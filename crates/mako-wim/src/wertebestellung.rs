@@ -351,6 +351,14 @@ pub enum WertebestellungEvent {
         message_ref: MessageRef,
         /// Number of interval values transmitted.
         interval_count: u32,
+        /// End of the period the transmitted values cover.
+        ///
+        /// `E_0254` Prüfschritt 4 refuses a Beendigung dated **before** the
+        /// values the MSB has already sent, so it has to remember how far its
+        /// own deliveries reach. `None` when the batch carried no readable
+        /// period, which is a defect in the caller rather than a date of zero.
+        #[serde(default)]
+        bis: Option<time::Date>,
     },
     /// First values delivered; the Stornierung window closes (UC 4.3 Vorbedingung).
     LieferungBegonnen,
@@ -426,6 +434,36 @@ pub struct WertebestellungData {
     /// `Z02` for an Abbestellung — it selects the EBD the ORDRSP must cite.
     #[serde(default)]
     pub offene_antwort_abo: Option<Abonnement>,
+    /// End of the Bindungsfrist this MSB stated in its own Angebot.
+    ///
+    /// Held here rather than only in the `AngebotAbgegeben` variant because
+    /// `E_0256` Prüfschritt 1 asks about it at **Bestellung** time, one state
+    /// later — and a Prüfschritt whose input was dropped in transit escalates
+    /// to an operator on every single order.
+    #[serde(default)]
+    pub bindungsfrist: Option<OffsetDateTime>,
+    /// `DTM+203` of the confirmed Bestellung — when the Abo starts.
+    ///
+    /// `E_0254` Prüfschritt 2 compares the requested Beendigungsdatum against
+    /// it. It is not the Bindungsfrist (that is when the *offer* expires) and
+    /// not the Abbestellung's own Ausführungsdatum (that *is* the requested
+    /// end, so comparing the two can only ever refuse).
+    #[serde(default)]
+    pub abo_beginn: Option<time::Date>,
+    /// End of the period the most recent delivery covered (`E_0254`
+    /// Prüfschritt 4).
+    #[serde(default)]
+    pub juengste_lieferung: Option<time::Date>,
+    /// Date the delivery was already ended, if it was (`E_0254` Prüfschritt 3).
+    #[serde(default)]
+    pub bereits_beendet_zum: Option<time::Date>,
+    /// `true` once the first values have gone out, which closes the UC 4.1
+    /// Nr. 5 Stornierung window (`E_0257` Prüfschritte 3/4).
+    ///
+    /// A fact about the subscription, so it lives with the rest of them rather
+    /// than inside whichever state variant happens to be current.
+    #[serde(default)]
+    pub lieferung_begonnen: bool,
 }
 
 /// State of an ESA Wertebestellung process.
@@ -584,6 +622,17 @@ pub enum WertebestellungCommand {
         /// `DTM+469` — earliest start we can deliver from. Defaults to the
         /// ESA's Wunschtermin when the MSB can meet it.
         fruehester_start: Option<OffsetDateTime>,
+        /// The commercial terms — currency, per-Artikel-ID prices and the OBIS
+        /// registers the subscription will deliver.
+        ///
+        /// `SG4 CUX`, the `SG27 PIA+Z02` Artikel-IDs, the `SG31 PRI+CAL` prices
+        /// and one to 23 `PIA+5 …:SRW` OBIS-Kennzahlen are all **Muss** on the
+        /// 15003 (QUOTES AHB 1.1a §4.3). UC 4.1.1 has the ESA asking for „die
+        /// Übermittlung von Werten **und die damit verbundenen Kosten**", so an
+        /// offer that prices nothing is not an offer — and pricing is exactly
+        /// what distinguishes the Angebot from the Ablehnung, since `DTM+273`
+        /// is Muss on both.
+        angebot: Box<crate::esa::Angebot>,
     },
     /// UC 4.1 Nr. 2 — refuse the Anfrage; the process ends.
     RejectAnfrage {
@@ -799,6 +848,11 @@ impl Workflow for WimWertebestellungWorkflow {
                 inbound_order_ref: None,
                 stornierung_ref: None,
                 offene_antwort_abo: None,
+                bindungsfrist: None,
+                abo_beginn: None,
+                juengste_lieferung: None,
+                bereits_beendet_zum: None,
+                lieferung_begonnen: false,
             })),
             E::AngebotAbgegeben {
                 bindungsfrist,
@@ -807,6 +861,8 @@ impl Workflow for WimWertebestellungWorkflow {
                 S::AnfrageEingegangen(mut data) => {
                     // The ESA's ORDERS 17007 will echo this in `RFF+AAG`.
                     data.angebot_ref = Some(message_ref.as_str().to_owned());
+                    // `E_0256` Prüfschritt 1 asks about this one state later.
+                    data.bindungsfrist = Some(*bindungsfrist);
                     S::AngebotAbgegeben {
                         data,
                         bindungsfrist: *bindungsfrist,
@@ -833,10 +889,15 @@ impl Workflow for WimWertebestellungWorkflow {
                 other => other,
             },
             E::BestellungBestaetigt { .. } => match state {
-                S::BestellungEingegangen(data) => S::BestellungBestaetigt {
-                    data,
-                    lieferung_begonnen: false,
-                },
+                S::BestellungEingegangen(mut data) => {
+                    // `DTM+203` of the order is when the Abo starts — the date
+                    // `E_0254` Prüfschritt 2 compares a later Beendigung with.
+                    data.abo_beginn = Some(data.gegenstand.wunschtermin);
+                    S::BestellungBestaetigt {
+                        data,
+                        lieferung_begonnen: false,
+                    }
+                }
                 other => other,
             },
             E::StornierungEingegangen { message_ref, .. } => match state {
@@ -853,12 +914,18 @@ impl Workflow for WimWertebestellungWorkflow {
                 S::StornierungEingegangen(data) => S::Storniert(data),
                 other => other,
             },
-            // A refused Stornierung leaves the Bestellung standing.
+            // A refused Stornierung leaves the Bestellung exactly as it was.
+            // `lieferung_begonnen` rides in the data and is never re-asserted:
+            // asserting `false` here claimed the delivery had not started, on a
+            // path taken precisely when `E_0257` said it had (`A02`/`A03`).
             E::StornierungAbgelehnt { .. } => match state {
-                S::StornierungEingegangen(data) => S::BestellungBestaetigt {
-                    data,
-                    lieferung_begonnen: false,
-                },
+                S::StornierungEingegangen(data) => {
+                    let lieferung_begonnen = data.lieferung_begonnen;
+                    S::BestellungBestaetigt {
+                        data,
+                        lieferung_begonnen,
+                    }
+                }
                 other => other,
             },
             E::AbbestellungEingegangen {
@@ -877,10 +944,18 @@ impl Workflow for WimWertebestellungWorkflow {
                 other => other,
             },
             E::AbbestellungBestaetigt { .. } => match state {
-                S::AbbestellungEingegangen { data, .. } => S::Beendet {
-                    data,
-                    durch_msb: false,
-                },
+                S::AbbestellungEingegangen {
+                    mut data,
+                    beendigung_zum,
+                } => {
+                    // `E_0254` Prüfschritt 3 refuses a second Beendigung for
+                    // the same or an earlier date.
+                    data.bereits_beendet_zum = Some(beendigung_zum.date());
+                    S::Beendet {
+                        data,
+                        durch_msb: false,
+                    }
+                }
                 other => other,
             },
             // A refused Beendigung leaves the running delivery in place; the
@@ -888,31 +963,77 @@ impl Workflow for WimWertebestellungWorkflow {
             E::AbbestellungAbgelehnt { .. } => match state {
                 S::AbbestellungEingegangen { mut data, .. } => {
                     data.offene_antwort_abo = None;
+                    let lieferung_begonnen = data.lieferung_begonnen;
+                    S::BestellungBestaetigt {
+                        data,
+                        lieferung_begonnen,
+                    }
+                }
+                other => other,
+            },
+            // A delivery closes the Stornierung window (first values have gone
+            // out). Recorded from every state that still holds an authorised
+            // order, since values may land while a Storno or an Abbestellung
+            // is in flight — which is exactly the case `E_0257` `A02` and
+            // `E_0254` `A04` exist for.
+            E::LieferungBegonnen => match state {
+                S::BestellungBestaetigt { mut data, .. } => {
+                    data.lieferung_begonnen = true;
                     S::BestellungBestaetigt {
                         data,
                         lieferung_begonnen: true,
                     }
                 }
+                S::StornierungEingegangen(mut data) => {
+                    data.lieferung_begonnen = true;
+                    S::StornierungEingegangen(data)
+                }
+                S::AbbestellungEingegangen {
+                    mut data,
+                    beendigung_zum,
+                } => {
+                    data.lieferung_begonnen = true;
+                    S::AbbestellungEingegangen {
+                        data,
+                        beendigung_zum,
+                    }
+                }
                 other => other,
             },
-            E::LieferungBegonnen => match state {
-                S::BestellungBestaetigt { data, .. } => S::BestellungBestaetigt {
-                    data,
-                    lieferung_begonnen: true,
-                },
+            E::WerteUebermittelt { bis, .. } => match state {
+                S::BestellungBestaetigt { mut data, .. } => {
+                    data.lieferung_begonnen = true;
+                    // `E_0254` Prüfschritt 4 refuses a Beendigung dated before
+                    // the values already sent, so the MSB has to remember how
+                    // far its own deliveries reach.
+                    data.juengste_lieferung = data.juengste_lieferung.max(*bis);
+                    S::BestellungBestaetigt {
+                        data,
+                        lieferung_begonnen: true,
+                    }
+                }
+                S::StornierungEingegangen(mut data) => {
+                    data.lieferung_begonnen = true;
+                    data.juengste_lieferung = data.juengste_lieferung.max(*bis);
+                    S::StornierungEingegangen(data)
+                }
+                S::AbbestellungEingegangen {
+                    mut data,
+                    beendigung_zum,
+                } => {
+                    data.lieferung_begonnen = true;
+                    data.juengste_lieferung = data.juengste_lieferung.max(*bis);
+                    S::AbbestellungEingegangen {
+                        data,
+                        beendigung_zum,
+                    }
+                }
                 other => other,
             },
-            // A delivery closes the Stornierung window (first values have gone
-            // out); it never changes the confirmed/winding-down state otherwise.
-            E::WerteUebermittelt { .. } => match state {
-                S::BestellungBestaetigt { data, .. } => S::BestellungBestaetigt {
-                    data,
-                    lieferung_begonnen: true,
-                },
-                other => other,
-            },
-            E::BeendetDurchMsb { .. } => match state {
-                S::BestellungBestaetigt { data, .. } | S::AbbestellungEingegangen { data, .. } => {
+            E::BeendetDurchMsb { beendigung_zum, .. } => match state {
+                S::BestellungBestaetigt { mut data, .. }
+                | S::AbbestellungEingegangen { mut data, .. } => {
+                    data.bereits_beendet_zum = Some(beendigung_zum.date());
                     S::Beendet {
                         data,
                         durch_msb: true,
@@ -941,6 +1062,63 @@ impl Workflow for WimWertebestellungWorkflow {
         // Both also carry `IMD+7081` and an `AJT` naming the EBD the
         // Prüfschritt code belongs to — Muss on all four (ORDRSP AHB 1.1b
         // §4.15). An ORDRSP carries **no LOC**, so no location travels here.
+        /// The `de.mako.process.initiated` notification an inbound ESA step
+        /// owes its observers.
+        ///
+        /// WiM Teil 2 Kapitel 4 obliges the **MSB** to answer four inbound
+        /// PIDs — 35003 within 5 Werktage, 17007/17008/39002 within 2 — and
+        /// §34 Abs. 2 S. 2 Nr. 10 MsbG makes serving an ESA a mandatory
+        /// Zusatzleistung, so none of them is optional. This notification is
+        /// the entire input to `processd`'s ESA module: the four
+        /// `mako-pruefung` walks, the operator queue and its Fristen.
+        ///
+        /// The payload is the contract `processd::esa_module::EsaOrderPayload`
+        /// parses, and every field it reads is a Prüfschritt input. An omitted
+        /// one does not fail — it escalates, so a decision that could have been
+        /// answered lands on an operator's desk instead.
+        fn esa_process_initiated(
+            pid: Pruefidentifikator,
+            data: &WertebestellungData,
+            beendigung_zum: Option<OffsetDateTime>,
+        ) -> PendingOutbox {
+            PendingOutbox::new(
+                "ProcessInitiated",
+                data.msb.as_str(),
+                serde_json::json!({
+                    "pid": pid.as_u32(),
+                    "malo_id": data.lokations_id,
+                    "lokations_id": data.lokations_id,
+                    "esa_mp_id": data.esa.as_str(),
+                    "msb_mp_id": data.msb.as_str(),
+                    "ebene": data.ebene,
+                    // Half of the subscription's business key, and what
+                    // `E_0252` Prüfschritt 1 and `E_0256` Prüfschritte 4/5 ask
+                    // about.
+                    "messprodukt": data.gegenstand.messprodukt,
+                    // `IMD+7081` — both termination trees branch on it with
+                    // different codes per side, so it is never defaulted.
+                    "abonnement": data.gegenstand.abonnement.imd_code(),
+                    // `DTM+203` of the message that just arrived: the delivery
+                    // start on a Bestellung, the stop date on an Abbestellung.
+                    "ausfuehrungsdatum": beendigung_zum
+                        .map(|d| d.date())
+                        .unwrap_or(data.gegenstand.wunschtermin)
+                        .to_string(),
+                    // `E_0256` Prüfschritt 1.
+                    "bindungsfrist": data.bindungsfrist.and_then(|b| {
+                        b.format(&time::format_description::well_known::Rfc3339).ok()
+                    }),
+                    // `E_0257` Prüfschritte 3/4 and `E_0254` Prüfschritt 4.
+                    "lieferung_begonnen": data.lieferung_begonnen,
+                    // `E_0254` Prüfschritte 2/3/4 — the three dates that walk
+                    // cannot be run without.
+                    "abo_beginn": data.abo_beginn.map(|d| d.to_string()),
+                    "bereits_beendet_zum": data.bereits_beendet_zum.map(|d| d.to_string()),
+                    "juengste_lieferung": data.juengste_lieferung.map(|d| d.to_string()),
+                }),
+            )
+        }
+
         fn esa_answer(
             message_type: &'static str,
             pid: Pruefidentifikator,
@@ -1097,6 +1275,31 @@ impl Workflow for WimWertebestellungWorkflow {
                     ));
                 }
                 let due = quittung.frist(ANGEBOT_FRIST_WT)?;
+                // The MSB owes an answer within 5 Werktage and `E_0252` decides
+                // what it is; nothing else in the platform learns that an
+                // Anfrage arrived.
+                let initiated = esa_process_initiated(
+                    pid,
+                    &WertebestellungData {
+                        esa: esa.clone(),
+                        msb: msb.clone(),
+                        ebene,
+                        lokations_id: lokations_id.clone(),
+                        gegenstand: gegenstand.clone(),
+                        anfrage_ref: Some(message_ref.as_str().to_owned()),
+                        angebot_ref: None,
+                        bestellung_ref: None,
+                        inbound_order_ref: None,
+                        stornierung_ref: None,
+                        offene_antwort_abo: None,
+                        bindungsfrist: None,
+                        abo_beginn: None,
+                        juengste_lieferung: None,
+                        bereits_beendet_zum: None,
+                        lieferung_begonnen: false,
+                    },
+                    None,
+                );
                 Ok(WorkflowOutput {
                     events: vec![E::AnfrageEingegangen {
                         esa,
@@ -1107,7 +1310,7 @@ impl Workflow for WimWertebestellungWorkflow {
                         message_ref,
                         quittung,
                     }],
-                    outbox: Vec::new(),
+                    outbox: vec![initiated],
                     deadlines: vec![PendingDeadline::new(ANGEBOT_WINDOW_LABEL, due)],
                 })
             }
@@ -1116,6 +1319,7 @@ impl Workflow for WimWertebestellungWorkflow {
                 message_ref,
                 bindungsfrist,
                 fruehester_start,
+                angebot,
             } => {
                 let Some(data) = state
                     .data()
@@ -1140,6 +1344,36 @@ impl Workflow for WimWertebestellungWorkflow {
                     .max(1);
                 let start = fruehester_start
                     .unwrap_or_else(|| data.gegenstand.wunschtermin.midnight().assume_utc());
+                // An Angebot has to price something: `SG31 PRI` is Muss inside
+                // the `SG27 LIN` position block, and a 15003 that prices nothing
+                // is the Ablehnung — which `RejectAnfrage` sends instead.
+                if angebot.ist_leer() {
+                    return Err(WorkflowError::rejected(
+                        "Angebot ohne Preisangabe — SG31 PRI und die OBIS-Kennzahlen sind Muss \
+                         auf der QUOTES 15003 (QUOTES AHB 1.1a §4.3); eine Anfrage ohne Angebot \
+                         wird mit RejectAnfrage abgelehnt",
+                    ));
+                }
+                let artikel_ids: Vec<&str> = {
+                    let mut ids: Vec<&str> = Vec::new();
+                    for p in &angebot.preise {
+                        if !ids.contains(&p.artikel_id.as_str()) {
+                            ids.push(p.artikel_id.as_str());
+                        }
+                    }
+                    ids
+                };
+                let preise: Vec<serde_json::Value> = angebot
+                    .preise
+                    .iter()
+                    .map(|p| {
+                        serde_json::json!({
+                            "betrag": p.betrag,
+                            "art": p.preistyp.pri_code(),
+                            "einheit": p.einheit,
+                        })
+                    })
+                    .collect();
                 let outbox = PendingOutbox::new(
                     "QUOTES",
                     data.esa.as_str(),
@@ -1154,6 +1388,10 @@ impl Workflow for WimWertebestellungWorkflow {
                         "bindungsfrist_tage": bindungsfrist_tage,
                         "fruehester_start": ccyymmdd(start),
                         "messprodukt": data.gegenstand.messprodukt,
+                        "currency": angebot.waehrung.as_deref().unwrap_or("EUR"),
+                        "artikel_ids": artikel_ids,
+                        "obis": angebot.obis_kennzahlen,
+                        "preise": preise,
                     }),
                 );
                 Ok(WorkflowOutput {
@@ -1249,13 +1487,21 @@ impl Workflow for WimWertebestellungWorkflow {
                     ));
                 }
                 let due = quittung.frist(ANTWORT_FRIST_WT)?;
+                // `E_0256` runs on this. The Abo mode arrives with the order
+                // rather than with the Anfrage, so it is stated here.
+                let mut fuer_meldung = state
+                    .data()
+                    .cloned()
+                    .ok_or_else(|| WorkflowError::invalid_state("AngebotAbgegeben", "New"))?;
+                fuer_meldung.gegenstand.abonnement = abonnement;
+                let initiated = esa_process_initiated(pid, &fuer_meldung, None);
                 Ok(WorkflowOutput {
                     events: vec![E::BestellungEingegangen {
                         message_ref,
                         abonnement,
                         quittung,
                     }],
-                    outbox: Vec::new(),
+                    outbox: vec![initiated],
                     deadlines: vec![PendingDeadline::new(ANTWORT_WINDOW_LABEL, due)],
                 })
             }
@@ -1335,12 +1581,19 @@ impl Workflow for WimWertebestellungWorkflow {
                     ));
                 }
                 let due = quittung.frist(ANTWORT_FRIST_WT)?;
+                let initiated = esa_process_initiated(
+                    pid,
+                    state.data().ok_or_else(|| {
+                        WorkflowError::invalid_state("BestellungBestaetigt", "New")
+                    })?,
+                    None,
+                );
                 Ok(WorkflowOutput {
                     events: vec![E::StornierungEingegangen {
                         message_ref,
                         quittung,
                     }],
-                    outbox: Vec::new(),
+                    outbox: vec![initiated],
                     deadlines: vec![PendingDeadline::new(ANTWORT_WINDOW_LABEL, due)],
                 })
             }
@@ -1398,13 +1651,21 @@ impl Workflow for WimWertebestellungWorkflow {
                 }
                 require_pid(pid, ABBESTELLUNG_PID, "Abbestellung von Werten")?;
                 let due = quittung.frist(ANTWORT_FRIST_WT)?;
+                // `E_0254` compares `beendigung_zum` against the Abo start and
+                // the values already delivered; both ride in the data.
+                let mut fuer_meldung = state
+                    .data()
+                    .cloned()
+                    .ok_or_else(|| WorkflowError::invalid_state("BestellungBestaetigt", "New"))?;
+                fuer_meldung.gegenstand.abonnement = Abonnement::EndeAbo;
+                let initiated = esa_process_initiated(pid, &fuer_meldung, Some(beendigung_zum));
                 Ok(WorkflowOutput {
                     events: vec![E::AbbestellungEingegangen {
                         message_ref,
                         beendigung_zum,
                         quittung,
                     }],
-                    outbox: Vec::new(),
+                    outbox: vec![initiated],
                     deadlines: vec![PendingDeadline::new(ANTWORT_WINDOW_LABEL, due)],
                 })
             }
@@ -1467,6 +1728,25 @@ impl Workflow for WimWertebestellungWorkflow {
                     )
                 })?;
                 let interval_count = u32::try_from(intervals.len()).unwrap_or(u32::MAX);
+                // How far this batch reaches. `E_0254` Prüfschritt 4 refuses a
+                // Beendigung dated before it, so the answer to that Prüfschritt
+                // is assembled here rather than guessed later.
+                let bis = intervals
+                    .iter()
+                    .filter_map(|iv| {
+                        let raw = iv.get("dtm_to").or_else(|| iv.get("bis"))?.as_str()?;
+                        // Both `CCYYMMDD…` from the wire and ISO from the API.
+                        let digits: String =
+                            raw.chars().filter(char::is_ascii_digit).take(8).collect();
+                        (digits.len() == 8).then_some(())?;
+                        time::Date::from_calendar_date(
+                            digits[0..4].parse().ok()?,
+                            time::Month::try_from(digits[4..6].parse::<u8>().ok()?).ok()?,
+                            digits[6..8].parse().ok()?,
+                        )
+                        .ok()
+                    })
+                    .max();
                 // Outbound MSCONS 13027 addressed to the ESA (NAD+MR = ESA).
                 let outbox = PendingOutbox::new(
                     "MSCONS",
@@ -1490,6 +1770,7 @@ impl Workflow for WimWertebestellungWorkflow {
                     vec![E::WerteUebermittelt {
                         message_ref,
                         interval_count,
+                        bis,
                     }],
                     vec![outbox],
                 ))

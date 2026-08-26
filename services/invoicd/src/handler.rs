@@ -336,6 +336,50 @@ async fn run_check(state: &HandlerState, route: &PidRoute, inc: &Incoming) -> Ch
         .unwrap_or_else(|| OffsetDateTime::now_utc().date());
 
     if route.check == CheckKind::Messung {
+        // ── The ESA branch: the price basis is the offer, not a sheet ────────
+        //
+        // INVOIC 31009 is „MSB-Rechnung" toward the **NB, the LF or the ESA**
+        // (WiM Teil 1 Kap. 6.2 / Teil 2 Kap. 4.5), and the three do not share a
+        // price basis. `PreisblattMessung` is what an MSB *publishes* toward the
+        // NB and the LF; there is none for the Kapitel-4.6 Messprodukte, because
+        // §35 MsbG leaves the Entgelt for a Zusatzleistung to be agreed per
+        // request. An ESA running the sheet path therefore got `TariffNotFound`
+        // and **no price check at all** — every invoice it received was checked
+        // for arithmetic and totals and nothing else.
+        //
+        // What it has instead is the QUOTES 15003 it ordered against: UC 4.1.1
+        // has it asking for „die Übermittlung von Werten und die damit
+        // verbundenen Kosten", and the offer carries a Bindungsfrist because it
+        // binds. The invoice names the same Artikel-IDs back (`SG26 LIN` DE 7143
+        // `Z09`), so the two join exactly.
+        //
+        // **The presence of an accepted offer is what selects the branch**, not
+        // a configured role: an offer on record for (this MSB, us) is precisely
+        // the statement "we are the ESA in this relationship, and this is what
+        // we agreed to pay".
+        let agreed = state
+            .marktd
+            .esa_preise(&inc.sender_mp_id, &state.tenant, billing_date)
+            .await
+            .unwrap_or_default();
+        if !agreed.is_empty() {
+            let prices: Vec<(String, invoic_checker::amount::EuroAmount)> = agreed
+                .iter()
+                .filter_map(|p| {
+                    Some((
+                        p.artikel_id.clone(),
+                        invoic_checker::amount::euro_from_decimal(p.betrag)?,
+                    ))
+                })
+                .collect();
+            return InvoicCheckEngine::check_esa_rechnung(
+                &inc.sender_mp_id,
+                rechnung,
+                &prices,
+                &state.check_config,
+            );
+        }
+
         let sheet = state
             .marktd
             .get_preisblatt_messung(&inc.sender_mp_id, billing_date)

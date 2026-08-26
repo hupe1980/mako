@@ -641,7 +641,7 @@ side**, not a bag of independent messages.
 
 | Step | Message | Direction | Antwort | Frist | EBD |
 |---|---|---|---|---|---|
-| Werteanfrage (UC 4.1 Nr. 1) | REQOTE **35003** | ESA → MSB | QUOTES 15003 | 5 WT | — |
+| Werteanfrage (UC 4.1 Nr. 1) | REQOTE **35003** | ESA → MSB | QUOTES 15003 | 5 WT | `E_0252` |
 | Angebot / Ablehnung (UC 4.1 Nr. 2) | QUOTES **15003** | MSB → ESA | — | Bindungsfrist | — |
 | Bestellung (UC 4.1 Nr. 3) | ORDERS **17007** | ESA → MSB | ORDRSP 19011/19012 | 2 WT | `E_0256` |
 | Wertelieferung (UC 4.2) | MSCONS **13027** | MSB → ESA | — | per Messprodukt | — |
@@ -655,9 +655,9 @@ sequenceDiagram
     participant ESA as ESA · esa-wertebestellung
     participant MSB as MSB · wim-wertebestellung
     ESA->>MSB: REQOTE 35003 Werteanfrage · LOC+172 · PIA Messprodukt · DTM+76
-    MSB-->>ESA: QUOTES 15003 Angebot · RFF+AAV · DTM+273 Bindungsfrist
-    Note over ESA,MSB: 5 WT · no Bindungsfrist ⇒ Ablehnung der Anfrage
-    ESA->>MSB: ORDERS 17007 Bestellung · RFF+AAG · IMD+7081
+    MSB-->>ESA: QUOTES 15003 Angebot · RFF+AAV · CUX · PRI je Artikel-ID · PIA OBIS · DTM+273/469
+    Note over ESA,MSB: 5 WT · E_0252 · keine Preisposition ⇒ Ablehnung der Anfrage
+    ESA->>MSB: ORDERS 17007 Bestellung · RFF+AAG · IMD+7081 · DTM+203 = max(Wunsch, DTM+469)
     MSB-->>ESA: ORDRSP 19011 / 19012 · RFF+ON · AJT code · E_0256
     loop per the ordered Messprodukt
         MSB-->>ESA: MSCONS 13027 Werte nach Typ 2
@@ -680,6 +680,18 @@ iMS over SM-PKI, and the latter makes the target address and certificate bodies
 mandatory in the Werteanfrage. A product defined for a different Lokationsebene
 than the request addresses is refused before it reaches the wire.
 
+**The product decides the Lokationsebene.** `LOC+172` DE 3225 has four permitted
+shapes and the Marktlokations-ID format (`[950]`) serves both the Marktlokation
+and the **Tranche** (REQOTE AHB 1.2 §4.3, hints `[502]`/`[504]`), so the
+identifier cannot resolve it — and the Tranche carries a Pflichtprodukt.
+
+**The Angebot is a priced offer.** UC 4.1.1 has the ESA asking for „die
+Übermittlung von Werten **und die damit verbundenen Kosten**"; QUOTES AHB 1.1a
+§4.3 makes `SG4 CUX`, the `PIA+Z02` Artikel-IDs, one `SG31 PRI+CAL` each and one
+to 23 `PIA+5 … :SRW` OBIS-Kennzahlen Muss, alongside `DTM+469` and `DTM+273`. The
+**prices**, not the Bindungsfrist, tell an Angebot from an Ablehnung: `DTM+273` is
+Muss on the only published 15003 use case, so a refusal carries one too.
+
 **The Prüfidentifikator is not in BGM.** Every `BGM` DE 1004 row of the MSCONS,
 REQOTE, QUOTES, ORDERS, ORDCHG and ORDRSP handbooks reads „Dokumentennummer";
 the PID travels in `SG1 RFF+Z13` (`SG15 RFF+Z13` on the IFTSTA). DE 1001 carries
@@ -701,12 +713,21 @@ is matched by the Belegnummer it echoes:
 | 19011 / 19012 | `ZG-T14` | `SG1 RFF+ON` | the ORDERS answered |
 | 19013 / 19014 | `ZG-T50` | `SG1 RFF+ACW` | the ORDCHG |
 | 21042 | `ZG-T47` | `SG15 RFF+AGI` | the ORDERS Bestellung |
+| 13027 | `ZG-T42` (of `EZ-03`) | `SG1 RFF+AGI` | the ORDERS Bestellung |
 
 **Answers.** `SG2 AJT` is Muss on all four ORDRSP PIDs: DE 4465 carries the
 Prüfschritt code, DE 1082 the EBD that publishes it. The code's Cluster — not a
 separate accept flag — decides whether the answer rides the Bestätigungs- or the
 Ablehnungs-PID. 19011/19012 answer both the Bestellung and the Beendigung, and
 the `IMD+7081` on the answer says which tree its code came from.
+
+Those four use cases publish **no free-text segment at all** — the only `FTX` a
+conformant 19011 may carry is `SG27 FTX+Z27`, the MSB's IP address for an SM-PKI
+delivery — so the Antwortcode is the whole content of a refusal in both
+directions. The **MSB's** check of an inbound Werteanfrage is `E_0252` „Anfrage
+prüfen" (eight Prüfschritte, refusals `A02`–`A07`); what has no tree is `E_0253`,
+the **ESA's** look at the offer that comes back, and `E_0258`, its look at the
+ORDRSP.
 
 See the [makod ESA messages guide](@/docs/services/makod.md#esa-messages) for the
 consent gate (§49 Abs. 2 Nr. 9 MsbG / GDPR Art. 7) and the command surface.

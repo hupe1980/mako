@@ -3241,6 +3241,55 @@ fn default_cert_state() -> String {
     "pending".to_owned()
 }
 
+/// One priced Artikel-ID of an accepted QUOTES 15003 Angebot.
+///
+/// **The ESA price basis**, and the only one it has. `PreisblattMessung` is what
+/// an MSB *publishes* toward the NB and the LF; there is none for the
+/// Kapitel-4.6 Messprodukte, because §35 MsbG leaves the Entgelt for a
+/// Zusatzleistung to be agreed per request — which is what the
+/// Universalbestellprozess exists for. UC 4.1.1 has the ESA asking for „die
+/// Übermittlung von Werten **und die damit verbundenen Kosten**", the offer
+/// carries a Bindungsfrist because it binds, and the MSB's later INVOIC 31009
+/// names the same Artikel-IDs back (`SG26 LIN` DE 7143 `Z09`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EsaMessproduktPreis {
+    #[serde(default)]
+    pub tenant: String,
+    /// The two parties to the offer. An ESA holds a separate agreement with
+    /// every MSB it reaches, and prices do not carry across them.
+    pub esa_mp_id: String,
+    pub msb_mp_id: String,
+    /// Which subscription was ordered at this price — a subscription is the
+    /// (Meldepunkt, Messprodukt) pair, so both are named.
+    pub lokations_id: String,
+    pub messprodukt: String,
+    /// `SG27 PIA+Z02` DE 7140.
+    pub artikel_id: String,
+    /// `SG31 PRI` DE 5387 — `Z01` Einrichtungs-, `Z02` Transaktions-, `Z03`
+    /// Betriebspreis.
+    pub preistyp: String,
+    /// `SG31 PRI` DE 5118. A decimal, not a float: the AHB admits six decimal
+    /// places and a Betriebspreis per Tag lands in the last of them.
+    pub betrag: rust_decimal::Decimal,
+    /// `SG31 PRI` DE 6411 — `H87` Stück or `DAY` Tag.
+    pub einheit: String,
+    /// `SG4 CUX` DE 6345.
+    #[serde(default = "default_waehrung")]
+    pub waehrung: String,
+    /// Belegnummer of the ORDERS 17007 the offer was accepted with.
+    #[serde(default)]
+    pub bestellung_ref: Option<String>,
+    /// Half-open validity; `valid_to` closes when the subscription ends.
+    #[serde(default)]
+    pub valid_from: Option<time::Date>,
+    #[serde(default)]
+    pub valid_to: Option<time::Date>,
+}
+
+fn default_waehrung() -> String {
+    "EUR".to_owned()
+}
+
 /// Which side of the ESA relationship is gating a message.
 ///
 /// The consent has **asymmetric** force. The MSB holds only the ESA's
@@ -3365,6 +3414,28 @@ pub trait EinwilligungRepository: Send + Sync {
         msb_mp_id: &str,
         esa_mp_id: &str,
     ) -> Result<Option<EsaFrameworkAgreement>, MdmError>;
+
+    /// Record the prices of an accepted Angebot, replacing whatever was on
+    /// record for the same subscription and validity start.
+    ///
+    /// Written when the MSB confirms the Bestellung (ORDRSP 19011): that is the
+    /// moment the offer becomes the agreement, and before it there is nothing
+    /// an invoice could be checked against.
+    async fn upsert_esa_preise(&self, preise: &[EsaMessproduktPreis]) -> Result<(), MdmError>;
+
+    /// The prices in force between an ESA and an MSB on `at`.
+    ///
+    /// Across **all** of that pair's subscriptions, deliberately: an INVOIC
+    /// 31009 bills a Rahmenvertrag rather than a single Meldepunkt, and its
+    /// positions name Artikel-IDs without saying which subscription each
+    /// belongs to. Narrowing to one would refuse every position of the others.
+    async fn esa_preise_at(
+        &self,
+        tenant: &str,
+        esa_mp_id: &str,
+        msb_mp_id: &str,
+        at: time::Date,
+    ) -> Result<Vec<EsaMessproduktPreis>, MdmError>;
 
     /// Gate an ESA message for `location_id` against the registry.
     ///

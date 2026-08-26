@@ -9,7 +9,7 @@
 
 use mako_markt::repository::{
     ConsentCode, ConsentPerspective, EinwilligungRecord, EinwilligungRepository as _,
-    EsaFrameworkAgreement,
+    EsaFrameworkAgreement, EsaMessproduktPreis,
 };
 use marktd::pg::PgEinwilligungRepository;
 use sqlx::PgPool;
@@ -201,6 +201,132 @@ type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgr
 
 /// Start a fresh throwaway `postgres:17-alpine` and return its URL plus the
 /// container guard. `None` when Docker is unavailable (tests skip gracefully).
+/// The accepted QUOTES 15003 Angebot — the ESA's **only** price basis for an
+/// INVOIC 31009.
+///
+/// `preisblaetter_messung` holds what an MSB publishes toward the NB and the LF;
+/// there is none for a Kapitel-4.6 Messprodukt, because §35 MsbG leaves the
+/// Entgelt for a Zusatzleistung to be agreed per request. So the offer the ESA
+/// ordered against is the agreement, and `invoicd` joins the invoice's
+/// Artikel-IDs (`SG26 LIN` DE 7143 `Z09`) onto these rows.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn accepted_angebot_prices_round_trip() {
+    let Some((pool, _pg)) = test_pool("esa_preise").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool);
+
+    let preis = |artikel: &str, typ: &str, betrag: &str, einheit: &str| EsaMessproduktPreis {
+        tenant: TENANT.to_owned(),
+        esa_mp_id: ESA.to_owned(),
+        msb_mp_id: MSB.to_owned(),
+        lokations_id: "51238696012".to_owned(),
+        messprodukt: "9991000003056".to_owned(),
+        artikel_id: artikel.to_owned(),
+        preistyp: typ.to_owned(),
+        betrag: betrag.parse().expect("decimal"),
+        einheit: einheit.to_owned(),
+        waehrung: "EUR".to_owned(),
+        bestellung_ref: Some("ESABE0000000001".to_owned()),
+        valid_from: Some(time::macros::date!(2026 - 03 - 01)),
+        valid_to: None,
+    };
+
+    repo.upsert_esa_preise(&[
+        // The Einrichtungspreis is per Stück, the Betriebspreis per Tag —
+        // QUOTES AHB 1.1a conditions [86]–[88].
+        preis("9990001100001", "Z01", "25.000000", "H87"),
+        preis("9990001100002", "Z03", "0.004500", "DAY"),
+    ])
+    .await
+    .expect("record the accepted Angebot");
+
+    let at = time::macros::date!(2026 - 04 - 01);
+    let got = repo
+        .esa_preise_at(TENANT, ESA, MSB, at)
+        .await
+        .expect("read back");
+    assert_eq!(got.len(), 2);
+    // Six decimal places survive: a Betriebspreis per Tag lands in the last of
+    // them, and rounding it away would silently change the agreement.
+    let betrieb = got
+        .iter()
+        .find(|p| p.preistyp == "Z03")
+        .expect("the Betriebspreis is on record");
+    assert_eq!(betrieb.betrag.to_string(), "0.004500");
+    assert_eq!(betrieb.einheit, "DAY");
+    assert_eq!(betrieb.bestellung_ref.as_deref(), Some("ESABE0000000001"));
+
+    // Before the subscription started, nothing is agreed — the window is
+    // half-open `[valid_from, valid_to)` like every other dated table here.
+    assert!(
+        repo.esa_preise_at(TENANT, ESA, MSB, time::macros::date!(2026 - 02 - 01))
+            .await
+            .expect("read back")
+            .is_empty()
+    );
+
+    // A re-accepted offer replaces the price for the same Artikel-ID and
+    // window rather than adding a second answer.
+    repo.upsert_esa_preise(&[preis("9990001100002", "Z03", "0.009900", "DAY")])
+        .await
+        .expect("supersede");
+    let got = repo
+        .esa_preise_at(TENANT, ESA, MSB, at)
+        .await
+        .expect("read back");
+    assert_eq!(got.len(), 2, "superseded, not duplicated");
+    assert_eq!(
+        got.iter()
+            .find(|p| p.preistyp == "Z03")
+            .expect("still there")
+            .betrag
+            .to_string(),
+        "0.009900"
+    );
+}
+
+/// Prices are tenant-scoped like every other row here.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn accepted_angebot_prices_are_tenant_scoped() {
+    let Some((pool, _pg)) = test_pool("esa_preise_tenant").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool);
+    repo.upsert_esa_preise(&[EsaMessproduktPreis {
+        tenant: TENANT.to_owned(),
+        esa_mp_id: ESA.to_owned(),
+        msb_mp_id: MSB.to_owned(),
+        lokations_id: "51238696012".to_owned(),
+        messprodukt: "9991000003056".to_owned(),
+        artikel_id: "9990001100001".to_owned(),
+        preistyp: "Z01".to_owned(),
+        betrag: "25.000000".parse().expect("decimal"),
+        einheit: "H87".to_owned(),
+        waehrung: "EUR".to_owned(),
+        bestellung_ref: None,
+        valid_from: Some(time::macros::date!(2026 - 03 - 01)),
+        valid_to: None,
+    }])
+    .await
+    .expect("record");
+
+    assert!(
+        repo.esa_preise_at(
+            "9900002000002",
+            ESA,
+            MSB,
+            time::macros::date!(2026 - 04 - 01)
+        )
+        .await
+        .expect("read back")
+        .is_empty(),
+        "another tenant sees nothing"
+    );
+}
+
 async fn pg_container() -> Option<(String, PgContainer)> {
     use testcontainers::ImageExt;
     use testcontainers::runners::AsyncRunner;

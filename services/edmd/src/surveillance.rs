@@ -323,10 +323,13 @@ pub async fn run_surveillance_sweep(
         // on the two transitions worth an event: opened now, or reopened now.
         let transition: Option<bool> = match sqlx::query_scalar(
             r"INSERT INTO delivery_surveillance
-                  (tenant, malo_id, stream, obis_code, state, last_interval_end,
-                   hours_silent, coverage_pct, interval_count)
-              VALUES ($1,$2,'TYP1','',$3,$4,$5,$6,$7)
-              ON CONFLICT (tenant, stream, malo_id, obis_code) DO UPDATE SET
+                  (tenant, malo_id, stream, obis_code, subscription_ref, state,
+                   last_interval_end, hours_silent, coverage_pct, interval_count)
+              VALUES ($1,$2,'TYP1','','',$3,$4,$5,$6,$7)
+              -- TYP1 has no subscription and no register, so both key columns
+              -- stay empty — but they are still part of the key and have to be
+              -- named here, or the upsert matches no unique constraint.
+              ON CONFLICT (tenant, stream, malo_id, obis_code, subscription_ref) DO UPDATE SET
                   last_seen_at      = now(),
                   state             = EXCLUDED.state,
                   last_interval_end = EXCLUDED.last_interval_end,
@@ -785,12 +788,17 @@ pub async fn post_delivery_surveillance_scan(
 /// delivery duty toward one ESA and reaches no billing run that could come up
 /// short. Nothing else in the platform would ever notice it.
 ///
-/// The key is the delivered OBIS register, not the ordered Messprodukt: a
-/// MSCONS 13027 carries `SG9 PIA+5 … :SRW` (the OBIS) per line item and names
-/// its subscription only in `SG1 RFF+AGI`, which `esa_typ2_reads` does not
-/// record. Per-register is the finer signal in any case — a subscription whose
-/// Erzeugung register stops while Verbrauch keeps arriving is broken, and a
-/// per-subscription key would call it healthy.
+/// The key is **(Meldepunkt, subscription, register)**. A MSCONS 13027 carries
+/// `SG9 PIA+5 … :SRW` (the OBIS) per line item and names its subscription in
+/// `SG1 RFF+AGI` (MSCONS AHB 3.2 §11.2 hint `[574]`) — `esa_typ2_reads` records
+/// both, so a finding can say which subscription stopped rather than leaving an
+/// operator to work it out from the registers.
+///
+/// Per-register stays part of the key because it is the finer signal: a
+/// subscription whose Erzeugung register goes quiet while Verbrauch keeps
+/// arriving is broken, and a subscription-only key would call it healthy.
+/// `bestellung_ref` is `NULL` for a delivery whose sender omitted the Muss, and
+/// those group together rather than being dropped.
 ///
 /// Coverage is deliberately not scored. A Typ-2 series is delivered as ordered
 /// and never reconciled, corrected or substituted, so "less than the window"
@@ -811,12 +819,13 @@ pub async fn assess_typ2_delivery(
     let sql = format!(
         r#"SELECT "malo_id",
                   "obis_code",
+                  "bestellung_ref",
                   MAX("to")   AS last_interval_end,
                   COUNT(*)    AS interval_count
              FROM "{table}"
             WHERE "tenant" = $1
               AND "from" >= $2
-            GROUP BY "malo_id", "obis_code""#,
+            GROUP BY "malo_id", "obis_code", "bestellung_ref""#,
         table = store.resolved_table(),
     );
 
@@ -859,10 +868,16 @@ pub async fn assess_typ2_delivery(
         if hours_silent < cfg.typ2_silent_after_hours {
             continue;
         }
+        let bestellung_ref = row
+            .get("bestellung_ref")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
         findings.push(DeliveryFinding {
-            // The register is carried in `obis_code` on the register row; the
-            // finding keeps the Meldepunkt so the two sweeps report alike.
-            malo_id: format!("{malo_id}|{obis}"),
+            // Packed `Meldepunkt|OBIS|Bestellnummer`; the sweep unpacks it for
+            // the register row and the event. The finding keeps the Meldepunkt
+            // first so the two sweeps report alike.
+            malo_id: format!("{malo_id}|{obis}|{bestellung_ref}"),
             state: DeliveryState::Silent,
             last_interval_end: last_end,
             hours_silent,
@@ -874,6 +889,21 @@ pub async fn assess_typ2_delivery(
         });
     }
     Ok((findings, scanned, window_from))
+}
+
+/// Unpack a Typ-2 finding key into `(Meldepunkt, OBIS-Kennzahl, Bestellnummer)`.
+///
+/// [`DeliveryFinding`] is shared with the Typ-1 sweep and carries one string,
+/// so the three parts of a Typ-2 key travel packed. Split on the **first two**
+/// separators only: a Belegnummer is a sender-chosen Dokumentennummer and
+/// nothing forbids the separator inside it.
+fn split_typ2_key(packed: &str) -> (&str, &str, &str) {
+    let mut parts = packed.splitn(3, '|');
+    (
+        parts.next().unwrap_or(packed),
+        parts.next().unwrap_or(""),
+        parts.next().unwrap_or(""),
+    )
 }
 
 /// Run one ESA Typ-2 sweep: assess, register the transitions, emit.
@@ -915,16 +945,13 @@ pub async fn run_typ2_surveillance_sweep(
     let mut suppressed = 0usize;
 
     for finding in &findings {
-        let (malo_id, obis) = finding
-            .malo_id
-            .split_once('|')
-            .unwrap_or((finding.malo_id.as_str(), ""));
+        let (malo_id, obis, bestellung_ref) = split_typ2_key(&finding.malo_id);
         let transition: Option<bool> = match sqlx::query_scalar(
             r"INSERT INTO delivery_surveillance
-                  (tenant, malo_id, stream, obis_code, state, last_interval_end,
-                   hours_silent, coverage_pct, interval_count)
-              VALUES ($1,$2,'TYP2',$3,$4,$5,$6,0,$7)
-              ON CONFLICT (tenant, stream, malo_id, obis_code) DO UPDATE SET
+                  (tenant, malo_id, stream, obis_code, subscription_ref, state,
+                   last_interval_end, hours_silent, coverage_pct, interval_count)
+              VALUES ($1,$2,'TYP2',$3,$4,$5,$6,$7,0,$8)
+              ON CONFLICT (tenant, stream, malo_id, obis_code, subscription_ref) DO UPDATE SET
                   last_seen_at      = now(),
                   state             = EXCLUDED.state,
                   last_interval_end = EXCLUDED.last_interval_end,
@@ -939,6 +966,7 @@ pub async fn run_typ2_surveillance_sweep(
         .bind(tenant)
         .bind(malo_id)
         .bind(obis)
+        .bind(bestellung_ref)
         .bind(finding.state.as_str())
         .bind(finding.last_interval_end)
         .bind(finding.hours_silent)
@@ -964,7 +992,7 @@ pub async fn run_typ2_surveillance_sweep(
         }
 
         tracing::warn!(
-            %malo_id, %obis,
+            %malo_id, %obis, %bestellung_ref,
             hours_silent = finding.hours_silent,
             "edmd: ESA Typ-2 subscription has stopped delivering (§60 Abs. 1 MsbG)"
         );
@@ -977,6 +1005,10 @@ pub async fn run_typ2_surveillance_sweep(
                 serde_json::json!({
                     "malo_id":           malo_id,
                     "obis_code":         obis,
+                    // `SG1 RFF+AGI` — the ORDERS 17007 that ordered these
+                    // values. Empty when the MSB omitted the Muss, which is
+                    // itself worth an operator's attention.
+                    "bestellung_ref":    bestellung_ref,
                     "last_interval_end": finding.last_interval_end.map(|t| t.to_string()),
                     "hours_silent":      finding.hours_silent,
                     "interval_count":    finding.interval_count,
@@ -1008,17 +1040,16 @@ pub async fn run_typ2_surveillance_sweep(
     let reported: Vec<String> = findings
         .iter()
         .map(|f| {
-            f.malo_id
-                .split_once('|')
-                .map_or_else(|| f.malo_id.clone(), |(m, o)| format!("{m}\u{1}{o}"))
+            let (m, o, b) = split_typ2_key(&f.malo_id);
+            format!("{m}\u{1}{o}\u{1}{b}")
         })
         .collect();
     let resumed_rows = sqlx::query(
         r"UPDATE delivery_surveillance
              SET resolved_at = now()
            WHERE tenant = $1 AND stream = 'TYP2' AND resolved_at IS NULL
-             AND NOT (malo_id || chr(1) || obis_code = ANY($2))
-       RETURNING malo_id, obis_code, state, first_detected_at",
+             AND NOT (malo_id || chr(1) || obis_code || chr(1) || subscription_ref = ANY($2))
+       RETURNING malo_id, obis_code, subscription_ref, state, first_detected_at",
     )
     .bind(tenant)
     .bind(&reported)
@@ -1030,7 +1061,8 @@ pub async fn run_typ2_surveillance_sweep(
         use sqlx::Row as _;
         let malo_id: String = row.get("malo_id");
         let obis: String = row.get("obis_code");
-        tracing::info!(%malo_id, %obis,
+        let bestellung_ref: String = row.get("subscription_ref");
+        tracing::info!(%malo_id, %obis, %bestellung_ref,
             "edmd: ESA Typ-2 subscription is delivering again");
         if let Some(url) = erp_webhook_url {
             let ce = mako_service::CloudEvent::new(
@@ -1040,6 +1072,7 @@ pub async fn run_typ2_surveillance_sweep(
                 serde_json::json!({
                     "malo_id":       malo_id,
                     "obis_code":     obis,
+                    "bestellung_ref": bestellung_ref,
                     "was_state":     row.get::<String, _>("state"),
                     "overdue_since": row
                         .get::<OffsetDateTime, _>("first_detected_at")

@@ -244,6 +244,39 @@ pub struct Erc {
     pub error_code: String,
 }
 
+// ── AJT ───────────────────────────────────────────────────────────────────────
+
+/// `AJT` — Einzelheiten zu einer Anpassung/Änderung.
+///
+/// The segment that carries a **published Antwortcode** and the
+/// Entscheidungsbaum it came from. BDEW repurposes both data elements:
+///
+/// | Element | DE   | UN/EDIFACT meaning        | BDEW meaning              |
+/// |---------|------|---------------------------|---------------------------|
+/// | 1       | 4465 | Adjustment reason code    | Code des Prüfschritts     |
+/// | 2       | 1082 | Line item number          | EBD-Nummer (e.g. `E_0256`)|
+///
+/// It is **Muss** on every ORDRSP that answers an ESA order (ORDRSP AHB 1.1b
+/// §4.15, PIDs 19011–19014) and on the REMADV rejection PIDs, and it is the
+/// *only* structured statement of why an answer says what it says — those
+/// ORDRSP use cases publish no free-text `FTX` at all. Conditions `[17]`/`[18]`
+/// require the code to sit in the named tree's Zustimmungs- resp.
+/// Ablehnungs-Cluster, so the **cluster decides which answer PID the message
+/// rides** and code and PID can never be read independently.
+#[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
+#[edifact(segment = "AJT", layout = crate::messages::layouts::AJT)]
+pub struct Ajt {
+    /// DE 4465 — Code des Prüfschritts (e.g. `"A11"`).
+    #[edifact(element = "4465")]
+    pub antwortcode: String,
+    /// DE 1082 — the Entscheidungsbaum that publishes the code (e.g. `"E_0256"`).
+    ///
+    /// `None` on the message types whose AHB leaves it out; an ESA ORDRSP
+    /// always carries it.
+    #[edifact(element = "1082")]
+    pub ebd: Option<String>,
+}
+
 // ── FTX ───────────────────────────────────────────────────────────────────────
 
 /// `FTX` — Free Text.

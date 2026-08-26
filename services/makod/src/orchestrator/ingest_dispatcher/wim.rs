@@ -465,12 +465,24 @@ impl EdifactIngestDispatcher {
                     // `SG15 RFF+AGI` (our ORDERS). Only the QUOTES also carries
                     // a `LOC`, which is why it is the sole location fallback.
                     let key = esa_korrelation_key(msg, pid);
-                    self.resume_by_key::<mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow>(
-                        &key,
-                        mako_wim::esa_wertebestellung::WORKFLOW_NAME,
-                        cmd,
-                    )
-                    .await
+                    let outcome = self
+                        .resume_by_key::<mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow>(
+                            &key,
+                            mako_wim::esa_wertebestellung::WORKFLOW_NAME,
+                            cmd,
+                        )
+                        .await?;
+                    // An ORDRSP 19011 answering a Bestellung is the moment the
+                    // MSB's Angebot stops being an offer and becomes the price
+                    // agreement — and it is the **only** price basis an ESA has
+                    // for the INVOIC 31009 that follows (§35 MsbG leaves the
+                    // Entgelt for a Zusatzleistung to be agreed per request;
+                    // there is no published Preisblatt for a Kapitel-4.6
+                    // Messprodukt). File it where `invoicd` looks.
+                    if pid == mako_wim::esa_wertebestellung::BESTAETIGUNG_PID.as_u32() {
+                        self.record_accepted_angebot(&key).await;
+                    }
+                    Ok(outcome)
                 } else {
                     Ok(IngestOutcome::Skipped {
                         workflow_name: mako_wim::esa_wertebestellung::WORKFLOW_NAME,

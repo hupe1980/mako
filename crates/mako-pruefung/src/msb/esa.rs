@@ -1,8 +1,9 @@
-//! The three trees an MSB runs when it serves an **Energieserviceanbieter**
+//! The four trees an MSB runs when it serves an **Energieserviceanbieter**
 //! (WiM Strom Teil 2, Kapitel 4).
 //!
 //! | Function | Inbound | Answering PIDs | EBD | Frist |
 //! |---|---|---|---|---|
+//! | [`pruefe_anfrage`] | REQOTE 35003 | QUOTES 15003 | `E_0252` | 5 WT |
 //! | [`pruefe_bestellung`] | ORDERS 17007 | 19011 / 19012 | `E_0256` | 2 WT |
 //! | [`pruefe_stornierung`] | ORDCHG 39002 | 19013 / 19014 | `E_0257` | 2 WT |
 //! | [`pruefe_beendigung`] | ORDERS 17008 | 19011 / 19012 | `E_0254` | 2 WT |
@@ -42,8 +43,10 @@
 
 use time::{Date, OffsetDateTime};
 
-use crate::antwort::RejectReason;
-use crate::codes::{EBD_ESA_BEENDIGUNG, EBD_ESA_BESTELLUNG, EBD_ESA_STORNIERUNG, lookup};
+use crate::antwort::{AntwortDetail, RejectReason};
+use crate::codes::{
+    EBD_ESA_ANFRAGE, EBD_ESA_BEENDIGUNG, EBD_ESA_BESTELLUNG, EBD_ESA_STORNIERUNG, lookup,
+};
 
 use super::types::MsbEntscheidung;
 
@@ -71,6 +74,173 @@ pub const fn ebd_fuer_antwort(imd_7081: &str) -> Option<&'static str> {
         b"Z01" | b"Z03" => Some(EBD_ESA_BESTELLUNG),
         b"Z02" => Some(EBD_ESA_BEENDIGUNG),
         _ => None,
+    }
+}
+
+// ── E_0252 — Anfrage prüfen ───────────────────────────────────────────────────
+
+/// What the MSB knows when an ESA Werteanfrage (REQOTE 35003) arrives.
+///
+/// The **first** gate of Kapitel 4: six questions the MSB must answer before it
+/// may price an offer at all, five of them from its own records.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EsaAnfrage {
+    /// Whether the requested Messprodukt is marked `Pflicht` in the Codeliste
+    /// **at the requested period** (Prüfschritt 1). A Pflichtprodukt skips
+    /// Prüfschritt 2 entirely — BNetzA *Mitteilung Nr. 3* removed the MSB's
+    /// discretion over it.
+    pub pflichtprodukt: bool,
+    /// Whether this MSB offers the product at all (Prüfschritt 2). Only
+    /// consulted for an *optional* product. `None` when the MSB has no product
+    /// catalogue on file — a fact mako does not hold, so it escalates rather
+    /// than refusing a §34-mandated Zusatzleistung on a guess.
+    pub messprodukt_angeboten: Option<bool>,
+    /// Whether the ESA-Rahmenvertrag is on file (Prüfschritt 3).
+    pub vertrag_vorhanden: bool,
+    /// Whether a signed Einwilligung for the location is on file
+    /// (Prüfschritt 4).
+    ///
+    /// `None` when the MSB holds no record: it holds only the ESA's
+    /// Zusicherung, and BNetzA *Mitteilung Nr. 3* forbids rejecting on consent
+    /// *form*. Same asymmetry as `E_0256` Prüfschritt 8.
+    pub einwilligung_vorhanden: Option<bool>,
+    /// Whether the consent's own data are plausible and complete
+    /// (Prüfschritt 5) — a *content* check, distinct from Prüfschritt 4's
+    /// presence check. `None` when there is nothing to judge.
+    pub einwilligung_plausibel: Option<bool>,
+    /// Whether the installed Gerätetechnik can produce the values
+    /// (Prüfschritt 6).
+    pub geraetetechnik_geeignet: bool,
+    /// `true` for a Marktlokations-, Tranchen- or Netzlokations-level request,
+    /// which needs the Prüfschritt-8 bundle check (Prüfschritt 7).
+    pub gebuendelte_ebene: bool,
+    /// For a bundled level: whether this MSB operates **every** underlying
+    /// Messlokation (Prüfschritt 8). `None` when the bundle is not known.
+    pub msb_aller_messlokationen: Option<bool>,
+}
+
+/// Walk `E_0252` — the MSB's check of an ESA Anfrage von Werten.
+///
+/// [`MsbEntscheidung::Accept`] here means „Angebot zur Anfrage erstellen": the
+/// tree's positive exits carry **no code**, because the QUOTES 15003 Angebot
+/// has no `AJT` segment — the priced offer *is* the agreement. The returned
+/// `Accept` therefore carries an empty Antwortcode, and the caller answers by
+/// pricing rather than by echoing a code.
+///
+/// # Panics
+///
+/// Only if the `E_0252` Codeliste is missing a code this function names, which
+/// a test in this module rules out.
+#[must_use]
+pub fn pruefe_anfrage(a: &EsaAnfrage) -> MsbEntscheidung {
+    let tree = EBD_ESA_ANFRAGE;
+    let code = |c: &str| lookup(tree, c).expect("code is published in E_0252");
+
+    // 1/2 — ein Pflichtprodukt überspringt die Angebotsfrage; bei einem
+    // optionalen entscheidet der MSB, und ob er es führt weiß nur er.
+    if !a.pflichtprodukt {
+        match a.messprodukt_angeboten {
+            Some(false) => {
+                return MsbEntscheidung::Reject(RejectReason::new(
+                    tree,
+                    code("A02"),
+                    2,
+                    "Das vom ESA gewünschte Messprodukt wird vom MSB nicht angeboten",
+                ));
+            }
+            None => {
+                return MsbEntscheidung::Escalate {
+                    reason: "E_0252 Prüfschritt 2: ob dieser MSB das optionale Messprodukt \
+                             anbietet, ist eine kaufmännische Entscheidung"
+                        .to_owned(),
+                };
+            }
+            Some(true) => {}
+        }
+    }
+
+    // 3 — vertragliche Grundlage (ESA-Rahmenvertrag + EDI-Vereinbarung).
+    if !a.vertrag_vorhanden {
+        return MsbEntscheidung::Reject(RejectReason::new(
+            tree,
+            code("A03"),
+            3,
+            "Die vertragliche Grundlage zur Anfrage und Übermittlung der Werte und Abrechnung \
+             der erbrachten Dienstleistung liegt beim MSB nicht vor",
+        ));
+    }
+
+    // 4 — liegt eine unterzeichnete Einwilligung vor? Ein *fehlender* Eintrag
+    // ist die Zusicherung des ESA und wird nicht abgelehnt (Mitteilung Nr. 3).
+    if a.einwilligung_vorhanden == Some(false) {
+        return MsbEntscheidung::Reject(RejectReason::new(
+            tree,
+            code("A04"),
+            4,
+            "Die unterzeichnete Einwilligung für die Lokation liegt nicht vor",
+        ));
+    }
+
+    // 5 — Inhaltsprüfung der vorliegenden Einwilligung. Nur prüfbar, wenn eine
+    // vorliegt; „nicht beurteilt" ist kein „nicht plausibel".
+    if a.einwilligung_plausibel == Some(false) {
+        return MsbEntscheidung::Reject(RejectReason::new(
+            tree,
+            code("A05"),
+            5,
+            "Vorliegende Einwilligung ist nicht plausibel oder vollständig",
+        ));
+    }
+
+    // 6 — Gerätetechnik.
+    if !a.geraetetechnik_geeignet {
+        return MsbEntscheidung::Reject(RejectReason::new(
+            tree,
+            code("A06"),
+            6,
+            "Die Gerätetechnik misst die angeforderten Messwerte nicht",
+        ));
+    }
+
+    // 7 — Messlokations-Anfrage: fertig, Angebot erstellen.
+    if !a.gebuendelte_ebene {
+        return MsbEntscheidung::Accept(angebot_erstellen());
+    }
+
+    // 8 — gebündelte Ebene: ein MSB über das ganze Lokationsbündel.
+    match a.msb_aller_messlokationen {
+        Some(true) => MsbEntscheidung::Accept(angebot_erstellen()),
+        Some(false) => MsbEntscheidung::Reject(RejectReason::new(
+            tree,
+            code("A07"),
+            8,
+            "Der MSB der Marktlokation / Netzlokation ist nicht zeitgleich der allen \
+             Messlokation(en) zugeordnete MSB",
+        )),
+        None => MsbEntscheidung::Escalate {
+            reason: "E_0252 Prüfschritt 8: ob der MSB an allen Messlokationen des \
+                     Lokationsbündels den Messstellenbetrieb führt, ist nicht bekannt"
+                .to_owned(),
+        },
+    }
+}
+
+/// The `E_0252` positive exit: „Angebot zur Anfrage erstellen".
+///
+/// Carries **no Antwortcode** — the QUOTES 15003 has no `AJT` segment, so the
+/// priced offer itself is the agreement. Kept as its own function so the
+/// tree's two positive exits cannot drift apart, and written out rather than
+/// built with [`MsbEntscheidung::accept`], which requires a published
+/// Zustimmungscode there is none of here.
+fn angebot_erstellen() -> AntwortDetail {
+    AntwortDetail {
+        tree: EBD_ESA_ANFRAGE.to_owned(),
+        antwortcode: String::new(),
+        ebd: None,
+        bedeutung: "Angebot zur Anfrage erstellen".to_owned(),
+        braucht_bemerkung: false,
+        abweichender_termin: None,
     }
 }
 
@@ -376,6 +546,142 @@ pub fn pruefe_beendigung(b: &EsaBeendigung) -> MsbEntscheidung {
 mod tests {
     use super::*;
     use time::macros::{date, datetime};
+
+    fn anfrage() -> EsaAnfrage {
+        EsaAnfrage {
+            pflichtprodukt: true,
+            messprodukt_angeboten: None,
+            vertrag_vorhanden: true,
+            einwilligung_vorhanden: Some(true),
+            einwilligung_plausibel: Some(true),
+            geraetetechnik_geeignet: true,
+            gebuendelte_ebene: false,
+            msb_aller_messlokationen: None,
+        }
+    }
+
+    /// The tree's positive exit is „Angebot zur Anfrage erstellen", which the
+    /// QUOTES has no `AJT` to state — so the Accept carries an empty code and
+    /// the offer itself is the agreement.
+    #[test]
+    fn a_clean_anfrage_ends_in_an_offer_with_no_antwortcode() {
+        let d = pruefe_anfrage(&anfrage());
+        assert!(matches!(d, MsbEntscheidung::Accept(_)));
+        assert_eq!(d.antwortcode(), Some(""));
+        assert_eq!(d.ebd(), Some(EBD_ESA_ANFRAGE));
+    }
+
+    /// Prüfschritt 1: BNetzA *Mitteilung Nr. 3* removed the MSB's discretion
+    /// over a Pflichtprodukt, so Prüfschritt 2 is never reached for one — even
+    /// with no product catalogue on file.
+    #[test]
+    fn a_pflichtprodukt_skips_the_angebotsfrage() {
+        let a = EsaAnfrage {
+            pflichtprodukt: true,
+            messprodukt_angeboten: Some(false),
+            ..anfrage()
+        };
+        assert!(matches!(pruefe_anfrage(&a), MsbEntscheidung::Accept(_)));
+    }
+
+    /// …while an optional product the MSB does not carry is `A02`, and one it
+    /// has no answer for escalates rather than refusing a Zusatzleistung on a
+    /// guess.
+    #[test]
+    fn an_optional_product_is_the_msbs_own_decision() {
+        let refused = pruefe_anfrage(&EsaAnfrage {
+            pflichtprodukt: false,
+            messprodukt_angeboten: Some(false),
+            ..anfrage()
+        });
+        assert_eq!(refused.antwortcode(), Some("A02"));
+
+        let unknown = pruefe_anfrage(&EsaAnfrage {
+            pflichtprodukt: false,
+            messprodukt_angeboten: None,
+            ..anfrage()
+        });
+        assert!(matches!(unknown, MsbEntscheidung::Escalate { .. }));
+
+        let carried = pruefe_anfrage(&EsaAnfrage {
+            pflichtprodukt: false,
+            messprodukt_angeboten: Some(true),
+            ..anfrage()
+        });
+        assert!(matches!(carried, MsbEntscheidung::Accept(_)));
+    }
+
+    /// `E_0252` splits consent into two Prüfschritte the way `E_0256` does
+    /// not: 4 asks whether one is on file, 5 whether its contents hold up.
+    /// A *missing* record is the ESA's Zusicherung and never refuses
+    /// (BNetzA Mitteilung Nr. 3).
+    #[test]
+    fn the_two_consent_pruefschritte_are_distinct() {
+        assert_eq!(
+            pruefe_anfrage(&EsaAnfrage {
+                einwilligung_vorhanden: Some(false),
+                ..anfrage()
+            })
+            .antwortcode(),
+            Some("A04")
+        );
+        assert_eq!(
+            pruefe_anfrage(&EsaAnfrage {
+                einwilligung_plausibel: Some(false),
+                ..anfrage()
+            })
+            .antwortcode(),
+            Some("A05")
+        );
+        // No record at all: self-assertion, so the Anfrage survives.
+        let absent = pruefe_anfrage(&EsaAnfrage {
+            einwilligung_vorhanden: None,
+            einwilligung_plausibel: None,
+            ..anfrage()
+        });
+        assert!(matches!(absent, MsbEntscheidung::Accept(_)));
+    }
+
+    /// Prüfschritte 7/8: only a bundled level asks the Lokationsbündel
+    /// question, and an unknown bundle escalates instead of refusing.
+    #[test]
+    fn the_buendel_check_only_applies_to_a_bundled_level() {
+        assert!(matches!(
+            pruefe_anfrage(&EsaAnfrage {
+                gebuendelte_ebene: false,
+                msb_aller_messlokationen: Some(false),
+                ..anfrage()
+            }),
+            MsbEntscheidung::Accept(_)
+        ));
+        assert_eq!(
+            pruefe_anfrage(&EsaAnfrage {
+                gebuendelte_ebene: true,
+                msb_aller_messlokationen: Some(false),
+                ..anfrage()
+            })
+            .antwortcode(),
+            Some("A07")
+        );
+        assert!(matches!(
+            pruefe_anfrage(&EsaAnfrage {
+                gebuendelte_ebene: true,
+                msb_aller_messlokationen: None,
+                ..anfrage()
+            }),
+            MsbEntscheidung::Escalate { .. }
+        ));
+    }
+
+    /// `A02`–`A07` mean different things in `E_0252` than the same letters do
+    /// in `E_0256`; resolving a code without naming its tree would silently
+    /// answer the wrong question.
+    #[test]
+    fn the_two_msb_trees_do_not_share_an_alphabet() {
+        let anfrage_a04 = crate::codes::lookup(EBD_ESA_ANFRAGE, "A04").expect("published");
+        let bestellung_a04 = crate::codes::lookup(EBD_ESA_BESTELLUNG, "A04").expect("published");
+        assert_ne!(anfrage_a04.bedeutung, bestellung_a04.bedeutung);
+    }
 
     fn bestellung() -> EsaBestellung {
         EsaBestellung {

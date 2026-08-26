@@ -35,8 +35,8 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::repository::{
-    ConsentDecision, ConsentPerspective, GrundversorgerRecord, MaloGridRecord, MaloTypedFields,
-    PreisblattDienstleistungRecord, PreisblattHardwareRecord, PreisblattKaRecord,
+    ConsentDecision, ConsentPerspective, EsaMessproduktPreis, GrundversorgerRecord, MaloGridRecord,
+    MaloTypedFields, PreisblattDienstleistungRecord, PreisblattHardwareRecord, PreisblattKaRecord,
     VersorgungsStatusRecord,
 };
 
@@ -510,6 +510,81 @@ impl MarktdClient {
     /// # Errors
     ///
     /// Returns [`MarktdClientError::Http`] on network or HTTP errors.
+    /// The prices an ESA accepted from an MSB, in force on `at`.
+    ///
+    /// **The ESA price basis for an INVOIC 31009.** `get_preisblatt_messung`
+    /// returns what an MSB *publishes* toward the NB and the LF; there is no
+    /// such sheet for the Kapitel-4.6 Messprodukte, because `§35 MsbG` leaves the
+    /// Entgelt for a Zusatzleistung to be agreed per request. The accepted
+    /// QUOTES 15003 Angebot is the agreement, and the invoice names the same
+    /// Artikel-IDs back.
+    ///
+    /// Empty when nothing is on record — which `invoic-checker` reports as a
+    /// warning and never a dispute, since a gap in mako's own records says
+    /// nothing about whether the MSB billed correctly.
+    ///
+    /// # Errors
+    ///
+    /// [`MarktdClientError::Http`] on a non-404 HTTP failure.
+    pub async fn esa_preise(
+        &self,
+        msb_mp_id: &str,
+        esa_mp_id: &str,
+        at: time::Date,
+    ) -> Result<Vec<EsaMessproduktPreis>, MarktdClientError> {
+        let url = format!(
+            "{}/api/v1/esa/preise/{msb_mp_id}/{esa_mp_id}",
+            self.base_url
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("at", at.to_string())])
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(Vec::new());
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        resp.json()
+            .await
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
+    /// Record the prices of an accepted Angebot.
+    ///
+    /// Called by `makod` when the MSB confirms the Bestellung (ORDRSP 19011) —
+    /// the moment the offer becomes the agreement. Best-effort at the call
+    /// site: a marktd outage must not fail a confirmed subscription, it only
+    /// leaves the invoice check without its basis, which the checker reports
+    /// as a warning.
+    ///
+    /// # Errors
+    ///
+    /// [`MarktdClientError::Http`] on an HTTP failure.
+    pub async fn put_esa_preise(
+        &self,
+        msb_mp_id: &str,
+        esa_mp_id: &str,
+        body: &serde_json::Value,
+    ) -> Result<(), MarktdClientError> {
+        let url = format!(
+            "{}/api/v1/esa/preise/{msb_mp_id}/{esa_mp_id}",
+            self.base_url
+        );
+        self.client
+            .put(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .json(body)
+            .send()
+            .await?
+            .error_for_status()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        Ok(())
+    }
+
     pub async fn esa_framework_established(
         &self,
         msb_mp_id: &str,

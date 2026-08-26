@@ -92,6 +92,19 @@ async fn relay_pending(
         .expect("pending outbox");
     let mut outcomes = Vec::new();
     for om in &pending {
+        // `ProcessInitiated` is an ERP notification, not a market message: the
+        // `OutboxErpWorker` delivers it as a CloudEvent to `processd` and the
+        // AS4 worker never sees it. It is what tells the MSB deployment that an
+        // ESA step needs answering — without it `processd`'s ESA module, the
+        // three `mako-pruefung` walks and the operator queue with its Fristen
+        // never ran at all. Acknowledged here so the loopback stays a *wire*
+        // relay; the notification contract itself is pinned in `mako-wim`.
+        if &*om.message_type == "ProcessInitiated" {
+            OutboxStore::acknowledge(&**store, om.message_id)
+                .await
+                .expect("acknowledge");
+            continue;
+        }
         let wire = makod::edifact_renderer::render_to_wire_bytes(om, registry)
             .unwrap_or_else(|e| panic!("render {} failed: {e:?}", om.message_type));
         let msg = edi_energy::parse(&wire.bytes)
@@ -185,10 +198,19 @@ async fn esa_ordrsp_answer_correlates_by_order_reference_not_malo() {
 
     // 2. MSB answers with a QUOTES 15003 Angebot; the ESA resumes by the
     //    REQOTE Belegnummer it echoes in `RFF+AAV` (`ZG-T16`).
+    // The Angebot is a **priced** offer: UC 4.1.1 has the ESA asking for „die
+    // Übermittlung von Werten und die damit verbundenen Kosten", and QUOTES AHB
+    // 1.1a §4.3 makes `SG4 CUX`, the `PIA+Z02` Artikel-IDs, the `SG31 PRI+CAL`
+    // prices and the `PIA+5 …:SRW` OBIS-Kennzahlen all Muss. That is also what
+    // tells an Angebot from an Ablehnung — `DTM+273` is Muss on both.
     dispatch_command(
         &msb,
         "wim.wertebestellung.anbieten",
-        &serde_json::json!({ "malo_id": MALO_ID }),
+        &serde_json::json!({
+            "malo_id": MALO_ID,
+            "obis": ["1-1:1.29.0"],
+            "preise": [{ "artikel_id": "9990001100002", "betrag": "0.004500" }],
+        }),
     )
     .await
     .expect("anbieten");
@@ -339,5 +361,140 @@ async fn two_messprodukte_at_one_marktlokation_are_two_subscriptions() {
         format!("{first:?}"),
         format!("{second:?}"),
         "the two orders must be distinct processes"
+    );
+}
+
+/// A GDPR Art. 7(3) Widerruf must stop **every** subscription at the location.
+///
+/// `marktd`'s revocation handler fires `esa.abbestellung.beauftragen` per
+/// covered *location*, with no `messprodukt` — it has no idea how many
+/// subscriptions sit behind one. But an ESA subscription is the (Meldepunkt,
+/// Messprodukt) pair, and the catalogue offers several products for a single
+/// Marktlokation.
+///
+/// Addressed by the bare location key, that resolved to more than one running
+/// process and `dispatch_to_process_keyed` refused it as `AmbiguousProcess`:
+/// the customer withdrew consent and **nothing stopped**. An omitted
+/// `messprodukt` therefore means „all of them".
+#[tokio::test]
+async fn a_widerruf_stops_every_subscription_at_the_location() {
+    let store = Arc::new(
+        SlateDbStore::open_in_memory()
+            .await
+            .expect("in-memory store"),
+    );
+    let tenant_esa = TenantId::from_party_id(ESA_MP_ID);
+    let tenant_msb = TenantId::from_party_id(MSB_MP_ID);
+    let esa = command_state(&store, tenant_esa, ESA_MP_ID, "ESA");
+    let msb = command_state(&store, tenant_msb, MSB_MP_ID, "MSB");
+    let dispatcher_esa = EdifactIngestDispatcher::new(
+        Arc::clone(&store),
+        store.as_snapshot_store(),
+        100,
+        tenant_esa,
+    );
+    let dispatcher_msb = EdifactIngestDispatcher::new(
+        Arc::clone(&store),
+        store.as_snapshot_store(),
+        100,
+        tenant_msb,
+    );
+    let registry = party_registry();
+
+    // Two subscriptions at one Marktlokation, both driven to a running delivery
+    // — and deliberately one of each Abo mode. A one-shot is *stornierbar,
+    // nicht abbestellbar* (`E_0254` Prüfschritt 1 answers its Beendigung with
+    // `A01` by construction), so a Widerruf that only knows how to send a 17008
+    // would fail for it — and failing to stop is the one outcome GDPR
+    // Art. 7(3) does not allow.
+    const PRODUKTE: [(&str, &str); 2] = [("9991000003056", "Z01"), ("9991000003147", "Z03")];
+    for (messprodukt, abonnement) in PRODUKTE {
+        dispatch_command(
+            &esa,
+            "esa.werteanfrage.stellen",
+            &serde_json::json!({
+                "msb_mp_id": MSB_MP_ID,
+                "malo_id": MALO_ID,
+                "messprodukt": messprodukt,
+                "abonnement": abonnement,
+                "wunschtermin": "2026-03-01",
+            }),
+        )
+        .await
+        .expect("werteanfrage");
+        relay_pending(&store, &registry, &dispatcher_esa, &dispatcher_msb).await;
+
+        dispatch_command(
+            &msb,
+            "wim.wertebestellung.anbieten",
+            &serde_json::json!({
+                "malo_id": MALO_ID,
+                "messprodukt": messprodukt,
+                "obis": ["1-1:1.29.0"],
+                "preise": [{ "artikel_id": "9990001100002", "betrag": "0.004500" }],
+            }),
+        )
+        .await
+        .expect("anbieten");
+        relay_pending(&store, &registry, &dispatcher_esa, &dispatcher_msb).await;
+
+        dispatch_command(
+            &esa,
+            "esa.bestellung.beauftragen",
+            &serde_json::json!({ "malo_id": MALO_ID, "messprodukt": messprodukt }),
+        )
+        .await
+        .expect("bestellung");
+        relay_pending(&store, &registry, &dispatcher_esa, &dispatcher_msb).await;
+
+        dispatch_command(
+            &msb,
+            "wim.wertebestellung.bestellung-beantworten",
+            &serde_json::json!({
+                "malo_id": MALO_ID,
+                "messprodukt": messprodukt,
+                "antwort_code": "A11",
+            }),
+        )
+        .await
+        .expect("bestellung-beantworten");
+        relay_pending(&store, &registry, &dispatcher_esa, &dispatcher_msb).await;
+    }
+
+    // The Widerruf, exactly as `marktd` fires it: location only, no product.
+    dispatch_command(
+        &esa,
+        "esa.abbestellung.beauftragen",
+        &serde_json::json!({
+            "malo_id": MALO_ID,
+            "esa_mp_id": ESA_MP_ID,
+            "grund": "einwilligung_widerrufen",
+        }),
+    )
+    .await
+    .expect("a Widerruf must not be refused as ambiguous");
+
+    // One stop message per subscription, not one for the location — and each in
+    // the shape its own Abo mode admits.
+    let now = time::OffsetDateTime::now_utc() + time::Duration::days(1);
+    let pending = OutboxStore::pending(&*store, 100, now)
+        .await
+        .expect("pending outbox");
+    let count = |mt: &str, pid: u64| {
+        pending
+            .iter()
+            .filter(|om| &*om.message_type == mt && om.payload["pid"].as_u64() == Some(pid))
+            .count()
+    };
+    assert_eq!(
+        count("ORDERS", 17008),
+        1,
+        "the Abo subscription is ended with an ORDERS 17008"
+    );
+    assert_eq!(
+        count("ORDCHG", 39002),
+        1,
+        "the one-shot subscription is stopped with an ORDCHG 39002, not a 17008 \
+         E_0254 would refuse with A01"
     );
 }

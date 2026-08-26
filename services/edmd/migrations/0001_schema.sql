@@ -619,6 +619,17 @@ CREATE TABLE delivery_surveillance (
     -- point; a Typ-2 subscription delivers named OBIS registers and one can go
     -- dark while the others keep arriving.
     obis_code         TEXT        NOT NULL DEFAULT '',
+    -- `SG1 RFF+AGI` on the delivering MSCONS 13027 — the Belegnummer of the
+    -- ORDERS 17007 that ordered the values (MSCONS AHB 3.2 §11.2 hint [574]).
+    -- Empty for TYP1, which has no subscription, and for a Typ-2 delivery whose
+    -- sender omitted the Muss.
+    --
+    -- Part of the key because an ESA subscription is the (Meldepunkt,
+    -- Messprodukt) pair and one Meldepunkt may carry several — the catalogue
+    -- offers 9991 00000 305 6 and 9991 00000 314 7 for the same Marktlokation.
+    -- Two subscriptions delivering the same OBIS register would otherwise share
+    -- one row, and one going silent would be masked by the other.
+    subscription_ref  TEXT        NOT NULL DEFAULT '',
     -- SILENT: nothing arrived for longer than the threshold.
     -- UNDER_COVERED: still delivering, but too little of the window to settle on.
     state             TEXT        NOT NULL CHECK (state IN ('SILENT','UNDER_COVERED')),
@@ -635,7 +646,7 @@ CREATE TABLE delivery_surveillance (
     last_seen_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     resolved_at       TIMESTAMPTZ,
 
-    PRIMARY KEY (tenant, stream, malo_id, obis_code)
+    PRIMARY KEY (tenant, stream, malo_id, obis_code, subscription_ref)
 );
 
 CREATE INDEX ds_open ON delivery_surveillance (tenant, state, first_detected_at)

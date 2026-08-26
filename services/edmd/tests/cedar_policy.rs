@@ -106,3 +106,61 @@ fn admin_role_covers_all_writes() {
         );
     }
 }
+
+/// The Kapitel-4.6.2 SMGW push is written by the **ESA's** SM-PKI gateway — the
+/// address the Werteanfrage's `FTX+Z17` points at — so it carries the `ESA`
+/// role. Gated on `write-meter-reads` it would be denied in the only deployment
+/// it exists for, since that policy demands `MSB`.
+#[test]
+fn an_esa_may_file_typ2_values_from_its_smgw_gateway() {
+    let e = enforcer();
+    assert!(
+        e.check(&principal(&["ESA"]), "write-esa-typ2", TENANT)
+            .is_ok()
+    );
+    // The integrated deployment that holds both roles runs the handshake
+    // against itself.
+    assert!(
+        e.check(&principal(&["MSB"]), "write-esa-typ2", TENANT)
+            .is_ok()
+    );
+    assert!(
+        e.check(&principal(&["ESA"]), "write-esa-typ2", "9900002000002")
+            .is_err(),
+        "cross-tenant is denied like everything else"
+    );
+}
+
+/// …and the separation runs the other way too. A Typ-2 value is
+/// non-authoritative by regulation (Codeliste 1.4 Kap. 4.6 · WiM Strom Teil 2
+/// §4) and may never reach `meter_reads`, so the gateway that files one must
+/// not be able to write the authoritative store — nor correct it, nor erase.
+#[test]
+fn the_typ2_gateway_cannot_reach_the_authoritative_store() {
+    let e = enforcer();
+    let esa = principal(&["ESA"]);
+    for action in [
+        "write-meter-reads",
+        "write-timeseries",
+        "write-corrections",
+        "write-quality-rescore",
+        "write-reading-order",
+        "write-gdpr-erasure",
+    ] {
+        assert!(
+            e.check(&esa, action, TENANT).is_err(),
+            "an ESA gateway must not be able to {action}"
+        );
+    }
+}
+
+/// An LF-role account of the right tenant gets no ESA write either — the
+/// consent-derived role is not a general write grant.
+#[test]
+fn lf_cannot_file_typ2_values() {
+    let e = enforcer();
+    assert!(
+        e.check(&principal(&["LF"]), "write-esa-typ2", TENANT)
+            .is_err()
+    );
+}

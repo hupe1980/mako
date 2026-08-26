@@ -877,7 +877,7 @@ S. 2 Nr. 10 MsbG), so `role-msb-strom` always carries these four obligations:
 
 | Inbound PID | Process | Answered with | Frist | EBD |
 |---|---|---|---|---|
-| **35003** | Werteanfrage (REQOTE) | QUOTES 15003 | 5 WT | — |
+| **35003** | Werteanfrage (REQOTE) | QUOTES 15003 | 5 WT | `E_0252` |
 | **17007** | Bestellung von Werten | ORDRSP 19011/19012 | 2 WT | `E_0256` |
 | **39002** | Stornierung der Bestellung | ORDRSP 19013/19014 | 2 WT | `E_0257` |
 | **17008** | Abbestellung von Werten | ORDRSP 19011/19012 | 2 WT | `E_0254` |
@@ -892,7 +892,7 @@ de.mako.process.initiated (PID 35003 / 17007 / 17008 / 39002)
   → GET marktd /api/v1/esa/consent-check           ← Einwilligung still valid?    (E_0256 Nr. 8)
   → GET marktd /api/v1/melos/{melo}/msb?at=        ← MSB assigned for the period? (E_0256 Nr. 7)
   → GET marktd /api/v1/malos/{malo}/buendel?at=    ← one MSB across the bundle?  (E_0256 Nr. 11)
-  → mako_pruefung::msb::esa::pruefe_{bestellung,stornierung,beendigung}
+  → mako_pruefung::msb::esa::pruefe_{anfrage,bestellung,stornierung,beendigung}
       Accept   → wim.wertebestellung.*-beantworten (Zustimmungscode) [if auto_accept]
                  else approval_queue with the WiM Frist
       Reject   → the same command with the tree's Ablehnungscode      [if auto_reject]
@@ -902,13 +902,30 @@ de.mako.process.initiated (PID 35003 / 17007 / 17008 / 39002)
 The answer command is the same for both clusters: the code's **Cluster** picks
 the PID, so there is no separate „ablehnen" command to route to.
 
-### The Werteanfrage always reaches an operator
+### The Werteanfrage: `E_0252`, not `E_0253`
 
-`E_0253` „Angebot zur Anfrage prüfen" is published **without a tree**, and the
-Angebot is a priced offer — Bindungsfrist, earliest start, one `PRI+CAL` per
-Artikel-ID — whose terms the Festlegung does not specify. 35003 therefore goes
-to the queue with its 5-Werktage window and both candidate commands
-(`anbieten` / `anfrage-ablehnen`) attached.
+Two trees answer the Werteanfrage and only one is the MSB's. **`E_0252` „Anfrage
+prüfen"** is the MSB's check of an inbound 35003 — eight Prüfschritte, refusals
+`A02`–`A07` (EBD 4.3 Kap. 8.25.1). Published **without** a tree are `E_0253`
+„Angebot zur Anfrage prüfen", the **ESA's** look at the offer that comes back,
+and `E_0258`, its look at the ORDRSP. One letter apart, opposite sides of the
+relationship.
+
+A **refused** Anfrage is dispatched like any other answer: the code's own
+wording rides `FTX+ACB` on the QUOTES via
+`wim.wertebestellung.anfrage-ablehnen`, since the 15003 has no `AJT` for a code
+to sit in.
+
+A **surviving** Anfrage reaches an operator: `E_0252`'s two positive exits both
+read „Angebot zur Anfrage erstellen", and the Angebot's Bindungsfrist, earliest
+start, per-Artikel-ID prices and OBIS registers are commercial terms the
+Festlegung does not specify. It queues with its 5-Werktage window and both
+candidate commands (`anbieten` / `anfrage-ablehnen`) attached.
+
+`A02`–`A07` mean different things in `E_0252` than the same letters do in
+`E_0256`: the two ask six of the same questions at different moments — the
+Anfrage against today, the Bestellung against the Zeitraum der
+Messwertermittlung.
 
 ### What escalates on the order PIDs
 
@@ -917,11 +934,17 @@ rather than guessing:
 
 - **Optional Messprodukte.** Whether *this* MSB offers a product is commercial.
   The seven Pflichtprodukte (BNetzA *Mitteilung Nr. 3*) are answered; an
-  otherwise-clean order for an optional one escalates.
-- **Gerätetechnik** (Prüfschritt 9) is a device fact mako does not hold, so it is
-  never asserted false.
-- **`E_0254` Prüfschritte 3/4** compare the requested end against values already
-  delivered — that state lives in the `makod` process, not in the event.
+  otherwise-clean order for an optional one escalates. „Pflicht" is **dated** —
+  the Codeliste lists `9991 00000 077 1` and `078 9` as „Optional ab 01.10.2023,
+  Pflicht ab 06.08.2024" — and a Vergangenheitswerte-Bestellung may reach back
+  before the cut-over, where the MSB's discretion still stood.
+- **Gerätetechnik** (`E_0252` Nr. 6, `E_0256` Nr. 9) is a device fact mako does
+  not hold, so it is never asserted false.
+- **An unknown Abo start.** `E_0254` Prüfschritt 2 compares the requested end
+  against it, and it is the `DTM+203` of the *Bestellung* — carried on the
+  `ProcessInitiated` payload as `abo_beginn`. Never the Bindungsfrist of the
+  MSB's own Angebot, and never the Abbestellung's `ausfuehrungsdatum`: that
+  field *is* the requested end, so comparing the two can only ever refuse.
 
 Enable in `processd.toml`:
 

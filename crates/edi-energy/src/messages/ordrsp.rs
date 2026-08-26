@@ -4,7 +4,7 @@ use crate::{
     MessageType,
     messages::{
         core::MessageCore,
-        segments::{Bgm, Dtm, Ftx, Nad, collect_dtm, find_bgm, find_nad, try_deserialize},
+        segments::{Ajt, Bgm, Dtm, Ftx, Nad, collect_dtm, find_bgm, find_nad, try_deserialize},
     },
 };
 
@@ -21,6 +21,7 @@ use crate::{
 /// | `sender`   | NAD+MS  | Message sender                      |
 /// | `receiver` | NAD+MR  | Message receiver                    |
 /// | `ftx`      | FTX     | Free text (rejection reason, …)     |
+/// | `ajt`      | SG2 AJT | Antwortcode + the EBD that publishes it |
 ///
 /// Wire type string: `ORDRSP:D:10A:UN:{release}`.
 ///
@@ -44,6 +45,8 @@ pub struct OrdrespMessage {
     receiver: Option<Nad>,
     /// FTX — free text segments (rejection reason, commentary, …).
     ftx: Vec<Ftx>,
+    /// SG2 AJT — the published Antwortcode and its Entscheidungsbaum.
+    ajt: Option<Ajt>,
 }
 
 impl OrdrespMessage {
@@ -54,7 +57,7 @@ impl OrdrespMessage {
         assoc_code: impl Into<Box<str>>,
         pruefidentifikator: Option<u32>,
     ) -> Self {
-        let (bgm, dtm, sender, receiver, ftx) = {
+        let (bgm, dtm, sender, receiver, ftx, ajt) = {
             let borrowed: Vec<edifact_rs::Segment<'_>> =
                 segments.iter().map(|s| s.as_borrowed()).collect();
             let ftx = borrowed
@@ -62,12 +65,17 @@ impl OrdrespMessage {
                 .filter(|s| s.tag == "FTX")
                 .filter_map(|s| try_deserialize::<Ftx>(s))
                 .collect::<Vec<_>>();
+            let ajt = borrowed
+                .iter()
+                .find(|s| s.tag == "AJT")
+                .and_then(|s| try_deserialize::<Ajt>(s));
             (
                 find_bgm(&borrowed),
                 collect_dtm(&borrowed),
                 find_nad(&borrowed, "MS"),
                 find_nad(&borrowed, "MR"),
                 ftx,
+                ajt,
             )
         };
         Self {
@@ -83,6 +91,7 @@ impl OrdrespMessage {
             sender,
             receiver,
             ftx,
+            ajt,
         }
     }
 
@@ -129,6 +138,23 @@ impl OrdrespMessage {
     #[must_use]
     pub fn ftx(&self) -> &[Ftx] {
         &self.ftx
+    }
+
+    /// SG2 `AJT` — the published Antwortcode and the Entscheidungsbaum it
+    /// came from.
+    ///
+    /// This, not [`ftx`](Self::ftx), is what an ORDRSP answer *means*. It is
+    /// **Muss** on the ESA order answers (PIDs 19011–19014, ORDRSP AHB 1.1b
+    /// §4.15) and on the Sperr-/Entsperr and Stammdaten answers, and those use
+    /// cases publish no free-text segment at all — the only `FTX` on a
+    /// conformant ESA 19011 is `SG27 FTX+Z27`, which carries the MSB's IP
+    /// address rather than a reason.
+    ///
+    /// `None` when the message carries no `AJT`, which for those PIDs means a
+    /// non-conformant counterparty rather than a silent answer.
+    #[must_use]
+    pub fn ajt(&self) -> Option<&Ajt> {
+        self.ajt.as_ref()
     }
 }
 

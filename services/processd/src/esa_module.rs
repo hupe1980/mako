@@ -3,7 +3,7 @@
 //!
 //! | Inbound PID | Process | Answered with | Frist | EBD |
 //! |---|---|---|---|---|
-//! | **35003** | Werteanfrage (REQOTE) | QUOTES 15003 | 5 WT | — |
+//! | **35003** | Werteanfrage (REQOTE) | QUOTES 15003 | 5 WT | `E_0252` |
 //! | **17007** | Bestellung von Werten | ORDRSP 19011/19012 | 2 WT | `E_0256` |
 //! | **39002** | Stornierung der Bestellung | ORDRSP 19013/19014 | 2 WT | `E_0257` |
 //! | **17008** | Abbestellung von Werten | ORDRSP 19011/19012 | 2 WT | `E_0254` |
@@ -18,17 +18,27 @@
 //!   → GET /api/v1/esa/consent-check              ← marktd (Einwilligung gültig?)
 //!   → GET /api/v1/melos/{melo}/msb?at=           ← marktd (zugeordnet?)
 //!   → GET /api/v1/malos/{malo}/buendel?at=       ← marktd (ein MSB im Bündel?)
-//!   → mako_pruefung::msb::esa::pruefe_{bestellung,stornierung,beendigung}
+//!   → mako_pruefung::msb::esa::pruefe_{anfrage,bestellung,stornierung,beendigung}
 //!       Accept   → wim.wertebestellung.*-beantworten [if auto_accept]
 //!                  else approval_queue with the WiM Frist
 //!       Reject   → the same command with the tree's Ablehnungscode
 //!       Escalate → approval_queue with the WiM Frist
 //! ```
 //!
-//! `E_0253` „Angebot zur Anfrage prüfen" is published **without a tree**, so
-//! the Werteanfrage always reaches an operator: the Angebot's Bindungsfrist,
-//! earliest start and per-Artikel-ID prices are commercial terms the Festlegung
-//! does not specify.
+//! # Two trees answer the Werteanfrage, and only one of them is the MSB's
+//!
+//! `E_0252` „Anfrage prüfen" is the MSB's check of an inbound REQOTE 35003 —
+//! eight Prüfschritte, refusals `A02`–`A07` (EBD 4.3 Kap. 8.25.1). Published
+//! **without** a tree are `E_0253` „Angebot zur Anfrage prüfen", the **ESA's**
+//! look at the offer that comes back („derzeit ist für diese Entscheidung kein
+//! Entscheidungsbaum notwendig, da keine Antwort gegeben wird"), and `E_0258`,
+//! its look at the ORDRSP. One letter apart, opposite sides.
+//!
+//! A surviving `E_0252` reaches a human: its positive exits both read „Angebot
+//! zur Anfrage erstellen", and the QUOTES 15003 has no `AJT` — the
+//! Bindungsfrist, the earliest start and the per-Artikel-ID prices are
+//! commercial terms the Festlegung does not specify. Its **refusals** are
+//! deterministic and are dispatched like any other.
 //!
 //! # Regulatory basis
 //!
@@ -108,6 +118,20 @@ pub struct EsaOrderPayload {
     pub bindungsfrist: Option<time::OffsetDateTime>,
     /// Whether delivery under the order has begun (`E_0257` Prüfschritte 3/4).
     pub lieferung_begonnen: bool,
+    /// Start of the running Abo — the `DTM+203` the **Bestellung** carried,
+    /// which the MSB confirmed (`E_0254` Prüfschritt 2).
+    ///
+    /// Neither the Bindungsfrist of the MSB's own Angebot — that is when the
+    /// *offer* expires, weeks before delivery may begin — nor the
+    /// Abbestellung's own `ausfuehrungsdatum`, which **is** `beendigung_zum`:
+    /// comparing the two would make Prüfschritt 2 („ist das Beendigungsdatum
+    /// größer als der Beginnzeitpunkt?") false by construction.
+    pub abo_beginn: Option<time::Date>,
+    /// Date the delivery was already ended, if it was (`E_0254` Prüfschritt 3).
+    pub bereits_beendet_zum: Option<time::Date>,
+    /// Date the most recent values covered, if any went out (`E_0254`
+    /// Prüfschritt 4).
+    pub juengste_lieferung: Option<time::Date>,
     /// The **Übertragungstag**, from the CloudEvent's `time`.
     pub received_at: time::OffsetDateTime,
 }
@@ -161,6 +185,18 @@ impl EsaOrderPayload {
                 .get("lieferung_begonnen")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false),
+            abo_beginn: data
+                .get("abo_beginn")
+                .and_then(|v| v.as_str())
+                .and_then(parse_date),
+            bereits_beendet_zum: data
+                .get("bereits_beendet_zum")
+                .and_then(|v| v.as_str())
+                .and_then(parse_date),
+            juengste_lieferung: data
+                .get("juengste_lieferung")
+                .and_then(|v| v.as_str())
+                .and_then(parse_date),
             received_at: event
                 .get("time")
                 .and_then(|v| v.as_str())
@@ -246,8 +282,11 @@ const fn answer_command(pid: u32) -> Option<(&'static str, &'static str)> {
         17_007 => Some(("wim.wertebestellung.bestellung-beantworten", "MSB")),
         17_008 => Some(("wim.wertebestellung.abbestellung-beantworten", "MSB")),
         39_002 => Some(("wim.wertebestellung.stornierung-beantworten", "MSB")),
-        // The Werteanfrage is answered with an Angebot or its Ablehnung, which
-        // are two different commands — the queue entry names both.
+        // The Werteanfrage has two answers with two different commands. Only
+        // the **refusal** is automatable: `E_0252`'s positive exit is „Angebot
+        // erstellen", which needs prices the Festlegung does not specify, so a
+        // surviving Anfrage always reaches an operator instead.
+        35_003 => Some(("wim.wertebestellung.anfrage-ablehnen", "MSB")),
         _ => None,
     }
 }
@@ -290,19 +329,13 @@ async fn evaluate(
 ) -> anyhow::Result<EsaDecisionOutcome> {
     use mako_pruefung::msb::esa;
 
-    // The Werteanfrage has no tree: its answer is a priced Angebot whose terms
-    // the Festlegung does not specify.
+    // ── Werteanfrage (35003) — `E_0252` ──────────────────────────────
+    //
+    // A surviving Anfrage still reaches an operator (the tree's positive exit
+    // is „Angebot erstellen", and pricing is not in the Festlegung), but its
+    // refusals are as deterministic as any other tree's.
     if payload.pid == mako_fristen::antwort::ESA_WERTEANFRAGE_PID {
-        return Ok(EsaDecisionOutcome::Escalate {
-            reason: format!(
-                "Werteanfrage des ESA {} zu {}{}: das Angebot nennt Bindungsfrist, frühesten \
-                 Liefertermin und Preise je Artikel-ID — `E_0253` veröffentlicht dafür keinen \
-                 Entscheidungsbaum, die kaufmännischen Konditionen entscheidet der MSB",
-                payload.esa_mp_id,
-                payload.lokations_id,
-                messprodukt_hinweis(&payload.messprodukt),
-            ),
-        });
+        return evaluate_anfrage(cfg, payload, marktd).await;
     }
 
     // `IMD+7081` is Muss on every order PID here, and both termination trees
@@ -350,7 +383,14 @@ async fn evaluate(
                     ),
                 });
             };
-            let pflicht = produkt.verbindlichkeit == mako_wim::esa::Verbindlichkeit::Pflicht;
+            // „Pflicht" is dated: the Codeliste lists `077 1`/`078 9` as
+            // „Optional ab 01.10.2023, Pflicht ab 06.08.2024", and a
+            // Vergangenheitswerte-Bestellung may reach back before the
+            // cut-over — where the MSB's discretion still stood.
+            let pflicht_am = payload
+                .ausfuehrungsdatum
+                .unwrap_or_else(|| payload.received_at.date());
+            let pflicht = produkt.ist_pflicht_am(pflicht_am);
 
             // Prüfschritt 6: is the ESA-Rahmenvertrag in force?
             let framework = marktd
@@ -465,29 +505,38 @@ async fn evaluate(
                     ),
                 });
             };
-            // Prüfschritte 2–4 compare the requested end against the Abo start
-            // and the values already delivered. Those live in the makod
-            // process, not in marktd, and the event carries neither — so the
-            // walk runs on what is known and escalates where it is not.
-            let Some(abo_beginn) = payload
-                .bindungsfrist
-                .map(|b| b.date())
-                .or(payload.ausfuehrungsdatum)
-            else {
-                return Ok(EsaDecisionOutcome::Escalate {
-                    reason: format!(
-                        "Der Beginn der turnusmäßigen Übermittlung zu {} ist unbekannt — \
-                         `E_0254` Prüfschritt 2 verlangt ihn",
-                        payload.lokations_id
-                    ),
-                });
+            // Prüfschritt 2 compares the requested end against the Abo start.
+            // That start is the `DTM+203` of the **Bestellung**, which lives in
+            // the makod process — never the Bindungsfrist of the MSB's own
+            // Angebot, and never `ausfuehrungsdatum`, which on a 17008 *is*
+            // `beendigung_zum` and made the comparison false by construction.
+            //
+            // Only asked of an Abo: Prüfschritt **1** refuses a one-shot with
+            // `A01` before ever reaching this, and it needs no start date.
+            let abo_beginn = match (art, payload.abo_beginn) {
+                (esa::Bestellart::Einmalig, _) => beendigung_zum,
+                (esa::Bestellart::Abo, Some(beginn)) => beginn,
+                (esa::Bestellart::Abo, None) => {
+                    return Ok(EsaDecisionOutcome::Escalate {
+                        reason: format!(
+                            "Der Beginn der turnusmäßigen Übermittlung zu {} ist unbekannt — \
+                             `E_0254` Prüfschritt 2 vergleicht das Beendigungsdatum mit ihm, und \
+                             ohne ihn wäre jede Abbestellung mit A02 abzulehnen",
+                            payload.lokations_id
+                        ),
+                    });
+                }
             };
+            // Prüfschritte 3/4 ask what has already gone out. `None` here means
+            // „nichts beendet, nichts geliefert" — an assertion, not an unknown
+            // — so it is only passed on when the process actually said so. The
+            // `de.mako.process.initiated` payload carries both.
             let anfrage = esa::EsaBeendigung {
                 art,
                 beendigung_zum,
                 abo_beginn,
-                bereits_beendet_zum: None,
-                juengste_lieferung: None,
+                bereits_beendet_zum: payload.bereits_beendet_zum,
+                juengste_lieferung: payload.juengste_lieferung,
             };
             Ok(EsaDecisionOutcome::from_entscheidung(
                 esa::pruefe_beendigung(&anfrage),
@@ -499,6 +548,110 @@ async fn evaluate(
             reason: format!("PID {pid} ist kein ESA-Bestellprozess dieses Moduls"),
         }),
     }
+}
+
+/// Walk `E_0252` for an inbound REQOTE 35003.
+///
+/// Split out because it asks a different set of questions from `E_0256` under
+/// **different letters** — `A02` here is „Messprodukt wird nicht angeboten",
+/// which is `A04`/`A05` there — and because its positive exit carries no code
+/// at all: the QUOTES 15003 Angebot has no `AJT`, so agreeing means pricing.
+async fn evaluate_anfrage(
+    cfg: &EsaModuleConfig,
+    payload: &EsaOrderPayload,
+    marktd: &mako_markt::marktd_client::MarktdClient,
+) -> anyhow::Result<EsaDecisionOutcome> {
+    use mako_pruefung::msb::esa;
+
+    // The Anfrage is checked against the period the values are wanted for.
+    // Without a `DTM+76` Wunschtermin on the message, today is the honest read.
+    let am = payload
+        .ausfuehrungsdatum
+        .unwrap_or_else(|| payload.received_at.date());
+
+    let Some(produkt) = mako_wim::esa::messprodukt(&payload.messprodukt) else {
+        // A code outside Kapitel 4.6 is not a product this Marktrolle may ask
+        // for at all, and `E_0252` publishes no code for „unbekanntes
+        // Messprodukt" — so it goes to an operator rather than borrowing one.
+        return Ok(EsaDecisionOutcome::Escalate {
+            reason: format!(
+                "Die Werteanfrage zu {} nennt das Messprodukt {:?}, das nicht in der Codeliste \
+                 der Konfigurationen Kapitel 4.6 steht",
+                payload.lokations_id, payload.messprodukt
+            ),
+        });
+    };
+
+    // Prüfschritt 3 — vertragliche Grundlage.
+    let vertrag_vorhanden = marktd
+        .esa_framework_established(&cfg.own_mp_id, &payload.esa_mp_id)
+        .await?;
+    // Prüfschritte 4/5 — Einwilligung: present, and plausible. A *missing*
+    // record is the ESA's Zusicherung, which BNetzA Mitteilung Nr. 3 forbids
+    // rejecting on, so it stays `None` and the Anfrage survives. mako records
+    // consent evidence-agnostically and never validates its form, so it has
+    // nothing to say about Prüfschritt 5 beyond „there is a valid record".
+    let einwilligung = marktd
+        .esa_consent_valid(&payload.esa_mp_id, &cfg.own_mp_id, &payload.lokations_id)
+        .await?;
+
+    let gebuendelt = matches!(
+        produkt.ebene,
+        mako_wim::esa::Lokationsebene::Marktlokation
+            | mako_wim::esa::Lokationsebene::Netzlokation
+            | mako_wim::esa::Lokationsebene::Tranche
+    );
+    let buendel_einheitlich = if gebuendelt {
+        marktd
+            .msb_serves_whole_buendel(&payload.lokations_id, &cfg.own_mp_id, am)
+            .await?
+    } else {
+        None
+    };
+
+    let anfrage = esa::EsaAnfrage {
+        pflichtprodukt: produkt.ist_pflicht_am(am),
+        // Whether *this* MSB carries an optional product is a commercial fact
+        // mako does not hold; `None` escalates rather than refusing a
+        // §34-mandated Zusatzleistung on a guess.
+        messprodukt_angeboten: None,
+        vertrag_vorhanden,
+        einwilligung_vorhanden: einwilligung,
+        // Prüfschritt 5 asks whether the consent's own *contents* are plausible
+        // and complete. mako records consent evidence-agnostically and never
+        // validates its form — BNetzA *Mitteilung Nr. 3* forbids rejecting a
+        // consent for deviating from the BDEW template — so it has nothing to
+        // say here and says nothing, rather than echoing Prüfschritt 4's answer
+        // into a question it did not ask.
+        einwilligung_plausibel: None,
+        // Device capability is not in any mako store either — asserting `false`
+        // would refuse on a guess.
+        geraetetechnik_geeignet: true,
+        gebuendelte_ebene: gebuendelt,
+        msb_aller_messlokationen: buendel_einheitlich,
+    };
+
+    let decision = esa::pruefe_anfrage(&anfrage);
+    if matches!(decision, mako_pruefung::msb::MsbEntscheidung::Accept(_)) {
+        // The tree survived, but its positive exit is „Angebot zur Anfrage
+        // erstellen" and the QUOTES carries no Antwortcode. Bindungsfrist,
+        // frühester Liefertermin and the per-Artikel-ID prices are commercial
+        // terms the Festlegung does not specify.
+        return Ok(EsaDecisionOutcome::Escalate {
+            reason: format!(
+                "Werteanfrage des ESA {} zu {}{}: alle Prüfschritte von `E_0252` sind erfüllt — \
+                 das Angebot nennt Bindungsfrist, frühesten Liefertermin und Preise je \
+                 Artikel-ID, die der MSB kaufmännisch entscheidet",
+                payload.esa_mp_id,
+                payload.lokations_id,
+                messprodukt_hinweis(&payload.messprodukt),
+            ),
+        });
+    }
+    Ok(EsaDecisionOutcome::from_entscheidung(
+        decision,
+        mako_pruefung::codes::EBD_ESA_ANFRAGE,
+    ))
 }
 
 fn messprodukt_hinweis(code: &str) -> String {
@@ -589,11 +742,16 @@ async fn dispatch(
     }
 }
 
-/// Post the ORDRSP answer to `makod`.
+/// Post the answer to `makod`.
 ///
-/// The Antwortcode rides `SG2 AJT` DE 4465 and makod resolves DE 1082 from the
-/// process's own Abo mode, so the code cannot travel under a tree that does not
-/// publish it.
+/// On the three order PIDs the Antwortcode rides `SG2 AJT` DE 4465 and makod
+/// resolves DE 1082 from the process's own Abo mode, so the code cannot travel
+/// under a tree that does not publish it.
+///
+/// The Werteanfrage refusal is different in kind: the QUOTES 15003 has **no
+/// `AJT`**, so an `E_0252` code has no segment to ride at all. Its wording goes
+/// into `FTX+ACB` — the only free text the message has, and what UC 4.1 Nr. 2
+/// means by „informiert der MSB den ESA über die Gründe".
 async fn post_answer(
     makod: &mako_markt::makod_client::MakodClient,
     payload: &EsaOrderPayload,
@@ -606,16 +764,33 @@ async fn post_answer(
     };
     let mut body = serde_json::json!({
         "malo_id": payload.lokations_id,
-        "antwort_code": antwortcode,
         "auto_stp": true,
     });
+    if payload.pid == mako_fristen::antwort::ESA_WERTEANFRAGE_PID {
+        // The QUOTES carries no Antwortcode; the code's own wording is the
+        // Begründung, and `anfrage-ablehnen` requires one.
+        body["reason"] = serde_json::Value::String(reason.map_or_else(
+            || {
+                mako_pruefung::codes::lookup(mako_pruefung::codes::EBD_ESA_ANFRAGE, antwortcode)
+                    .map_or_else(
+                        || format!("E_0252 {antwortcode}"),
+                        |c| format!("E_0252 {antwortcode}: {}", c.bedeutung),
+                    )
+            },
+            |text| format!("E_0252 {antwortcode}: {text}"),
+        ));
+    } else {
+        body["antwort_code"] = serde_json::Value::String(antwortcode.to_owned());
+    }
     // A subscription is the (Meldepunkt, Messprodukt) pair — without the
     // product the command cannot say which of several subscriptions at this
     // location it answers.
     if !payload.messprodukt.is_empty() {
         body["messprodukt"] = serde_json::Value::String(payload.messprodukt.clone());
     }
-    if let Some(text) = reason {
+    if let Some(text) = reason
+        && payload.pid != mako_fristen::antwort::ESA_WERTEANFRAGE_PID
+    {
         body["reason"] = serde_json::Value::String(text.clone());
     }
     let cmd = mako_markt::makod_client::ForwardCommand {
@@ -766,20 +941,40 @@ mod tests {
         )
     }
 
-    /// 35003 is answered by an operator: `E_0253` publishes no tree, and the
-    /// Angebot's Bindungsfrist, earliest start and per-Artikel-ID prices are
-    /// commercial terms the Festlegung does not specify.
+    /// A Werteanfrage naming a code outside Kapitel 4.6 is refused before any
+    /// lookup: `E_0252` publishes no code for „unbekanntes Messprodukt", so it
+    /// escalates rather than borrowing one from another tree.
     #[tokio::test]
-    async fn the_werteanfrage_escalates_without_consulting_marktd() {
-        let payload =
-            EsaOrderPayload::parse(&event(35_003, serde_json::json!({}))).expect("parsed");
+    async fn an_unknown_messprodukt_escalates_before_any_lookup() {
+        let payload = EsaOrderPayload::parse(&event(
+            35_003,
+            serde_json::json!({ "messprodukt": "9992000000011" }),
+        ))
+        .expect("parsed");
         let outcome = evaluate(&test_cfg(), &payload, &unreachable_marktd())
             .await
-            .expect("the Werteanfrage path makes no marktd call");
+            .expect("no marktd call precedes the catalogue lookup");
         let EsaDecisionOutcome::Escalate { reason } = outcome else {
-            panic!("the Werteanfrage must always reach an operator")
+            panic!("an unknown Messprodukt must escalate")
         };
-        assert!(reason.contains("E_0253"), "{reason}");
+        assert!(reason.contains("Kapitel 4.6"), "{reason}");
+    }
+
+    /// `E_0252` is the **MSB's** check of an inbound Werteanfrage and it has a
+    /// tree — eight Prüfschritte, refusals `A02`–`A07`. What has no tree is
+    /// `E_0253`, the **ESA's** look at the offer that comes back. Citing the
+    /// latter for an inbound REQOTE escalated every Werteanfrage, refusals
+    /// included, on the strength of the other side's tree.
+    #[test]
+    fn the_anfrage_tree_is_e0252_and_publishes_only_refusals() {
+        use mako_pruefung::codes::{Cluster, E_0252_CODES, EBD_ESA_ANFRAGE, ist_ablehnung_only};
+
+        assert_eq!(E_0252_CODES.len(), 6, "A02..A07");
+        assert!(E_0252_CODES.iter().all(|c| c.cluster == Cluster::Ablehnung));
+        assert!(
+            ist_ablehnung_only(EBD_ESA_ANFRAGE),
+            "the QUOTES Angebot carries no AJT, so there is no Zustimmungscode"
+        );
     }
 
     /// `IMD+7081` is Muss on every order PID, and both termination trees branch
@@ -863,6 +1058,77 @@ mod tests {
         assert_eq!(ebd, mako_pruefung::codes::EBD_ESA_BEENDIGUNG);
     }
 
+    /// The GDPR-Art.-7(3) Widerruf path had to survive `E_0254`, and it did not:
+    /// `abo_beginn` fell back to `ausfuehrungsdatum`, which on a 17008 **is**
+    /// `beendigung_zum` — so Prüfschritt 2 („ist das Beendigungsdatum größer als
+    /// der Beginnzeitpunkt?") was false by construction and every Abbestellung
+    /// was refused with `A02`.
+    #[tokio::test]
+    async fn an_abo_abbestellung_is_confirmed_when_the_dates_hold() {
+        let payload = EsaOrderPayload::parse(&event(
+            17_008,
+            serde_json::json!({
+                "abonnement": "Z02",
+                "ausfuehrungsdatum": "2026-06-01",
+                "abo_beginn": "2026-03-01",
+            }),
+        ))
+        .expect("parsed");
+        let outcome = evaluate(&test_cfg(), &payload, &unreachable_marktd())
+            .await
+            .expect("no marktd call on this path");
+        assert_eq!(
+            outcome,
+            EsaDecisionOutcome::Accept {
+                antwortcode: "A05".to_owned(),
+                ebd: mako_pruefung::codes::EBD_ESA_BEENDIGUNG,
+            },
+            "a Beendigung after the Abo start is confirmed"
+        );
+    }
+
+    /// …and without a known Abo start it escalates rather than refusing: the
+    /// Prüfschritt is unanswerable, not answered `A02`.
+    #[tokio::test]
+    async fn an_abo_abbestellung_without_an_abo_start_escalates() {
+        let payload = EsaOrderPayload::parse(&event(
+            17_008,
+            serde_json::json!({ "abonnement": "Z02", "ausfuehrungsdatum": "2026-06-01" }),
+        ))
+        .expect("parsed");
+        let outcome = evaluate(&test_cfg(), &payload, &unreachable_marktd())
+            .await
+            .expect("no marktd call on this path");
+        let EsaDecisionOutcome::Escalate { reason } = outcome else {
+            panic!("an unknown Abo start must escalate, got {outcome:?}")
+        };
+        assert!(reason.contains("Prüfschritt 2"), "{reason}");
+    }
+
+    /// Prüfschritte 3/4 are facts, not defaults: values already delivered past
+    /// the requested end are `A04`, and the process carries that date.
+    #[tokio::test]
+    async fn values_delivered_past_the_requested_end_refuse_with_a04() {
+        let payload = EsaOrderPayload::parse(&event(
+            17_008,
+            serde_json::json!({
+                "abonnement": "Z02",
+                "ausfuehrungsdatum": "2026-06-01",
+                "abo_beginn": "2026-03-01",
+                "juengste_lieferung": "2026-06-15",
+            }),
+        ))
+        .expect("parsed");
+        let EsaDecisionOutcome::Reject { antwortcode, .. } =
+            evaluate(&test_cfg(), &payload, &unreachable_marktd())
+                .await
+                .expect("no marktd call on this path")
+        else {
+            panic!("a delivery past the requested end must refuse")
+        };
+        assert_eq!(antwortcode, "A04");
+    }
+
     /// `E_0257` refuses a started delivery with a different code per Abo mode,
     /// so the module must not collapse the two.
     #[test]
@@ -898,11 +1164,21 @@ mod tests {
         assert_eq!(p.abonnement, None);
     }
 
+    /// Every PID this module answers has a command, including the
+    /// Werteanfrage — whose refusal is `wim.wertebestellung.anfrage-ablehnen`
+    /// rather than an ORDRSP, because `E_0252` codes have no `AJT` to ride.
     #[test]
-    fn answer_commands_cover_the_order_pids_but_not_the_anfrage() {
-        assert!(answer_command(17_007).is_some());
-        assert!(answer_command(17_008).is_some());
-        assert!(answer_command(39_002).is_some());
-        assert!(answer_command(35_003).is_none());
+    fn every_answered_pid_has_a_command() {
+        for pid in ESA_ANSWERED_PIDS {
+            assert!(answer_command(*pid).is_some(), "PID {pid} has no command");
+        }
+        assert_eq!(
+            answer_command(35_003).map(|(c, _)| c),
+            Some("wim.wertebestellung.anfrage-ablehnen")
+        );
+        assert!(
+            answer_command(19_011).is_none(),
+            "outbound PIDs are not ours"
+        );
     }
 }

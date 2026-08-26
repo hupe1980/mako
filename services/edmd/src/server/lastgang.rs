@@ -547,6 +547,202 @@ pub(crate) fn reads_to_arrow_ipc(reads: &[crate::domain::MeterRead]) -> anyhow::
 /// - `medium` reflects the commodity (Strom / Gas).
 ///
 /// Source: BO4E-Standard Zeitreihe; API-Webdienste Strom §5.3.
+/// One interval of a Kapitel-4.6.2 SMGW push.
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct SmgwTyp2Interval {
+    /// Interval start, RFC 3339.
+    dtm_from: String,
+    /// Interval end, RFC 3339.
+    dtm_to: String,
+    /// Energy quantity, in kWh. A string so no decimal is lost in JSON.
+    quantity_kwh: String,
+    /// OBIS-Kennzahl of the register this interval belongs to.
+    ///
+    /// **Required.** A 4.6.2 product delivers a named register, and the
+    /// surveillance sweep is keyed on it.
+    obis_code: String,
+    /// Quality as delivered. Absent or unrecognised is `UNKNOWN`, never
+    /// `MEASURED` — „nothing was said" is not „it was measured", and only the
+    /// billable qualities settle.
+    #[serde(default)]
+    quality: Option<String>,
+}
+
+/// A Kapitel-4.6.2 "Werte nach Typ 2 aus SMGW" push.
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct SmgwTyp2Push {
+    /// `SG1 RFF+AGI` of the ORDERS 17007 that ordered these values — which
+    /// subscription this delivery belongs to.
+    ///
+    /// **Required**: a Meldepunkt may carry several subscriptions, and a Typ-2
+    /// value that cannot name its own is one the ESA cannot attribute.
+    bestellung_ref: String,
+    /// MP-ID of the MSB whose iMS delivered these values.
+    msb_mp_id: String,
+    /// Messlokation the SMGW sits at. Every Kapitel-4.6.2 Messprodukt is
+    /// defined for the Messlokation, so a push without one is mis-addressed.
+    melo_id: String,
+    /// Commodity. `STROM` unless stated — there is no ESA in the Gas
+    /// Rollenmodell, so nothing else is expected here.
+    #[serde(default)]
+    sparte: Option<String>,
+    /// The intervals.
+    werte: Vec<SmgwTyp2Interval>,
+}
+
+/// `POST /api/v1/esa/typ2/{malo_id}` — receive "Werte nach Typ 2 **aus SMGW**"
+/// (Codeliste der Konfigurationen 1.4 Kapitel **4.6.2**).
+///
+/// # Why a second door
+///
+/// Kapitel 4.6 has two delivery paths and they share nothing but the values.
+/// **4.6.1** arrives as MSCONS 13027 over AS4 and lands through the `makod`
+/// ingest; **4.6.2** arrives as XML **straight from the iMS over SM-PKI**,
+/// never touching the market-communication transport at all, so there is no
+/// ingest to carry it. Two of the seven Pflichtprodukte BNetzA *Mitteilung
+/// Nr. 3* obliges every MSB to serve — `9991 00000 312 1` and
+/// `9991 00000 313 9` — are 4.6.2 products.
+///
+/// # What this endpoint is not
+///
+/// It does **not** terminate SM-PKI. The TLS session against the SMGW's WAN
+/// interface, the BSI TR-03109-4 certificate chain and the Zieladresse the
+/// Werteanfrage named are a deployment concern — a gateway holding those
+/// certificates, which is what `FTX+Z17` points at. This is where that gateway
+/// files what it decoded, and it is deliberately separate from the submetering
+/// push (`POST /api/v1/meter-reads/iot/{malo_id}`), which writes the
+/// **authoritative** store. A Typ-2 value must never reach one.
+pub(crate) async fn post_esa_typ2(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(malo_id): Path<String>,
+    Json(req): Json<SmgwTyp2Push>,
+) -> impl IntoResponse {
+    use time::format_description::well_known::Rfc3339;
+
+    let resource_tenant = state.tenant.as_str();
+    // Its own action, deliberately: the writer is the ESA's SM-PKI gateway, and
+    // `write-meter-reads` would both refuse it (that policy demands the MSB
+    // role) and grant it too much — a Typ-2 value may never reach `meter_reads`.
+    if let Err(e) = enforcer.check(&claims.principal(), "write-esa-typ2", resource_tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    if req.bestellung_ref.trim().is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "bestellung_ref is required — it names the ORDERS 17007 that ordered                           these values (SG1 RFF+AGI), and a Meldepunkt may carry several                           subscriptions",
+            })),
+        )
+            .into_response();
+    }
+    // There is no ESA in the Gas Rollenmodell (BDEW Rollenmodell V2.2), so a
+    // Sparte other than Strom is a mis-addressed push rather than a default to
+    // correct silently.
+    let sparte = match req.sparte.as_deref() {
+        None => crate::domain::Sparte::Strom,
+        Some(raw) => match crate::domain::parse_sparte(raw) {
+            Some(crate::domain::Sparte::Strom) => crate::domain::Sparte::Strom,
+            _ => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": format!(
+                            "sparte {raw:?} is not orderable by an ESA — Kapitel 4.6 is Strom                              only and there is no ESA in the Gas Rollenmodell"
+                        ),
+                    })),
+                )
+                    .into_response();
+            }
+        },
+    };
+
+    let mut reads: Vec<crate::domain::Typ2Read> = Vec::with_capacity(req.werte.len());
+    for (i, w) in req.werte.iter().enumerate() {
+        let (Ok(from), Ok(to)) = (
+            time::OffsetDateTime::parse(&w.dtm_from, &Rfc3339),
+            time::OffsetDateTime::parse(&w.dtm_to, &Rfc3339),
+        ) else {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": format!("werte[{i}]: dtm_from/dtm_to must be RFC 3339"),
+                })),
+            )
+                .into_response();
+        };
+        let Ok(quantity_kwh) = w.quantity_kwh.parse::<rust_decimal::Decimal>() else {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": format!("werte[{i}]: quantity_kwh {:?} is not a decimal", w.quantity_kwh),
+                })),
+            )
+                .into_response();
+        };
+        reads.push(crate::domain::Typ2Read {
+            malo_id: malo_id.clone(),
+            melo_id: Some(req.melo_id.clone()),
+            dtm_from: from,
+            dtm_to: to,
+            quantity_kwh,
+            quality: crate::domain::quality_from_label(w.quality.as_deref()),
+            // The Codeliste's own code for the 4.6.1 path. A 4.6.2 delivery
+            // carries no Prüfidentifikator at all — it never entered market
+            // communication — so `delivery_path` is what says where it came
+            // from, and the PID stays the Typ-2 stream's single identity.
+            pid: crate::domain::ESA_TYP2_PIDS[0],
+            sparte,
+            obis_code: Some(w.obis_code.clone()),
+            tenant: state.tenant.clone(),
+            delivery_path: crate::domain::Typ2DeliveryPath::SmgwDirect,
+            sender_mp_id: Some(req.msb_mp_id.clone()),
+            bestellung_ref: Some(req.bestellung_ref.clone()),
+            received_at: None,
+        });
+    }
+
+    let stored = reads.len();
+    if let Err(err) = state.typ2_repo.store_typ2_reads(&reads).await {
+        let status = if err.is_retryable() {
+            StatusCode::INTERNAL_SERVER_ERROR
+        } else {
+            StatusCode::UNPROCESSABLE_ENTITY
+        };
+        tracing::error!(
+            %err, malo_id, retryable = err.is_retryable(),
+            "edmd: ESA Typ-2 SMGW push store failed"
+        );
+        return (
+            status,
+            Json(serde_json::json!({ "error": err.to_string() })),
+        )
+            .into_response();
+    }
+
+    tracing::info!(
+        malo_id, melo_id = %req.melo_id, bestellung_ref = %req.bestellung_ref, stored,
+        "edmd: stored ESA Typ-2 values from SMGW (non-authoritative, separate store)"
+    );
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "malo_id": malo_id,
+            "bestellung_ref": req.bestellung_ref,
+            "delivery_path": crate::domain::Typ2DeliveryPath::SmgwDirect.as_str(),
+            "non_authoritative": true,
+            "stored": stored,
+        })),
+    )
+        .into_response()
+}
+
 /// `GET /api/v1/esa/typ2/{malo_id}` — read ESA "Werte nach Typ 2" for a MaLo.
 ///
 /// Reads the separate `esa_typ2_reads` store exclusively. These values are

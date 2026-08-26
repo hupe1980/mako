@@ -165,6 +165,24 @@ pub enum FindingKind {
     /// Tax shown on a §13b invoice is owed under §14c Abs. 1 UStG and is still
     /// not deductible, because the recipient owes it too.
     ReverseChargeStatesTax,
+    /// An INVOIC 31009 position's unit price deviates from the price the MSB
+    /// **offered** and the ESA accepted (QUOTES 15003 `SG31 PRI+CAL`).
+    ///
+    /// Distinct from [`Self::TariffDeviation`], which compares against a
+    /// *published* Preisblatt. An ESA has none: there is no price sheet for
+    /// Kapitel-4.6 Messprodukte, and §35 MsbG leaves the Entgelt for a
+    /// Zusatzleistung to be agreed per request. The Angebot **is** the price
+    /// agreement, which is why UC 4.1.1 has the ESA asking for „die
+    /// Übermittlung von Werten und die damit verbundenen Kosten" and why the
+    /// offer carries a Bindungsfrist at all.
+    AngebotDeviation,
+    /// An INVOIC 31009 position names an Artikel-ID the accepted Angebot never
+    /// priced.
+    ///
+    /// The offer prices one to three Artikel-IDs per `SG27 LIN` (QUOTES AHB
+    /// 1.1a condition `[2042]`); a fourth on the invoice is a charge the ESA
+    /// never agreed to.
+    AngebotPositionUnknown,
 }
 
 // ── Finding ───────────────────────────────────────────────────────────────────
@@ -264,6 +282,46 @@ pub struct CheckReport {
 }
 
 impl CheckReport {
+    /// Assemble a report from the findings a check pipeline produced.
+    ///
+    /// The outcome is the **highest severity** across the findings: one dispute
+    /// makes the whole report a dispute, any finding at all makes it at least a
+    /// warning, none makes it `Ok`. That rule, the invoice's own stated total
+    /// and the line count were open-coded once per pipeline — three copies of
+    /// the same four lines, in the one place where a divergence would silently
+    /// change whether an invoice is auto-paid.
+    #[must_use]
+    pub fn from_findings(
+        pid: u32,
+        rechnung: &Rechnung,
+        findings: Vec<Finding>,
+        computed_total: Option<EuroAmount>,
+    ) -> Self {
+        let outcome = findings
+            .iter()
+            .map(|f| {
+                if f.is_dispute {
+                    CheckOutcome::Dispute
+                } else {
+                    CheckOutcome::Warn
+                }
+            })
+            .max()
+            .unwrap_or(CheckOutcome::Ok);
+
+        Self {
+            outcome,
+            findings,
+            pid,
+            total_net_invoic: rechnung
+                .gesamtnetto
+                .wert_decimal()
+                .and_then(euro_from_decimal),
+            total_net_computed: computed_total,
+            line_items_checked: rechnung.rechnungspositionen.iter().flatten().count(),
+        }
+    }
+
     /// `true` when the invoice passed all checks without findings.
     #[must_use]
     pub fn is_ok(&self) -> bool {
@@ -384,32 +442,7 @@ impl InvoicCheckEngine {
             );
         }
 
-        // ── Derive overall outcome ────────────────────────────────────────────
-        let outcome = findings
-            .iter()
-            .map(|f| {
-                if f.is_dispute {
-                    CheckOutcome::Dispute
-                } else {
-                    CheckOutcome::Warn
-                }
-            })
-            .max()
-            .unwrap_or(CheckOutcome::Ok);
-
-        let total_net_invoic = rechnung
-            .gesamtnetto
-            .wert_decimal()
-            .and_then(euro_from_decimal);
-
-        CheckReport {
-            outcome,
-            findings,
-            pid,
-            total_net_invoic,
-            total_net_computed: computed_total,
-            line_items_checked: rechnung.rechnungspositionen.iter().flatten().count(),
-        }
+        CheckReport::from_findings(pid, rechnung, findings, computed_total)
     }
 
     // ── Stage implementations ──────────────────────────────────────────────────
@@ -921,6 +954,147 @@ impl InvoicCheckEngine {
         }
     }
 
+    // ── The ESA's price basis is its own accepted Angebot ────────────────────
+
+    /// Check an INVOIC 31009 against the **Angebot the ESA accepted**.
+    ///
+    /// # Why an ESA cannot use the Preisblatt path
+    ///
+    /// [`check_msb_rechnung`](Self::check_msb_rechnung) compares against
+    /// `PreisblattMessung` — the price sheet an MSB publishes toward the NB and
+    /// the LF. **An ESA has none**: there is no published sheet for the
+    /// Kapitel-4.6 Messprodukte, because §35 MsbG leaves the Entgelt for a
+    /// Zusatzleistung to be agreed per request.
+    ///
+    /// Its basis is the offer it accepted. UC 4.1.1 has the ESA asking for „die
+    /// Übermittlung von Werten **und die damit verbundenen Kosten**"; QUOTES AHB
+    /// 1.1a §4.3 makes `SG4 CUX` and one `SG31 PRI+CAL` per `SG27 PIA+Z02`
+    /// Artikel-ID **Muss**; and the offer carries a Bindungsfrist because it
+    /// binds. The invoice names the same Artikel-IDs back (`SG26 LIN` DE 7143
+    /// `Z09`, INVOIC AHB 1.0b), so the two join exactly rather than by a
+    /// plausibility band.
+    ///
+    /// # What it reports
+    ///
+    /// - a position whose `einzelpreis` deviates from the agreed one beyond
+    ///   `tariff_tolerance_ppm` → [`FindingKind::AngebotDeviation`], a dispute;
+    /// - a position naming an Artikel-ID the offer never priced →
+    ///   [`FindingKind::AngebotPositionUnknown`], a dispute — a charge the ESA
+    ///   did not agree to;
+    /// - a position carrying **no** Artikel-ID → skipped with a warning. DE 7143
+    ///   admits `Z01` Artikelnummer as well as `Z09` Artikel-ID, and an
+    ///   Artikelnummer names no offer position.
+    ///
+    /// `agreed` is the accepted offer as `(Artikel-ID, price)` pairs. Empty
+    /// means no accepted offer is on record: the checks are **skipped with a
+    /// warning**, never disputed, because absence is a gap in mako's own
+    /// records rather than a defect in the MSB's invoice.
+    #[must_use]
+    pub fn check_esa_rechnung(
+        sender_mp_id: &str,
+        rechnung: &Rechnung,
+        agreed: &[(String, EuroAmount)],
+        config: &CheckConfig,
+    ) -> CheckReport {
+        let mut findings = Vec::new();
+
+        // The structural checks are the same invoice arithmetic as everywhere
+        // else; only the price basis differs.
+        Self::check_periods(rechnung, &mut findings);
+        Self::check_arithmetic(rechnung, config, &mut findings);
+        let computed_total = Self::check_total(rechnung, config, &mut findings);
+        Self::check_zahlungsziel(rechnung, config, &mut findings);
+        Self::check_steuer(rechnung, config, &mut findings);
+
+        Self::check_against_angebot(rechnung, sender_mp_id, agreed, config, &mut findings);
+
+        CheckReport::from_findings(31009, rechnung, findings, computed_total)
+    }
+
+    /// The price comparison of [`check_esa_rechnung`], split out so the
+    /// Preisblatt path and the Angebot path cannot drift into one another.
+    fn check_against_angebot(
+        rechnung: &Rechnung,
+        sender_mp_id: &str,
+        agreed: &[(String, EuroAmount)],
+        config: &CheckConfig,
+        findings: &mut Vec<Finding>,
+    ) {
+        if agreed.is_empty() {
+            findings.push(Finding {
+                kind: FindingKind::TariffNotFound,
+                // Never a dispute: mako not holding the accepted offer says
+                // nothing about whether the MSB billed correctly.
+                is_dispute: false,
+                message: format!(
+                    "No accepted Angebot on record for MSB {sender_mp_id}. The ESA price basis \
+                     is the QUOTES 15003 the ESA ordered against (§35 MsbG — there is no \
+                     published Preisblatt for Kapitel-4.6 Messprodukte), so the price check is \
+                     skipped."
+                ),
+                line_number: None,
+                expected: None,
+                actual: None,
+                deviation_pct: None,
+            });
+            return;
+        }
+
+        let tol = config.tariff_tolerance_ppm;
+        for pos in rechnung.rechnungspositionen.iter().flatten() {
+            let (line_no, text) = pos_ident(pos);
+            let Some(invoiced) = pos.einzelpreis.wert_decimal().and_then(euro_from_decimal) else {
+                continue;
+            };
+            // DE 7143 admits `Z01` Artikelnummer beside `Z09` Artikel-ID, and an
+            // Artikelnummer names no offer position — so a position without an
+            // Artikel-ID is not comparable rather than wrong.
+            let Some(artikel_id) = pos.artikel_id.as_deref().filter(|a| !a.is_empty()) else {
+                findings.push(Finding::warn(
+                    FindingKind::TariffNotFound,
+                    format!(
+                        "Line {line_no} ({text}): no Artikel-ID, so the position cannot be \
+                         matched to the accepted Angebot — price check skipped for this line"
+                    ),
+                    Some(line_no),
+                    None,
+                    Some(invoiced),
+                ));
+                continue;
+            };
+
+            let Some((_, expected)) = agreed.iter().find(|(id, _)| id == artikel_id) else {
+                findings.push(Finding::dispute(
+                    FindingKind::AngebotPositionUnknown,
+                    format!(
+                        "Line {line_no} ({text}): Artikel-ID {artikel_id} was never priced in \
+                         the Angebot this subscription was ordered against — the ESA did not \
+                         agree to this charge"
+                    ),
+                    Some(line_no),
+                    None,
+                    Some(invoiced),
+                ));
+                continue;
+            };
+
+            if !invoiced.within_tolerance_ppm(*expected, tol) {
+                findings.push(Finding::dispute(
+                    FindingKind::AngebotDeviation,
+                    format!(
+                        "Line {line_no} ({text}): Artikel-ID {artikel_id} billed at {invoiced} \
+                         EUR, but the accepted Angebot from MSB {sender_mp_id} priced it at \
+                         {expected} EUR (tolerance {pct:.1}%)",
+                        pct = f64::from(tol) / 10_000.0,
+                    ),
+                    Some(line_no),
+                    Some(*expected),
+                    Some(invoiced),
+                ));
+            }
+        }
+    }
+
     // ── Stage 5: MMM settlement price check ──────────────────────────────────
 
     /// Check 6 (MMM settlement): validate that `mehr_preis` / `minder_preis`
@@ -1093,31 +1267,7 @@ impl InvoicCheckEngine {
             }
         }
 
-        let outcome = findings
-            .iter()
-            .map(|f| {
-                if f.is_dispute {
-                    CheckOutcome::Dispute
-                } else {
-                    CheckOutcome::Warn
-                }
-            })
-            .max()
-            .unwrap_or(CheckOutcome::Ok);
-
-        let total_net_invoic = rechnung
-            .gesamtnetto
-            .wert_decimal()
-            .and_then(euro_from_decimal);
-
-        CheckReport {
-            outcome,
-            findings,
-            pid: 31009,
-            total_net_invoic,
-            total_net_computed: computed_total,
-            line_items_checked: rechnung.rechnungspositionen.iter().flatten().count(),
-        }
+        CheckReport::from_findings(31009, rechnung, findings, computed_total)
     }
 
     /// Arithmetic-only check for Stornorechnungen (cancellation invoices).
@@ -1182,31 +1332,7 @@ impl InvoicCheckEngine {
 
         // Stage 4: SKIPPED — Storno carries negated original amounts.
 
-        let outcome = findings
-            .iter()
-            .map(|f| {
-                if f.is_dispute {
-                    CheckOutcome::Dispute
-                } else {
-                    CheckOutcome::Warn
-                }
-            })
-            .max()
-            .unwrap_or(CheckOutcome::Ok);
-
-        let total_net_invoic = rechnung
-            .gesamtnetto
-            .wert_decimal()
-            .and_then(euro_from_decimal);
-
-        CheckReport {
-            outcome,
-            findings,
-            pid,
-            total_net_invoic,
-            total_net_computed: computed_total,
-            line_items_checked: rechnung.rechnungspositionen.iter().flatten().count(),
-        }
+        CheckReport::from_findings(pid, rechnung, findings, computed_total)
     }
 
     /// Called by `invoicd` handler **after** the standard 5-check pipeline when
@@ -2185,6 +2311,166 @@ mod tests {
                 FindingKind::ZahlungszielExceeded | FindingKind::ZahlungszielInvalid
             )),
             "Zahlungsziel check must be skipped when max_zahlungsziel_days = 0"
+        );
+    }
+
+    // ── The ESA's price basis is its accepted Angebot ─────────────────────────
+
+    /// An ESA-flavoured position: the same shape as `make_pos`, plus the
+    /// `SG26 LIN` DE 7143 `Z09` Artikel-ID that joins it to the offer.
+    fn esa_pos(n: i64, artikel_id: &str, price: EuroAmount) -> Rechnungsposition {
+        Rechnungsposition {
+            artikel_id: Some(artikel_id.to_owned()),
+            ..make_pos(n, "ESA-Messprodukt", Some("1"), Some(price), Some(price))
+        }
+    }
+
+    /// `EuroAmount` is fixed-point at 5 decimal places, so one cent is 1 000
+    /// raw units.
+    fn cents(n: i64) -> EuroAmount {
+        EuroAmount::from_raw_units(n * 1_000)
+    }
+
+    fn agreed() -> Vec<(String, EuroAmount)> {
+        vec![
+            // Betriebspreis, per Tag.
+            ("9990001100002".to_owned(), cents(1)),
+            // Einrichtungspreis, per Stück.
+            ("9990001100001".to_owned(), cents(2_500)),
+        ]
+    }
+
+    /// The offer priced it, the invoice bills it, the two agree.
+    #[test]
+    fn an_invoice_matching_the_accepted_angebot_passes() {
+        let r = make_rechnung(
+            vec![
+                esa_pos(1, "9990001100002", cents(1)),
+                esa_pos(2, "9990001100001", cents(2_500)),
+            ],
+            Some(cents(2_501)),
+        );
+        let report =
+            InvoicCheckEngine::check_esa_rechnung(SENDER, &r, &agreed(), &CheckConfig::default());
+        assert_eq!(
+            report.outcome,
+            CheckOutcome::Ok,
+            "clean ESA invoice: {:?}",
+            report.findings
+        );
+        assert_eq!(report.pid, 31009);
+    }
+
+    /// A price the ESA never agreed to is a dispute — and this is the check an
+    /// ESA had **no** substitute for: `PreisblattMessung` is the MSB's sheet
+    /// toward NB and LF, and there is none for Kapitel-4.6 Messprodukte, so the
+    /// Preisblatt path skipped price checking entirely.
+    #[test]
+    fn a_position_billed_above_the_agreed_price_is_disputed() {
+        let r = make_rechnung(
+            // Agreed 25.00, billed 40.00.
+            vec![esa_pos(1, "9990001100001", cents(4_000))],
+            Some(cents(4_000)),
+        );
+        let report =
+            InvoicCheckEngine::check_esa_rechnung(SENDER, &r, &agreed(), &CheckConfig::default());
+        assert_eq!(report.outcome, CheckOutcome::Dispute);
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.kind == FindingKind::AngebotDeviation)
+            .expect("the deviation is reported");
+        assert_eq!(f.expected, Some(cents(2_500)));
+        assert_eq!(f.actual, Some(cents(4_000)));
+        assert!(f.is_dispute);
+    }
+
+    /// The offer prices one to three Artikel-IDs per position block (QUOTES AHB
+    /// 1.1a condition `[2042]`); a fourth on the invoice is a charge nobody
+    /// agreed to, which is a different defect from a wrong price.
+    #[test]
+    fn an_artikel_id_the_angebot_never_priced_is_its_own_finding() {
+        let r = make_rechnung(
+            vec![esa_pos(1, "9990009900009", cents(500))],
+            Some(cents(500)),
+        );
+        let report =
+            InvoicCheckEngine::check_esa_rechnung(SENDER, &r, &agreed(), &CheckConfig::default());
+        assert_eq!(report.outcome, CheckOutcome::Dispute);
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::AngebotPositionUnknown),
+            "{:?}",
+            report.findings
+        );
+    }
+
+    /// No accepted offer on record is a gap in **mako's** records, not a defect
+    /// in the MSB's invoice — so it warns and skips, never disputes. Disputing
+    /// it would send a REMADV 33002 rejecting a correct invoice.
+    #[test]
+    fn a_missing_angebot_warns_rather_than_disputing() {
+        let r = make_rechnung(vec![esa_pos(1, "9990001100002", cents(1))], Some(cents(1)));
+        let report =
+            InvoicCheckEngine::check_esa_rechnung(SENDER, &r, &[], &CheckConfig::default());
+        assert_eq!(report.outcome, CheckOutcome::Warn);
+        let f = report
+            .findings
+            .iter()
+            .find(|f| f.kind == FindingKind::TariffNotFound)
+            .expect("the gap is reported");
+        assert!(!f.is_dispute);
+        assert!(f.message.contains("Angebot"), "{}", f.message);
+    }
+
+    /// DE 7143 admits `Z01` Artikelnummer beside `Z09` Artikel-ID, and an
+    /// Artikelnummer names no offer position — so such a line is not comparable
+    /// rather than wrong.
+    #[test]
+    fn a_position_without_an_artikel_id_is_skipped_not_disputed() {
+        let r = make_rechnung(
+            vec![make_pos(
+                1,
+                "Artikelnummer-Position",
+                Some("1"),
+                Some(cents(999)),
+                Some(cents(999)),
+            )],
+            Some(cents(999)),
+        );
+        let report =
+            InvoicCheckEngine::check_esa_rechnung(SENDER, &r, &agreed(), &CheckConfig::default());
+        assert_eq!(report.outcome, CheckOutcome::Warn);
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.kind != FindingKind::AngebotDeviation)
+        );
+    }
+
+    /// The structural checks still run: an ESA invoice is an invoice.
+    #[test]
+    fn the_esa_path_still_checks_arithmetic_and_totals() {
+        let r = make_rechnung(
+            // 1 × 0.01 EUR billed as a 5.00 EUR line net.
+            vec![Rechnungsposition {
+                artikel_id: Some("9990001100002".to_owned()),
+                ..make_pos(1, "ESA", Some("1"), Some(cents(1)), Some(cents(500)))
+            }],
+            Some(cents(500)),
+        );
+        let report =
+            InvoicCheckEngine::check_esa_rechnung(SENDER, &r, &agreed(), &CheckConfig::default());
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::ArithmeticError),
+            "{:?}",
+            report.findings
         );
     }
 }

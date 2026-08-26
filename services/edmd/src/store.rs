@@ -52,8 +52,58 @@ use crate::domain::{
     repository::{TimeSeriesRepository, Typ2Repository},
 };
 
-fn store_err(e: impl std::fmt::Display) -> EdmError {
-    EdmError::Database(e.to_string())
+/// Map a `meterstore` failure onto edmd's error type, **keeping whether a retry
+/// could ever work**.
+///
+/// meterstore 0.6 splits the two: `IntegrityViolation` is a refused delivery —
+/// an overlapping span, a restated value, a second network operator on one
+/// reading — and no retry changes it, because the message has to change.
+/// Everything transient (`Storage`, `LockTimeout`, an object store that could
+/// not be reached) is retryable. Flattening both into one variant made every
+/// ingest door answer `5xx` to a delivery that could never be stored, so the
+/// fan-out redelivered it for as long as its retry budget allowed.
+fn store_err(e: meterstore::Error) -> EdmError {
+    if e.is_retryable() {
+        return EdmError::Database(e.to_string());
+    }
+    let constraint = match &e {
+        meterstore::Error::IntegrityViolation { constraint, .. } => constraint.clone(),
+        _ => None,
+    };
+    EdmError::Rejected {
+        detail: e.to_string(),
+        constraint,
+    }
+}
+
+/// Map a **`sqlx`** failure — edmd's own PostgreSQL pool, not meterstore's.
+///
+/// Split the same way and for the same reason: a lost connection or a deadlock
+/// is worth another attempt, while a column that is not there or will not decode
+/// is a schema/code disagreement that no retry resolves. Redelivering the second
+/// is a loop, and the loop hides the mismatch that caused it.
+fn pg_err(e: sqlx::Error) -> EdmError {
+    match &e {
+        sqlx::Error::ColumnDecode { .. }
+        | sqlx::Error::ColumnNotFound(_)
+        | sqlx::Error::ColumnIndexOutOfBounds { .. }
+        | sqlx::Error::TypeNotFound { .. } => EdmError::Internal(e.to_string()),
+        _ => EdmError::Database(e.to_string()),
+    }
+}
+
+/// The same mapping for the failures that are **not** meterstore's.
+///
+/// A MeLo that is not a Zählpunktbezeichnung, an OBIS code that will not parse:
+/// statements about the *input*, none of them fixed by a retry. They were
+/// `Internal` before, which reads as "edmd is broken" for what is in fact a
+/// malformed delivery from a counterparty — and, once the two are told apart by
+/// retryability, would have been the wrong answer as well as the wrong word.
+fn input_err(e: impl std::fmt::Display) -> EdmError {
+    EdmError::Rejected {
+        detail: e.to_string(),
+        constraint: None,
+    }
 }
 
 /// Parse a MaLo-ID at the store boundary.
@@ -154,6 +204,13 @@ pub struct TieringConfig {
     pub archival_step: time::Duration,
     /// Target Parquet file size in the cold tier, in bytes.
     pub cold_file_target_bytes: usize,
+    /// How long a DDL statement waits for its lock before giving up.
+    ///
+    /// Partition creation runs on the **write path** and the archival detach on
+    /// its own schedule; PostgreSQL queues locks in arrival order, so either can
+    /// stall every reader and writer behind it. Timed out, the statement gives
+    /// up having changed nothing.
+    pub ddl_lock_timeout: time::Duration,
 }
 
 impl Default for TieringConfig {
@@ -163,6 +220,7 @@ impl Default for TieringConfig {
             partition_step: time::Duration::DAY,
             archival_step: time::Duration::DAY,
             cold_file_target_bytes: 512 * 1024 * 1024,
+            ddl_lock_timeout: time::Duration::seconds(3),
         }
     }
 }
@@ -214,7 +272,7 @@ pub async fn build_stores(
     let cold = cold_tier.cold();
     // One hot tier serves every table: `PostgresHot` takes the table as a method
     // argument, so a single handle over one pool covers both.
-    let hot = Arc::new(PostgresHot::new(pool.clone()));
+    let hot = Arc::new(PostgresHot::new(pool.clone()).ddl_lock_timeout(tiering.ddl_lock_timeout));
 
     // `meter_reads` is authoritative and carries the GDPR subject registry;
     // `esa_typ2_reads` is the non-authoritative ESA stream (never billed).
@@ -351,11 +409,24 @@ async fn table_builder(
         // the SMGW over SM-PKI). Without the column the field was write-only:
         // every Typ-2 value read back as `MSCONS_BACKEND` whatever it was
         // delivered by, and the model documented a column that did not exist.
-        config.attribute_column(meterstore::coded_column(
-            "delivery_path",
-            &delivery_paths,
-            true,
-        ))
+        config
+            .attribute_column(meterstore::coded_column(
+                "delivery_path",
+                &delivery_paths,
+                true,
+            ))
+            // `SG1 RFF+AGI` on the delivering MSCONS 13027 — the Belegnummer of
+            // the ORDERS that ordered these values (MSCONS AHB 3.2 §11.2 hint
+            // [574]), and the first hop of the PID overview's `EZ-03` routing.
+            //
+            // It is the **only** thing on a value delivery that names the
+            // subscription it belongs to, and a Meldepunkt may carry several: a
+            // subscription is the (Meldepunkt, Messprodukt) pair, and the
+            // catalogue offers `9991 00000 305 6` and `9991 00000 314 7` for
+            // the same Marktlokation. Without it the delivery-surveillance
+            // sweep had to infer the subscription from whichever OBIS registers
+            // had stopped, and could not name the one that is silent.
+            .attribute_column(Field::new("bestellung_ref", DataType::Utf8, true))
     };
     let config = config.build()?;
 
@@ -677,18 +748,24 @@ impl MeterStoreTimeSeriesRepository {
         as_of: OffsetDateTime,
     ) -> Result<Vec<MeterRead>, EdmError> {
         let store = self.store.as_known_at(as_of).await.map_err(store_err)?;
-        let resolved = store
+        // Multi-register, exactly like `query()`: this answers the same
+        // question at an earlier transaction time, so it describes the same
+        // measuring point. meterstore declines a range spanning two channels,
+        // and a prosumer or an HT/NT point has two.
+        let mut out: Vec<MeterRead> = store
             .series(malo(&q.malo_id)?)
             .map_err(store_err)?
             .column_eq(TENANT_COL, tenant_scope(&q.tenant))
             .map_err(store_err)?
             .range(q.from, q.to)
-            .collect_resolved()
+            .collect_by_channel()
             .await
-            .map_err(store_err)?;
-        Ok(resolved
-            .map(|r| series_to_reads(&r, &q.tenant))
-            .unwrap_or_default())
+            .map_err(store_err)?
+            .values()
+            .flat_map(|r| series_to_reads(r, &q.tenant))
+            .collect();
+        out.sort_by(|a, b| a.dtm_from.cmp(&b.dtm_from));
+        Ok(out)
     }
 }
 
@@ -736,59 +813,19 @@ fn inclusive_end(at: OffsetDateTime) -> OffsetDateTime {
     at + time::Duration::microseconds(1)
 }
 
-/// The OBIS channels a measuring point reported inside a window.
-///
-/// One scan of the resolved relation. `series(..)` reads a single channel, so a
-/// multi-register read has to know which ones exist before it can ask for them,
-/// and there is no cheaper source for that than the data.
-async fn channels_in_window(
-    store: &MeterStore,
-    malo_id: &str,
-    tenant: &str,
-    from: OffsetDateTime,
-    to: OffsetDateTime,
-) -> Result<Vec<String>, EdmError> {
-    let sql = format!(
-        "SELECT DISTINCT obis_code FROM {table} \
-         WHERE malo_id = $1 AND {TENANT_COL} = $2 AND \"from\" >= $3 AND \"from\" < $4",
-        table = store.resolved_table(),
-    );
-    let rows = store
-        .query_with_params(
-            &sql,
-            vec![
-                ScalarValue::Utf8(Some(malo_id.to_owned())),
-                tenant_scope(tenant),
-                crate::server::ts_param(from),
-                crate::server::ts_param(to),
-            ],
-        )
-        .await
-        .map_err(store_err)?
-        .to_json()
-        .map_err(store_err)?;
-
-    let mut channels: Vec<String> = rows
-        .iter()
-        .filter_map(|r| r.get("obis_code").and_then(serde_json::Value::as_str))
-        .map(str::to_owned)
-        .collect();
-    channels.sort_unstable();
-    channels.dedup();
-    Ok(channels)
-}
-
 /// Every register a measuring point reported in a window, as `MeterRead`s.
 ///
 /// **A MaLo is a set of registers, and this returns all of them.** meterstore
 /// refuses to collect a range spanning two channels — a prosumer reports import
 /// beside export at the same instants, and folded into one series `aggregate`
 /// sums both and doubles the month. edmd's callers project the registers
-/// themselves through [`crate::domain::register`], so the answer is one typed,
-/// version-resolved read per channel rather than a narrower one.
+/// themselves through [`crate::domain::register`], so the answer is the whole
+/// point rather than one channel of it.
 ///
-/// Raw SQL over the resolved relation would be one scan instead of N, at the
-/// cost of moving version resolution and tier handling into edmd.
+/// `collect_by_channel` is **one scan**, split per channel inside the store, so
+/// every channel is resolved against the *same* tier boundary. A `SELECT
+/// DISTINCT obis_code` plus one typed read each would be `1 + N` round trips
+/// with N boundaries read at N different moments.
 async fn read_all_channels(
     store: &MeterStore,
     malo_id: &str,
@@ -797,26 +834,23 @@ async fn read_all_channels(
     to: OffsetDateTime,
     billable_only: bool,
 ) -> Result<Vec<MeterRead>, EdmError> {
-    let channels = channels_in_window(store, malo_id, tenant, from, to).await?;
-    let mut out: Vec<MeterRead> = Vec::new();
-    for obis in channels {
-        let mut q = store
-            .series(malo(malo_id)?)
-            .map_err(store_err)?
-            .column_eq(TENANT_COL, tenant_scope(tenant))
-            .map_err(store_err)?
-            .obis(&obis)
-            .map_err(store_err)?
-            .range(from, to);
-        if billable_only {
-            q = q.quality_in(&billable_qualities());
-        }
-        if let Some(r) = q.collect_resolved().await.map_err(store_err)? {
-            out.extend(series_to_reads(&r, tenant));
-        }
+    let mut q = store
+        .series(malo(malo_id)?)
+        .map_err(store_err)?
+        .column_eq(TENANT_COL, tenant_scope(tenant))
+        .map_err(store_err)?
+        .range(from, to);
+    if billable_only {
+        q = q.quality_in(&billable_qualities());
     }
-    // Callers assume chronological order; reading channel by channel is
-    // register-major.
+    let mut out: Vec<MeterRead> = q
+        .collect_by_channel()
+        .await
+        .map_err(store_err)?
+        .values()
+        .flat_map(|r| series_to_reads(r, tenant))
+        .collect();
+    // Callers assume chronological order; the map is register-major.
     out.sort_by(|a, b| a.dtm_from.cmp(&b.dtm_from));
     Ok(out)
 }
@@ -882,9 +916,7 @@ fn read_to_stored_at(r: &MeterRead, version: Option<Version>) -> Result<StoredSe
         .as_deref()
         .map(|m| {
             m.parse::<metering::MeloId>()
-                .map_err(|e: metering::ParseError| {
-                    EdmError::Internal(format!("not a MeLo-ID: {m} ({e})"))
-                })
+                .map_err(|e: metering::ParseError| input_err(format!("not a MeLo-ID: {m} ({e})")))
         })
         .transpose()?;
 
@@ -927,7 +959,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         .bind(&receipt.tenant)
         .execute(&self.pool)
         .await
-        .map_err(store_err)?;
+        .map_err(pg_err)?;
         Ok(())
     }
 
@@ -1077,7 +1109,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 .bind(format!("edmd-ingest:{}", batch_source.as_str()))
                 .execute(&self.pool)
                 .await
-                .map_err(store_err)?;
+                .map_err(pg_err)?;
             }
 
             // § 60 Abs. 2: a measured/corrected value discharges an open
@@ -1097,7 +1129,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                     .bind(batch_source.as_str())
                     .execute(&self.pool)
                     .await
-                    .map_err(store_err)?;
+                    .map_err(pg_err)?;
                 }
                 QualityFlag::Estimated | QualityFlag::Substituted => {
                     sqlx::query(
@@ -1114,7 +1146,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                     .bind(d.to)
                     .execute(&self.pool)
                     .await
-                    .map_err(store_err)?;
+                    .map_err(pg_err)?;
                 }
                 _ => {}
             }
@@ -1183,7 +1215,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         .bind(tenant)
         .fetch_all(&self.pool)
         .await
-        .map_err(store_err)?;
+        .map_err(pg_err)?;
         rows.into_iter().map(|row| row_to_receipt(&row)).collect()
     }
 
@@ -1280,7 +1312,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         .bind(&q.tenant)
         .fetch_optional(&self.pool)
         .await
-        .map_err(store_err)?;
+        .map_err(pg_err)?;
 
         if let Some(row) = pre {
             let dec = |c: &str| row.try_get::<Option<Decimal>, _>(c).ok().flatten();
@@ -1329,7 +1361,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         &self,
         q: &crate::domain::GasQualityRecord,
     ) -> Result<u64, EdmError> {
-        let mut tx = self.pool.begin().await.map_err(store_err)?;
+        let mut tx = self.pool.begin().await.map_err(pg_err)?;
 
         // 1. The delivery itself. A re-delivery for the same period supersedes
         //    the previous values rather than appending a second row — the grid
@@ -1358,7 +1390,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         .bind(&q.tenant)
         .execute(&mut *tx)
         .await
-        .map_err(store_err)?;
+        .map_err(pg_err)?;
 
         // 2. Backfill cached billing-period aggregates that overlap the period
         //    and are still missing their gas factors. Bounded by the delivery's
@@ -1380,9 +1412,9 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         .bind(q.period_to)
         .execute(&mut *tx)
         .await
-        .map_err(store_err)?;
+        .map_err(pg_err)?;
 
-        tx.commit().await.map_err(store_err)?;
+        tx.commit().await.map_err(pg_err)?;
         Ok(result.rows_affected())
     }
 
@@ -1402,7 +1434,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         // between the append and the commit loses audit rows for values that did
         // change, which is the recoverable direction: the version history in
         // `meter_reads_versions` still holds both values.
-        let mut tx = self.pool.begin().await.map_err(store_err)?;
+        let mut tx = self.pool.begin().await.map_err(pg_err)?;
         let mut ids = Vec::with_capacity(records.len());
         let mut touched: Vec<(String, String, OffsetDateTime, OffsetDateTime)> =
             Vec::with_capacity(records.len());
@@ -1443,8 +1475,8 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             .bind(&obis_norm)
             .fetch_one(&mut *tx)
             .await
-            .map_err(store_err)?;
-            let correction_id: uuid::Uuid = row.try_get("correction_id").map_err(store_err)?;
+            .map_err(pg_err)?;
+            let correction_id: uuid::Uuid = row.try_get("correction_id").map_err(pg_err)?;
             ids.push(correction_id);
             touched.push((
                 rec.tenant.clone(),
@@ -1540,7 +1572,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 .bind(source_str)
                 .execute(&mut *tx)
                 .await
-                .map_err(store_err)?;
+                .map_err(pg_err)?;
             }
         }
 
@@ -1563,10 +1595,10 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             .bind(metering::calendar::local_day(*to))
             .execute(&mut *tx)
             .await
-            .map_err(store_err)?;
+            .map_err(pg_err)?;
         }
 
-        tx.commit().await.map_err(store_err)?;
+        tx.commit().await.map_err(pg_err)?;
         Ok(ids)
     }
 
@@ -1635,7 +1667,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             let recorded_at = OffsetDateTime::now_utc();
 
             let melo: metering::MeloId = melo.parse().map_err(|e: metering::ParseError| {
-                EdmError::Internal(format!("not a MeLo-ID: {melo} ({e})"))
+                input_err(format!("not a MeLo-ID: {melo} ({e})"))
             })?;
             let mut stored = meterstore::encode::StoredReadings::new(
                 malo(&first.malo_id)?,
@@ -1766,7 +1798,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             .bind(&e.session_id)
             .execute(&self.pool)
             .await
-            .map_err(store_err)?;
+            .map_err(pg_err)?;
         }
         Ok(())
     }
@@ -1869,9 +1901,7 @@ fn typ2_to_stored(r: &Typ2Read) -> Result<StoredSeries, EdmError> {
         .as_deref()
         .map(|m| {
             m.parse::<metering::MeloId>()
-                .map_err(|e: metering::ParseError| {
-                    EdmError::Internal(format!("not a MeLo-ID: {m} ({e})"))
-                })
+                .map_err(|e: metering::ParseError| input_err(format!("not a MeLo-ID: {m} ({e})")))
         })
         .transpose()?;
     Ok(StoredSeries::of(
@@ -1889,6 +1919,10 @@ fn typ2_to_stored(r: &Typ2Read) -> Result<StoredSeries, EdmError> {
     .with_extra(
         "delivery_path",
         ScalarValue::Utf8(Some(r.delivery_path.as_str().to_owned())),
+    )
+    .with_extra(
+        "bestellung_ref",
+        ScalarValue::Utf8(r.bestellung_ref.clone()),
     ))
 }
 
@@ -1928,20 +1962,37 @@ impl Typ2Repository for MeterStoreTyp2Repository {
         Ok(())
     }
 
+    /// Every Typ-2 register a Meldepunkt was delivered in a window.
+    ///
+    /// **Multi-register, and it has to be.** The QUOTES 15003 Angebot names one
+    /// to 23 `PIA+5 … :SRW` OBIS-Kennzahlen per subscription (QUOTES AHB 1.1a
+    /// §4.3, condition `[2073]`), and one Meldepunkt may carry several
+    /// subscriptions — a subscription is the (Meldepunkt, Messprodukt) pair.
+    ///
+    /// meterstore declines a range spanning two channels, correctly: a
+    /// `MeasurementSeries` holds one `obis_code`, and folding import beside
+    /// export puts two values at every instant. So this is one scan split per
+    /// channel inside the store, with every register resolved against the same
+    /// tier boundary.
     async fn query_typ2(&self, q: &TimeSeriesQuery) -> Result<Vec<Typ2Read>, EdmError> {
-        let resolved = self
+        let by_channel = self
             .store
             .series(malo(&q.malo_id)?)
             .map_err(store_err)?
             .column_eq(TENANT_COL, tenant_scope(&q.tenant))
             .map_err(store_err)?
             .range(q.from, q.to)
-            .collect_resolved()
+            .collect_by_channel()
             .await
             .map_err(store_err)?;
-        Ok(resolved
-            .map(|r| series_to_typ2(&r, &q.tenant))
-            .unwrap_or_default())
+        let mut out: Vec<Typ2Read> = by_channel
+            .values()
+            .flat_map(|r| series_to_typ2(r, &q.tenant))
+            .collect();
+        // Callers read a delivery, which is chronological; the map is
+        // register-major.
+        out.sort_by(|a, b| a.dtm_from.cmp(&b.dtm_from));
+        Ok(out)
     }
 }
 
@@ -2038,6 +2089,7 @@ fn series_to_typ2(resolved: &meterstore::ResolvedSeries, tenant: &str) -> Vec<Ty
         _ => 13027,
     };
     let sender_mp_id = extra_str(&resolved.extra, "sender_mp_id");
+    let bestellung_ref = extra_str(&resolved.extra, "bestellung_ref");
     let delivery_path = extra_str(&resolved.extra, "delivery_path")
         .map_or(Typ2DeliveryPath::MsconsBackend, |p| {
             Typ2DeliveryPath::from_db_str(&p)
@@ -2058,6 +2110,7 @@ fn series_to_typ2(resolved: &meterstore::ResolvedSeries, tenant: &str) -> Vec<Ty
             tenant: tenant.to_string(),
             delivery_path,
             sender_mp_id: sender_mp_id.clone(),
+            bestellung_ref: bestellung_ref.clone(),
             received_at: None,
         })
         .collect()
@@ -2065,13 +2118,13 @@ fn series_to_typ2(resolved: &meterstore::ResolvedSeries, tenant: &str) -> Vec<Ty
 
 fn row_to_receipt(row: &sqlx::postgres::PgRow) -> Result<MeterDataReceipt, EdmError> {
     Ok(MeterDataReceipt {
-        process_id: row.try_get("process_id").map_err(store_err)?,
-        pid: row.try_get::<i32, _>("pid").map_err(store_err)? as u32,
-        malo_id: row.try_get("malo_id").map_err(store_err)?,
-        sender_mp_id: row.try_get("sender_mp_id").map_err(store_err)?,
-        message_ref: row.try_get("message_ref").map_err(store_err)?,
-        received_at: row.try_get("received_at").map_err(store_err)?,
-        tenant: row.try_get("tenant").map_err(store_err)?,
+        process_id: row.try_get("process_id").map_err(pg_err)?,
+        pid: row.try_get::<i32, _>("pid").map_err(pg_err)? as u32,
+        malo_id: row.try_get("malo_id").map_err(pg_err)?,
+        sender_mp_id: row.try_get("sender_mp_id").map_err(pg_err)?,
+        message_ref: row.try_get("message_ref").map_err(pg_err)?,
+        received_at: row.try_get("received_at").map_err(pg_err)?,
+        tenant: row.try_get("tenant").map_err(pg_err)?,
     })
 }
 

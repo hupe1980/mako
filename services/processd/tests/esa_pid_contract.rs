@@ -81,3 +81,73 @@ fn parse_accepts_the_claimed_pids_and_rejects_the_answers() {
         );
     }
 }
+
+/// …and something actually **emits** those PIDs.
+///
+/// The tests above check that the module listens on the right side of the
+/// handshake. They cannot catch the failure that had actually happened: the
+/// MSB-side workflow emitted **no `ProcessInitiated` at all**, so
+/// `de.mako.process.initiated` was never published for any Kapitel-4 PID and
+/// this entire module — the four `mako_pruefung` walks, the operator queue and
+/// its Fristen — subscribed to an event that did not exist and never ran once.
+///
+/// A listener contract is only half a contract. This drives the real MSB
+/// workflow and feeds its own notification straight into the parser, so the two
+/// sides of the seam are pinned to each other rather than to a fixture.
+#[test]
+fn the_msb_workflow_emits_what_this_module_parses() {
+    use mako_engine::types::{MarktpartnerCode, MessageRef, Pruefidentifikator};
+    use mako_engine::workflow::Workflow as _;
+    use mako_wim::wertebestellung::{
+        ANFRAGE_PID, Lokationsebene, WertebestellungCommand as C, WimWertebestellungWorkflow as W,
+        Zustellquittung,
+    };
+
+    let out = W::handle(
+        &mako_wim::wertebestellung::WertebestellungState::default(),
+        C::ReceiveAnfrage {
+            pid: ANFRAGE_PID,
+            esa: MarktpartnerCode::new("9900555000005"),
+            msb: MarktpartnerCode::new("9900357000004"),
+            ebene: Lokationsebene::Marktlokation,
+            lokations_id: "51238696012".to_owned(),
+            gegenstand: Box::new(mako_wim::esa::Bestellgegenstand {
+                messprodukt: "9991000003056".to_owned(),
+                wunschtermin: time::macros::date!(2026 - 03 - 01),
+                zeitraum_bis: None,
+                abonnement: mako_wim::esa::Abonnement::StartAbo,
+                smgw: None,
+            }),
+            message_ref: MessageRef::new("REQ-1"),
+            quittung: Zustellquittung::positive(time::macros::datetime!(2026-03-02 09:00 UTC)),
+            consent_block: None,
+        },
+    )
+    .expect("the Werteanfrage is accepted");
+
+    let notification = out
+        .outbox
+        .iter()
+        .find(|o| &*o.message_type == "ProcessInitiated")
+        .expect("an inbound ESA step must notify, or this module never runs");
+
+    // The shape the ERP outbox worker wraps it in: `makopid` as a CloudEvents
+    // extension, the workflow payload as `data`.
+    let pid = notification.payload["pid"].as_u64().expect("pid") as u32;
+    assert_eq!(Pruefidentifikator::new(pid).unwrap(), ANFRAGE_PID);
+    let event = serde_json::json!({
+        "subject": "0195f1a0-0000-7000-8000-000000000001",
+        "makopid": pid,
+        "time": "2026-03-02T08:00:00Z",
+        "data": notification.payload,
+    });
+
+    let parsed = EsaOrderPayload::parse(&event).expect("the module must parse its own trigger");
+    assert_eq!(parsed.pid, pid);
+    assert_eq!(parsed.lokations_id, "51238696012");
+    assert_eq!(parsed.esa_mp_id, "9900555000005");
+    assert_eq!(parsed.messprodukt, "9991000003056");
+    // `IMD+7081` is what both termination trees branch on; a `None` here
+    // escalates every order before any lookup.
+    assert_eq!(parsed.abonnement, Some(mako_wim::esa::Abonnement::StartAbo));
+}

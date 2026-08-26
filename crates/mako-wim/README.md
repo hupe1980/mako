@@ -232,7 +232,7 @@ PID sets so one deployment may hold both roles.
 
 | UC step | Direction | Message | PID | Frist | EBD |
 |---|---|---|---|---|---|
-| 4.1 Nr. 1 Anfrage | ESA → MSB | REQOTE | 35003 | — | — |
+| 4.1 Nr. 1 Anfrage | ESA → MSB | REQOTE | 35003 | — | `E_0252` |
 | 4.1 Nr. 2 Angebot / Ablehnung | MSB → ESA | QUOTES | 15003 | **5 WT** nach ÜT der Anfrage | — |
 | 4.1 Nr. 3 Bestellung | ESA → MSB | ORDERS | 17007 | bis Ablauf der **Bindungsfrist** | — |
 | 4.1 Nr. 4 Antwort | MSB → ESA | ORDRSP | 19011 / 19012 | **2 WT** nach ÜT der Bestellung | `E_0256` |
@@ -262,6 +262,32 @@ An order is validated against the catalogue before it leaves the system — a
 product outside Kapitel 4.6, one defined for a different Lokationsebene than the
 request addresses, or a 4.6.2 product without its SM-PKI target is refused.
 
+**The product decides the Lokationsebene** (`esa::ebene_fuer_messprodukt`).
+REQOTE AHB 1.2 §4.3 gives `LOC+172` DE 3225 four permitted shapes and lets the
+Marktlokations-ID format (`[950]`) serve both the Marktlokation (hint `[502]`)
+and the **Tranche** (hint `[504]`), so an identifier cannot resolve the level —
+and the Tranche carries a Pflichtprodukt (`9991 00000 306 4`).
+
+**„Pflicht" and „nutzbar ab" are two different dates**, and both are dates rather
+than flags: `9991 00000 077 1` and `078 9` read „Optional ab 01.10.2023, Pflicht
+ab 06.08.2024" while being usable from 01.10.2023. `Verbindlichkeit::Pflicht { ab }`
+carries its start and `Messprodukt::ist_pflicht_am` is what `E_0252` Prüfschritt 1
+asks — a Vergangenheitswerte-Anfrage may reach back before the cut-over.
+
+### The Angebot is a priced offer
+
+UC 4.1.1 has the ESA asking for „die Übermittlung von Werten **und die damit
+verbundenen Kosten**". QUOTES AHB 1.1a §4.3 makes the substance Muss — `SG4 CUX`,
+one to three `SG27 PIA+Z02` Artikel-IDs, one `SG31 PRI+CAL` each (`Z01`
+Einrichtungs- / `Z02` Transaktions- / `Z03` Betriebspreis) and one to 23
+`PIA+5 … :SRW` OBIS-Kennzahlen — so [`esa::Angebot`] carries all of it and the
+process keeps it past the Bestellung: it is what the INVOIC 31009 is checked
+against and what a delivery-surveillance sweep expects to arrive.
+
+It is also the **discriminator**. `DTM+273` is Muss on the only published 15003
+use case, so a refusal carries a Bindungsfrist too; the priced position is what
+tells an Angebot from an Ablehnung.
+
 ### The Prüfidentifikator is not in BGM
 
 `BGM` DE 1004 is a **Dokumentennummer** throughout these handbooks; the PID
@@ -285,9 +311,15 @@ Prüfidentifikatoren* 4.0 publishes per PID:
 | 19011 / 19012 | `ZG-T14` | `SG1 RFF+ON` | the ORDERS answered |
 | 19013 / 19014 | `ZG-T50` | `SG1 RFF+ACW` | the ORDCHG |
 | 21042 | `ZG-T47` | `SG15 RFF+AGI` | the ORDERS Bestellung |
+| 13027 | `ZG-T42` (of `EZ-03`) | `SG1 RFF+AGI` | the ORDERS Bestellung |
 
 `esa::korrelation` is that table; the renderer and the ingest dispatcher both
-read it, so the qualifier they emit and the one they look for cannot drift.
+read it, so the qualifier they emit and the one they look for cannot drift. Note
+that the same `AGI` qualifier sits in a different segment group per message —
+`SG15` on the IFTSTA, `SG1` on the MSCONS — which is why the lookup searches by
+qualifier rather than by position. `EZ-03` continues past it to `ZO-T20`
+(Gerätenummer) and `ZO-T21` (OBIS-Kennzahl); those two assign the values to a
+Zählwerk and belong to `edmd`.
 
 ### Answers are Antwortcodes, not booleans
 
@@ -297,6 +329,44 @@ the code to sit in that tree's Zustimmungs- resp. Ablehnungs-Cluster, so **the
 cluster selects the answer PID**. The MSB commands therefore take an
 `antwort_code` resolved against [`mako_pruefung::msb::esa`], never an `accept`
 flag alongside it.
+
+**And it is the whole content of a refusal on the receiving side too.** Those
+four use cases publish **no free-text segment at all**: the only `FTX` a
+conformant 19011 may carry is `SG27 FTX+Z27` — the MSB's IP address, Muss when
+the confirmed order named a Kapitel-4.6.2 SMGW product (`FTX+Z28` for a range),
+and the source the ESA has to admit before the iMS can reach it. So the ESA side
+records [`esa::Antwort`], the typed `(Antwortcode, EBD)` pair, rather than prose:
+that is what lets it tell `A08` (Einwilligung abgelaufen — renew and re-order)
+from `A10` (Lokationsbündel — split the request) from `A09` (Gerätetechnik —
+nothing to retry). `Antwort::widerspricht_pid` flags a code whose Cluster
+contradicts the PID that carried it; such an answer is recorded as a conflict and
+resolved **by the PID**, since resolving it by the code would silently turn a
+confirmation into a refusal.
+
+### Every inbound step notifies
+
+The MSB-side workflow emits a `ProcessInitiated` outbox entry on each of
+35003/17007/39002/17008. That notification is the entire input to `processd`'s
+ESA module — the four `mako-pruefung` walks, the operator queue and its Fristen —
+and its payload is a contract: every field is a Prüfschritt input, so an omitted
+one does not fail, it escalates a decision that could have been answered. In
+particular `abo_beginn` (the confirmed `DTM+203` of the Bestellung) is what
+`E_0254` Prüfschritt 2 compares a requested end against.
+
+### What a subscription remembers
+
+Both aggregates keep `lieferung_begonnen` in their process **data**, not inside
+the state variant that happens to be current. It is a fact about the
+subscription: it has to survive a Storno or Abbestellung round trip, and a first
+delivery landing while a 39002 is in flight is exactly the case `E_0257` `A02`
+exists for. The MSB side additionally remembers its own Bindungsfrist (`E_0256`
+Prüfschritt 1 asks about it one state later), the Abo start, the reach of its
+latest delivery and any date it already ended on — the three inputs `E_0254`
+Prüfschritte 2–4 need.
+
+An Angebot whose Bindungsfrist lapses is **terminal** on the ESA side: UC 4.1
+Nr. 3 admits no Bestellung after it, so the process releases its (Meldepunkt,
+Messprodukt) business key rather than blocking every replacement order.
 
 19011/19012 answer both the Bestellung and the Beendigung; the `IMD+7081` on the
 answer is what says which tree its code came from.

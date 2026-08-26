@@ -73,6 +73,7 @@ fn drive(cmds: Vec<C>) -> Result<S, WorkflowError> {
 
 fn angebot() -> C {
     C::SendAngebot {
+        angebot: angebot_terms(),
         fruehester_start: None,
         message_ref: mref("QUO-1"),
         // Bindungsfrist: two weeks out.
@@ -88,6 +89,23 @@ fn bestellung() -> C {
         quittung: Zustellquittung::positive(datetime!(2026-03-09 09:00 UTC)),
         consent_block: None,
     }
+}
+
+/// The Muss content of a QUOTES 15003 Angebot: `SG4 CUX`, an Artikel-ID with
+/// its `SG31 PRI+CAL` price, and the OBIS-Kennzahlen the subscription delivers.
+/// A 15003 without them is not an offer — it is the Ablehnung.
+fn angebot_terms() -> Box<mako_wim::esa::Angebot> {
+    Box::new(mako_wim::esa::Angebot {
+        waehrung: Some("EUR".to_owned()),
+        preise: vec![mako_wim::esa::Preisposition {
+            artikel_id: "9990001100002".to_owned(),
+            preistyp: mako_wim::esa::Preistyp::Betrieb,
+            betrag: "0.004500".to_owned(),
+            einheit: "DAY".to_owned(),
+        }],
+        obis_kennzahlen: vec!["1-1:1.29.0".to_owned()],
+        einrichtung_bis: None,
+    })
 }
 
 fn accept_bestellung() -> C {
@@ -899,4 +917,94 @@ fn a_delivery_with_no_intervals_is_rejected() {
     )
     .unwrap_err();
     assert!(err.to_string().contains("Intervallwerte"), "got: {err}");
+}
+
+// ── The notification contract with processd ───────────────────────────────────
+
+/// Every inbound step of Kapitel 4 obliges the MSB to answer — 35003 within
+/// 5 Werktage, 17007/17008/39002 within 2 — and §34 Abs. 2 S. 2 Nr. 10 MsbG
+/// makes serving an ESA a mandatory Zusatzleistung, so none of them is
+/// optional. This workflow emitted no `ProcessInitiated` at all, so
+/// `processd`'s ESA module — the three `mako-pruefung` walks, the operator
+/// queue and its Fristen — subscribed to an event that was never published and
+/// never ran once.
+#[test]
+fn every_inbound_step_notifies_its_observers() {
+    let mut state = S::default();
+    let mut seen = Vec::new();
+
+    for cmd in [anfrage(), angebot(), bestellung()] {
+        let inbound = matches!(cmd, C::ReceiveAnfrage { .. } | C::ReceiveBestellung { .. });
+        let out = W::handle(&state, cmd).expect("step accepted");
+        if inbound {
+            let n = out
+                .outbox
+                .iter()
+                .find(|o| &*o.message_type == "ProcessInitiated")
+                .expect("an inbound ESA step must notify");
+            seen.push(n.payload.clone());
+        }
+        for ev in &out.events {
+            state = W::apply(state.clone(), ev);
+        }
+    }
+
+    assert_eq!(seen.len(), 2, "35003 and 17007 both notify");
+    // The payload is the contract `processd::esa_module::EsaOrderPayload`
+    // parses; a field it cannot find does not fail, it escalates.
+    for p in &seen {
+        assert!(p["pid"].as_u64().is_some());
+        assert!(p["malo_id"].as_str().is_some());
+        assert!(p["esa_mp_id"].as_str().is_some());
+        assert!(p["messprodukt"].as_str().is_some());
+        assert!(p["abonnement"].as_str().is_some());
+    }
+    // `E_0256` Prüfschritt 1 asks about the Bindungsfrist at Bestellung time,
+    // one state after the Angebot stated it.
+    assert!(
+        seen[1]["bindungsfrist"].as_str().is_some(),
+        "the Bestellung notification carries the offer window: {:?}",
+        seen[1]
+    );
+}
+
+/// `E_0254` Prüfschritt 2 compares the requested end against the Abo start, and
+/// Prüfschritt 4 against the values already delivered. Both live here, not in
+/// the message: the Abbestellung's own `DTM+203` *is* the requested end, so
+/// deriving the start from it made Prüfschritt 2 false by construction and
+/// refused every Abbestellung — the GDPR-Art.-7(3) Widerruf included.
+#[test]
+fn the_abbestellung_notification_carries_the_dates_e0254_needs() {
+    let state = drive(vec![
+        anfrage(),
+        angebot(),
+        bestellung(),
+        accept_bestellung(),
+    ])
+    .expect("handshake");
+    let out = W::handle(
+        &state,
+        C::ReceiveAbbestellung {
+            pid: ABBESTELLUNG_PID,
+            message_ref: mref("ESA-AB-1"),
+            beendigung_zum: datetime!(2026-06-01 00:00 UTC),
+            quittung: quittung(),
+        },
+    )
+    .expect("Abbestellung accepted");
+
+    let n = out
+        .outbox
+        .iter()
+        .find(|o| &*o.message_type == "ProcessInitiated")
+        .expect("the Abbestellung notifies");
+    assert_eq!(n.payload["abonnement"].as_str(), Some("Z02"));
+    assert_eq!(n.payload["ausfuehrungsdatum"].as_str(), Some("2026-06-01"));
+    let abo_beginn = n.payload["abo_beginn"]
+        .as_str()
+        .expect("the Abo start is carried");
+    assert_ne!(
+        abo_beginn, "2026-06-01",
+        "the Abo start must not be the requested end"
+    );
 }

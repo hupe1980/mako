@@ -269,6 +269,7 @@ async fn reads_and_typ2_share_a_catalog_but_stay_isolated() {
         tenant: "9910000000001".to_owned(),
         delivery_path: Typ2DeliveryPath::default(),
         sender_mp_id: None,
+        bestellung_ref: Some("ESABE0000000001".to_owned()),
         received_at: None,
     }])
     .await
@@ -293,6 +294,15 @@ async fn reads_and_typ2_share_a_catalog_but_stay_isolated() {
         .expect("query typ2");
     assert_eq!(esa.len(), 1);
     assert_eq!(esa[0].quantity_kwh, kwh("9.0"));
+    // `SG1 RFF+AGI` — which subscription these values are. A Meldepunkt may
+    // carry several (a subscription is the (Meldepunkt, Messprodukt) pair), so
+    // without it the delivery-surveillance sweep can only report that *some*
+    // register went quiet, never which subscription stopped.
+    assert_eq!(
+        esa[0].bestellung_ref.as_deref(),
+        Some("ESABE0000000001"),
+        "the ordering ORDERS' Belegnummer must survive the store round trip"
+    );
 }
 
 #[tokio::test]
@@ -2330,6 +2340,7 @@ async fn erasure_unlinks_the_esa_typ2_store_as_well() {
         tenant: tenant.to_owned(),
         delivery_path: Typ2DeliveryPath::default(),
         sender_mp_id: None,
+        bestellung_ref: Some("ESABE0000000001".to_owned()),
         received_at: None,
     }])
     .await
@@ -2887,4 +2898,150 @@ async fn a_gas_zaehlerstand_round_trips_unconverted() {
         "a gas register counts m³ and is stored as it displayed, unconverted"
     );
     assert_eq!(back[0].sparte, Sparte::Gas);
+}
+
+/// Kapitel 4.6 has **two** delivery paths, and both have to reach the store.
+///
+/// 4.6.1 arrives as MSCONS 13027 over AS4; **4.6.2** arrives as XML straight
+/// from the iMS over SM-PKI and never touches market communication at all. Two
+/// of the seven Pflichtprodukte BNetzA *Mitteilung Nr. 3* obliges every MSB to
+/// serve — `9991 00000 312 1` and `9991 00000 313 9` — are 4.6.2 products, and
+/// mako could order them while `Typ2DeliveryPath::SmgwDirect` was a variant
+/// nothing ever wrote.
+///
+/// Both land in the **same** non-authoritative table, told apart by
+/// `delivery_path`, and both carry the subscription that ordered them.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn both_kapitel_46_delivery_paths_reach_the_typ2_store() {
+    let (pool, url, warehouse_uri, _pg, _wh) = boot().await;
+    let (_reads_store, typ2_store, _zsg_store, _cold) = build_stores(
+        pool.clone(),
+        &url,
+        &warehouse_uri,
+        TieringConfig::default(),
+        &WarehouseAuth::default(),
+    )
+    .await
+    .expect("build meterstore tiers");
+    let typ2 = MeterStoreTyp2Repository::new(typ2_store);
+
+    let t = OffsetDateTime::now_utc() - Duration::days(1);
+    let typ2_read = |path: Typ2DeliveryPath, obis: &str, order: &str, kwh: &str| Typ2Read {
+        malo_id: "51238696012".to_owned(),
+        melo_id: Some("DE0004392189912345678901234567890".to_owned()),
+        dtm_from: t,
+        dtm_to: t + Duration::minutes(15),
+        quantity_kwh: kwh.parse().expect("decimal"),
+        quality: QualityFlag::Measured,
+        pid: 13027,
+        sparte: Sparte::Strom,
+        obis_code: Some(obis.to_owned()),
+        tenant: "9910000000001".to_owned(),
+        delivery_path: path,
+        sender_mp_id: Some("9900357000004".to_owned()),
+        bestellung_ref: Some(order.to_owned()),
+        received_at: None,
+    };
+
+    typ2.store_typ2_reads(&[
+        // 4.6.1 — the EDIFACT back-end path.
+        typ2_read(
+            Typ2DeliveryPath::MsconsBackend,
+            "1-1:1.29.0",
+            "ESABE0000000001",
+            "1.5",
+        ),
+        // 4.6.2 — straight from the iMS over SM-PKI.
+        typ2_read(
+            Typ2DeliveryPath::SmgwDirect,
+            "1-1:2.29.0",
+            "ESABE0000000002",
+            "2.5",
+        ),
+    ])
+    .await
+    .expect("store both paths");
+
+    let got = typ2
+        .query_typ2(&window("51238696012", t))
+        .await
+        .expect("query typ2");
+    assert_eq!(got.len(), 2);
+
+    let smgw = got
+        .iter()
+        .find(|r| r.delivery_path == Typ2DeliveryPath::SmgwDirect)
+        .expect("the SMGW delivery reads back as one");
+    assert_eq!(smgw.bestellung_ref.as_deref(), Some("ESABE0000000002"));
+    assert_eq!(smgw.obis_code.as_deref(), Some("1-1:2.29.0"));
+
+    let backend = got
+        .iter()
+        .find(|r| r.delivery_path == Typ2DeliveryPath::MsconsBackend)
+        .expect("the EDIFACT delivery reads back as one");
+    assert_eq!(backend.bestellung_ref.as_deref(), Some("ESABE0000000001"));
+
+    // Two subscriptions at one Meldepunkt, told apart by the order they were
+    // delivered under — which is what the surveillance sweep keys on.
+    assert_ne!(smgw.bestellung_ref, backend.bestellung_ref);
+}
+
+/// `?as_of=` has to describe the **whole** measuring point, like the ordinary
+/// read does.
+///
+/// A prosumer reports import beside export at the same instants, and a
+/// dual-tariff point HT beside NT. meterstore refuses to fold two channels into
+/// one `MeasurementSeries` — correctly, since that puts two values at every
+/// instant — so a transaction-time read that collected without splitting
+/// answered **500** for exactly the points whose corrections it exists to
+/// reconstruct. Every existing as-of test used a single register, so the fold
+/// looked fine.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn query_as_of_describes_every_register_of_a_prosumer() {
+    let (repo, _pool, _pg, _wh) = setup().await;
+    let interval = OffsetDateTime::now_utc() - Duration::days(1);
+    let delivered = OffsetDateTime::now_utc() - Duration::hours(3);
+
+    // Import and export at the same instants — one measuring point, two
+    // channels.
+    for (obis, kwh_value) in [("1-0:1.8.0", "3.5"), ("1-0:2.8.0", "1.25")] {
+        let mut r = read("51238696012", interval, kwh_value, Sparte::Strom, obis);
+        r.valid_from_tx = Some(delivered);
+        repo.store_reads(validated(vec![r]))
+            .await
+            .expect("store channel");
+    }
+
+    let q = window("51238696012", interval);
+    let now = repo.query(&q).await.expect("query");
+    assert_eq!(now.len(), 2, "the ordinary read describes both channels");
+
+    let as_of = repo
+        .query_as_of(&q, OffsetDateTime::now_utc())
+        .await
+        .expect("a transaction-time read must not refuse a prosumer");
+    assert_eq!(as_of.len(), 2, "and so does the transaction-time read");
+
+    let mut by_register: Vec<_> = as_of
+        .iter()
+        .map(|r| (r.obis_code.clone().unwrap_or_default(), r.quantity_kwh))
+        .collect();
+    by_register.sort();
+    assert_eq!(
+        by_register,
+        vec![
+            ("1-0:1.8.0".to_owned(), kwh("3.5")),
+            ("1-0:2.8.0".to_owned(), kwh("1.25")),
+        ],
+        "neither channel is folded into the other"
+    );
+
+    // Before either was delivered, the point was unknown — not half-known.
+    let before = repo
+        .query_as_of(&q, delivered - Duration::hours(1))
+        .await
+        .expect("query_as_of");
+    assert!(before.is_empty());
 }

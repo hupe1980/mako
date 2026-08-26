@@ -348,7 +348,9 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `POST` | `/api/v1/esa/einwilligungen` | `write-einwilligung` | Grant an ESA consent (§49 Abs. 2 Nr. 9 MsbG). Emits `de.markt.einwilligung.erteilt`. Evidence-agnostic |
 | `GET` | `/api/v1/esa/einwilligungen` | `read-einwilligung` | List active consents (`?esa_mp_id=`) |
 | `GET` | `/api/v1/esa/einwilligungen/{id}` | `read-einwilligung` | Get a consent |
-| `DELETE` | `/api/v1/esa/einwilligungen/{id}` | `write-einwilligung` | Revoke (GDPR Art. 7(3)) — emits `de.markt.einwilligung.widerrufen` and fires the 17008 Abbestellung at makod |
+| `DELETE` | `/api/v1/esa/einwilligungen/{id}` | `write-einwilligung` | Revoke (GDPR Art. 7(3)) — emits `de.markt.einwilligung.widerrufen` and fires the 17008 Abbestellung at makod, once **per covered location and no Messprodukt**: a location may carry several subscriptions and makod stops every one of them |
+| `PUT` | `/api/v1/esa/preise/{msb_mp_id}/{esa_mp_id}` | `write-einwilligung` | Record the prices of an **accepted QUOTES 15003 Angebot** (`esa_messprodukt_preise`). Filed by makod on the ORDRSP 19011 — the moment the offer becomes the agreement |
+| `GET` | `/api/v1/esa/preise/{msb_mp_id}/{esa_mp_id}?at=` | `read-einwilligung` | The prices in force on `at`. Read by invoicd to check an INVOIC 31009: an ESA has **no Preisblatt** (§35 MsbG leaves the Entgelt for a Zusatzleistung to be agreed per request), so the offer it ordered against is the price basis |
 | `PUT`/`GET` | `/api/v1/esa/framework/{msb_mp_id}/{esa_mp_id}` | — | Bilateral EDI@Energy framework agreement + AS4 cert state |
 | `GET` | `/api/v1/esa/consent-check` | — | Gate an ESA message (`?esa_mp_id=&msb_mp_id=&location_id=&perspective=`) → `{allowed, code, reason}`. `perspective=msb_inbound` (default, lenient: missing record = self-assertion) or `esa_outbound` (strict: missing record = no lawful basis). makod calls this before running the Wertebestellung workflow |
 | `GET` | `/api/v1/mabis-zp` | `read-mabis-zp` | Every Bilanzierungsgebiet → MaBiS-Zählpunkt assignment for the tenant |

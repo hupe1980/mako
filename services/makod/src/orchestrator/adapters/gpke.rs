@@ -1124,6 +1124,17 @@ pub fn gpke_messwerte_registry() -> AdapterRegistry<GpkeMesswerteLieferungWorkfl
                 message_ref: MessageRef::new(msg.message_ref()),
                 validation_passed,
                 validation_errors,
+                // `SG1 RFF+AGI` — Muss on a 13027 „Werte nach Typ 2" (MSCONS
+                // AHB 3.2 §11.2 hint [574]) and the only thing on the delivery
+                // that names the ESA subscription it belongs to. Absent on
+                // every other MSCONS PID, which have no subscription.
+                bestellung_ref: msg
+                    .segments()
+                    .iter()
+                    .find(|s| s.tag == "RFF" && s.component_str(0, 0) == Some("AGI"))
+                    .and_then(|s| s.component_str(0, 1))
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_owned),
             })
         },
     ));

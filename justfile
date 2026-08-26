@@ -146,6 +146,24 @@ test-features:
         cargo test -p edi-energy $f
     done
 
+# `cargo publish` verifies each crate **alone, with default features**, where
+# workspace feature unification no longer supplies an optional dependency. A
+# `#[cfg]` gate that slipped off its item compiles all through `just ci` and
+# fails in the release job.
+#
+# Build every publishable crate the way crates.io will
+check-publishable:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # The publish order in .github/workflows/release.yml is the source of truth.
+    crates=$(grep -oE 'cargo publish -p [a-z0-9-]+' .github/workflows/release.yml \
+             | awk '{print $NF}' | sort -u)
+    for c in $crates; do
+        echo "==> cargo check -p $c (default features)"
+        cargo check -q -p "$c"
+    done
+    echo "check-publishable: $(echo "$crates" | wc -w | tr -d ' ') crates build with default features"
+
 # Full CI suite (minimum gate + tests + quality + release-lifecycle checks)
 # Lint every documented role-scoped deployment profile of makod.
 #
@@ -211,7 +229,7 @@ smoke-roles:
             --allow-no-as4-signing --check
     done
 
-ci: check test test-features clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-routes check-wire-timestamps check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci validate-release-codes lint-makotest test-makotest
+ci: check test test-features check-publishable clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-routes check-wire-timestamps check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci validate-release-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the

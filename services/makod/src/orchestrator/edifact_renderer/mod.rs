@@ -904,22 +904,41 @@ mod tests {
             .bytes
         };
 
-        // Angebot (has Bindungsfrist) → ReceiveAngebot.
+        // Angebot — a **priced** position block. UC 4.1.1 has the ESA asking
+        // for „die Übermittlung von Werten und die damit verbundenen Kosten",
+        // and QUOTES AHB 1.1a §4.3 makes `SG4 CUX`, the `PIA+Z02` Artikel-IDs,
+        // the `SG31 PRI+CAL` prices and the `PIA+5 …:SRW` OBIS-Kennzahlen all
+        // Muss. That, not the Bindungsfrist, is what tells an offer from a
+        // refusal — `DTM+273` is Muss on the only published 15003 use case, so
+        // a refusal carries one too and reading its absence as the signal made
+        // every conformant Angebot parse as an Ablehnung.
         let angebot = render(serde_json::json!({
             "pid": 15003_u32, "sender": "9900357000004", "receiver": esa,
             "location": "51238696781", "bindungsfrist_tage": 14,
             "korrelation_ref": "ESA-WA-1",
+            "messprodukt": "9991000003056",
+            "currency": "EUR",
+            "artikel_ids": ["9990001100002"],
+            "obis": ["1-1:1.29.0"],
+            "preise": [{ "betrag": "0.004500", "art": "Z03", "einheit": "DAY" }],
         }));
         let msg = edi_energy::parse(&angebot).expect("parse angebot");
         let cmd = registry
             .dispatch(&msg as &dyn std::any::Any, &fv)
             .expect("dispatch angebot");
-        assert!(
-            matches!(cmd, C::ReceiveAngebot { .. }),
-            "Angebot must map to ReceiveAngebot"
-        );
+        let C::ReceiveAngebot { angebot, .. } = cmd else {
+            panic!("a priced 15003 must map to ReceiveAngebot")
+        };
+        assert_eq!(angebot.waehrung.as_deref(), Some("EUR"));
+        assert_eq!(angebot.obis_kennzahlen, ["1-1:1.29.0"]);
+        let preis = angebot
+            .preis(mako_wim::esa::Preistyp::Betrieb)
+            .expect("the Betriebspreis survives the round trip");
+        assert_eq!(preis.betrag, "0.004500");
+        assert_eq!(preis.einheit, "DAY");
+        assert_eq!(preis.artikel_id, "9990001100002");
 
-        // Ablehnung (no Bindungsfrist, FTX reason) → ReceiveAnfrageAblehnung.
+        // Ablehnung — no priced position, grounds in `FTX+ACB`.
         let ablehnung = render(serde_json::json!({
             "pid": 15003_u32, "sender": "9900357000004", "receiver": esa,
             "location": "51238696781", "reason": "Messprodukt nicht lieferbar",
@@ -929,7 +948,7 @@ mod tests {
             .dispatch(&msg as &dyn std::any::Any, &fv)
             .expect("dispatch ablehnung");
         match cmd {
-            C::ReceiveAnfrageAblehnung { reason } => {
+            C::ReceiveAnfrageAblehnung { reason, .. } => {
                 assert_eq!(reason.as_deref(), Some("Messprodukt nicht lieferbar"));
             }
             _ => panic!("Ablehnung must map to ReceiveAnfrageAblehnung"),

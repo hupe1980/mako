@@ -2333,6 +2333,64 @@ pub const E_0256_CODES: &[AntwortCode] = &[
     ),
 ];
 
+/// `E_0252` — Anfrage prüfen (REQOTE 35003 → QUOTES 15003).
+pub const EBD_ESA_ANFRAGE: &str = "E_0252";
+const E_0252: Option<&'static str> = Some(EBD_ESA_ANFRAGE);
+
+/// `E_0252` — the MSB's check of an ESA Werteanfrage.
+///
+/// **Ablehnungscodes only.** The tree's two positive exits both read „Angebot
+/// zur Anfrage erstellen", and the QUOTES AHB 1.1a publishes exactly one 15003
+/// use case — an Angebot with no `AJT` segment anywhere in it. So the offer
+/// itself is the agreement and there is no Zustimmungscode to draw; it is
+/// registered in [`ABLEHNUNG_ONLY_TREES`] for that reason.
+///
+/// Note the deliberate divergence from [`E_0256_CODES`], which asks six of the
+/// same questions again at Bestellung time under **different letters** (`A02`
+/// here is `A04`/`A05` there, `A03` is `A06`, `A07` is `A10`). The two are
+/// asked at different moments — the Anfrage is checked against today, the
+/// Bestellung against the Zeitraum der Messwertermittlung — and a code has no
+/// meaning without its tree.
+pub const E_0252_CODES: &[AntwortCode] = &[
+    code!(
+        "A02",
+        E_0252,
+        Ablehnung,
+        "Das vom ESA gewünschte Messprodukt wird vom MSB nicht angeboten"
+    ),
+    code!(
+        "A03",
+        E_0252,
+        Ablehnung,
+        "Vertragliche Grundlage des ESA liegt nicht vor"
+    ),
+    code!(
+        "A04",
+        E_0252,
+        Ablehnung,
+        "Die unterzeichnete Einwilligung für die Lokation liegt nicht vor"
+    ),
+    code!(
+        "A05",
+        E_0252,
+        Ablehnung,
+        "Vorliegende Einwilligung ist nicht plausibel oder vollständig"
+    ),
+    code!(
+        "A06",
+        E_0252,
+        Ablehnung,
+        "Die Gerätetechnik misst die angeforderten Messwerte nicht"
+    ),
+    code!(
+        "A07",
+        E_0252,
+        Ablehnung,
+        "Der MSB der Marktlokation / Netzlokation ist nicht zeitgleich der allen \
+         Messlokation(en) zugeordnete MSB"
+    ),
+];
+
 /// `E_0257` — Stornierung prüfen (ORDCHG 39002 → ORDRSP 19013/19014).
 pub const EBD_ESA_STORNIERUNG: &str = "E_0257";
 const E_0257: Option<&'static str> = Some(EBD_ESA_STORNIERUNG);
@@ -2449,6 +2507,7 @@ pub const CODELISTEN: &[(&str, &[AntwortCode])] = &[
     (EBD_WIM_STORNO_GAS, E_2018_CODES),
     (EBD_WIM_STORNO_MSBN_GAS, E_2019_CODES),
     // WiM Strom Teil 2 — ESA Wertebestellung.
+    (EBD_ESA_ANFRAGE, E_0252_CODES),
     (EBD_ESA_BESTELLUNG, E_0256_CODES),
     (EBD_ESA_STORNIERUNG, E_0257_CODES),
     (EBD_ESA_BEENDIGUNG, E_0254_CODES),
@@ -2479,6 +2538,11 @@ pub const VORPRUEFUNG_TREES: &[(&str, &str)] = &[
 /// Adding a tree here is a claim about an AHB column. The test below holds it
 /// to the consequence: such a tree must publish no Zustimmungscode.
 pub const ABLEHNUNG_ONLY_TREES: &[(&str, &str)] = &[
+    (
+        EBD_ESA_ANFRAGE,
+        "QUOTES: the 15003 Angebot carries no AJT at all — the priced offer is \
+         the agreement (QUOTES AHB 1.1a §4.3)",
+    ),
     (
         EBD_NETZNUTZUNGSRECHNUNG,
         "REMADV: the Bestätigung 33001 carries no AJT at all (REMADV AHB 1.0a)",

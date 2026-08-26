@@ -220,6 +220,40 @@ fn typ2_pid_13027_is_received_and_forked() {
     );
 }
 
+/// An ESA subscription is the **(Meldepunkt, Messprodukt)** pair, and one
+/// Meldepunkt may carry several: the Codeliste offers `9991 00000 305 6` and
+/// `9991 00000 314 7` for the same Marktlokation. The delivery-surveillance key
+/// has to separate them, or two subscriptions delivering the same OBIS register
+/// share one row and one going silent is masked by the other still arriving.
+///
+/// `subscription_ref` is `SG1 RFF+AGI` on the delivering MSCONS 13027 — the
+/// Belegnummer of the ORDERS that ordered the values (MSCONS AHB 3.2 §11.2
+/// hint `[574]`).
+#[test]
+fn typ2_surveillance_is_keyed_per_subscription() {
+    let ddl = ddl_of(&migration(), "delivery_surveillance");
+    assert!(
+        ddl.contains("subscription_ref"),
+        "delivery_surveillance must record which ESA subscription a finding is about"
+    );
+    let pk = ddl
+        .lines()
+        .find(|l| l.contains("PRIMARY KEY"))
+        .expect("delivery_surveillance has a primary key");
+    for col in [
+        "tenant",
+        "stream",
+        "malo_id",
+        "obis_code",
+        "subscription_ref",
+    ] {
+        assert!(
+            pk.contains(col),
+            "the surveillance key must include {col}; got {pk}"
+        );
+    }
+}
+
 /// An ESA may order value delivery from the MSB (WiM Strom Teil 2 Kap. 4 · §60
 /// Abs. 1 MsbG), so a reading order can be raised on its behalf — the
 /// `auftraggeber_rolle` CHECK must admit `ESA` alongside LF/MSB/NB.

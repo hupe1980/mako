@@ -42,8 +42,8 @@ use marktd::{
         },
         dlq::{delete_dlq_entry, list_dlq, retry_dlq_entry},
         einwilligung::{
-            consent_check, get_einwilligung, get_framework, grant_einwilligung,
-            list_einwilligungen, put_framework, revoke_einwilligung,
+            consent_check, get_einwilligung, get_esa_preise, get_framework, grant_einwilligung,
+            list_einwilligungen, put_esa_preise, put_framework, revoke_einwilligung,
         },
         event_ingest::{InboundWebhookSecret, ingest_event},
         event_log::list_event_log,
@@ -525,6 +525,13 @@ fn esa_routes() -> Router<S> {
         .route(
             "/api/v1/esa/framework/{msb_mp_id}/{esa_mp_id}",
             put(put_framework).get(get_framework),
+        )
+        // The accepted QUOTES 15003 Angebot — the ESA price basis, since there
+        // is no published Preisblatt for Kapitel-4.6 Messprodukte (§35 MsbG).
+        // `invoicd` checks INVOIC 31009 positions against it.
+        .route(
+            "/api/v1/esa/preise/{msb_mp_id}/{esa_mp_id}",
+            put(put_esa_preise).get(get_esa_preise),
         )
         // Inbound-message gate: revoked consent / unestablished framework
         // → allowed:false (the Ablehnung clearing case).

@@ -177,6 +177,23 @@ const LOC_ELEMENTS: &[ElementRef] = &[
 /// `LOC` — Ortsangabe.
 pub const LOC: SegmentDefinition = SegmentDefinition::new("LOC", "Ortsangabe", LOC_ELEMENTS);
 
+const AJT_ELEMENTS: &[ElementRef] = &[
+    ElementRef::new(1, "4465", M, 1),
+    ElementRef::new(2, "1082", C, 1),
+];
+/// `AJT` — Einzelheiten zu einer Anpassung/Änderung.
+///
+/// Two plain data elements, both dense, so no `CANONICAL_ELEMENT_POSITIONS`
+/// entry is needed. BDEW repurposes both: DE 4465 carries the **Code des
+/// Prüfschritts** of an Entscheidungsbaum and DE 1082 (nominally a Positions-
+/// nummer) the **EBD number** that code was published in — see e.g. ORDRSP
+/// AHB 1.1b §4.15 and REMADV AHB 1.1 §4.2.
+pub const AJT: SegmentDefinition = SegmentDefinition::new(
+    "AJT",
+    "Einzelheiten zu einer Anpassung/Änderung",
+    AJT_ELEMENTS,
+);
+
 const ERC_ELEMENTS: &[ElementRef] = &[ElementRef::composite(1, "C901", M, 1, C901)];
 /// `ERC` — Anwendungsfehler.
 pub const ERC: SegmentDefinition = SegmentDefinition::new("ERC", "Anwendungsfehler", ERC_ELEMENTS);

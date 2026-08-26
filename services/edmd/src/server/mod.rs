@@ -112,7 +112,15 @@ pub fn router(state: HandlerState) -> Router {
         // ESA "Werte nach Typ 2" — a deliberately separate read path from the
         // billing endpoints above. It reads `esa_typ2_reads` only, never
         // `meter_reads`, so Typ-2 data is unreachable from any billing query.
-        .route("/api/v1/esa/typ2/{malo_id}", get(get_esa_typ2))
+        // `GET` reads what was delivered; `POST` is the **Kapitel 4.6.2**
+        // receiving door — "Werte nach Typ 2 aus SMGW" arrive as XML straight
+        // from the iMS over SM-PKI and never touch market communication, so
+        // there is no MSCONS ingest to carry them. Two of the seven
+        // Pflichtprodukte are 4.6.2 products.
+        .route(
+            "/api/v1/esa/typ2/{malo_id}",
+            get(get_esa_typ2).post(post_esa_typ2),
+        )
         // ── Ablesesteuerung ───────────────────────────────────────────────────
         .route(
             "/api/v1/reading-orders",
@@ -494,6 +502,7 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
             partition_step: time::Duration::days(i64::from(a.partition_step_days)),
             archival_step: time::Duration::days(i64::from(a.archival_step_days)),
             cold_file_target_bytes: a.cold_file_target_mib as usize * 1024 * 1024,
+            ddl_lock_timeout: time::Duration::seconds(i64::from(a.ddl_lock_timeout_secs)),
         })
         .unwrap_or_default();
 

@@ -345,6 +345,31 @@ impl IngestionSource {
     }
 }
 
+/// Read a delivered quality label into a [`QualityFlag`].
+///
+/// The vocabulary MSCONS `SG10 STS+Z34` decodes to, and the one every ingest
+/// door speaks — the MSCONS fork, the SMGW push, the IoT batch. Shared rather
+/// than copied: two doors filing the same label under different flags is a
+/// difference no read-back can see, and `billable_qualities()` is what decides
+/// whether a value settles.
+///
+/// An absent or unrecognised label is [`QualityFlag::Unknown`], never
+/// `Measured`: „nothing was said" is not „it was measured", and the two differ
+/// in whether the value may be billed.
+#[must_use]
+pub fn quality_from_label(label: Option<&str>) -> QualityFlag {
+    match label.unwrap_or_default() {
+        "MEASURED" => QualityFlag::Measured,
+        "ESTIMATED" => QualityFlag::Estimated,
+        "SUBSTITUTED" => QualityFlag::Substituted,
+        "CALCULATED" => QualityFlag::Calculated,
+        "CORRECTED" => QualityFlag::Corrected,
+        "PRELIMINARY" => QualityFlag::Preliminary,
+        "FAULTY" => QualityFlag::Faulty,
+        _ => QualityFlag::Unknown,
+    }
+}
+
 /// The transport an ESA Typ-2 value arrived on (Codeliste 1.4 Kap. 4.6).
 ///
 /// Stored in `esa_typ2_reads.delivery_path`. Both paths carry the *same*
@@ -421,6 +446,20 @@ pub struct Typ2Read {
     /// MP-ID of the MSB that delivered the values.
     #[serde(default)]
     pub sender_mp_id: Option<String>,
+    /// `SG1 RFF+AGI` on the delivering MSCONS 13027 — the Belegnummer of the
+    /// ORDERS 17007 that ordered these values.
+    ///
+    /// MSCONS AHB 3.2 §11.2 hint `[574]`: „Wert aus BGM DE1004 der ORDERS mit
+    /// der die Bestellung der Werte nach Typ 2 erfolgt ist", and the first hop
+    /// of the PID overview's `EZ-03` routing. It is the **only** thing on a
+    /// value delivery that names the subscription it belongs to — a Meldepunkt
+    /// may carry several, since a subscription is the (Meldepunkt,
+    /// Messprodukt) pair.
+    ///
+    /// `None` on a delivery from a counterparty that omitted the Muss, and on
+    /// a 4.6.2 value that arrived over SM-PKI rather than as EDIFACT.
+    #[serde(default)]
+    pub bestellung_ref: Option<String>,
     /// When `edmd` received the value (database clock on write).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub received_at: Option<OffsetDateTime>,

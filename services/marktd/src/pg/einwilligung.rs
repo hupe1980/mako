@@ -5,7 +5,7 @@ use mako_markt::{
     error::MdmError,
     repository::{
         ConsentCode, ConsentDecision, ConsentPerspective, EinwilligungRecord,
-        EinwilligungRepository, EsaFrameworkAgreement,
+        EinwilligungRepository, EsaFrameworkAgreement, EsaMessproduktPreis,
     },
 };
 use sqlx::{PgPool, Row, postgres::PgRow};
@@ -194,6 +194,99 @@ impl EinwilligungRepository for PgEinwilligungRepository {
             })
         })
         .transpose()
+        .map_err(|e| MdmError::Internal(e.to_string()))
+    }
+
+    async fn upsert_esa_preise(&self, preise: &[EsaMessproduktPreis]) -> Result<(), MdmError> {
+        if preise.is_empty() {
+            return Ok(());
+        }
+        // One transaction: an offer is accepted as a whole, and half its prices
+        // on record is worse than none — the checker would dispute every
+        // position whose Artikel-ID did not make it.
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        for p in preise {
+            sqlx::query(
+                "INSERT INTO esa_messprodukt_preise \
+                   (tenant, esa_mp_id, msb_mp_id, lokations_id, messprodukt, artikel_id, \
+                    preistyp, betrag, einheit, waehrung, bestellung_ref, valid_from, valid_to) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,COALESCE($12, CURRENT_DATE),$13) \
+                 ON CONFLICT (tenant, esa_mp_id, msb_mp_id, lokations_id, messprodukt, \
+                              artikel_id, valid_from) \
+                 DO UPDATE SET preistyp       = EXCLUDED.preistyp, \
+                               betrag         = EXCLUDED.betrag, \
+                               einheit        = EXCLUDED.einheit, \
+                               waehrung       = EXCLUDED.waehrung, \
+                               bestellung_ref = EXCLUDED.bestellung_ref, \
+                               valid_to       = EXCLUDED.valid_to, \
+                               updated_at     = now()",
+            )
+            .bind(&p.tenant)
+            .bind(&p.esa_mp_id)
+            .bind(&p.msb_mp_id)
+            .bind(&p.lokations_id)
+            .bind(&p.messprodukt)
+            .bind(&p.artikel_id)
+            .bind(&p.preistyp)
+            .bind(p.betrag)
+            .bind(&p.einheit)
+            .bind(&p.waehrung)
+            .bind(p.bestellung_ref.as_deref())
+            .bind(p.valid_from)
+            .bind(p.valid_to)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        }
+        tx.commit()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))
+    }
+
+    async fn esa_preise_at(
+        &self,
+        tenant: &str,
+        esa_mp_id: &str,
+        msb_mp_id: &str,
+        at: time::Date,
+    ) -> Result<Vec<EsaMessproduktPreis>, MdmError> {
+        // Half-open `[valid_from, valid_to)`, as every dated table here.
+        sqlx::query(
+            "SELECT * FROM esa_messprodukt_preise \
+             WHERE tenant = $1 AND esa_mp_id = $2 AND msb_mp_id = $3 \
+               AND valid_from <= $4 AND (valid_to IS NULL OR valid_to > $4) \
+             ORDER BY artikel_id, valid_from DESC",
+        )
+        .bind(tenant)
+        .bind(esa_mp_id)
+        .bind(msb_mp_id)
+        .bind(at)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?
+        .into_iter()
+        .map(|row| {
+            Ok::<_, sqlx::Error>(EsaMessproduktPreis {
+                tenant: row.try_get("tenant")?,
+                esa_mp_id: row.try_get("esa_mp_id")?,
+                msb_mp_id: row.try_get("msb_mp_id")?,
+                lokations_id: row.try_get("lokations_id")?,
+                messprodukt: row.try_get("messprodukt")?,
+                artikel_id: row.try_get("artikel_id")?,
+                preistyp: row.try_get("preistyp")?,
+                betrag: row.try_get("betrag")?,
+                einheit: row.try_get("einheit")?,
+                waehrung: row.try_get("waehrung")?,
+                bestellung_ref: row.try_get("bestellung_ref").unwrap_or(None),
+                valid_from: row.try_get("valid_from").ok(),
+                valid_to: row.try_get("valid_to").unwrap_or(None),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
         .map_err(|e| MdmError::Internal(e.to_string()))
     }
 

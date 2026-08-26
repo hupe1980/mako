@@ -46,7 +46,9 @@ pub use super::wertebestellung::{
     BEENDIGUNG_MSB_PID, BESTAETIGUNG_PID, BESTELLUNG_PID, STORNIERUNG_PID, STORNO_ABLEHNUNG_PID,
     STORNO_BESTAETIGUNG_PID, STS_BEENDET, Zustellquittung,
 };
-pub use crate::esa::{Abonnement, Bestellgegenstand, Lokationsebene, ProduktFehler};
+pub use crate::esa::{
+    Abonnement, Angebot, Antwort, Bestellgegenstand, Lokationsebene, ProduktFehler, SmgwQuelle,
+};
 
 /// Workflow name used for PID routing and `WorkflowId` construction.
 pub const WORKFLOW_NAME: &str = "esa-wertebestellung";
@@ -95,14 +97,28 @@ pub enum EsaWertebestellungEvent {
         /// duration against the day the Angebot arrived.
         bindungsfrist: OffsetDateTime,
         /// `DTM+469` — the earliest start the MSB offers, which may be later
-        /// than the ESA's Wunschtermin.
+        /// than the ESA's Wunschtermin. **Muss** on the 15003.
         #[serde(default)]
         fruehester_start: Option<OffsetDateTime>,
+        /// The commercial substance: currency, per-Artikel-ID prices, the OBIS
+        /// registers the subscription will deliver, and the Einrichtungsdauer.
+        #[serde(default)]
+        angebot: Box<Angebot>,
     },
-    /// QUOTES 15003 Ablehnung received — the MSB refused the Anfrage; the process
-    /// ends. (Distinguished from an Angebot by carrying no Bindungsfrist.)
+    /// QUOTES 15003 without a priced position — the MSB will not deliver, and
+    /// the process ends.
+    ///
+    /// UC 4.1 Nr. 2 covers both outcomes („Angebot zur / Ablehnung der
+    /// Anfrage") but the QUOTES AHB 1.1a publishes only the Angebot, with
+    /// `SG31 PRI` **Muss** inside its position block and `DTM+273` Muss on the
+    /// message — so the *prices*, never the Bindungsfrist, tell the two apart.
+    /// The MSB states its grounds in `FTX+ACB` (the only free text the 15003
+    /// has); the `E_0252` code behind them has no segment to ride.
     AnfrageAbgelehnt {
-        /// Reason communicated by the MSB.
+        /// Reference of the inbound QUOTES.
+        #[serde(default)]
+        message_ref: Option<MessageRef>,
+        /// `FTX+ACB` — the MSB's stated grounds.
         reason: String,
     },
     /// ORDERS 17007 Bestellung sent.
@@ -114,10 +130,24 @@ pub enum EsaWertebestellungEvent {
     BestellungBestaetigt {
         /// Reference of the inbound ORDRSP.
         message_ref: MessageRef,
+        /// `SG2 AJT` — the `E_0256` Zustimmungscode and its tree.
+        #[serde(default)]
+        antwort: Option<Antwort>,
+        /// `SG27 FTX+Z27`/`FTX+Z28` — where the iMS will push from. **Muss**
+        /// on a 19011 confirming a Kapitel-4.6.2 order; the ESA must admit
+        /// that source or the confirmed subscription never delivers.
+        #[serde(default)]
+        smgw_quelle: Option<SmgwQuelle>,
     },
     /// ORDRSP 19012 received — the MSB refused the Bestellung; the process ends.
     BestellungAbgelehnt {
-        /// Reason communicated by the MSB.
+        /// Reference of the inbound ORDRSP.
+        message_ref: MessageRef,
+        /// `SG2 AJT` — the `E_0256` Ablehnungscode and its tree. This *is* the
+        /// reason; those PIDs publish no free-text segment.
+        #[serde(default)]
+        antwort: Option<Antwort>,
+        /// Human-readable rendering of the Antwortcode, for the operator queue.
         reason: String,
     },
     /// ORDCHG 39002 Stornierung sent (before delivery began).
@@ -130,10 +160,18 @@ pub enum EsaWertebestellungEvent {
     StornierungBestaetigt {
         /// Reference of the inbound ORDRSP.
         message_ref: MessageRef,
+        /// `SG2 AJT` — the `E_0257` Zustimmungscode and its tree.
+        #[serde(default)]
+        antwort: Option<Antwort>,
     },
     /// ORDRSP 19014 received — the Stornierung was refused; the order stands.
     StornierungAbgelehnt {
-        /// Reason communicated by the MSB.
+        /// Reference of the inbound ORDRSP.
+        message_ref: MessageRef,
+        /// `SG2 AJT` — the `E_0257` Ablehnungscode and its tree.
+        #[serde(default)]
+        antwort: Option<Antwort>,
+        /// Human-readable rendering of the Antwortcode.
         reason: String,
     },
     /// ORDERS 17008 Abbestellung sent (the Art. 7(3) revocation path).
@@ -149,12 +187,23 @@ pub enum EsaWertebestellungEvent {
     AbbestellungBestaetigt {
         /// Reference of the inbound ORDRSP.
         message_ref: MessageRef,
+        /// `SG2 AJT` — the `E_0254` Zustimmungscode and its tree.
+        #[serde(default)]
+        antwort: Option<Antwort>,
     },
     /// ORDRSP 19012 received for the Abbestellung — the MSB refused to stop;
     /// delivery continues. Surfaced so the operator can escalate (refusing a
     /// GDPR-Art.-7(3) Widerruf is a compliance incident).
     AbbestellungAbgelehnt {
-        /// Reason communicated by the MSB.
+        /// Reference of the inbound ORDRSP.
+        message_ref: MessageRef,
+        /// `SG2 AJT` — the `E_0254` Ablehnungscode and its tree. `A01`
+        /// („war eine einmalige Übermittlung") and `A02` („ist zu stornieren")
+        /// both mean „you used the wrong termination path", which the operator
+        /// can only act on if the code survives.
+        #[serde(default)]
+        antwort: Option<Antwort>,
+        /// Human-readable rendering of the Antwortcode.
         reason: String,
     },
     /// First values arrived; the Stornierung window closes.
@@ -172,6 +221,16 @@ pub enum EsaWertebestellungEvent {
     FristVersaeumt {
         /// Deadline label that fired.
         label: String,
+    },
+    /// An inbound answer contradicted itself: its `SG2 AJT` code sits in the
+    /// cluster the *other* PID is for (ORDRSP AHB 1.1b conditions
+    /// `[17]`/`[18]`). Recorded and then acted on by PID, since a Bestätigung
+    /// that quotes an Ablehnungscode cannot be resolved either way.
+    AntwortWidersprichtSich {
+        /// PID of the inbound ORDRSP.
+        pid: u32,
+        /// The code and tree it named.
+        antwort: Antwort,
     },
 }
 
@@ -191,6 +250,7 @@ impl EventPayload for EsaWertebestellungEvent {
             Self::AbbestellungBestaetigt { .. } => "EsaWertebestellungAbbestellungBestaetigt",
             Self::AbbestellungAbgelehnt { .. } => "EsaWertebestellungAbbestellungAbgelehnt",
             Self::LieferungBegonnen => "EsaWertebestellungLieferungBegonnen",
+            Self::AntwortWidersprichtSich { .. } => "EsaWertebestellungAntwortWidersprichtSich",
             Self::BeendetDurchMsb { .. } => "EsaWertebestellungBeendetDurchMsb",
             Self::FristVersaeumt { .. } => "EsaWertebestellungFristVersaeumt",
         }
@@ -238,6 +298,41 @@ pub struct EsaWertebestellungData {
     /// 19011/19012 in `RFF+ON`.
     #[serde(default)]
     pub abbestellung_ref: Option<String>,
+    /// `true` once the first values arrived under this order.
+    ///
+    /// Lives here rather than inside the `Beliefert` variant because it is a
+    /// fact about the **subscription**, not about the state the handshake
+    /// happens to be in. Held in the variant it was lost every time the
+    /// process left `Beliefert` for a Storno round trip and had to be
+    /// re-invented on the way back — as `true` after a refused Abbestellung
+    /// and `false` after a refused Stornierung, neither of which anything had
+    /// observed. It is what closes the UC 4.1 Nr. 5 Stornierung window, and
+    /// `E_0257` refuses a Stornierung of a started delivery, so guessing it
+    /// earns a market rejection either way.
+    #[serde(default)]
+    pub lieferung_begonnen: bool,
+    /// `DTM+469` — the earliest start the MSB offered.
+    ///
+    /// The ORDERS 17007 `DTM+203` Ausführungsdatum must not precede it: the
+    /// MSB has already said it cannot serve an earlier date, so ordering the
+    /// original Wunschtermin anyway asks for something the offer excluded.
+    #[serde(default)]
+    pub fruehester_start: Option<OffsetDateTime>,
+    /// What the MSB offered — prices, currency, OBIS registers, Einrichtungs-
+    /// dauer. Retained past the Bestellung because the MSB's INVOIC 31009
+    /// (UC 4.5) is checked against the offer the ESA accepted, and because the
+    /// OBIS list is what a delivery-surveillance sweep compares against.
+    #[serde(default)]
+    pub angebot: Box<Angebot>,
+    /// `SG27 FTX+Z27`/`Z28` on the confirming ORDRSP — where the iMS pushes
+    /// from, for a Kapitel-4.6.2 subscription.
+    #[serde(default)]
+    pub smgw_quelle: Option<SmgwQuelle>,
+    /// The last `SG2 AJT` the MSB sent on this process, whichever step it
+    /// answered. The operator queue and the § 20 EnWG audit trail both need
+    /// the code that was actually stated.
+    #[serde(default)]
+    pub letzte_antwort: Option<Antwort>,
 }
 
 /// State of an ESA-origination Wertebestellung process.
@@ -259,13 +354,11 @@ pub enum EsaWertebestellungState {
     /// Bestellung sent; the ESA awaits an ORDRSP within 2 WT.
     BestellungGesendet(Box<EsaWertebestellungData>),
     /// Bestellung confirmed — delivery is authorised and may be running.
-    Beliefert {
-        /// Process data.
-        data: Box<EsaWertebestellungData>,
-        /// `true` once the first values arrived, which closes the Stornierung
-        /// window (UC 4.3 Vorbedingung).
-        lieferung_begonnen: bool,
-    },
+    ///
+    /// Whether values have actually started arriving is
+    /// [`EsaWertebestellungData::lieferung_begonnen`], not a second field
+    /// here: it has to survive the Storno and Abbestellung round trips.
+    Beliefert(Box<EsaWertebestellungData>),
     /// Stornierung sent; the ESA awaits an ORDRSP 19013/19014 within 2 WT.
     StornierungGesendet(Box<EsaWertebestellungData>),
     /// Abbestellung sent; the ESA awaits an ORDRSP 19011 within 2 WT.
@@ -289,7 +382,7 @@ impl mako_engine::workflow::OccupiesBusinessKey for EsaWertebestellungState {
             Self::AnfrageGesendet(_)
             | Self::AngebotErhalten { .. }
             | Self::BestellungGesendet(_)
-            | Self::Beliefert { .. }
+            | Self::Beliefert(_)
             | Self::StornierungGesendet(_)
             | Self::AbbestellungGesendet(_) => true,
             // Terminal: cancelled before delivery, delivery ended, or refused.
@@ -307,7 +400,7 @@ impl EsaWertebestellungState {
             Self::AnfrageGesendet(_) => "AnfrageGesendet",
             Self::AngebotErhalten { .. } => "AngebotErhalten",
             Self::BestellungGesendet(_) => "BestellungGesendet",
-            Self::Beliefert { .. } => "Beliefert",
+            Self::Beliefert(_) => "Beliefert",
             Self::StornierungGesendet(_) => "StornierungGesendet",
             Self::AbbestellungGesendet(_) => "AbbestellungGesendet",
             Self::Storniert(_) => "Storniert",
@@ -319,7 +412,7 @@ impl EsaWertebestellungState {
     /// `true` when delivery to the ESA is authorised (a confirmed Bestellung).
     #[must_use]
     pub const fn beliefert(&self) -> bool {
-        matches!(self, Self::Beliefert { .. } | Self::AbbestellungGesendet(_))
+        matches!(self, Self::Beliefert(_) | Self::AbbestellungGesendet(_))
     }
 
     /// Process data, when the process has advanced past `New`.
@@ -328,11 +421,12 @@ impl EsaWertebestellungState {
         match self {
             Self::AnfrageGesendet(d)
             | Self::BestellungGesendet(d)
+            | Self::Beliefert(d)
             | Self::StornierungGesendet(d)
             | Self::AbbestellungGesendet(d)
             | Self::Storniert(d)
             | Self::Beendet(d) => Some(d),
-            Self::AngebotErhalten { data, .. } | Self::Beliefert { data, .. } => Some(data),
+            Self::AngebotErhalten { data, .. } => Some(data),
             Self::New | Self::Abgelehnt { .. } => None,
         }
     }
@@ -368,10 +462,14 @@ pub enum EsaWertebestellungCommand {
         bindungsfrist: OffsetDateTime,
         /// `DTM+469` — earliest start the MSB offers.
         fruehester_start: Option<OffsetDateTime>,
+        /// Prices, currency, OBIS registers and Einrichtungsdauer.
+        angebot: Box<Angebot>,
     },
-    /// QUOTES 15003 Ablehnung received — the MSB refused the Anfrage.
+    /// QUOTES 15003 with no priced position — the MSB will not deliver.
     ReceiveAnfrageAblehnung {
-        /// Reason communicated by the MSB.
+        /// Belegnummer of the inbound QUOTES.
+        message_ref: Option<MessageRef>,
+        /// `FTX+ACB` — the grounds the MSB stated.
         reason: Option<String>,
     },
     /// Originate ORDERS 17007 Bestellung (UC 4.1 Nr. 3). Consent-gated.
@@ -385,6 +483,11 @@ pub enum EsaWertebestellungCommand {
     ReceiveBestaetigung {
         /// Reference of the inbound ORDRSP.
         message_ref: MessageRef,
+        /// `SG2 AJT` — the Antwortcode and the EBD it came from. **Muss** on
+        /// the wire; `None` only from a non-conformant counterparty.
+        antwort: Option<Antwort>,
+        /// `SG27 FTX+Z27`/`Z28` — the MSB's push source, for a 4.6.2 order.
+        smgw_quelle: Option<SmgwQuelle>,
     },
     /// ORDRSP 19012 received — an **Ablehnung** of the Bestellung (ends the
     /// process) or of the Abbestellung (delivery continues). Resolved against
@@ -392,8 +495,9 @@ pub enum EsaWertebestellungCommand {
     ReceiveAblehnung {
         /// Reference of the inbound ORDRSP.
         message_ref: MessageRef,
-        /// Reason communicated by the MSB.
-        reason: Option<String>,
+        /// `SG2 AJT` — the Antwortcode and the EBD it came from. This is the
+        /// whole reason: 19012 publishes no free-text segment.
+        antwort: Option<Antwort>,
     },
     /// Originate ORDCHG 39002 Stornierung (UC 4.1 Nr. 5) before delivery began.
     SendStornierung {
@@ -406,8 +510,8 @@ pub enum EsaWertebestellungCommand {
         pid: Pruefidentifikator,
         /// Reference of the inbound ORDRSP.
         message_ref: MessageRef,
-        /// Reason, present on rejection (19014).
-        reason: Option<String>,
+        /// `SG2 AJT` — the `E_0257` code and its tree.
+        antwort: Option<Antwort>,
     },
     /// Originate ORDERS 17008 Abbestellung (UC 4.3 Nr. 1) — the GDPR Art. 7(3)
     /// revocation path. **Not** consent-gated: it is the act of stopping.
@@ -446,6 +550,46 @@ impl CommandPayload for EsaWertebestellungCommand {}
 
 /// ESA-origination Wertebestellung workflow (WiM Strom Teil 2, Kapitel 4).
 pub struct EsaWertebestellungWorkflow;
+
+/// Render an inbound `SG2 AJT` as the Begründung an operator reads.
+///
+/// The ORDRSP ESA answers publish **no free-text segment** (ORDRSP AHB 1.1b
+/// §4.15), so the Antwortcode and its EBD are the whole content of a refusal.
+/// An answer that names no tree stays unresolved rather than being given a
+/// meaning it does not have — `A01` is a different sentence in each of the
+/// three trees.
+fn antwort_reason(antwort: Option<&Antwort>) -> String {
+    antwort.map_or_else(
+        || {
+            "ORDRSP ohne SG2 AJT — der Antwortcode ist Muss (ORDRSP AHB 1.1b §4.15), \
+             die Ablehnung nennt damit keinen Grund"
+                .to_owned()
+        },
+        Antwort::beschreibung,
+    )
+}
+
+/// Record an answer whose `AJT` Cluster contradicts the PID that carried it.
+///
+/// ORDRSP AHB 1.1b conditions `[17]`/`[18]` bind the two together, so they can
+/// only disagree on a non-conformant message. Returns the event to prepend, or
+/// an empty vector when the answer is consistent or cannot be resolved at all
+/// (a missing EBD is a different defect, already carried by the answer itself).
+fn konflikt_event(
+    pid: Pruefidentifikator,
+    antwort: Option<&Antwort>,
+    pid_ist_zustimmung: bool,
+) -> Vec<EsaWertebestellungEvent> {
+    match antwort {
+        Some(a) if a.widerspricht_pid(pid_ist_zustimmung) => {
+            vec![EsaWertebestellungEvent::AntwortWidersprichtSich {
+                pid: pid.as_u32(),
+                antwort: a.clone(),
+            }]
+        }
+        _ => Vec::new(),
+    }
+}
 
 fn require_pid(
     pid: Pruefidentifikator,
@@ -518,15 +662,23 @@ impl Workflow for EsaWertebestellungWorkflow {
                 bestellung_ref: None,
                 stornierung_ref: None,
                 abbestellung_ref: None,
+                lieferung_begonnen: false,
+                fruehester_start: None,
+                angebot: Box::default(),
+                smgw_quelle: None,
+                letzte_antwort: None,
             })),
             E::AngebotErhalten {
                 message_ref,
                 bindungsfrist,
-                ..
+                fruehester_start,
+                angebot,
             } => match state {
                 S::AnfrageGesendet(mut data) => {
                     // The ORDERS 17007 must echo this Belegnummer in `RFF+AAG`.
                     data.angebot_ref = Some(message_ref.as_str().to_owned());
+                    data.fruehester_start = *fruehester_start;
+                    data.angebot.clone_from(angebot);
                     S::AngebotErhalten {
                         data,
                         bindungsfrist: *bindungsfrist,
@@ -534,7 +686,7 @@ impl Workflow for EsaWertebestellungWorkflow {
                 }
                 other => other,
             },
-            E::AnfrageAbgelehnt { reason } => match state {
+            E::AnfrageAbgelehnt { reason, .. } => match state {
                 S::AnfrageGesendet(_) => S::Abgelehnt {
                     reason: reason.clone(),
                 },
@@ -547,78 +699,126 @@ impl Workflow for EsaWertebestellungWorkflow {
                 }
                 other => other,
             },
-            E::BestellungBestaetigt { .. } => match state {
-                S::BestellungGesendet(data) => S::Beliefert {
-                    data,
-                    lieferung_begonnen: false,
+            E::BestellungBestaetigt {
+                antwort,
+                smgw_quelle,
+                ..
+            } => match state {
+                S::BestellungGesendet(mut data) => {
+                    data.letzte_antwort.clone_from(antwort);
+                    data.smgw_quelle.clone_from(smgw_quelle);
+                    S::Beliefert(data)
+                }
+                other => other,
+            },
+            // Guarded rather than unconditional: `apply` is a replay fold and
+            // must not let a stray event collapse a state the handler would
+            // never have produced it from.
+            E::BestellungAbgelehnt {
+                reason, antwort, ..
+            } => match state {
+                S::BestellungGesendet(_) => S::Abgelehnt {
+                    reason: antwort
+                        .as_ref()
+                        .map_or_else(|| reason.clone(), Antwort::beschreibung),
                 },
                 other => other,
             },
-            E::BestellungAbgelehnt { reason } => S::Abgelehnt {
-                reason: reason.clone(),
-            },
             E::StornierungGesendet { message_ref } => match state {
-                S::Beliefert { mut data, .. } => {
+                S::Beliefert(mut data) => {
                     // The ORDRSP 19013/19014 echoes this in `RFF+ACW`.
                     data.stornierung_ref = Some(message_ref.as_str().to_owned());
                     S::StornierungGesendet(data)
                 }
                 other => other,
             },
-            E::StornierungBestaetigt { .. } => match state {
-                S::StornierungGesendet(data) => S::Storniert(data),
+            E::StornierungBestaetigt { antwort, .. } => match state {
+                S::StornierungGesendet(mut data) => {
+                    data.letzte_antwort.clone_from(antwort);
+                    S::Storniert(data)
+                }
                 other => other,
             },
-            // A refused Stornierung leaves the delivery running.
-            E::StornierungAbgelehnt { .. } => match state {
-                S::StornierungGesendet(data) => S::Beliefert {
-                    data,
-                    lieferung_begonnen: false,
-                },
+            // A refused Stornierung leaves the delivery exactly as it was —
+            // `lieferung_begonnen` rides in the data and is not re-asserted.
+            E::StornierungAbgelehnt { antwort, .. } => match state {
+                S::StornierungGesendet(mut data) => {
+                    data.letzte_antwort.clone_from(antwort);
+                    S::Beliefert(data)
+                }
                 other => other,
             },
             E::AbbestellungGesendet { message_ref, .. } => match state {
-                S::Beliefert { mut data, .. } => {
+                S::Beliefert(mut data) => {
                     // The ORDRSP 19011/19012 echoes this in `RFF+ON`.
                     data.abbestellung_ref = Some(message_ref.as_str().to_owned());
                     S::AbbestellungGesendet(data)
                 }
                 other => other,
             },
-            E::AbbestellungBestaetigt { .. } => match state {
-                S::AbbestellungGesendet(data) => S::Beendet(data),
+            E::AbbestellungBestaetigt { antwort, .. } => match state {
+                S::AbbestellungGesendet(mut data) => {
+                    data.letzte_antwort.clone_from(antwort);
+                    S::Beendet(data)
+                }
                 other => other,
             },
             // UC 4.4: the MSB ended the delivery — terminal from any
             // delivery-authorised state.
             E::BeendetDurchMsb { .. } => match state {
-                S::Beliefert { data, .. } | S::AbbestellungGesendet(data) => S::Beendet(data),
+                S::Beliefert(data) | S::AbbestellungGesendet(data) => S::Beendet(data),
                 other => other,
             },
-            // A refused Abbestellung leaves delivery running.
-            E::AbbestellungAbgelehnt { .. } => match state {
-                S::AbbestellungGesendet(data) => S::Beliefert {
-                    data,
-                    lieferung_begonnen: true,
-                },
+            // A refused Abbestellung leaves delivery running, unchanged.
+            E::AbbestellungAbgelehnt { antwort, .. } => match state {
+                S::AbbestellungGesendet(mut data) => {
+                    data.letzte_antwort.clone_from(antwort);
+                    S::Beliefert(data)
+                }
                 other => other,
             },
             E::LieferungBegonnen => match state {
-                S::Beliefert { data, .. } => S::Beliefert {
-                    data,
-                    lieferung_begonnen: true,
-                },
+                // Recorded from any state that still holds an authorised
+                // order: a first delivery landing while a Stornierung is in
+                // flight is exactly the case `E_0257` `A02` exists for.
+                S::Beliefert(mut data) => {
+                    data.lieferung_begonnen = true;
+                    S::Beliefert(data)
+                }
+                S::StornierungGesendet(mut data) => {
+                    data.lieferung_begonnen = true;
+                    S::StornierungGesendet(data)
+                }
+                S::AbbestellungGesendet(mut data) => {
+                    data.lieferung_begonnen = true;
+                    S::AbbestellungGesendet(data)
+                }
                 other => other,
             },
-            E::FristVersaeumt { .. } => match state {
-                // Only an outstanding Angebot turns into a terminal rejection;
-                // a missed ORDRSP is a process anomaly surfaced by the event but
-                // does not collapse an authorised delivery.
+            E::FristVersaeumt { label } => match state {
+                // An outstanding Angebot that never came ends the process.
                 S::AnfrageGesendet(_) => S::Abgelehnt {
                     reason: "Angebot nicht innerhalb der Frist erhalten".to_owned(),
                 },
+                // …and so does an offer whose Bindungsfrist ran out. UC 4.1
+                // Nr. 3 admits no order after it, so `AngebotErhalten` can
+                // never advance again — and a process that cannot advance must
+                // release its (Meldepunkt, Messprodukt) business key, or the
+                // ESA can never request those values again.
+                S::AngebotErhalten { bindungsfrist, .. } if label == BINDUNGSFRIST_LABEL => {
+                    S::Abgelehnt {
+                        reason: format!(
+                            "Bindungsfrist des Angebots am {bindungsfrist} abgelaufen, ohne dass \
+                             bestellt wurde"
+                        ),
+                    }
+                }
+                // A missed ORDRSP is a process anomaly the event surfaces; it
+                // does not void an authorised delivery.
                 other => other,
             },
+            // Recorded for the audit trail; the PID decides what happens next.
+            E::AntwortWidersprichtSich { .. } => state,
         }
     }
 
@@ -708,6 +908,11 @@ impl Workflow for EsaWertebestellungWorkflow {
                     bestellung_ref: None,
                     stornierung_ref: None,
                     abbestellung_ref: None,
+                    lieferung_begonnen: false,
+                    fruehester_start: None,
+                    angebot: Box::default(),
+                    smgw_quelle: None,
+                    letzte_antwort: None,
                 };
                 let wunschtermin = gegenstand.wunschtermin.midnight().assume_utc();
                 let outbox = esa_send(
@@ -744,6 +949,7 @@ impl Workflow for EsaWertebestellungWorkflow {
                 message_ref,
                 bindungsfrist,
                 fruehester_start,
+                angebot,
             } => {
                 if !matches!(state, S::AnfrageGesendet(_)) {
                     return Err(WorkflowError::invalid_state(
@@ -756,13 +962,17 @@ impl Workflow for EsaWertebestellungWorkflow {
                         message_ref,
                         bindungsfrist,
                         fruehester_start,
+                        angebot,
                     }],
                     outbox: Vec::new(),
                     deadlines: vec![PendingDeadline::new(BINDUNGSFRIST_LABEL, bindungsfrist)],
                 })
             }
 
-            C::ReceiveAnfrageAblehnung { reason } => {
+            C::ReceiveAnfrageAblehnung {
+                message_ref,
+                reason,
+            } => {
                 if !matches!(state, S::AnfrageGesendet(_)) {
                     return Err(WorkflowError::invalid_state(
                         "AnfrageGesendet",
@@ -770,7 +980,11 @@ impl Workflow for EsaWertebestellungWorkflow {
                     ));
                 }
                 Ok(WorkflowOutput::events(vec![E::AnfrageAbgelehnt {
-                    reason: reason.unwrap_or_else(|| "Anfrage vom MSB abgelehnt".to_owned()),
+                    message_ref,
+                    reason: reason.unwrap_or_else(|| {
+                        "QUOTES 15003 ohne bepreiste Position — der MSB nennt keine Gründe"
+                            .to_owned()
+                    }),
                 }]))
             }
 
@@ -800,13 +1014,21 @@ impl Workflow for EsaWertebestellungWorkflow {
                         "Bestellung ohne Angebotsnummer — RFF+AAG ist Muss (ORDERS AHB 1.1b §4.15)",
                     )
                 })?;
+                // `DTM+203` Ausführungsdatum is **Muss** on the 17007
+                // (ORDERS AHB 1.1b §4.15) and states when delivery is to
+                // begin. The MSB has already answered that question with
+                // `DTM+469` „Startdatum, frühestes/r" — Muss on its Angebot —
+                // so ordering the original Wunschtermin when the offer named a
+                // later one asks for a date the MSB has said it cannot serve.
+                let wunsch = data.gegenstand.wunschtermin.midnight().assume_utc();
+                let ausfuehrungsdatum = data.fruehester_start.map_or(wunsch, |f| wunsch.max(f));
                 let outbox = esa_send(
                     "ORDERS",
                     BESTELLUNG_PID,
                     data,
                     &message_ref,
                     Some(angebot_ref),
-                    Some(data.gegenstand.wunschtermin.midnight().assume_utc()),
+                    Some(ausfuehrungsdatum),
                     data.gegenstand.abonnement,
                 );
                 let due = mako_fristen::deadline_at_werktage(
@@ -821,56 +1043,86 @@ impl Workflow for EsaWertebestellungWorkflow {
                 })
             }
 
-            C::ReceiveBestaetigung { message_ref } => match state {
-                // ORDRSP 19011 confirms the Bestellung → delivery authorised.
-                S::BestellungGesendet(_) => {
-                    Ok(WorkflowOutput::events(vec![E::BestellungBestaetigt {
-                        message_ref,
-                    }]))
+            C::ReceiveBestaetigung {
+                message_ref,
+                antwort,
+                smgw_quelle,
+            } => {
+                // ORDRSP AHB 1.1b conditions `[17]`/`[18]`: the `AJT` code has
+                // to sit in the Zustimmungs-Cluster of the tree it names, and
+                // 19011 is the Zustimmungs-PID. A 19011 quoting an
+                // Ablehnungscode is a message whose halves disagree; it is
+                // recorded and then read by PID, because acting on the code
+                // instead would silently turn a confirmation into a refusal.
+                let mut events = konflikt_event(BESTAETIGUNG_PID, antwort.as_ref(), true);
+                match state {
+                    // ORDRSP 19011 confirms the Bestellung → delivery authorised.
+                    S::BestellungGesendet(_) => {
+                        events.push(E::BestellungBestaetigt {
+                            message_ref,
+                            antwort,
+                            smgw_quelle,
+                        });
+                    }
+                    // ORDRSP 19011 confirms the Abbestellung → delivery ended.
+                    S::AbbestellungGesendet(_) => {
+                        events.push(E::AbbestellungBestaetigt {
+                            message_ref,
+                            antwort,
+                        });
+                    }
+                    _ => {
+                        return Err(WorkflowError::invalid_state(
+                            "BestellungGesendet|AbbestellungGesendet",
+                            state.label(),
+                        ));
+                    }
                 }
-                // ORDRSP 19011 confirms the Abbestellung → delivery ended.
-                S::AbbestellungGesendet(_) => {
-                    Ok(WorkflowOutput::events(vec![E::AbbestellungBestaetigt {
-                        message_ref,
-                    }]))
-                }
-                _ => Err(WorkflowError::invalid_state(
-                    "BestellungGesendet|AbbestellungGesendet",
-                    state.label(),
-                )),
-            },
+                Ok(WorkflowOutput::events(events))
+            }
 
             C::ReceiveAblehnung {
-                message_ref: _,
-                reason,
-            } => match state {
-                // ORDRSP 19012 refuses the Bestellung → the process ends.
-                S::BestellungGesendet(_) => {
-                    Ok(WorkflowOutput::events(vec![E::BestellungAbgelehnt {
-                        reason: reason.unwrap_or_else(|| "ohne Begründung".to_owned()),
-                    }]))
+                message_ref,
+                antwort,
+            } => {
+                let mut events = konflikt_event(ABLEHNUNG_PID, antwort.as_ref(), false);
+                // The `AJT` **is** the reason — ORDRSP AHB 1.1b §4.15 gives
+                // 19011–19014 no free-text segment at all, and the only `FTX`
+                // a conformant 19011 may carry is `SG27 FTX+Z27`, the MSB's IP
+                // address.
+                let reason = antwort_reason(antwort.as_ref());
+                match state {
+                    // ORDRSP 19012 refuses the Bestellung → the process ends.
+                    S::BestellungGesendet(_) => {
+                        events.push(E::BestellungAbgelehnt {
+                            message_ref,
+                            antwort,
+                            reason,
+                        });
+                    }
+                    // ORDRSP 19012 refuses the Abbestellung → delivery continues.
+                    S::AbbestellungGesendet(_) => {
+                        events.push(E::AbbestellungAbgelehnt {
+                            message_ref,
+                            antwort,
+                            reason,
+                        });
+                    }
+                    _ => {
+                        return Err(WorkflowError::invalid_state(
+                            "BestellungGesendet|AbbestellungGesendet",
+                            state.label(),
+                        ));
+                    }
                 }
-                // ORDRSP 19012 refuses the Abbestellung → delivery continues.
-                S::AbbestellungGesendet(_) => {
-                    Ok(WorkflowOutput::events(vec![E::AbbestellungAbgelehnt {
-                        reason: reason.unwrap_or_else(|| "ohne Begründung".to_owned()),
-                    }]))
-                }
-                _ => Err(WorkflowError::invalid_state(
-                    "BestellungGesendet|AbbestellungGesendet",
-                    state.label(),
-                )),
-            },
+                Ok(WorkflowOutput::events(events))
+            }
 
             C::SendStornierung { message_ref } => {
-                let S::Beliefert {
-                    data,
-                    lieferung_begonnen,
-                } = state
-                else {
+                let S::Beliefert(data) = state else {
                     return Err(WorkflowError::invalid_state("Beliefert", state.label()));
                 };
-                if *lieferung_begonnen {
+                if data.lieferung_begonnen {
                     return Err(WorkflowError::rejected(
                         "Stornierung ist nach Lieferbeginn nicht mehr möglich \
                          (UC 4.3 Vorbedingung) — nutze die Abbestellung (17008)",
@@ -907,7 +1159,7 @@ impl Workflow for EsaWertebestellungWorkflow {
             C::ReceiveStornierungAntwort {
                 pid,
                 message_ref,
-                reason,
+                antwort,
             } => {
                 if !matches!(state, S::StornierungGesendet(_)) {
                     return Err(WorkflowError::invalid_state(
@@ -920,15 +1172,21 @@ impl Workflow for EsaWertebestellungWorkflow {
                     &[STORNO_BESTAETIGUNG_PID, STORNO_ABLEHNUNG_PID],
                     "Antwort auf Stornierung",
                 )?;
-                if pid == STORNO_BESTAETIGUNG_PID {
-                    Ok(WorkflowOutput::events(vec![E::StornierungBestaetigt {
+                let bestaetigt = pid == STORNO_BESTAETIGUNG_PID;
+                let mut events = konflikt_event(pid, antwort.as_ref(), bestaetigt);
+                events.push(if bestaetigt {
+                    E::StornierungBestaetigt {
                         message_ref,
-                    }]))
+                        antwort,
+                    }
                 } else {
-                    Ok(WorkflowOutput::events(vec![E::StornierungAbgelehnt {
-                        reason: reason.unwrap_or_else(|| "ohne Begründung".to_owned()),
-                    }]))
-                }
+                    E::StornierungAbgelehnt {
+                        reason: antwort_reason(antwort.as_ref()),
+                        message_ref,
+                        antwort,
+                    }
+                });
+                Ok(WorkflowOutput::events(events))
             }
 
             C::SendAbbestellung {
@@ -936,11 +1194,25 @@ impl Workflow for EsaWertebestellungWorkflow {
                 beendigung_zum,
                 grund,
             } => {
-                let S::Beliefert { data, .. } = state else {
+                let S::Beliefert(data) = state else {
                     return Err(WorkflowError::invalid_state("Beliefert", state.label()));
                 };
-                // UC 4.3 Nr. 1: the Abbestellung (17008) ends a running
-                // delivery. ORDERS AHB 1.1b §4.15 makes `SG1 RFF+ACW` Muss —
+                // UC 4.3's Vorbedingung is „Es findet eine turnusmäßige/
+                // regelmäßige Übermittlung von Werten statt". A one-shot has
+                // none, and `E_0254` Prüfschritt 1 refuses its Beendigung with
+                // `A01` by construction — „es handelte sich um eine einmalige
+                // Übermittlung, sie ist zu stornieren". Sending it anyway
+                // spends a 2-Werktage answer window to be told what the
+                // Codeliste already says, and after the refusal the Abo mode
+                // has still not changed, so the ESA can only repeat it.
+                if !data.gegenstand.abonnement.ist_abo() {
+                    return Err(WorkflowError::rejected(
+                        "einmalige Übermittlung (IMD++Z03) ist stornierbar, nicht abbestellbar — \
+                         nutze die Stornierung (ORDCHG 39002); E_0254 Prüfschritt 1 lehnt eine \
+                         Abbestellung mit A01 ab",
+                    ));
+                }
+                // ORDERS AHB 1.1b §4.15 makes `SG1 RFF+ACW` Muss —
                 // it carries the 17007's Dokumentennummer (`ZG-T41`) and is
                 // the only way the MSB can tell which order is being ended.
                 let bestellung_ref = data.bestellung_ref.as_deref().ok_or_else(|| {
@@ -984,10 +1256,11 @@ impl Workflow for EsaWertebestellungWorkflow {
                 // repeating the event on every daily delivery would bloat the
                 // stream for no state change.
                 match state {
-                    S::Beliefert {
-                        lieferung_begonnen: false,
-                        ..
-                    } => Ok(WorkflowOutput::events(vec![E::LieferungBegonnen])),
+                    S::Beliefert(d) | S::StornierungGesendet(d) | S::AbbestellungGesendet(d)
+                        if !d.lieferung_begonnen =>
+                    {
+                        Ok(WorkflowOutput::events(vec![E::LieferungBegonnen]))
+                    }
                     _ => Ok(WorkflowOutput::events(Vec::new())),
                 }
             }

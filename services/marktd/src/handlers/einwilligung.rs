@@ -29,6 +29,7 @@ use mako_markt::{
     makod_client::{ForwardCommand, MakodClient},
     repository::{
         ConsentPerspective, EinwilligungRecord, EinwilligungRepository, EsaFrameworkAgreement,
+        EsaMessproduktPreis,
     },
 };
 use serde::Deserialize;
@@ -243,9 +244,17 @@ pub async fn revoke_einwilligung(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
-    // GDPR Art. 7(3): stopping value delivery requires an Abbestellung (17008,
-    // NBA 1) per covered location. Fire it at makod — best-effort so a makod
-    // outage never blocks the customer's revocation right.
+    // GDPR Art. 7(3): stopping value delivery requires an Abbestellung (17008)
+    // per covered location. Fire it at makod — best-effort so a makod outage
+    // never blocks the customer's revocation right.
+    //
+    // **No `messprodukt`, deliberately.** An ESA subscription is the
+    // (Meldepunkt, Messprodukt) pair and one location may carry several — the
+    // Codeliste offers `9991 00000 305 6` and `9991 00000 314 7` for the same
+    // Marktlokation. A Widerruf withdraws the lawful basis for all of them, and
+    // marktd has no idea how many are running: makod resolves an omitted
+    // `messprodukt` to *every* live subscription at the location and sends one
+    // 17008 each. Naming one here would stop one and leave the rest delivering.
     for location_id in &revoked.location_ids {
         let cmd = ForwardCommand {
             command: "esa.abbestellung.beauftragen".to_owned(),
@@ -359,6 +368,139 @@ pub async fn put_framework(
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => e.into_response(),
     }
+}
+
+/// Body of `PUT /api/v1/esa/preise/:msb_mp_id/:esa_mp_id`.
+#[derive(Debug, Deserialize)]
+pub struct EsaPreiseBody {
+    /// Which subscription these prices were agreed for — a subscription is the
+    /// (Meldepunkt, Messprodukt) pair.
+    pub lokations_id: String,
+    pub messprodukt: String,
+    /// Belegnummer of the ORDERS 17007 the offer was accepted with.
+    #[serde(default)]
+    pub bestellung_ref: Option<String>,
+    #[serde(default)]
+    pub valid_from: Option<time::Date>,
+    #[serde(default)]
+    pub valid_to: Option<time::Date>,
+    /// `SG4 CUX` DE 6345.
+    #[serde(default)]
+    pub waehrung: Option<String>,
+    /// The priced Artikel-IDs of the accepted offer.
+    pub preise: Vec<EsaPreisPosition>,
+}
+
+/// One `SG27 PIA+Z02` / `SG31 PRI+CAL` pair of an accepted Angebot.
+#[derive(Debug, Deserialize)]
+pub struct EsaPreisPosition {
+    pub artikel_id: String,
+    /// `SG31 PRI` DE 5387 — `Z01` / `Z02` / `Z03`.
+    pub preistyp: String,
+    /// `SG31 PRI` DE 5118, up to six decimals.
+    pub betrag: rust_decimal::Decimal,
+    /// `SG31 PRI` DE 6411 — `H87` Stück or `DAY` Tag.
+    pub einheit: String,
+}
+
+/// `PUT /api/v1/esa/preise/:msb_mp_id/:esa_mp_id` — record the prices of an
+/// accepted QUOTES 15003 Angebot.
+///
+/// **The ESA price basis.** `PreisblattMessung` is what an MSB publishes toward
+/// the NB and the LF; there is none for the Kapitel-4.6 Messprodukte, because
+/// §35 MsbG leaves the Entgelt for a Zusatzleistung to be agreed per request.
+/// So the offer the ESA ordered against is the agreement, and `invoicd` checks
+/// the MSB's INVOIC 31009 positions against exactly these rows — the invoice
+/// names the same Artikel-IDs back (`SG26 LIN` DE 7143 `Z09`).
+///
+/// Written by `makod` when the MSB confirms the Bestellung (ORDRSP 19011),
+/// which is the moment the offer becomes binding.
+pub async fn put_esa_preise(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(repo): Extension<EinwilligungRepoExt>,
+    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Path((msb_mp_id, esa_mp_id)): Path<(String, String)>,
+    Json(body): Json<EsaPreiseBody>,
+) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "write-einwilligung", &tenant)
+        .is_err()
+    {
+        return forbidden("write-einwilligung denied");
+    }
+    if body.preise.is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "preise must not be empty — SG31 PRI is Muss inside the SG27 LIN                           position block, and an offer that prices nothing is the Ablehnung",
+            })),
+        )
+            .into_response();
+    }
+    let waehrung = body.waehrung.unwrap_or_else(|| "EUR".to_owned());
+    let rows: Vec<EsaMessproduktPreis> = body
+        .preise
+        .into_iter()
+        .map(|p| EsaMessproduktPreis {
+            tenant: tenant.clone(),
+            esa_mp_id: esa_mp_id.clone(),
+            msb_mp_id: msb_mp_id.clone(),
+            lokations_id: body.lokations_id.clone(),
+            messprodukt: body.messprodukt.clone(),
+            artikel_id: p.artikel_id,
+            preistyp: p.preistyp,
+            betrag: p.betrag,
+            einheit: p.einheit,
+            waehrung: waehrung.clone(),
+            bestellung_ref: body.bestellung_ref.clone(),
+            valid_from: body.valid_from,
+            valid_to: body.valid_to,
+        })
+        .collect();
+    match repo.upsert_esa_preise(&rows).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// `GET /api/v1/esa/preise/:msb_mp_id/:esa_mp_id?at=YYYY-MM-DD` — the prices in
+/// force between the pair on `at`.
+///
+/// Across **all** of the pair's subscriptions, deliberately: an INVOIC 31009
+/// bills a Rahmenvertrag rather than a single Meldepunkt, and its positions name
+/// Artikel-IDs without saying which subscription each belongs to.
+pub async fn get_esa_preise(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(repo): Extension<EinwilligungRepoExt>,
+    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Path((msb_mp_id, esa_mp_id)): Path<(String, String)>,
+    axum::extract::Query(q): axum::extract::Query<EsaPreiseQuery>,
+) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "read-einwilligung", &tenant)
+        .is_err()
+    {
+        return forbidden("read-einwilligung denied");
+    }
+    let at =
+        q.at.unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+    match repo
+        .esa_preise_at(&tenant, &esa_mp_id, &msb_mp_id, at)
+        .await
+    {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// Query of `GET /api/v1/esa/preise/…`.
+#[derive(Debug, Deserialize)]
+pub struct EsaPreiseQuery {
+    /// The day the prices must be in force on. Defaults to today.
+    #[serde(default)]
+    pub at: Option<time::Date>,
 }
 
 /// `GET /api/v1/esa/framework/:msb_mp_id/:esa_mp_id`.

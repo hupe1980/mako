@@ -10,6 +10,7 @@
 //   "read-imbalance"      — GET /api/v1/imbalance/:malo_id/:year/:month
 //   "read-billing-period" — GET /api/v1/billing-period/:malo_id (M15)
 //   "write-meter-reads"   — POST /api/v1/meter-reads/rlm/:malo_id (direct push)
+//   "write-esa-typ2"      — POST /api/v1/esa/typ2/:malo_id (Kapitel 4.6.2 SMGW push)
 //   "read-corrections"    — GET /api/v1/corrections/:malo_id
 //   "write-corrections"   — POST /api/v1/corrections/:malo_id (§ 60 Abs. 6 MsbG)
 //   "write-gdpr-erasure"  — DELETE /api/v1/gdpr/erasure/:malo_id (GDPR Art. 17)
@@ -84,6 +85,30 @@ permit(
 ) when {
     context.principal_tenant == context.resource_tenant &&
     (context.principal_roles.contains("NB") ||
+     context.principal_roles.contains("MSB") ||
+     context.principal_roles.contains("admin"))
+};
+
+// ESA "Werte nach Typ 2 aus SMGW" (Codeliste 1.4 Kapitel 4.6.2).
+//
+// **Its own action, not `write-meter-reads`**, and the separation runs both
+// ways. The writer is the *ESA's* SM-PKI gateway — the thing the Werteanfrage's
+// `FTX+Z17` Zieladresse points at — so it carries the `ESA` role and would be
+// refused by a policy demanding `MSB`. And it must not gain what
+// `write-meter-reads` grants: a Typ-2 value is non-authoritative by regulation
+// (Codeliste 1.4 Kap. 4.6 · WiM Strom Teil 2 §4) and may never reach
+// `meter_reads`. A gateway that can write one store must not be able to write
+// the other.
+//
+// `MSB` is permitted alongside for the integrated deployment that holds both
+// roles and runs the handshake against itself.
+permit(
+    principal,
+    action == Action::"write-esa-typ2",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    (context.principal_roles.contains("ESA") ||
      context.principal_roles.contains("MSB") ||
      context.principal_roles.contains("admin"))
 };

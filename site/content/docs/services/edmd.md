@@ -887,6 +887,16 @@ land in their own table, `esa_typ2_reads`, and never in `meter_reads`:
   Typ-2 value is stored as delivered and read back verbatim via
   `GET /api/v1/esa/typ2/{malo_id}`; it is never reconciled against, corrected,
   or substituted for a Typ-1 value.
+- **Both delivery paths of Kapitel 4.6 land here, and only here.** 4.6.1
+  arrives as MSCONS 13027 over AS4 and forks out of the `makod` ingest; **4.6.2**
+  arrives as XML straight from the iMS over SM-PKI, never touching market
+  communication at all — `POST /api/v1/esa/typ2/{malo_id}` is where the ESA's
+  SM-PKI gateway (the address the Werteanfrage's `FTX+Z17` named) files what it
+  decoded — two of the seven Pflichtprodukte are 4.6.2 products. Its own Cedar
+  action, `write-esa-typ2`: the gateway holds the **ESA** role, and it must not
+  gain what `write-meter-reads` grants — the authoritative store. edmd does not
+  terminate SM-PKI; the TLS session and the BSI TR-03109-4 certificate chain are
+  a deployment concern.
 
 The separation is a table boundary, not a session one. `meter_reads`,
 `esa_typ2_reads` and the `meter_readings` Zählerstandsgang are built as three
@@ -1369,6 +1379,22 @@ resolution column. The shared rule set lives in `metering::sharing`.
 | `de.mako.process.initiated` | 23003 / 23004 / 23008 (INSRPT Technische Änderung / Gerätebefund) | Auto-create `SONDERABLESUNG` reading order |
 | `de.mako.process.initiated` | 23005 / 23009 (WiM Gas INSRPT) | Auto-create `SONDERABLESUNG` reading order |
 | anything else | — | 204 No Content (ignored) |
+
+### What a failed ingest answers
+
+`marktd` treats `2xx` as delivered and redelivers on `5xx`, so the status code
+is the decision "should this delivery come back". edmd answers it by whether a
+retry could ever work:
+
+| Condition | Status | Why |
+|---|---|---|
+| Transient store failure — lost connection, a lock the statement declined to queue for | **500** | The same bytes store once the condition clears, so redelivery is the point |
+| The store **refused** the write — overlapping spans within one version, a value restated under an existing version, a second network operator on one reading, a non-canonical OBIS code | **422** | The *delivery* is what is wrong. It is refused identically every time, so redelivering it is a loop that runs until the retry budget is exhausted |
+| Nothing stored, nothing wrong | 204 | — |
+
+`EdmError::is_retryable` is the predicate. A rejection names the constraint that
+refused it where meterstore reports one, so an operator is told which rule fired
+rather than handed a message to parse.
 
 ### MSCONS PIDs handled
 
@@ -2561,6 +2587,7 @@ partition_step_days  = 1    # cold-tier partition granularity
 archival_step_days   = 1    # watermark advance per archival sweep
 cold_file_target_mib = 512  # target Parquet file size
 maintenance_interval_secs = 3600  # how often the tiering loop runs a cycle
+ddl_lock_timeout_secs = 3   # how long DDL waits for its lock before giving up
 ```
 
 `enabled` turns the cold tier on; the `storage_uri` **scheme** selects the
@@ -2574,6 +2601,16 @@ the hot tier through the tiering watermark, and `settlement_lag_days` is simply 
 long a reading stays correctable before it settles. `maintenance_interval_secs`
 sets how often meterstore's in-process maintenance loop archives due windows: without it the
 cold tier never fills, since the watermark only advances when a cycle runs.
+
+`ddl_lock_timeout_secs` bounds how long a **DDL** statement waits for its lock.
+PostgreSQL grants locks in arrival order, so a statement queued behind an
+`ACCESS EXCLUSIVE` lock blocks every reader and writer behind it — and meterstore
+issues DDL on two schedules nobody picks: archival detaches a partition, and an
+append past the pre-created frontier makes the one it needs. Timed out, the
+statement gives up having changed nothing (the cycle reports `deferred`, the
+append gets a retryable error); untimed, the same contention is an ingest outage.
+Three seconds by default; raise it where the hot table carries long transactions
+by design. `0` restores PostgreSQL's queue-behind-me behaviour.
 
 ### Archive OLAP endpoints
 
@@ -2649,7 +2686,8 @@ with open('reads.arrows', 'rb') as f:
 |---|---|---|
 | `GET /api/v1/lastgang/{malo_id}` | BO4E `Lastgang` | ✓ |
 | `GET /api/v1/zeitreihe/{malo_id}` | BO4E `Zeitreihe` | ✓ |
-| `GET /api/v1/esa/typ2/{malo_id}` | ESA Typ-2 values (`esa_typ2_reads`) — non-authoritative, never billing | — |
+| `GET /api/v1/esa/typ2/{malo_id}` | ESA Typ-2 values (`esa_typ2_reads`) — non-authoritative, never billing. **Multi-register**: an Angebot names 1–23 OBIS-Kennzahlen | — |
+| `POST /api/v1/esa/typ2/{malo_id}` | **Kapitel 4.6.2** — "Werte nach Typ 2 **aus SMGW**", filed by the ESA's SM-PKI gateway | `write-esa-typ2` |
 
 **Arrow schema** (per response row):
 

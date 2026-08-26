@@ -99,6 +99,24 @@ pub struct ArchiveConfig {
     /// 3600 (hourly).
     #[serde(default = "archive_default_maintenance_interval_secs")]
     pub maintenance_interval_secs: u32,
+    /// How long a **DDL** statement waits for its lock before giving up, in
+    /// seconds. Default: 3.
+    ///
+    /// PostgreSQL grants locks in arrival order, so a statement queued behind
+    /// an `ACCESS EXCLUSIVE` lock blocks every reader and writer that arrives
+    /// after it — whether or not those would have conflicted with each other.
+    /// meterstore issues DDL on two schedules nobody picks the timing of:
+    /// archival detaches a partition, and an append reaching past the
+    /// pre-created frontier makes the one it needs. Timed out, the statement
+    /// gives up having changed nothing — the archival cycle reports `deferred`
+    /// and an append gets a retryable error. Untimed, the same contention is an
+    /// ingest outage that reads as "the database is slow".
+    ///
+    /// Raise it where the hot table carries long transactions by design; every
+    /// second added is a second the whole table can stall for. `0` restores
+    /// PostgreSQL's own queue-behind-me behaviour.
+    #[serde(default = "archive_default_ddl_lock_timeout_secs")]
+    pub ddl_lock_timeout_secs: u32,
     /// Object-store region for an `s3://` warehouse (or `AWS_REGION`).
     #[serde(default)]
     pub region: Option<String>,
@@ -129,6 +147,9 @@ fn archive_default_cold_file_mib() -> u32 {
 fn archive_default_maintenance_interval_secs() -> u32 {
     3_600
 }
+fn archive_default_ddl_lock_timeout_secs() -> u32 {
+    3
+}
 
 impl Default for ArchiveConfig {
     fn default() -> Self {
@@ -140,6 +161,7 @@ impl Default for ArchiveConfig {
             archival_step_days: archive_default_step_days(),
             cold_file_target_mib: archive_default_cold_file_mib(),
             maintenance_interval_secs: archive_default_maintenance_interval_secs(),
+            ddl_lock_timeout_secs: archive_default_ddl_lock_timeout_secs(),
             region: None,
             endpoint_url: None,
             access_key_id: None,

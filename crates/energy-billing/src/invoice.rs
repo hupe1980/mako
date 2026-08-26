@@ -949,9 +949,6 @@ impl Invoice {
 
 // ── BO4E construction helpers ─────────────────────────────────────────────────
 
-/// A BO4E `ZusatzAttribut` — the sanctioned extension point for facts the
-/// schema does not model.
-#[cfg(feature = "bo4e")]
 /// A BO4E date-only market value as the `date-time` the schema declares.
 ///
 /// BDEW INVOIC transmits `rechnungsdatum` and `faelligkeitsdatum` as DTM
@@ -966,6 +963,7 @@ impl Invoice {
 /// serialises as. The field is optional and an invoice with no billing period
 /// has no issue date, so it is omitted rather than made fatal — rejecting a
 /// periodless invoice is the engine's job, not the serializer's.
+#[cfg(feature = "bo4e")]
 fn as_bo4e_timestamp(date: time::Date) -> Option<time::OffsetDateTime> {
     (0..=9999)
         .contains(&date.year())
@@ -982,6 +980,7 @@ fn as_bo4e_timestamp(date: time::Date) -> Option<time::OffsetDateTime> {
 /// That cannot happen here — each map is freshly constructed and receives at
 /// most three keys — so the assertion states the invariant, and a cap set below
 /// three fails every test run instead of silently dropping an audit record.
+#[cfg(feature = "bo4e")]
 fn annotate(map: &mut rubo4e::json::LimitedExtensionMap, key: &str, value: serde_json::Value) {
     let outcome = map.try_insert(key.to_owned(), value);
     debug_assert!(
@@ -990,6 +989,9 @@ fn annotate(map: &mut rubo4e::json::LimitedExtensionMap, key: &str, value: serde
     );
 }
 
+/// A BO4E `ZusatzAttribut` — the sanctioned extension point for facts the
+/// schema does not model.
+#[cfg(feature = "bo4e")]
 fn zusatz_attribut(name: &str, wert: serde_json::Value) -> rubo4e::current::ZusatzAttribut {
     rubo4e::current::ZusatzAttribut {
         name: Some(name.to_owned()),

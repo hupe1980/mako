@@ -874,6 +874,164 @@ pub fn extract_messprodukt(msg: &AnyMessage) -> Option<String> {
         })
 }
 
+/// Read `SG2 AJT` — the published Antwortcode and the EBD it came from.
+///
+/// **Muss** on every ORDRSP that answers an ESA order (ORDRSP AHB 1.1b §4.15,
+/// PIDs 19011–19014), and the only structured statement of what the answer
+/// means: those four use cases publish no free-text segment at all. The one
+/// `FTX` a conformant 19011 may carry is `SG27 FTX+Z27`, which holds the MSB's
+/// **IP address** — reading that as a rejection reason recorded an IP where the
+/// Antwortcode belonged, and left every 19012 with no reason at all.
+///
+/// `None` means the counterparty omitted a Muss segment, which the workflow
+/// records rather than papering over.
+fn extract_antwort(msg: &AnyMessage) -> Option<mako_wim::esa::Antwort> {
+    let AnyMessage::Ordrsp(o) = msg else {
+        return None;
+    };
+    o.ajt()
+        .map(|a| mako_wim::esa::Antwort::new(a.antwortcode.clone(), a.ebd.clone()))
+}
+
+/// Read `SG27 FTX+Z27` (IP-Adresse) or `FTX+Z28` (IP-Range) off a confirming
+/// ORDRSP 19011.
+///
+/// ORDRSP AHB 1.1b §4.15 conditions `[76]`/`[77]`: exactly one of the two is
+/// **Muss** when the confirmed order named a Kapitel-4.6.2 product. It is the
+/// source the ESA has to admit before the iMS can reach it, so a confirmed
+/// SMGW subscription without it can never deliver.
+fn extract_smgw_quelle(msg: &AnyMessage) -> Option<mako_wim::esa::SmgwQuelle> {
+    msg.segments()
+        .iter()
+        .filter(|s| s.tag == "FTX")
+        .find_map(|s| match s.component_str(0, 0) {
+            // C108 sits at element 3 (`FTX+Z27+++<Adresse>`), and its
+            // components are the repeated DE 4440 lines.
+            Some("Z27") => Some(mako_wim::esa::SmgwQuelle::Adresse(
+                s.component_str(3, 0)?.to_owned(),
+            )),
+            Some("Z28") => Some(mako_wim::esa::SmgwQuelle::Range {
+                von: s.component_str(3, 0)?.to_owned(),
+                bis: s.component_str(3, 1)?.to_owned(),
+            }),
+            _ => None,
+        })
+}
+
+/// Read the free text of a given `FTX` DE 4451 qualifier.
+///
+/// C108 is the **fourth** element of `FTX` (4451, 4453, C107, C108) and
+/// `component_str` indexes from zero, so the text is at 3; reading 4 addresses
+/// DE 3453 (the language code) and yields `None` for every conformant message.
+///
+/// Qualified rather than „the first FTX": on a 19011 the first `FTX` is
+/// `SG27 FTX+Z27`, the MSB's IP address.
+fn esa_freitext(msg: &AnyMessage, qualifier: &str) -> Option<String> {
+    msg.segments()
+        .iter()
+        .filter(|s| s.tag == "FTX" && s.component_str(0, 0) == Some(qualifier))
+        .find_map(|s| s.component_str(3, 0))
+        .map(str::to_owned)
+}
+
+/// Read a `DTM` whose DE 2380 is a **duration** and resolve it against now.
+///
+/// `DTM+273` (Gültigkeitsdauer/Bindungsfrist) and `DTM+279` (Einrichtungs-
+/// zeitspanne) both carry a count in DE 2380 and its unit in DE 2379 — `802`
+/// Monat, `803` Woche, `804` Tag (QUOTES AHB 1.1a condition `[908]`). Parsed
+/// as `CCYYMMDD` they find nothing at all.
+fn extract_dauer(msg: &AnyMessage, qualifier: &str) -> Option<time::OffsetDateTime> {
+    msg.segments()
+        .iter()
+        .find(|s| s.tag == "DTM" && s.component_str(0, 0) == Some(qualifier))
+        .and_then(|s| {
+            let count: i64 = s.component_str(0, 1)?.trim().parse().ok()?;
+            let einheit = edi_energy::builders::DauerEinheit::from_code(s.component_str(0, 2)?)?;
+            Some(time::OffsetDateTime::now_utc() + einheit.to_duration(count))
+        })
+}
+
+/// Read the commercial substance of a QUOTES 15003 Angebot.
+///
+/// UC 4.1.1: the ESA „fragt die Übermittlung von Werten **und die damit
+/// verbundenen Kosten**" beim MSB an. QUOTES AHB 1.1a §4.3 makes `SG4 CUX`,
+/// the `SG27 PIA+Z02` Artikel-IDs, the `SG31 PRI+CAL` prices and one to 23
+/// `PIA+5 …:SRW` OBIS-Kennzahlen all **Muss** — keeping only the Bindungsfrist
+/// reduced an offer to its expiry date. The ESA needs the prices to order
+/// deliberately and to check the MSB's INVOIC 31009 (UC 4.5) against what it
+/// accepted, and the OBIS list to know which registers the subscription owes.
+fn extract_angebot(msg: &AnyMessage) -> mako_wim::esa::Angebot {
+    use mako_wim::esa::{Angebot, Preisposition, Preistyp};
+
+    let segs = msg.segments();
+    // `SG4 CUX+2:EUR:4` — DE 6345 is the currency, component 1 of C504.
+    let waehrung = segs
+        .iter()
+        .find(|s| s.tag == "CUX")
+        .and_then(|s| s.component_str(0, 1))
+        .map(str::to_owned);
+
+    // `SG27 PIA+5+<OBIS>:SRW` — the registers the subscription will carry.
+    let obis_kennzahlen: Vec<String> = segs
+        .iter()
+        .filter(|s| s.tag == "PIA" && s.component_str(0, 0) == Some("5"))
+        .filter_map(|s| {
+            let code = s.component_str(1, 0)?;
+            (s.component_str(1, 1) == Some("SRW")).then(|| code.to_owned())
+        })
+        .collect();
+
+    // `SG27 PIA+Z02+<Artikel-ID>:Z09` and the `SG31 PRI+CAL:<Betrag>:<Typ>::<Menge>:<Einheit>`
+    // that follows it. The AHB repeats `SG31` once per Artikel-ID inside the
+    // same `SG27 LIN`, in that order, so a price is attributed to the most
+    // recent Artikel-ID seen — the wire carries no back-reference.
+    let mut preise = Vec::new();
+    let mut artikel: Vec<String> = Vec::new();
+    let mut naechster = 0usize;
+    for seg in segs {
+        match seg.tag.as_str() {
+            "LIN" => {
+                artikel.clear();
+                naechster = 0;
+            }
+            "PIA" if seg.component_str(0, 0) == Some("Z02") => {
+                if let Some(id) = seg.component_str(1, 0) {
+                    artikel.push(id.to_owned());
+                }
+            }
+            "PRI" => {
+                let Some(betrag) = seg.component_str(0, 1) else {
+                    continue;
+                };
+                let Some(preistyp) = seg.component_str(0, 2).and_then(Preistyp::from_pri_code)
+                else {
+                    continue;
+                };
+                let artikel_id = artikel.get(naechster).or_else(|| artikel.last());
+                preise.push(Preisposition {
+                    artikel_id: artikel_id.cloned().unwrap_or_default(),
+                    preistyp,
+                    betrag: betrag.to_owned(),
+                    // C509: 5125, 5118, 5387, 5284, 6411 — the unit is
+                    // component 5 of the first element.
+                    einheit: seg.component_str(0, 5).unwrap_or_default().to_owned(),
+                });
+                naechster += 1;
+            }
+            _ => {}
+        }
+    }
+
+    Angebot {
+        waehrung,
+        preise,
+        obis_kennzahlen,
+        // `DTM+279` — „Erforderliche Zeitspanne zur Einrichtung der
+        // Übermittlung von Werten ab Bestellung", a duration (Kann).
+        einrichtung_bis: extract_dauer(msg, "279"),
+    }
+}
+
 /// Read a `DTM` of the given DE 2005 qualifier as a date.
 ///
 /// Kapitel 4 uses format `303` (`CCYYMMDDHHMMZZZ`) throughout, so only the
@@ -1076,78 +1234,59 @@ pub fn esa_wertebestellung_registry() -> AdapterRegistry<EsaWertebestellungWorkf
                 })
                 .and_then(convert_pid)?;
             let message_ref = MessageRef::new(msg.message_ref());
-            // Rejection reason (ORDRSP 19012/19014) from the first FTX free text.
-            // C108 is the *fourth* element of FTX (4451, 4453, C107, C108) and
-            // `component_str` indexes elements from zero, so the free text is at
-            // 3. Reading 4 addresses 3453 (language code) and yields `None` for
-            // every conformant message.
-            let reason = msg
-                .segments()
-                .iter()
-                .find(|s| s.tag == "FTX")
-                .and_then(|s| s.component_str(3, 0))
-                .map(str::to_owned);
 
             match pid {
                 ANGEBOT_PID => {
-                    // QUOTES 15003 carries both the Angebot and the Ablehnung
-                    // der Anfrage. They are told apart by the Bindungsfrist
-                    // (`DTM+273` Gültigkeitsdauer): an Angebot has one, an
-                    // Ablehnung does not.
+                    // QUOTES 15003 covers both outcomes of UC 4.1 Nr. 2
+                    // („Angebot zur / Ablehnung der Anfrage"), but the QUOTES
+                    // AHB 1.1a publishes only the Angebot — and makes
+                    // `DTM+273` **Muss** on it. The Bindungsfrist therefore
+                    // cannot tell the two apart: a refusal carries one too,
+                    // and reading its absence as a rejection turned every
+                    // conformant offer into one.
                     //
-                    // **It is a duration, not a date.** QUOTES AHB 1.1a §4.3
-                    // gives DE 2380 as „Zeitraum" with condition [908]
-                    // („Mögliche Werte: 1 bis n") and DE 2379 as `802` Monat /
-                    // `803` Woche / `804` Tag. Parsed as `CCYYMMDD` it finds
-                    // nothing in a conformant message, and the Angebot then
-                    // reads as a rejection.
-                    let bindungsfrist = msg
-                        .segments()
-                        .iter()
-                        .find(|s| s.tag == "DTM" && s.component_str(0, 0) == Some("273"))
-                        .and_then(|s| {
-                            let count: i64 = s.component_str(0, 1)?.trim().parse().ok()?;
-                            let einheit = edi_energy::builders::DauerEinheit::from_code(
-                                s.component_str(0, 2)?,
-                            )?;
-                            Some(time::OffsetDateTime::now_utc() + einheit.to_duration(count))
+                    // What an offer *is* is a priced position: `SG31 PRI` is
+                    // Muss inside the `SG27 LIN` block, one per Artikel-ID.
+                    // A 15003 that prices nothing is the MSB declining, with
+                    // its grounds in `FTX+ACB` — the only free text the
+                    // message has.
+                    let angebot = extract_angebot(msg);
+                    if angebot.ist_leer() {
+                        return Ok(EsaWertebestellungCommand::ReceiveAnfrageAblehnung {
+                            message_ref: Some(message_ref),
+                            reason: esa_freitext(msg, "ACB"),
                         });
-                    if let Some(bindungsfrist) = bindungsfrist {
-                        Ok(EsaWertebestellungCommand::ReceiveAngebot {
-                            message_ref,
-                            bindungsfrist,
-                            // `DTM+469` — the earliest start the MSB offers.
-                            fruehester_start: extract_dtm_date(msg, "469")
-                                .map(|d| d.midnight().assume_utc()),
-                        })
-                    } else {
-                        // No Bindungsfrist → Ablehnung der Anfrage. Reason from
-                        // the FTX free text (element 3, per the AHB).
-                        let reason = msg
-                            .segments()
-                            .iter()
-                            .find(|s| s.tag == "FTX")
-                            .and_then(|s| s.component_str(3, 0))
-                            .map(str::to_owned);
-                        Ok(EsaWertebestellungCommand::ReceiveAnfrageAblehnung { reason })
                     }
+                    // `DTM+273` is a **duration**, not a date: QUOTES AHB 1.1a
+                    // §4.3 gives DE 2380 as „Zeitraum" with condition [908]
+                    // („Mögliche Werte: 1 bis n") and DE 2379 as `802` Monat /
+                    // `803` Woche / `804` Tag. Read as `CCYYMMDD` it finds
+                    // nothing in a conformant message.
+                    let bindungsfrist =
+                        extract_dauer(msg, "273").unwrap_or_else(time::OffsetDateTime::now_utc);
+                    Ok(EsaWertebestellungCommand::ReceiveAngebot {
+                        message_ref,
+                        bindungsfrist,
+                        // `DTM+469` — the earliest start the MSB offers, Muss.
+                        fruehester_start: extract_dtm_date(msg, "469")
+                            .map(|d| d.midnight().assume_utc()),
+                        angebot: Box::new(angebot),
+                    })
                 }
-                BESTAETIGUNG_PID => {
-                    Ok(EsaWertebestellungCommand::ReceiveBestaetigung { message_ref })
-                }
+                BESTAETIGUNG_PID => Ok(EsaWertebestellungCommand::ReceiveBestaetigung {
+                    message_ref,
+                    antwort: extract_antwort(msg),
+                    smgw_quelle: extract_smgw_quelle(msg),
+                }),
                 ABLEHNUNG_PID => Ok(EsaWertebestellungCommand::ReceiveAblehnung {
                     message_ref,
-                    reason,
+                    antwort: extract_antwort(msg),
                 }),
-                p @ (STORNO_BESTAETIGUNG_PID | STORNO_ABLEHNUNG_PID) => {
+                STORNO_BESTAETIGUNG_PID | STORNO_ABLEHNUNG_PID => {
                     Ok(EsaWertebestellungCommand::ReceiveStornierungAntwort {
                         pid,
                         message_ref,
-                        reason: if p == STORNO_ABLEHNUNG_PID {
-                            reason
-                        } else {
-                            None
-                        },
+                        antwort: extract_antwort(msg),
                     })
                 }
                 BEENDIGUNG_MSB_PID => {
@@ -1163,7 +1302,7 @@ pub fn esa_wertebestellung_registry() -> AdapterRegistry<EsaWertebestellungWorkf
                     Ok(EsaWertebestellungCommand::ReceiveBeendigungDurchMsb {
                         message_ref,
                         beendigung_zum,
-                        reason,
+                        reason: esa_freitext(msg, "ACB"),
                     })
                 }
                 other => Err(EngineError::Deserialization(format!(

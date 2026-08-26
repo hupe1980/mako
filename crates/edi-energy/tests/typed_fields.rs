@@ -977,3 +977,59 @@ fn partin_round_trip_serialize() {
     assert_eq!(m.bgm(), m2.bgm(), "BGM should round-trip");
     assert_eq!(m.sender(), m2.sender(), "sender should round-trip");
 }
+
+// ── ORDRSP SG2 AJT — the published Antwortcode ────────────────────────────────
+
+/// An ESA order answer (ORDRSP AHB 1.1b §4.15). `SG2 AJT` is **Muss** on
+/// 19011–19014 and those four use cases publish no free-text segment at all, so
+/// this segment is the entire statement of what the answer means.
+#[cfg(feature = "ordrsp")]
+const ORDRSP_ESA_ANSWER: &[u8] = b"\
+UNH+MSG001+ORDRSP:D:10A:UN:1.4c'\
+BGM+Z57+MSBRSP0000001'\
+DTM+137:202603021000+00:303'\
+IMD++Z01'\
+RFF+ON:ESABE0000000001'\
+RFF+Z13:19011'\
+AJT+A11+E_0256'\
+NAD+MS+9900357000004::293'\
+NAD+MR+9900555000005::293'\
+UNT+10+MSG001'";
+
+/// The `AJT` was written by the builders and read by nobody: the segment had no
+/// accessor anywhere in the platform, so every consumer had to scrape raw
+/// segments or — as the ESA side did — fall back to a free text that on a
+/// conformant 19011 is `SG27 FTX+Z27`, the MSB's IP address.
+#[cfg(feature = "ordrsp")]
+#[test]
+fn ordrsp_ajt_carries_the_antwortcode_and_its_ebd() {
+    let msg = Platform::with_all_profiles()
+        .parse(ORDRSP_ESA_ANSWER)
+        .unwrap();
+    let AnyMessage::Ordrsp(o) = msg else {
+        panic!("expected ORDRSP")
+    };
+    let ajt = o.ajt().expect("SG2 AJT is Muss on 19011");
+    // DE 4465 — Code des Prüfschritts; DE 1082 — the EBD that publishes it.
+    assert_eq!(ajt.antwortcode, "A11");
+    assert_eq!(ajt.ebd.as_deref(), Some("E_0256"));
+}
+
+/// DE 1082 is `C` in the directory and a handful of AHBs leave it out, so a
+/// bare `AJT` still parses — with the code and no tree, which is a fact the
+/// caller can act on rather than a parse failure.
+#[cfg(feature = "ordrsp")]
+#[test]
+fn ordrsp_ajt_without_an_ebd_still_parses() {
+    let wire: Vec<u8> = String::from_utf8(ORDRSP_ESA_ANSWER.to_vec())
+        .unwrap()
+        .replace("AJT+A11+E_0256'", "AJT+A11'")
+        .into_bytes();
+    let msg = Platform::with_all_profiles().parse(&wire).unwrap();
+    let AnyMessage::Ordrsp(o) = msg else {
+        panic!("expected ORDRSP")
+    };
+    let ajt = o.ajt().expect("the code is still there");
+    assert_eq!(ajt.antwortcode, "A11");
+    assert_eq!(ajt.ebd, None);
+}

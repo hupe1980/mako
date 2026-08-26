@@ -1362,6 +1362,73 @@ CREATE TABLE esa_framework_agreements (
 COMMENT ON TABLE esa_framework_agreements IS
     'Bilateral EDI@Energy framework agreement + AS4 cert state between MSB and ESA.';
 
+-- ── ESA Messprodukt-Preise (the accepted QUOTES 15003 Angebot) ───────────────
+--
+-- The price basis for an ESA's INVOIC 31009, and the only one it has.
+--
+-- `preisblaetter_messung` holds what an MSB *publishes* toward the NB and the
+-- LF. There is no published sheet for the Kapitel-4.6 Messprodukte: §35 MsbG
+-- leaves the Entgelt for a Zusatzleistung to be agreed per request, which is
+-- what the Universalbestellprozess is for. UC 4.1.1 has the ESA asking for „die
+-- Übermittlung von Werten **und die damit verbundenen Kosten**"; QUOTES AHB
+-- 1.1a §4.3 makes `SG4 CUX` and one `SG31 PRI+CAL` per `SG27 PIA+Z02`
+-- Artikel-ID Muss; and the offer carries a Bindungsfrist precisely because it
+-- binds. So the accepted Angebot *is* the agreement, and the invoice names the
+-- same Artikel-IDs back (`SG26 LIN` DE 7143 `Z09`).
+--
+-- One row per priced Artikel-ID of one accepted offer. Written by `makod` when
+-- the MSB confirms the Bestellung (ORDRSP 19011), read by `invoicd` when a
+-- 31009 arrives from that MSB.
+
+CREATE TABLE esa_messprodukt_preise (
+    tenant          TEXT        NOT NULL,
+    -- The two parties to the offer. An ESA holds separate agreements with every
+    -- MSB it reaches, and prices are not comparable across them.
+    esa_mp_id       TEXT        NOT NULL,
+    msb_mp_id       TEXT        NOT NULL,
+    -- Which subscription was ordered at these prices: a subscription is the
+    -- (Meldepunkt, Messprodukt) pair, so both are part of the key.
+    lokations_id    TEXT        NOT NULL,
+    messprodukt     TEXT        NOT NULL,
+    -- `SG27 PIA+Z02` DE 7140 — the Artikel-ID this price is for.
+    artikel_id      TEXT        NOT NULL,
+    -- `SG31 PRI` DE 5387: Z01 Einrichtungs-, Z02 Transaktions-, Z03 Betriebspreis.
+    preistyp        TEXT        NOT NULL CHECK (preistyp IN ('Z01', 'Z02', 'Z03')),
+    -- `SG31 PRI` DE 5118 — up to six decimal places, so NUMERIC and not a float.
+    betrag          NUMERIC(18,6) NOT NULL,
+    -- `SG31 PRI` DE 6411 — `H87` Stück (Einrichtung, Transaktion) or `DAY` Tag
+    -- (Betrieb), per QUOTES AHB conditions [86]–[88].
+    einheit         TEXT        NOT NULL,
+    -- `SG4 CUX` DE 6345. Read rather than assumed, though EUR is the only
+    -- published value.
+    waehrung        TEXT        NOT NULL DEFAULT 'EUR',
+    -- Belegnummer of the ORDERS 17007 the offer was accepted with, so a price
+    -- can be traced to the subscription it belongs to.
+    bestellung_ref  TEXT,
+    -- Half-open validity, as every other dated table here. `valid_to` closes
+    -- when the subscription ends (ORDRSP 19011 on a 17008, or IFTSTA 21042).
+    valid_from      DATE        NOT NULL DEFAULT CURRENT_DATE,
+    valid_to        DATE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    -- One price per Artikel-ID per subscription per window. `NULLS NOT
+    -- DISTINCT` so a second open-ended row cannot shadow the first — two open
+    -- prices for one Artikel-ID leave the checker two answers and no rule.
+    UNIQUE NULLS NOT DISTINCT
+        (tenant, esa_mp_id, msb_mp_id, lokations_id, messprodukt, artikel_id, valid_from)
+);
+
+-- „what did we agree to pay this MSB" — the invoicd lookup.
+CREATE INDEX esa_preise_lookup
+    ON esa_messprodukt_preise (tenant, msb_mp_id, esa_mp_id, valid_from DESC);
+
+COMMENT ON TABLE esa_messprodukt_preise IS
+    'The accepted QUOTES 15003 Angebot, per Artikel-ID. The ESA price basis for '
+    'INVOIC 31009 — there is no published Preisblatt for Kapitel-4.6 '
+    'Messprodukte (§35 MsbG), so the offer the ESA ordered against is the '
+    'agreement.';
+
 -- ── §20b EnWG Netzzugangsplattform — request registry ─────────────────────────
 --
 -- Projection of §20b requests submitted through the makod netzzugang adapter:

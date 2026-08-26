@@ -105,12 +105,33 @@ dispatched and `422` when it carries no message reference.
 | 31006 | MMM Mehrmenge, selbst ausgestellt (LF → NB) | Inbound + Outbound | Strom | ✅ |
 | 31007 | GaBi Gas Aggreg. MMM-Rechnung (NB → MGV) | Inbound | Gas | ✅ + MMM check 6 |
 | 31008 | GaBi Gas selbst ausgest. Aggreg. MMM-Rechnung | Inbound | Gas | ✅ + MMM check 6 |
-| 31009 | MSB-Rechnung (MSB → LF, WiM) | Inbound | Strom | ✅ PreisblattMessung |
+| 31009 | MSB-Rechnung (MSB → **NB / LF / ESA**, WiM) | Inbound | Strom | ✅ `PreisblattMessung` — or the accepted **Angebot** toward an ESA |
 | 31011 | GeLi Gas Rechnung sonstige Leistung (AWH) | Inbound | Gas | ✅ |
 
 **PID 31009 (WiM MSB-Rechnung)** prices metering service, so it is checked
 against `PreisblattMessung`, not the NNE tariff. When the Rechnung is not
 embedded in the process payload, `invoicd` asks `makod` for it.
+
+**Toward an ESA the price basis is the accepted Angebot.** 31009 is
+„MSB-Rechnung" toward the **NB, the LF or the ESA** (WiM Teil 1 Kap. 6.2 /
+Teil 2 Kap. 4.5), and the three do not share one. `PreisblattMessung` is what an
+MSB *publishes* toward the NB and the LF; there is none for a Kapitel-4.6
+Messprodukt, because §35 MsbG leaves the Entgelt for a Zusatzleistung to be
+agreed per request.
+
+An ESA's basis is the QUOTES 15003 it ordered against. `makod` files the
+accepted offer at `marktd` on the ORDRSP 19011 (`esa_messprodukt_preise`) and
+`invoicd` looks it up. **An offer on record for (this MSB, this tenant) selects
+the branch** — not a configured role: it is the statement „we are the ESA here,
+and this is what we agreed to pay". The join is exact rather than a plausibility
+band, because the offer prices Artikel-IDs (`SG27 PIA+Z02`) and the invoice
+names the same ones back (`SG26 LIN` DE 7143 `Z09`).
+
+| Finding | Meaning |
+|---|---|
+| `AngebotDeviation` | a position billed away from the agreed price — dispute |
+| `AngebotPositionUnknown` | an Artikel-ID the offer never priced — a charge nobody agreed to; dispute |
+| `TariffNotFound` | no accepted offer on record — **warn and skip**, never dispute: a gap in mako's records is not a defect in the invoice |
 
 **PID 31004 (Stornorechnung)** is a single universal, **Sparte-neutral** Storno
 (INVOIC AHB §3.1.2) cancelling an original invoice from any process — GPKE, MMM

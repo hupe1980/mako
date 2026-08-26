@@ -400,9 +400,9 @@ sequenceDiagram
     participant ESA as ESA · esa-wertebestellung
     participant MSB as MSB · wim-wertebestellung
     ESA->>MSB: REQOTE 35003 Werteanfrage · LOC+172 · PIA Messprodukt · DTM+76
-    MSB-->>ESA: QUOTES 15003 Angebot · RFF+AAV · DTM+273 Bindungsfrist
-    Note over ESA,MSB: 5 WT · no Bindungsfrist ⇒ Ablehnung der Anfrage
-    ESA->>MSB: ORDERS 17007 Bestellung · RFF+AAG · IMD+7081
+    MSB-->>ESA: QUOTES 15003 Angebot · RFF+AAV · CUX · PRI je Artikel-ID · PIA OBIS · DTM+273/469
+    Note over ESA,MSB: 5 WT · E_0252 · keine Preisposition ⇒ Ablehnung der Anfrage
+    ESA->>MSB: ORDERS 17007 Bestellung · RFF+AAG · IMD+7081 · DTM+203 = max(Wunsch, DTM+469)
     MSB-->>ESA: ORDRSP 19011 / 19012 · RFF+ON · AJT code · E_0256
     loop per the ordered Messprodukt
         MSB-->>ESA: MSCONS 13027 Werte nach Typ 2
@@ -424,6 +424,27 @@ the product against the catalogue before rendering: a code outside Kapitel 4.6,
 one defined for a different Lokationsebene than the request addresses, or a
 Kapitel-4.6.2 (SM-PKI) product without its target address and certificates is
 refused with `422`.
+
+**The Messprodukt decides the Lokationsebene.** `LOC+172` DE 3225 has four
+permitted shapes and the Marktlokations-ID format (`[950]`) serves both the
+Marktlokation and the **Tranche** (REQOTE AHB 1.2 §4.3, hints `[502]`/`[504]`),
+so the identifier cannot resolve it — and `9991 00000 306 4` is a Pflichtprodukt
+defined for the Tranche alone. Both sides read the level from
+`mako_wim::esa::ebene_fuer_messprodukt`.
+
+**The Angebot is a priced offer.** UC 4.1.1 has the ESA asking for „die
+Übermittlung von Werten **und die damit verbundenen Kosten**", and QUOTES AHB
+1.1a §4.3 makes the substance Muss: `SG4 CUX`, one to three `SG27 PIA+Z02`
+Artikel-IDs, one `SG31 PRI+CAL` each (`Z01` Einrichtungs- / `Z02`
+Transaktions- / `Z03` Betriebspreis), one to 23 `PIA+5 … :SRW` OBIS-Kennzahlen,
+plus `DTM+469` and `DTM+273`. So `wim.wertebestellung.anbieten` requires
+`preise` and `obis`, and the **prices** — not the Bindungsfrist, which is Muss on
+both — are what tell an Angebot from an Ablehnung in either direction. An offer
+that prices nothing is `wim.wertebestellung.anfrage-ablehnen`.
+
+The ORDERS' `DTM+203` Ausführungsdatum is `max(Wunschtermin, DTM+469)`: the
+Angebot's „Startdatum, frühestes/r" is Muss, so an earlier date asks for
+something the offer excluded.
 
 A subscription is the **(Meldepunkt, Messprodukt) pair**: several Kapitel-4.6
 products exist for one Marktlokation, so a second Werteanfrage naming a different
@@ -453,6 +474,27 @@ finds its process. The renderer and the ingest dispatcher read the same table
 (`mako_wim::esa::korrelation`), so the qualifier emitted and the one looked for
 cannot drift. The 39002 Stornierung is part of the same subscription lifecycle;
 it is not a standalone process.
+
+The MSCONS 13027 delivery carries the same `RFF+AGI` (as `ZG-T42`, in `SG1`
+rather than `SG15`) — the first hop of the PID overview's `EZ-03`
+(`ZG-T42` → `ZO-T20` Gerätenummer → `ZO-T21` OBIS-Kennzahl). It is what closes
+the ESA-side Stornierung window and what `edmd` records against the values, so a
+Typ-2 gap can name the subscription that stopped.
+
+**What an answer means.** `SG2 AJT` is Muss on all four ORDRSP PIDs, and those
+use cases publish **no free-text segment at all** — the only `FTX` a conformant
+19011 may carry is `SG27 FTX+Z27`, the MSB's IP address for an SM-PKI delivery
+(`FTX+Z28` for a range). The Antwortcode and its EBD are therefore the whole
+content of a refusal in both directions: makod reads them into
+`mako_wim::esa::Antwort` and resolves them against `mako_pruefung`'s catalogue,
+which is what tells `A08` (Einwilligung abgelaufen) from `A10`
+(Lokationsbündel) from `A09` (Gerätetechnik). A code whose Cluster contradicts
+its PID is recorded as a conflict and resolved by the PID.
+
+**Every inbound step notifies.** An MSB deployment emits `ProcessInitiated` on
+35003/17007/39002/17008, delivered as `de.mako.process.initiated`. That is the
+entire input to `processd`'s ESA module, and its payload is a contract: every
+field is a Prüfschritt input.
 
 #### Consent gate
 
@@ -540,6 +582,24 @@ This closes the revocation loop end-to-end: marktd's consent revocation
 **and** posts `esa.abbestellung.beauftragen` to makod, which resumes the running
 `esa-wertebestellung` process and sends the 17008 Abbestellung to the MSB.
 
+**A Widerruf stops every subscription at the location.** marktd fires the command
+per covered location and names no `messprodukt` — a subscription is the
+(Meldepunkt, Messprodukt) pair and it does not know how many sit behind one. An
+omitted `messprodukt` therefore means *all of them*: makod resolves every
+`esa-wertebestellung` process still occupying a business key there and sends one
+stop message each, logging any that fail. Naming a `messprodukt` addresses
+exactly that subscription.
+
+`beendigung_zum` (alias `ausfuehrungsdatum`, `YYYY-MM-DD`) sets the `DTM+203` the
+17008 carries; it defaults to today, which is what a Widerruf wants, but a
+planned end — a service contract running out at month end — has to be nameable.
+**The stop message follows the Abo mode.** A one-shot is *stornierbar, nicht
+abbestellbar* — `E_0254` Prüfschritt 1 refuses its Beendigung with `A01` by
+construction — so the workflow declines a 17008 for one. A Widerruf covers
+whatever is running, one-shots included, so the dispatch picks per subscription:
+ORDERS 17008 for an Abo, ORDCHG 39002 for a one-shot.
+`esa.stornierung.beauftragen` addresses a single one-shot deliberately.
+
 #### MSB → ESA value delivery (UC 4.2)
 
 The counterpart to the ordering handshake: once the MSB holds a confirmed
@@ -601,13 +661,19 @@ the MaLo (role `MSB`):
 
 | Command | Answer on the wire | EBD |
 |---|---|---|
-| `wim.wertebestellung.anbieten` | QUOTES 15003 Angebot (Bindungsfrist in `DTM+273`) | — |
-| `wim.wertebestellung.anfrage-ablehnen` | QUOTES 15003 Ablehnung (reason in `FTX+ACB`, **no** Bindungsfrist) | — |
+| `wim.wertebestellung.anbieten` | QUOTES 15003 Angebot (`CUX` + `PRI` je Artikel-ID + OBIS + `DTM+273`/`469`) | `E_0252` (survived) |
+| `wim.wertebestellung.anfrage-ablehnen` | QUOTES 15003 Ablehnung (**no** priced position; grounds in `FTX+ACB`) | `E_0252` |
 | `wim.wertebestellung.bestellung-beantworten` | ORDRSP 19011 / 19012 | `E_0256` |
 | `wim.wertebestellung.stornierung-beantworten` | ORDRSP 19013 / 19014 | `E_0257` |
 | `wim.wertebestellung.abbestellung-beantworten` | ORDRSP 19011 / 19012 | `E_0254` |
 
-The three answer commands take an **`antwort_code`**, not an `accept` flag:
+`anbieten` takes `preise` (one `{artikel_id, betrag}` per priced position; `art`
+is derived from the Artikel-ID's `01`/`02`/`03` suffix unless stated), `obis`,
+and `waehrung` (default `EUR`) — see *The Angebot is a priced offer* above.
+`E_0252` has no `AJT` to carry a code, so an Ablehnung states its grounds in
+`FTX+ACB`.
+
+The three ORDRSP answer commands take an **`antwort_code`**, not an `accept` flag:
 `SG2 AJT` is Muss on all four ORDRSP PIDs (ORDRSP AHB 1.1b §4.15) and its code
 must sit in the named EBD's Zustimmungs- or Ablehnungs-Cluster, so **the cluster
 selects the PID**. Resolve the code by running the matching walk in
@@ -2367,8 +2433,8 @@ orchestrator probes from, and a throttled probe reads as a dead container.
 | `/health` | alias of `/health/ready` | as above | — |
 
 ```
-HTTP 200 {"status":"ok","instance_id":"makod-0-1","version":"0.16.0"}
-HTTP 503 {"status":"degraded","instance_id":"makod-0-1","version":"0.16.0",
+HTTP 200 {"status":"ok","instance_id":"makod-0-1","version":"0.17.0"}
+HTTP 503 {"status":"degraded","instance_id":"makod-0-1","version":"0.17.0",
           "reason":"worker_stale:deadline-scheduler"}
 ```
 

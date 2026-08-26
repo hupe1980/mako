@@ -178,14 +178,47 @@ impl Lieferrhythmus {
     }
 }
 
-/// Whether the MSB must serve the product or may decline it.
+/// Whether the MSB must serve the product or may decline it — **as of a date**.
+///
+/// The Codeliste's „Pflicht / Optional" column is not a constant. Two rows
+/// carry both values with a cut-over date („Optional ab 01.10.2023, Pflicht ab
+/// 06.08.2024" — `9991 00000 077 1` and `078 9`), and every other Pflicht
+/// product became mandatory on 06.08.2024 while having existed as an optional
+/// product or not at all before.
+///
+/// For a role whose entire premise includes **Vergangenheitswerte** that
+/// distinction is load-bearing: whether `E_0252` Prüfschritt 1 may skip the
+/// MSB's commercial discretion depends on what the product was at the period
+/// being requested, not on what it is today.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Verbindlichkeit {
-    /// The MSB must offer it — BNetzA *Mitteilung Nr. 3* (07.02.2024).
-    Pflicht,
-    /// Optional; the MSB may reject the Anfrage for this product.
+    /// The MSB must offer it from `ab` — BNetzA *Mitteilung Nr. 3* (07.02.2024).
+    /// Before that date the product may exist but is Optional.
+    Pflicht {
+        /// First day the Pflicht applies.
+        ab: Date,
+    },
+    /// Optional for the product's whole life; the MSB may decline the Anfrage.
     Optional,
+}
+
+impl Verbindlichkeit {
+    /// Whether the MSB is obliged to serve the product for a delivery on `am`.
+    #[must_use]
+    pub const fn ist_pflicht_am(self, am: Date) -> bool {
+        match self {
+            Self::Pflicht { ab } => am.to_julian_day() >= ab.to_julian_day(),
+            Self::Optional => false,
+        }
+    }
+
+    /// Whether the product is ever mandatory. Use [`Self::ist_pflicht_am`] to
+    /// decide an actual order — a Pflicht that has not started yet is not one.
+    #[must_use]
+    pub const fn jemals_pflicht(self) -> bool {
+        matches!(self, Self::Pflicht { .. })
+    }
 }
 
 // ── Messprodukt ───────────────────────────────────────────────────────────────
@@ -228,7 +261,7 @@ pub struct Messprodukt {
 macro_rules! produkt {
     (
         $code:literal, $bez:literal, $weg:ident, $ebene:ident, $wert:ident,
-        $art:ident, $ri:ident, $rh:ident, $vb:ident, $nutzbar_ab:expr
+        $art:ident, $ri:ident, $rh:ident, $vb:expr, $nutzbar_ab:expr
     ) => {
         Messprodukt {
             code: $code,
@@ -239,12 +272,18 @@ macro_rules! produkt {
             werteart: Werteart::$art,
             richtung: Energieflussrichtung::$ri,
             rhythmus: Lieferrhythmus::$rh,
-            verbindlichkeit: Verbindlichkeit::$vb,
+            verbindlichkeit: $vb,
             nutzbar_ab: $nutzbar_ab,
             schwellwertgesteuert: false,
         }
     };
 }
+
+/// „Pflicht ab 06.08.2024" — the date BNetzA *Mitteilung Nr. 3* (07.02.2024)
+/// set for every mandatory ESA Messprodukt in Codeliste Kapitel 4.6.
+const PFLICHT: Verbindlichkeit = Verbindlichkeit::Pflicht {
+    ab: date!(2024 - 08 - 06),
+};
 
 /// *Codeliste der Konfigurationen* 1.4, Kapitel **4.6.1** — „Werte nach Typ 2
 /// aus Backend“, delivered as MSCONS 13027 over AS4.
@@ -258,7 +297,7 @@ pub const BACKEND_PRODUKTE: &[Messprodukt] = &[
         Lastgang,
         Verbrauch,
         TaeglichBis0930,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2022 - 04 - 01)
     ),
     produkt!(
@@ -270,7 +309,7 @@ pub const BACKEND_PRODUKTE: &[Messprodukt] = &[
         Lastgang,
         Erzeugung,
         TaeglichBis0930,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2022 - 04 - 01)
     ),
     produkt!(
@@ -282,7 +321,7 @@ pub const BACKEND_PRODUKTE: &[Messprodukt] = &[
         Lastgang,
         Q1Q4,
         TaeglichBis0930,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2022 - 04 - 01)
     ),
     produkt!(
@@ -294,7 +333,7 @@ pub const BACKEND_PRODUKTE: &[Messprodukt] = &[
         Lastgang,
         Q2Q3,
         TaeglichBis0930,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2022 - 04 - 01)
     ),
     produkt!(
@@ -306,7 +345,7 @@ pub const BACKEND_PRODUKTE: &[Messprodukt] = &[
         Lastgang,
         VerbrauchUndErzeugung,
         WimKapitel255,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2023 - 10 - 01)
     ),
     produkt!(
@@ -318,7 +357,7 @@ pub const BACKEND_PRODUKTE: &[Messprodukt] = &[
         Lastgang,
         VerbrauchUndErzeugung,
         WimKapitel255,
-        Pflicht,
+        PFLICHT,
         date!(2024 - 08 - 06)
     ),
     produkt!(
@@ -330,7 +369,7 @@ pub const BACKEND_PRODUKTE: &[Messprodukt] = &[
         Lastgang,
         Erzeugung,
         WimKapitel255,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2023 - 10 - 01)
     ),
     produkt!(
@@ -342,7 +381,7 @@ pub const BACKEND_PRODUKTE: &[Messprodukt] = &[
         Lastgang,
         Erzeugung,
         WimKapitel255,
-        Pflicht,
+        PFLICHT,
         date!(2024 - 08 - 06)
     ),
     produkt!(
@@ -354,7 +393,7 @@ pub const BACKEND_PRODUKTE: &[Messprodukt] = &[
         Lastgang,
         VerbrauchUndErzeugung,
         WimKapitel255,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2023 - 10 - 01)
     ),
     produkt!(
@@ -366,7 +405,7 @@ pub const BACKEND_PRODUKTE: &[Messprodukt] = &[
         Lastgang,
         VerbrauchUndErzeugung,
         WimKapitel255,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2024 - 01 - 01)
     ),
     produkt!(
@@ -378,8 +417,8 @@ pub const BACKEND_PRODUKTE: &[Messprodukt] = &[
         Lastgang,
         Verbrauch,
         WimKapitel255,
-        Pflicht,
-        date!(2024 - 08 - 06)
+        PFLICHT,
+        date!(2023 - 10 - 01)
     ),
     produkt!(
         "9991000000789",
@@ -390,8 +429,8 @@ pub const BACKEND_PRODUKTE: &[Messprodukt] = &[
         Lastgang,
         Erzeugung,
         WimKapitel255,
-        Pflicht,
-        date!(2024 - 08 - 06)
+        PFLICHT,
+        date!(2023 - 10 - 01)
     ),
     produkt!(
         "9991000000797",
@@ -402,7 +441,7 @@ pub const BACKEND_PRODUKTE: &[Messprodukt] = &[
         Lastgang,
         Q1Q4,
         WimKapitel255,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2023 - 10 - 01)
     ),
     produkt!(
@@ -414,7 +453,7 @@ pub const BACKEND_PRODUKTE: &[Messprodukt] = &[
         Lastgang,
         Q2Q3,
         WimKapitel255,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2023 - 10 - 01)
     ),
     produkt!(
@@ -426,7 +465,7 @@ pub const BACKEND_PRODUKTE: &[Messprodukt] = &[
         Zaehlerstandsgang,
         Erzeugung,
         TaeglichBis0930,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2023 - 08 - 01)
     ),
     produkt!(
@@ -438,7 +477,7 @@ pub const BACKEND_PRODUKTE: &[Messprodukt] = &[
         Zaehlerstandsgang,
         VerbrauchUndErzeugung,
         TaeglichBis0930,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2023 - 08 - 01)
     ),
     produkt!(
@@ -450,7 +489,7 @@ pub const BACKEND_PRODUKTE: &[Messprodukt] = &[
         Zaehlerstandsgang,
         Verbrauch,
         TaeglichBis0930,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2023 - 08 - 01)
     ),
     produkt!(
@@ -462,7 +501,7 @@ pub const BACKEND_PRODUKTE: &[Messprodukt] = &[
         Arbeitsmenge,
         VerbrauchUndErzeugung,
         WimKapitel255,
-        Pflicht,
+        PFLICHT,
         date!(2024 - 08 - 06)
     ),
 ];
@@ -484,7 +523,7 @@ pub const SMGW_PRODUKTE: &[Messprodukt] = &[
         Lastgang,
         Verbrauch,
         TaeglichBis0930,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2022 - 04 - 01)
     ),
     produkt!(
@@ -496,7 +535,7 @@ pub const SMGW_PRODUKTE: &[Messprodukt] = &[
         Lastgang,
         Verbrauch,
         TaeglichBis0930,
-        Pflicht,
+        PFLICHT,
         date!(2024 - 08 - 06)
     ),
     produkt!(
@@ -508,7 +547,7 @@ pub const SMGW_PRODUKTE: &[Messprodukt] = &[
         Lastgang,
         Erzeugung,
         TaeglichBis0930,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2022 - 04 - 01)
     ),
     produkt!(
@@ -520,7 +559,7 @@ pub const SMGW_PRODUKTE: &[Messprodukt] = &[
         Lastgang,
         Erzeugung,
         TaeglichBis0930,
-        Pflicht,
+        PFLICHT,
         date!(2024 - 08 - 06)
     ),
     produkt!(
@@ -532,7 +571,7 @@ pub const SMGW_PRODUKTE: &[Messprodukt] = &[
         Lastgang,
         Q1Q4,
         TaeglichBis0930,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2022 - 04 - 01)
     ),
     produkt!(
@@ -544,7 +583,7 @@ pub const SMGW_PRODUKTE: &[Messprodukt] = &[
         Lastgang,
         Q2Q3,
         TaeglichBis0930,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2022 - 04 - 01)
     ),
     produkt!(
@@ -556,7 +595,7 @@ pub const SMGW_PRODUKTE: &[Messprodukt] = &[
         Momentanwerte,
         Erzeugung,
         Direktverbindung,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2023 - 10 - 01)
     ),
     produkt!(
@@ -568,7 +607,7 @@ pub const SMGW_PRODUKTE: &[Messprodukt] = &[
         Momentanwerte,
         Erzeugung,
         Direktverbindung,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2023 - 10 - 01)
     ),
     produkt!(
@@ -580,7 +619,7 @@ pub const SMGW_PRODUKTE: &[Messprodukt] = &[
         Momentanwerte,
         Erzeugung,
         Direktverbindung,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2023 - 10 - 01)
     ),
     Messprodukt {
@@ -605,7 +644,7 @@ pub const SMGW_PRODUKTE: &[Messprodukt] = &[
         Momentanwerte,
         VerbrauchUndErzeugung,
         Direktverbindung,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2023 - 10 - 01)
     ),
     produkt!(
@@ -617,7 +656,7 @@ pub const SMGW_PRODUKTE: &[Messprodukt] = &[
         Momentanwerte,
         VerbrauchUndErzeugung,
         Direktverbindung,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2023 - 10 - 01)
     ),
     produkt!(
@@ -629,7 +668,7 @@ pub const SMGW_PRODUKTE: &[Messprodukt] = &[
         Momentanwerte,
         VerbrauchUndErzeugung,
         Direktverbindung,
-        Optional,
+        Verbindlichkeit::Optional,
         date!(2023 - 10 - 01)
     ),
     Messprodukt {
@@ -668,11 +707,31 @@ pub fn messprodukt(code: &str) -> Option<&'static Messprodukt> {
 }
 
 /// Every Messprodukt an MSB must serve on request (BNetzA *Mitteilung Nr. 3*).
+///
+/// „Must serve" is dated: use [`Messprodukt::ist_pflicht_am`] to decide an
+/// actual order, since a historical Werteanfrage may reach back before the
+/// Pflicht began.
 pub fn pflichtprodukte() -> impl Iterator<Item = &'static Messprodukt> {
     BACKEND_PRODUKTE
         .iter()
         .chain(SMGW_PRODUKTE)
-        .filter(|p| p.verbindlichkeit == Verbindlichkeit::Pflicht)
+        .filter(|p| p.verbindlichkeit.jemals_pflicht())
+}
+
+/// The [`Lokationsebene`] a Messprodukt-Code is defined for.
+///
+/// **The product decides the level, not the identifier.** REQOTE AHB 1.2 §4.3
+/// gives `LOC+172` DE 3225 four permitted shapes and lets the Marktlokations-ID
+/// format (`[950]`) serve *both* the Marktlokation (`[502]`) and the Tranche
+/// (`[504]`) — so an 11-digit identifier is provably ambiguous and no amount of
+/// inspection of it can resolve the level. The `SG27 PIA+5` Messprodukt can,
+/// and does so for every one of the four.
+///
+/// Returns `None` only for a code outside Kapitel 4.6, which is not orderable
+/// by this Marktrolle at all.
+#[must_use]
+pub fn ebene_fuer_messprodukt(code: &str) -> Option<Lokationsebene> {
+    messprodukt(code).map(|p| p.ebene)
 }
 
 /// Why a [`Bestellgegenstand`] is not orderable as stated.
@@ -867,6 +926,17 @@ pub struct Bestellgegenstand {
     pub smgw: Option<SmgwZiel>,
 }
 
+impl Messprodukt {
+    /// Whether the MSB is obliged to serve this product for a delivery on `am`.
+    ///
+    /// `E_0252` Prüfschritt 1 branches on exactly this, and it is what lets an
+    /// MSB deployment answer a Werteanfrage without an operator.
+    #[must_use]
+    pub const fn ist_pflicht_am(&self, am: Date) -> bool {
+        self.verbindlichkeit.ist_pflicht_am(am)
+    }
+}
+
 impl Bestellgegenstand {
     /// Resolve the catalogue entry.
     ///
@@ -936,6 +1006,224 @@ pub fn business_key(lokations_id: &str, messprodukt: &str) -> String {
     format!("{lokations_id}#{}", normalize_code(messprodukt))
 }
 
+// ── Antwort (ORDRSP SG2 AJT) ──────────────────────────────────────────────────
+
+/// What an ORDRSP actually said — the published Antwortcode and its tree.
+///
+/// `SG2 AJT` is **Muss** on all four ESA answer PIDs (ORDRSP AHB 1.1b §4.15),
+/// DE 4465 carrying the Code des Prüfschritts and DE 1082 the EBD that
+/// publishes it. Those four use cases have **no free-text `FTX` segment at
+/// all** — the only `FTX` a conformant 19011 may carry is `SG27 FTX+Z27`, the
+/// MSB's IP address — so this is the entire content of a refusal.
+///
+/// Kept as a typed pair rather than a bare string because a code has no
+/// meaning without its tree: `A01` is „Bindungsfrist abgelaufen" in `E_0256`,
+/// „Bestellung nicht bestätigt" in `E_0257` and „war eine einmalige
+/// Übermittlung" in `E_0254`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Antwort {
+    /// `AJT` DE 4465 — the Code des Prüfschritts.
+    pub antwortcode: String,
+    /// `AJT` DE 1082 — the EBD the code was published in (`E_0254`, `E_0256`,
+    /// `E_0257`). `None` only from a counterparty that omitted the Muss.
+    #[serde(default)]
+    pub ebd: Option<String>,
+}
+
+impl Antwort {
+    /// Build one from the two `AJT` data elements.
+    #[must_use]
+    pub fn new(antwortcode: impl Into<String>, ebd: Option<String>) -> Self {
+        Self {
+            antwortcode: antwortcode.into(),
+            ebd,
+        }
+    }
+
+    /// Resolve the code against its tree and return the BDEW's own wording.
+    ///
+    /// `None` when the answer names no tree, or names a code that tree does
+    /// not publish — either is a non-conformant answer, and reporting it as
+    /// unresolved is honest where inventing a meaning is not.
+    #[must_use]
+    pub fn bedeutung(&self) -> Option<&'static str> {
+        let tree = self.ebd.as_deref()?;
+        mako_pruefung::codes::lookup(tree, &self.antwortcode).map(|c| c.bedeutung)
+    }
+
+    /// Whether the code sits in its tree's **Zustimmungs**-Cluster.
+    ///
+    /// ORDRSP AHB conditions `[17]`/`[18]` bind the cluster to the answer PID,
+    /// so this and the PID must agree; [`Self::widerspricht_pid`] is that check.
+    #[must_use]
+    pub fn ist_zustimmung(&self) -> Option<bool> {
+        let tree = self.ebd.as_deref()?;
+        mako_pruefung::codes::lookup(tree, &self.antwortcode)
+            .map(|c| c.cluster == mako_pruefung::codes::Cluster::Zustimmung)
+    }
+
+    /// `true` when the code's Cluster contradicts the PID that carried it.
+    ///
+    /// A 19011 (Bestätigung) whose `AJT` names an Ablehnungscode is not a
+    /// confirmation with a note attached — it is a message whose two halves
+    /// disagree, and acting on either half alone is guesswork. `false` when
+    /// the answer cannot be resolved at all, which is a separate defect.
+    #[must_use]
+    pub fn widerspricht_pid(&self, pid_ist_zustimmung: bool) -> bool {
+        self.ist_zustimmung()
+            .is_some_and(|zustimmung| zustimmung != pid_ist_zustimmung)
+    }
+
+    /// One-line rendering for an operator queue or an audit log.
+    #[must_use]
+    pub fn beschreibung(&self) -> String {
+        let tree = self.ebd.as_deref().unwrap_or("ohne EBD");
+        self.bedeutung().map_or_else(
+            || {
+                format!(
+                    "{} ({tree}, im Codelistenkatalog nicht geführt)",
+                    self.antwortcode
+                )
+            },
+            |b| format!("{} ({tree}): {b}", self.antwortcode),
+        )
+    }
+}
+
+// ── Angebot (QUOTES 15003) ────────────────────────────────────────────────────
+
+/// One `SG31 PRI+CAL` price of the MSB's Angebot.
+///
+/// QUOTES AHB 1.1a §4.3: `SG31` is **Muss** and repeats once per `PIA+Z02`
+/// Artikel-ID in the same `SG27 LIN`, up to three times. The Artikel-ID's last
+/// two digits pick the price type — `01` Einrichtung, `02` Betrieb, `03`
+/// Transaktion — which is what conditions `[83]`–`[85]` say.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Preisposition {
+    /// `SG27 PIA+Z02` DE 7140 — the Artikel-ID this price belongs to.
+    pub artikel_id: String,
+    /// `SG31 PRI` DE 5387 — `Z01` Einrichtungspreis, `Z02` Transaktionspreis,
+    /// `Z03` Betriebspreis.
+    pub preistyp: Preistyp,
+    /// `SG31 PRI` DE 5118 — the amount, verbatim from the wire (up to six
+    /// decimals). Kept as text so no rounding happens before the ESA's own
+    /// ledger sees it.
+    pub betrag: String,
+    /// `SG31 PRI` DE 6411 — `H87` Stück (Einrichtung, Transaktion) or `DAY`
+    /// Tag (Betrieb).
+    pub einheit: String,
+}
+
+/// `SG31 PRI` DE 5387 — which of the three ESA price types this is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Preistyp {
+    /// `Z01` — Einrichtungspreis, once per Stück.
+    Einrichtung,
+    /// `Z02` — Transaktionspreis, per Stück.
+    Transaktion,
+    /// `Z03` — Betriebspreis, per Tag.
+    Betrieb,
+}
+
+impl Preistyp {
+    /// `PRI` DE 5387 code.
+    #[must_use]
+    pub const fn pri_code(self) -> &'static str {
+        match self {
+            Self::Einrichtung => "Z01",
+            Self::Transaktion => "Z02",
+            Self::Betrieb => "Z03",
+        }
+    }
+
+    /// Parse a `PRI` DE 5387 code.
+    #[must_use]
+    pub fn from_pri_code(code: &str) -> Option<Self> {
+        match code {
+            "Z01" => Some(Self::Einrichtung),
+            "Z02" => Some(Self::Transaktion),
+            "Z03" => Some(Self::Betrieb),
+            _ => None,
+        }
+    }
+}
+
+/// The substance of the MSB's QUOTES 15003 Angebot.
+///
+/// UC 4.1.1 says the ESA „fragt die Übermittlung von Werten **und die damit
+/// verbundenen Kosten**" and UC 4.1 Nr. 2 that the MSB states „wie hoch die
+/// damit verbundenen Kosten sind". The offer is therefore what the ESA orders
+/// against, what the MSB's later INVOIC 31009 is reconciled with, and what says
+/// which registers the subscription will deliver.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Angebot {
+    /// `SG4 CUX` DE 6345 — the currency the prices are in. **Muss**; `EUR` is
+    /// the only published value, but it is read rather than assumed.
+    #[serde(default)]
+    pub waehrung: Option<String>,
+    /// `SG31 PRI` — one entry per (Artikel-ID, Preistyp) the offer prices.
+    #[serde(default)]
+    pub preise: Vec<Preisposition>,
+    /// `SG27 PIA+5 …:SRW` — the OBIS-Kennzahlen the subscription will deliver.
+    ///
+    /// **Muss**, one to 23 per `SG27 LIN` (QUOTES AHB 1.1a condition `[2073]`).
+    /// This is the only place the ESA learns which registers to expect, and it
+    /// is what a delivery-surveillance sweep has to compare against —
+    /// `ZO-T21` of `EZ-03` routes an inbound MSCONS 13027 by exactly this.
+    #[serde(default)]
+    pub obis_kennzahlen: Vec<String>,
+    /// `DTM+279` — „Erforderliche Zeitspanne zur Einrichtung der Übermittlung
+    /// von Werten ab Bestellung", a **duration** (DE 2379 `802`/`803`/`804`),
+    /// resolved against the day the Angebot arrived. `Kann`.
+    #[serde(default)]
+    pub einrichtung_bis: Option<time::OffsetDateTime>,
+}
+
+impl Angebot {
+    /// `true` when the offer prices nothing.
+    ///
+    /// `SG31 PRI` is **Muss** inside a `SG27 LIN` position, and the position
+    /// block is what a priced offer consists of — so a 15003 with no price is
+    /// the MSB saying it will not deliver. The QUOTES AHB publishes no
+    /// Ablehnung use case and `DTM+273` is Muss on the one it does publish, so
+    /// the absence of a Bindungsfrist cannot be the discriminator.
+    #[must_use]
+    pub fn ist_leer(&self) -> bool {
+        self.preise.is_empty() && self.obis_kennzahlen.is_empty()
+    }
+
+    /// The offered price of one type, if the offer names it.
+    #[must_use]
+    pub fn preis(&self, typ: Preistyp) -> Option<&Preisposition> {
+        self.preise.iter().find(|p| p.preistyp == typ)
+    }
+}
+
+/// Where the MSB will push SM-PKI values **from** (ORDRSP 19011, `SG27`).
+///
+/// ORDRSP AHB 1.1b §4.15: when the confirmed order named a Kapitel-4.6.2
+/// product, the Bestätigung must carry either `FTX+Z27` (a single IP address,
+/// condition `[77]`) or `FTX+Z28` (a range, condition `[76]`). The ESA has to
+/// admit that source before the iMS can reach it, so dropping it left a
+/// confirmed SMGW subscription that could never deliver.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case", tag = "art", content = "wert")]
+pub enum SmgwQuelle {
+    /// `FTX+Z27` — one IP address.
+    Adresse(String),
+    /// `FTX+Z28` — the lower and upper bound of an IP range.
+    Range {
+        /// `FTX+Z28` DE 4440 #1 — untere Grenze.
+        von: String,
+        /// `FTX+Z28` DE 4440 #2 — obere Grenze.
+        bis: String,
+    },
+}
+
 // ── Correlation (Anwendungsübersicht der Prüfidentifikatoren 4.0) ──────────────
 
 /// How a message of the ESA handshake is matched to its running process.
@@ -960,7 +1248,11 @@ pub enum Korrelation {
     /// `ZG-T41` / `ZG-T50` — `SG1 RFF+ACW` DE 1154. On ORDERS 17008 it is the
     /// 17007's Belegnummer; on ORDRSP 19013/19014 the ORDCHG's.
     VorherigeNachricht,
-    /// `ZG-T47` — `SG15 RFF+AGI` DE 1154, the ORDERS' Belegnummer. IFTSTA 21042.
+    /// The ORDERS' Belegnummer, echoed as `RFF+AGI` — but in a different
+    /// segment group per message: `ZG-T47` is `SG15 RFF+AGI` on the IFTSTA
+    /// 21042, `ZG-T42` is `SG1 RFF+AGI` on the MSCONS 13027. Only the
+    /// qualifier is shared, which is why this is one key and the lookup
+    /// searches by qualifier rather than by position.
     BeantragungsNummer,
 }
 
@@ -994,8 +1286,11 @@ pub const fn korrelation(pid: u32) -> Option<Korrelation> {
         17008 | 19013 | 19014 => Some(Korrelation::VorherigeNachricht),
         // MSCONS AHB 3.2 §11.2 hint `[574]`: „Wert aus BGM DE1004 der ORDERS
         // mit der die Bestellung der Werte nach Typ 2 erfolgt ist" — the same
-        // `RFF+AGI` shape as the IFTSTA, and the only thing on a value
-        // delivery that names the subscription it belongs to.
+        // `RFF+AGI` qualifier as the IFTSTA (in `SG1` rather than `SG15`), and
+        // the only thing on a value delivery that names the subscription it
+        // belongs to. It is the first hop of the PID overview's `EZ-03`
+        // (`ZG-T42` → `ZO-T20` Gerätenummer → `ZO-T21` OBIS-Kennzahl); the two
+        // later hops assign the values to a Zählwerk and belong to `edmd`.
         21042 | 13027 => Some(Korrelation::BeantragungsNummer),
         _ => None,
     }
@@ -1067,7 +1362,7 @@ mod tests {
         let p = messprodukt("9991 00000 305 6").expect("Pflichtprodukt 305 6");
         assert_eq!(p.code, "9991000003056");
         assert_eq!(p.ebene, Lokationsebene::Marktlokation);
-        assert_eq!(p.verbindlichkeit, Verbindlichkeit::Pflicht);
+        assert!(p.ist_pflicht_am(time::macros::date!(2026 - 03 - 01)));
         assert_eq!(messprodukt("9991000003056").map(|q| q.code), Some(p.code));
     }
 
@@ -1197,10 +1492,6 @@ mod tests {
         );
     }
 
-    /// The Zuordnungsschlüssel table of the PID overview 4.0, verbatim.
-    ///
-    /// The two easily-inverted ones: the answer to a Bestellung references
-    /// `RFF+ON` (not `ACW`), and the Abbestellung itself carries `RFF+ACW`.
     /// Two different Messprodukte at one Marktlokation are two subscriptions.
     #[test]
     fn the_business_key_separates_products_at_one_location() {
@@ -1211,6 +1502,10 @@ mod tests {
         assert_eq!(lastgang, business_key("51238696012", "9991000003056"));
     }
 
+    /// The Zuordnungsschlüssel table of the PID overview 4.0, verbatim.
+    ///
+    /// The two easily-inverted ones: the answer to a Bestellung references
+    /// `RFF+ON` (not `ACW`), and the Abbestellung itself carries `RFF+ACW`.
     #[test]
     fn correlation_keys_match_the_pid_overview() {
         for (pid, expected, qual) in [
@@ -1264,6 +1559,142 @@ mod tests {
             assert_eq!(Abonnement::from_imd_code(a.imd_code()), Some(a));
         }
         assert_eq!(Abonnement::from_imd_code("Z99"), None);
+    }
+
+    /// The Codeliste dates the Pflicht — „Optional ab 01.10.2023, Pflicht ab
+    /// 06.08.2024" for `077 1`/`078 9`. A Vergangenheitswerte-Anfrage reaching
+    /// back before the cut-over asks for a product the MSB could still decline,
+    /// which is what `E_0252` Prüfschritt 1 branches on.
+    #[test]
+    fn the_pflicht_is_dated_not_absolute() {
+        let p = messprodukt("9991 00000 077 1").expect("Pflichtprodukt 077 1");
+        assert!(!p.ist_pflicht_am(time::macros::date!(2024 - 08 - 05)));
+        assert!(p.ist_pflicht_am(time::macros::date!(2024 - 08 - 06)));
+        assert!(p.verbindlichkeit.jemals_pflicht());
+
+        let optional = messprodukt("9991 00000 074 7").expect("optional 074 7");
+        assert!(!optional.ist_pflicht_am(time::macros::date!(2026 - 01 - 01)));
+        assert!(!optional.verbindlichkeit.jemals_pflicht());
+    }
+
+    /// …and the same two rows are usable from **01.10.2023**, a year before the
+    /// Pflicht. Storing the Pflicht date as `nutzbar_ab` refused a legitimate
+    /// historical Wunschtermin in between — for a role whose whole premise
+    /// includes Vergangenheitswerte.
+    #[test]
+    fn nutzbar_ab_is_not_the_pflicht_date() {
+        for code in ["9991000000771", "9991000000789"] {
+            let p = messprodukt(code).expect("in the catalogue");
+            assert_eq!(
+                p.nutzbar_ab,
+                time::macros::date!(2023 - 10 - 01),
+                "{code}: Codeliste 1.4 Kap. 4.6.1 gives Nutzbar ab 01.10.2023"
+            );
+        }
+    }
+
+    /// The product, never the identifier, decides the level: REQOTE AHB 1.2
+    /// §4.3 gives the Marktlokation (`[502]`) and the Tranche (`[504]`) the
+    /// *same* `[950]` Marktlokations-ID format, so length inference cannot tell
+    /// them apart — and the Tranche carries a Pflichtprodukt.
+    #[test]
+    fn the_product_resolves_the_level_where_the_identifier_cannot() {
+        assert_eq!(
+            ebene_fuer_messprodukt("9991 00000 305 6"),
+            Some(Lokationsebene::Marktlokation)
+        );
+        assert_eq!(
+            ebene_fuer_messprodukt("9991 00000 306 4"),
+            Some(Lokationsebene::Tranche)
+        );
+        assert_eq!(ebene_fuer_messprodukt("9992000000011"), None);
+        // Both are Pflicht, and both are addressed by an 11-digit identifier.
+        assert!(pflichtprodukte().any(|p| p.ebene == Lokationsebene::Tranche));
+    }
+
+    /// An `AJT` code is meaningless without its tree, and the cluster it sits
+    /// in has to agree with the PID that carried it.
+    #[test]
+    fn an_antwort_resolves_against_the_tree_it_names() {
+        let ok = Antwort::new("A11", Some(EBD_ESA_BESTELLUNG.to_owned()));
+        assert_eq!(ok.ist_zustimmung(), Some(true));
+        assert!(ok.bedeutung().is_some());
+        assert!(!ok.widerspricht_pid(true));
+        // A Bestätigung PID carrying an Ablehnungscode is self-contradictory.
+        assert!(ok.widerspricht_pid(false));
+
+        let refusal = Antwort::new("A08", Some(EBD_ESA_BESTELLUNG.to_owned()));
+        assert_eq!(refusal.ist_zustimmung(), Some(false));
+        assert!(
+            refusal
+                .bedeutung()
+                .expect("A08 is published")
+                .contains("Einwilligung")
+        );
+    }
+
+    /// `A01` means three different things across the three answer trees, so an
+    /// answer that names no tree stays unresolved rather than being guessed.
+    #[test]
+    fn an_antwort_without_a_tree_is_not_guessed() {
+        let bare = Antwort::new("A01", None);
+        assert_eq!(bare.bedeutung(), None);
+        assert_eq!(bare.ist_zustimmung(), None);
+        assert!(
+            !bare.widerspricht_pid(true),
+            "unresolvable is not a conflict"
+        );
+        assert!(bare.beschreibung().contains("ohne EBD"));
+
+        let per_tree: Vec<_> = [EBD_ESA_BESTELLUNG, EBD_ESA_STORNIERUNG, EBD_ESA_BEENDIGUNG]
+            .into_iter()
+            .map(|t| Antwort::new("A01", Some(t.to_owned())).bedeutung().unwrap())
+            .collect();
+        assert_eq!(
+            per_tree
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            3,
+            "A01 must mean something different in each tree: {per_tree:?}"
+        );
+    }
+
+    /// An Angebot with no price is the MSB declining. `DTM+273` cannot be the
+    /// discriminator — QUOTES AHB 1.1a makes it Muss on the only published
+    /// 15003 use case, so a refusal carries one too.
+    #[test]
+    fn an_offer_is_told_from_a_refusal_by_its_prices() {
+        assert!(Angebot::default().ist_leer());
+        let priced = Angebot {
+            waehrung: Some("EUR".to_owned()),
+            preise: vec![Preisposition {
+                artikel_id: "9990001100002".to_owned(),
+                preistyp: Preistyp::Betrieb,
+                betrag: "0.004500".to_owned(),
+                einheit: "DAY".to_owned(),
+            }],
+            obis_kennzahlen: vec!["1-1:1.29.0".to_owned()],
+            einrichtung_bis: None,
+        };
+        assert!(!priced.ist_leer());
+        assert_eq!(
+            priced.preis(Preistyp::Betrieb).map(|p| p.betrag.as_str()),
+            Some("0.004500")
+        );
+        assert_eq!(priced.preis(Preistyp::Einrichtung), None);
+    }
+
+    #[test]
+    fn pri_codes_round_trip() {
+        for t in [
+            Preistyp::Einrichtung,
+            Preistyp::Transaktion,
+            Preistyp::Betrieb,
+        ] {
+            assert_eq!(Preistyp::from_pri_code(t.pri_code()), Some(t));
+        }
+        assert_eq!(Preistyp::from_pri_code("Z99"), None);
     }
 
     /// Rohdaten products publish a wall-clock deadline; the aufbereitete-Daten

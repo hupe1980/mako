@@ -459,6 +459,91 @@ impl EdifactIngestDispatcher {
         state.data().map(|d| d.lokations_id.clone())
     }
 
+    /// File the prices of a just-accepted Angebot where `invoicd` looks.
+    ///
+    /// An ORDRSP 19011 answering a Bestellung is the moment the MSB's offer
+    /// becomes the **price agreement**, and it is the only price basis an ESA
+    /// has: `PreisblattMessung` is what an MSB publishes toward the NB and the
+    /// LF, and there is no published sheet for a Kapitel-4.6 Messprodukt
+    /// because §35 MsbG leaves the Entgelt for a Zusatzleistung to be agreed
+    /// per request. Without this, an ESA's INVOIC 31009 is checked for
+    /// arithmetic and totals and nothing else.
+    ///
+    /// **Best-effort.** A marktd outage must not fail a confirmed
+    /// subscription: the values are authorised either way, and the missing
+    /// basis is a warning on the later invoice check rather than a dispute.
+    async fn record_accepted_angebot(&self, key: &str) {
+        let Some(marktd) = self.marktd_client.as_ref() else {
+            return;
+        };
+        if key.is_empty() {
+            return;
+        }
+        let Ok(identities) = self
+            .store
+            .as_process_registry()
+            .lookup_correlated(self.tenant_id, key)
+            .await
+        else {
+            return;
+        };
+        let Some(identity) = identities.into_iter().find(|id| {
+            id.workflow_id.name.as_ref() == mako_wim::esa_wertebestellung::WORKFLOW_NAME
+        }) else {
+            return;
+        };
+        let process = Process::<
+            mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow,
+            Arc<SlateDbStore>,
+        >::from_identity(Arc::clone(&self.store), identity);
+        let Ok(state) = process.state().await else {
+            return;
+        };
+        let Some(data) = state.data() else { return };
+        if data.angebot.preise.is_empty() {
+            // A confirmed subscription whose offer priced nothing is either a
+            // counterparty that omitted a Muss (`SG31 PRI`) or an offer mako
+            // read before it modelled prices. Say so once rather than filing an
+            // empty agreement, which would read as "we agreed to nothing".
+            tracing::warn!(
+                esa = %data.esa.as_str(), msb = %data.msb.as_str(),
+                location = %data.lokations_id,
+                "makod: Bestellung confirmed but the Angebot priced nothing — the ESA has no \
+                 basis to check the MSB's INVOIC 31009 against"
+            );
+            return;
+        }
+        let body = serde_json::json!({
+            "lokations_id": data.lokations_id,
+            "messprodukt": data.gegenstand.messprodukt,
+            "bestellung_ref": data.bestellung_ref,
+            "waehrung": data.angebot.waehrung.as_deref().unwrap_or("EUR"),
+            "valid_from": data.gegenstand.wunschtermin.to_string(),
+            "valid_to": data.gegenstand.zeitraum_bis.map(|d| d.to_string()),
+            "preise": data
+                .angebot
+                .preise
+                .iter()
+                .map(|p| serde_json::json!({
+                    "artikel_id": p.artikel_id,
+                    "preistyp": p.preistyp.pri_code(),
+                    "betrag": p.betrag,
+                    "einheit": p.einheit,
+                }))
+                .collect::<Vec<_>>(),
+        });
+        if let Err(e) = marktd
+            .put_esa_preise(data.msb.as_str(), data.esa.as_str(), &body)
+            .await
+        {
+            tracing::warn!(
+                error = %e, esa = %data.esa.as_str(), msb = %data.msb.as_str(),
+                "makod: could not file the accepted Angebot at marktd — the INVOIC 31009 check \
+                 will report a missing price basis"
+            );
+        }
+    }
+
     /// Construct a new dispatcher backed by the given stores.
     #[must_use]
     pub fn new(

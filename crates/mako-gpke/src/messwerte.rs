@@ -205,6 +205,21 @@ pub enum MesswerteLieferungCommand {
         validation_passed: bool,
         /// Human-readable validation errors (if any).
         validation_errors: Vec<String>,
+        /// `SG1 RFF+AGI` — the Belegnummer of the ORDERS that ordered these
+        /// values, on a **PID 13027** „Werte nach Typ 2" delivery.
+        ///
+        /// MSCONS AHB 3.2 §11.2 hint `[574]`: „Wert aus BGM DE1004 der ORDERS
+        /// mit der die Bestellung der Werte nach Typ 2 erfolgt ist". It is the
+        /// first hop of the PID overview's `EZ-03` routing and the only thing
+        /// on a value delivery that names the subscription it belongs to — a
+        /// Meldepunkt may carry several, since a subscription is the
+        /// (Meldepunkt, Messprodukt) pair.
+        ///
+        /// Carried through to `edmd` so a Typ-2 gap can be reported against the
+        /// subscription that is actually silent instead of being inferred from
+        /// whichever OBIS registers happened to stop.
+        #[allow(clippy::doc_markdown)]
+        bestellung_ref: Option<String>,
     },
 }
 
@@ -231,6 +246,7 @@ fn erp_payload(
     location_id: &MaLo,
     message_ref: &MessageRef,
     reads: &[MeteredInterval],
+    bestellung_ref: Option<&str>,
 ) -> serde_json::Value {
     serde_json::json!({
         "pid": pid.as_u32(),
@@ -238,6 +254,8 @@ fn erp_payload(
         "sender": sender.as_str(),
         "message_ref": message_ref.as_str(),
         "sparte": "STROM",
+        // `SG1 RFF+AGI` on a 13027 — which ESA subscription these values are.
+        "bestellung_ref": bestellung_ref,
         "reads": reads
             .iter()
             .map(|r| serde_json::json!({
@@ -311,6 +329,7 @@ impl Workflow for GpkeMesswerteLieferungWorkflow {
                 reads,
                 validation_passed,
                 validation_errors,
+                bestellung_ref,
             } => {
                 if !matches!(state, MesswerteLieferungState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -320,7 +339,14 @@ impl Workflow for GpkeMesswerteLieferungWorkflow {
                         "PID {pid} is not a handled MSCONS PID",
                     )));
                 }
-                let erp_payload = erp_payload(pid, &sender, &location_id, &message_ref, &reads);
+                let erp_payload = erp_payload(
+                    pid,
+                    &sender,
+                    &location_id,
+                    &message_ref,
+                    &reads,
+                    bestellung_ref.as_deref(),
+                );
                 let mut events = vec![MesswerteLieferungEvent::MsconsDatenErhalten {
                     pruefidentifikator: pid,
                     sender,

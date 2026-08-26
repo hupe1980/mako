@@ -28,9 +28,30 @@
 
 use std::sync::Arc;
 
+/// The status an ingest door answers when the store refused a batch.
+///
+/// `marktd` treats 2xx as delivered and redelivers on 5xx, so the choice is
+/// whether this delivery should come back. A transient failure — a lost
+/// connection, a lock the statement declined to queue for — should: the same
+/// bytes will store once the condition clears. A **refused** one must not: an
+/// overlapping span, a restated value under an existing version or a second
+/// network operator on one reading is a statement about the message, and
+/// redelivering it is a loop that runs until the retry budget is exhausted
+/// while an operator watches a 5xx that never resolves.
+///
+/// 422 is the honest answer for the second: the delivery was received and
+/// understood, and it cannot be stored as sent.
+fn ingest_status(err: &crate::domain::error::EdmError) -> StatusCode {
+    if err.is_retryable() {
+        StatusCode::INTERNAL_SERVER_ERROR
+    } else {
+        StatusCode::UNPROCESSABLE_ENTITY
+    }
+}
+
 use crate::domain::{
     ALL_MSCONS_PIDS, ESA_TYP2_PIDS, GAS_QUALITY_PIDS, IngestionSource, MeterDataReceipt, MeterRead,
-    QualityFlag, Sparte as EdmSparte, Typ2DeliveryPath, Typ2Read,
+    Sparte as EdmSparte, Typ2DeliveryPath, Typ2Read,
     repository::{TimeSeriesRepository, Typ2Repository},
 };
 use axum::{
@@ -42,24 +63,6 @@ use axum::{
 use secrecy::{ExposeSecret, SecretString};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
-
-/// Map an MSCONS quality token onto the domain quality flag.
-///
-/// An unrecognised or absent token becomes `Unknown`, which the billing
-/// aggregates exclude — a reading whose status we cannot interpret must not be
-/// settled as if it were measured.
-fn quality_from_mscons(status: Option<&str>) -> QualityFlag {
-    match status.unwrap_or_default() {
-        "MEASURED" => QualityFlag::Measured,
-        "ESTIMATED" => QualityFlag::Estimated,
-        "SUBSTITUTED" => QualityFlag::Substituted,
-        "CALCULATED" => QualityFlag::Calculated,
-        "CORRECTED" => QualityFlag::Corrected,
-        "PRELIMINARY" => QualityFlag::Preliminary,
-        "FAULTY" => QualityFlag::Faulty,
-        _ => QualityFlag::Unknown,
-    }
-}
 
 use crate::store::{MeterStoreTimeSeriesRepository, MeterStoreTyp2Repository};
 
@@ -424,13 +427,15 @@ pub async fn handle_webhook(
             }
             Err(err) => {
                 // `marktd` treats 2xx as delivered and will not redeliver, so a
-                // failed receipt write must surface as 5xx rather than being
-                // logged and forgotten.
+                // failed receipt write must surface rather than being logged and
+                // forgotten — as 5xx when another attempt could work, as 422
+                // when the delivery itself is what the store refused.
+                let status = ingest_status(&err);
                 error!(
-                    %err, process_id = %process_id,
-                    "edmd: failed to store receipt — signalling redelivery"
+                    %err, process_id = %process_id, retryable = err.is_retryable(),
+                    "edmd: failed to store receipt"
                 );
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                return status.into_response();
             }
         }
 
@@ -598,7 +603,7 @@ pub async fn handle_webhook(
                     dtm_from: from,
                     dtm_to: to,
                     quantity_kwh: kwh,
-                    quality: quality_from_mscons(r["quality"].as_str()),
+                    quality: crate::domain::quality_from_label(r["quality"].as_str()),
                     pid,
                     sparte,
                     obis_code: r["obis_code"].as_str().map(str::to_owned),
@@ -628,6 +633,23 @@ pub async fn handle_webhook(
             // no validation/substitution machinery: a Typ-2 value is stored as
             // delivered and never reconciled or corrected.
             if ESA_TYP2_PIDS.contains(&pid) {
+                // `SG1 RFF+AGI` — which ESA subscription these values belong
+                // to. A Meldepunkt may carry several (a subscription is the
+                // (Meldepunkt, Messprodukt) pair), so without it a Typ-2 gap
+                // could only be reported against a register, never against the
+                // subscription that has actually stopped.
+                let bestellung_ref = data
+                    .get("bestellung_ref")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned);
+                if bestellung_ref.is_none() {
+                    warn!(
+                        process_id = %process_id, pid, malo_id = %malo_id,
+                        "edmd: ESA Typ-2 delivery without SG1 RFF+AGI — the subscription it \
+                         belongs to cannot be named (MSCONS AHB 3.2 §11.2 hint [574])"
+                    );
+                }
                 let typ2: Vec<Typ2Read> = batch
                     .into_iter()
                     .map(|m| Typ2Read {
@@ -643,16 +665,19 @@ pub async fn handle_webhook(
                         tenant: m.tenant,
                         delivery_path: Typ2DeliveryPath::MsconsBackend,
                         sender_mp_id: m.sender_mp_id,
+                        bestellung_ref: bestellung_ref.clone(),
                         received_at: None,
                     })
                     .collect();
                 let stored = typ2.len();
                 if let Err(err) = state.typ2_repo.store_typ2_reads(&typ2).await {
+                    let status = ingest_status(&err);
                     error!(
                         %err, process_id = %process_id, pid, malo_id = %malo_id,
-                        "edmd: ESA Typ-2 store failed — signalling redelivery"
+                        retryable = err.is_retryable(),
+                        "edmd: ESA Typ-2 store failed"
                     );
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    return status.into_response();
                 }
                 info!(
                     process_id = %process_id, pid, malo_id = %malo_id, stored,
@@ -678,13 +703,17 @@ pub async fn handle_webhook(
             // readings are stored.
             let hampel = crate::server::score_batch(validated.as_slice());
             if let Err(err) = state.repo.store_reads(validated).await {
-                // A 5xx makes `marktd` redeliver. Answering 204 here would mark
-                // the process delivered while the readings were never stored.
+                // A 5xx makes `marktd` redeliver; answering 204 would mark the
+                // process delivered while the readings were never stored. A
+                // refused delivery gets 422 instead — redelivering a batch the
+                // store will always refuse never terminates.
+                let status = ingest_status(&err);
                 error!(
                     %err, process_id = %process_id, pid, malo_id = %malo_id,
-                    "edmd: MSCONS interval store failed — signalling redelivery"
+                    retryable = err.is_retryable(),
+                    "edmd: MSCONS interval store failed"
                 );
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                return status.into_response();
             }
 
             if let Some(q) = &hampel {
