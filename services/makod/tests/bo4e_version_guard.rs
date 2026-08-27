@@ -34,7 +34,7 @@ fn workspace_root() -> PathBuf {
 /// The payload spelling carries no `v`, and the series is its `YYYYMM` prefix.
 #[test]
 fn the_wire_spelling_has_no_v_prefix() {
-    let v = *SCHEMA_VERSION;
+    let v = SCHEMA_VERSION;
     assert!(
         !v.starts_with('v'),
         "`_version` carries the payload spelling, not the git tag: {v:?}. \
@@ -42,14 +42,14 @@ fn the_wire_spelling_has_no_v_prefix() {
     );
     assert_eq!(
         v.split('.').next(),
-        Some(*SCHEMA_SERIES),
+        Some(SCHEMA_SERIES),
         "the series must be the release's own YYYYMM prefix"
     );
     assert_eq!(
         SCHEMA_SERIES.len(),
         6,
         "a series is YYYYMM: {:?}",
-        *SCHEMA_SERIES
+        SCHEMA_SERIES
     );
 }
 
@@ -62,7 +62,7 @@ fn the_wire_spelling_has_no_v_prefix() {
 #[test]
 fn every_sql_default_matches_the_generated_schema_version() {
     let root = workspace_root();
-    let expected = format!("DEFAULT '{}'", *SCHEMA_VERSION);
+    let expected = format!("DEFAULT '{}'", SCHEMA_VERSION);
 
     let mut offenders = Vec::new();
     let mut checked = 0usize;
@@ -104,7 +104,7 @@ fn every_sql_default_matches_the_generated_schema_version() {
 /// CloudEvent that points at a schema release its payloads do not match.
 #[test]
 fn the_schema_url_tag_is_the_payload_version_with_a_v() {
-    let expected = format!("BO4E-Schemas/v{}/", *SCHEMA_VERSION);
+    let expected = format!("BO4E-Schemas/v{}/", SCHEMA_VERSION);
     assert!(
         mako_engine::erp::BO4E_V202607_BASE.contains(&expected),
         "the schema URL base points at a different release than rubo4e generates.\n  \
@@ -121,9 +121,9 @@ fn the_schema_url_tag_is_the_payload_version_with_a_v() {
 /// carrying the git tag's `v` is read rather than refused.
 #[test]
 fn readability_is_decided_by_the_series() {
-    let series = *SCHEMA_SERIES;
+    let series = SCHEMA_SERIES;
 
-    assert!(version_is_readable(*SCHEMA_VERSION));
+    assert!(version_is_readable(SCHEMA_VERSION));
     assert!(
         version_is_readable(&format!("{series}.9.9")),
         "a later patch inside the series is readable"

@@ -56,10 +56,26 @@ const REGISTRY: &[(&str, &str)] = &[
         "mako:kundenkategorie",
         "the operator's own customer classification",
     ),
+    (
+        "mako:malo_id",
+        "the MaLo a Sammelrechnung position settles — BO4E gives a Rechnungsposition no Marktlokation field",
+    ),
     ("mako:marktpartnercode", "the issuing Marktpartner's code"),
+    (
+        "mako:positionskategorie",
+        "the engine's PositionCategory for a Rechnungsposition (Commodity, Tax, Levy, Info, …)",
+    ),
+    (
+        "mako:positionstyp",
+        "the engine's primary tag for a Rechnungsposition (arbeitspreis, grundpreis, …)",
+    ),
     (
         "mako:preisvergleichsdaten",
         "§41 EnWG price-comparison block",
+    ),
+    (
+        "mako:rechtliche_grundlage",
+        "the § a Rechnungsposition is charged under, for the §147 AO / GoBD audit trail",
     ),
     (
         "mako:rechnungsart",

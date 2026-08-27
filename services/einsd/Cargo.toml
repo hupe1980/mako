@@ -22,6 +22,9 @@ mako-events = { workspace = true }
 mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
 billing      = { workspace = true }
 eeg-billing  = { path = "../../crates/eeg-billing", features = ["serde", "bo4e"] }
+# The BO4E outbound gate. A Gutschrift einsd assembles is the settlement's legal
+# document, so it crosses the same rules mako applies to a received one.
+mako-markt   = { workspace = true }
 rmcp         = { workspace = true }
 schemars     = { workspace = true }
 axum         = { version = "0.8" }

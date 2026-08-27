@@ -41,10 +41,8 @@ use pyo3::types::PyModule;
 /// another produce passes that mean nothing.
 #[pyfunction]
 fn bo4e_schema_version() -> String {
-    use rubo4e::Bo4eObject as _;
-    rubo4e::current::Marktlokation::default()
-        .schema_version()
-        .to_owned()
+    use rubo4e::Bo4eTyped as _;
+    rubo4e::current::Marktlokation::SCHEMA_VERSION.to_owned()
 }
 
 #[pymodule]

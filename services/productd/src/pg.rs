@@ -1261,7 +1261,7 @@ pub struct ComparisonFeedEntry {
     pub valid_from: Option<time::Date>,
     /// Product validity end (inclusive).  `null` = indefinitely valid.
     pub valid_to: Option<time::Date>,
-    /// Extracted price points from `tarifpreisblatt.tarifpreispositionen`.
+    /// Extracted price points from `tarifpreisblatt.tarifpreise`.
     pub preise: TarifPreise,
     /// Estimated annual supply cost in EUR **netto** (excl. MwSt) for
     /// `verbrauch_kwh`.  Includes Grundpreis + Arbeitspreis.

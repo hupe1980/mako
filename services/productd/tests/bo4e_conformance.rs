@@ -3,7 +3,7 @@
 //! mako's price-type vocabulary is a superset of BO4E's ten `Preistyp` values —
 //! it prices an EEG-Marktprämie, a HEMS optimisation event, an E-Mobility
 //! roaming fee, none of which the standard models. Written straight into
-//! `tarifpreispositionen[*].preistyp`, they make a document stamped
+//! `tarifpreise[*].preistyp`, they make a document stamped
 //! `_typ: "TARIFPREISBLATT"` carry price types that are not BO4E values.
 //!
 //! What that costs depends on the reader, and the lenient case is the *mild*
@@ -28,7 +28,7 @@ fn product(preistyp: &str) -> serde_json::Value {
         "_typ": "TARIFPREISBLATT",
         "bezeichnung": "Testtarif",
         "sparte": "STROM",
-        "tarifpreispositionen": [{
+        "tarifpreise": [{
             "preistyp": preistyp,
             "preisstaffeln": [{ "preis": "8.20" }]
         }]
@@ -64,12 +64,12 @@ fn a_stored_tarifpreisblatt_has_no_unknown_enums() {
 #[test]
 fn the_vocabulary_split_is_where_it_should_be() {
     let bo4e = normalize_tarifpreisblatt("STROM", product("GRUNDPREIS")).expect("accepted");
-    let pos = &bo4e["tarifpreispositionen"][0];
+    let pos = &bo4e["tarifpreise"][0];
     assert_eq!(pos["preistyp"], "GRUNDPREIS");
     assert_eq!(position_preistyp(pos), "GRUNDPREIS");
 
     let mako = normalize_tarifpreisblatt("STROM", product("EEG_MARKTPRAEMIE")).expect("accepted");
-    let pos = &mako["tarifpreispositionen"][0];
+    let pos = &mako["tarifpreise"][0];
     assert!(
         pos.get("preistyp").is_none(),
         "a mako price type must not occupy BO4E's enum field: {pos}"
@@ -89,7 +89,7 @@ fn normalisation_is_idempotent() {
     let twice = normalize_tarifpreisblatt("STROM", once.clone()).expect("accepted");
     assert_eq!(once, twice, "normalisation must be a fixpoint");
 
-    let attrs = twice["tarifpreispositionen"][0]["zusatzAttribute"]
+    let attrs = twice["tarifpreise"][0]["zusatzAttribute"]
         .as_array()
         .expect("attribute list");
     assert_eq!(attrs.len(), 1, "the mako attribute must not accumulate");

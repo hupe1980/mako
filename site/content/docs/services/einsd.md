@@ -1506,6 +1506,14 @@ category `E`) and persists it as a BO4E
 the credit against an actual document, not just an amount. Non-billable statuses
 (`no_data` / `price_missing` / `foerderung_beendet`) issue no Gutschrift.
 
+**The Gutschrift crosses the BO4E outbound gate before it is stored.**
+`eeg-billing` checks its own emissions in tests, but that covers the *shapes* the
+builder produces, not the *values* a settlement run supplies — the entitlement,
+the VAT status, the §§53b–54 levy layers — and every rule the gate runs is
+arithmetic over those. This is the document an Anlagenbetreiber is paid against.
+One that fails is dropped with a warning naming the defect and the settlement is
+stored without a document, the same degradation an assembly failure takes.
+
 ```json
 {
   "specversion": "1.0",

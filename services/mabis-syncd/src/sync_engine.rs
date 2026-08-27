@@ -1,7 +1,9 @@
 //! Core aggregation + submission engine for `mabis-syncd`.
 //!
 //! Orchestrates the full MaBiS Summenzeitreihe pipeline:
-//! 1. Discover MaLos in Bilanzierungsgebiet (edmd `/api/v1/billing-periods`, then `/api/v1/lastgang/{malo_id}`)
+//! 1. Discover MaLos in Bilanzierungsgebiet (edmd `/api/v1/billing-periods`, then
+//!    `/api/v1/energy/{malo_id}?direction=BEZUG` — the projected series, not the
+//!    `/lastgang` export)
 //! 2. Aggregate using `mako-mabis::SummenzeitreiheBuilder`
 //! 3. Build the MSCONS 13003 command payload for makod
 //! 4. Submit via makod command API

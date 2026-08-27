@@ -89,8 +89,8 @@ Content-Type: application/json
   "data": {
     "_typ": "TARIFPREISBLATT",
     "bezeichnung": "Strom Zuhause Classic 2026",
-    "gueltigkeit": { "startdatum": "2026-01-01" },
-    "tarifpreispositionen": [
+    "zeitlicheGueltigkeit": { "startdatum": "2026-01-01" },
+    "tarifpreise": [
       { "preistyp": "GRUNDPREIS",          "preisstaffeln": [{ "preis": "0.20" }] },
       { "preistyp": "ARBEITSPREIS_EINTARIF", "preisstaffeln": [{ "preis": "0.32" }] }
     ]
@@ -99,7 +99,8 @@ Content-Type: application/json
 ```
 
 `billingd` extracts `grundpreis_ct_per_day` (20 ct/day) and `arbeitspreis_ct_per_kwh`
-(32 ct/kWh) by traversing `data.tarifpreispositionen` keyed on `preistyp`.
+(32 ct/kWh) by traversing `data.tarifpreise` keyed on `preistyp`.
+
 
 ### Two vocabularies, one field — and why they are kept apart
 
@@ -276,9 +277,15 @@ curl -s "http://productd:9080/api/v1/comparison-feed/bo4e?sparte=STROM&kundentyp
       "registeranzahl": "Eintarif",
       "tariftyp": "SONDERTARIF",
       "tarifmerkmale": ["FESTPREIS"],
-      "energiemix": { "anteilErneuerbareEnergien": 100, "co2Emission": 0 },
+      "energiemix": {
+        "anteil": [
+          { "erzeugungsart": "WASSER", "anteilProzent": "60.0" },
+          { "erzeugungsart": "WIND",   "anteilProzent": "40.0" }
+        ],
+        "co2Emission": 0
+      },
       "zeitlicheGueltigkeit": { "startdatum": "2026-01-01" },
-      "vertragskonditionen": { "laufzeit": { "wert": 12, "einheit": "MONAT" } }
+      "vertragskonditionen": { "vertragslaufzeit": { "dauer": "P12M" } }
     }
   ]
 }

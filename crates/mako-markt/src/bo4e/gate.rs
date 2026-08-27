@@ -19,8 +19,9 @@
 //! # Outbound
 //!
 //! [`ensure_conformant`] runs stages 3 and 4 on a value mako has *built* — the
-//! first two are the compiler's job there. Every document mako emits crosses
-//! it, so mako never ships one it would refuse to accept.
+//! first two are the compiler's job there — plus a check that every field name
+//! is one BO4E defines, which belongs on this side only. Every document mako
+//! emits crosses it, so mako never ships one it would refuse to accept.
 //!
 //! # What this module is not
 //!
@@ -35,87 +36,14 @@ use serde::de::DeserializeOwned;
 use super::conformance::Bo4eConformance;
 use rubo4e::validation::{ValidationFailure, report_errors};
 
-/// The `_typ` discriminator a BO4E type carries on the wire.
+/// The `_typ` discriminator, read off the type.
 ///
-/// Read off the type itself rather than written down, so a schema bump that
-/// renames a BO changes this without a source edit here and there is no second
-/// spelling to drift.
-pub trait Bo4eTyped {
-    /// The wire value of this type's `_typ` field (`"MARKTLOKATION"`, `"BETRAG"`, …).
-    fn typ_wire() -> &'static str;
-}
-
-/// BOs: straight from [`Bo4eObject::TYP_WIRE`](rubo4e::Bo4eObject::TYP_WIRE).
-///
-/// A constant, so no value has to be constructed to read it — which matters
-/// because a `T: Default` bound silently excludes the two BOs the schema marks
-/// `required`: `Lastgang` and `Tarif` derive no `Default`.
-macro_rules! bo4e_typed_bo {
-    ($($t:ty),* $(,)?) => { $(
-        impl Bo4eTyped for $t {
-            fn typ_wire() -> &'static str {
-                <$t as rubo4e::Bo4eObject>::TYP_WIRE
-            }
-        }
-    )* };
-}
-
-/// COMs: from the discriminant `Default` stamps.
-///
-/// `Bo4eObject` is sealed to the 35 Geschäftsobjekte, so a COM has no
-/// `TYP_WIRE` to read. Every COM does derive `Default`, and 0.11 fixed the
-/// defect where that `Default` left `typ` unset — BO4E pins each COM's
-/// discriminant with a JSON Schema `const`, so the reference implementation
-/// stamps it on every component and a Rust-built one was distinguishable from
-/// one produced anywhere else.
-macro_rules! bo4e_typed_com {
-    ($($t:ty),* $(,)?) => { $(
-        impl Bo4eTyped for $t {
-            fn typ_wire() -> &'static str {
-                <$t as Default>::default()
-                    .typ
-                    .expect("rubo4e stamps `typ` on a COM's Default since 0.11")
-                    .as_wire()
-            }
-        }
-    )* };
-}
-
-bo4e_typed_bo![
-    rubo4e::current::Angebot,
-    rubo4e::current::Bilanzierung,
-    rubo4e::current::Energiemenge,
-    rubo4e::current::Fremdkosten,
-    rubo4e::current::Geraet,
-    rubo4e::current::Geschaeftspartner,
-    rubo4e::current::Kosten,
-    rubo4e::current::Lastgang,
-    rubo4e::current::Marktlokation,
-    rubo4e::current::Messlokation,
-    rubo4e::current::Netzlokation,
-    rubo4e::current::Person,
-    rubo4e::current::PreisblattMessung,
-    rubo4e::current::PreisblattNetznutzung,
-    rubo4e::current::Rechnung,
-    rubo4e::current::Standorteigenschaften,
-    rubo4e::current::SteuerbareRessource,
-    rubo4e::current::Tarifinfo,
-    rubo4e::current::Tarifpreisblatt,
-    rubo4e::current::TechnischeRessource,
-    rubo4e::current::Vertrag,
-    rubo4e::current::Zaehler,
-    rubo4e::current::Zaehlzeitdefinition,
-    rubo4e::current::Zeitreihe,
-];
-
-bo4e_typed_com![
-    rubo4e::current::Energiemix,
-    rubo4e::current::LastvariablePreisposition,
-    rubo4e::current::Preisgarantie,
-    rubo4e::current::Vorauszahlung,
-    rubo4e::current::Zahlungsinformation,
-    rubo4e::current::ZeitvariablePreisposition,
-];
+/// `rubo4e`'s own trait, re-exported. It spans Geschäftsobjekte **and**
+/// components, so the gate takes one bound over "anything BO4E stamps a `_typ`
+/// on" and reads `T::TYP_WIRE` without constructing a value — which is what
+/// admits the types the schema marks `required`, since those derive no
+/// `Default`.
+pub use rubo4e::Bo4eTyped;
 
 /// Why a BO4E payload was refused.
 ///
@@ -171,6 +99,26 @@ pub enum Bo4eRejection {
         /// Every rule the document broke, each at its JSON-path.
         failures: Vec<ValidationFailure>,
     },
+    /// The document carries fields this BO4E schema version does not define.
+    ///
+    /// **Outbound only.** Refusing an unknown field on a *received* document
+    /// would throw away the forward compatibility `_additional` exists for — a
+    /// counterparty one BO4E release ahead is to be read, not rejected. On a
+    /// document mako authored the same field can only be a mistake, and the
+    /// mistake it usually is is a misspelling that a decode round-trip cannot
+    /// see: serde ignores a key no field declares, `rubo4e` files it under
+    /// `_additional`, and the field it was meant to fill stays `None`.
+    #[error(
+        "{typ} carries {} field(s) BO4E does not define at: {}",
+        paths.len(),
+        paths.join(", ")
+    )]
+    UnknownField {
+        /// The type that was checked.
+        typ: &'static str,
+        /// JSON-paths of every field that landed in extension data.
+        paths: Vec<String>,
+    },
 }
 
 impl Bo4eRejection {
@@ -183,6 +131,7 @@ impl Bo4eRejection {
             Self::Schema { .. } => "bo4e.schema",
             Self::UnknownEnum { .. } => "bo4e.unknown_enum",
             Self::Rule { .. } => "bo4e.rule",
+            Self::UnknownField { .. } => "bo4e.unknown_field",
         }
     }
 
@@ -217,7 +166,7 @@ impl Bo4eRejection {
                 obj.insert("found_typ".into(), found.clone().into());
             }
             Self::Schema { .. } => {}
-            Self::UnknownEnum { paths, .. } => {
+            Self::UnknownEnum { paths, .. } | Self::UnknownField { paths, .. } => {
                 obj.insert("paths".into(), paths.clone().into());
             }
             Self::Rule { failures, .. } => {
@@ -252,7 +201,7 @@ impl Bo4eRejection {
 pub fn decode<T>(data: serde_json::Value) -> Result<T, Bo4eRejection>
 where
     T: DeserializeOwned + Bo4eTyped + Bo4eStrict + Bo4eConformance,
-    T: rubo4e::prelude::Validate<Context = ()>,
+    T: rubo4e::prelude::Validate<Context = ()> + rubo4e::json::Bo4eJsonExt,
 {
     let typed: T = decode_structural(data)?;
     let failures = rule_failures(&typed);
@@ -260,7 +209,7 @@ where
         Ok(typed)
     } else {
         Err(Bo4eRejection::Rule {
-            typ: T::typ_wire(),
+            typ: T::TYP_WIRE,
             failures,
         })
     }
@@ -289,43 +238,6 @@ where
     failures
 }
 
-/// Decode a value nested inside a BO whose `_typ` is already settled.
-///
-/// A COM read out of the extension map of the BO that carried it — the key it
-/// was filed under already named it, and producers do not reliably stamp `_typ`
-/// on a nested COM.
-///
-/// **Stage 1 is relaxed by exactly one step: `_typ` may be absent; a wrong one
-/// is still refused.** Nothing else catches a wrong one — `ensure_known_enums`
-/// walks the value's *fields* and never reaches `typ`, so
-/// `{"_typ": "MARKTLOKATION"}` would decode to `typ: Some(Unknown)` and
-/// serialise back out as `"UNKNOWN"`.
-///
-/// # Errors
-///
-/// [`Bo4eRejection`], naming the stage that refused.
-pub fn decode_nested<T>(data: serde_json::Value) -> Result<T, Bo4eRejection>
-where
-    T: DeserializeOwned + Bo4eTyped + Bo4eStrict + Bo4eConformance,
-    T: rubo4e::prelude::Validate<Context = ()>,
-{
-    let expected = T::typ_wire();
-    if let Some(found) = data.get("_typ").and_then(serde_json::Value::as_str)
-        && !found.eq_ignore_ascii_case(expected)
-    {
-        return Err(Bo4eRejection::Discriminator {
-            expected,
-            found: found.to_owned(),
-        });
-    }
-    let typed: T = serde_json::from_value(data).map_err(|e| Bo4eRejection::Schema {
-        typ: expected,
-        detail: e.to_string(),
-    })?;
-    ensure_conformant(&typed)?;
-    Ok(typed)
-}
-
 /// Decode a market document a counterparty sent, separating what makes it
 /// unreadable from what makes it wrong.
 ///
@@ -348,7 +260,7 @@ pub fn decode_received<T>(
 ) -> Result<(T, Vec<ValidationFailure>), Bo4eRejection>
 where
     T: DeserializeOwned + Bo4eTyped + Bo4eStrict + Bo4eConformance,
-    T: rubo4e::prelude::Validate<Context = ()>,
+    T: rubo4e::prelude::Validate<Context = ()> + rubo4e::json::Bo4eJsonExt,
 {
     let typed: T = decode_structural(data)?;
     let failures = rule_failures(&typed);
@@ -357,11 +269,19 @@ where
 
 /// Stages 1–3: the payload is the BO it claims, types, and holds no
 /// out-of-schema enum. Shared by [`decode`] and [`decode_received`].
+///
+/// `_typ` is injected when absent rather than demanded. That covers the nested
+/// case too — a COM read out of the extension map of the BO that carried it,
+/// where the key already named it and producers do not reliably stamp `_typ`.
+/// A *wrong* `_typ` is still refused: nothing downstream catches one, because
+/// `ensure_known_enums` walks the value's fields and never reaches `typ`, so
+/// `{"_typ": "MARKTLOKATION"}` on a COM would decode to `typ: Some(Unknown)`
+/// and serialise back out as `"UNKNOWN"`.
 fn decode_structural<T>(data: serde_json::Value) -> Result<T, Bo4eRejection>
 where
-    T: DeserializeOwned + Bo4eTyped + Bo4eStrict,
+    T: DeserializeOwned + Bo4eTyped + Bo4eStrict + rubo4e::json::Bo4eJsonExt,
 {
-    let expected = T::typ_wire();
+    let expected = T::TYP_WIRE;
     let data = match data {
         serde_json::Value::Object(mut obj) => {
             match obj.get("_typ").and_then(serde_json::Value::as_str) {
@@ -380,7 +300,17 @@ where
         }
         other => other,
     };
-    let typed: T = serde_json::from_value(data).map_err(|e| Bo4eRejection::Schema {
+    // `T::from_json_value`, not `serde_json::from_value`: the payload is
+    // untrusted, and rubo4e's own entry point enforces `DEFAULT_MAX_NESTING_DEPTH`
+    // where plain serde enforces nothing. The depth guard is the crate's
+    // documented protection and the gate was the one place bypassing it.
+    //
+    // **Not** `from_json_value_hardened` with `max_extension_field_count(0)`.
+    // That would refuse a field this schema version does not define, which on an
+    // *inbound* document is the forward compatibility `_additional` exists for —
+    // a counterparty one BO4E release ahead is to be read, not rejected. The
+    // field check belongs on the outbound path; see `ensure_conformant`.
+    let typed: T = T::from_json_value(data).map_err(|e| Bo4eRejection::Schema {
         typ: expected,
         detail: e.to_string(),
     })?;
@@ -391,26 +321,96 @@ where
     Ok(typed)
 }
 
-/// Run the value-level stages (3 and 4) on an already-typed BO4E value.
+/// A BO4E value mako built could not be serialised.
 ///
-/// This is the outbound gate: a document mako built is type-correct by
-/// construction, but nothing stops it carrying an enum some other code path set
-/// to `Unknown`, or totals that do not add up. Every emission path runs it, so
-/// mako never sends a document it would refuse to receive.
+/// Carries the type's own `_typ`, read off [`Bo4eTyped`] rather than passed in,
+/// so the message cannot name a different BO than the one that failed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("the validated BO4E {typ} is not serialisable: {detail}")]
+pub struct Bo4eSerialiseError {
+    /// The `_typ` of the value that failed.
+    pub typ: &'static str,
+    /// `serde_json`'s own message.
+    pub detail: String,
+}
+
+/// Serialise a BO4E value mako built into its canonical JSON form, or fail.
+///
+/// # Why this exists rather than `serde_json::to_value(&bo)` with a fallback
+///
+/// The obvious spellings are both wrong, and neither fails a build:
+///
+/// - **`.unwrap_or_default()`** yields `Value::Null`. `PostgreSQL` accepts the
+///   JSON literal `null` into a `JSONB NOT NULL` column — SQL `NULL` and JSON
+///   `null` are different things — so a validated document is replaced by
+///   `null` and the write *succeeds*. In a feed served to consumers it is a
+///   null entry where a tariff should be, counted in the total like a real one.
+/// - **`.unwrap_or(original.clone())`** is worse: it stores the caller's own
+///   unvalidated input under a line that claims to canonicalise it, silently
+///   undoing every stage the gate just ran.
+///
+/// Failure is not reachable for the generated BO4E types — no non-string map
+/// keys, no non-finite floats. That is exactly why it should be *stated*: if it
+/// ever becomes reachable, the write must not happen.
 ///
 /// # Errors
 ///
-/// [`Bo4eRejection::UnknownEnum`] or [`Bo4eRejection::Rule`].
+/// [`Bo4eSerialiseError`], naming the type and `serde_json`'s message.
+pub fn to_canonical_json<T>(value: &T) -> Result<serde_json::Value, Bo4eSerialiseError>
+where
+    T: Bo4eTyped + serde::Serialize,
+{
+    serde_json::to_value(value).map_err(|e| Bo4eSerialiseError {
+        typ: T::TYP_WIRE,
+        detail: e.to_string(),
+    })
+}
+
+/// Run the value-level stages on an already-typed BO4E value.
+///
+/// This is the outbound gate: a document mako built is type-correct by
+/// construction, but nothing stops it carrying an enum some other code path set
+/// to `Unknown`, a field name no BO4E schema declares, or totals that do not add
+/// up. Every emission path runs it, so mako never sends a document it would
+/// refuse to receive.
+///
+/// # The field check is outbound-only, and deliberately
+///
+/// [`ensure_known_enums`](Bo4eStrict::ensure_known_enums) finds out-of-schema
+/// **values**; [`ensure_no_extension_data`](rubo4e::json::Bo4eExtensions::ensure_no_extension_data)
+/// finds out-of-schema **fields**. Neither sees the other's finding, and only
+/// the first belongs on an inbound path: refusing an unknown *field* from a
+/// counterparty throws away the forward compatibility `_additional` exists for,
+/// and a sender one BO4E release ahead is to be read rather than rejected.
+///
+/// On a document mako authored the calculation inverts. An undefined field can
+/// only be a mistake there, and the mistake it usually is — a misspelled or
+/// renamed key — is invisible to every other check: serde ignores a key no field
+/// declares, `rubo4e` files it under `_additional`, and the field it was meant
+/// to fill reads back `None`. mako's own extensions are unaffected, because they
+/// ride in `zusatzAttribute`, which *is* a BO4E field (`mako:<snake_case>`, one
+/// registry, `xtask check-bo4e-attributes`).
+///
+/// # Errors
+///
+/// [`Bo4eRejection::UnknownEnum`], [`Bo4eRejection::UnknownField`] or
+/// [`Bo4eRejection::Rule`].
 pub fn ensure_conformant<T>(value: &T) -> Result<(), Bo4eRejection>
 where
-    T: Bo4eTyped + Bo4eStrict + Bo4eConformance,
+    T: Bo4eTyped + Bo4eStrict + Bo4eConformance + rubo4e::json::Bo4eExtensions,
     T: rubo4e::prelude::Validate<Context = ()>,
 {
-    let typ = T::typ_wire();
+    let typ = T::TYP_WIRE;
     Bo4eStrict::ensure_known_enums(value).map_err(|e| Bo4eRejection::UnknownEnum {
         typ,
         paths: e.paths,
     })?;
+    value
+        .ensure_no_extension_data()
+        .map_err(|e| Bo4eRejection::UnknownField {
+            typ,
+            paths: e.paths,
+        })?;
     // Outbound also runs the emission rules: BO4E does not state them, and mako
     // controls this document. See `Bo4eConformance::emission_rules`.
     let mut failures = rule_failures(value);
@@ -431,9 +431,9 @@ mod tests {
     /// The discriminator comes from the type, not from a literal that can rot.
     #[test]
     fn the_discriminator_is_the_types_own() {
-        assert_eq!(Marktlokation::typ_wire(), "MARKTLOKATION");
-        assert_eq!(Zaehler::typ_wire(), "ZAEHLER");
-        assert_eq!(rubo4e::current::Energiemix::typ_wire(), "ENERGIEMIX");
+        assert_eq!(Marktlokation::TYP_WIRE, "MARKTLOKATION");
+        assert_eq!(Zaehler::TYP_WIRE, "ZAEHLER");
+        assert_eq!(rubo4e::current::Energiemix::TYP_WIRE, "ENERGIEMIX");
     }
 
     #[test]
@@ -465,6 +465,37 @@ mod tests {
             .expect_err("STROMM is not a Sparte");
         assert_eq!(err.code(), "bo4e.unknown_enum");
         assert_eq!(err.to_json()["paths"], serde_json::json!(["sparte"]));
+    }
+
+    /// The gate decodes through `rubo4e`'s own entry point, which enforces the
+    /// nesting-depth cap. Plain `serde_json::from_value` enforces nothing, and
+    /// the gate — the one place in mako that reads untrusted BO4E — was
+    /// bypassing the crate's documented protection.
+    #[test]
+    fn a_pathologically_nested_payload_is_refused() {
+        // Far past `DEFAULT_MAX_NESTING_DEPTH` (128). Built under a key
+        // `Marktlokation` does not declare, so nothing but the depth guard can
+        // refuse it: extension data is preserved by design.
+        let mut deep = serde_json::json!(null);
+        for _ in 0..600 {
+            deep = serde_json::json!([deep]);
+        }
+        let err = decode::<Marktlokation>(serde_json::json!({ "tief": deep }))
+            .expect_err("600 levels is past the cap");
+        assert_eq!(err.code(), "bo4e.schema");
+    }
+
+    /// …and an ordinarily-nested document still decodes, so the guard is a cap
+    /// rather than a ban on nesting.
+    #[test]
+    fn an_ordinary_payload_is_not_caught_by_the_depth_cap() {
+        assert!(
+            decode::<Marktlokation>(serde_json::json!({
+                "marktlokationsId": "51238696781",
+                "lokationsadresse": { "strasse": "Musterstraße", "hausnummer": "1" }
+            }))
+            .is_ok()
+        );
     }
 
     #[test]
@@ -546,17 +577,23 @@ mod tests {
         assert_eq!(wert(&as_string), wert(&as_number));
     }
 
-    /// `decode_nested` relaxes the discriminator stage by exactly one step.
-    ///
-    /// Absent is fine — the key the value was filed under already named it, and
-    /// producers do not reliably stamp `_typ` on a nested COM.
+    /// A nested COM may omit its `_typ` — the key it was filed under already
+    /// named it, and producers do not reliably stamp `_typ` on one. The gate
+    /// injects it, so what comes back out carries the discriminant every other
+    /// BO4E implementation writes.
     #[test]
     fn a_nested_value_may_omit_its_typ() {
         use rubo4e::current::ZeitvariablePreisposition;
         let zvp: ZeitvariablePreisposition =
-            super::decode_nested(serde_json::json!({ "zaehlzeitregister": "HT" }))
+            decode(serde_json::json!({ "zaehlzeitregister": "HT" }))
                 .expect("a nested COM need not stamp _typ");
         assert_eq!(zvp.zaehlzeitregister.as_deref(), Some("HT"));
+        assert_eq!(
+            zvp.typ,
+            Some(rubo4e::current::ComTyp::ZeitvariablePreisposition),
+            "the gate injects the discriminant rather than leaving the COM \
+             distinguishable from one the reference implementation produced"
+        );
     }
 
     /// …and *wrong* is not. Nothing downstream catches it:
@@ -566,12 +603,37 @@ mod tests {
     #[test]
     fn a_nested_value_may_not_misname_itself() {
         use rubo4e::current::ZeitvariablePreisposition;
-        let err = super::decode_nested::<ZeitvariablePreisposition>(
-            serde_json::json!({ "_typ": "MARKTLOKATION" }),
-        )
-        .expect_err("a Marktlokation is not a ZeitvariablePreisposition");
+        let err =
+            decode::<ZeitvariablePreisposition>(serde_json::json!({ "_typ": "MARKTLOKATION" }))
+                .expect_err("a Marktlokation is not a ZeitvariablePreisposition");
         assert_eq!(err.code(), "bo4e.discriminator");
         assert_eq!(err.to_json()["found_typ"], "MARKTLOKATION");
+    }
+
+    /// The canonical serialisation names the BO from the type, so the message
+    /// cannot drift from the value that failed — and it works for a COM as
+    /// well as a BO, which is what `Bo4eTyped` spanning both buys.
+    #[test]
+    fn canonical_serialisation_round_trips_and_names_its_type() {
+        let malo = Marktlokation {
+            marktlokations_id: Some(
+                rubo4e::identifiers::MaloId::new("51238696781").expect("a real MaLo"),
+            ),
+            ..Default::default()
+        };
+        let json = super::to_canonical_json(&malo).expect("a generated BO always serialises");
+        assert_eq!(json["_typ"], "MARKTLOKATION");
+        assert_eq!(json["marktlokationsId"], "51238696781");
+
+        // A COM goes through the same call — before 0.12 there was no bound
+        // that admitted both.
+        let json = super::to_canonical_json(&Betrag {
+            wert: Some(dec!(1.00)),
+            waehrung: Some(Waehrungscode::Eur),
+            ..Default::default()
+        })
+        .expect("a generated COM always serialises");
+        assert_eq!(json["_typ"], "BETRAG");
     }
 
     /// Outbound: a document mako built is type-correct by construction, and
@@ -603,11 +665,11 @@ mod tests {
     fn every_gated_discriminator_is_a_schema_value() {
         use rubo4e::current::{BoTyp, ComTyp};
         for wire in [
-            Marktlokation::typ_wire(),
-            Zaehler::typ_wire(),
-            Rechnung::typ_wire(),
-            rubo4e::current::Energiemix::typ_wire(),
-            rubo4e::current::Zahlungsinformation::typ_wire(),
+            Marktlokation::TYP_WIRE,
+            Zaehler::TYP_WIRE,
+            Rechnung::TYP_WIRE,
+            rubo4e::current::Energiemix::TYP_WIRE,
+            rubo4e::current::Zahlungsinformation::TYP_WIRE,
         ] {
             assert!(
                 BoTyp::from_wire(wire).is_ok() || ComTyp::from_wire(wire).is_ok(),

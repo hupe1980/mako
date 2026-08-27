@@ -927,6 +927,19 @@ own number from the tenant's `ST` series), enqueues
 `de.billing.rechnung.erstellt` with `is_correction: true` so `accountingd`
 books the CREDIT, and advances the original's `outcome` to `cancelled`.
 
+**The correction crosses the BO4E outbound gate before it is booked.** The
+original `Invoice` struct is gone by the time a correction is issued, so the
+negation runs over the *stored JSON* — the three totals, `zuZahlen`, each
+`Steuerbetrag`, each `Vorauszahlung`, and every position's `gesamtpreis` and
+`einzelpreis`, each addressed by name. A monetary field the negation missed
+would produce a document whose totals disagree, which no receiver can book, so
+it is checked with
+[the same `ensure_conformant`](@/docs/architecture/domain-model.md#the-bo4e-gate)
+the ordinary invoice path uses. The §41e VPP-Gutschrift crosses it for the same
+reason: it is assembled from dispatch credits and the aggregator contract's VAT
+rate, so no fixture covers its arithmetic, and `accountingd` books a CREDIT off
+the event it publishes.
+
 **Storno und Neuberechnung.** Cancelling releases the period: it drops out of
 `br_unique_original`, so the corrected amounts are billed by calling
 `POST /api/v1/billing/{malo_id}/calculate` again for the same window, which

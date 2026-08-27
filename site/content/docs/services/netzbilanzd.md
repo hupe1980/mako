@@ -652,10 +652,43 @@ following month**.
 | `PUT` | `/api/v1/redispatch/kostenblatt/{activation_id}` | Create or update a record |
 | `GET` | `/api/v1/redispatch/kostenblatt/{activation_id}` | Every TechnischeRessource under the activation |
 | `GET` | `/api/v1/redispatch/kostenblatt?year=&month=&status=` | List a month |
-| `POST` | `/api/v1/redispatch/kostenblatt/{activation_id}/compute` | Quantify from the `edmd` Lastgang |
+| `POST` | `/api/v1/redispatch/kostenblatt/{activation_id}/compute` | Quantify from `edmd`'s projected feed-in series |
 | `GET` | `/api/v1/redispatch/kostenblatt/gaps/{year}/{month}` | Activations registered but never quantified |
 | `POST` | `/api/v1/redispatch/kostenblatt/submit/{year}/{month}` | Submit the month's pending records |
 | `POST` | `/api/v1/redispatch/verguetung/{activation_id}/compute` | §13a Abs. 2 EnWG compensation |
+
+### The Kostenblatt is built typed
+
+The stored `kosten_json` is a BO4E `Kosten` with a `Kostenblock`, a
+`Kostenposition` and its `Menge`, `Preis` and `Betrag` — seven objects the ÜNB
+settles against. It is constructed as a struct and serialised, never assembled
+as JSON: a struct literal fails to compile on a field rename, whereas a JSON
+literal round-tripped through `from_value::<Kosten>()` proves nothing, because
+`rubo4e` absorbs an unknown key into `_additional` and the decode still returns
+`Ok`. `_typ` is stamped by `rubo4e` on all four nested components, and the value
+crosses [the outbound gate](@/docs/architecture/domain-model.md#the-bo4e-gate)
+before it is persisted.
+
+### The dispatched energy comes from the projected series
+
+The quantity the ÜNB is invoiced for is read from `edmd`'s
+`GET /api/v1/energy?direction=EINSPEISUNG` — the canonical projected series, one
+entry per interval in one direction. Both callers settle lost *generation*: the
+Kostenblatt prices the curtailed energy, and §13a Abs. 2 Ausfallarbeit is by
+definition what the resource would have produced.
+
+`GET /api/v1/lastgang` is the BO4E **export** and is the wrong input to a
+figure: one object per register, both directions, every quality, non-kWh
+registers included. Folding it back into one number *is* the register
+projection, and doing it here would sum the grid **draw** into a figure that
+means feed-in, count a total register (`1-0:1.8.0`) on top of the tariff
+registers that already cover the same energy, and keep qualities § 60 Abs. 2
+MsbG excludes from settlement.
+
+`coverage_pct` arrives with the projection, so a window `edmd` covers only in
+part is a fact the caller can act on rather than a smaller number indistinguishable
+from a small dispatch. It is logged; the figure is still produced, because the
+resource was curtailed for the part that is there.
 
 ### Where the energy comes from
 
@@ -663,11 +696,10 @@ following month**.
 `dispatch_source`:
 
 1. `manual_override` — a verified operator figure, when supplied;
-2. `lastgang_sum` — the `edmd` Lastgang summed over the **exact** activation window, half-open
-   `[start, end)`, with each interval's own UTC offset honoured (`11:00:00+01:00` sums as
-   10:00 UTC). Reading the offset away shifted a German-local series by an hour, which on a
-   quarter-hour activation selects entirely the wrong intervals;
-3. `billing_period` — the monthly aggregate, only when no Lastgang exists.
+2. `lastgang_sum` — `edmd`'s projected feed-in series
+   (`/api/v1/energy?direction=EINSPEISUNG`) summed over the **exact** activation window,
+   half-open `[start, end)`;
+3. `billing_period` — the monthly aggregate, only when no series exists.
 
 **Check `dispatch_source` on the result.** For a 15-minute activation the monthly aggregate
 is wrong by roughly three orders of magnitude — 2 500 kWh/month is not 2.5 kWh/quarter-hour.
@@ -685,10 +717,10 @@ different figures for the same activation:
 
 | `abwicklung` | Counterfactual | Ausfallarbeit source |
 |---|---|---|
-| `DULDUNGSFALL` | The NB steered the resource, so what the plant would have produced was never transmitted | the measured `edmd` Lastgang over the window |
+| `DULDUNGSFALL` | The NB steered the resource, so what the plant would have produced was never transmitted | the measured `edmd` feed-in series over the window |
 | `AUFFORDERUNGSFALL` | The EIV steered to a transmitted schedule, and that schedule *is* the counterfactual | `ausfallarbeit_kwh_override` from that schedule — **required**; the request is refused `422` without it |
 
-Using the Lastgang for an Aufforderungsfall settles against what happened rather than against
+Using the measured series for an Aufforderungsfall settles against what happened rather than against
 what was instructed — a money error in whichever direction the plant deviated, and one
 nothing downstream can detect. The chosen basis travels into the result and its calculation
 trace, so an audit can see which counterfactual a figure rests on.

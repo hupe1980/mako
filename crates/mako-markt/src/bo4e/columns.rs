@@ -30,7 +30,12 @@ pub struct MaloShadowColumns {
     /// `Marktlokation.netzebene` — BO4E `Netzebene` wire value
     /// (`NSP`/`MSP`/`HSP`/`HSS`/`…_UMSP` Strom, `HD`/`MD`/`ND` Gas).
     pub netzebene: Option<&'static str>,
-    /// `Marktlokation.bilanzierungsgebiet` — Bilanzierungsgebiet EIC.
+    /// `Marktlokation.bilanzierungsgebiet` — „Bilanzierungsgebiet, dem das
+    /// Netzgebiet zugeordnet ist".
+    ///
+    /// A plain `String` in BO4E, unlike `Standorteigenschaften`'s
+    /// `bilanzierungsgebietEic`, which is a validated identifier. Nothing here
+    /// checks it is an EIC, because BO4E does not say it is one.
     pub bilanzierungsgebiet: Option<String>,
     /// `Marktlokation.gasqualitaet` — BO4E `Gasqualitaet` (`H_GAS`/`L_GAS`).
     pub gasqualitaet: Option<&'static str>,
@@ -43,6 +48,11 @@ pub struct MaloShadowColumns {
     /// `Marktlokation.bilanzierungsmethode` — BO4E `Bilanzierungsmethode`.
     pub bilanzierungsmethode: Option<&'static str>,
     /// `Marktlokation.regelzone` — Regelzone EIC (ÜNB assignment).
+    ///
+    /// On a `Marktlokation` this field really is the code — BO4E documents it
+    /// „für Strom. Code vom EIC" and rubo4e types it `EicCode`. The homonym on
+    /// `StandorteigenschaftenStrom` is the Regelzone's *name*; see
+    /// [`MeloShadowColumns::regelzone`].
     pub regelzone: Option<String>,
     /// `Marktlokation.lokationsbuendelObjektcode`.
     pub lokationsbuendel_objektcode: Option<String>,
@@ -77,7 +87,13 @@ pub struct MeloShadowColumns {
     pub netzebene_messung: Option<&'static str>,
     /// `Messlokation.lokationsbuendelObjektcode`.
     pub lokationsbuendel_objektcode: Option<String>,
-    /// Regelzone EIC from `standorteigenschaften.eigenschaftenStrom[0].regelzone`.
+    /// Regelzone EIC from `standorteigenschaften.eigenschaftenStrom[0].regelzoneEic`.
+    ///
+    /// **`regelzoneEic`, not `regelzone`.** BO4E ships both and they are
+    /// different things: `regelzone` is „Der Name der Regelzone" (a `String`),
+    /// `regelzoneEic` is „De EIC-Nummer der Regelzone" (BO4E's own typo).
+    /// Both render through `ToString`, so reading the wrong one compiles and
+    /// quietly stores a name in a column that is joined on as a code.
     pub regelzone: Option<String>,
     /// The `Standorteigenschaften` extension, re-serialised from its typed form.
     pub standorteigenschaften: Option<serde_json::Value>,
@@ -107,10 +123,13 @@ impl MeloShadowColumns {
             match melo.extension_data().get("standorteigenschaften") {
                 None => (None, None),
                 Some(raw) => {
-                    // The same gate every BO4E payload crosses, minus the `_typ`
-                    // stage: the key in the extension map already named the BO,
-                    // and producers do not reliably stamp `_typ` on a nested one.
-                    let typed: Standorteigenschaften = super::gate::decode_nested(raw.clone())
+                    // The same gate every BO4E payload crosses. The key in the
+                    // extension map already named the BO and producers do not
+                    // reliably stamp `_typ` on a nested one, so the gate injects
+                    // it — which is what puts the discriminant on the JSON
+                    // stored below, where BO4E and every other implementation
+                    // expect one.
+                    let typed: Standorteigenschaften = super::gate::decode(raw.clone())
                         .map_err(|e| StandorteigenschaftenError(e.to_string()))?;
                     // `regelzoneEic`, not `regelzone`. BO4E ships both and they
                     // are different things: `regelzone` is „Der Name der
@@ -193,7 +212,7 @@ pub fn geraet_typ(g: &rubo4e::current::Geraet) -> Option<&'static str> {
 /// `ValidationError`) refuse outright. The lenient reading is the mild case.
 pub const MAKO_PREISTYP_ATTRIBUT: &str = "mako:preistyp";
 
-/// Read the effective price type of one `tarifpreispositionen` entry.
+/// Read the effective price type of one `tarifpreise` entry.
 ///
 /// Checks the BO4E `preistyp` first, then the [`MAKO_PREISTYP_ATTRIBUT`]
 /// `ZusatzAttribut`. Returns `""` when neither is present.
@@ -362,6 +381,92 @@ mod tests {
             MaloShadowColumns::from_marktlokation(&Marktlokation::default()),
             MaloShadowColumns::default()
         );
+    }
+}
+
+/// The `standorteigenschaften` extension: the one column mako reads out of a
+/// nested BO rather than off a typed field.
+///
+/// Two things can go wrong here and neither fails to compile: reading the
+/// Regelzone's *name* into a column joined on as a *code*, and storing a nested
+/// BO with no `_typ`.
+#[cfg(test)]
+mod standorteigenschaften_tests {
+    use super::MeloShadowColumns;
+    use rubo4e::current::Messlokation;
+
+    /// A `Messlokation` carrying `standorteigenschaften` in its extension map.
+    fn melo_with(standorteigenschaften: &serde_json::Value) -> Messlokation {
+        serde_json::from_value(serde_json::json!({
+            "messlokationsId": "DE0123456789012345678901234567890",
+            "standorteigenschaften": standorteigenschaften,
+        }))
+        .expect("a Messlokation with an extension field")
+    }
+
+    /// The **code**, never the name. BO4E ships `regelzone` („Der Name der
+    /// Regelzone") beside `regelzoneEic`, both render through `ToString`, and
+    /// this column is joined on to map a `MeLo` to its ÜNB — so picking the
+    /// wrong one compiles and quietly stores a name where a code is expected.
+    #[test]
+    fn the_regelzone_column_holds_the_eic_and_not_the_name() {
+        let cols = MeloShadowColumns::from_messlokation(&melo_with(&serde_json::json!({
+            "eigenschaftenStrom": [{
+                "regelzone":    "TenneT TSO GmbH",
+                "regelzoneEic": "10YDE-EON------1",
+            }],
+        })))
+        .expect("a well-formed Standorteigenschaften");
+
+        assert_eq!(cols.regelzone.as_deref(), Some("10YDE-EON------1"));
+    }
+
+    /// A Regelzone stating only its name yields no column rather than the name.
+    #[test]
+    fn a_name_without_a_code_yields_no_regelzone() {
+        let cols = MeloShadowColumns::from_messlokation(&melo_with(&serde_json::json!({
+            "eigenschaftenStrom": [{ "regelzone": "TenneT TSO GmbH" }],
+        })))
+        .expect("a well-formed Standorteigenschaften");
+
+        assert_eq!(cols.regelzone, None);
+    }
+
+    /// The stored JSON carries `_typ`. BO4E pins every schema's discriminant
+    /// with a `const` and the reference implementation stamps it on everything
+    /// it emits, so a nested BO stored without one is distinguishable from one
+    /// produced anywhere else in the ecosystem.
+    #[test]
+    fn the_stored_extension_carries_its_discriminant() {
+        let cols = MeloShadowColumns::from_messlokation(&melo_with(&serde_json::json!({
+            "eigenschaftenStrom": [{ "regelzoneEic": "10YDE-EON------1" }],
+        })))
+        .expect("a well-formed Standorteigenschaften");
+
+        let stored = cols.standorteigenschaften.expect("the extension is stored");
+        assert_eq!(stored["_typ"], "STANDORTEIGENSCHAFTEN");
+    }
+
+    /// The gate runs in full: an out-of-schema enum anywhere below is refused,
+    /// so a malformed extension is a rejected write and not a stored typo.
+    #[test]
+    fn an_out_of_schema_value_is_refused() {
+        let err = MeloShadowColumns::from_messlokation(&melo_with(&serde_json::json!({
+            "eigenschaftenGas": [{ "netzebene": "NIEDERDRUCKK" }],
+        })))
+        .expect_err("NIEDERDRUCKK is not a Netzebene");
+
+        assert!(err.to_string().contains("Standorteigenschaften"), "{err}");
+    }
+
+    /// A `Messlokation` with no such extension is not an error and yields no
+    /// column — the ordinary case.
+    #[test]
+    fn no_extension_yields_no_columns() {
+        let cols = MeloShadowColumns::from_messlokation(&Messlokation::default())
+            .expect("absence is not a failure");
+        assert_eq!(cols.regelzone, None);
+        assert_eq!(cols.standorteigenschaften, None);
     }
 }
 

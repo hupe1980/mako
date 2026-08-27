@@ -158,7 +158,7 @@ pub async fn put_nb_energiemix(
         }
     }
 
-    let canonical = match super::serialise_or_500(&typed, "Energiemix") {
+    let canonical = match super::serialise_or_500(&typed) {
         Ok(v) => v,
         Err((status, body)) => return (status, Json(body)).into_response(),
     };

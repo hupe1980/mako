@@ -142,32 +142,26 @@ fn document_to_rechnung(doc: &BillingDocument) -> Result<bo::Rechnung, BillingEr
     };
 
     // The NB issues the Gutschrift (Gutschriftverfahren); the Anlagenbetreiber
-    // receives it. BO4E models these as full Geschaeftspartner objects — we carry
-    // only the MP-IDs, as round-trip-preserved keys.
-    // `try_insert` refuses once the extension map hits its hardening caps. It
-    // cannot happen here — the map is freshly constructed and takes at most
-    // three keys — so the invariant is asserted rather than discarded, because
-    // dropping an audit record silently is the alternative. (No helper: naming
-    // `serde_json::Value` in a signature would pull a dependency this crate
-    // deliberately does without.)
-    if let Some(id) = &meta.issuer_id {
-        let inserted = rechnung
-            ._additional
-            .try_insert("rechnungserstellerId".into(), id.value.as_str().into());
-        debug_assert!(
-            inserted.is_ok(),
-            "extension map refused rechnungserstellerId"
-        );
+    // receives it. BO4E models both as a `Geschaeftspartner`, so that is where
+    // they go — carrying the MP-ID as a `mako:marktpartnercode` ZusatzAttribut,
+    // the same shape `energy-billing` uses on its own invoices. Only the MP-IDs
+    // are known here, and a `Geschaeftspartner` carrying nothing else satisfies
+    // the field.
+    fn party(mp_id: &str) -> Box<bo::Geschaeftspartner> {
+        Box::new(bo::Geschaeftspartner {
+            zusatz_attribute: Some(vec![bo::ZusatzAttribut {
+                name: Some("mako:marktpartnercode".to_owned()),
+                wert: Some(mp_id.into()),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        })
     }
-    if let Some(id) = &meta.recipient_id {
-        let inserted = rechnung
-            ._additional
-            .try_insert("rechnungsempfaengerId".into(), id.value.as_str().into());
-        debug_assert!(
-            inserted.is_ok(),
-            "extension map refused rechnungsempfaengerId"
-        );
-    }
+    rechnung.rechnungsersteller = meta.issuer_id.as_ref().map(|id| party(id.value.as_str()));
+    rechnung.rechnungsempfaenger = meta
+        .recipient_id
+        .as_ref()
+        .map(|id| party(id.value.as_str()));
     Ok(rechnung)
 }
 
@@ -190,15 +184,19 @@ fn position_to_bo4e(number: usize, p: &LineItem) -> bo::Rechnungsposition {
         gesamtpreis: Some(betrag(p.net_amount.into_decimal())),
         ..Default::default()
     };
-    // The legal basis (§21 EEG 2023, …) is the audit record of why the rate applies.
+    // The legal basis (§21 EEG 2023, …) is the audit record of why the rate
+    // applies. It rides in `zusatzAttribute` — a real BO4E field — under the
+    // `mako:` namespace, not as a bare `_additional` key: an unprefixed
+    // `rechtlicheGrundlage` is indistinguishable from a field BO4E might define
+    // and from one the counterparty's own system writes.
     if let Some(lb) = p.get_meta("legal_basis") {
-        let inserted = pos
-            ._additional
-            .try_insert("rechtlicheGrundlage".into(), lb.into());
-        debug_assert!(
-            inserted.is_ok(),
-            "extension map refused rechtlicheGrundlage"
-        );
+        pos.zusatz_attribute
+            .get_or_insert_with(Vec::new)
+            .push(bo::ZusatzAttribut {
+                name: Some("mako:rechtliche_grundlage".to_owned()),
+                wert: Some(lb.into()),
+                ..Default::default()
+            });
     }
     pos
 }

@@ -213,6 +213,15 @@ async fn build_and_dispatch(
     };
     let total_eur = document.settlement.total_eur;
     let rechnung = grid_billing::bo4e::into_rechnung(&document);
+    // The outbound gate. `grid-billing` checks its own emissions in tests, but
+    // this document is assembled here from request data — the Mehrmenge leg,
+    // the period, the amounts — so no fixture covers the arithmetic the gate
+    // runs. It is *dispatched to a counterparty*, who checks exactly these
+    // rules (`invoic-checker` stage 3) and answers a document that does not
+    // reconcile with a REMADV rejection. mako refuses a received document that
+    // breaks a BO4E-stated rule; it must not issue one.
+    mako_markt::bo4e::ensure_conformant(&rechnung)
+        .map_err(|e| unprocessable(format!("the self-issued Rechnung is not valid BO4E: {e}")))?;
     let rechnung_json = serde_json::to_value(&rechnung)
         .map_err(|e| unprocessable(format!("Rechnung does not serialise: {e}")))?;
 

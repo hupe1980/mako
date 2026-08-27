@@ -119,6 +119,18 @@ pub async fn post_correction(
     let corrected_json =
         negate_rechnung_json_for_correction(&original.rechnung_json, &original_nr, &new_nr);
 
+    // The outbound gate. A Korrekturrechnung is built by negating the stored
+    // JSON field by field — string-keyed surgery over totals, the tax
+    // breakdown, the advances and every position — so a field the negation
+    // misses yields a document whose totals silently disagree. It is persisted
+    // and published as `de.billing.rechnung.erstellt`, and it was the one
+    // billingd write path that never crossed the gate the ordinary invoice
+    // path crosses. A correction that does not add up must not be booked.
+    let corrected: rubo4e::current::Rechnung = serde_json::from_value(corrected_json.clone())
+        .map_err(|e| anyhow::anyhow!("the correction is not a readable BO4E Rechnung: {e}"))?;
+    mako_markt::bo4e::ensure_conformant(&corrected)
+        .map_err(|e| anyhow::anyhow!("the correction is not a valid BO4E document: {e}"))?;
+
     let netto = -original.total_netto_eur.unwrap_or_default();
     let brutto = -original.total_brutto_eur.unwrap_or_default();
 

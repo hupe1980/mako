@@ -495,8 +495,13 @@ INFO mako::erp: ErpAdapter: event logged (no delivery configured)
 
 ### REST (`POST /api/v1/commands`)
 
-Submit a BO4E business object to trigger a MaKo process. `makod` resolves the
-correct PID from the object type and process context.
+Submit a **command envelope** to trigger a MaKo process: the dotted command
+name, the Marktrolle issuing it, and a command-specific `payload`. `makod`
+resolves the PID from the command and the process context.
+
+The envelope is *not* a bare BO4E object. Most GPKE/GeLi commands need only the
+MaLo-ID and the process date — the engine resolves the NB, the MSB and the MeLo
+data from its own master-data cache, so an ERP does not repeat them:
 
 ```http
 POST /api/v1/commands
@@ -505,27 +510,44 @@ Idempotency-Key: erp-order-991234
 Authorization: Bearer <token>
 
 {
-  "_typ": "VERTRAG",
-  "_version": "202501",
-  "vertragsbeginn": "2026-10-01T00:00:00+02:00",
-  "sparte": "STROM",
-  "vertragsart": "ENERGIELIEFERVERTRAG",
-  "marktrolle": "LIEFERANT",
-  "vertragspartner1": {
-    "_typ": "MARKTTEILNEHMER",
-    "rollencodenummer": "9900357000004",
-    "rollencodetyp": "GLN",
-    "marktrolle": "NETZBETREIBER"
-  },
-  "vertragsteile": [
-    {
-      "_typ": "VERTRAGSTEIL",
-      "lokation": "51238696799",
-      "vertragsteilbeginn": "2026-10-01T00:00:00+02:00"
-    }
-  ]
+  "command": "gpke.lieferbeginn.anmelden",
+  "marktrolle": "LF",
+  "payload": {
+    "malo_id":            "51238696799",
+    "lieferbeginn_datum": "2026-10-01"
+  }
 }
 ```
+
+`marktrolle` is required only for a command more than one role may issue (such
+as `wim.geraetewechsel.beauftragen`, permitted for `NB` and `MSB`); for a
+single-role command it is inferred from the name. Never include
+`sender_party_id`, `receiver_party_id`, `pruefidentifikator` or `message_ref` —
+those are engine-owned.
+
+A **billing** command carries a BO4E object in `payload` instead, because there
+the invoice *is* the master data and there is no cache entry to resolve it
+from:
+
+```json
+{
+  "command": "invoic.netznutzungsrechnung.senden",
+  "marktrolle": "NB",
+  "payload": {
+    "_typ": "RECHNUNG",
+    "_version": "202607.1.0",
+    "rechnungsnummer": "NN-2026-000123",
+    "gesamtnetto":  { "_typ": "BETRAG", "wert": "300.00", "waehrung": "EUR" },
+    "gesamtsteuer": { "_typ": "BETRAG", "wert": "57.00",  "waehrung": "EUR" },
+    "gesamtbrutto": { "_typ": "BETRAG", "wert": "357.00", "waehrung": "EUR" }
+  }
+}
+```
+
+`_version` is the wire spelling — `202607.1.0`, with no `v`. mako reads the
+**series** (`202607`), so a producer one BO4E patch ahead is accepted rather
+than refused; it is not required in the payload at all, because mako parses with
+its own generated types regardless of what a request claims.
 
 **Response** — `202 Accepted`:
 
@@ -1010,7 +1032,7 @@ With BO4E:
 | `OutboxErpWorker` (exponential back-off) | `makod/src/core/erp_adapter.rs` | At-least-once delivery with retry + dead-letter |
 | `POST /api/v1/commands` | `makod/src/orchestrator/commands_api/` | ERP-initiated process commands |
 | `PUT /admin/malo/{malo_id}` · `PUT /admin/partners/{mp_id}` | `makod` | Master-data cache sync |
-| BO4E typed model (`rubo4e`) | workspace dependency | `rubo4e = "0.11"`, BO4E schema v202607.1.0; typed BOs at every API boundary, strict-decoded on ingest (`Bo4eStrict::ensure_known_enums`) and checked against BO4E's own rules (`.validate()`) |
+| BO4E typed model (`rubo4e`) | workspace dependency | `rubo4e = "0.13"`, BO4E schema v202607.1.0; typed BOs at every API boundary, strict-decoded on ingest (`Bo4eStrict::ensure_known_enums`) and checked against BO4E's own rules (`.validate()`) |
 
 ---
 

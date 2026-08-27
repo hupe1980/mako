@@ -36,7 +36,7 @@ pub const DEAD_LETTER_ATTEMPTS: i16 = 5;
 /// the column is what a later reader uses to decide how to interpret the JSONB.
 #[must_use]
 pub fn bo4e_version(rechnung: &rubo4e::current::Rechnung) -> &'static str {
-    use rubo4e::Bo4eObject as _;
+    use rubo4e::Bo4eTyped as _;
     rechnung.schema_version()
 }
 

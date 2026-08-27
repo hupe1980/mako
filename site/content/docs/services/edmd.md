@@ -2518,6 +2518,25 @@ curl -s "http://edmd:8380/api/v1/zeitreihe/10001234558?from=2026-01-01T00:00:00Z
   -H "Authorization: Bearer <token>" | jq '.[0] | {bezeichnung, medium, messart, einheit}'
 ```
 
+### The exports state their coverage
+
+`/api/v1/lastgang` and `/api/v1/zeitreihe` answer with an
+`x-mako-coverage-pct` header: the share of the requested window the series
+actually spans, worst-first across the registers returned. The body stays a
+plain BO4E array — a consumer feeds it to a BO4E parser — so completeness rides
+as metadata about the representation rather than wrapping the document.
+
+A **gap** is data: a meter that was not read has no reading, and the export says
+so by containing fewer entries. An **overlap** is not — `edmd` builds every
+`Zeitreihenwert` with a full instant range from a version-resolved read, so two
+entries claiming one interval means duplicate readings survived resolution, and
+a consumer summing the export would count that energy twice. Overlaps and
+unplaceable entries are logged at `error` with their counts.
+
+> The export is not the input to a figure. Use
+> `GET /api/v1/energy/{malo_id}?direction=` for that — see
+> [the projected series](#the-portfolio-aggregate-is-projected-too).
+
 ---
 
 ## The portfolio aggregate is projected too

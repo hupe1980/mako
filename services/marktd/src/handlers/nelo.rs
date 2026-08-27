@@ -60,7 +60,7 @@ fn normalize_netzlokation(
 ) -> Result<(Netzlokation, serde_json::Value), (StatusCode, serde_json::Value)> {
     let nelo: Netzlokation = mako_markt::bo4e::decode(data)
         .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_json()))?;
-    let canonical = super::serialise_or_500(&nelo, "Netzlokation")?;
+    let canonical = super::serialise_or_500(&nelo)?;
     Ok((nelo, canonical))
 }
 

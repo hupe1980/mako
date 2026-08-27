@@ -189,7 +189,7 @@ flowchart LR
 
 ### BO4E typed API (`marktd`)
 
-**83 active `rubo4e::current` types — every payload, in or out, crosses one four-stage gate.**
+**87 active `rubo4e::current` types — every payload, in or out, crosses one four-stage gate**, decoded through `rubo4e`'s own depth-capped entry point.
 
 | Category | Detail |
 |---|---|
@@ -207,7 +207,7 @@ flowchart LR
 | 🔒 **One vocabulary per column** | Typed columns are derived from the typed BO, never a string lookup on its JSON, and hold BO4E wire values only. Each enum column's SQL `CHECK` is that enum's `VARIANTS`, compared against the schema by a `mako-markt` test. |
 | 🧭 **UTILMD characteristics read by class** | `makod` reads SG10 `CCI`/`CAV` by DE 7059 Klassentyp *and* DE 7037 Merkmal — the two code spaces overlap (`Z18` = Regelzone or „Kein Haushaltskunde") — and maps them to BO4E enums: `CCI+Z30++Z06/Z07` → `Energierichtung`, `CAV+E03…E09` / `Y01…Y03` → `Netzebene`. Each mapping cites its MIG Strom S2.2 / Gas G1.2 segment number. |
 | 🏷️ **Namespaced BO4E extensions** | What BO4E does not model rides in a `ZusatzAttribut` named `mako:<snake_case>` — 37, each registered with what it carries. BO4E mandates no convention for its extension slot, so `cargo xtask check-bo4e-attributes` enforces the prefix and keeps the registry consumers read. |
-| ✅ **Outbound BO4E conformance** | What mako emits is checked, not just what it receives: every `Rechnung`, `Angebot` and stored `Tarifpreisblatt` must round-trip through `rubo4e` with no enum falling through to `Unknown`. A mako-only price type sits in `mako:preistyp`, never in BO4E's `preistyp`. |
+| ✅ **Outbound BO4E conformance** | What mako emits is checked, not just what it receives. Every emission site crosses the same gate — Sammelrechnung, Korrekturrechnung, VPP-Gutschrift, the self-issued INVOIC 31006, the EEG-Gutschrift, the Redispatch-Kostenblatt — because an engine test covers the shapes a builder produces but not the values a request supplies. Out-of-schema **fields** are refused alongside values (`Bo4eExtensions`); documents are built typed, never assembled as JSON, with `check-bo4e-discriminants` and `check-bo4e-examples` enforcing that in code and in the docs. A mako-only price type sits in `mako:preistyp`, never in BO4E's `preistyp`. |
 | 🧾 **`Steuerbetrag` + `Registeranzahl`** | `energy-billing` projects the EN 16931 BG-23 tax breakdown into BO4E `Steuerbetrag` entries on the Rechnung JSON; `Registeranzahl` (Eintarif/Zweitarif) drives HT/NT position branching |
 | 🏦 **`Zahlungsinformation` + `Zahlungsart`** | `accountingd` SEPA mandate registry stores structured payment info; pain.008 XML generated from `SepaMandateRow` (IBAN, BIC, Kontoinhaber, Mandatsreferenz) |
 ### Process engine layer (`mako-engine` + domain crates)

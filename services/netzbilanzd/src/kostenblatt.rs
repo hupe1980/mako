@@ -67,7 +67,28 @@ impl Window {
     }
 }
 
-/// Sum the `edmd` Lastgang over an activation window.
+/// The dispatched (fed-in) energy over an activation window, from `edmd`.
+///
+/// Reads `GET /api/v1/energy?direction=EINSPEISUNG` — the **canonical projected
+/// series**, one entry per interval in one direction. Both callers settle lost
+/// *generation*: the Kostenblatt prices the curtailed energy, and §13a Abs. 2
+/// Ausfallarbeit is by definition what the resource would have produced.
+///
+/// # Why not `GET /api/v1/lastgang`
+///
+/// That endpoint is the BO4E **export**: one `Lastgang` per register, both
+/// directions, every quality, non-kWh registers included. Folding it back into
+/// one figure *is* the register projection, and doing it here would repeat —
+/// differently — what `edmd` already does once for everyone:
+///
+/// - it sums the grid **draw** into a figure that means feed-in;
+/// - it counts a total register (`1-0:1.8.0`) on top of the tariff registers
+///   (`…1.8.1`, `…1.8.2`) that already cover the same energy;
+/// - it keeps qualities § 60 Abs. 2 MsbG excludes from settlement.
+///
+/// `coverage_pct` comes with the projection, so an incomplete window is a fact
+/// the caller can act on rather than a smaller number it cannot distinguish
+/// from a small dispatch.
 ///
 /// Returns `None` when `edmd` has no data for the window — 404, a non-2xx, an
 /// unparseable body, or a sum of zero. The caller decides what to do about it;
@@ -80,96 +101,62 @@ pub async fn lastgang_sum(
     window: Window,
 ) -> Option<Decimal> {
     let edmd = cfg.edmd(client.clone())?;
-    let path = format!("/api/v1/lastgang/{malo_id}");
+    let path = format!("/api/v1/energy/{malo_id}");
     let request = edmd.get(&path).query(&[
+        ("direction", "EINSPEISUNG".to_owned()),
         ("from", window.start.format(&Rfc3339).ok()?),
         ("to", window.end.format(&Rfc3339).ok()?),
     ]);
-    let lastgaenge: Vec<rubo4e::current::Lastgang> = match edmd.json(request).await {
+    let body: serde_json::Value = match edmd.json(request).await {
         Ok(Some(v)) => v,
         Ok(None) => return None,
         Err(e) => {
-            tracing::warn!(%e, malo_id, "netzbilanzd: edmd Lastgang unavailable");
+            tracing::warn!(%e, malo_id, "netzbilanzd: edmd energy series unavailable");
             return None;
         }
     };
-    sum_lastgang_kwh(&lastgaenge, window)
+    sum_energy_intervals(&body, malo_id, window)
 }
 
-/// Sum interval values across the OBIS groups of a Lastgang response.
+/// Sum the `intervals` of an `edmd` energy-series response over `window`.
 ///
-/// Values are filtered to `[start, end)`. A value whose interval start cannot be
-/// resolved is kept: `edmd` already filtered server-side, and dropping it would
-/// under-report the activation.
-#[must_use]
-pub fn sum_lastgang_kwh(
-    lastgaenge: &[rubo4e::current::Lastgang],
+/// The projection is already one entry per interval in one direction, so this
+/// only clips to the activation and adds up. An incomplete window is reported
+/// rather than silently summed short: `coverage_pct` is the share of the
+/// requested period the series actually spans, and a Kostenblatt built from a
+/// half-covered window under-compensates the resource with nothing in the figure
+/// to say so.
+fn sum_energy_intervals(
+    body: &serde_json::Value,
+    malo_id: &str,
     window: Window,
 ) -> Option<Decimal> {
-    let total: Decimal = lastgaenge
-        .iter()
-        .flat_map(|lg| lg.werte.iter().flatten())
-        .filter(|zw| {
-            zw.zeitraum
-                .as_ref()
-                .and_then(zeitraum_start_utc)
-                .is_none_or(|t| t >= window.start && t < window.end)
-        })
-        .filter_map(|zw| zw.wert)
-        .sum();
-    (total > Decimal::ZERO).then_some(total)
-}
-
-/// Resolve a BO4E `Zeitraum` interval start to a UTC instant.
-///
-/// `startuhrzeit` carries its UTC offset (`10:00:00+00:00`, `11:00:00+01:00`),
-/// and the offset is honoured rather than assumed away. Truncating to `hh:mm:ss`
-/// and calling it UTC put a German-local Lastgang an hour off: on a 15-minute
-/// Redispatch activation that selects the wrong quarter-hours entirely, so the
-/// Einsatzkosten submitted to the ÜNB price energy from a window the resource
-/// was never curtailed in.
-///
-/// A bare `hh:mm:ss` with no offset is read as UTC — that is what BO4E's own
-/// examples show, and the only reading available.
-fn zeitraum_start_utc(z: &rubo4e::current::Zeitraum) -> Option<time::OffsetDateTime> {
-    let date = z.startdatum?;
-    let raw = z.startuhrzeit.as_deref()?;
-    let hms = raw.get(..8)?;
-    let clock = time::Time::parse(
-        hms,
-        time::macros::format_description!("[hour]:[minute]:[second]"),
-    )
-    .ok()?;
-    let offset = parse_utc_offset(&raw[8..]);
-    Some(
-        date.with_time(clock)
-            .assume_offset(offset)
-            .to_offset(time::UtcOffset::UTC),
-    )
-}
-
-/// The UTC offset trailing a BO4E time — `Z`, `+01:00`, `-0330`, or absent.
-fn parse_utc_offset(suffix: &str) -> time::UtcOffset {
-    let suffix = suffix.trim();
-    if suffix.is_empty() || suffix.eq_ignore_ascii_case("z") {
-        return time::UtcOffset::UTC;
+    if let Some(pct) = body.get("coverage_pct").and_then(serde_json::Value::as_f64)
+        && pct < 99.9
+    {
+        tracing::warn!(
+            malo_id,
+            coverage_pct = pct,
+            from = %window.start,
+            to = %window.end,
+            "netzbilanzd: edmd covers only part of the activation window"
+        );
     }
-    let sign = match suffix.as_bytes().first() {
-        Some(b'+') => 1_i8,
-        Some(b'-') => -1_i8,
-        _ => return time::UtcOffset::UTC,
-    };
-    let digits: String = suffix[1..].chars().filter(char::is_ascii_digit).collect();
-    let (Some(h), Some(m)) = (
-        digits.get(..2).and_then(|h| h.parse::<i8>().ok()),
-        digits
-            .get(2..4)
-            .and_then(|m| m.parse::<i8>().ok())
-            .or(Some(0)),
-    ) else {
-        return time::UtcOffset::UTC;
-    };
-    time::UtcOffset::from_hms(sign * h, sign * m, 0).unwrap_or(time::UtcOffset::UTC)
+
+    let mut total = Decimal::ZERO;
+    for iv in body.get("intervals")?.as_array()? {
+        let start = iv
+            .get("start")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|s| time::OffsetDateTime::parse(s, &Rfc3339).ok())?;
+        if start < window.start || start >= window.end {
+            continue;
+        }
+        if let Some(kwh) = iv.get("kwh").and_then(decimal_from_json) {
+            total = total.checked_add(kwh)?;
+        }
+    }
+    (total > Decimal::ZERO).then_some(total)
 }
 
 /// Parse a JSON value as a `Decimal`, whether it arrived as a string or a number.
@@ -433,28 +420,55 @@ pub async fn post_compute(
     }
 
     let einsatzkosten = dispatch_kwh * req.arbeitspreis_eur_per_kwh;
-    let kosten_json = serde_json::json!({
-        "_typ": "KOSTEN",
-        "kostenbloecke": [{
-            "_typ": "KOSTENBLOCK",
-            "kostenblockbezeichnung": "Redispatch 2.0 Einsatzkosten",
-            "kostenpositionen": [{
-                "_typ": "KOSTENPOSITION",
-                "positionstitel": "Arbeitspreis Redispatch",
-                "artikeldetail": req.tr_id,
-                "menge": { "_typ": "MENGE", "wert": dispatch_kwh.to_string(), "einheit": "KWH" },
-                "einzelpreis": { "_typ": "PREIS", "wert": req.arbeitspreis_eur_per_kwh.to_string(), "einheit": "EUR" },
-                "betragKostenposition": { "_typ": "BETRAG", "wert": einsatzkosten.to_string(), "waehrung": "EUR" },
-                "von": req.activation_start_utc,
-                "bis": req.activation_end_utc,
-            }]
-        }]
-    });
-    // Built from a literal, so a `rubo4e` field rename must fail here rather
-    // than silently ship a Kosten object the ÜNB's parser drops.
-    serde_json::from_value::<rubo4e::current::Kosten>(kosten_json.clone()).map_err(|e| {
-        ApiError::Internal(anyhow::Error::new(e).context("generated Kosten payload is not BO4E"))
-    })?;
+
+    // Built typed, then serialised. A struct literal fails to compile on a
+    // field rename; a `json!` literal round-tripped through
+    // `from_value::<Kosten>()` would not, because rubo4e captures unknown keys
+    // in `_additional` rather than rejecting them — the renamed field would
+    // decode cleanly, read back as `None`, and ship to the ÜNB missing.
+    //
+    // `_typ` is stamped by rubo4e on all four nested COMs, and
+    // `Preis.bezugswert` states the reference quantity, without which the
+    // Arbeitspreis is EUR per *nothing* rather than EUR/kWh.
+    use rubo4e::current::{
+        Betrag, Kosten, Kostenblock, Kostenposition, Menge, Mengeneinheit, Preis, Waehrungscode,
+        Waehrungseinheit,
+    };
+    let kosten = Kosten {
+        kostenbloecke: Some(vec![Kostenblock {
+            kostenblockbezeichnung: Some("Redispatch 2.0 Einsatzkosten".to_owned()),
+            kostenpositionen: Some(vec![Kostenposition {
+                positionstitel: Some("Arbeitspreis Redispatch".to_owned()),
+                artikeldetail: Some(req.tr_id.clone()),
+                menge: Some(Menge {
+                    wert: Some(dispatch_kwh),
+                    einheit: Some(Mengeneinheit::Kwh),
+                    ..Default::default()
+                }),
+                einzelpreis: Some(Preis {
+                    wert: Some(req.arbeitspreis_eur_per_kwh),
+                    einheit: Some(Waehrungseinheit::Eur),
+                    bezugswert: Some(Mengeneinheit::Kwh),
+                    ..Default::default()
+                }),
+                betrag_kostenposition: Some(Betrag {
+                    wert: Some(einsatzkosten),
+                    waehrung: Some(Waehrungscode::Eur),
+                    ..Default::default()
+                }),
+                von: Some(window.start),
+                bis: Some(window.end),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        }]),
+        ..Default::default()
+    };
+    // The outbound gate: this document is settled against by the ÜNB.
+    mako_markt::bo4e::ensure_conformant(&kosten)
+        .map_err(|e| ApiError::Unprocessable(format!("the Kostenblatt is not valid BO4E: {e}")))?;
+    let kosten_json = mako_markt::bo4e::to_canonical_json(&kosten)
+        .map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?;
 
     let upsert = UpsertKostenblattRequest {
         tr_id: req.tr_id.clone(),
@@ -679,113 +693,114 @@ mod tests {
         time::OffsetDateTime::parse(s, &Rfc3339).expect("valid RFC 3339")
     }
 
-    fn edmd_shaped_response() -> Vec<rubo4e::current::Lastgang> {
-        serde_json::from_value(serde_json::json!([{
-            "_typ": "LASTGANG",
-            "obisKennzahl": "1-0:1.29.0",
-            "sparte": "STROM",
-            "zeitIntervallLaenge": { "wert": "15", "einheit": "VIERTEL_STUNDE" },
-            "werte": [
-                { "wert": "1.25", "zeitraum": {
-                    "startdatum": "2026-01-15", "startuhrzeit": "10:00:00+00:00",
-                    "enddatum": "2026-01-15", "enduhrzeit": "10:15:00+00:00" } },
-                { "wert": "1.30", "zeitraum": {
-                    "startdatum": "2026-01-15", "startuhrzeit": "10:15:00+00:00",
-                    "enddatum": "2026-01-15", "enduhrzeit": "10:30:00+00:00" } },
-                { "wert": "0.80", "zeitraum": {
-                    "startdatum": "2026-01-15", "startuhrzeit": "10:30:00+00:00",
-                    "enddatum": "2026-01-15", "enduhrzeit": "10:45:00+00:00" } }
+    /// An `edmd` `GET /api/v1/energy` response: the projected series, one
+    /// entry per interval, already in one direction.
+    fn edmd_energy_response(coverage_pct: f64) -> serde_json::Value {
+        serde_json::json!({
+            "malo_id": "51238696012",
+            "direction": "EINSPEISUNG",
+            "resolution_min": 15,
+            "coverage_pct": coverage_pct,
+            "billable_pct": 100.0,
+            "interval_count": 3,
+            "intervals": [
+                { "start": "2026-01-15T10:00:00Z", "end": "2026-01-15T10:15:00Z",
+                  "kwh": "1.25", "quality": "MEASURED" },
+                { "start": "2026-01-15T10:15:00Z", "end": "2026-01-15T10:30:00Z",
+                  "kwh": "1.30", "quality": "MEASURED" },
+                { "start": "2026-01-15T10:30:00Z", "end": "2026-01-15T10:45:00Z",
+                  "kwh": "0.80", "quality": "MEASURED" }
             ]
-        }]))
-        .expect("edmd-shaped JSON parses as Vec<Lastgang>")
+        })
     }
 
     /// The window bounds the sum, half-open, so a 15-minute activation settles
     /// on its own quarter-hours rather than the neighbouring ones.
     #[test]
-    fn the_window_bounds_the_lastgang_sum() {
-        let lastgaenge = edmd_shaped_response();
-        let all = Window {
-            start: utc("2026-01-15T09:00:00Z"),
-            end: utc("2026-01-15T12:00:00Z"),
-        };
-        assert_eq!(sum_lastgang_kwh(&lastgaenge, all), Some(dec!(3.35)));
+    fn the_window_bounds_the_energy_sum() {
+        let body = edmd_energy_response(100.0);
+        let sum = |w| super::sum_energy_intervals(&body, "51238696012", w);
 
-        let first_two = Window {
-            start: utc("2026-01-15T10:00:00Z"),
-            end: utc("2026-01-15T10:30:00Z"),
-        };
-        assert_eq!(sum_lastgang_kwh(&lastgaenge, first_two), Some(dec!(2.55)));
-
-        let single = Window {
-            start: utc("2026-01-15T10:30:00Z"),
-            end: utc("2026-01-15T10:45:00Z"),
-        };
-        assert_eq!(sum_lastgang_kwh(&lastgaenge, single), Some(dec!(0.80)));
+        assert_eq!(
+            sum(Window {
+                start: utc("2026-01-15T09:00:00Z"),
+                end: utc("2026-01-15T12:00:00Z"),
+            }),
+            Some(dec!(3.35))
+        );
+        assert_eq!(
+            sum(Window {
+                start: utc("2026-01-15T10:00:00Z"),
+                end: utc("2026-01-15T10:30:00Z"),
+            }),
+            Some(dec!(2.55))
+        );
+        assert_eq!(
+            sum(Window {
+                start: utc("2026-01-15T10:30:00Z"),
+                end: utc("2026-01-15T10:45:00Z"),
+            }),
+            Some(dec!(0.80))
+        );
+        // A window the series does not reach yields nothing, not zero.
+        assert_eq!(
+            sum(Window {
+                start: utc("2026-01-15T11:00:00Z"),
+                end: utc("2026-01-15T11:30:00Z"),
+            }),
+            None
+        );
     }
 
-    /// A local-time Lastgang is converted, not read as UTC.
-    ///
-    /// `edmd` may serialise a German-local Zeitraum (`+01:00`). Truncating the
-    /// offset away shifted every interval by an hour, so a 15-minute activation
-    /// summed the wrong quarter-hours — and the Kostenblatt priced energy the
-    /// resource produced while it was not curtailed.
+    /// A decimal spelled as a JSON number sums the same as one spelled as a
+    /// string — `edmd` serialises through `rust_decimal`, but a hand-built or
+    /// proxied body may not.
     #[test]
-    fn a_lastgang_offset_is_honoured_not_truncated() {
-        let local: Vec<rubo4e::current::Lastgang> = serde_json::from_value(serde_json::json!([{
-            "_typ": "LASTGANG",
-            "obisKennzahl": "1-0:1.29.0",
-            "sparte": "STROM",
-            "zeitIntervallLaenge": { "wert": "15", "einheit": "VIERTEL_STUNDE" },
-            "werte": [
-                { "wert": "1.25", "zeitraum": {
-                    "startdatum": "2026-01-15", "startuhrzeit": "11:00:00+01:00" } },
-                { "wert": "1.30", "zeitraum": {
-                    "startdatum": "2026-01-15", "startuhrzeit": "11:15:00+01:00" } }
+    fn both_decimal_spellings_sum() {
+        let body = serde_json::json!({
+            "coverage_pct": 100.0,
+            "intervals": [
+                { "start": "2026-01-15T10:00:00Z", "kwh": 1.25 },
+                { "start": "2026-01-15T10:15:00Z", "kwh": "1.30" }
             ]
-        }]))
-        .expect("edmd-shaped JSON parses");
-
-        // 11:00+01:00 is 10:00 UTC — inside the window.
+        });
         let window = Window {
             start: utc("2026-01-15T10:00:00Z"),
             end: utc("2026-01-15T10:30:00Z"),
         };
-        assert_eq!(sum_lastgang_kwh(&local, window), Some(dec!(2.55)));
-
-        // Read as bare UTC the same values would land at 11:00, outside it.
-        let later = Window {
-            start: utc("2026-01-15T11:00:00Z"),
-            end: utc("2026-01-15T11:30:00Z"),
-        };
-        assert_eq!(sum_lastgang_kwh(&local, later), None);
+        assert_eq!(
+            super::sum_energy_intervals(&body, "51238696012", window),
+            Some(dec!(2.55))
+        );
     }
 
-    /// Every offset form BO4E emits resolves; anything else falls back to UTC.
+    /// A partly covered window still yields its figure — the resource was
+    /// curtailed for the part that is there — but the shortfall is reported.
     #[test]
-    fn a_utc_offset_parses_in_every_form_bo4e_emits() {
-        use time::UtcOffset;
-        assert_eq!(parse_utc_offset(""), UtcOffset::UTC);
-        assert_eq!(parse_utc_offset("Z"), UtcOffset::UTC);
-        assert_eq!(parse_utc_offset("+00:00"), UtcOffset::UTC);
+    fn a_partly_covered_window_still_sums() {
+        let body = edmd_energy_response(50.0);
+        let window = Window {
+            start: utc("2026-01-15T10:00:00Z"),
+            end: utc("2026-01-15T10:30:00Z"),
+        };
         assert_eq!(
-            parse_utc_offset("+02:00"),
-            UtcOffset::from_hms(2, 0, 0).expect("valid")
-        );
-        assert_eq!(
-            parse_utc_offset("-0330"),
-            UtcOffset::from_hms(-3, -30, 0).expect("valid")
+            super::sum_energy_intervals(&body, "51238696012", window),
+            Some(dec!(2.55))
         );
     }
 
     /// An empty response is `None`, which is the caller's fallback signal.
     #[test]
-    fn an_empty_lastgang_is_none() {
+    fn an_empty_series_is_none() {
+        let body = serde_json::json!({ "coverage_pct": 0.0, "intervals": [] });
         let window = Window {
             start: utc("2026-01-15T10:00:00Z"),
             end: utc("2026-01-15T10:15:00Z"),
         };
-        assert_eq!(sum_lastgang_kwh(&[], window), None);
+        assert_eq!(
+            super::sum_energy_intervals(&body, "51238696012", window),
+            None
+        );
     }
 
     /// A window must be RFC 3339 and strictly positive.

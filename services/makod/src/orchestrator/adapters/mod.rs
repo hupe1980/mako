@@ -1476,19 +1476,9 @@ fn konfigurationsprodukt_from_group(group: &[OwnedSegment]) -> Option<serde_json
         .find(|s| s.tag == "PIA" && s.element_str(0) == Some("5"))
         .and_then(|s| s.component_str(1, 0))
         .map(str::to_owned)?;
-    let mut kp = serde_json::Map::new();
-    kp.insert("_typ".into(), "KONFIGURATIONSPRODUKT".into());
-    kp.insert("produktcode".into(), produktcode.into());
-    // zugeordneter Marktpartner: reuse the Z91/ZF0 13-digit resolver on the group.
-    if let Some(mp) = extract_zugeordneter_msb(group) {
-        kp.insert(
-            "marktpartner".into(),
-            serde_json::json!({ "_typ": "MARKTTEILNEHMER", "rollencodenummer": mp }),
-        );
-    }
     // Leistungskurvendefinition: the Produkteigenschaft value carried in a
     // CAV+ZH9 (Code der Produkteigenschaft) or CAV+ZV4 (Wertedetails).
-    if let Some(lk) = group
+    let leistungskurvendefinition = group
         .iter()
         .filter(|s| s.tag == "CAV")
         .filter(|s| matches!(s.component_str(0, 0), Some("ZH9") | Some("ZV4")))
@@ -1497,10 +1487,29 @@ fn konfigurationsprodukt_from_group(group: &[OwnedSegment]) -> Option<serde_json
                 .filter_map(|c| s.component_str(0, c))
                 .find(|v| !v.is_empty())
         })
-    {
-        kp.insert("leistungskurvendefinition".into(), lk.into());
-    }
-    Some(serde_json::Value::Object(kp))
+        .map(str::to_owned);
+
+    // Built typed, then serialised — not assembled as a JSON map. Two things
+    // follow from that and neither is cosmetic: `_typ` is stamped on the COM
+    // *and* on the nested `Marktteilnehmer` by rubo4e rather than written out
+    // as a literal here, and `rollencodenummer` goes through
+    // `MarktpartnerId`, so a value the Z91/ZF0 resolver produced that is not a
+    // well-formed market-partner ID is dropped rather than stored in a BO4E
+    // field that promises one.
+    let kp = rubo4e::current::Konfigurationsprodukt {
+        produktcode: Some(produktcode),
+        marktpartner: extract_zugeordneter_msb(group)
+            .and_then(|mp| rubo4e::identifiers::MarktpartnerId::new(&mp).ok())
+            .map(|rollencodenummer| {
+                Box::new(rubo4e::current::Marktteilnehmer {
+                    rollencodenummer: Some(rollencodenummer),
+                    ..Default::default()
+                })
+            }),
+        leistungskurvendefinition,
+        ..Default::default()
+    };
+    serde_json::to_value(&kp).ok()
 }
 
 /// Extract the **Bilanzierungsgebiet** EIC from a UTILMD segment list.

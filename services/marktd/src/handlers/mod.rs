@@ -157,22 +157,22 @@ pub fn etag(version: i64) -> String {
 
 /// Serialise a validated BO4E object for storage, or fail the request.
 ///
-/// The obvious spelling, `serde_json::to_value(&bo).unwrap_or_default()`, yields
-/// `Value::Null` on failure — and PostgreSQL accepts a JSON `null` into a
-/// `JSONB NOT NULL` column, because SQL `NULL` and JSON `null` are different
-/// things. A validated document would therefore have been replaced by the JSON
-/// literal `null` with a `204` in reply. Failure here is not reachable for the
-/// generated BO4E types, which is exactly why it should be stated rather than
-/// defaulted: if it ever becomes reachable, the write must not happen.
-pub(crate) fn serialise_or_500<T: serde::Serialize>(
+/// The rule and the reasoning live in [`mako_markt::bo4e::to_canonical_json`];
+/// this adapts its error to the `(StatusCode, Json)` shape marktd's handlers
+/// return, so every BO4E write in the service refuses the same way. The BO is
+/// named by the type rather than by an argument, so the message cannot drift
+/// from the value that failed.
+pub(crate) fn serialise_or_500<T>(
     value: &T,
-    what: &str,
-) -> Result<serde_json::Value, (axum::http::StatusCode, serde_json::Value)> {
-    serde_json::to_value(value).map_err(|e| {
-        tracing::error!(bo = what, error = %e, "validated BO4E object is not serialisable");
+) -> Result<serde_json::Value, (axum::http::StatusCode, serde_json::Value)>
+where
+    T: mako_markt::bo4e::Bo4eTyped + serde::Serialize,
+{
+    mako_markt::bo4e::to_canonical_json(value).map_err(|e| {
+        tracing::error!(bo = e.typ, error = %e, "validated BO4E object is not serialisable");
         (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            serde_json::json!({ "error": format!("could not serialise {what}: {e}") }),
+            serde_json::json!({ "error": e.to_string() }),
         )
     })
 }

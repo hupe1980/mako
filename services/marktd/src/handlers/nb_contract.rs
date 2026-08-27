@@ -57,7 +57,7 @@ fn normalize_vertrag(
 ) -> Result<(Vertrag, serde_json::Value), (StatusCode, serde_json::Value)> {
     let vertrag: Vertrag = mako_markt::bo4e::decode(data)
         .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_json()))?;
-    let canonical = super::serialise_or_500(&vertrag, "Vertrag")?;
+    let canonical = super::serialise_or_500(&vertrag)?;
     Ok((vertrag, canonical))
 }
 
@@ -184,26 +184,26 @@ fn parse_req(
     })?;
 
     // Validate and normalise the BO4E Vertrag payload.
-    // When the caller omits `data`, auto-construct a minimal Vertrag so every
-    // stored record is self-describing BO4E from day 1.
-    let raw_data = req.data.unwrap_or_else(|| {
-        serde_json::json!({
-            "_typ": "VERTRAG",
-            "vertragsart": "NETZNUTZUNGSVERTRAG",
-            "vertragsstatus": "AKTIV"
-        })
-    });
-    let (_, canonical_data) = normalize_vertrag(raw_data)?;
+    //
+    // When the caller omits `data`, a minimal Vertrag is constructed so every
+    // stored record is self-describing BO4E. It is built *typed*: the default
+    // is mako's own value, not an untrusted payload, so it has no business
+    // being spelled as JSON and re-parsed, and `..Default::default()` stamps
+    // `_typ` and `_version`.
+    let vertrag = match req.data {
+        Some(data) => normalize_vertrag(data)?.0,
+        None => Vertrag {
+            vertragsart: Some(rubo4e::current::Vertragsart::Netznutzungsvertrag),
+            vertragsstatus: Some(rubo4e::current::Vertragsstatus::Aktiv),
+            ..Default::default()
+        },
+    };
+    let canonical_data = super::serialise_or_500(&vertrag)?;
 
-    // Extract typed columns from the canonical Vertrag JSON for fast SQL queries.
-    let vertragsart = canonical_data
-        .get("vertragsart")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
-    let vertragsstatus = canonical_data
-        .get("vertragsstatus")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
+    // Typed columns for fast SQL queries, read off the *typed* value rather
+    // than by string lookup on its JSON — a field that moves stops compiling.
+    let vertragsart = vertrag.vertragsart.map(|v| v.as_wire().to_owned());
+    let vertragsstatus = vertrag.vertragsstatus.map(|v| v.as_wire().to_owned());
 
     Ok(NbContractRecord {
         contract_id: id,

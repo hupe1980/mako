@@ -248,13 +248,10 @@ pub async fn put_preisblatt(
         .and_then(|v| v.as_array())
     {
         for (i, item) in lvp_arr.iter().enumerate() {
-            // `decode_nested`: the enclosing PreisblattNetznutzung has
-            // already established what this is, and BO4E producers do not
-            // reliably stamp `_typ` on a nested COM. The remaining stages —
-            // schema, strict enums, BO4E rules — still run.
-            if let Err(e) =
-                mako_markt::bo4e::decode_nested::<LastvariablePreisposition>(item.clone())
-            {
+            // The enclosing PreisblattNetznutzung has already established what
+            // this is, and BO4E producers do not reliably stamp `_typ` on a
+            // nested COM — so the gate injects it. Every stage still runs.
+            if let Err(e) = mako_markt::bo4e::decode::<LastvariablePreisposition>(item.clone()) {
                 let mut body = e.to_json();
                 if let Some(obj) = body.as_object_mut() {
                     obj.insert(
@@ -633,22 +630,21 @@ pub async fn put_preisblatt_messung(
                     .into_response();
             }
 
-            // The BO4E gate, minus the `_typ` stage the enclosing
-            // PreisblattMessung has already settled.
-            let zvp =
-                match mako_markt::bo4e::decode_nested::<ZeitvariablePreisposition>(item.clone()) {
-                    Ok(z) => z,
-                    Err(e) => {
-                        let mut body = e.to_json();
-                        if let Some(obj) = body.as_object_mut() {
-                            obj.insert(
-                                "at".into(),
-                                format!("zeitvariablePreispositionen[{i}]").into(),
-                            );
-                        }
-                        return (StatusCode::UNPROCESSABLE_ENTITY, Json(body)).into_response();
+            // The BO4E gate. A nested COM need not stamp `_typ`; the gate
+            // injects the one the enclosing PreisblattMessung already settled.
+            let zvp = match mako_markt::bo4e::decode::<ZeitvariablePreisposition>(item.clone()) {
+                Ok(z) => z,
+                Err(e) => {
+                    let mut body = e.to_json();
+                    if let Some(obj) = body.as_object_mut() {
+                        obj.insert(
+                            "at".into(),
+                            format!("zeitvariablePreispositionen[{i}]").into(),
+                        );
                     }
-                };
+                    return (StatusCode::UNPROCESSABLE_ENTITY, Json(body)).into_response();
+                }
+            };
 
             // Business rule (§14a Modul 2, BK6-22-300): `zaehlzeitregister` is mandatory.
             // Without it, `invoicd` / `invoic-checker` cannot route INVOIC positions to bands.

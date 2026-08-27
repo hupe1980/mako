@@ -7,7 +7,7 @@
 -- `epex_prices`: hourly EPEX Spot day-ahead prices for §41a dynamic tariffs.
 -- `angebote`: formal B2B quotation workflow (C&I / RLM customers).
 --
--- All prices are user-defined in data.tarifpreispositionen.
+-- All prices are user-defined in data.tarifpreise.
 -- productd contains no hardcoded commercial rates.
 
 CREATE EXTENSION IF NOT EXISTS btree_gist;
@@ -88,7 +88,7 @@ ALTER TABLE products
     );
 
 COMMENT ON TABLE products IS
-    'Product catalog. ALL prices are user-defined in data.tarifpreispositionen. '
+    'Product catalog. ALL prices are user-defined in data.tarifpreise. '
     'category determines which billingd billing engine is invoked.';
 
 COMMENT ON COLUMN products.category IS

@@ -2860,16 +2860,30 @@ pub async fn get_vorauszahlung(
                 })
             } else {
                 // Synthesise from abschlag_ct — bootstrapping fallback.
+                //
+                // Built typed rather than as a JSON literal: this is a BO4E COM
+                // served to a caller, so `_typ` is stamped by rubo4e on the
+                // `Vorauszahlung` and the nested `Betrag`, and `waehrung` goes
+                // through `Waehrungscode` rather than a bare string.
+                use rubo4e::current::{Betrag, Vorauszahlung, Waehrungscode};
                 let eur = Decimal::from(abschlag_ct) / Decimal::from(100);
+                let vorauszahlung = Vorauszahlung {
+                    betrag: Some(Betrag {
+                        wert: Some(eur),
+                        waehrung: Some(Waehrungscode::Eur),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                };
+                let vorauszahlung = match mako_markt::bo4e::to_canonical_json(&vorauszahlung) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                    }
+                };
                 serde_json::json!({
                     "malo_id": malo_id,
-                    "vorauszahlung": {
-                        "_typ": "VORAUSZAHLUNG",
-                        "betrag": {
-                            "wert": eur.to_string(),
-                            "waehrung": "EUR"
-                        }
-                    },
+                    "vorauszahlung": vorauszahlung,
                     "abschlag_ct": abschlag_ct,
                     "source": "derived_from_abschlag_ct",
                 })

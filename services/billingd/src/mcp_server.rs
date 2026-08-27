@@ -688,17 +688,15 @@ before billing.",
                         "menge": pos["positionsMenge"],
                         "einzelpreis": pos["einzelpreis"],
                         "gesamtpreis": pos["gesamtpreis"],
-                        "rechtsgrundlage": pos["rechtlicheGrundlage"],
-                        "kategorie": pos["kategorie"],
-                        // The trace rides on the position as the
-                        // `mako:calculation_trace` ZusatzAttribut.
-                        "trace": pos.get("zusatzAttribute")
-                            .and_then(|z| z.as_array())
-                            .and_then(|attrs| attrs.iter().find(|a| {
-                                a.get("name").and_then(|n| n.as_str())
-                                    == Some("mako:calculation_trace")
-                            }))
-                            .and_then(|a| a.get("wert")),
+                        // Every per-position fact BO4E does not model rides in
+                        // `zusatzAttribute` under the `mako:` namespace. These
+                        // used to be read as bare `_additional` keys
+                        // (`rechtlicheGrundlage`, `kategorie`), which is the
+                        // collision the namespace exists to prevent.
+                        "rechtsgrundlage": mako_attr(pos, "mako:rechtliche_grundlage"),
+                        "kategorie": mako_attr(pos, "mako:positionskategorie"),
+                        "positionstyp": mako_attr(pos, "mako:positionstyp"),
+                        "trace": mako_attr(pos, "mako:calculation_trace"),
                         "note": "trace carries formula, input_quantity, input_unit_price_eur, gross_eur, and regulatory_basis for audit reconstruction."
                     }
                 });
@@ -802,8 +800,10 @@ owed to customers who have an iMSys):\n\
                  1. Verify the product in productd has dynamic_epex: true\n\
                  2. Verify EPEX day-ahead prices are imported for the whole billing period:\n\
                     PUT /api/v1/epex-prices/{date} in productd (15-min MTUs)\n\
-                 3. Verify the customer has 15-min Lastgang data in edmd:\n\
-                    GET /api/v1/lastgang/{malo_id}?from=...&to=...\n\
+                 3. Verify the customer has 15-min interval data in edmd, on the same\n\
+                    endpoint billingd bills from — the /lastgang export can show data\n\
+                    this returns none of (wrong direction, or all non-billable):\n\
+                    GET /api/v1/energy/{malo_id}?direction=BEZUG&from=...&to=...\n\
                  4. Verify the meter is an iMSys — §41a Abs. 1 EnWG requires one, and billingd\n\
                     refuses the run with SECT41A_IMSYS_REQUIRED for MeteringMode Slp or Rlm\n\
                  5. Run a preview: POST /api/v1/billing/{malo_id}/preview\n\n\
@@ -1001,4 +1001,22 @@ pub fn router(state: Arc<BillingdMcpState>, _shutdown: CancellationToken) -> Rou
     Router::new()
         .route_service("/mcp", service)
         .layer(middleware::from_fn_with_state(state, mcp_auth_middleware))
+}
+
+/// Read one `mako:`-namespaced `ZusatzAttribut` off a serialised BO4E value.
+///
+/// Returns `Value::Null` when absent, which is what `json!` would have produced
+/// for a missing key — so a position that carries none renders the same shape.
+fn mako_attr(value: &serde_json::Value, name: &str) -> serde_json::Value {
+    value
+        .get("zusatzAttribute")
+        .and_then(|z| z.as_array())
+        .and_then(|attrs| {
+            attrs
+                .iter()
+                .find(|a| a.get("name").and_then(|n| n.as_str()) == Some(name))
+        })
+        .and_then(|a| a.get("wert"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null)
 }

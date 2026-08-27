@@ -39,7 +39,8 @@ pub use conformance::Bo4eConformance;
 // Re-exported so a caller rendering a rejection does not need its own `rubo4e`
 // dependency just to name the failure type.
 pub use gate::{
-    Bo4eRejection, Bo4eTyped, decode, decode_nested, decode_received, ensure_conformant,
+    Bo4eRejection, Bo4eSerialiseError, Bo4eTyped, decode, decode_received, ensure_conformant,
+    to_canonical_json,
 };
 pub use rubo4e::validation::ValidationFailure;
 
@@ -56,16 +57,13 @@ use rubo4e::current::Marktlokation;
 /// under the new types, which works because unknown fields survive in
 /// `_additional`. What the stamp buys is the ability to tell which rows have
 /// not been rewritten yet.
-pub static SCHEMA_VERSION: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
-    use rubo4e::Bo4eObject as _;
-    Marktlokation::default().schema_version()
-});
+pub const SCHEMA_VERSION: &str = Marktlokation::SCHEMA_VERSION;
 
 /// The BO4E schema version, as an owned `String`, for `serde` defaults and
 /// row construction.
 #[must_use]
 pub fn schema_version() -> String {
-    (*SCHEMA_VERSION).to_owned()
+    SCHEMA_VERSION.to_owned()
 }
 
 /// The BO4E schema **series** — the `YYYYMM` prefix, without the patch level.
@@ -73,10 +71,7 @@ pub fn schema_version() -> String {
 /// This is the granularity at which rubo4e exposes a module, and the right key
 /// for deciding whether a stored payload is readable: BO4E ships patch releases
 /// *inside* a series and every one of them deserializes into the same types.
-pub static SCHEMA_SERIES: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
-    use rubo4e::Bo4eObject as _;
-    Marktlokation::default().schema_series()
-});
+pub const SCHEMA_SERIES: &str = Marktlokation::SCHEMA_SERIES;
 
 /// Is `stored` a payload version this build can read?
 ///
@@ -92,7 +87,7 @@ pub static SCHEMA_SERIES: std::sync::LazyLock<&'static str> = std::sync::LazyLoc
 /// refused; what mako *writes* is always [`SCHEMA_VERSION`].
 #[must_use]
 pub fn version_is_readable(stored: &str) -> bool {
-    stored.strip_prefix('v').unwrap_or(stored).split('.').next() == Some(*SCHEMA_SERIES)
+    stored.strip_prefix('v').unwrap_or(stored).split('.').next() == Some(SCHEMA_SERIES)
 }
 
 #[cfg(test)]
@@ -101,10 +96,10 @@ mod schema_version_tests {
     /// changes it without a source edit — the point of deriving it.
     #[test]
     fn the_schema_version_is_the_linked_crates_own() {
-        use rubo4e::Bo4eObject as _;
+        use rubo4e::Bo4eTyped as _;
         assert_eq!(
             super::schema_version(),
-            rubo4e::current::Vertrag::default().schema_version(),
+            rubo4e::current::Vertrag::SCHEMA_VERSION,
             "every BO in a schema series reports the same version"
         );
         // BO4E prefixes its git *tags* with a `v` (`v202607.1.0`); the
@@ -116,7 +111,7 @@ mod schema_version_tests {
         );
         assert_eq!(
             super::schema_version().split('.').next(),
-            Some(*super::SCHEMA_SERIES),
+            Some(super::SCHEMA_SERIES),
             "the series is the release's own YYYYMM prefix"
         );
     }
@@ -129,7 +124,7 @@ mod schema_version_tests {
     /// tag; they stay readable rather than being orphaned by the correction.
     #[test]
     fn the_series_decides_what_is_readable() {
-        let series = *super::SCHEMA_SERIES;
+        let series = super::SCHEMA_SERIES;
         assert!(super::version_is_readable(&super::schema_version()));
         assert!(super::version_is_readable(&format!("{series}.9.9")));
         assert!(super::version_is_readable(&format!("v{series}.0.0")));

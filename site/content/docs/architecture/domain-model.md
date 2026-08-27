@@ -647,9 +647,9 @@ Money is compared at the scale of the stated total, with the cent as the floor.
 A position vector carried at six decimals sums to a figure no invoice states;
 demanding exact equality would reject the whole real-world corpus.
 
-### Received, nested, emitted
+### Received and emitted
 
-Three call sites need something other than all four stages, and each says why:
+Two call sites need something other than all four stages, and each says why:
 
 - **`decode_received`** — a market document from a counterparty. Stages 1–3
   still refuse, because a document that will not type has nothing to
@@ -657,21 +657,24 @@ Three call sites need something other than all four stages, and each says why:
   `gesamtbrutto` is not net plus tax is *disputable*, and the market's answer is
   a REMADV naming the defect (`invoic-checker` stage 3 already produces it).
   Refusing to parse would replace that answer with silence and a dead letter.
-- **`decode_nested`** — a COM read out of the extension map of the BO that
-  carried it. It relaxes stage 1 by exactly one step: `_typ` may be **absent**
-  (the key it was filed under already named it, and producers do not reliably
-  stamp it on a nested COM), but a `_typ` that is present and **wrong** is still
-  refused. Nothing else catches that one: `ensure_known_enums` walks a value's
-  *fields* and never reaches `typ` itself, so a nested
-  `{"_typ": "MARKTLOKATION"}` otherwise decodes to `typ: Some(Unknown)` and
-  passes every remaining stage.
 - **`ensure_conformant`** — the outbound gate: stages 3 and 4 on a value mako
-  *built*, the first two being the compiler's job there. **mako never sends a
-  document it would refuse to receive.** It runs in tests over every shape the
-  three billing engines can emit, and at runtime wherever a document is
-  *assembled* rather than emitted whole — `netzbilanzd` merging a stored
-  `Fremdkosten` into a stored `Rechnung`, `billingd` concatenating many
-  invoices' positions into a Sammelrechnung.
+  *built* (the first two are the compiler's job there), plus the outbound-only
+  field check. **mako never sends a document it would refuse to receive.** It
+  runs in tests over every shape the billing engines emit, and at runtime at
+  every emission site — the Sammelrechnung and Korrekturrechnung, the VPP and
+  EEG Gutschriften, the self-issued INVOIC 31006, the Redispatch-Kostenblatt.
+  A fixture test covers the *shapes* a builder produces; the gate's rules are
+  arithmetic over the *values* a request supplies.
+
+**A nested value is not a third case.** A COM or standalone BO read out of the
+extension map of the object that carried it — `ZeitvariablePreisposition` under
+a `PreisblattMessung`, `Standorteigenschaften` under a `Messlokation` — crosses
+the same `decode`, which injects an absent `_typ` rather than demanding it
+(BO4E marks the field required on no schema). A `_typ` that is present and
+**wrong** is still refused, because nothing downstream catches one:
+`ensure_known_enums` walks a value's *fields* and never reaches `typ` itself, so
+a nested `{"_typ": "MARKTLOKATION"}` would otherwise decode to
+`typ: Some(Unknown)` and go back out as the literal string `"UNKNOWN"`.
 
 A BO4E `Rechnungsposition` is a **net supply line**: tax lives in
 `steuerbetraege`/`gesamtsteuer` and advances in `vorauszahlungen`/`zuZahlen`, so
@@ -708,6 +711,54 @@ attribute that is not namespaced **and** listed in its registry. The registry
 carries a one-line description per attribute and is the discoverable list: a
 consumer cannot learn mako's extensions from the BO4E schema, because not being
 in the schema is the point.
+
+### The gate decodes through `rubo4e`, not `serde_json`
+
+Stage 2 is `T::from_json_value`, which enforces the crate's nesting-depth cap;
+plain `serde_json::from_value` enforces nothing, and the gate is the one place
+mako reads untrusted BO4E.
+
+Not the *hardened* variant with the extension-field count closed to zero: that
+turns an undefined field into a decode error, which is right for a document you
+built and wrong for one a counterparty sent.
+
+### Out-of-schema fields are refused on the way out
+
+`Bo4eStrict::ensure_known_enums` finds out-of-schema **values**;
+`Bo4eExtensions::ensure_no_extension_data` finds out-of-schema **fields**.
+Neither sees the other's finding, and the outbound gate runs both.
+
+Only outbound: refusing an unknown *field* from a counterparty would throw away
+the forward compatibility the extension map exists for — a sender one BO4E
+release ahead is to be read, not rejected. On a document mako authored an
+undefined field can only be a mistake, and it is the mistake nothing else can
+see: a decode round-trip returns `Ok` for a misspelled key and reads the field
+back as `None`.
+
+`_additional` is the **counterparty's** extension slot. Everything mako adds
+rides in `zusatzAttribute` — a real BO4E field — under the `mako:` namespace,
+where the registry and `check-bo4e-attributes` reach it.
+
+### A BO4E document is built typed, never assembled as JSON
+
+`cargo xtask check-bo4e-discriminants` (also part of `just ci`) refuses a `_typ`
+written by hand — as `typ: Some(BoTyp::X)` beside a `..Default::default()` that
+already stamps it, as `typ: None` (which serialises to a document carrying no
+discriminant at all), or as a `"_typ": "X"` key in a `json!` literal.
+
+The discriminant is the visible half of the rule; the field names are the
+half that matters. A document assembled as `json!` never meets the typed
+constructor, so nothing checks its keys against the schema — `rubo4e` captures
+unknown keys in `_additional` rather than rejecting them, so a misspelled field
+decodes cleanly, reads back as `None`, and ships with the value missing.
+
+A decode round-trip is not a defence against this: `from_value::<T>(literal)`
+returns `Ok` for a renamed key, because absorbing it is what the extension map
+is for. A struct literal fails to compile instead.
+
+The same trap reaches documentation, because an example is copied.
+`cargo xtask check-bo4e-examples` decodes every fenced JSON block in the docs
+that carries a `_typ` and reports any field BO4E does not define.
 
 Two rules follow:
 

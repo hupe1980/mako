@@ -33,7 +33,7 @@ use crate::{
 /// produces. See [`mako_markt::bo4e::schema_version`].
 #[must_use]
 pub fn bo4e_version() -> &'static str {
-    *mako_markt::bo4e::SCHEMA_VERSION
+    mako_markt::bo4e::SCHEMA_VERSION
 }
 
 /// Product categories that store a BO4E `Tarifpreisblatt` payload.
@@ -42,7 +42,7 @@ pub fn bo4e_version() -> &'static str {
 /// absent) and the full BO4E envelope is validated via
 /// `rubo4e::current::Tarifpreisblatt`.  All other categories
 /// (`WASSER`, `HEMS`, `EMOBILITY`, `ENERGIEDIENSTLEISTUNG`, `BUNDLE`) use a free-form
-/// structure — only `tarifpreispositionen` is validated if present.
+/// structure — only `tarifpreise` is validated if present.
 const TARIFPREISBLATT_CATEGORIES: &[&str] = &[
     "STROM",
     "GAS",
@@ -116,7 +116,7 @@ pub const VALID_PREISTYPEN: &[&str] = &[
 ///
 /// ## Position validation (all categories)
 ///
-/// Applied to every element of `tarifpreispositionen` when the field is present:
+/// Applied to every element of `tarifpreise` when the field is present:
 ///
 /// - `preistyp` is normalised to ALLCAPS and validated against [`VALID_PREISTYPEN`].
 /// - `preisstaffeln[*].preis` must be a **scalar** JSON string or number parseable
@@ -126,7 +126,7 @@ pub const VALID_PREISTYPEN: &[&str] = &[
 ///
 /// For BO4E categories the full envelope is re-serialised from the typed struct,
 /// yielding canonical camelCase field names.  The normalised
-/// `tarifpreispositionen` (with ALLCAPS `preistyp`) are merged back so that
+/// `tarifpreise` (with ALLCAPS `preistyp`) are merged back so that
 /// mako-extended preistyp values survive the round-trip without being mapped to
 /// `"UNKNOWN"` by `Preistyp`'s catch-all serde variant.
 pub fn normalize_tarifpreisblatt(
@@ -154,19 +154,16 @@ pub fn normalize_tarifpreisblatt(
             serde_json::json!({
                 "error": format!(
                     "_version {v:?} is not accepted; this build reads BO4E series {:?}",
-                    *mako_markt::bo4e::SCHEMA_SERIES
+                    mako_markt::bo4e::SCHEMA_SERIES
                 )
             }),
         ));
     }
 
-    // ── 1. Normalise tarifpreispositionen ─────────────────────────────────────
+    // ── 1. Normalise tarifpreise ─────────────────────────────────────
     //    - ALLCAPS preistyp normalisation + whitelist check
     //    - scalar Decimal validation for preisstaffeln[*].preis
-    if let Some(positionen) = data
-        .get_mut("tarifpreispositionen")
-        .and_then(|v| v.as_array_mut())
-    {
+    if let Some(positionen) = data.get_mut("tarifpreise").and_then(|v| v.as_array_mut()) {
         for (i, pos) in positionen.iter_mut().enumerate() {
             if let Some(pt) = pos.get("preistyp").and_then(|v| v.as_str()) {
                 let upper = pt.to_uppercase();
@@ -175,7 +172,7 @@ pub fn normalize_tarifpreisblatt(
                         StatusCode::UNPROCESSABLE_ENTITY,
                         serde_json::json!({
                             "error": format!(
-                                "tarifpreispositionen[{i}].preistyp {pt:?} is not valid; \
+                                "tarifpreise[{i}].preistyp {pt:?} is not valid; \
                                  accepted values: {}",
                                 VALID_PREISTYPEN.join(", ")
                             )
@@ -221,7 +218,7 @@ pub fn normalize_tarifpreisblatt(
                                 StatusCode::UNPROCESSABLE_ENTITY,
                                 serde_json::json!({
                                     "error": format!(
-                                        "tarifpreispositionen[{i}].preisstaffeln[{j}].preis \
+                                        "tarifpreise[{i}].preisstaffeln[{j}].preis \
                                          must be a scalar decimal (string or number), \
                                          not a nested object"
                                     )
@@ -949,9 +946,7 @@ fn compute_cost_breakdown(
 ) -> Option<PositionCostBreakdown> {
     use rust_decimal::dec;
 
-    let positionen = product_data
-        .get("tarifpreispositionen")
-        .and_then(|v| v.as_array())?;
+    let positionen = product_data.get("tarifpreise").and_then(|v| v.as_array())?;
 
     let mut grundpreis_ct: Option<Decimal> = None;
     let mut arbeitspreis_ct: Option<Decimal> = None;
@@ -1887,7 +1882,7 @@ pub async fn put_angebot(
 
 // ── Comparison portal feed ────────────────────────────────────────────────────
 
-/// Extract `TarifPreise` from a product's `tarifpreispositionen` JSONB array.
+/// Extract `TarifPreise` from a product's `tarifpreise` JSONB array.
 ///
 /// Prices are stored as scalar `Decimal` strings after `normalize_tarifpreisblatt`
 /// validation (never nested `{"wert": ...}` objects).  Unknown preistypen are
@@ -1903,7 +1898,7 @@ pub async fn put_angebot(
 /// - `arbeitspreis_ht_ct_per_kwh` and `arbeitspreis_nt_ct_per_kwh` are `None`
 pub fn extract_tarif_preise(data: &serde_json::Value) -> crate::pg::TarifPreise {
     let positionen = data
-        .get("tarifpreispositionen")
+        .get("tarifpreise")
         .and_then(|v| v.as_array())
         .map(Vec::as_slice)
         .unwrap_or(&[]);
@@ -2243,13 +2238,9 @@ pub fn build_tarifinfo(row: &crate::pg::ProductRow, lf_mp_id: &str) -> Tarifinfo
         energiemix,
         zeitliche_gueltigkeit,
         vertragskonditionen,
-        typ: Some(rubo4e::current::BoTyp::Tarifinfo),
-        version: Some(bo4e_version().to_owned()),
-        website: None,
-        bemerkung: None,
-        anwendung_von: None,
-        zusatz_attribute: None,
-        _additional: Default::default(),
+        // `..Default::default()` stamps `_typ` and `_version` from this type's
+        // own schema — the only source that cannot disagree with itself.
+        ..Default::default()
     }
 }
 
@@ -2337,13 +2328,25 @@ pub async fn get_comparison_feed_bo4e(
     };
 
     // ── Build BO4E TarifInfo objects ──────────────────────────────────────────
-    let tarife: Vec<serde_json::Value> = rows
+    //
+    // Not `unwrap_or(Value::Null)`: a `null` in this array is served to
+    // consumers as a tariff and counted in `total_returned` like one. The feed
+    // fails rather than publishing a hole in it.
+    let tarife: Vec<serde_json::Value> = match rows
         .iter()
-        .map(|row| {
-            let tarifinfo = build_tarifinfo(row, &lf_mp_id);
-            serde_json::to_value(&tarifinfo).unwrap_or(serde_json::Value::Null)
-        })
-        .collect();
+        .map(|row| mako_markt::bo4e::to_canonical_json(&build_tarifinfo(row, &lf_mp_id)))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, "comparison feed: a TarifInfo is not serialisable");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
 
     let meta = crate::pg::ComparisonFeedMeta {
         generated_at: time::OffsetDateTime::now_utc(),
@@ -2461,7 +2464,11 @@ pub async fn get_comparison_feed(
     };
 
     // ── Build response entries ────────────────────────────────────────────────
-    let tarife: Vec<crate::pg::ComparisonFeedEntry> = rows
+    //
+    // Collected as a `Result`: a `TarifInfo` that will not serialise fails the
+    // feed rather than riding in it as a JSON `null` counted in
+    // `total_returned` — see `mako_markt::bo4e::to_canonical_json`.
+    let tarife: Vec<crate::pg::ComparisonFeedEntry> = match rows
         .iter()
         .map(|row| {
             let preise = extract_tarif_preise(&row.data);
@@ -2472,7 +2479,7 @@ pub async fn get_comparison_feed(
             });
             let netto = netto.map(|n| n.round_dp(2));
 
-            crate::pg::ComparisonFeedEntry {
+            Ok(crate::pg::ComparisonFeedEntry {
                 product_code: row.product_code.clone(),
                 name: row.name.clone(),
                 category: row.category.clone(),
@@ -2499,12 +2506,22 @@ pub async fn get_comparison_feed(
                 energiemix: row.energiemix.clone(),
                 oekolabel: row.oekolabel.clone(),
                 tarifpreisblatt: row.data.clone(),
-                tarifinfo: serde_json::to_value(build_tarifinfo(row, &lf_mp_id))
-                    .unwrap_or(serde_json::Value::Null),
+                tarifinfo: mako_markt::bo4e::to_canonical_json(&build_tarifinfo(row, &lf_mp_id))?,
                 updated_at: row.updated_at,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, mako_markt::bo4e::Bo4eSerialiseError>>()
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, "comparison feed: a TarifInfo is not serialisable");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
 
     let meta = crate::pg::ComparisonFeedMeta {
         generated_at: time::OffsetDateTime::now_utc(),

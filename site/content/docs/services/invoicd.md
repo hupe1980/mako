@@ -529,6 +529,14 @@ so the rendered BO4E states `netznutzungrechnungsart = Selbstausgestellt` and
 with PID 31006 renders as a Handelsrechnung instead — individually well-formed
 fields, and a document the AHB rejects.
 
+**The document crosses the BO4E outbound gate before it is dispatched.**
+`grid-billing` checks its own emissions in tests, but that covers the *shapes*
+`settle_mmm` produces, not the *values* this request supplies — the quantities,
+the period, the price series. The counterparty runs the same rules on receipt
+(`invoic-checker` stage 3) and answers a document that does not reconcile with a
+REMADV rejection, so a non-conformant document is a `422` here rather than a
+dispute there.
+
 The receipt carries **`makod`'s** process id, so the answering REMADV, a later
 Storno and the payment confirmation all find the same row.
 

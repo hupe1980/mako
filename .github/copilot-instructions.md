@@ -123,7 +123,9 @@ cargo xtask validate-profiles         # validate all profiles against EDIFACT sp
 cargo xtask validate-pruefids         # validate Prüfidentifikatoren (AHB check)
 cargo xtask audit-ahb                 # audit Application Handbooks
 cargo xtask check-release-coverage    # verify format-version coverage
-cargo xtask check-bo4e-coverage       # verify rubo4e::current type count matches README (delta ≤ 2)
+cargo xtask check-bo4e-coverage       # verify rubo4e::current type count matches README exactly
+cargo xtask check-bo4e-discriminants  # refuse a hand-written BO4E `_typ` (build it typed instead)
+cargo xtask check-bo4e-examples       # refuse a documented BO4E example using an undefined field
 cargo xtask generate-fixtures         # regenerate EDIFACT test fixtures
 cargo xtask extract-pdf               # extract tables from BDEW specification PDFs
 cargo xtask import-codelists          # import BDEW code lists

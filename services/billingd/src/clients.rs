@@ -228,10 +228,7 @@ fn extract_tariff_from_product_data(
         .unwrap_or(false);
 
     let preispositionen = data
-        .and_then(|d| {
-            d.get("tarifpreispositionen")
-                .or_else(|| d.get("preispositionen"))
-        })
+        .and_then(|d| d.get("tarifpreise").or_else(|| d.get("preispositionen")))
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();

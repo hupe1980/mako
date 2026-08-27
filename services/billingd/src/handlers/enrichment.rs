@@ -499,14 +499,28 @@ mod gas_enrichment_tests {
         )
         .unwrap();
         let pos = json["rechnungspositionen"].as_array().unwrap();
-        assert_eq!(pos[0]["marktlokationsId"], "11111111115");
-        assert_eq!(pos[1]["marktlokationsId"], "22222222220");
+        // The per-position facts ride as `mako:`-namespaced ZusatzAttribute,
+        // not as bare extension keys — `marktlokationsId` in particular is a
+        // real BO4E field name elsewhere in the schema.
+        let attr = |p: &serde_json::Value, name: &str| {
+            p.get("zusatzAttribute")
+                .and_then(|z| z.as_array())
+                .and_then(|a| {
+                    a.iter()
+                        .find(|x| x.get("name").and_then(|n| n.as_str()) == Some(name))
+                })
+                .and_then(|x| x.get("wert"))
+                .cloned()
+        };
+        assert_eq!(attr(&pos[0], "mako:malo_id").unwrap(), "11111111115");
+        assert_eq!(attr(&pos[1], "mako:malo_id").unwrap(), "22222222220");
         assert!(
-            !pos.iter().any(|p| p["kategorie"] == "Tax"),
+            !pos.iter()
+                .any(|p| attr(p, "mako:positionskategorie") == Some("Tax".into())),
             "tax belongs in steuerbetraege, not among the positions"
         );
         assert!(
-            pos.iter().all(|p| p.get("marktlokationsId").is_some()),
+            pos.iter().all(|p| attr(p, "mako:malo_id").is_some()),
             "every emitted position is a supply line, so every one names its MaLo"
         );
         // …and the tax the positions no longer state is still on the document.

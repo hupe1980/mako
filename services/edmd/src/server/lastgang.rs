@@ -127,38 +127,7 @@ pub(crate) async fn get_lastgang(
 
     let lastgaenge: Vec<Lastgang> = groups
         .into_iter()
-        .map(|(obis_key, group)| {
-            let sparte = edm_sparte_to_bo4e(group[0].sparte);
-            let obis_kennzahl = if obis_key.is_empty() {
-                None
-            } else {
-                rubo4e::identifiers::ObisCode::new(&obis_key).ok()
-            };
-
-            // The register's observed cadence. Taking the first consecutive pair
-            // instead reported the *gap* as the resolution whenever the window
-            // opened on one, and 15 min for any single-reading series whatever
-            // its length.
-            let interval_min = observed_interval_minutes(&group);
-
-            let werte: Vec<Zeitreihenwert> =
-                group.iter().map(|r| read_to_zeitreihenwert(r)).collect();
-
-            Lastgang {
-                id: None,
-                marktlokation: None,
-                messgroesse: None,
-                messlokation: None,
-                obis_kennzahl,
-                sparte: Some(sparte),
-                typ: None,
-                version: None,
-                werte: Some(werte),
-                zeit_intervall_laenge: minutes_to_menge(interval_min),
-                zusatz_attribute: None,
-                _additional: Default::default(),
-            }
-        })
+        .map(|(obis_key, group)| lastgang_from_group(&obis_key, &group))
         .collect();
 
     // ── Arrow IPC response path ────────────────────────────────────────────────
@@ -183,7 +152,8 @@ pub(crate) async fn get_lastgang(
         };
     }
 
-    Json(lastgaenge).into_response()
+    let coverage = audit_export(&lastgaenge, from, to, &malo_id, "lastgang");
+    ([(COVERAGE_HEADER, coverage)], Json(lastgaenge)).into_response()
 }
 
 /// Query parameters for [`get_energy_series`].
@@ -363,6 +333,80 @@ pub(crate) async fn get_energy_series(
 /// The same normalisation `domain::register_groups`, the validator and the
 /// storage merge key use, so a BO4E export, a validation finding and a stored
 /// row all name one register the same way.
+/// Coverage of the requested window, as a percentage, on every series export.
+///
+/// The body of `/lastgang` and `/zeitreihe` is a BO4E array and stays one — a
+/// consumer feeds it to a BO4E parser. Completeness is metadata *about* the
+/// representation, so it rides in a header rather than wrapping the document.
+pub(crate) const COVERAGE_HEADER: &str = "x-mako-coverage-pct";
+
+/// Audit an exported series and report what the caller cannot see in the array.
+///
+/// A **gap** is data: a meter that was not read has no reading, and the export
+/// says so by containing fewer entries. It is returned as coverage, not logged.
+///
+/// An **overlap** or an unplaceable entry is not data — it is a defect on this
+/// side. `edmd` builds every `Zeitreihenwert` with a full instant range from a
+/// version-resolved read, so two entries claiming one interval means duplicate
+/// readings survived resolution, and a consumer summing the export would count
+/// the energy twice. Logged at `error` with the paths.
+///
+/// Returns the covered share of `[from, to)` across all series, worst-first, as
+/// a fixed-point percentage string.
+fn audit_export<T: rubo4e::timeseries::Bo4eTimeSeries>(
+    series: &[T],
+    from: time::OffsetDateTime,
+    to: time::OffsetDateTime,
+    malo_id: &str,
+    endpoint: &str,
+) -> String {
+    let mut worst = 100.0_f64;
+    for s in series {
+        let report = s.audit_over(from..to);
+        if !report.overlaps.is_empty() || !report.unplaced.is_empty() {
+            tracing::error!(
+                malo_id,
+                endpoint,
+                overlaps = report.overlaps.len(),
+                unplaced = report.unplaced.len(),
+                "edmd: exported series overlaps itself or carries an unplaceable entry"
+            );
+        }
+        if let Some(ratio) = report.coverage_ratio() {
+            worst = worst.min(ratio * 100.0);
+        }
+    }
+    format!("{worst:.1}")
+}
+
+/// One BO4E `Lastgang` from the readings of a single register.
+///
+/// `Lastgang::new` is the `..Default::default()` stand-in: the BO has no
+/// `Default`, because `zeitIntervallLaenge` is one of the two fields BO4E marks
+/// required. It stamps `_typ` the way `Default` does everywhere else.
+///
+/// `version` is left unset on purpose. On this BO it is **not** the schema
+/// stamp — `Lastgang` and `Zeitreihe` spell it `version` ("Versionsnummer des
+/// Lastgangs") where `Marktlokation` and `Tarif` spell theirs `_version`. It is
+/// the load profile's own revision number, which edmd does not carry.
+fn lastgang_from_group(obis_key: &str, group: &[&MeterRead]) -> Lastgang {
+    let obis_kennzahl = if obis_key.is_empty() {
+        None
+    } else {
+        rubo4e::identifiers::ObisCode::new(obis_key).ok()
+    };
+
+    Lastgang {
+        obis_kennzahl,
+        sparte: Some(edm_sparte_to_bo4e(group[0].sparte)),
+        werte: Some(group.iter().map(|r| read_to_zeitreihenwert(r)).collect()),
+        // The register's observed cadence. Taking the first consecutive pair
+        // instead reports the *gap* as the resolution whenever the window opens
+        // on one, and 15 min for any single-reading series whatever its length.
+        ..Lastgang::new(minutes_to_menge(observed_interval_minutes(group)))
+    }
+}
+
 fn register_key(r: &MeterRead) -> String {
     crate::domain::normalise_obis_code(r.obis_code.as_deref())
 }
@@ -911,7 +955,8 @@ pub(crate) async fn get_zeitreihe(
         };
     }
 
-    Json(zeitreihen).into_response()
+    let coverage = audit_export(&zeitreihen, from, to, &malo_id, "zeitreihe");
+    ([(COVERAGE_HEADER, coverage)], Json(zeitreihen)).into_response()
 }
 
 // ── Resampled Lastgang ───────────────────────────────────────────────────
@@ -1222,5 +1267,54 @@ mod arrow_transport_tests {
                 .expect("Utf8");
             assert_eq!(quality.value(0), crate::store::quality_to_str(flag));
         }
+    }
+    /// A complete window reports full coverage; a half-covered one says so.
+    ///
+    /// A gap is **data** — a meter that was not read has no reading — so the
+    /// export still serves what it has and the header carries the shortfall.
+    #[test]
+    fn the_export_reports_its_coverage() {
+        use time::macros::datetime;
+
+        let full = super::lastgang_from_group("1-0:1.8.0", &[&read("1.25")]);
+        // The fixture read spans 10:00–10:15.
+        assert_eq!(
+            super::audit_export(
+                std::slice::from_ref(&full),
+                datetime!(2026-07-01 10:00 UTC),
+                datetime!(2026-07-01 10:15 UTC),
+                "51238696012",
+                "lastgang",
+            ),
+            "100.0"
+        );
+        // Twice the window, same single reading — half covered.
+        assert_eq!(
+            super::audit_export(
+                std::slice::from_ref(&full),
+                datetime!(2026-07-01 10:00 UTC),
+                datetime!(2026-07-01 10:30 UTC),
+                "51238696012",
+                "lastgang",
+            ),
+            "50.0"
+        );
+    }
+
+    /// Every `Lastgang` edmd serves carries its BO4E discriminant.
+    ///
+    /// `Lastgang` has no `Default` — `zeitIntervallLaenge` is one of the two
+    /// fields BO4E marks required — so a struct spelled out field by field is
+    /// the natural shape here, and one that silently omits `_typ`.
+    ///
+    /// `version` stays absent: on this BO it is the load profile's own revision
+    /// number, not the schema stamp `Marktlokation` spells `_version`.
+    #[test]
+    fn a_served_lastgang_states_its_typ() {
+        let r = read("1.25");
+        let json = serde_json::to_value(super::lastgang_from_group("1-0:1.8.0", &[&r]))
+            .expect("serialises");
+        assert_eq!(json["_typ"], "LASTGANG");
+        assert!(json.get("_version").is_none());
     }
 }

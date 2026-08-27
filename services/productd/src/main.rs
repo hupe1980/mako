@@ -23,14 +23,14 @@
 //! | `BUNDLE` | Composite: references component product codes | per-component |
 //! | `SHARING` | §42c EnWG Energy Sharing | `calculate_strom` + share allocation |
 //!
-//! ## Pricing schema (`data.tarifpreispositionen`)
+//! ## Pricing schema (`data.tarifpreise`)
 //!
 //! Products store prices as BO4E Tarifpreisblatt JSONB.
 //! `billingd` reads `preistyp` strings (case-insensitive) to extract rates.
 //! Example product for a Strom SLP Eintarif:
 //! ```json
 //! {
-//!   "tarifpreispositionen": [
+//!   "tarifpreise": [
 //!     { "preistyp": "grundpreis",   "preisstaffeln": [{ "preis": { "wert": "20.50", "einheit": "CT" } }] },
 //!     { "preistyp": "arbeitspreis", "preisstaffeln": [{ "preis": { "wert": "31.20", "einheit": "CT" } }] }
 //!   ]

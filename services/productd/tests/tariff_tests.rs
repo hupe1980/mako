@@ -613,7 +613,7 @@ mod tarifpreisblatt_tests {
     fn minimal_strom_slp_product_payload() {
         let payload = json!({
             "_typ": "TARIFPREISBLATT",
-            "tarifpreispositionen": [
+            "tarifpreise": [
                 {
                     "preistyp": "GRUNDPREIS",
                     "preisstaffeln": [{ "preis": "20.50" }]
@@ -625,7 +625,7 @@ mod tarifpreisblatt_tests {
             ]
         });
         assert_eq!(payload["_typ"], "TARIFPREISBLATT");
-        let positions = payload["tarifpreispositionen"].as_array().unwrap();
+        let positions = payload["tarifpreise"].as_array().unwrap();
         assert_eq!(positions.len(), 2);
         assert_eq!(positions[0]["preistyp"], "GRUNDPREIS");
         assert_eq!(positions[1]["preistyp"], "ARBEITSPREIS_EINTARIF");
@@ -839,7 +839,7 @@ mod comparison_feed_tests {
     #[test]
     fn extract_eintarif_preise() {
         let data = serde_json::json!({
-            "tarifpreispositionen": [
+            "tarifpreise": [
                 { "preistyp": "GRUNDPREIS",           "preisstaffeln": [{ "preis": "5.50" }] },
                 { "preistyp": "ARBEITSPREIS_EINTARIF", "preisstaffeln": [{ "preis": "28.40" }] }
             ]
@@ -855,7 +855,7 @@ mod comparison_feed_tests {
     #[test]
     fn extract_zweitarif_preise() {
         let data = serde_json::json!({
-            "tarifpreispositionen": [
+            "tarifpreise": [
                 { "preistyp": "GRUNDPREIS",      "preisstaffeln": [{ "preis": "6.00" }] },
                 { "preistyp": "ARBEITSPREIS_HT", "preisstaffeln": [{ "preis": "31.20" }] },
                 { "preistyp": "ARBEITSPREIS_NT", "preisstaffeln": [{ "preis": "22.80" }] }
@@ -873,7 +873,7 @@ mod comparison_feed_tests {
     fn extract_preise_from_numeric_json_number() {
         // preis stored as JSON number (not string) is also valid
         let data = serde_json::json!({
-            "tarifpreispositionen": [
+            "tarifpreise": [
                 { "preistyp": "ARBEITSPREIS_EINTARIF", "preisstaffeln": [{ "preis": 29.5 }] }
             ]
         });
@@ -883,7 +883,7 @@ mod comparison_feed_tests {
 
     #[test]
     fn extract_preise_empty_positionen() {
-        let data = serde_json::json!({ "tarifpreispositionen": [] });
+        let data = serde_json::json!({ "tarifpreise": [] });
         let preise = extract_tarif_preise(&data);
         assert!(preise.grundpreis_ct_per_day.is_none());
         assert!(preise.arbeitspreis_ct_per_kwh.is_none());
@@ -901,7 +901,7 @@ mod comparison_feed_tests {
     fn extract_preise_unknown_preistyp_ignored() {
         // Extended preistypen (EEG_VERGUETUNG, etc.) must not pollute portal prices
         let data = serde_json::json!({
-            "tarifpreispositionen": [
+            "tarifpreise": [
                 { "preistyp": "EEG_VERGUETUNG", "preisstaffeln": [{ "preis": "8.00" }] },
                 { "preistyp": "GRUNDPREIS",     "preisstaffeln": [{ "preis": "4.80" }] }
             ]
@@ -1147,7 +1147,7 @@ mod comparison_feed_tests {
         // Simulate a fully populated STROM Tarifpreisblatt JSONB as stored by productd.
         let data = serde_json::json!({
             "_typ": "TARIFPREISBLATT",
-            "tarifpreispositionen": [
+            "tarifpreise": [
                 { "preistyp": "GRUNDPREIS",           "preisstaffeln": [{ "preis": "5.50" }] },
                 { "preistyp": "ARBEITSPREIS_EINTARIF", "preisstaffeln": [{ "preis": "28.40" }] }
             ],

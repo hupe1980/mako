@@ -1584,14 +1584,36 @@ fn build_gutschrift(
     };
 
     match settlement_to_gutschrift_with_document(output, vat, meta) {
-        Ok((rechnung, doc)) => (
-            serde_json::to_value(&rechnung).ok(),
-            Some(nummer),
-            // BT-110 VAT total (not `tax_total()`, which would also fold in any
-            // non-VAT levy layer). A validated single-layer Gutschrift never errs.
-            doc.vat_total().ok().map(|a| a.into_decimal()),
-            Some(doc.gross_total().into_decimal()),
-        ),
+        Ok((rechnung, doc)) => {
+            // The outbound gate. `eeg-billing` checks its own emissions in
+            // tests, but this Gutschrift is assembled from a settlement run's
+            // runtime values — the entitlement, the VAT status, the levy
+            // layers — and no fixture covers the arithmetic for arbitrary
+            // amounts. It is the document the Anlagenbetreiber is paid against.
+            //
+            // A non-conformant one is dropped rather than stored, which is the
+            // same degradation this function already applies to an assembly
+            // failure: the settlement is recorded, the document is not, and the
+            // warning names what to fix. Storing one whose totals disagree
+            // would put a defective payment document into the record instead.
+            if let Err(e) = mako_markt::bo4e::ensure_conformant(&rechnung) {
+                tracing::warn!(
+                    tr_id = %input.tr_id, error = %e,
+                    "einsd: assembled Gutschrift is not a valid BO4E document — \
+                     settlement stored without a document"
+                );
+                return (None, None, None, None);
+            }
+            (
+                serde_json::to_value(&rechnung).ok(),
+                Some(nummer),
+                // BT-110 VAT total (not `tax_total()`, which would also fold in
+                // any non-VAT levy layer). A validated single-layer Gutschrift
+                // never errs.
+                doc.vat_total().ok().map(|a| a.into_decimal()),
+                Some(doc.gross_total().into_decimal()),
+            )
+        }
         Err(e) => {
             tracing::warn!(
                 tr_id = %input.tr_id, error = %e,

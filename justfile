@@ -193,6 +193,14 @@ clippy-roles:
         cargo clippy -p processd --no-default-features --features "$f" --all-targets -- -D warnings
         cargo test   -p processd --no-default-features --features "$f" --test role_separation
     done
+    # mako-pruefung carries role features of its own — the EBD trees are grouped
+    # by prüfende Rolle, so an NB-only build should hold no LF catalogue. They
+    # were never linted, which is how an unused re-export came to sit in every
+    # role-scoped build while the default build stayed clean.
+    for f in "role-nb" "role-lf" "role-msb" "role-mabis" "role-nb,role-lf"; do
+        echo "==> cargo clippy -p mako-pruefung --no-default-features --features $f"
+        cargo clippy -p mako-pruefung --no-default-features --features "$f" --all-targets -- -D warnings
+    done
     # agentd carries the same role flags: it is the one service that reaches all
     # the others, so a role-scoped build must exclude the other arm's
     # specialists rather than merely decline to run them (§ 9 EnWG).
@@ -229,7 +237,7 @@ smoke-roles:
             --allow-no-as4-signing --check
     done
 
-ci: check test test-features check-publishable clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-routes check-wire-timestamps check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci validate-release-codes lint-makotest test-makotest
+ci: check test test-features check-publishable clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-wire-timestamps check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci validate-release-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -434,6 +442,15 @@ check-release-coverage:
 # Verify the rubo4e::current active-type count matches the README.md claim exactly.
 check-bo4e-coverage:
     cargo xtask check-bo4e-coverage
+
+# A BO4E `_typ` is the type's own fact — never a literal in a struct or a `json!`.
+check-bo4e-discriminants:
+    cargo xtask check-bo4e-discriminants
+
+# Every BO4E example in the docs uses fields BO4E defines. An example is copied,
+# and an undefined field is absorbed into `_additional` rather than refused.
+check-bo4e-examples:
+    cargo xtask check-bo4e-examples
 
 # Refuse a raw `time` value on a JSON wire: `OffsetDateTime` and `Date` derive
 # `Serialize` as their component array ([y, ordinal, h, m, s, ns, ±h, ±m, ±s]),

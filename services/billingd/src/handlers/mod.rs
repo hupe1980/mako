@@ -87,6 +87,15 @@ fn build_vpp_settlement(
             .get_or_insert_with(Vec::new)
             .extend(extra_attrs);
     }
+    // The outbound gate. `energy-billing`'s own emissions are test-guarded over
+    // the shapes the engine produces, but a VPP settlement is assembled here
+    // from runtime values — the dispatch credits, the VAT rate the aggregator
+    // contract carries, the tax pass over both — and no fixture can cover the
+    // arithmetic this checks for arbitrary amounts. The document is persisted
+    // and published as `de.billing.rechnung.erstellt`, off which `accountingd`
+    // books the CREDIT, so a Gutschrift whose totals disagree would be booked.
+    mako_markt::bo4e::ensure_conformant(&rechnung)
+        .map_err(|e| anyhow::anyhow!("the VPP settlement is not a valid BO4E document: {e}"))?;
     let json = serde_json::to_value(&rechnung)?;
     Ok((invoice, json))
 }
@@ -222,25 +231,23 @@ fn build_aggregate_invoice(
     let aggregate = Invoice::from_positions(ctx, base, warnings);
 
     let mut rechnung = aggregate.to_rechnung();
-    // BO4E Rechnungsposition has no per-position Marktlokation field, so the
-    // provenance annotation rides as an extension key (`_additional`) on each
-    // typed position — the same flat `marktlokationsId` key consumers read.
+    // BO4E `Rechnungsposition` has no per-position Marktlokation field, so the
+    // provenance annotation rides as a `mako:`-namespaced `zusatzAttribut` —
+    // which *is* a BO4E field — rather than as a bare extension key.
+    // `marktlokationsId` is a real BO4E field name elsewhere in the schema, so
+    // an unprefixed copy of it on a position would be indistinguishable from
+    // one BO4E might define with different semantics.
     if let Some(pos) = rechnung.rechnungspositionen.as_mut() {
         let mut idx = 0usize;
         for (malo_id, count) in &slices {
             for p in pos.iter_mut().skip(idx).take(*count) {
-                // `try_insert` refuses once the extension map hits its hardening
-                // caps. Dropping the annotation silently would leave a position
-                // on an aggregate invoice with no way back to the MaLo it
-                // settles, which is the one thing this annotation exists for —
-                // so a refusal fails the request instead.
-                p._additional
-                    .try_insert("marktlokationsId".to_owned(), serde_json::json!(malo_id))
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "cannot annotate aggregate position with MaLo {malo_id}: {e}"
-                        )
-                    })?;
+                p.zusatz_attribute.get_or_insert_with(Vec::new).push(
+                    rubo4e::current::ZusatzAttribut {
+                        name: Some("mako:malo_id".to_owned()),
+                        wert: Some(serde_json::json!(malo_id)),
+                        ..Default::default()
+                    },
+                );
             }
             idx += count;
         }

@@ -354,9 +354,10 @@ impl Invoice {
     /// ride as `zusatzAttribute` (§40 Kilowattstundenpreis, §40b
     /// Preisvergleichsdaten, §40 Abs. 2 Verbraucherinformationen, §42
     /// Stromkennzeichnung, contract facts, audit ids). Per-position facts with
-    /// no BO4E home (`rechtlicheGrundlage`, `positionstyp`, `kategorie`) ride
-    /// as extension keys on the position so audit tooling keeps reading the
-    /// same flat fields.
+    /// no BO4E home (`mako:rechtliche_grundlage`, `mako:positionstyp`,
+    /// `mako:positionskategorie`) ride as `zusatzAttribute` on the position —
+    /// `_additional` is for what a *counterparty* sent that this schema version
+    /// does not define, not for mako's own vocabulary.
     ///
     /// ## Money is Decimal-exact
     ///
@@ -457,29 +458,31 @@ impl Invoice {
                         ..Default::default()
                     }),
                     gesamtpreis: Some(betrag_eur(p.net_eur)),
-                    zusatz_attribute: Some(attrs),
                     ..Default::default()
                 };
-                // BO4E Rechnungsposition has no field for these; they ride as
-                // extension keys (round-trip-preserved by rubo4e) so the audit
-                // tooling keeps reading the same flat fields it always did.
+                // Per-position facts BO4E does not model ride in
+                // `zusatzAttribute` — a real BO4E field on `Rechnungsposition`
+                // — under the `mako:` namespace, like every other mako
+                // extension. A bare key in `_additional` would be
+                // indistinguishable from a field BO4E might introduce and from
+                // one the counterparty writes, and the outbound gate refuses
+                // it (`Bo4eExtensions::ensure_no_extension_data`).
+                let mut attrs = attrs;
                 if let Some(lb) = &p.legal_basis {
-                    annotate(
-                        &mut pos._additional,
-                        "rechtlicheGrundlage",
+                    attrs.push(zusatz_attribut(
+                        "mako:rechtliche_grundlage",
                         serde_json::json!(lb),
-                    );
+                    ));
                 }
-                annotate(
-                    &mut pos._additional,
-                    "positionstyp",
+                attrs.push(zusatz_attribut(
+                    "mako:positionstyp",
                     serde_json::json!(p.tags.first().map(String::as_str).unwrap_or("POSITION")),
-                );
-                annotate(
-                    &mut pos._additional,
-                    "kategorie",
+                ));
+                attrs.push(zusatz_attribut(
+                    "mako:positionskategorie",
                     serde_json::json!(format!("{:?}", p.category)),
-                );
+                ));
+                pos.zusatz_attribute = Some(attrs);
                 pos
             })
             .collect();
@@ -986,25 +989,6 @@ fn as_bo4e_timestamp(date: time::Date) -> Option<time::OffsetDateTime> {
     (0..=9999)
         .contains(&date.year())
         .then(|| date.midnight().assume_utc())
-}
-
-/// Add a provenance key to a BO4E object's extension map.
-///
-/// BO4E has no field for these — the legal basis of a rate, the position type,
-/// the MaLo an aggregate line settles — so they ride as extension keys, which
-/// rubo4e round-trip-preserves.
-///
-/// `try_insert` refuses once the map hits its hardening caps and names which.
-/// That cannot happen here — each map is freshly constructed and receives at
-/// most three keys — so the assertion states the invariant, and a cap set below
-/// three fails every test run instead of silently dropping an audit record.
-#[cfg(feature = "bo4e")]
-fn annotate(map: &mut rubo4e::json::LimitedExtensionMap, key: &str, value: serde_json::Value) {
-    let outcome = map.try_insert(key.to_owned(), value);
-    debug_assert!(
-        outcome.is_ok(),
-        "extension map refused the provenance key {key:?}: {outcome:?}"
-    );
 }
 
 /// A BO4E `ZusatzAttribut` — the sanctioned extension point for facts the

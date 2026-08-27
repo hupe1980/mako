@@ -291,6 +291,12 @@ macro_rules! code {
     };
 }
 
+// `mabis::codes` is the only module that names the macro by path
+// (`use crate::codes::{AntwortCode, code}`); every other user is textually
+// inside this file. Gated to match, so a role-scoped build that leaves MaBiS
+// out does not carry an unused re-export — the role features exist precisely to
+// build a binary containing only one Marktrolle's trees.
+#[cfg(feature = "role-mabis")]
 pub(crate) use code;
 
 // ── E_0609 — Abmeldung prüfen (Lieferende von NB an LF, 55007 → 55008/55009) ──

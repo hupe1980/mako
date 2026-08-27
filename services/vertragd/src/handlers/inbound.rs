@@ -419,18 +419,32 @@ async fn resolve_kunde(
     // typed read finds it: a CPQ prospect is an organisation, so the name is
     // `organisationsname`, and the contact address rides as a `Kontaktweg`
     // where `outputd` can find it.
-    let mut geschaeftspartner = serde_json::json!({
-        "_typ": "GESCHAEFTSPARTNER",
-        "organisationsname": name,
-    });
-    if let Some(ref mail) = contact_email {
-        geschaeftspartner["kontaktwege"] = serde_json::json!([{
-            "_typ": "KONTAKTWEG",
-            "kontaktart": "E_MAIL",
-            "kontaktwert": mail,
-            "istBevorzugterKontaktweg": true,
-        }]);
-    }
+    //
+    // Built typed and crossed through the outbound gate rather than assembled
+    // as JSON. Hand-writing the object meant hand-writing `_typ` on the BO and
+    // on the nested COM, and the result went into a `JSONB` column without
+    // crossing any gate — the one path in vertragd where an unchecked document
+    // reached storage. Serialising the typed value stamps both discriminants
+    // and spells every field the way BO4E does.
+    let geschaeftspartner = rubo4e::current::Geschaeftspartner {
+        organisationsname: Some(name),
+        kontaktwege: contact_email.as_ref().map(|mail| {
+            vec![rubo4e::current::Kontaktweg {
+                kontaktart: Some(rubo4e::current::Kontaktart::EMail),
+                kontaktwert: Some(mail.clone()),
+                ist_bevorzugter_kontaktweg: Some(true),
+                ..Default::default()
+            }]
+        }),
+        ..Default::default()
+    };
+    mako_markt::bo4e::ensure_conformant(&geschaeftspartner).map_err(|e| {
+        ApiError::Internal(anyhow::anyhow!(
+            "built a non-conformant Geschaeftspartner: {e}"
+        ))
+    })?;
+    let geschaeftspartner =
+        serde_json::to_value(&geschaeftspartner).map_err(|e| ApiError::Internal(e.into()))?;
     let input = pg::CreateKundeInput {
         kunden_nr: Some(angebotsnummer.to_owned()),
         oidc_sub: None,

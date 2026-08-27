@@ -817,7 +817,7 @@ impl ProductdMcpHandler {
                       \"data\": {\n\
                         \"dynamic_epex\": true,\n\
                         \"grundpreis_ct_per_day\": \"5.0\",\n\
-                        \"tarifpreispositionen\": [{ \"preistyp\": \"GRUNDPREIS\", ... }]\n\
+                        \"tarifpreise\": [{ \"preistyp\": \"GRUNDPREIS\", ... }]\n\
                       }\n\
                     }\n\n\
                  2. Import EPEX D-1 prices daily (cron at 13:00 CET after EPEX publication):\n\

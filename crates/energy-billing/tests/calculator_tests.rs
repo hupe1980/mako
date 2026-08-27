@@ -6476,3 +6476,44 @@ fn half_a_zweitarif_is_refused_as_a_product_defect() {
     );
     assert_eq!(ok.total_by_tag("arbeitspreis").round_dp(2), dec!(260.00));
 }
+
+/// A Korrekturrechnung is built by negating the stored JSON field by field, so
+/// a monetary field the negation misses yields a document whose totals disagree
+/// with each other — a correction no receiver can book.
+///
+/// `billingd` now runs the outbound gate on the result before persisting it and
+/// publishing `de.billing.rechnung.erstellt`. This pins the invariant that gate
+/// asserts: negating a conformant invoice yields a conformant invoice.
+#[cfg(feature = "bo4e")]
+#[test]
+fn a_negated_correction_is_still_a_conformant_bo4e_document() {
+    use energy_billing::negate_rechnung_json_for_correction;
+
+    let (_f, _t) = period();
+    let tariff =
+        j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30,"grundpreis_eur_per_month":12}"#);
+    let original = bill(&tariff, elec(dec!(1000))).to_rechnung_json();
+
+    // The original is conformant to begin with — otherwise this proves nothing.
+    let typed: rubo4e::current::Rechnung =
+        serde_json::from_value(original.clone()).expect("the engine emits a readable Rechnung");
+    mako_markt::bo4e::ensure_conformant(&typed).expect("the engine emits a conformant Rechnung");
+
+    let corrected = negate_rechnung_json_for_correction(&original, "ORIG-1", "KORR-1");
+    let typed: rubo4e::current::Rechnung = serde_json::from_value(corrected.clone())
+        .expect("the correction is still a readable Rechnung");
+    mako_markt::bo4e::ensure_conformant(&typed).unwrap_or_else(|e| {
+        panic!("negation broke BO4E conformance: {e}\n{corrected:#}");
+    });
+
+    // And the negation actually happened, so this is not passing vacuously.
+    assert!(
+        typed
+            .gesamtbrutto
+            .as_ref()
+            .and_then(|b| b.wert)
+            .is_some_and(|w| w < Decimal::ZERO),
+        "the correction credits the original"
+    );
+    assert_eq!(typed.original_rechnungsnummer.as_deref(), Some("ORIG-1"));
+}

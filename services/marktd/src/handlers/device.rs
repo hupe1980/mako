@@ -49,6 +49,7 @@ where
         + mako_markt::bo4e::Bo4eTyped
         + rubo4e::Bo4eStrict
         + mako_markt::bo4e::Bo4eConformance
+        + rubo4e::json::Bo4eJsonExt
         + rubo4e::prelude::Validate<Context = ()>,
 {
     mako_markt::bo4e::decode(data).map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_json()))
@@ -223,7 +224,7 @@ pub async fn put_steuerbare_ressource(
             }
         },
     };
-    let data = match super::serialise_or_500(&typed_sr, "SteuerbareRessource") {
+    let data = match super::serialise_or_500(&typed_sr) {
         Ok(v) => v,
         Err((status, body)) => return (status, Json(body)).into_response(),
     };
@@ -413,7 +414,17 @@ pub async fn put_konfigurationsprodukte(
             _ => {}
         }
         // Re-serialize to canonical BO4E camelCase.
-        validated.push(serde_json::to_value(&kp).unwrap_or(item.clone()));
+        //
+        // Not `unwrap_or(item.clone())`: falling back to the caller's own
+        // element would store the *unvalidated* body under a line that claims
+        // to canonicalise it, silently undoing every check above. Failure is
+        // unreachable for a generated BO4E type, which is why it is stated
+        // rather than defaulted — if it ever becomes reachable the write must
+        // not happen.
+        match super::serialise_or_500(&kp) {
+            Ok(v) => validated.push(v),
+            Err((status, body)) => return (status, Json(body)).into_response(),
+        }
     }
 
     let canonical = serde_json::Value::Array(validated);
@@ -1067,7 +1078,7 @@ pub async fn put_technische_ressource(
 
     // The canonical form of what the gate accepted, so the stored document and
     // the typed columns derived above come from one object.
-    let data = match super::serialise_or_500(&typed_tr, "TechnischeRessource") {
+    let data = match super::serialise_or_500(&typed_tr) {
         Ok(v) => v,
         Err((status, body)) => return (status, Json(body)).into_response(),
     };
@@ -1329,7 +1340,7 @@ pub async fn get_zaehlzeitdefinitionen(
     Path(zaehler_id): Path<String>,
     axum::extract::Query(q): axum::extract::Query<ZaehlzeitdefinitionQuery>,
 ) -> impl IntoResponse {
-    use rubo4e::current::{BoTyp, ComTyp, Umschaltzeit, Zaehlzeitsaison, Zaehlzeittagtyp};
+    use rubo4e::current::{Umschaltzeit, Zaehlzeitsaison, Zaehlzeittagtyp};
     use std::collections::BTreeMap;
 
     if enforcer
@@ -1357,13 +1368,15 @@ pub async fn get_zaehlzeitdefinitionen(
         .collect();
 
     if registers.is_empty() {
-        // Return an empty but schema-valid Zaehlzeitdefinition
-        // `..Default::default()` also stamps `_version` — rubo4e pre-fills it on
-        // construction, matching BO4E-python and go-bo4e, so setting it by hand
-        // would only reintroduce a literal that goes stale on a schema bump.
+        // Return an empty but schema-valid Zaehlzeitdefinition.
+        //
+        // `..Default::default()` stamps `_typ` *and* `_version` — rubo4e
+        // pre-fills both on construction, for COMs as well as BOs since 0.12,
+        // matching BO4E-python and go-bo4e. Writing either by hand reintroduces
+        // a literal that goes stale on a schema bump, and a discriminant
+        // written down is one that can name a different BO than the type.
         let empty = Zaehlzeitdefinition {
             id: Some(zaehler_id.clone()),
-            typ: Some(BoTyp::Zaehlzeitdefinition),
             ..Default::default()
         };
         return Json(empty).into_response();
@@ -1414,14 +1427,12 @@ pub async fn get_zaehlzeitdefinitionen(
                         .map(|(zeit_von, registercode)| Umschaltzeit {
                             registercode: Some(registercode),
                             umschaltzeit: Some(zeit_von),
-                            typ: Some(ComTyp::Umschaltzeit),
                             ..Default::default()
                         })
                         .collect();
                     Zaehlzeittagtyp {
                         tagtyp: Some(wochentage_key_to_wiederholungstyp(&wochentage_key)),
                         umschaltzeiten: Some(umschaltzeiten),
-                        typ: Some(ComTyp::Zaehlzeittagtyp),
                         ..Default::default()
                     }
                 })
@@ -1430,7 +1441,6 @@ pub async fn get_zaehlzeitdefinitionen(
             Zaehlzeitsaison {
                 bezeichnung: Some(saison_name),
                 tagtypen: Some(tagtypen),
-                typ: Some(ComTyp::Zaehlzeitsaison),
                 ..Default::default()
             }
         })
@@ -1438,7 +1448,6 @@ pub async fn get_zaehlzeitdefinitionen(
 
     let definition = Zaehlzeitdefinition {
         id: Some(zaehler_id.clone()),
-        typ: Some(BoTyp::Zaehlzeitdefinition),
         saisons: Some(saisons),
         // saisonprofil / feiertagskalender: the DB rows encode neither.
         ..Default::default()

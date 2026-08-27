@@ -50,7 +50,7 @@ fn normalize_geschaeftspartner(
 ) -> Result<serde_json::Value, (StatusCode, serde_json::Value)> {
     let partner: Geschaeftspartner = mako_markt::bo4e::decode(data)
         .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_json()))?;
-    super::serialise_or_500(&partner, "Geschaeftspartner")
+    super::serialise_or_500(&partner)
 }
 
 /// `PUT /api/v1/partners/:gln`
