@@ -152,6 +152,7 @@ impl MockLfn {
                 location_id: MaLo::new(malo_id),
                 process_date: process_date.to_owned(),
                 transaktionsgrund: None,
+                bilanzkreis: Some("11XBK-LF-------9".to_owned()),
             })
             .await
             .expect("LFN: execute InitiateAnmeldung (55001)");
@@ -209,6 +210,7 @@ impl MockLfn {
                 location_id: MaLo::new(malo_id),
                 process_date: process_date.to_owned(),
                 transaktionsgrund: None,
+                bilanzkreis: Some("11XBK-LF-------9".to_owned()),
             })
             .await
             .expect("LFN: execute InitiateAnmeldung (55016)");
@@ -532,7 +534,7 @@ impl MockLfa {
                     document_date,
                     process_date,
                     message_ref,
-                    vorgang: mako_gpke::LfVorgangsdaten::default(),
+                    vorgang: Box::new(mako_gpke::LfVorgangsdaten::default()),
                     validation_passed: true,
                     validation_errors: vec![],
                 }
@@ -775,6 +777,7 @@ fn nb_antwort(accepted: bool, reason: Option<&str>) -> mako_gpke::LfAntwort {
         ebd: Some(ebd.to_owned()),
         zustimmung: accepted,
         bemerkung: reason.map(ToOwned::to_owned),
+        bilanzkreis: None,
         termin: None,
     }
 }

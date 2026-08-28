@@ -227,6 +227,8 @@ fn the_hand_authored_layouts_agree_with_the_generated_tables() {
         &layouts::LIN,
         &layouts::PIA,
         &layouts::CCI,
+        &layouts::CAV,
+        &layouts::SEQ,
         &layouts::STS,
         &layouts::CTA,
         &layouts::COM,

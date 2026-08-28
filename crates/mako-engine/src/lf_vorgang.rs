@@ -60,6 +60,31 @@ pub struct LfVorgangsdaten {
     /// Vertragsbindung — so this field's *presence* is load-bearing and it is
     /// omitted, never nulled, when the message carried a fixed date.
     pub naechstmoeglicher_termin: Option<String>,
+    /// `SG12 NAD+Z09` `C080` — „Kunde des LF", the customer name the request
+    /// carries, joined from the composite's up-to-five DE 3036 components.
+    ///
+    /// `E_0624` Prüfschritt 50 („Ist der Kunde aus der Anfrage zur Beendigung
+    /// der Zuordnung identisch mit dem Kunden beim LFA?") is answerable only
+    /// from this: the UTILMD AHB marks the segment **Muss** on a 55010 whose
+    /// Transaktionsgrundergänzung is `ZW4`/`ZAP` (Bedingung `[279]`), and
+    /// Bedingung `[572]` says what it is — „Kundenname aus Anmeldung Lieferant
+    /// neu". Without it the whole Ein-/Auszug arm (`A32`/`A33`/`A34`)
+    /// escalates, which is a large share of all switches.
+    pub kunde_name: Option<String>,
+    /// `SG12 NAD+Z09` `C080` DE 3045 — the Namensformat: `Z01` Struktur von
+    /// Personennamen, `Z02` Struktur der Firmenbezeichnung.
+    ///
+    /// It says how to read [`Self::kunde_name`]: five interchangeable
+    /// components are a person (Nachname, Vorname, …) under `Z01` and a company
+    /// name under `Z02`, and a comparison that ignores the difference matches a
+    /// person against a company.
+    pub kunde_namensformat: Option<String>,
+    /// `SG12 NAD+VY` DE 3039 — the **Neulieferant**'s MP-ID (Bedingung `[567]`).
+    ///
+    /// The 55010 is the only message that names the LFN to the LFA before the
+    /// switch completes; it is what reconciles an Anfrage against a Kündigung
+    /// the LFA already answered.
+    pub lfn_mp_id: Option<String>,
 }
 
 impl LfVorgangsdaten {
@@ -115,6 +140,9 @@ impl LfVorgangsdaten {
         set("vorgangsnummer", &self.vorgangsnummer);
         set("uet_lieferanmeldung", &self.uet_lieferanmeldung);
         set("naechstmoeglicher_termin", &self.naechstmoeglicher_termin);
+        set("kunde_name", &self.kunde_name);
+        set("kunde_namensformat", &self.kunde_namensformat);
+        set("lfn_mp_id", &self.lfn_mp_id);
 
         if let Some(extra) = extra.as_object() {
             for (k, v) in extra {
@@ -157,6 +185,9 @@ mod tests {
             "vorgangsnummer",
             "uet_lieferanmeldung",
             "naechstmoeglicher_termin",
+            "kunde_name",
+            "kunde_namensformat",
+            "lfn_mp_id",
         ] {
             assert!(p.get(key).is_none(), "{key} must be absent, got {p:#}");
         }
@@ -172,6 +203,9 @@ mod tests {
                 vorgangsnummer: Some("NNV1234".into()),
                 uet_lieferanmeldung: Some("20260820".into()),
                 naechstmoeglicher_termin: Some("20261231".into()),
+                kunde_name: Some("Mustermann Erika".into()),
+                kunde_namensformat: Some("Z01".into()),
+                lfn_mp_id: Some("9900357000004".into()),
             },
             &serde_json::Value::Null,
         );
@@ -180,6 +214,9 @@ mod tests {
         assert_eq!(p["vorgangsnummer"], "NNV1234");
         assert_eq!(p["uet_lieferanmeldung"], "20260820");
         assert_eq!(p["naechstmoeglicher_termin"], "20261231");
+        assert_eq!(p["kunde_name"], "Mustermann Erika");
+        assert_eq!(p["kunde_namensformat"], "Z01");
+        assert_eq!(p["lfn_mp_id"], "9900357000004");
     }
 
     /// Sparte-specific facts ride along, and cannot displace a fact a tree

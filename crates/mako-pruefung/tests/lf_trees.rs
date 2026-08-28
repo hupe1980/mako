@@ -35,7 +35,9 @@ fn anfrage(pid: u32, grund: Option<&str>) -> LfAnfrage {
         transaktionsgrund: grund.map(ToOwned::to_owned),
         termin: Some(TERMIN),
         terminart: Terminart::Fix,
-        uet_lieferanmeldung: None,
+        // `SG4 DTM+154` is Muss on a 55010 and `E_0624` Prüfschritt 5 measures
+        // its Frist from it; the day before `EINGANG` is inside the window.
+        uet_lieferanmeldung: (pid == 55_010).then_some(date!(2026 - 08 - 20)),
         eingang: EINGANG,
     }
 }
@@ -45,6 +47,11 @@ fn anfrage(pid: u32, grund: Option<&str>) -> LfAnfrage {
 fn lage() -> LfVertragslage {
     LfVertragslage {
         beliefert: true,
+        vertrag_vorhanden: Bekannt::Ja,
+        // `E_0614` Prüfschritt 70 is „kündbar zum übermittelten Termin?", and
+        // the answer is this date against the requested one — a contract
+        // terminable to the day before TERMIN is terminable to TERMIN.
+        naechstmoeglicher_kuendigungstermin: Some(date!(2026 - 08 - 31)),
         zuordnung_am_folgetag: Bekannt::Ja,
         vertragsbindung_am_folgetag: Bekannt::Nein,
         kunde_identisch: Bekannt::Nein,
@@ -152,6 +159,41 @@ fn e0609_tranche_uses_the_second_code_range() {
     let mut l = lage();
     l.vorlauffrist_eingehalten = Bekannt::Nein;
     assert_eq!(code_of(&pruefe_abmeldung(&a, &l)), "A22");
+}
+
+/// `ZQ7`'s Vorlauffrist hangs on a Deaktivierungsmeldung the supplier never
+/// sees, so Prüfschritt 40 has nothing to evaluate and `E_0609` gives the Grund
+/// its own Frist at 120. The walk therefore reaches 85, 100 and 120.
+#[test]
+fn e0609_the_zq7_branch_walks_past_pruefschritt_40() {
+    let mut a = anfrage(55_007, Some("ZQ7"));
+    // Prüfschritt 85 — das Lieferende muss der nächste Monatserste sein.
+    a.termin = Some(date!(2026 - 09 - 01)); // EINGANG is 2026-08-20
+    let mut l = lage();
+    l.vorlauffrist_eingehalten = Bekannt::Ja;
+    l.zuordnungsermaechtigung_deaktiviert = Bekannt::Ja;
+    assert_eq!(code_of(&pruefe_abmeldung(&a, &l)), "A10");
+
+    // 100 → A07: the LF has no record of the BKV deactivating anything.
+    l.zuordnungsermaechtigung_deaktiviert = Bekannt::Nein;
+    assert_eq!(code_of(&pruefe_abmeldung(&a, &l)), "A07");
+}
+
+/// Prüfschritt 85 asks for the **next** Monatserster, not merely a Monatserster:
+/// a first of the month two years out claims to end a Zuordnungsermächtigung
+/// that has nothing to do with it.
+#[test]
+fn e0609_a_distant_monatserster_is_a05() {
+    let mut a = anfrage(55_007, Some("ZQ7"));
+    a.termin = Some(date!(2028 - 01 - 01));
+    let mut l = lage();
+    l.vorlauffrist_eingehalten = Bekannt::Ja;
+    l.zuordnungsermaechtigung_deaktiviert = Bekannt::Ja;
+    assert_eq!(code_of(&pruefe_abmeldung(&a, &l)), "A05");
+
+    // …and a mid-month date is the same refusal.
+    a.termin = Some(date!(2026 - 09 - 15));
+    assert_eq!(code_of(&pruefe_abmeldung(&a, &l)), "A05");
 }
 
 /// `A32` and `A35` belong to `E_0624`. `E_0609` must never produce them: a
@@ -412,6 +454,92 @@ fn e0614_a05_needs_an_actual_future_termination() {
     assert_eq!(e.as_antwort().unwrap().termin, Some(date!(2027 - 06 - 30)));
 }
 
+/// Prüfschritt 70 asks whether the contract is „unter Einhaltung der
+/// Kündigungsfrist" terminable to the *submitted* date — not whether it is
+/// running. Every unterminated contract is running, and almost all of them are
+/// terminable to a date far enough out.
+#[test]
+fn e0614_a_terminable_fixed_date_is_confirmed_even_while_the_contract_runs() {
+    let mut l = lage();
+    // A running, unterminated contract: nothing has been cancelled, and the
+    // Vertragsverhältnis outlives the requested date.
+    l.vertragsende = None;
+    l.vertragsbindung_am_folgetag = Bekannt::Ja;
+    // …but the notice period is met: the next admissible date is on or before
+    // the one the LFN asked for.
+    l.naechstmoeglicher_kuendigungstermin = Some(TERMIN);
+    let e = pruefe_kuendigung(&anfrage(55_016, None), &l);
+    assert_eq!(code_of(&e), "A09", "a terminable Kündigung is confirmed");
+    assert!(e.ist_zustimmung());
+}
+
+/// `E_3001` makes the same comparison: `E15` „Zustimmung ohne Korrekturen"
+/// when the requested date honours the notice period, `Z12`/`Z01` only when it
+/// does not.
+#[test]
+fn e3001_a_terminable_fixed_date_is_e15_not_z12() {
+    let mut l = lage();
+    l.vertragsbindung_am_folgetag = Bekannt::Ja;
+    l.naechstmoeglicher_kuendigungstermin = Some(TERMIN);
+    let e = pruefe_kuendigung_gas(&anfrage(44_016, None), &l);
+    assert_eq!(code_of(&e), "E15");
+    assert!(e.ist_zustimmung());
+}
+
+/// Prüfschritt 70 without a next admissible date is not „kündbar": the step
+/// cannot be evaluated at all, and `A06`/`A15` would have no `DTM+157` to carry.
+#[test]
+fn e0614_an_unknown_kuendbarkeit_escalates_at_70() {
+    let mut l = lage();
+    l.naechstmoeglicher_kuendigungstermin = None;
+    let e = pruefe_kuendigung(&anfrage(55_016, None), &l);
+    assert!(e.ist_eskalation(), "{e:?}");
+    match e {
+        LfEntscheidung::Eskalation { pruefschritt, .. } => assert_eq!(pruefschritt, 70),
+        LfEntscheidung::Antwort(_) => unreachable!(),
+    }
+}
+
+/// Prüfschritt 500 → `A18` is a **record** that no contract exists, not the
+/// absence of a record. A deployment that cannot look one up escalates; reading
+/// „nothing found" as `A18` releases every Tranche on request.
+#[test]
+fn e0614_a18_needs_a_recorded_absence_not_a_missing_record() {
+    let mut a = anfrage(55_016, None);
+    a.lokationsart = Some(Lokationsart::Tranche);
+
+    let mut l = lage();
+    l.vertrag_vorhanden = Bekannt::Unbekannt;
+    let e = pruefe_kuendigung(&a, &l);
+    assert!(e.ist_eskalation(), "{e:?}");
+    match e {
+        LfEntscheidung::Eskalation { pruefschritt, .. } => assert_eq!(pruefschritt, 500),
+        LfEntscheidung::Antwort(_) => unreachable!(),
+    }
+
+    l.vertrag_vorhanden = Bekannt::Nein;
+    assert_eq!(code_of(&pruefe_kuendigung(&a, &l)), "A18");
+
+    l.vertrag_vorhanden = Bekannt::Ja;
+    assert_eq!(code_of(&pruefe_kuendigung(&a, &l)), "A17");
+}
+
+/// `E_0624` Prüfschritt 5 is the tree's *first* question and its anchor is
+/// `SG4 DTM+154`. A 55010 without one cannot be measured, so it escalates —
+/// skipping the step accepts every late Anfrage, which is the one thing `A43`
+/// exists to refuse.
+#[test]
+fn e0624_a_request_without_its_uet_escalates_at_5() {
+    let mut a = anfrage(55_010, Some("E03"));
+    a.uet_lieferanmeldung = None;
+    let e = pruefe_beendigung_zuordnung(&a, &lage());
+    assert!(e.ist_eskalation(), "{e:?}");
+    match e {
+        LfEntscheidung::Eskalation { pruefschritt, .. } => assert_eq!(pruefschritt, 5),
+        LfEntscheidung::Antwort(_) => unreachable!(),
+    }
+}
+
 /// Prüfschritt 100: the EBD parks the process while an requested Vollmacht is
 /// outstanding — „wartet an diesem Prüfschritt". Parking is an operator state,
 /// not an answer.
@@ -542,8 +670,8 @@ fn e3001_a_kuendigung_dated_in_the_past_escalates() {
 /// gate is an AHB Bedingung, so getting it wrong fails validation rather than
 /// merely stating the wrong thing:
 ///
-/// - `Z12` „Ablehnung Vertragsbindung" is **[43] Wenn SG4 DTM+93 vorhanden**;
-/// - `Z01` „Zustimmung mit Terminänderung" is **[41] Wenn SG4 DTM+471 vorhanden**.
+/// - `Z12` „Ablehnung Vertragsbindung" is **`[43]` Wenn SG4 DTM+93 vorhanden**;
+/// - `Z01` „Zustimmung mit Terminänderung" is **`[41]` Wenn SG4 DTM+471 vorhanden**.
 ///
 /// So a Gas Kündigung „zum nächstmöglichen Termin" is *confirmed* at the date
 /// the LFA determined. Refusing it with `Z12` would block every Gas switch of a

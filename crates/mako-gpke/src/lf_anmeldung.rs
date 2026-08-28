@@ -76,6 +76,19 @@ pub const ANFRAGE_PIDS_LF: &[u32] = &[
     55077, // Anmeldung Lieferbeginn erz. MaLo (LFN → NB, BK6-24-174)
 ];
 
+/// The Anfrage-PIDs whose `SG8 SEQ+Z79` Produktpaket is **Muss**.
+///
+/// UTILMD AHB Strom 2.2 Kap. 5.3 lists the six Anwendungsfälle that carry one;
+/// the two this workflow sends are the Anmeldungen. An Abmeldung (55004) and a
+/// Kündigung (55016) register nothing and carry none.
+///
+/// The Codeliste der Konfigurationen 1.4 Kap. 6.1.1 makes the Bilanzkreis
+/// product (`9991000002082`) unconditional inside the package.
+pub const ANMELDUNG_PIDS_MIT_BILANZKREIS: &[u32] = &[
+    55001, // Anmeldung verb. MaLo
+    55077, // Anmeldung erz. MaLo
+];
+
 /// Inbound response PIDs (NB → LF or LFA → LF) routed back to this workflow.
 ///
 /// These must be registered in the PID router so the AS4 inbound layer can
@@ -252,6 +265,14 @@ pub enum LfAnmeldungCommand {
         /// SG4 STS Transaktionsgrund (DE9013) — `E01` Ein-/Auszug,
         /// `E03` Wechsel. Rendered as the outbound STS segment.
         transaktionsgrund: Option<String>,
+        /// `SG8 SEQ+Z79` Produktpaket — the Bilanzkreis the LF registers the
+        /// Marktlokation into.
+        ///
+        /// **Muss on 55001 and 55077** (UTILMD AHB Strom 2.2 Kap. 5.3): „ohne
+        /// die Angabe eines für den LF gültigen Bilanzkreises `[kann]` der NB den
+        /// LF der Marktlokation bzw. Tranche nicht zuordnen". `None` on 55004
+        /// and 55016, which register nothing.
+        bilanzkreis: Option<String>,
     },
     /// Inbound NB/LFA response (55002/55003, 55005/55006, 55017, 55018, 55078, 55080) received via AS4.
     ///
@@ -384,6 +405,7 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                 location_id,
                 process_date,
                 transaktionsgrund,
+                bilanzkreis,
             } => {
                 if !matches!(state, LfAnmeldungState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -391,6 +413,23 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                 if !ANFRAGE_PIDS_LF.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
                         "expected an LF Anfrage PID (55001, 55004, 55016, 55077), got {pid}",
+                    )));
+                }
+                // An Anmeldung without a Bilanzkreis is not a message the NB
+                // can act on. UTILMD AHB Strom 2.2 Kap. 5.3 makes `SG8 SEQ+Z79`
+                // Muss on 55001 and 55077 and names the reason: „ohne die
+                // Angabe eines für den LF gültigen Bilanzkreises [kann] der NB
+                // den LF der Marktlokation bzw. Tranche nicht zuordnen."
+                // Refusing here beats sending an AHB-invalid Anmeldung and
+                // waiting a Werktag for the APERAK.
+                if ANMELDUNG_PIDS_MIT_BILANZKREIS.contains(&pid.as_u32())
+                    && bilanzkreis.as_deref().is_none_or(str::is_empty)
+                {
+                    return Err(WorkflowError::rejected(format!(
+                        "Anmeldung {pid} ohne Bilanzkreis: die UTILMD AHB Strom 2.2 \
+                         Kap. 5.3 macht das Produktpaket SG8 SEQ+Z79 mit dem Produkt-Code \
+                         9991000002082 (Bilanzkreis) zur Muss-Angabe — ohne einen für den \
+                         LF gültigen Bilanzkreis kann der NB die Zuordnung nicht vornehmen.",
                     )));
                 }
 
@@ -423,6 +462,8 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                         // SG4 STS Transaktionsgrund (E01 Ein-/Auszug, E03
                         // Wechsel) — rendered as the outbound STS segment.
                         "transaktionsgrund": transaktionsgrund,
+                        // `SG8 SEQ+Z79` / `SG10 CAV+ZV4` — the Bilanzkreis.
+                        "bilanzkreis":       bilanzkreis,
                     }),
                 );
 
@@ -517,6 +558,7 @@ mod tests {
             location_id: MaLo::new("10001234558"),
             process_date: "2026-10-01".to_owned(),
             transaktionsgrund: None,
+            bilanzkreis: Some("11XBK-LF-------9".to_owned()),
         }
     }
 

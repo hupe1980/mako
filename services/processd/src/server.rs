@@ -105,6 +105,12 @@ pub struct RunConfig {
     /// This supplier's Bilanzkreise, by Regelzone and regime — a 55607
     /// Zustimmung must name one (GPKE Teil 2 § 2.4.2.2 Nr. 2).
     pub lf_bilanzkreise: Vec<crate::config::BilanzkreisEintrag>,
+    /// See [`crate::config::LfConfig::grundversorgungs_netzgebiete`].
+    pub lf_grundversorgungs_netzgebiete: Vec<String>,
+    /// See [`crate::config::LfConfig::eog_auto_respond`].
+    pub lf_eog_auto_respond: bool,
+    /// See [`crate::config::LfConfig::eog_versorgungsart`].
+    pub lf_eog_versorgungsart: Option<String>,
     /// `vertragd`, when this deployment runs the contract layer.
     ///
     /// Read by the LF and the MSB module alike: the split is by kind of fact,
@@ -318,6 +324,9 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
             tenant: cfg.tenant.clone(),
             auto_respond: cfg.lf_auto_respond,
             bilanzkreise: cfg.lf_bilanzkreise.clone(),
+            grundversorgungs_netzgebiete: cfg.lf_grundversorgungs_netzgebiete.clone(),
+            eog_auto_respond: cfg.lf_eog_auto_respond,
+            eog_versorgungsart: cfg.lf_eog_versorgungsart.clone(),
         };
         Some(Arc::new(LfState {
             config: lf_config,
@@ -912,6 +921,30 @@ mod rest {
         decide_queue_entry(&state, pool, &id_str, false, &decided_by(&claims)).await
     }
 
+    /// The one `standard` Bilanzkreis this deployment declared, if any.
+    ///
+    /// Both Anmeldungen need one — UTILMD AHB Strom 2.2 Kap. 5.3 makes the
+    /// `SG8 SEQ+Z79` Produktpaket Muss on a 55001, AHB Gas 1.2 makes
+    /// `SG10 CCI+Z19` Muss on a 44001 — and a deployment that lists exactly one
+    /// has already made the choice MaBiS § 10.2.1 leaves to the supplier.
+    ///
+    /// `None` in a build without the LF module compiled in: the endpoints stay
+    /// reachable so the Cedar `initiate-supply` denial is the answer a caller
+    /// gets, not a 404, and there is no `[[lf.bilanzkreise]]` to consult.
+    #[cfg(any(feature = "role-lf-strom", feature = "role-lf-gas"))]
+    fn configured_standard_bilanzkreis(state: &ProcessdState) -> Option<String> {
+        crate::lf_module::bilanzkreis_fuer(
+            &state.lf.as_ref()?.config.bilanzkreise,
+            mako_pruefung::Bilanzkreisart::Standard,
+            None,
+        )
+    }
+
+    #[cfg(not(any(feature = "role-lf-strom", feature = "role-lf-gas")))]
+    fn configured_standard_bilanzkreis(_state: &ProcessdState) -> Option<String> {
+        None
+    }
+
     /// `POST /api/v1/start-supply` — ERP initiates a GPKE Lieferbeginn (Strom SLP).
     ///
     /// Validates the LFW24 Mindestvorlauffrist and dispatches
@@ -990,6 +1023,34 @@ mod rest {
             .get("transaktionsgrund")
             .and_then(|v| v.as_str())
             .map(str::to_owned);
+
+        // `SG8 SEQ+Z79` Produktpaket — **Muss** on a 55001 (UTILMD AHB Strom
+        // 2.2 Kap. 5.3): „ohne die Angabe eines für den LF gültigen
+        // Bilanzkreises [kann] der NB den LF der Marktlokation bzw. Tranche
+        // nicht zuordnen". `makod` refuses an Anmeldung without one, so the
+        // caller learns here rather than from a rejected command.
+        //
+        // A deployment that lists exactly one Bilanzkreis for the Marktlokation's
+        // Bilanzierungsgebiet may leave it out and let the configuration decide;
+        // otherwise it is the caller's to name, because MaBiS § 10.2.1 grants the
+        // Zuordnungsermächtigung per (ZRT, BG, BK, LF) and the supplier picks
+        // among those.
+        let bilanzkreis = body
+            .get("bilanzkreis")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .or_else(|| configured_standard_bilanzkreis(&state));
+        if bilanzkreis.is_none() {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                axum::Json(serde_json::json!({
+                    "error": "MISSING_BILANZKREIS",
+                    "message": "\"bilanzkreis\" is required: the UTILMD AHB Strom 2.2                                 Kap. 5.3 makes the SG8 SEQ+Z79 Produktpaket with Produkt-Code                                 9991000002082 (Bilanzkreis) a Muss on PID 55001, and without                                 a Bilanzkreis valid for this LF the NB cannot assign the                                 Marktlokation. Configure [[lf.bilanzkreise]] with a single                                 `standard` entry to have it filled in automatically."
+                })),
+            )
+                .into_response();
+        }
 
         // Parse the requested Lieferbeginn date.
         let lieferbeginn = match time::Date::parse(
@@ -1076,6 +1137,8 @@ mod rest {
                 // Optional SG4 STS Transaktionsgrund (E01 Ein-/Auszug,
                 // E03 Wechsel) — forwarded onto the outbound UTILMD.
                 "transaktionsgrund": transaktionsgrund,
+                // `SG8 SEQ+Z79` / `SG10 CAV+ZV4` — Muss on 55001.
+                "bilanzkreis": bilanzkreis,
             }),
         };
         match state.makod.post_command(&idempotency_key, &cmd).await {
@@ -1180,6 +1243,27 @@ mod rest {
                 .into_response();
         }
 
+        // `SG10 CCI+Z19` DE 7037 — **Muss** on a 44001 (UTILMD AHB Gas 1.2).
+        // GeLi Gas states the Bilanzkreis in one segment; the Strom `SG8
+        // SEQ+Z79` Produktpaket does not exist here. `makod` refuses an
+        // Anmeldung without one, so the caller learns at the edge.
+        let bilanzkreis = body
+            .get("bilanzkreis")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .or_else(|| configured_standard_bilanzkreis(&state));
+        let Some(bilanzkreis) = bilanzkreis else {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                axum::Json(serde_json::json!({
+                    "error": "MISSING_BILANZKREIS",
+                    "message": "\"bilanzkreis\" is required: UTILMD AHB Gas 1.2 marks                                 SG10 CCI+Z19 (Bilanzkreis) a Muss on PID 44001, and without                                 it the GNB has no balancing circle to assign the                                 Marktlokation to. Configure [[lf.bilanzkreise]] with a                                 single `standard` entry to have it filled in automatically."
+                })),
+            )
+                .into_response();
+        };
+
         // ── GeLi Gas Mindestvorlauffrist ──────────────────────────────────
         //
         // AWH GeLi Gas 2.0 Kap. 2.5.2, SD „Lieferbeginn" Nr. 1: „Bei Anmeldungen
@@ -1267,7 +1351,13 @@ mod rest {
             command: mako_markt::commands::GELI_LIEFERBEGINN_ANMELDEN.to_owned(),
             malo_id: Some(malo_id.clone()),
             melo_id: None,
-            payload: body,
+            payload: {
+                let mut body = body;
+                if let Some(obj) = body.as_object_mut() {
+                    obj.insert("bilanzkreis".to_owned(), bilanzkreis.into());
+                }
+                body
+            },
         };
         match state.makod.post_command(&idempotency_key, &cmd).await {
             Ok(accepted) => (

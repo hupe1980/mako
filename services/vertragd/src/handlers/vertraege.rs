@@ -23,6 +23,21 @@ fn heute() -> Date {
     time::OffsetDateTime::now_utc().date()
 }
 
+/// Query parameters of the `by-malo` lookup.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct ByMaloQuery {
+    /// `?stichtag=YYYY-MM-DD` — the date a Kündigungsfrist is measured from.
+    /// Absent means today.
+    pub stichtag: Option<String>,
+    /// `?kunde=<Name>` — the customer a market message names, for `E_0624`
+    /// Prüfschritt 50.
+    ///
+    /// `processd` passes the `SG12 NAD+Z09` „Kunde des LF" of an inbound 55010
+    /// (or 44010). The answer comes back as `kunde_identisch_mit_anfrage`, and
+    /// it is deliberately tri-state — see [`domain::kundenidentitaet`].
+    pub kunde: Option<String>,
+}
+
 // ── Create ────────────────────────────────────────────────────────────────────
 
 /// `POST /api/v1/kunden/{id}/vertraege` — create a supply contract.
@@ -166,11 +181,29 @@ pub async fn list_by_kunde(
 /// invoice must state. Besides the contract row it computes the next possible
 /// Kündigungstermin under the rules that actually apply to this contract, and
 /// resolves the BG-7 buyer so the e-invoice has a real addressee.
+///
+/// # `?stichtag=YYYY-MM-DD`
+///
+/// The date the Kündigungsfrist is measured from; today when absent. `processd`
+/// passes the **Eingangsdatum der Kündigung**, because that is what `E_0614`
+/// Prüfschritt 70 names: „unter Einhaltung der Kündigungsfrist unter
+/// Berücksichtigung des Eingangsdatums der Kündigung". Inside the one-Werktag
+/// answer window the two usually agree; across a month boundary they do not,
+/// and the answer would otherwise state a date a whole notice period out.
 pub async fn by_malo(
     _claims: Claims,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(malo_id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<ByMaloQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let stichtag = match q.stichtag.as_deref() {
+        Some(raw) => Some(
+            Date::parse(raw, &time::format_description::well_known::Iso8601::DATE).map_err(
+                |_| ApiError::BadRequest(format!("\"stichtag\" is not an ISO-8601 date: {raw:?}")),
+            )?,
+        ),
+        None => None,
+    };
     let (vertrag, komponente) = pg::fetch_vertrag_by_malo(&ctx.pool, &malo_id, ctx.tenant())
         .await
         .map_err(ApiError::Internal)?
@@ -179,7 +212,7 @@ pub async fn by_malo(
         .await
         .map_err(ApiError::Internal)?;
     let haushaltskunde = kunde.as_ref().is_none_or(|k| k.haushaltskunde);
-    let frist = naechster_kuendigungstermin(&vertrag, haushaltskunde);
+    let frist = naechster_kuendigungstermin(&vertrag, haushaltskunde, stichtag);
 
     // Best-effort: a missing Kunde must not fail the contract lookup § 40 Abs. 1
     // needs; the invoice then carries a synthesised buyer and says so.
@@ -196,12 +229,26 @@ pub async fn by_malo(
             }
         };
 
+    // `E_0624` Prüfschritt 50 — „Ist der Kunde aus der Anfrage identisch mit
+    // dem Kunden beim LFA?" Only `vertragd` knows the contract holder, and the
+    // comparison is a domain rule rather than a string equality: the two sides
+    // never agree on shape. Absent `?kunde=` it stays `null`, which
+    // `processd` reads as unknown and escalates.
+    let identitaet = q.kunde.as_deref().map(|aus_anfrage| {
+        domain::kundenidentitaet(
+            Some(aus_anfrage),
+            rechnungsempfaenger.as_ref().and_then(|r| r.name.as_deref()),
+        )
+    });
+
     ok(serde_json::json!({
         "vertrag": vertrag,
         "komponente": komponente,
         "rechnungsempfaenger": rechnungsempfaenger,
         "naechstmoeglicher_kuendigungstermin": frist.fruehestens.to_string(),
         "kuendigungsfrist": frist,
+        "kunde_identisch_mit_anfrage": identitaet.and_then(domain::Kundenidentitaet::as_option),
+        "kundenidentitaet": identitaet,
     }))
 }
 
@@ -212,9 +259,10 @@ pub async fn by_malo(
 fn naechster_kuendigungstermin(
     vertrag: &pg::VersorgungsvertragRow,
     haushaltskunde: bool,
+    stichtag: Option<Date>,
 ) -> domain::Kuendigungsfrist {
     let mut frist = domain::kuendigungsfrist(
-        heute(),
+        stichtag.unwrap_or_else(heute),
         Vertragsart::from_db(&vertrag.vertragsart),
         haushaltskunde,
         Kuendigungsgrund::Ordentlich,

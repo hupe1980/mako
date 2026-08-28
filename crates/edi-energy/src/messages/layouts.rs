@@ -60,7 +60,15 @@ const C082: &[ComponentRef] = &[
 const C058: &[ComponentRef] = &[ComponentRef::repeated(1, "3124", C, 5)];
 
 /// C080 — Name des Beteiligten (`NAD`).
-const C080: &[ComponentRef] = &[ComponentRef::repeated(1, "3036", M, 5)];
+/// C080 — Name des Beteiligten (`NAD`). Five interchangeable name components
+/// and, after them, the **Namensformat** DE 3045 at component 6: `Z01` Struktur
+/// von Personennamen, `Z02` Struktur der Firmenbezeichnung. It is what says
+/// whether the five parts are (Nachname, Vorname, …) or a company name, and the
+/// UTILMD AHB marks it Muss wherever a `NAD` carries a Kundenname.
+const C080: &[ComponentRef] = &[
+    ComponentRef::repeated(1, "3036", M, 5),
+    ComponentRef::new(6, "3045", C),
+];
 
 /// C506 — Referenz (`RFF`).
 const C506: &[ComponentRef] = &[
@@ -230,9 +238,39 @@ const CCI_ELEMENTS: &[ElementRef] = &[
     ElementRef::new(1, "7059", C, 1),
     ElementRef::composite(2, "C502", C, 1, C502),
     ElementRef::composite(3, "C240", C, 1, C240),
+    // DE 4051 „Relevanz des Merkmals, Code" — element **4**, not 3. It is the
+    // only element `CCI+Z65` („Umsetzungsgradvorgabe des Produktpakets") uses,
+    // so its encoding is `CCI+Z65+++Z01` with C502 and C240 both empty. A
+    // three-element definition rejected that message as „CCI has 4 elements,
+    // expected between 0 and 3".
+    ElementRef::new(4, "4051", C, 1),
 ];
 /// `CCI` — Merkmal/Klasse. `C502` is unused and still occupies element 2.
 pub const CCI: SegmentDefinition = SegmentDefinition::new("CCI", "Merkmal/Klasse", CCI_ELEMENTS);
+
+/// C889 — Merkmalswert (`CAV`). `1131` and `3055` are *nicht benutzt* in the
+/// BDEW profile and keep their slots, so the value sits at component **4**:
+/// `CAV+ZV4:::11XBK-STD-----9`.
+const C889: &[ComponentRef] = &[
+    ComponentRef::new(1, "7111", C),
+    ComponentRef::new(2, "1131", C),
+    ComponentRef::new(3, "3055", C),
+    ComponentRef::new(4, "7110", C),
+];
+
+const CAV_ELEMENTS: &[ElementRef] = &[ElementRef::composite(1, "C889", M, 1, C889)];
+/// `CAV` — Merkmalswert. Carries the value of the `CCI` it follows.
+pub const CAV: SegmentDefinition = SegmentDefinition::new("CAV", "Merkmalswert", CAV_ELEMENTS);
+
+/// C286 — Information über eine Folge (`SEQ`). BDEW carries only DE 1050.
+const C286: &[ComponentRef] = &[ComponentRef::new(1, "1050", M)];
+
+const SEQ_ELEMENTS: &[ElementRef] = &[
+    ElementRef::new(1, "1245", C, 1),
+    ElementRef::composite(2, "C286", C, 1, C286),
+];
+/// `SEQ` — Folgeangaben. Opens a `SG8`: `SEQ+Z79+1`.
+pub const SEQ: SegmentDefinition = SegmentDefinition::new("SEQ", "Folgeangaben", SEQ_ELEMENTS);
 
 const STS_ELEMENTS: &[ElementRef] = &[
     ElementRef::composite(1, "C601", C, 1, C601),

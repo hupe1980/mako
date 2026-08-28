@@ -108,6 +108,7 @@ fn nb_antwort(accepted: bool) -> mako_gpke::LfAntwort {
         ebd: Some(ebd.to_owned()),
         zustimmung: accepted,
         bemerkung: None,
+        bilanzkreis: None,
         termin: None,
     }
 }

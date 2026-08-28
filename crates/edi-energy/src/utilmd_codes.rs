@@ -155,7 +155,204 @@ pub mod ergaenzung {
     pub const RUHENDE_MALO: &str = "ZAP";
 }
 
+/// `SG4 STS+7` DE 9013 (element 3) on the **Ankündigung Zuordnung LF**.
+///
+/// 55607 / 55608 / 55609 use their own code space in the same element:
+/// `ZW8`–`ZX1` name Fall 1 to Fall 4 of GPKE Teil 2 § 2.4, and UTILMD AHB Strom
+/// 2.2 Bedingungen `[161]`–`[164]` map them one-to-one onto the answering EBD
+/// `E_0603`–`E_0606` in `SG4 STS+E01` DE 1131. They are **not** [`ergaenzung`]
+/// values, and reading a 55607 through that module yields nothing.
+pub mod zuordnungsfall {
+    /// `ZW8` — Fall 1: EEG-MaLo bzw. KWKG-MaLo ohne DV-Pflicht (`E_0603`).
+    pub const FALL_1: &str = "ZW8";
+    /// `ZW9` — Fall 2: EEG-MaLo mit DV-Pflicht (`E_0604`).
+    pub const FALL_2: &str = "ZW9";
+    /// `ZX0` — Fall 3: KWKG-MaLo mit DV-Pflicht bzw. Nicht-EEG-/Nicht-KWKG-MaLo,
+    /// nicht-tranchiert (`E_0605`).
+    pub const FALL_3: &str = "ZX0";
+    /// `ZX1` — Fall 4: dieselben Fälle, tranchiert abgebildet (`E_0606`).
+    pub const FALL_4: &str = "ZX1";
+}
+
+/// `NAD` DE 3035 — Beteiligter, Qualifier.
+///
+/// `MS`/`MR` open `SG2` at message level; the rest are `SG12` parties inside a
+/// Vorgang.
+pub mod nad {
+    /// `MS` — Dokumenten-/Nachrichtenaussteller (message sender).
+    pub const ABSENDER: &str = "MS";
+    /// `MR` — Nachrichtenempfänger.
+    pub const EMPFAENGER: &str = "MR";
+    /// `Z09` — **Kunde des Lieferanten**, `SG12`.
+    ///
+    /// Muss on a 55010 whose Transaktionsgrundergänzung is `ZW4`/`ZAP`
+    /// (UTILMD AHB Strom 2.2 Bedingung `[279]`); Bedingung `[572]` says it is
+    /// the „Kundenname aus Anmeldung Lieferant neu".
+    pub const KUNDE_DES_LF: &str = "Z09";
+    /// `VY` — andere zugehörige Partei, `SG12`. On a 55010 the
+    /// **Neulieferant** (Bedingung `[567]`).
+    pub const ZUGEHOERIGE_PARTEI: &str = "VY";
+}
+
+/// `NAD` `C080` DE 3045 — Format für den Namen des Beteiligten.
+pub mod namensformat {
+    /// `Z01` — Struktur von Personennamen: the `C080` components are
+    /// Nachname, Vorname, …
+    pub const PERSON: &str = "Z01";
+    /// `Z02` — Struktur der Firmenbezeichnung.
+    pub const FIRMA: &str = "Z02";
+}
+
+/// `SG8` / `SG10` — the **Produktpaket** an Anmeldung and its Bestätigung carry.
+///
+/// A UTILMD Anmeldung einer Zuordnung does not merely name a Marktlokation and
+/// a date: the AHB makes `SG8 SEQ+Z79` („Bestandteil eines Produktpakets")
+/// Muss on 55001, 55077, 55600, 55601, 55014 and 55608, and the Codeliste der
+/// Konfigurationen 1.4 Kap. 6.1.1 lists the products that must appear in it.
+/// One of them is unconditional:
+///
+/// > `9991000002082` **Bilanzkreis** — „Dieses Produkt ist je Produktpaket-ID
+/// > in der UTILMD zwingend anzugeben."
+///
+/// So the Bilanzkreis is not a remark beside the answer; it is the answer's
+/// mandatory payload, and `SG4 FTX+ACB` is not where it goes — the AHB admits
+/// that segment on the Ablehnung only.
+pub mod produkt {
+    /// `SG8 SEQ` DE 1229 — Bestandteil eines Produktpakets.
+    pub const SEQ_PRODUKTPAKET: &str = "Z79";
+    /// `SG8 PIA` DE 4347 — Produktidentifikation.
+    pub const PIA_ERFORDERLICHES_PRODUKT: &str = "5";
+    /// `SG8 PIA` DE 7143 — Produkt.
+    pub const PIA_TYP_PRODUKT: &str = "Z11";
+    /// `SG10 CCI` DE 7059 — Produkteigenschaft.
+    pub const CCI_PRODUKTEIGENSCHAFT: &str = "Z66";
+    /// `SG10 CAV` DE 7111 — Code der Produkteigenschaft.
+    pub const CAV_EIGENSCHAFT: &str = "ZH9";
+    /// `SG10 CAV` DE 7111 — Wertedetails zum Produkt.
+    pub const CAV_WERT: &str = "ZV4";
+    /// `SG8 SEQ` DE 1229 — Priorisierung erforderliches Produktpaket.
+    pub const SEQ_PRIORISIERUNG: &str = "ZH0";
+    /// `SG10 CCI` DE 7059 — Umsetzungsgradvorgabe des Produktpakets.
+    pub const CCI_UMSETZUNGSGRAD: &str = "Z65";
+    /// `SG10 CCI` DE 4051 — Produktpaket ist vollumfänglich umzusetzen.
+    pub const UMSETZUNG_VOLLUMFAENGLICH: &str = "Z01";
+    /// `SG10 CCI` DE 4051 — Produktpaket kann in Teilen umgesetzt werden.
+    pub const UMSETZUNG_IN_TEILEN: &str = "Z02";
+    /// Produkt-Code `9991000002082` — **Bilanzkreis**, format `an..17`
+    /// (Bedingung `[970]`).
+    pub const BILANZKREIS: &str = "9991000002082";
+    /// Produkt-Code `9991000002090` — Tranchengröße.
+    pub const TRANCHENGROESSE: &str = "9991000002090";
+    /// `SG10 CCI` DE 7059 — **Bilanzkreis**, the `GeLi` Gas shape.
+    ///
+    /// `GeLi` Gas has no Produktpaket: UTILMD AHB Gas 1.2 marks `SG10 CCI+Z19`
+    /// with the Bilanzkreis in DE 7037 Muss on 44001 and on the Bestandsliste
+    /// family. The Strom Produktpaket and this segment carry the same fact and
+    /// are not interchangeable.
+    pub const CCI_BILANZKREIS_GAS: &str = "Z19";
+    /// `SG10 CAV` DE 7111 — Priorisierung erforderliches Produktpaket, 1. to
+    /// 5. Priorität. Bedingung `[42]` requires it only where a Geschäftsvorfall
+    /// carries more than one Produktpaket; the AHB caps it at five.
+    pub const PRIORITAET: [&str; 5] = ["Z75", "Z76", "Z77", "Z78", "Z79"];
+}
+
 // ── Typed SG4 payloads ────────────────────────────────────────────────────────
+
+/// One entry of a `SG8 SEQ+Z79` Produktpaket: a Produkt-Code with the
+/// Produkteigenschaft and the Merkmalswert the Codeliste attaches to it.
+///
+/// Serialises as
+///
+/// ```text
+/// SEQ+Z79+1
+/// PIA+5+9991000002082:Z11
+/// CCI+Z66
+/// CAV+ZV4:::11XBK-EEG-----1
+/// ```
+///
+/// `CAV+ZH9` is emitted only where the Codeliste gives the product a Code der
+/// Produkteigenschaft; the Bilanzkreis has none („--"), and Bedingung `[36]`
+/// makes the segment conditional on exactly that.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Produkt {
+    /// `SG8 PIA+5` DE 7140 — the Produkt-Code from the Codeliste der
+    /// Konfigurationen Kap. 6.1.
+    pub produkt_code: String,
+    /// `SG10 CAV+ZH9` DE 7110 — Code der Produkteigenschaft, where the product
+    /// defines a Wertebereich.
+    pub eigenschaft: Option<String>,
+    /// `SG10 CAV+ZV4` DE 7110 — Merkmalswert, „Wertedetails für Position".
+    pub wert: Option<String>,
+}
+
+impl Produkt {
+    /// The mandatory **Bilanzkreis** product (`9991000002082`), whose
+    /// Merkmalswert is the Bilanzkreis itself.
+    #[must_use]
+    pub fn bilanzkreis(bk: impl Into<String>) -> Self {
+        Self {
+            produkt_code: produkt::BILANZKREIS.to_owned(),
+            eigenschaft: None,
+            wert: Some(bk.into()),
+        }
+    }
+}
+
+/// `SG10 CCI+Z65` DE 4051 — how much of a Produktpaket the NB must honour.
+///
+/// UTILMD AHB Strom 2.2 Kap. 5.3: `Z01` means the NB may only assign the LF
+/// when **every** product of the package can be applied from the
+/// Zuordnungsbeginn; `Z02` means a partial application is enough — „unabhängig
+/// vom Bilanzkreis, der immer erfüllt sein muss".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Umsetzungsgrad {
+    /// `Z01` — Produktpaket ist vollumfänglich umzusetzen.
+    #[default]
+    Vollumfaenglich,
+    /// `Z02` — Produktpaket kann in Teilen umgesetzt werden.
+    InTeilen,
+}
+
+impl Umsetzungsgrad {
+    /// The `CCI+Z65` DE 4051 code.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Vollumfaenglich => produkt::UMSETZUNG_VOLLUMFAENGLICH,
+            Self::InTeilen => produkt::UMSETZUNG_IN_TEILEN,
+        }
+    }
+}
+
+/// A `SG8 SEQ+Z79` Produktpaket — a Produktpaket-ID, its products, and the
+/// `SG8 SEQ+ZH0` Umsetzungsgradvorgabe that goes with it.
+///
+/// DE 1050 is „Produktpaket-ID", Bedingungen `[914]` ∧ `[937]`: a positive integer
+/// without decimals. A Geschäftsvorfall carries at most five (AHB Kap. 5.3),
+/// and every one of them needs its own `SEQ+ZH0` — the AHB marks that group
+/// Muss, so a Produktpaket emitted without it is an incomplete message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Produktpaket {
+    /// `SG8 SEQ` DE 1050 — the Produktpaket-ID.
+    pub paket_id: u32,
+    /// The products in the package, in Codeliste order.
+    pub produkte: Vec<Produkt>,
+    /// `SG10 CCI+Z65` DE 4051 — the Umsetzungsgradvorgabe.
+    pub umsetzung: Umsetzungsgrad,
+}
+
+impl Produktpaket {
+    /// The single-product package a Zuordnung needs: Produktpaket 1 carrying
+    /// the Bilanzkreis, to be applied in full.
+    #[must_use]
+    pub fn bilanzkreis(bk: impl Into<String>) -> Self {
+        Self {
+            paket_id: 1,
+            produkte: vec![Produkt::bilanzkreis(bk)],
+            umsetzung: Umsetzungsgrad::Vollumfaenglich,
+        }
+    }
+}
 
 /// `SG4 STS+7` — Transaktionsgrund, Ergänzung and befristete Anmeldung.
 ///

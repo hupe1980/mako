@@ -461,6 +461,194 @@ pub fn verlaengerung(
     Verlaengerung::Befristet(ende)
 }
 
+// ── Kundenidentität (`E_0624` Prüfschritt 50) ─────────────────────────────────
+
+/// Whether the customer a market message names is the one on the contract.
+///
+/// `E_0624` Prüfschritt 50 asks „Ist der Kunde aus der Anfrage zur Beendigung
+/// der Zuordnung identisch mit dem Kunden beim LFA?" and the two answers move
+/// in opposite directions: `Ja` refuses the Einzug (`A32`), `Nein` walks on
+/// toward releasing the Marktlokation (`A34`). Neither may be produced from a
+/// guess, so the comparison publishes a third outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Kundenidentitaet {
+    /// Every name token matches — the same customer.
+    Identisch,
+    /// No token matches — a different customer.
+    Verschieden,
+    /// Some tokens match and some do not, or one side has no name.
+    ///
+    /// The common case is a family member moving in: same Nachname, different
+    /// Vorname. It is exactly the case a rule cannot settle, and the one where
+    /// both wrong answers are expensive — so it goes to an operator.
+    Unklar,
+}
+
+impl Kundenidentitaet {
+    /// The tri-state as `mako_pruefung::Bekannt` reads it over the wire.
+    #[must_use]
+    pub fn as_option(self) -> Option<bool> {
+        match self {
+            Self::Identisch => Some(true),
+            Self::Verschieden => Some(false),
+            Self::Unklar => None,
+        }
+    }
+}
+
+/// Normalise one name into comparable tokens.
+///
+/// The wire and the contract database do not agree on shape and cannot be made
+/// to: `SG12 NAD+Z09` splits a person across up to five interchangeable `C080`
+/// components under Namensformat `Z01` — „Mustermann", „Erika" — while BO4E
+/// stores `vorname` and `nachname`, and a company under `Z02` arrives as one
+/// string. So the comparison is on the **set** of tokens, not on their order.
+///
+/// Folding: case, the German umlauts and `ß`, punctuation, and the legal-form
+/// suffixes that a Firmenbezeichnung carries on one side and not the other.
+fn name_tokens(name: &str) -> std::collections::BTreeSet<String> {
+    /// Rechtsformzusätze — noise for an identity comparison, and written
+    /// inconsistently („GmbH & Co. KG" / „GmbH und Co KG").
+    const RECHTSFORM: &[&str] = &[
+        "gmbh", "ag", "kg", "ohg", "gbr", "ug", "se", "ev", "eg", "mbh", "co", "und", "and",
+    ];
+    name.chars()
+        .map(|c| match c {
+            'ä' | 'Ä' => 'a',
+            'ö' | 'Ö' => 'o',
+            'ü' | 'Ü' => 'u',
+            c if c.is_alphanumeric() => c.to_ascii_lowercase(),
+            _ => ' ',
+        })
+        .collect::<String>()
+        .replace('ß', "ss")
+        .split_whitespace()
+        .filter(|t| !t.is_empty() && !RECHTSFORM.contains(t))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// Kölner Phonetik (Postel 1969) — the phonetic code of one normalised token.
+///
+/// Soundex and Metaphone are tuned to English and miss the German pairs that
+/// matter here: `Meyer`/`Maier`/`Mayer` are one name, and Jaro-Winkler scores
+/// them ≈ 0.87 — under any threshold that does not also match unrelated names.
+/// Kölner Phonetik maps all three to `67`.
+///
+/// Input is already folded by [`name_tokens`]: lowercase ASCII, umlauts and `ß`
+/// resolved.
+fn koelner_phonetik(token: &str) -> String {
+    let c: Vec<char> = token.chars().collect();
+    let mut out = String::new();
+    for (i, &ch) in c.iter().enumerate() {
+        let prev = i.checked_sub(1).and_then(|p| c.get(p)).copied();
+        let next = c.get(i + 1).copied();
+        let code = match ch {
+            'a' | 'e' | 'i' | 'j' | 'o' | 'u' | 'y' => "0",
+            'h' => "",
+            'b' => "1",
+            'p' => {
+                if next == Some('h') {
+                    "3"
+                } else {
+                    "1"
+                }
+            }
+            'd' | 't' => {
+                if matches!(next, Some('c' | 's' | 'z')) {
+                    "8"
+                } else {
+                    "2"
+                }
+            }
+            'f' | 'v' | 'w' => "3",
+            'g' | 'k' | 'q' => "4",
+            'c' => match (i, prev, next) {
+                (0, _, Some('a' | 'h' | 'k' | 'l' | 'o' | 'q' | 'r' | 'u' | 'x')) => "4",
+                (0, ..) => "8",
+                (_, Some('s' | 'z'), _) => "8",
+                (_, _, Some('a' | 'h' | 'k' | 'o' | 'q' | 'u' | 'x')) => "4",
+                _ => "8",
+            },
+            'x' => {
+                if matches!(prev, Some('c' | 'k' | 'q')) {
+                    "8"
+                } else {
+                    "48"
+                }
+            }
+            'l' => "5",
+            'm' | 'n' => "6",
+            'r' => "7",
+            's' | 'z' => "8",
+            _ => "",
+        };
+        for d in code.chars() {
+            if !out.ends_with(d) {
+                out.push(d);
+            }
+        }
+    }
+    // Every `0` but a leading one is dropped.
+    let mut it = out.chars();
+    let head: String = it.by_ref().take(1).collect();
+    head + &it.filter(|d| *d != '0').collect::<String>()
+}
+
+/// Whether two normalised name tokens plausibly denote the same name part.
+///
+/// Three tests, cheapest first: equality, Jaro-Winkler ≥ 0.90 (Winkler's own
+/// threshold for personal names — it catches transpositions and single-letter
+/// typos while leaving unrelated names well below), and Kölner Phonetik for the
+/// German spelling variants a string metric cannot see.
+///
+/// The phonetic test needs three characters: on shorter tokens — initials,
+/// „de", „van" — it collides indiscriminately.
+fn tokens_similar(a: &str, b: &str) -> bool {
+    a == b
+        || strsim::jaro_winkler(a, b) >= 0.90
+        || (a.chars().count() >= 3
+            && b.chars().count() >= 3
+            && koelner_phonetik(a) == koelner_phonetik(b))
+}
+
+/// Compare the customer a message names against the contract holder.
+///
+/// # Where the fuzziness goes
+///
+/// Similarity widens [`Kundenidentitaet::Unklar`] and nothing else — it never
+/// produces an answer that exact comparison would not:
+///
+/// - **`Identisch`** needs the token sets to be *equal*. It drives `A32`, an
+///   Ablehnung; asserting that two customers are the same person on a
+///   similarity score is the guess this crate exists to avoid.
+/// - **`Verschieden`** needs *no* token pair to be similar — not merely none to
+///   be equal. It drives the walk toward `A34`, which releases the
+///   Marktlokation, so „Meier" against „Meyer" must not reach it.
+/// - Everything between is an operator's call.
+///
+/// See [`Kundenidentitaet`] for why a partial match is not an answer.
+#[must_use]
+pub fn kundenidentitaet(aus_anfrage: Option<&str>, beim_lfa: Option<&str>) -> Kundenidentitaet {
+    let (Some(a), Some(b)) = (aus_anfrage, beim_lfa) else {
+        return Kundenidentitaet::Unklar;
+    };
+    let (a, b) = (name_tokens(a), name_tokens(b));
+    if a.is_empty() || b.is_empty() {
+        return Kundenidentitaet::Unklar;
+    }
+    if a == b {
+        return Kundenidentitaet::Identisch;
+    }
+    let overlap = a.iter().any(|x| b.iter().any(|y| tokens_similar(x, y)));
+    if overlap {
+        Kundenidentitaet::Unklar
+    } else {
+        Kundenidentitaet::Verschieden
+    }
+}
+
 // ── Kalenderarithmetik ────────────────────────────────────────────────────────
 
 /// Add `months` calendar months, clamping the day into the target month.
@@ -500,6 +688,136 @@ fn tage_im_monat(jahr: i32, monat: u8) -> u8 {
 
 #[cfg(test)]
 mod tests {
+    use super::{Kundenidentitaet, kundenidentitaet};
+
+    /// The wire and the contract database never agree on shape: `SG12 NAD+Z09`
+    /// under Namensformat `Z01` splits a person across `C080`'s
+    /// interchangeable components — „Mustermann", „Erika" — while BO4E stores
+    /// `vorname`/`nachname`. An order-sensitive comparison would call the same
+    /// person two different customers on every single Einzug.
+    #[test]
+    fn a_person_matches_whichever_order_the_parts_arrive_in() {
+        assert_eq!(
+            kundenidentitaet(Some("Mustermann Erika"), Some("Erika Mustermann")),
+            Kundenidentitaet::Identisch
+        );
+        assert_eq!(
+            kundenidentitaet(Some("MUSTERMANN  ERIKA"), Some("Erika Mustermann")),
+            Kundenidentitaet::Identisch
+        );
+    }
+
+    /// Umlauts and `ß` fold, because one side is an EDIFACT payload in a
+    /// restricted repertoire and the other is a database column.
+    #[test]
+    fn umlauts_and_eszett_fold() {
+        assert_eq!(
+            kundenidentitaet(Some("Weiss Jürgen"), Some("Jürgen Weiß")),
+            Kundenidentitaet::Identisch
+        );
+    }
+
+    /// A Rechtsformzusatz is written inconsistently on the two sides and says
+    /// nothing about identity.
+    #[test]
+    fn a_rechtsform_suffix_is_not_part_of_the_identity() {
+        assert_eq!(
+            kundenidentitaet(
+                Some("Muster Energie GmbH & Co. KG"),
+                Some("Muster Energie GmbH und Co KG")
+            ),
+            Kundenidentitaet::Identisch
+        );
+    }
+
+    /// Nothing in common — not even phonetically — is an answer: a different
+    /// customer moved in.
+    #[test]
+    fn disjoint_names_are_a_different_customer() {
+        assert_eq!(
+            kundenidentitaet(Some("Schmidt Anna"), Some("Erika Mustermann")),
+            Kundenidentitaet::Verschieden
+        );
+        assert_eq!(
+            kundenidentitaet(Some("Nordwind Energie GmbH"), Some("Erika Mustermann")),
+            Kundenidentitaet::Verschieden
+        );
+    }
+
+    /// **The case that must not be guessed.** A family member moving in shares
+    /// the Nachname and nothing else, and the two possible answers move in
+    /// opposite directions: `A32` refuses the Einzug, `A34` releases the
+    /// Marktlokation. Prüfschritt 50 gets an operator instead.
+    #[test]
+    fn a_shared_surname_alone_is_not_an_answer() {
+        assert_eq!(
+            kundenidentitaet(Some("Mustermann Max"), Some("Erika Mustermann")),
+            Kundenidentitaet::Unklar
+        );
+    }
+
+    /// Kölner Phonetik maps the German spelling variants a string metric
+    /// cannot see: `Meyer`/`Maier`/`Mayer` are one name and score ≈ 0.87 on
+    /// Jaro-Winkler, under any threshold that does not also match unrelated
+    /// names.
+    #[test]
+    fn the_phonetic_code_folds_german_spelling_variants() {
+        use super::koelner_phonetik;
+        let meyer = koelner_phonetik("meyer");
+        for variant in ["maier", "mayer", "meier", "mayr"] {
+            assert_eq!(koelner_phonetik(variant), meyer, "{variant}");
+        }
+        assert_eq!(koelner_phonetik("schmidt"), koelner_phonetik("schmitt"));
+        assert_ne!(koelner_phonetik("mustermann"), koelner_phonetik("schmidt"));
+    }
+
+    /// **Similarity only ever widens `Unklar`.** A spelling variant must not
+    /// reach `Verschieden`: that answer walks `E_0624` on toward `A34`, which
+    /// releases the Marktlokation.
+    #[test]
+    fn a_spelling_variant_is_not_a_different_customer() {
+        for (wire, contract) in [
+            ("Meier", "Meyer"),
+            ("Schmidt", "Schmitt"),
+            // A single transposed letter — Jaro-Winkler's own case.
+            ("Mustermann", "Mustermann"),
+            ("Muhlbauer", "Mühlbauer"),
+        ] {
+            assert_ne!(
+                kundenidentitaet(Some(wire), Some(contract)),
+                Kundenidentitaet::Verschieden,
+                "{wire} / {contract}"
+            );
+        }
+    }
+
+    /// …and it must not reach `Identisch` either. `A32` is an Ablehnung, and a
+    /// similarity score is not a statement that two customers are one person.
+    #[test]
+    fn a_spelling_variant_is_not_an_assertion_of_identity() {
+        assert_eq!(
+            kundenidentitaet(Some("Meier Anna"), Some("Anna Meyer")),
+            Kundenidentitaet::Unklar
+        );
+    }
+
+    /// A missing name on either side is not evidence of anything.
+    #[test]
+    fn a_missing_name_is_unknown() {
+        assert_eq!(
+            kundenidentitaet(None, Some("Erika Mustermann")),
+            Kundenidentitaet::Unklar
+        );
+        assert_eq!(
+            kundenidentitaet(Some("Erika Mustermann"), None),
+            Kundenidentitaet::Unklar
+        );
+        assert_eq!(
+            kundenidentitaet(Some("   "), Some("Erika Mustermann")),
+            Kundenidentitaet::Unklar
+        );
+    }
+
     use super::*;
     use time::macros::date;
 

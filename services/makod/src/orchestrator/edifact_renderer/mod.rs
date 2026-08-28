@@ -437,6 +437,18 @@ mod tests {
         assert_eq!(utilmd_dtm_qualifier(55109), dtm::AENDERUNG_ZUM);
         assert_eq!(utilmd_dtm_qualifier(55616), dtm::AENDERUNG_ZUM);
 
+        // …but the two GPKE Teil 2 families that share the 556xx block are
+        // not Stammdatenänderungen. Neuanlage and Ankündigung Zuordnung LF
+        // both mark `SG4 DTM+92` „Datum Vertragsbeginn" Muss (UTILMD AHB
+        // Strom 2.2), and `157` is not a qualifier their AHB defines.
+        for pid in [55600_u32, 55601, 55602, 55603, 55604, 55605, 55607, 55608] {
+            assert_eq!(
+                utilmd_dtm_qualifier(pid),
+                dtm::BEGINN_ZUM,
+                "PID {pid} names a Vertragsbeginn, not a Stammdatenänderung"
+            );
+        }
+
         // WiM Messstellenbetrieb: the planned execution date.
         assert_eq!(utilmd_dtm_qualifier(55042), dtm::LEISTUNGSBEGINN_GEPLANT);
 
@@ -448,6 +460,102 @@ mod tests {
                 "PID {pid} resolved to the Messperioden-Qualifier {q}"
             );
         }
+    }
+
+    /// **The Bilanzkreis is a Produktpaket, not a remark.** UTILMD AHB Strom 2.2
+    /// Kap. 5.3 makes `SG8 SEQ+Z79` Muss on 55001, 55077, 55600, 55601, 55014
+    /// and 55608 — „ohne die Angabe eines für den LF gültigen Bilanzkreises
+    /// `[kann]` der NB den LF der Marktlokation bzw. Tranche nicht zuordnen" —
+    /// and Codeliste der Konfigurationen 1.4 Kap. 6.1.1 fixes the Produkt-Code.
+    /// `SG4 FTX+ACB` is admitted on the Ablehnung only (Bedingung `[48]`), so a
+    /// Bilanzkreis carried there rode a segment the Bestätigung may not have and
+    /// left the Muss group empty.
+    #[test]
+    fn the_bilanzkreis_rides_the_produktpaket_not_the_bemerkung() {
+        let msg = fake_msg(
+            "UTILMD",
+            "9900987654321",
+            serde_json::json!({
+                "pid": 55608_u32,
+                "sender": "9900123456789",
+                "receiver": "9900987654321",
+                "malo": "51238696012",
+                "process_date": "20261101",
+                "antwort_code": "A01",
+                "antwort_codeliste": "E_0604",
+                "bilanzkreis": "11XBK-EEG-----1",
+            }),
+        );
+        let wire =
+            render_to_wire_bytes(&msg, &test_registry("9900123456789")).expect("55608 renders");
+        let text = String::from_utf8_lossy(&wire.bytes);
+        assert!(text.contains("SEQ+Z79+1"), "{text}");
+        assert!(text.contains("PIA+5+9991000002082:Z11"), "{text}");
+        assert!(text.contains("CCI+Z66"), "{text}");
+        assert!(text.contains("CAV+ZV4:::11XBK-EEG-----1"), "{text}");
+        // `SG8 SEQ+ZH0` is Muss wherever `SEQ+Z79` is.
+        assert!(text.contains("SEQ+ZH0+1"), "{text}");
+        assert!(text.contains("CCI+Z65+++Z01"), "{text}");
+        assert!(
+            !text.contains("FTX+ACB"),
+            "a 55608 Bestätigung carries no FTX+ACB: {text}"
+        );
+        // …and it names a Vertragsbeginn, not a Stammdatenänderung.
+        assert!(text.contains("DTM+92:"), "{text}");
+        assert!(!text.contains("DTM+157"), "{text}");
+    }
+
+    /// **GeLi Gas states the Bilanzkreis in one segment, not a Produktpaket.**
+    /// UTILMD AHB Gas 1.2 marks `SG10 CCI+Z19` DE 7037 Muss on a 44001; there is
+    /// no `SG8 SEQ+Z79` anywhere in the Gas AHB, so sending the Strom shape here
+    /// puts segments the receiving AHB does not define on the wire and leaves
+    /// the Muss segment empty.
+    #[test]
+    fn the_gas_anmeldung_states_its_bilanzkreis_in_cci_z19() {
+        let msg = fake_msg(
+            "UTILMD",
+            "9900987654321",
+            serde_json::json!({
+                "pid": 44001_u32,
+                "sender": "9900123456789",
+                "receiver": "9900987654321",
+                "malo": "51238696012",
+                "process_date": "20261101",
+                "transaktionsgrund": "E03",
+                "bilanzkreis": "9870000000006",
+            }),
+        );
+        let wire =
+            render_to_wire_bytes(&msg, &test_registry("9900123456789")).expect("44001 renders");
+        let text = String::from_utf8_lossy(&wire.bytes);
+        assert!(text.contains("CCI+Z19++9870000000006"), "{text}");
+        assert!(
+            !text.contains("SEQ+Z79"),
+            "the Strom Produktpaket has no Gas counterpart: {text}"
+        );
+    }
+
+    /// The LF's own Anmeldung needs the same package — that is what tells the NB
+    /// which balancing circle to book the Marktlokation into.
+    #[test]
+    fn the_55001_anmeldung_carries_its_bilanzkreis() {
+        let msg = fake_msg(
+            "UTILMD",
+            "9900987654321",
+            serde_json::json!({
+                "pid": 55001_u32,
+                "sender": "9900123456789",
+                "receiver": "9900987654321",
+                "malo": "51238696012",
+                "process_date": "20261101",
+                "transaktionsgrund": "E03",
+                "bilanzkreis": "11XBK-STD-----9",
+            }),
+        );
+        let wire =
+            render_to_wire_bytes(&msg, &test_registry("9900123456789")).expect("55001 renders");
+        let text = String::from_utf8_lossy(&wire.bytes);
+        assert!(text.contains("CAV+ZV4:::11XBK-STD-----9"), "{text}");
     }
 
     #[test]

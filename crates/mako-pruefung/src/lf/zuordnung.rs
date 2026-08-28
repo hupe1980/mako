@@ -31,9 +31,12 @@ use crate::lf::types::{LfAnfrage, LfEntscheidung};
 
 /// Which of the four Anwendungsfälle the inbound 55607 belongs to.
 ///
-/// The message names its EBD in `SG4 STS+E01` DE 1131, and the four differ only
-/// in the Bilanzkreis the Zustimmung must name — so the caller resolves the id
-/// rather than the walk guessing from Stammdaten it may not hold.
+/// **The message states it.** `SG4 STS+7` DE 9013 element 3 carries `ZW8`
+/// (Fall 1), `ZW9` (Fall 2), `ZX0` (Fall 3) or `ZX1` (Fall 4) on the 55607 and
+/// on both answers, and UTILMD AHB Strom 2.2's Bedingungen `[161]`–`[164]` map the
+/// four one-to-one onto `E_0603`–`E_0606` in `SG4 STS+E01` DE 1131. So the
+/// Anwendungsfall is a wire fact, not something to derive from EEG/KWKG
+/// Stammdaten — [`ZuordnungsFall::from_ergaenzung`] reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ZuordnungsFall {
@@ -95,7 +98,37 @@ impl ZuordnungsFall {
         }
     }
 
-    /// Resolve from the EBD id the inbound message named.
+    /// Resolve from the inbound 55607's Transaktionsgrundergänzung.
+    ///
+    /// `SG4 STS+7` DE 9013 element 3 — this Vorgang's own code space, disjoint
+    /// from the `ZW3`/`ZW4`/`ZW5`/`ZAP` [`Lokationsart`] every other LF-answered
+    /// Vorgang carries in the same element.
+    ///
+    /// [`Lokationsart`]: crate::lf::types::Lokationsart
+    #[must_use]
+    pub fn from_ergaenzung(code: &str) -> Option<Self> {
+        match code {
+            "ZW8" => Some(Self::EegOhneDvPflicht),
+            "ZW9" => Some(Self::EegMitDvPflicht),
+            "ZX0" => Some(Self::KwkgNichtTranchiert),
+            "ZX1" => Some(Self::KwkgTranchiert),
+            _ => None,
+        }
+    }
+
+    /// The `SG4 STS+7` DE 9013 element 3 code this Anwendungsfall is announced
+    /// with, which the answer echoes.
+    #[must_use]
+    pub const fn ergaenzung(self) -> &'static str {
+        match self {
+            Self::EegOhneDvPflicht => "ZW8",
+            Self::EegMitDvPflicht => "ZW9",
+            Self::KwkgNichtTranchiert => "ZX0",
+            Self::KwkgTranchiert => "ZX1",
+        }
+    }
+
+    /// Resolve from the EBD id the answer names in DE 1131.
     #[must_use]
     pub fn from_ebd(ebd: &str) -> Option<Self> {
         match ebd {
@@ -152,13 +185,12 @@ pub struct ZuordnungsLage {
 
 /// Walk `E_0603`–`E_0606` „Zuordnung prüfen" for an inbound **55607**.
 ///
-/// `fall` is `None` when the deployment cannot say which Anwendungsfall this
-/// is, and that escalates. The inbound 55607 does **not** name an EBD — the
-/// Anwendungsübersicht leaves the column empty for it and names `E_0603`–
-/// `E_0606` only on the answers — so which one applies follows from the
-/// Marktlokation being EEG or KWKG, with or without Direktvermarktungspflicht,
-/// tranchiert or not. Guessing it would put a tree in DE 1131 that does not
-/// govern this Sequenzdiagramm.
+/// `fall` is `None` when the inbound message named no Anwendungsfall, and that
+/// escalates. The 55607 does not name an EBD — the Anwendungsübersicht leaves
+/// DE 1131 to the answers — but it does name the **Fall** in `SG4 STS+7`
+/// DE 9013 element 3 (`ZW8`…`ZX1`), which UTILMD AHB Strom 2.2 Bedingungen
+/// `[161]`–`[164]` map onto `E_0603`–`E_0606`. Guessing it would put a tree in
+/// DE 1131 that does not govern this Sequenzdiagramm.
 ///
 /// # Panics
 ///
@@ -175,11 +207,11 @@ pub fn pruefe_zuordnung(
         return LfEntscheidung::eskalation(
             10,
             format!(
-                "Ankündigung Zuordnung LF für MaLo {}: der Anwendungsfall ist nicht bekannt \
-                 (EEG/KWKG, mit oder ohne DV-Pflicht, tranchiert oder nicht — \
-                 E_0603…E_0606), und die Antwort muss ihn in SG4 STS+E01 DE 1131 nennen. \
-                 Ohne Antwort bis 15:00 Uhr am ÜT ordnet der NB den LF selbst zu \
-                 (GPKE Teil 2 § 2.4.2.2 Nr. 3).",
+                "Ankündigung Zuordnung LF für MaLo {}: die Nachricht nennt keinen \
+                 Anwendungsfall (SG4 STS+7 DE 9013, Element 3 — ZW8/ZW9/ZX0/ZX1 für \
+                 Fall 1–4), und die Antwort muss den zugehörigen Entscheidungsbaum in \
+                 SG4 STS+E01 DE 1131 nennen (E_0603…E_0606). Ohne Antwort bis 15:00 Uhr \
+                 am ÜT ordnet der NB den LF selbst zu (GPKE Teil 2 § 2.4.2.2 Nr. 3).",
                 anfrage.malo_id
             ),
         );
@@ -214,7 +246,11 @@ pub fn pruefe_zuordnung(
 
     let mut entscheidung = LfEntscheidung::antwort(find("A01"), 10, anfrage.termin, None);
     if let LfEntscheidung::Antwort(antwort) = &mut entscheidung {
-        antwort.bemerkung = Some(bilanzkreis.clone());
+        // Its own slot, not `bemerkung`: on a 55608 the UTILMD AHB permits
+        // `SG4 FTX+ACB` only on the 55609 Ablehnung under Bedingung [48], while
+        // the Bilanzkreis belongs in the Produktpaket `SG8 SEQ+Z79` / `SG10
+        // CAV+ZV4`.
+        antwort.bilanzkreis = Some(bilanzkreis.clone());
     }
     entscheidung
 }
@@ -288,9 +324,11 @@ mod tests {
                 fehler: None,
             },
         );
-        assert_eq!(
-            d.as_antwort().expect("answer").bemerkung.as_deref(),
-            Some("11XBK-EEG-----1")
+        let a = d.as_antwort().expect("answer");
+        assert_eq!(a.bilanzkreis.as_deref(), Some("11XBK-EEG-----1"));
+        assert!(
+            a.bemerkung.is_none(),
+            "a 55608 Bestätigung carries no FTX+ACB — the AHB allows it on the 55609 only"
         );
     }
 
@@ -353,5 +391,24 @@ mod tests {
     fn a_foreign_ebd_resolves_to_no_anwendungsfall() {
         assert_eq!(ZuordnungsFall::from_ebd("E_0609"), None);
         assert_eq!(ZuordnungsFall::from_ebd(""), None);
+    }
+
+    /// The inbound 55607 states its Anwendungsfall in `SG4 STS+7` DE 9013
+    /// element 3 — its own code space, disjoint from the `ZW3`/`ZW4`/`ZW5`/`ZAP`
+    /// Lokationsart the other LF-answered Vorgänge carry there.
+    #[test]
+    fn the_anwendungsfall_is_read_from_the_transaktionsgrundergaenzung() {
+        for (code, fall) in [
+            ("ZW8", ZuordnungsFall::EegOhneDvPflicht),
+            ("ZW9", ZuordnungsFall::EegMitDvPflicht),
+            ("ZX0", ZuordnungsFall::KwkgNichtTranchiert),
+            ("ZX1", ZuordnungsFall::KwkgTranchiert),
+        ] {
+            assert_eq!(ZuordnungsFall::from_ergaenzung(code), Some(fall));
+            assert_eq!(fall.ergaenzung(), code);
+        }
+        for foreign in ["ZW3", "ZW4", "ZW5", "ZAP", ""] {
+            assert_eq!(ZuordnungsFall::from_ergaenzung(foreign), None);
+        }
     }
 }

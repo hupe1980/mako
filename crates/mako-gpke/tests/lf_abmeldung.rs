@@ -42,7 +42,7 @@ fn receive_cmd(validation_passed: bool) -> LfAbmeldungCommand {
         document_date: "20250815".to_owned(),
         process_date: "20251001".to_owned(),
         message_ref: MessageRef::new("MSG-55007-001"),
-        vorgang: mako_gpke::LfVorgangsdaten::default(),
+        vorgang: Box::new(mako_gpke::LfVorgangsdaten::default()),
         validation_passed,
         validation_errors: if validation_passed {
             vec![]
@@ -256,7 +256,7 @@ async fn wrong_pid_at_receive_returns_error() {
             document_date: "20250815".to_owned(),
             process_date: "20251001".to_owned(),
             message_ref: MessageRef::new("MSG-001"),
-            vorgang: mako_gpke::LfVorgangsdaten::default(),
+            vorgang: Box::new(mako_gpke::LfVorgangsdaten::default()),
             validation_passed: true,
             validation_errors: vec![],
         })

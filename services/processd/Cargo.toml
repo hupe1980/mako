@@ -16,8 +16,9 @@ publish          = false
 # `lf-only` and `nb-only` respectively. BNetzA examines binary SHA.
 #
 # Features:
-#   role-lf-strom  — LF answers to NB-initiated GPKE processes, LFN bootstrap
-#   role-lf-gas    — LF answers to NB-initiated GeLi Gas processes
+#   role-lf-strom  — LF answers to the nine GPKE processes it is asked about,
+#                    plus the LFN bootstrap
+#   role-lf-gas    — LF answers to the GeLi Gas processes it is asked about
 #   role-nb-strom  — GPKE Anmeldung STP (55001, 55016) via `mako-pruefung`;
 #                    EoG gap closure; the MSB-Wechsel PIDs the *NB* answers
 #   role-nb-gas    — GeLi Gas Anmeldung STP (44001) via `mako-pruefung`
@@ -41,11 +42,11 @@ publish          = false
 [features]
 default = []
 
-## LFA answers to the NB-initiated GPKE processes (`E_0609`, `E_0624`,
-## `E_0614`) + LFN Strom bootstrap.
+## LF answers to the NB- and LFN-initiated GPKE processes (`E_0609`, `E_0624`,
+## `E_0614`, `E_0615`, `E_0603`–`E_0606`) + LFN Strom bootstrap.
 role-lf-strom = ["mako-pruefung/role-lf"]
-## LFA answers to the NB-initiated GeLi Gas processes (`E_3001`, `E_3002`,
-## `E_3020`).
+## LF answers to the NB- and LFN-initiated GeLi Gas processes (`E_3001`,
+## `E_3002`, `E_3008`, `E_3020`).
 role-lf-gas   = ["mako-pruefung/role-lf"]
 ## GPKE Anmeldung/Abmeldung STP for Strom (`E_0622`, `E_0607`) via `mako-pruefung`.
 role-nb-strom = ["mako-pruefung/role-nb"]

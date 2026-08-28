@@ -109,13 +109,17 @@ fn an_lf_only_build_answers_no_nb_or_msb_process() {
     // `role-lf-strom` build that answered a GeLi Gas Abmeldung would fail here.
     let mut expected: Vec<u32> = Vec::new();
     if cfg!(feature = "role-lf-gas") {
-        expected.extend_from_slice(&[44_007, 44_010, 44_016]);
+        // 44013 is the Anmeldung E/G — the one Anmeldung a supplier is asked to
+        // check, because it is the one the GNB *assigns* to it (§ 36 / § 38
+        // EnWG). Its Zustimmung takes a second opt-in, but the walk and its
+        // Frist belong to every LF build.
+        expected.extend_from_slice(&[44_007, 44_010, 44_013, 44_016]);
     }
     if cfg!(feature = "role-lf-strom") {
         // 55607 is Strom-only: assigning a supplier to an erzeugende
         // Marktlokation is a Bilanzkreis mechanic GeLi Gas has no counterpart
         // for.
-        expected.extend_from_slice(&[55_007, 55_010, 55_016, 55_607]);
+        expected.extend_from_slice(&[55_007, 55_010, 55_013, 55_016, 55_607]);
     }
     assert_eq!(
         pids, expected,

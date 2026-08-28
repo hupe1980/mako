@@ -1,6 +1,6 @@
 //! LF answer automation — the processes a supplier is *asked* about.
 //!
-//! Seven inbound messages put this deployment in the answering seat. Each one
+//! Nine inbound messages put this deployment in the answering seat. Each one
 //! has a published set of Prüfschritte, its own Codeliste, and its own
 //! Antwortfrist:
 //!
@@ -8,11 +8,19 @@
 //! |---|---|---|---|---|---|
 //! | Strom | **55007** | Lieferende von NB an LF | `E_0609` | 55008 / 55009 | 05:00 Uhr des 1. WT nach dem ÜT |
 //! | Strom | **55010** | Beendigung der Zuordnung | `E_0624` | 55011 / 55012 | 09:00 Uhr des 1. WT nach dem ÜT |
+//! | Strom | **55013** | Anmeldung E/G (§ 36 / § 38 EnWG) | `E_0615` | 55014 / 55015 | 15:00 Uhr **am ÜT** |
 //! | Strom | **55016** | Kündigung (LFN → LFA) | `E_0614` | 55017 / 55018 | Ablauf des 1. WT nach dem ÜT |
 //! | Strom | **55607** | Ankündigung Zuordnung LF (erz. MaLo / Tranche) | `E_0603`–`E_0606` | 55608 / 55609 | 15:00 Uhr **am ÜT** |
 //! | Gas | **44007** | Abmeldung NN vom NB | `E_3002` | 44008 / 44009 | Ablauf des 3. WT |
 //! | Gas | **44010** | Abmeldeanfrage des NB | `E_3020` | 44011 / 44012 | Ablauf des 3. WT |
+//! | Gas | **44013** | Anmeldung E/G | `E_3008` | 44014 / 44015 | Ablauf des 2. WT |
 //! | Gas | **44016** | Kündigung beim alten Lieferanten | `E_3001` | 44017 / 44018 | Ablauf des 3. WT |
+//!
+//! **The E/G Anmeldung has a second switch.** `E_0615` / `E_3008` is the only
+//! Anmeldung a supplier is asked to check, and its Zustimmung accepts a
+//! statutory § 36 / § 38 EnWG duty for a customer this supplier has no contract
+//! with. The walk always runs and its outcome is always queued with the Frist;
+//! only `eog_auto_respond` lets the answer leave unattended.
 //!
 //! **55607 is the one where silence is not a lapsed Frist.** Prozessschritt 3
 //! of GPKE Teil 2 § 2.4 has the NB assign the supplier to the erzeugende
@@ -98,6 +106,32 @@ pub struct LfModuleConfig {
     /// Bilanzkreis would buy is generation booked into the wrong balancing
     /// circle rather than into the one the NB already had on file.
     pub bilanzkreise: Vec<BilanzkreisEintrag>,
+    /// The Netzgebiete this supplier is Grund-/Ersatzversorger in, by the
+    /// **Netzbetreiber's MP-ID**.
+    ///
+    /// `E_0615` Prüfschritt 20 is „Befindet sich die Marktlokation im
+    /// Grundversorgungsgebiet des Empfängers …?" — a fact about the deployment,
+    /// not about the message, and one no BDEW process transports. Empty means
+    /// unknown, so every 55013 / 44013 escalates with its Frist attached rather
+    /// than refusing a statutory supply duty on an absent record.
+    pub grundversorgungs_netzgebiete: Vec<String>,
+    /// Whether a resolved `E_0615` / `E_3008` answer may go out unattended.
+    ///
+    /// Off by default even when [`Self::auto_respond`] is on: a Zustimmung here
+    /// accepts a § 36 / § 38 EnWG supply duty for a customer this supplier has
+    /// no contract with, and an Ablehnung declines one. The walk still runs and
+    /// its outcome is queued with the Antwortfrist.
+    pub eog_auto_respond: bool,
+    /// `SG10 CCI+Z36` — which fallback supply an automatic Zustimmung states.
+    ///
+    /// `ZC9` § 38 Ersatzversorgung, `ZD0` § 36 Grundversorgung, `ZE3`
+    /// vertragliche Ersatzbelieferung — the three DE 7037 codes the UTILMD AHB
+    /// publishes for this element. (The § 38a Übergangsversorgung is one of
+    /// them, marked by the Transaktionsgrund `ZZD`; it is not a fourth
+    /// Versorgungsart.) The AHB marks the element Muss on a 55014 and it is a
+    /// legal classification, not a tree outcome — `E_0615` never produces one.
+    /// Without it an automatic Zustimmung is queued instead of dispatched.
+    pub eog_versorgungsart: Option<String>,
 }
 
 /// Pick the Bilanzkreis a 55607 Zustimmung names, or `None` to let an operator
@@ -128,7 +162,49 @@ pub fn resolve_bilanzkreis(
     fall: Option<mako_pruefung::ZuordnungsFall>,
     bilanzierungsgebiet: Option<&str>,
 ) -> Option<String> {
-    let art = fall?.bilanzkreisart()?;
+    use mako_pruefung::{Bilanzkreisart, ZuordnungsFall};
+
+    let fall = fall?;
+    if let Some(art) = fall.bilanzkreisart() {
+        return bilanzkreis_fuer(eintraege, art, bilanzierungsgebiet);
+    }
+    // Fall 1 (`E_0603`) is the one the Anwendungsfall does not decide: its
+    // Sequenzdiagramm covers „EEG-Marktlokation ohne DV-Pflicht **bzw.**
+    // KWKG-Marktlokation ohne DV-Pflicht", and the two take different
+    // balancing circles.
+    //
+    // A deployment that declared a BK for exactly **one** of the two regimes in
+    // this Bilanzierungsgebiet has stated which kind of generation it books
+    // there, and that is an answer rather than a guess. Declaring both leaves
+    // the regime genuinely open, and the decision goes to an operator — the
+    // `Veräußerungsform` that would settle it (`Z90` EEG-Einspeisevergütung vs
+    // `Z94` KWKG-Vergütung) lives in the EEG-/KWKG-Register, not in `marktd`.
+    debug_assert_eq!(fall, ZuordnungsFall::EegOhneDvPflicht);
+    match (
+        bilanzkreis_fuer(eintraege, Bilanzkreisart::Eeg, bilanzierungsgebiet),
+        bilanzkreis_fuer(eintraege, Bilanzkreisart::Kwkg, bilanzierungsgebiet),
+    ) {
+        (Some(eeg), None) => Some(eeg),
+        (None, Some(kwkg)) => Some(kwkg),
+        _ => None,
+    }
+}
+
+/// The one Bilanzkreis of a given [`Bilanzkreisart`] this deployment has
+/// declared for a Bilanzierungsgebiet, or `None`.
+///
+/// [`Bilanzkreisart`]: mako_pruefung::Bilanzkreisart
+///
+/// The same lookup [`resolve_bilanzkreis`] performs, addressed by the regime
+/// directly: an ordinary Anmeldung (55001) needs a Bilanzkreis too — UTILMD AHB
+/// Strom 2.2 Kap. 5.3 makes the Produktpaket Muss there as well — and it has no
+/// `ZuordnungsFall` to derive one from.
+#[must_use]
+pub fn bilanzkreis_fuer(
+    eintraege: &[BilanzkreisEintrag],
+    art: mako_pruefung::Bilanzkreisart,
+    bilanzierungsgebiet: Option<&str>,
+) -> Option<String> {
     let row = bilanzierungsgebiet
         .and_then(|bg| {
             eintraege
@@ -175,6 +251,8 @@ pub enum Walk {
     /// GeLi Gas has no counterpart: assigning a supplier to an erzeugende
     /// Marktlokation is a Strom Bilanzkreis mechanic.
     ZuordnungLf,
+    /// Anmeldung Ersatz-/Grundversorgung — `E_0615` (Strom) / `E_3008` (Gas).
+    AnmeldungEog,
 }
 
 /// Sparte, derived from the PID range.
@@ -247,6 +325,30 @@ pub const BEENDIGUNG_ZUORDNUNG_GAS: LfAntwortProcess = LfAntwortProcess {
     walk: Walk::BeendigungZuordnung,
 };
 
+/// **55013** Zuordnung Ersatz-/Grundversorgung (§ 36 / § 38 EnWG).
+///
+/// The one **Anmeldung** a supplier is asked to check. A supplier *sends* the
+/// ordinary 55001 and the NB checks it (`E_0622`); the one it checks itself is
+/// the one the NB assigns to it under the statutory supply duty.
+pub const ANMELDUNG_EOG: LfAntwortProcess = LfAntwortProcess {
+    trigger_pid: 55_013,
+    name: "Anmeldung Ersatz-/Grundversorgung",
+    ebd: mako_pruefung::codes::EBD_ANMELDUNG_EOG,
+    bestaetigen: mako_markt::commands::GPKE_EOG_BESTAETIGEN,
+    ablehnen: mako_markt::commands::GPKE_EOG_ABLEHNEN,
+    walk: Walk::AnmeldungEog,
+};
+
+/// **44013** Zuordnung Ersatz-/Grundversorgung Gas.
+pub const ANMELDUNG_EOG_GAS: LfAntwortProcess = LfAntwortProcess {
+    trigger_pid: 44_013,
+    name: "Anmeldung Ersatz-/Grundversorgung (Gas)",
+    ebd: mako_pruefung::codes::EBD_ANMELDUNG_EOG_GAS,
+    bestaetigen: mako_markt::commands::GELI_EOG_BESTAETIGEN,
+    ablehnen: mako_markt::commands::GELI_EOG_ABLEHNEN,
+    walk: Walk::AnmeldungEog,
+};
+
 /// **44016** Kündigung beim alten Lieferanten.
 pub const KUENDIGUNG_GAS: LfAntwortProcess = LfAntwortProcess {
     trigger_pid: 44_016,
@@ -264,14 +366,19 @@ const STROM_PROCESSES: &[LfAntwortProcess] = &[
     BEENDIGUNG_ZUORDNUNG,
     KUENDIGUNG,
     ZUORDNUNG_LF,
+    ANMELDUNG_EOG,
 ];
 #[cfg(not(feature = "role-lf-strom"))]
 const STROM_PROCESSES: &[LfAntwortProcess] = &[];
 
 /// The GeLi Gas processes, compiled in only for `role-lf-gas`.
 #[cfg(feature = "role-lf-gas")]
-const GAS_PROCESSES: &[LfAntwortProcess] =
-    &[NB_LIEFERENDE_GAS, BEENDIGUNG_ZUORDNUNG_GAS, KUENDIGUNG_GAS];
+const GAS_PROCESSES: &[LfAntwortProcess] = &[
+    NB_LIEFERENDE_GAS,
+    BEENDIGUNG_ZUORDNUNG_GAS,
+    KUENDIGUNG_GAS,
+    ANMELDUNG_EOG_GAS,
+];
 #[cfg(not(feature = "role-lf-gas"))]
 const GAS_PROCESSES: &[LfAntwortProcess] = &[];
 
@@ -295,17 +402,31 @@ pub struct LfAnfragePayload {
     pub anfrage: LfAnfrage,
     /// The business answer deadline and the operator window derived from it.
     pub window: mako_fristen::antwort::OperatorWindow,
-    /// Which of the four 55607 Anwendungsfälle this is, when the deployment
-    /// could name it.
+    /// Which of the four 55607 Anwendungsfälle this is.
     ///
-    /// The inbound 55607 does **not** carry an EBD — the Anwendungsübersicht
-    /// leaves the column empty for it and names `E_0603`–`E_0606` only on the
-    /// answers. Which one applies follows from the Marktlokation being EEG or
-    /// KWKG, with or without Direktvermarktungspflicht, tranchiert or not —
-    /// facts `marktd` does not record. A deployment that enriches the event
-    /// with `anwendungsfall` gets an automatic answer; otherwise the decision
-    /// escalates with its Frist attached.
+    /// The inbound 55607 does not carry an EBD — the Anwendungsübersicht leaves
+    /// DE 1131 to the answers — but it *does* carry the Fall, in `SG4 STS+7`
+    /// DE 9013 element 3 as `ZW8`/`ZW9`/`ZX0`/`ZX1`, which UTILMD AHB Strom 2.2
+    /// Bedingungen `[161]`–`[164]` map onto `E_0603`–`E_0606`. That code space is
+    /// disjoint from the `ZW3`/`ZW4`/`ZW5`/`ZAP` Lokationsart the other
+    /// LF-answered Vorgänge use in the same element, so it is read through its
+    /// own parser.
     pub zuordnungsfall: Option<mako_pruefung::ZuordnungsFall>,
+    /// `SG12 NAD+Z09` „Kunde des LF" — the customer the request names.
+    ///
+    /// Forwarded to `vertragd`, which compares it against the contract holder
+    /// and answers `E_0624` Prüfschritt 50. It is not on [`LfAnfrage`] because
+    /// the walk never sees a name: the comparison is a contract fact, and
+    /// `mako_pruefung` takes the verdict, not the inputs.
+    pub kunde_name: Option<String>,
+    /// What the deployment can say about its own statutory supply duty, for the
+    /// one process that asks — `E_0615` / `E_3008`.
+    ///
+    /// Filled from `[lf] grundversorgungs_netzgebiete` and the supply state; a
+    /// deployment that declares no Netzgebiet leaves every field `None`, and
+    /// the walk escalates at Prüfschritt 20 rather than refusing or accepting a
+    /// statutory duty on a guess.
+    pub eog_zustaendigkeit: mako_pruefung::EogZustaendigkeit,
 }
 
 impl LfAnfragePayload {
@@ -340,6 +461,12 @@ impl LfAnfragePayload {
             vorgangsnummer: str_field("vorgangsnummer"),
             uet_lieferanmeldung: str_field("uet_lieferanmeldung"),
             naechstmoeglicher_termin: str_field("naechstmoeglicher_termin"),
+            // `SG12 NAD+Z09` / `NAD+VY` — the customer the request names and
+            // the Neulieferant behind it. `E_0624` Prüfschritt 50 compares the
+            // first against the contract holder.
+            kunde_name: str_field("kunde_name"),
+            kunde_namensformat: str_field("kunde_namensformat"),
+            lfn_mp_id: str_field("lfn_mp_id"),
         };
 
         // `STS+7` DE 9013 element 3 — the Transaktionsgrundergänzung, which is
@@ -400,15 +527,26 @@ impl LfAnfragePayload {
         };
 
         let window = mako_fristen::antwort::operator_window(process.trigger_pid, event_time);
-        let zuordnungsfall = str_field("anwendungsfall")
-            .or_else(|| str_field("antwort_ebd"))
+        let zuordnungsfall = vorgang
+            .transaktionsgrund_ergaenzung
             .as_deref()
-            .and_then(mako_pruefung::ZuordnungsFall::from_ebd);
+            .and_then(mako_pruefung::ZuordnungsFall::from_ergaenzung)
+            .or_else(|| {
+                // A deployment that enriches the event with the resolved
+                // Anwendungsfall, or an operator replaying one, may name it
+                // directly.
+                str_field("anwendungsfall")
+                    .or_else(|| str_field("antwort_ebd"))
+                    .as_deref()
+                    .and_then(mako_pruefung::ZuordnungsFall::from_ebd)
+            });
         Some(Self {
             process,
             anfrage,
             window,
+            kunde_name: vorgang.kunde_name.clone(),
             zuordnungsfall,
+            eog_zustaendigkeit: mako_pruefung::EogZustaendigkeit::default(),
         })
     }
 }
@@ -478,6 +616,11 @@ pub fn lage_from_versorgung(
         zuordnung_am_folgetag,
         // `lieferende` is set once the termination is agreed with the NB.
         bestaetigtes_zuordnungsende: vs.lieferende,
+        // `E_0615` Prüfschritt 40 („Doppelmeldung") compares the *Beginn* of a
+        // fallback supply this deployment already confirmed. `eog_seit` is that
+        // date where the supply is one; an ordinary Lieferbeginn is not a
+        // Geschäftsvorfall a 55013 could duplicate.
+        bestaetigter_zuordnungsbeginn: vs.eog_seit.filter(|_| ours),
         in_ersatzversorgung_am_folgetag: Bekannt::from_option(Some(matches!(
             vs.lieferstatus,
             LieferStatus::Ersatzversorgung
@@ -517,7 +660,15 @@ fn abmeldung_vorlauffrist(anfrage: &LfAnfrage, termin: Option<Date>) -> Bekannt 
         Some(Lokationsart::VerbrauchendeMalo | Lokationsart::RuhendeMalo) => Some(false),
         _ => None,
     };
-    AbmeldungVorlauf::fuer(grund, eeg)
+    let window = AbmeldungVorlauf::fuer(grund, eeg);
+    // `ZQ7` (BKV-Deaktivierung) has no window this step can measure — its
+    // anchor is the ÜT of a Deaktivierungsmeldung between BKV and NB — and
+    // `E_0609` gives the Grund its own Frist at Prüfschritt 120 instead. So
+    // Prüfschritt 40 has nothing to evaluate and the walk continues.
+    if window.ist_an_pruefschritt_120() {
+        return Bekannt::Ja;
+    }
+    window
         .check(
             anfrage.eingang.date(),
             zuordnungsende,
@@ -531,6 +682,21 @@ fn abmeldung_vorlauffrist(anfrage: &LfAnfrage, termin: Option<Date>) -> Bekannt 
 /// Fold the contract facts from `vertragd` into the supply-derived Lage.
 ///
 /// `vertrag` is the `GET /api/v1/vertraege/by-malo/{malo_id}` body.
+///
+/// # Three dates, three different questions
+///
+/// `vertragd` carries them separately and the trees ask about them separately;
+/// collapsing any two answers the wrong code:
+///
+/// | `vertragd` column | Meaning | Read into |
+/// |---|---|---|
+/// | `kuendigung_zum` | somebody **has** terminated, to this date | [`LfVertragslage::vertragsende`] |
+/// | `vertragsende` | the agreed end of the Laufzeit — nobody terminated anything | the Vertragsbindung, together with the above |
+/// | `naechstmoeglicher_kuendigungstermin` | the next date notice could take effect | [`LfVertragslage::naechstmoeglicher_kuendigungstermin`] |
+///
+/// `E_0614` Prüfschritte 40/50/80 read the first one only — `A03` is „bereits
+/// **gekündigt**", `A05` „bereits in der Zukunft **beendetem** Vertrag" — and a
+/// fixed-term contract that merely expires has been cancelled by nobody.
 #[must_use]
 pub fn apply_vertrag(
     mut lage: LfVertragslage,
@@ -538,51 +704,110 @@ pub fn apply_vertrag(
     termin: Option<Date>,
 ) -> LfVertragslage {
     let v = &vertrag["vertrag"];
-    let vertragsende = v
-        .get("vertragsende")
-        .and_then(|x| x.as_str())
-        .and_then(parse_date);
-    lage.vertragsende = vertragsende;
+    let date_of = |key: &str| v.get(key).and_then(|x| x.as_str()).and_then(parse_date);
+
+    // A contract row came back at all — `E_0614` Prüfschritt 500. `None` from
+    // the caller leaves this `Unbekannt`, which is what a deployment without
+    // `vertragd` reports, and the walk escalates instead of answering `A18`.
+    lage.vertrag_vorhanden = if v.is_object() {
+        Bekannt::Ja
+    } else {
+        Bekannt::Unbekannt
+    };
+
+    // A *recorded termination*, and only that.
+    lage.vertragsende = date_of("kuendigung_zum");
+    // The agreed end of the Laufzeit. Not a termination — but it does end the
+    // Vertragsverhältnis, so it counts for the Vertragsbindung question.
+    let laufzeitende = date_of("vertragsende");
 
     // „Bleibt das Vertragsverhältnis zum Tag nach dem Enddatum bestehen?"
-    // A contract with no end date does; one ending on or before the requested
-    // date does not. Without a requested date the question is unanswerable.
-    lage.vertragsbindung_am_folgetag = match (termin, vertragsende) {
+    // (`E_0624` Prüfschritte 90 / 220, Gas `E_3020`). The contract survives the
+    // requested date when neither a termination nor the agreed Laufzeit has cut
+    // it by then. Without a requested date the question is unanswerable.
+    //
+    // `auto_renewal` is deliberately not consulted: a tacit extension only
+    // takes effect if nobody terminates, and this Anfrage may be exactly that.
+    let wirksames_ende = match (lage.vertragsende, laufzeitende) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
+    lage.vertragsbindung_am_folgetag = match (termin, wirksames_ende) {
         (None, _) => Bekannt::Unbekannt,
         (Some(_), None) => Bekannt::Ja,
         (Some(t), Some(ende)) => Bekannt::from_option(Some(ende > t)),
     };
 
     // The next admissible termination date, which `vertragd` computes from the
-    // Vertragsart, the Kündigungsfrist and § 41b EnWG. It is a *separate* fact
-    // from `vertragsende`: `E_0614` Prüfschritt 80 distinguishes a contract
-    // somebody already terminated to a later date (`A05`, whose 55018 carries
-    // that date in `DTM+Z05`/`Z06`) from one merely still running (`A06`,
-    // `DTM+157`). Writing it into `vertragsende` answered `A05` for every
-    // running contract.
-    let naechster = vertrag
+    // Vertragsart, the Kündigungsfrist and § 41b EnWG. `E_0614` Prüfschritt 70
+    // („kündbar zum übermittelten Termin?") is decided from it alone, and
+    // `A06`/`A15` carry it in `SG4 DTM+157`.
+    lage.naechstmoeglicher_kuendigungstermin = vertrag
         .get("naechstmoeglicher_kuendigungstermin")
         .and_then(|x| x.as_str())
         .and_then(parse_date);
-    lage.naechstmoeglicher_kuendigungstermin = naechster;
-    if let (Some(naechster), Some(t)) = (naechster, termin)
-        && naechster > t
-    {
-        // Notice to a date earlier than the next admissible one is a
-        // Vertragsbindung, whatever the stored Vertragsende says.
-        lage.vertragsbindung_am_folgetag = Bekannt::Ja;
-    }
 
     lage.kunde_identisch = Bekannt::from_option(
-        v.get("kunde_identisch_mit_anfrage")
+        vertrag
+            .get("kunde_identisch_mit_anfrage")
             .and_then(serde_json::Value::as_bool),
     );
     lage.kunde_nicht_ausgezogen = Bekannt::from_option(
-        v.get("kunde_nicht_ausgezogen")
+        vertrag
+            .get("kunde_nicht_ausgezogen")
             .and_then(serde_json::Value::as_bool),
     );
     lage.vollmacht = Vollmacht::NichtAngefordert;
     lage
+}
+
+/// `E_0615` / `E_3008` — what this deployment can say about its own statutory
+/// supply duty for the Marktlokation the NB just assigned it.
+///
+/// Two of the three Prüfschritte are answerable from configuration and the
+/// supply state; the third is not, and says so.
+#[must_use]
+pub fn eog_zustaendigkeit(
+    config: &LfModuleConfig,
+    versorgung: Option<&VersorgungsStatusRecord>,
+) -> mako_pruefung::EogZustaendigkeit {
+    // Prüfschritt 20 — Zuständigkeit. A declared list makes both answers
+    // possible; an empty one makes neither, because „we hold no Netzgebiet on
+    // file" is not „this one is not ours".
+    let zustaendig = if config.grundversorgungs_netzgebiete.is_empty() {
+        None
+    } else {
+        versorgung.map(|vs| {
+            config
+                .grundversorgungs_netzgebiete
+                .iter()
+                .any(|nb| nb == &vs.nb_mp_id)
+        })
+    };
+
+    // Prüfschritt 50 — „Besteht eine gesetzliche Pflicht zur Grund- oder
+    // Ersatzversorgung …?" A Marktlokation that already has a supplier is not a
+    // Grund-/Ersatzversorgungsfall, and `marktd`'s supply state says so
+    // positively. The converse is *not* symmetric: `Unbeliefert` in our records
+    // does not establish that the statutory case has arisen — an Einzug the ERP
+    // has not booked yet looks identical — so it stays unknown and escalates.
+    let gesetzliche_pflicht = versorgung.and_then(|vs| {
+        matches!(vs.lieferstatus, LieferStatus::Beliefert)
+            .then_some(false)
+            .filter(|_| vs.lf_mp_id.as_deref() != Some(config.own_mp_id.as_str()))
+    });
+
+    mako_pruefung::EogZustaendigkeit {
+        zustaendig,
+        // Prüfschritt 30 — „Wurden die Fristen zur Anmeldung eingehalten?"
+        // GPKE Teil 2 § 2.3 lets the Zuordnungsbeginn of an Ersatz-/Grund-
+        // versorgung lie in the past, so there is no Vorlauffrist on the wire to
+        // measure. `A03` is an operator finding, and an unknown verdict here is
+        // a pass rather than an escalation because the step has nothing to
+        // evaluate.
+        frist_eingehalten: None,
+        gesetzliche_pflicht,
+    }
 }
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────
@@ -603,30 +828,41 @@ pub async fn process_lf_antwort(
     makod: &MakodClient,
     queue: &PgApprovalQueue,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-    let Some(payload) = LfAnfragePayload::parse(event) else {
+    let Some(mut payload) = LfAnfragePayload::parse(event) else {
         return Ok(false);
     };
-    let anfrage = &payload.anfrage;
 
     info!(
-        process_id = %anfrage.process_id,
-        malo_id = %anfrage.malo_id,
+        process_id = %payload.anfrage.process_id,
+        malo_id = %payload.anfrage.malo_id,
         pid = payload.process.trigger_pid,
         process = payload.process.name,
         ebd = payload.process.ebd,
         "processd LF: evaluating"
     );
 
-    let versorgung = reader.get_versorgung(&anfrage.malo_id).await.inspect_err(
-        |e| warn!(%e, malo_id = %anfrage.malo_id, "processd LF: marktd fetch failed"),
-    )?;
+    let versorgung = reader
+        .get_versorgung(&payload.anfrage.malo_id)
+        .await
+        .inspect_err(
+            |e| warn!(%e, malo_id = %payload.anfrage.malo_id, "processd LF: marktd fetch failed"),
+        )?;
 
+    payload.eog_zustaendigkeit = eog_zustaendigkeit(config, versorgung.as_ref());
+    let anfrage = &payload.anfrage;
     let mut lage = lage_from_versorgung(anfrage, versorgung.as_ref(), &config.own_mp_id);
 
     // The contract half. A deployment without `vertragd` leaves these facts
     // unknown, and the walk escalates when it reaches one — rather than
     // assuming the supplier has no contract, which would agree to everything.
-    if let Some(vertrag) = fetch_vertrag(config, &anfrage.malo_id).await {
+    if let Some(vertrag) = fetch_vertrag(
+        config,
+        &anfrage.malo_id,
+        anfrage.eingang.date(),
+        payload.kunde_name.as_deref(),
+    )
+    .await
+    {
         lage = apply_vertrag(lage, &vertrag, anfrage.termin);
     }
 
@@ -690,16 +926,66 @@ pub async fn process_lf_antwort(
             .inspect_err(|e| warn!(%e, "processd LF: failed to enqueue approval entry"))
     };
 
+    // A resolved `E_0615` / `E_3008` answer needs its own opt-in: it accepts or
+    // declines a § 36 / § 38 EnWG supply duty for a customer this supplier has
+    // no contract with.
+    //
+    // A **Zustimmung** additionally needs two facts the walk does not produce.
+    // UTILMD AHB Strom 2.2 Kap. 5.3 makes `SG8 SEQ+Z79` Muss on a 55014, and
+    // the AHB marks `SG10 CCI+Z36` (Versorgungsart, `ZC9`/`ZD0`/`ZE3`)
+    // Muss there too — which of the two statutes applies is a legal
+    // classification, not a tree outcome. Dispatching without them produces an
+    // AHB-invalid 55014, so the answer is queued instead, with the missing
+    // fact named.
+    let eog_missing: Option<&str> = if payload.process.walk == Walk::AnmeldungEog
+        && entscheidung.ist_zustimmung()
+    {
+        match (
+            config.eog_versorgungsart.as_deref(),
+            bilanzkreis_fuer(
+                &config.bilanzkreise,
+                mako_pruefung::Bilanzkreisart::Standard,
+                None,
+            ),
+        ) {
+            (None, _) => Some("[lf] eog_versorgungsart (SG10 CCI+Z36: ZC9/ZD0/ZE3)"),
+            (_, None) => Some("ein eindeutiger Bilanzkreis aus [[lf.bilanzkreise]] (SG8 SEQ+Z79)"),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    let may_dispatch = config.auto_respond
+        && (payload.process.walk != Walk::AnmeldungEog
+            || (config.eog_auto_respond && eog_missing.is_none()));
+
     match &entscheidung {
         LfEntscheidung::Antwort(antwort) => {
-            if config.auto_respond {
-                dispatch_antwort(makod, payload.process, anfrage, antwort).await?;
+            if may_dispatch {
+                let eog_extras = (payload.process.walk == Walk::AnmeldungEog).then(|| {
+                    (
+                        config.eog_versorgungsart.clone(),
+                        bilanzkreis_fuer(
+                            &config.bilanzkreise,
+                            mako_pruefung::Bilanzkreisart::Standard,
+                            None,
+                        ),
+                    )
+                });
+                dispatch_antwort(makod, payload.process, anfrage, antwort, eog_extras).await?;
             } else {
                 // auto_respond off means "an operator decides", not "nobody
                 // answers": without a queue row the process goes unanswered and
                 // unseen.
                 enqueue(format!(
-                    "auto_respond disabled — {} für MaLo {} ist entschieden: {} {} ({})",
+                    "{} — {} für MaLo {} ist entschieden: {} {} ({})",
+                    match (config.auto_respond, eog_missing) {
+                        (_, Some(fehlt)) =>
+                            format!("Zustimmung nicht versandfähig, es fehlt {fehlt}"),
+                        (true, None) => "eog_auto_respond disabled".to_owned(),
+                        (false, None) => "auto_respond disabled".to_owned(),
+                    },
                     payload.process.name,
                     anfrage.malo_id,
                     if antwort.zustimmung {
@@ -763,6 +1049,12 @@ pub fn entscheide(
         (Walk::ZuordnungLf, _) => {
             mako_pruefung::pruefe_zuordnung(anfrage, payload.zuordnungsfall, zuordnung)
         }
+        (Walk::AnmeldungEog, false) => {
+            mako_pruefung::pruefe_anmeldung_eog(anfrage, lage, &payload.eog_zustaendigkeit)
+        }
+        (Walk::AnmeldungEog, true) => {
+            mako_pruefung::pruefe_anmeldung_eog_gas(anfrage, lage, &payload.eog_zustaendigkeit)
+        }
     }
 }
 
@@ -775,6 +1067,7 @@ async fn dispatch_antwort(
     process: LfAntwortProcess,
     anfrage: &LfAnfrage,
     antwort: &LfAntwort,
+    eog_extras: Option<(Option<String>, Option<String>)>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let command = if antwort.zustimmung {
         process.bestaetigen
@@ -793,12 +1086,28 @@ async fn dispatch_antwort(
     if let Some(bemerkung) = &antwort.bemerkung {
         payload["bemerkung"] = serde_json::Value::String(bemerkung.clone());
     }
+    // Its own key, not `bemerkung`: the Bilanzkreis a 55608 Zustimmung names
+    // rides the Produktpaket (`SG8 SEQ+Z79` / `SG10 CAV+ZV4`), while the UTILMD
+    // AHB admits `SG4 FTX+ACB` on the 55609 Ablehnung only.
+    if let Some(bilanzkreis) = &antwort.bilanzkreis {
+        payload["bilanzkreis"] = serde_json::Value::String(bilanzkreis.clone());
+    }
     if let Some(termin) = antwort.termin {
         payload["termin"] = serde_json::Value::String(
             termin
                 .format(time::macros::format_description!("[year][month][day]"))
                 .unwrap_or_default(),
         );
+    }
+    // The two facts a 55014 / 44014 Bestätigung must state beside its code:
+    // `SG10 CCI+Z36` Versorgungsart and the `SG8 SEQ+Z79` Bilanzkreis.
+    if let Some((versorgungsart, bilanzkreis)) = eog_extras {
+        if let Some(art) = versorgungsart {
+            payload["versorgungsart"] = serde_json::Value::String(art);
+        }
+        if let Some(bk) = bilanzkreis {
+            payload["bilanzkreis"] = serde_json::Value::String(bk);
+        }
     }
 
     let cmd = ForwardCommand {
@@ -824,22 +1133,41 @@ async fn dispatch_antwort(
     Ok(())
 }
 
-/// Fetch the contract for a MaLo, or `None` when `vertragd` is not configured
-/// or has no contract on file.
+/// Fetch the contract for a MaLo as of the Nachrichteneingang, or `None` when
+/// `vertragd` is not configured or has no contract on file.
 ///
 /// A transport failure is deliberately *not* an error: the walk then reaches an
 /// unknown fact and escalates, which is the right outcome for "we could not
 /// find out". Returning `Err` would instead make the fan-out retry an event
 /// whose answer window may be minutes wide.
-async fn fetch_vertrag(config: &LfModuleConfig, malo_id: &str) -> Option<serde_json::Value> {
+async fn fetch_vertrag(
+    config: &LfModuleConfig,
+    malo_id: &str,
+    eingang: Date,
+    kunde_name: Option<&str>,
+) -> Option<serde_json::Value> {
     use secrecy::ExposeSecret;
 
     let base = config.vertragd_url.as_ref()?;
+    // `E_0614` Prüfschritt 70 measures the Kündigungsfrist „unter
+    // Berücksichtigung des **Eingangsdatums der Kündigung**", not from the day
+    // the answer happens to be computed. Across a month boundary the two differ
+    // by a whole notice period, and the answer would state a date the LFN did
+    // not ask about.
+    //
+    // `kunde` is the `SG12 NAD+Z09` „Kunde des LF" of the request. `E_0624`
+    // Prüfschritt 50 compares it against the contract holder, and only
+    // `vertragd` knows the latter — so the comparison happens there and comes
+    // back as `kunde_identisch_mit_anfrage`.
     let url = format!(
         "{}/api/v1/vertraege/by-malo/{malo_id}",
         base.trim_end_matches('/')
     );
-    let mut req = reqwest::Client::new().get(&url);
+    let mut query: Vec<(&str, String)> = vec![("stichtag", eingang.to_string())];
+    if let Some(kunde) = kunde_name {
+        query.push(("kunde", kunde.to_owned()));
+    }
+    let mut req = reqwest::Client::new().get(&url).query(&query);
     if let Some(key) = &config.vertragd_api_key {
         req = req.bearer_auth(key.expose_secret());
     }
@@ -908,6 +1236,14 @@ mod tests {
 
     fn event(pid: u32, extra: serde_json::Value) -> serde_json::Value {
         let mut data = serde_json::json!({ "malo_id": "51238696012" });
+        // `SG4 DTM+154` is Muss on a 55010 and `E_0624` Prüfschritt 5 measures
+        // its first Frist from it, so every 55010 fixture carries one — the ÜT
+        // of the event day, which is inside the window.
+        if pid == 55_010
+            && let Some(d) = data.as_object_mut()
+        {
+            d.insert("uet_lieferanmeldung".to_owned(), "20260820".into());
+        }
         if let (Some(d), Some(e)) = (data.as_object_mut(), extra.as_object()) {
             for (k, v) in e {
                 d.insert(k.clone(), v.clone());
@@ -1007,6 +1343,62 @@ mod tests {
         );
     }
 
+    /// **Fall 1 covers two regimes, so the deployment has to have picked one.**
+    /// `E_0603`'s Sequenzdiagramm is „EEG-Marktlokation ohne DV-Pflicht **bzw.**
+    /// KWKG-Marktlokation ohne DV-Pflicht", and the Anwendungsfall alone does
+    /// not say which. A row declaring a BK for exactly one of the two has
+    /// stated it; a row declaring both leaves it genuinely open, and the
+    /// Veräußerungsform that would settle it lives in the EEG-/KWKG-Register.
+    #[test]
+    fn fall_one_resolves_only_when_the_deployment_declared_one_regime() {
+        let eeg_only = vec![BilanzkreisEintrag {
+            bilanzierungsgebiet: None,
+            eeg: vec!["BK-EEG".into()],
+            ..BilanzkreisEintrag::default()
+        }];
+        assert_eq!(
+            resolve_bilanzkreis(
+                &eeg_only,
+                Some(mako_pruefung::ZuordnungsFall::EegOhneDvPflicht),
+                None
+            )
+            .as_deref(),
+            Some("BK-EEG")
+        );
+
+        let kwkg_only = vec![BilanzkreisEintrag {
+            bilanzierungsgebiet: None,
+            kwkg: vec!["BK-KWKG".into()],
+            ..BilanzkreisEintrag::default()
+        }];
+        assert_eq!(
+            resolve_bilanzkreis(
+                &kwkg_only,
+                Some(mako_pruefung::ZuordnungsFall::EegOhneDvPflicht),
+                None
+            )
+            .as_deref(),
+            Some("BK-KWKG"),
+            "the kwkg column must be reachable — it was dead before"
+        );
+
+        let both = vec![BilanzkreisEintrag {
+            bilanzierungsgebiet: None,
+            eeg: vec!["BK-EEG".into()],
+            kwkg: vec!["BK-KWKG".into()],
+            ..BilanzkreisEintrag::default()
+        }];
+        assert_eq!(
+            resolve_bilanzkreis(
+                &both,
+                Some(mako_pruefung::ZuordnungsFall::EegOhneDvPflicht),
+                None
+            ),
+            None,
+            "two regimes on file is exactly the case E_0603 cannot decide"
+        );
+    }
+
     /// **Several authorised BKs is a choice, not a default.** MaBiS § 10.2.1
     /// lets the BKV authorise more than one BK for the same (ZRT, BG, LF); the
     /// supplier picks. Picking the first in code would invent that decision.
@@ -1038,16 +1430,6 @@ mod tests {
             ..BilanzkreisEintrag::default()
         }];
 
-        // `E_0603` covers EEG *and* KWKG plants, so the Anwendungsfall alone
-        // does not fix the regime.
-        assert_eq!(
-            resolve_bilanzkreis(
-                &table,
-                Some(mako_pruefung::ZuordnungsFall::EegOhneDvPflicht),
-                Some("11YN-BG-EON---X")
-            ),
-            None
-        );
         // The matching row lists no BK for this regime, and there is no fallback.
         assert_eq!(
             resolve_bilanzkreis(
@@ -1114,7 +1496,12 @@ mod tests {
         assert_eq!(a.code, "A01");
         assert!(a.zustimmung);
         assert_eq!(a.ebd.as_deref(), Some("E_0604"));
-        assert_eq!(a.bemerkung.as_deref(), Some("11XBK-EEG-----1"));
+        assert_eq!(
+            a.bilanzkreis.as_deref(),
+            Some("11XBK-EEG-----1"),
+            "the Bilanzkreis has its own slot; FTX+ACB is 55609-only"
+        );
+        assert!(a.bemerkung.is_none());
     }
 
     /// The producer and the consumer must agree, and only a round trip
@@ -1133,6 +1520,7 @@ mod tests {
             vorgangsnummer: Some("NNV1234".to_owned()),
             uet_lieferanmeldung: None,
             naechstmoeglicher_termin: None,
+            ..LfVorgangsdaten::default()
         };
         let payload = vorgang
             .process_initiated(
@@ -1167,6 +1555,7 @@ mod tests {
             vorgangsnummer: Some("GASV1".to_owned()),
             uet_lieferanmeldung: None,
             naechstmoeglicher_termin: Some("20261231".to_owned()),
+            ..LfVorgangsdaten::default()
         };
         let payload = vorgang
             .process_initiated(
@@ -1396,6 +1785,215 @@ mod tests {
             lage.naechstmoeglicher_kuendigungstermin,
             Some(date!(2026 - 12 - 31))
         );
+    }
+
+    /// **Three dates, three questions.** `vertragd` distinguishes a recorded
+    /// termination (`kuendigung_zum`) from the agreed end of the Laufzeit
+    /// (`vertragsende`), and `E_0614` reads only the first: `A03` is „bereits
+    /// **gekündigt**", `A05` „bereits in der Zukunft **beendet**". A fixed-term
+    /// contract that merely expires has been cancelled by nobody.
+    #[test]
+    fn the_laufzeitende_is_not_a_recorded_termination() {
+        let vs = make_vs(LieferStatus::Beliefert, Some(OWN));
+        let termin = Some(date!(2026 - 09 - 01));
+        let lage = apply_vertrag(
+            lage_from_versorgung(&beendigung_anfrage(), Some(&vs), OWN),
+            &serde_json::json!({
+                "vertrag": {
+                    // The Laufzeit happens to end on the requested date …
+                    "vertragsende": "2026-09-01",
+                    // … but nobody has terminated anything.
+                    "kuendigung_zum": serde_json::Value::Null,
+                },
+                "naechstmoeglicher_kuendigungstermin": "2026-09-01",
+            }),
+            termin,
+        );
+        assert_eq!(lage.vertragsende, None, "no termination is on file");
+        assert_eq!(
+            lage.vertragsbindung_am_folgetag,
+            Bekannt::Nein,
+            "the Vertragsverhältnis does not survive its own Laufzeitende"
+        );
+        assert_eq!(lage.vertrag_vorhanden, Bekannt::Ja);
+
+        // A real termination *does* land in `vertragsende`.
+        let lage = apply_vertrag(
+            lage_from_versorgung(&beendigung_anfrage(), Some(&vs), OWN),
+            &serde_json::json!({
+                "vertrag": { "vertragsende": "2027-12-31", "kuendigung_zum": "2026-09-01" },
+            }),
+            termin,
+        );
+        assert_eq!(lage.vertragsende, Some(date!(2026 - 09 - 01)));
+    }
+
+    /// Without `vertragd` no contract row comes back, and „no record" is not
+    /// „no contract": `E_0614` Prüfschritt 500 escalates instead of answering
+    /// `A18`.
+    #[test]
+    fn a_missing_contract_row_leaves_the_existence_unknown() {
+        let lage = lage_from_versorgung(&beendigung_anfrage(), None, OWN);
+        assert_eq!(lage.vertrag_vorhanden, Bekannt::Unbekannt);
+    }
+
+    /// `E_0624` Prüfschritt 50 („Ist der Kunde aus der Anfrage identisch mit
+    /// dem Kunden beim LFA?") gates `A32`/`A33`/`A34`, and the name it compares
+    /// is on the wire: `SG12 NAD+Z09`, Muss on a 55010 under Bedingung `[279]`
+    /// and „Kundenname aus Anmeldung Lieferant neu" under `[572]`.
+    #[test]
+    fn the_requesting_customer_reaches_the_decision() {
+        let payload = LfAnfragePayload::parse(&event(
+            55_010,
+            serde_json::json!({
+                "transaktionsgrund": "E01",
+                "transaktionsgrund_ergaenzung": "ZW4",
+                "lieferende": "20260901",
+                "kunde_name": "Mustermann Erika",
+                "kunde_namensformat": "Z01",
+                "lfn_mp_id": "9900357000004",
+            }),
+        ))
+        .expect("parses");
+        assert_eq!(payload.kunde_name.as_deref(), Some("Mustermann Erika"));
+
+        // `vertragd` answered „same customer" → this is not an Einzug: `A32`.
+        let vs = make_vs(LieferStatus::Beliefert, Some(OWN));
+        let lage = apply_vertrag(
+            lage_from_versorgung(&payload.anfrage, Some(&vs), OWN),
+            &serde_json::json!({
+                "vertrag": { "vertragsende": serde_json::Value::Null },
+                "naechstmoeglicher_kuendigungstermin": "2026-09-01",
+                "kunde_identisch_mit_anfrage": true,
+            }),
+            payload.anfrage.termin,
+        );
+        assert_eq!(lage.kunde_identisch, Bekannt::Ja);
+        assert_eq!(
+            entscheide(&payload, &lage, &Default::default())
+                .as_antwort()
+                .expect("answer")
+                .code,
+            "A32"
+        );
+    }
+
+    /// A running contract whose notice period is met by the requested date is
+    /// confirmed, not refused for Vertragsbindung — the § 20a EnWG case.
+    #[test]
+    fn a_terminable_fixed_date_kuendigung_is_confirmed() {
+        let vs = make_vs(LieferStatus::Beliefert, Some(OWN));
+        let termin = Some(date!(2026 - 09 - 01));
+        let lage = apply_vertrag(
+            lage_from_versorgung(&beendigung_anfrage(), Some(&vs), OWN),
+            &serde_json::json!({
+                "vertrag": { "vertragsende": serde_json::Value::Null },
+                "naechstmoeglicher_kuendigungstermin": "2026-09-01",
+            }),
+            termin,
+        );
+        let payload = LfAnfragePayload::parse(&event(
+            55_016,
+            serde_json::json!({
+                "transaktionsgrund": "E03",
+                "transaktionsgrund_ergaenzung": "ZW4",
+                "termin": "20260901",
+            }),
+        ))
+        .expect("parses");
+        let d = entscheide(&payload, &lage, &Default::default());
+        assert_eq!(d.as_antwort().expect("answer").code, "A09");
+        assert!(d.ist_zustimmung());
+    }
+
+    /// The 55607 Anwendungsfall is a **wire fact**: `SG4 STS+7` DE 9013
+    /// element 3 carries `ZW8`…`ZX1`, which the AHB maps onto `E_0603`–`E_0606`.
+    /// It is a different code space from the `ZW3`/`ZW4`/`ZW5`/`ZAP`
+    /// Lokationsart the other LF-answered Vorgänge put in the same element.
+    #[test]
+    fn the_55607_anwendungsfall_comes_off_the_wire() {
+        for (code, ebd) in [
+            ("ZW8", "E_0603"),
+            ("ZW9", "E_0604"),
+            ("ZX0", "E_0605"),
+            ("ZX1", "E_0606"),
+        ] {
+            let p = LfAnfragePayload::parse(&event(
+                55_607,
+                serde_json::json!({ "transaktionsgrund_ergaenzung": code }),
+            ))
+            .expect("parses");
+            let d = entscheide(
+                &p,
+                &LfVertragslage::default(),
+                &mako_pruefung::ZuordnungsLage {
+                    bilanzkreis: Some("11XBK-EEG-----1".to_owned()),
+                    fehler: None,
+                },
+            );
+            let a = d.as_antwort().unwrap_or_else(|| panic!("{code}: {d:?}"));
+            assert_eq!(a.ebd.as_deref(), Some(ebd));
+            assert_eq!(a.bilanzkreis.as_deref(), Some("11XBK-EEG-----1"));
+        }
+    }
+
+    /// The E/G Anmeldung (55013 / 44013) is routed: without a descriptor an
+    /// inbound statutory assignment produces no answer *and* no queue entry,
+    /// and its 15:00-Uhr-am-ÜT Frist lapses unseen.
+    #[test]
+    fn the_eog_anmeldung_is_routed_and_escalates_without_a_declared_netzgebiet() {
+        for pid in [55_013_u32, 44_013] {
+            let p = LfAnfragePayload::parse(&event(
+                pid,
+                serde_json::json!({ "transaktionsgrund_ergaenzung": "ZW4" }),
+            ));
+            let Some(p) = p else {
+                // Only the Sparte this build carries is routed.
+                continue;
+            };
+            assert!(p.window.deadline > p.anfrage.eingang, "the Frist is live");
+            let d = entscheide(&p, &LfVertragslage::default(), &Default::default());
+            assert!(
+                d.ist_eskalation(),
+                "PID {pid} must escalate without a declared Grundversorgungsgebiet: {d:?}"
+            );
+        }
+    }
+
+    /// A declared Netzgebiet resolves Prüfschritt 20; the statutory question at
+    /// Prüfschritt 50 still needs an operator unless the records settle it.
+    #[test]
+    fn a_declared_netzgebiet_resolves_the_eog_zustaendigkeit() {
+        let cfg = LfModuleConfig {
+            marktd_url: String::new(),
+            marktd_api_key: SecretString::from(String::new()),
+            vertragd_url: None,
+            vertragd_api_key: None,
+            own_mp_id: OWN.to_owned(),
+            tenant: "t".to_owned(),
+            auto_respond: false,
+            bilanzkreise: Vec::new(),
+            grundversorgungs_netzgebiete: vec!["9900000000001".to_owned()],
+            eog_auto_respond: false,
+            eog_versorgungsart: None,
+        };
+        let vs = make_vs(LieferStatus::Unbeliefert, None);
+        let z = eog_zustaendigkeit(&cfg, Some(&vs));
+        assert_eq!(z.zustaendig, Some(true), "the MaLo's NB is our Netzgebiet");
+
+        let mut other = make_vs(LieferStatus::Unbeliefert, None);
+        other.nb_mp_id = "9911111111111".to_owned();
+        assert_eq!(
+            eog_zustaendigkeit(&cfg, Some(&other)).zustaendig,
+            Some(false)
+        );
+
+        // Undeclared: neither answer is available.
+        let empty = LfModuleConfig {
+            grundversorgungs_netzgebiete: Vec::new(),
+            ..cfg
+        };
+        assert_eq!(eog_zustaendigkeit(&empty, Some(&vs)).zustaendig, None);
     }
 
     /// The Gas Kündigung answers from its own Codeliste — `Z12`, not `A06` — and

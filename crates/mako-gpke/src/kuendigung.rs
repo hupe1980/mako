@@ -245,7 +245,7 @@ pub enum KuendigungCommand {
         message_ref: MessageRef,
         /// The `SG4` facts the trees branch on, forwarded to `processd` on
         /// the `de.mako.process.initiated` notification.
-        vorgang: crate::lf_antwort::LfVorgangsdaten,
+        vorgang: Box<crate::lf_antwort::LfVorgangsdaten>,
         /// `true` if validation returned no errors.
         validation_passed: bool,
         /// Validation error strings.
@@ -578,7 +578,7 @@ mod tests {
             document_date: "20251001".to_owned(),
             process_date: "20260101".to_owned(),
             message_ref: mref("BEEND-001"),
-            vorgang: crate::LfVorgangsdaten::default(),
+            vorgang: Box::new(crate::LfVorgangsdaten::default()),
             validation_passed: ok,
             validation_errors: if ok {
                 vec![]

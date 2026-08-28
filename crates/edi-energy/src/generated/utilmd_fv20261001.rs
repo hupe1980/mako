@@ -128,13 +128,27 @@ static SEGMENTS: &[SegmentDefinition] = &[
         &[ElementRef::new(1, "C186", Status::Mandatory, 1)],
     ),
     SegmentDefinition::new(
+        "PIA",
+        "Erforderliches Produkt",
+        &[
+            ElementRef::new(1, "4347", Status::Mandatory, 1),
+            ElementRef::new(2, "C212", Status::Mandatory, 1),
+        ],
+    ),
+    SegmentDefinition::new(
         "CCI",
         "Characteristic/Class Id",
         &[
             ElementRef::new(1, "7059", Status::Conditional, 1),
             ElementRef::new(2, "C502", Status::Conditional, 1),
             ElementRef::new(3, "C240", Status::Conditional, 1),
+            ElementRef::new(4, "4051", Status::Conditional, 1),
         ],
+    ),
+    SegmentDefinition::new(
+        "CAV",
+        "Merkmalswert",
+        &[ElementRef::new(1, "C889", Status::Mandatory, 1)],
     ),
 ];
 
@@ -151,11 +165,15 @@ static CODES_1131: &[&str] = &[
 ];
 static CODES_1153: &[&str] = &["ACE", "AGI", "AGL", "MG", "TN", "Z13"];
 static CODES_1245: &[&str] = &["Z01", "Z02", "Z03"];
-static CODES_2005: &[&str] = &["137", "163", "164", "165", "166", "203", "76"];
+static CODES_2005: &[&str] = &[
+    "137", "154", "157", "158", "159", "163", "164", "206", "471", "752", "76", "92", "93", "Z01",
+    "Z05", "Z06", "Z07", "Z08", "Z09", "Z10", "Z15", "Z16", "Z21", "Z22", "Z25", "Z26",
+];
 static CODES_3035: &[&str] = &["BF", "DDQ", "DER", "ELR", "EM", "MR", "MS", "Z01"];
 static CODES_3227: &[&str] = &[
     "172", "Z01", "Z04", "Z16", "Z17", "Z18", "Z19", "Z20", "Z21", "Z22", "ZST",
 ];
+static CODES_4347: &[&str] = &["5"];
 static CODES_7037: &[&str] = &["Z15", "Z18", "ZC9", "ZD0", "ZE3", "ZZD"];
 static CODES_7059: &[&str] = &["Z27", "Z28", "Z36"];
 static CODES_7495: &[&str] = &["24", "Z18", "Z19", "Z31", "Z32"];
@@ -183,7 +201,8 @@ fn expected_components(tag: &str, idx: usize) -> Option<u8> {
         | ("IDE", 0)
         | ("STS", 0)
         | ("FTX", 0)
-        | ("LOC", 0) => Some(1),
+        | ("LOC", 0)
+        | ("PIA", 0) => Some(1),
         _ => None,
     }
 }
@@ -197,6 +216,7 @@ pub(crate) fn code_list(de_id: &str) -> Option<&'static [&'static str]> {
         "2005" => Some(CODES_2005),
         "3035" => Some(CODES_3035),
         "3227" => Some(CODES_3227),
+        "4347" => Some(CODES_4347),
         "7037" => Some(CODES_7037),
         "7059" => Some(CODES_7059),
         "7495" => Some(CODES_7495),
@@ -435,9 +455,9 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
             "SG3" => &["CTA", "COM"],
             "SG4" => &["IDE", "DTM", "STS", "FTX", "AGR"],
             "SG5" => &["LOC"],
-            "SG8" => &["SEQ", "RFF", "DTM", "QTY"],
+            "SG8" => &["SEQ", "RFF", "DTM", "QTY", "PIA"],
             "SG9" => &["QTY", "DTM"],
-            "SG10" => &["CCI"],
+            "SG10" => &["CCI", "CAV"],
             _ => &[],
         }
     }

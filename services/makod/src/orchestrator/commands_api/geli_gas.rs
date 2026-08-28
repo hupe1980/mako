@@ -539,6 +539,14 @@ pub(super) async fn dispatch_geli_lf_anmeldung(
             .get("transaktionsgrund")
             .and_then(|v| v.as_str())
             .map(str::to_owned),
+        // `SG10 CCI+Z19` DE 7037 — Muss on a 44001. GeLi Gas states the
+        // Bilanzkreis in one segment; the Strom `SG8 SEQ+Z79` Produktpaket does
+        // not exist here.
+        bilanzkreis: payload
+            .get("bilanzkreis")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned),
         received_at: time::OffsetDateTime::now_utc(),
     };
 

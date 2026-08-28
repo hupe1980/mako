@@ -137,7 +137,16 @@ pub fn eog_antwort_due_at(
 // ── EoG classification ────────────────────────────────────────────────────────
 
 /// Versorgungsart stated by the E/G in the Bestätigung 55014
-/// (SG10 CCI+Z36, DE7037).
+/// (`SG10 CCI+Z36`, DE 7037).
+///
+/// **Three codes, not four.** UTILMD AHB Strom 2.2 („Versorgungsart der
+/// Marktlokation", Muss on 55014) publishes exactly `ZC9`, `ZD0` and `ZE3` for
+/// DE 7037. `ZZD` Übergangsversorgung is a **Transaktionsgrund** — `SG4 STS+7`
+/// DE 9013 element 2, alongside `Z36`/`Z37`/`Z39`/`ZC6`/`ZC7`/`ZT6`/`ZT7`
+/// (AHB Änd-ID 27001/27002, § 38a EnWG) — and appears in the same element on
+/// the 55004 Abmeldung under Bedingung `[686]`. Carrying it here put a qualifier
+/// into DE 7037 that the AHB does not define there, which the counterparty
+/// rejects, and accepted one inbound that cannot legitimately arrive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Versorgungsart {
@@ -146,31 +155,40 @@ pub enum Versorgungsart {
     /// `ZD0` — §36 EnWG Grundversorgung (Haushaltskunden in NSP).
     Grundversorgung,
     /// `ZE3` — vertragliche Ersatzbelieferung (bilateral agreement).
+    ///
+    /// The § 38a Übergangsversorgung (MSP/HSP, from 01.04.2026) is one of
+    /// these: its Grundlage is a bilaterale Vereinbarung. What marks the case
+    /// as § 38a is the Transaktionsgrund [`UEBERGANGSVERSORGUNG`], not a
+    /// separate Versorgungsart.
+    ///
+    /// [`UEBERGANGSVERSORGUNG`]: crate::eog::UEBERGANGSVERSORGUNG
     Ersatzbelieferung,
-    /// `ZZD` — §38a EnWG Übergangsversorgung (MSP/MD, from 2026-04-01).
-    Uebergangsversorgung,
 }
 
+/// `SG4 STS+7` DE 9013 — Transaktionsgrund „Übergangsversorgung" (§ 38a EnWG).
+///
+/// Belongs to the Transaktionsgrund code space of the 55013/55014/55015 and the
+/// 55004/55005/55006, **not** to the Versorgungsart in `SG10 CCI+Z36`.
+pub const UEBERGANGSVERSORGUNG: &str = "ZZD";
+
 impl Versorgungsart {
-    /// AHB code (SG10 CCI+Z36 DE7037).
+    /// AHB code (`SG10 CCI+Z36` DE 7037).
     #[must_use]
     pub fn code(self) -> &'static str {
         match self {
             Self::Ersatzversorgung => "ZC9",
             Self::Grundversorgung => "ZD0",
             Self::Ersatzbelieferung => "ZE3",
-            Self::Uebergangsversorgung => "ZZD",
         }
     }
 
-    /// Parse from the AHB code.
+    /// Parse from the AHB code. `ZZD` is deliberately absent — see the type docs.
     #[must_use]
     pub fn from_code(code: &str) -> Option<Self> {
         match code {
             "ZC9" => Some(Self::Ersatzversorgung),
             "ZD0" => Some(Self::Grundversorgung),
             "ZE3" => Some(Self::Ersatzbelieferung),
-            "ZZD" => Some(Self::Uebergangsversorgung),
             _ => None,
         }
     }
@@ -182,7 +200,6 @@ impl Versorgungsart {
             Self::Ersatzversorgung => "ERSATZVERSORGUNG",
             Self::Grundversorgung => "GRUNDVERSORGUNG",
             Self::Ersatzbelieferung => "ERSATZBELIEFERUNG",
-            Self::Uebergangsversorgung => "UEBERGANGSVERSORGUNG",
         }
     }
 }
@@ -217,7 +234,7 @@ pub enum EogEvent {
         response_pid: Pruefidentifikator,
         /// `true` = Bestätigung, `false` = Ablehnung.
         accepted: bool,
-        /// Versorgungsart from the Bestätigung (CCI ZC9/ZD0/ZE3/ZZD).
+        /// Versorgungsart from the Bestätigung (`CCI+Z36`: ZC9/ZD0/ZE3).
         versorgungsart: Option<Versorgungsart>,
         /// Bilanzkreis (EIC) from the Bestätigung.
         bilanzkreis: Option<String>,
@@ -469,7 +486,7 @@ pub enum EogCommand {
         response_pid: Pruefidentifikator,
         /// `true` = Bestätigung (55014).
         accepted: bool,
-        /// Versorgungsart from the Bestätigung (CCI ZC9/ZD0/ZE3/ZZD).
+        /// Versorgungsart from the Bestätigung (`CCI+Z36`: ZC9/ZD0/ZE3).
         versorgungsart: Option<Versorgungsart>,
         /// Bilanzkreis (EIC) from the Bestätigung.
         bilanzkreis: Option<String>,
@@ -507,7 +524,7 @@ pub enum EogCommand {
     SendAntwort {
         /// `true` = Bestätigung (55014), `false` = Ablehnung (55015).
         accepted: bool,
-        /// Versorgungsart (required for a Bestätigung: ZC9/ZD0/ZE3/ZZD).
+        /// Versorgungsart (required for a Bestätigung: ZC9/ZD0/ZE3).
         versorgungsart: Option<Versorgungsart>,
         /// Bilanzkreis (EIC) the MaLo is assigned to (Bestätigung).
         bilanzkreis: Option<String>,
@@ -822,9 +839,12 @@ impl Workflow for GpkeEogWorkflow {
                         "expected EoG Anmeldung PID ({EOG_ANMELDUNG_PID}), got {pid}",
                     )));
                 }
-                // Clone before move for APERAK emission.
+                // Clone before move for the notification and APERAK emission.
                 let sender_mp_id = sender.clone();
                 let receiver_gln = receiver.clone();
+                let notify_malo = location_id.clone();
+                let notify_termin = process_date.clone();
+                let grund = transaktionsgrund.clone();
 
                 let mut events = vec![EogEvent::AnmeldungErhalten {
                     location_id,
@@ -842,6 +862,24 @@ impl Workflow for GpkeEogWorkflow {
                     // APERAK BGM+312 (Anerkennung) — Strom UTILMD 45-min Frist
                     // (APERAK AHB 1.0 §2.4.1).
                     let outbox = vec![
+                        // The business notification. Without it `processd`'s LF
+                        // module never sees the Zuordnung: `makod` delivers a
+                        // CloudEvent only for an outbox entry, and an APERAK is
+                        // a technical acknowledgement. The E/G's 15:00-Uhr-am-ÜT
+                        // Frist would then lapse unanswered and unseen.
+                        crate::LfVorgangsdaten {
+                            transaktionsgrund: Some(grund.clone()),
+                            ..crate::LfVorgangsdaten::default()
+                        }
+                        .process_initiated(
+                            pid,
+                            &notify_malo,
+                            &sender_mp_id,
+                            &receiver_gln,
+                            &notify_termin,
+                            &serde_json::json!({ "haushaltskunde": haushaltskunde }),
+                        )
+                        .caused_by(1),
                         PendingOutbox::new(
                             "APERAK",
                             sender_mp_id.as_str(),
@@ -911,7 +949,7 @@ impl Workflow for GpkeEogWorkflow {
                 };
                 if accepted && versorgungsart.is_none() {
                     return Err(WorkflowError::rejected(
-                        "Bestätigung EOG requires the Versorgungsart (CCI ZC9/ZD0/ZE3/ZZD)"
+                        "Bestätigung EOG requires the Versorgungsart (CCI+Z36: ZC9/ZD0/ZE3)"
                             .to_owned(),
                     ));
                 }
@@ -1301,17 +1339,56 @@ mod tests {
 
     // ── Versorgungsart codes ──────────────────────────────────────────────────
 
+    /// **The E/G must be told.** `makod` delivers a CloudEvent only for an
+    /// outbox entry, and an APERAK is a technical acknowledgement — so without
+    /// its own `ProcessInitiated` the inbound 55013 never reaches `processd`'s
+    /// LF module and the 15:00-Uhr-am-ÜT Frist lapses unanswered and unseen.
+    #[test]
+    fn an_inbound_anmeldung_notifies_the_eog_supplier() {
+        let out = GpkeEogWorkflow::handle(&EogState::New, receive_anmeldung_cmd(true)).unwrap();
+        let notification = out
+            .outbox
+            .iter()
+            .find(|o| &*o.message_type == "ProcessInitiated")
+            .expect("the E/G is notified of the Zuordnung");
+        assert_eq!(notification.payload["pid"], EOG_ANMELDUNG_PID);
+        assert_eq!(notification.payload["malo_id"], "51238696781");
+        // The Transaktionsgrund reaches the walk; without it `E_0615` cannot
+        // tell a Grundversorgungs- from an Ersatzversorgungsfall.
+        assert!(notification.payload.get("transaktionsgrund").is_some());
+        assert_eq!(&*notification.recipient, "9900357000011");
+    }
+
     #[test]
     fn versorgungsart_code_roundtrip() {
         for art in [
             Versorgungsart::Ersatzversorgung,
             Versorgungsart::Grundversorgung,
             Versorgungsart::Ersatzbelieferung,
-            Versorgungsart::Uebergangsversorgung,
         ] {
             assert_eq!(Versorgungsart::from_code(art.code()), Some(art));
         }
         assert_eq!(Versorgungsart::from_code("E06"), None);
+    }
+
+    /// **`ZZD` is a Transaktionsgrund, not a Versorgungsart.** UTILMD AHB Strom
+    /// 2.2 publishes exactly `ZC9`, `ZD0` and `ZE3` for `SG10 CCI+Z36` DE 7037;
+    /// `ZZD` Übergangsversorgung lives in `SG4 STS+7` DE 9013 element 2, on the
+    /// 55013/55014/55015 and on the 55004/55005/55006 under Bedingung `[686]`.
+    /// Accepting it here put a qualifier into DE 7037 the AHB does not define,
+    /// and the counterparty rejects the message.
+    #[test]
+    fn zzd_is_not_a_versorgungsart() {
+        assert_eq!(Versorgungsart::from_code(UEBERGANGSVERSORGUNG), None);
+        assert!(
+            [
+                Versorgungsart::Ersatzversorgung,
+                Versorgungsart::Grundversorgung,
+                Versorgungsart::Ersatzbelieferung,
+            ]
+            .iter()
+            .all(|a| a.code() != UEBERGANGSVERSORGUNG)
+        );
     }
 
     #[test]

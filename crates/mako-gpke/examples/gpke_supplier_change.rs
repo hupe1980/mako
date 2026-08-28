@@ -456,6 +456,7 @@ fn nb_antwort(accepted: bool, reason: Option<&str>) -> mako_gpke::LfAntwort {
         ebd: Some(ebd.to_owned()),
         zustimmung: accepted,
         bemerkung: reason.map(ToOwned::to_owned),
+        bilanzkreis: None,
         termin: None,
     }
 }

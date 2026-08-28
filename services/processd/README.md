@@ -24,7 +24,9 @@ What it cannot decide it puts in front of an operator with the deadline attached
 | **LFA** | 55010 | Anfrage zur Beendigung der Zuordnung (EBD `E_0624`) | **09:00 Uhr des 1. WT nach dem ÜT** | `VersorgungsStatus` from `marktd` |
 | **LFA** | 55016 | GPKE Kündigung (LFN → LFA, EBD `E_0614`) | **1. WT nach dem ÜT** | `VersorgungsStatus` from `marktd` |
 | **LFN** | 55607 | Ankündigung Zuordnung LF, erz. MaLo / Tranche (EBDs `E_0603`–`E_0606`) | **15:00 Uhr am ÜT** | `malo.bilanzierungsgebiet` from `marktd` + `[[lf.bilanzkreise]]` |
+| **E/G** | 55013 | Anmeldung Ersatz-/Grundversorgung (EBD `E_0615`) | **15:00 Uhr am ÜT** | `[lf] grundversorgungs_netzgebiete` + `VersorgungsStatus` |
 | **LFA** | 44007, 44010, 44016 | GeLi Gas Lieferende von NB / Beendigung der Zuordnung / Kündigung | 3 Werktage | `VersorgungsStatus` from `marktd` |
+| **E/G** | 44013 | GeLi Gas Anmeldung Ersatz-/Grundversorgung (`E_3008`) | **Ablauf des 2. WT** | as 55013 |
 | **MSB** | 55039 | WiM Kündigung MSB (MSBN → MSBA) | 3 WT | MeLo / partner checks |
 | **MSB** | 55168 | WiM Verpflichtungsanfrage (NB → gMSB) | 1 WT | operator queue |
 | **MSB** | 35001, 35002, 35004, 35005 | REQOTE Preisanfrage | 5 WT | `PreisblattMessung` from `marktd` |
@@ -244,13 +246,24 @@ carries the same command name in both Sparten: 55007 / 44007
 (`{gpke,geli}.beendigung-zuordnung.*`, `E_0624` / `E_3020`) and 55016 / 44016
 (`{gpke,geli}.kuendigung.*`, `E_0614` / `E_3001`).
 
-**55607 is the seventh, and its shape is different.** It is not about ending a
-supply but about the NB assigning this LF to an *erzeugende* Marktlokation or
-Tranche, and the substance of the answer is the **Bilanzkreis**, not the code
-(`A01` / `A99` are the only two the trees publish). Missing the 15:00 window does
-not lapse the obligation — GPKE Teil 2 § 2.4.2.2 Nr. 3 has the NB assign the LF
-anyway, using whichever BK it has on file. The admissible set is the
-`[[lf.bilanzkreise]]` table, keyed on the Bilanzierungsgebiet.
+**55607's shape is different.** It is not about ending a supply but about the NB
+assigning this LF to an *erzeugende* Marktlokation or Tranche, and the substance
+of the answer is the **Bilanzkreis**, not the code — `A01` / `A99` are the only
+two the trees publish. Which of the four Anwendungsfälle applies is on the wire:
+`SG4 STS+7` DE 9013 element 3, `ZW8`…`ZX1`, mapped onto `E_0603`–`E_0606` by
+AHB Bedingungen [161]–[164]. The Bilanzkreis rides the Produktpaket
+(`SG8 SEQ+Z79`, Produkt-Code `9991000002082`), never `FTX+ACB`.
+
+Missing the 15:00 window does not lapse the obligation: GPKE Teil 2 § 2.4.2.2
+Nr. 3 has the NB assign the LF anyway, using whichever BK it has on file. The
+admissible set is `[[lf.bilanzkreise]]`, keyed on the Bilanzierungsgebiet.
+
+**55013 / 44013 is the ninth, and the only Anmeldung.** Its Zustimmung accepts a
+statutory § 36 / § 38 EnWG supply duty for a customer this deployment has no
+contract with, so it takes a second opt-in: the walk always runs and queues its
+outcome with the Frist, and only `[lf] eog_auto_respond = true` dispatches it.
+`E_0615` Prüfschritt 20 („Grundversorgungsgebiet des Empfängers?") is answered
+from `[lf] grundversorgungs_netzgebiete`; an empty list escalates.
 
 ---
 
@@ -288,7 +301,7 @@ action is checked somewhere, and every routed handler takes a `Claims` extractor
 | `GET` | `/api/v1/decisions` | `read-decisions` | Recent Anmeldung STP decisions |
 | `GET` | `/api/v1/queue` | `read-queue` | Approval-queue entries |
 | `POST` | `/api/v1/queue/{id}/approve` · `/reject` | `decide-queue` | Decide an entry; dispatches the market answer stored on it |
-| `POST` | `/api/v1/start-supply` · `-gas` | `initiate-supply` | LFN bootstrap (Strom / Gas) |
+| `POST` | `/api/v1/start-supply` · `-gas` | `initiate-supply` | LFN bootstrap (Strom / Gas). Both require a **Bilanzkreis** — Strom as the `SG8 SEQ+Z79` Produktpaket, Gas as `SG10 CCI+Z19` — falling back to a single configured `[[lf.bilanzkreise]] standard` entry, else `422` |
 | `POST` | `/api/v1/end-supply` · `-gas` | `initiate-supply` | LF Lieferende bootstrap |
 | `GET` | `/api/v1/eog` | `read-eog` | EoG case log (`?status=`) |
 | `GET` | `/api/v1/neuanlage` | `read-neuanlage` | `E_0608` case log (`?status=`), with each case's `letzter_pruefungstag` |

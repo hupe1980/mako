@@ -26,6 +26,7 @@ use super::*;
 /// | `antwort_code`  | no       | `SG4 STS+E01` DE 9013 — **required on every Antwort-PID** |
 /// | `antwort_codeliste` | no   | `STS+E01` DE 1131, the **Codeliste** the code comes from (`E_0622`, `S_0090`, `G_0051`, …) |
 /// | `bemerkung`     | no       | `FTX+ACB` free text (mandatory alongside a catch-all Ablehnungscode) |
+/// | `bilanzkreis`   | on 55001/55014/55608, 44001 | Strom: `SG8 SEQ+Z79` Produktpaket · Gas: `SG10 CCI+Z19` — its own slot, never `bemerkung` |
 ///
 /// \* Exactly one of `malo` / `melo` is required, depending on the PID range.
 ///
@@ -177,6 +178,34 @@ pub(super) fn render_utilmd(
         tx = tx.free_text("ACB", text);
     }
 
+    // The Bilanzkreis — **two different segments, one per Festlegung**.
+    //
+    // GPKE Strom carries it in the Produktpaket `SG8 SEQ+Z79` with Produkt-Code
+    // `9991000002082` and the value in `SG10 CAV+ZV4` (UTILMD AHB Strom 2.2
+    // Kap. 5.3, Codeliste der Konfigurationen 1.4 Kap. 6.1.1), Muss on 55001,
+    // 55077, 55600, 55601, 55014 and 55608. GeLi Gas has no Produktpaket at
+    // all: UTILMD AHB Gas 1.2 puts the Bilanzkreis in `SG10 CCI+Z19` DE 7037,
+    // Muss on 44001. Sending either shape on the other Sparte is a segment the
+    // receiving AHB does not define.
+    //
+    // Neither is an `FTX+ACB` remark: on a Strom Zuordnungs-Bestätigung that
+    // segment is admitted on the Ablehnung only (Bedingung [48]).
+    if let Some(bilanzkreis) = p
+        .get("bilanzkreis")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        tx = match track {
+            ReleaseTrack::Gas => tx.merkmal(
+                edi_energy::utilmd_codes::produkt::CCI_BILANZKREIS_GAS,
+                bilanzkreis,
+            ),
+            _ => tx.produktpaket(edi_energy::utilmd_codes::Produktpaket::bilanzkreis(
+                bilanzkreis,
+            )),
+        };
+    }
+
     let tx = if names_messlokation {
         tx.messlokation(location_id)
     } else {
@@ -230,8 +259,14 @@ pub(super) fn utilmd_dtm_qualifier(pid: u32) -> &'static str {
         55_051..=55_053 | 44_051..=44_053 | 44_183 => dtm::ENDE_ZUM,
         55_042..=55_044 | 44_042..=44_044 => dtm::LEISTUNGSBEGINN_GEPLANT,
         55_168..=55_170 | 44_168 | 44_169 => dtm::LEISTUNGSBEGINN_GEPLANT,
+        // Two families inside the 556xx block are GPKE **Teil 2**, not Teil 4,
+        // and both mark `SG4 DTM+92` „Datum Vertragsbeginn" Muss: Neuanlage
+        // (55600–55605) and Ankündigung Zuordnung LF (55607/55608). Their AHB
+        // does not define `157` at all. 55609 carries no SG4 date; the one
+        // emitted here is an unlisted segment, not a missing Muss.
+        55_600..=55_609 => dtm::BEGINN_ZUM,
         // Stammdatenänderung (GPKE Teil 4 / GeLi Gas): Änderung zum.
-        55_109 | 55_110 | 55_136 | 55_137 | 55_600..=55_699 => dtm::AENDERUNG_ZUM,
+        55_109 | 55_110 | 55_136 | 55_137 | 55_610..=55_699 => dtm::AENDERUNG_ZUM,
         44_109..=44_199 => dtm::AENDERUNG_ZUM,
         // A PID with no entry here would otherwise get a silently wrong
         // qualifier; `Beginn zum` is the least surprising default and the

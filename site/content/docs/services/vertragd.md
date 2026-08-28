@@ -207,6 +207,32 @@ curl -s http://vertragd:9780/api/v1/vertraege/{id}/kuendigungsfrist
 }
 ```
 
+The MaKo side asks the same question through `GET
+/api/v1/vertraege/by-malo/{malo_id}`, which returns the contract row together
+with `naechstmoeglicher_kuendigungstermin`. It takes `?stichtag=YYYY-MM-DD`:
+`E_0614` Prüfschritt 70 measures the notice period „unter Berücksichtigung des
+**Eingangsdatums der Kündigung**", so `processd` passes the date the 55016
+arrived rather than the day it computes the answer. Inside the one-Werktag
+window the two usually agree; across a month boundary they differ by a whole
+notice period.
+
+It also takes `?kunde=<Name>` and answers `E_0624` Prüfschritt 50 — „Ist der
+Kunde aus der Anfrage identisch mit dem Kunden beim LFA?" — as
+`kunde_identisch_mit_anfrage`, with the verdict in `kundenidentitaet`
+(`IDENTISCH` / `VERSCHIEDEN` / `UNKLAR`). The comparison is on the **set** of
+normalised name tokens, not their order: the wire splits a person across
+`SG12 NAD+Z09`'s five interchangeable `C080` components while `vertragd` stores
+`vorname`/`nachname`, umlauts fold and Rechtsformzusätze are dropped.
+
+**Similarity widens `UNKLAR` and nothing else.** `IDENTISCH` needs the token
+sets to be equal — it drives `A32`, an Ablehnung, and a score is not a statement
+that two customers are one person. `VERSCHIEDEN` needs no token pair to be even
+*similar*, because it walks the tree toward `A34`, which releases the
+Marktlokation: „Meier" against „Meyer" must not get there. Between them sit
+Jaro-Winkler ≥ 0.90 and Kölner Phonetik — the latter because Soundex and
+Metaphone are English-tuned and the German variants that matter
+(`Meyer`/`Maier`/`Mayer`) score ≈ 0.87 on any string metric.
+
 ```bash
 curl -X POST http://vertragd:9780/api/v1/vertraege/{id}/kuendigen \
   -H 'Content-Type: application/json' \

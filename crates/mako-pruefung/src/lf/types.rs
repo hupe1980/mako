@@ -128,12 +128,17 @@ impl LfAnfrage {
 
     /// The Lokationsart, or the Prüfschritt-10 escalation a message without one
     /// earns.
+    ///
+    /// The escalation is boxed: an [`LfEntscheidung`] is a resolved decision
+    /// with its code, its BDEW wording and the dates the answer states, so it
+    /// is far larger than the `Ok` side and would make every caller's `Result`
+    /// the size of an answer.
     pub(crate) fn lokationsart_oder_eskalation(
         &self,
         ebd: &str,
-    ) -> Result<Lokationsart, LfEntscheidung> {
+    ) -> Result<Lokationsart, Box<LfEntscheidung>> {
         self.lokationsart.ok_or_else(|| {
-            LfEntscheidung::eskalation(
+            Box::new(LfEntscheidung::eskalation(
                 10,
                 format!(
                     "MaLo {}: die Nachricht nennt keine Transaktionsgrundergänzung \
@@ -142,7 +147,7 @@ impl LfAnfrage {
                      verschiedenen Coderäumen.",
                     self.malo_id
                 ),
-            )
+            ))
         })
     }
 }
@@ -207,6 +212,15 @@ pub struct LfVertragslage {
     /// `true` when this LF supplies the MaLo today (Beliefert, Grund- or
     /// Ersatzversorgung with our own MP-ID).
     pub beliefert: bool,
+    /// Whether a contract exists for the object at all (`E_0614` Prüfschritt
+    /// 500).
+    ///
+    /// Only the non-verbrauchend branch asks it, and only there does `A18`
+    /// („Zu dem genannten Objekt liegt kein Vertrag vor") exist. It is a
+    /// *record*, not an inference: a deployment without `vertragd` finds
+    /// nothing for every object, so „we found nothing" is
+    /// [`Bekannt::Unbekannt`].
+    pub vertrag_vorhanden: Bekannt,
     /// `true` when a Zuordnung still exists on the **day after** the requested
     /// Termin — the question `E_0624` Prüfschritt 20 asks.
     ///
@@ -215,6 +229,16 @@ pub struct LfVertragslage {
     pub zuordnung_am_folgetag: Bekannt,
     /// A Zuordnungsende the NB has already confirmed, if any.
     pub bestaetigtes_zuordnungsende: Option<Date>,
+    /// A Zuordnungs**beginn** this supplier has already confirmed, if any.
+    ///
+    /// `E_0615` Prüfschritt 40 („Wurde der angefragte Geschäftsvorfall dem
+    /// Anfragenden bereits zum gleichen Zeitpunkt mit einer früheren Meldung
+    /// bestätigt?" → `A04` Doppelmeldung) compares the *start* of the
+    /// Ersatz-/Grundversorgung, which is the date a 55013 carries in
+    /// `SG4 DTM+92`. Comparing [`Self::bestaetigtes_zuordnungsende`] instead
+    /// answers Doppelmeldung when a wholly unrelated Lieferende happens to fall
+    /// on the same day.
+    pub bestaetigter_zuordnungsbeginn: Option<Date>,
     /// The date the supply contract ends, **if it is already terminated**.
     ///
     /// Strictly a record of an existing termination — `E_0614` Prüfschritte
@@ -236,7 +260,14 @@ pub struct LfVertragslage {
     /// der Antwort noch kündbar ist").
     pub naechstmoeglicher_kuendigungstermin: Option<Date>,
     /// `true` when the Vertragsverhältnis still stands on the day after the
-    /// requested Termin (`E_0624` Prüfschritte 90 / 220, `E_0614` 70 / 580).
+    /// requested Termin — `E_0624` Prüfschritte 90 / 220 and the Gas `E_3020`,
+    /// and **only** those.
+    ///
+    /// Not what `E_0614` Prüfschritt 70 asks. That step is „kündbar **unter
+    /// Einhaltung der Kündigungsfrist**?", which a running contract answers
+    /// with *yes* once the notice period is met — while this field says *yes*
+    /// for every running contract, terminable or not. The Kündbarkeit comes
+    /// from [`Self::naechstmoeglicher_kuendigungstermin`].
     pub vertragsbindung_am_folgetag: Bekannt,
     /// `true` when the customer named in the request is the same person the
     /// LFA has on file (`E_0624` Prüfschritt 50).
@@ -276,8 +307,10 @@ impl Default for LfVertragslage {
     fn default() -> Self {
         Self {
             beliefert: false,
+            vertrag_vorhanden: Bekannt::Unbekannt,
             zuordnung_am_folgetag: Bekannt::Unbekannt,
             bestaetigtes_zuordnungsende: None,
+            bestaetigter_zuordnungsbeginn: None,
             vertragsende: None,
             naechstmoeglicher_kuendigungstermin: None,
             vertragsbindung_am_folgetag: Bekannt::Unbekannt,
@@ -330,7 +363,21 @@ pub struct LfAntwort {
     /// The BDEW wording, carried into the audit log and the operator queue.
     pub bedeutung: String,
     /// `FTX+ACB` Erläuterung — populated whenever the code requires one.
+    ///
+    /// A free-text remark and nothing else. The UTILMD AHB permits `SG4
+    /// FTX+ACB` on the **55609 Ablehnung** only (Bedingung `[48]`, „Wenn in
+    /// dieser SG4 das STS+E01++A99 vorhanden"); the Bilanzkreis a 55608
+    /// Zustimmung names has its own slot, [`Self::bilanzkreis`].
     pub bemerkung: Option<String>,
+    /// The Bilanzkreis a 55608 Zustimmung names, when the tree asked for one.
+    ///
+    /// `E_0603`–`E_0606` publish a single Prüfschritt, so the substance of the
+    /// answer is not the code — it is which balancing circle the generation is
+    /// booked into (GPKE Teil 2 § 2.4.2.2 Nr. 2). On the wire it is a
+    /// Produktpaket, `SG8 SEQ+Z79` / `PIA+5` with the Produkteigenschaft in
+    /// `SG10 CCI+Z66` / `CAV+ZH9` / `CAV+ZV4` (UTILMD AHB Strom 2.2, Codeliste
+    /// der Konfigurationen Kap. 6.1), never a Bemerkung.
+    pub bilanzkreis: Option<String>,
     /// The date the answer states.
     ///
     /// `A34` requires the LFA's own Lieferendedatum; the Gas `Z01` „Zustimmung
@@ -361,6 +408,7 @@ impl LfEntscheidung {
             // rather than silently going out bare.
             bemerkung: bemerkung
                 .or_else(|| code.braucht_bemerkung.then(|| code.bedeutung.to_owned())),
+            bilanzkreis: None,
             termin,
             pruefschritt,
         })

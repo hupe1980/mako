@@ -67,6 +67,13 @@ pub const WORKFLOW_NAME: &str = "geli-gas-lf-anmeldung";
 /// answer „unverzüglich, spätestens jedoch bis zum Ablauf des 3. Werktages".
 pub const ANFRAGE_PIDS_LF: &[u32] = &[44001, 44004, 44016];
 
+/// The one Anfrage-PID whose `SG10 CCI+Z19` Bilanzkreis is **Muss**.
+///
+/// UTILMD AHB Gas 1.2 marks the segment Muss on the Anmeldung NN. An Abmeldung
+/// (44004) and a Kündigung (44016) register nothing and carry none. GeLi Gas has
+/// no Produktpaket — the Strom `SG8 SEQ+Z79` shape is not sendable here.
+pub const ANMELDUNG_PID_MIT_BILANZKREIS: u32 = 44001;
+
 /// Inbound response PIDs that resume this workflow.
 ///
 /// | PID   | Meaning                          |
@@ -241,6 +248,13 @@ pub enum GeliGasLfAnmeldungCommand {
         /// permitted within the 6-week window for SLP metering), `E02` Einzug
         /// in Neuanlage, `E03` Wechsel (future-only, ≥ 10 WT).
         transaktionsgrund: Option<String>,
+        /// `SG10 CCI+Z19` DE 7037 — the Bilanzkreis the LF registers the
+        /// Marktlokation into.
+        ///
+        /// **Muss on 44001** (UTILMD AHB Gas 1.2). GeLi Gas has no Produktpaket:
+        /// where GPKE Strom puts the Bilanzkreis in `SG8 SEQ+Z79`, Gas states it
+        /// in this one segment. `None` on 44004, which registers nothing.
+        bilanzkreis: Option<String>,
         /// UTC wall-clock time when the ERP command was received.
         received_at: OffsetDateTime,
     },
@@ -364,6 +378,7 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
                 zaehlpunkt,
                 process_date,
                 transaktionsgrund,
+                bilanzkreis,
                 received_at: _,
             } => {
                 if !matches!(state, GeliGasLfAnmeldungState::New) {
@@ -373,6 +388,18 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
                     return Err(WorkflowError::rejected(format!(
                         "expected a Gas LFN Anfrage PID (44001/44002), got {pid}",
                     )));
+                }
+                // UTILMD AHB Gas 1.2 marks `SG10 CCI+Z19` (Bilanzkreis) Muss on
+                // a 44001; without it the GNB has no balancing circle to assign
+                // the Marktlokation to. Refusing here beats sending an
+                // AHB-invalid Anmeldung and waiting for the APERAK.
+                if pid.as_u32() == ANMELDUNG_PID_MIT_BILANZKREIS
+                    && bilanzkreis.as_deref().is_none_or(str::is_empty)
+                {
+                    return Err(WorkflowError::rejected(
+                        "Gas-Anmeldung 44001 ohne Bilanzkreis: die UTILMD AHB Gas 1.2 \
+                         macht SG10 CCI+Z19 (Bilanzkreis) zur Muss-Angabe.",
+                    ));
                 }
 
                 let event = GeliGasLfAnmeldungEvent::Initiated {
@@ -403,6 +430,9 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
                             // 6-week retroactive window (AWH GeLi Gas 2.0
                             // Kap. 2.2); E03 is future-only.
                             "transaktionsgrund": transaktionsgrund,
+                            // `SG10 CCI+Z19` DE 7037 — the Gas shape of the
+                            // Bilanzkreis; GeLi Gas has no Produktpaket.
+                            "bilanzkreis":       bilanzkreis,
                         }),
                     ),
                     // ProcessInitiated CE — notifies marktd → processd/invoicd/edmd.
@@ -516,6 +546,7 @@ mod tests {
             zaehlpunkt: "DE00123456789012345678901234567890".to_owned(),
             process_date: "20261001".to_owned(),
             transaktionsgrund: None,
+            bilanzkreis: Some("9870000000006".to_owned()),
             received_at: time::OffsetDateTime::now_utc(),
         };
         let output = GeliGasLfAnmeldungWorkflow::handle(&state, cmd).unwrap();
@@ -601,6 +632,7 @@ mod tests {
             zaehlpunkt: "DE00123456789012345678901234567890".to_owned(),
             process_date: "20261001".to_owned(),
             transaktionsgrund: None,
+            bilanzkreis: Some("9870000000006".to_owned()),
             received_at: time::OffsetDateTime::now_utc(),
         };
         assert!(GeliGasLfAnmeldungWorkflow::handle(&state, cmd).is_err());

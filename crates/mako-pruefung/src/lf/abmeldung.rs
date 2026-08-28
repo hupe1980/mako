@@ -67,7 +67,7 @@ pub fn pruefe_abmeldung(anfrage: &LfAnfrage, lage: &LfVertragslage) -> LfEntsche
     // Marktlokation**?" `E_0609` names both, unlike `E_0624`.
     let lokationsart = match anfrage.lokationsart_oder_eskalation(EBD_ABMELDUNG) {
         Ok(l) => l,
-        Err(e) => return e,
+        Err(e) => return *e,
     };
     let verbrauchend = lokationsart.ist_verbrauchend();
     // (verbrauchend, Tranche/erzeugend) code pairs, in Prüfschritt order.
@@ -202,7 +202,12 @@ fn pruefe_zuordnungsermaechtigung(
              (SG4 DTM+93) — Prüfschritt 85 vergleicht es mit dem nächsten Monatsersten.",
         ));
     };
-    if termin.day() != 1 {
+    // „Ist das angegebene Datum ‚Lieferende' der **nächste** 1. eines
+    // Kalendermonats 00:00 Uhr?" Two conditions, not one: it must be a
+    // Monatserster *and* the next one after the Nachrichteneingang. A first of
+    // the month two years out is a Monatserster too, and the Zuordnungs-
+    // ermächtigung it claims to end has nothing to do with it.
+    if termin != naechster_monatserster(anfrage.eingang.date()) {
         return code(c("A05", "A24"), 85);
     }
     // 100/580 — hat der BKV die Deaktivierung vorgenommen?
@@ -271,6 +276,21 @@ fn zustimmung(verbrauchend: bool, termin: Option<Date>) -> LfEntscheidung {
         .find(|c| c.code == code)
         .expect("E_0609 publishes its Zustimmungscodes");
     LfEntscheidung::antwort(entry, 130, termin, None)
+}
+
+/// The first day of the month **after** `von`.
+///
+/// `E_0609` Prüfschritt 85 / 565 asks for „der nächste 1. eines Kalendermonats"
+/// measured from the Nachrichteneingang, so a Lieferende on the 1st of the
+/// current month is already in the past and one further out is not the next.
+fn naechster_monatserster(von: Date) -> Date {
+    let (jahr, monat) = (von.year(), von.month());
+    let (jahr, monat) = if monat == time::Month::December {
+        (jahr + 1, time::Month::January)
+    } else {
+        (jahr, monat.next())
+    };
+    Date::from_calendar_date(jahr, monat, 1).unwrap_or(von)
 }
 
 /// `E_0609` Prüfschritt 120/600 — „Liegt das Eingangsdatum der Abmeldung nach

@@ -435,6 +435,44 @@ pub struct LfConfig {
     /// letting the NB use whichever one it has on file.
     #[serde(default)]
     pub bilanzkreise: Vec<BilanzkreisEintrag>,
+    /// The Netzgebiete this supplier is Grund-/Ersatzversorger in, listed by
+    /// the **Netzbetreiber's MP-ID**.
+    ///
+    /// `E_0615` Prüfschritt 20 („Befindet sich die Marktlokation im
+    /// Grundversorgungsgebiet des Empfängers oder besteht für die Marktlokation
+    /// eine vertragliche Vereinbarung zur Ersatzbelieferung?") is a fact about
+    /// the deployment; no BDEW process transports it.
+    ///
+    /// ```toml
+    /// [lf]
+    /// grundversorgungs_netzgebiete = ["9900000000001"]
+    /// ```
+    ///
+    /// Empty means unknown — every inbound 55013 / 44013 escalates with its
+    /// Frist attached rather than refusing or accepting a statutory supply duty
+    /// from an absent record.
+    #[serde(default)]
+    pub grundversorgungs_netzgebiete: Vec<String>,
+    /// Whether a resolved `E_0615` / `E_3008` answer may leave unattended.
+    ///
+    /// Off by default even where [`Self::auto_respond`] is on: a Zustimmung
+    /// accepts a § 36 / § 38 EnWG supply duty for a customer this supplier has
+    /// no contract with, and an Ablehnung declines one. The walk runs either
+    /// way and queues its outcome.
+    #[serde(default)]
+    pub eog_auto_respond: bool,
+    /// `SG10 CCI+Z36` — which fallback supply an automatic `E_0615` /
+    /// `E_3008` Zustimmung states: `ZC9` (§ 38 Ersatzversorgung), `ZD0` (§ 36
+    /// Grundversorgung) or `ZE3` (vertragliche Ersatzbelieferung). Those three
+    /// are what DE 7037 publishes; the § 38a Übergangsversorgung is a `ZE3`
+    /// carrying the Transaktionsgrund `ZZD`, not a fourth code here.
+    ///
+    /// The AHB marks it Muss on a 55014 and no Entscheidungsbaum produces it —
+    /// it is a legal classification of the case. Without it an automatic
+    /// Zustimmung is queued rather than dispatched, because the message would
+    /// otherwise leave a Muss segment empty.
+    #[serde(default)]
+    pub eog_versorgungsart: Option<String>,
 }
 
 fn default_lf_auto_respond() -> bool {
@@ -446,6 +484,9 @@ impl Default for LfConfig {
         Self {
             auto_respond: default_lf_auto_respond(),
             bilanzkreise: Vec::new(),
+            grundversorgungs_netzgebiete: Vec::new(),
+            eog_auto_respond: false,
+            eog_versorgungsart: None,
         }
     }
 }

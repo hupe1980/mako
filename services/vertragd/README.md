@@ -164,7 +164,7 @@ the component statuses and never returns from a terminal state.
 | `POST`/`GET` | `/api/v1/kunden/{id}/vertraege` | Create (idempotent on `erp_contract_id`) / list |
 | `GET` | `/api/v1/vertraege` | Open contracts |
 | `GET` | `/api/v1/vertraege/{id}` | Contract + components |
-| `GET` | `/api/v1/vertraege/by-malo/{malo_id}` | § 40 Abs. 1 EnWG invoice facts + BG-7 buyer |
+| `GET` | `/api/v1/vertraege/by-malo/{malo_id}` | § 40 Abs. 1 EnWG invoice facts + BG-7 buyer + the next admissible Kündigungstermin; `?stichtag=YYYY-MM-DD` measures the notice period from that date instead of today (`processd` passes the Eingangsdatum der Kündigung, which `E_0614` Prüfschritt 70 names); `?kunde=<Name>` answers `E_0624` Prüfschritt 50 as a tri-state `kundenidentitaet` — token-set match, with Jaro-Winkler and Kölner Phonetik widening `UNKLAR` only |
 | `GET` | `/api/v1/vertraege/{id}/kuendigungsfrist` | Earliest lawful end date **per reason**, with the rule |
 | `GET` | `/api/v1/malo/{malo_id}/produkte` | The valid-time product assignment — `?as_of=` or `?from=&to=` |
 | `POST` | `/api/v1/vertraege/{id}/kuendigen` | Terminate |

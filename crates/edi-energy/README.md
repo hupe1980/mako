@@ -98,26 +98,68 @@ for result in parse_interchange(reader) {
 
 ```rust,no_run
 use edi_energy::builders::UtilmdBuilder;
-use edi_energy::{Pruefidentifikator, ObjectType};
+use edi_energy::utilmd_codes::{Produktpaket, Transaktionsgrund, dtm, transaktionsgrund};
+use edi_energy::{Pruefidentifikator, Release};
 
-// S2.1 is the current UTILMD Strom format (fv20251001).
-let release = edi_energy::releases::utilmd_fv20251001().clone();
-let bytes = UtilmdBuilder::new(release)
+let bytes = UtilmdBuilder::new(Release::new("S2.2"))
     .pruefidentifikator(Pruefidentifikator::new(55001)?)
     .sender("4012345000023")
     .receiver("9900357000004")
-    .document_date("20251001")
-    .document_code("E01")
-    .transaction(ObjectType::Marktlokation, "51238696799")
-    .process_date("163", "20251001") // Lieferbeginn
+    .document_date("20261001")
+    // `IDE+24` DE 7402 is a **Vorgangsnummer**, never a Lokations-ID.
+    .transaction("VORGANG-0001")
+    // `SG4 DTM+92` „Datum Vertragsbeginn" — the Anmeldung's process date.
+    .date(dtm::BEGINN_ZUM, "20261101")
+    .transaktionsgrund(Transaktionsgrund::verbrauchende_malo(transaktionsgrund::WECHSEL))
+    // `SG8 SEQ+Z79` Produktpaket — Muss on an Anmeldung: without a Bilanzkreis
+    // the NB cannot assign the Marktlokation (UTILMD AHB Strom 2.2 Kap. 5.3).
+    .produktpaket(Produktpaket::bilanzkreis("11XBK-STD-----9"))
+    // The Lokations-ID lives in `SG5 LOC+Z16`.
+    .marktlokation("51238696799")
     .done()
-    .build()?
     .serialize()?;
 
 println!("{}", String::from_utf8_lossy(&bytes));
 ```
 
 See the [builder guide][builders] for the full builder API and all message types.
+
+## The Produktpaket an Anmeldung must carry
+
+UTILMD AHB Strom 2.2 Kap. 5.3 makes `SG8 SEQ+Z79` „Bestandteil eines
+Produktpakets" and `SG8 SEQ+ZH0` „Priorisierung erforderliches Produktpaket"
+Muss on **55001, 55077, 55600, 55601, 55014 and 55608**, and the Codeliste der
+Konfigurationen 1.4 Kap. 6.1.1 makes one product unconditional inside it:
+
+> `9991000002082` **Bilanzkreis** — „Dieses Produkt ist je Produktpaket-ID in
+> der UTILMD zwingend anzugeben."
+
+[`Produktpaket::bilanzkreis`] builds that package; the emitted shape is
+
+```text
+SEQ+Z79+1
+PIA+5+9991000002082:Z11
+CCI+Z66
+CAV+ZV4:::11XBK-STD-----9
+SEQ+ZH0+1
+CCI+Z65+++Z01
+```
+
+The Bilanzkreis is *not* an `FTX+ACB` remark: on a 55608 the AHB admits that
+segment under Bedingung [48] („Wenn … STS+E01++A99 vorhanden"), i.e. on the
+Ablehnung only.
+
+**GeLi Gas has no Produktpaket.** UTILMD AHB Gas 1.2 marks `SG10 CCI+Z19` with
+the Bilanzkreis in DE 7037 Muss on a 44001 — one segment, no `SEQ`. Build it
+with `.merkmal(produkt::CCI_BILANZKREIS_GAS, "…")`; the two shapes carry the
+same fact and neither is sendable on the other Sparte.
+
+**Reading it back.** `UtilmdTransaction::sequences` nests each `CAV` under the
+`CCI` above it — the only thing that says which Merkmal a value belongs to — and
+`UtilmdTransaction::bilanzkreis()` accepts either Sparte's shape. `SG12 NAD`
+lands in `UtilmdTransaction::parties` with the full five-component `C080` name.
+
+[`Produktpaket::bilanzkreis`]: https://docs.rs/edi-energy/latest/edi_energy/utilmd_codes/struct.Produktpaket.html
 
 ## Interchange party identity (§2.13)
 

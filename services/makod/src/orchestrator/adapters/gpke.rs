@@ -742,7 +742,7 @@ pub fn gpke_lf_abmeldung_registry() -> AdapterRegistry<GpkeLfAbmeldungWorkflow> 
                     .unwrap_or("")
                     .to_owned(),
                 message_ref: MessageRef::new(msg.message_ref()),
-                vorgang: super::lf_vorgangsdaten(u),
+                vorgang: Box::new(super::lf_vorgangsdaten(u)),
                 validation_passed,
                 validation_errors,
             })
@@ -814,7 +814,7 @@ pub fn gpke_beendigung_zuordnung_registry() -> AdapterRegistry<GpkeBeendigungZuo
                     .unwrap_or("")
                     .to_owned(),
                 message_ref: MessageRef::new(msg.message_ref()),
-                vorgang: super::lf_vorgangsdaten(u),
+                vorgang: Box::new(super::lf_vorgangsdaten(u)),
                 validation_passed,
                 validation_errors,
             })
@@ -884,7 +884,7 @@ pub fn gpke_kuendigung_registry() -> AdapterRegistry<mako_gpke::GpkeKuendigungWo
                     .unwrap_or("")
                     .to_owned(),
                 message_ref: MessageRef::new(msg.message_ref()),
-                vorgang: super::lf_vorgangsdaten(u),
+                vorgang: Box::new(super::lf_vorgangsdaten(u)),
                 validation_passed,
                 validation_errors,
             })
@@ -985,7 +985,7 @@ pub fn gpke_ankuendigung_zuordnung_lf_registry()
                     .unwrap_or("")
                     .to_owned(),
                 message_ref: MessageRef::new(msg.message_ref()),
-                vorgang: super::lf_vorgangsdaten(u),
+                vorgang: Box::new(super::lf_vorgangsdaten(u)),
                 validation_passed,
                 validation_errors,
             })
@@ -1776,7 +1776,7 @@ pub fn gpke_allokationsliste_mscons_registry() -> AdapterRegistry<GpkeAllokation
 ///
 /// The Transaktionsgrund is read from the first `SG4 STS` with category `7`,
 /// the Haushaltskunde flag from SG10 `CCI` Z15/Z18, and the response
-/// Versorgungsart from SG10 `CCI+Z36` (ZC9/ZD0/ZE3/ZZD). When the compiled AHB
+/// Versorgungsart from SG10 `CCI+Z36` (ZC9/ZD0/ZE3). When the compiled AHB
 /// rulepack for 55013–55015 is present the message is validated against it;
 /// otherwise structural (MIG) validation applies and the vacuous AHB pass is
 /// accepted with a warning (like the Gas twin 44013).
@@ -1865,7 +1865,7 @@ pub fn gpke_eog_registry() -> AdapterRegistry<mako_gpke::GpkeEogWorkflow> {
                 55014 | 55015 => Ok(mako_gpke::EogCommand::ReceiveAntwort {
                     response_pid: pid,
                     accepted: pid.as_u32() == 55014,
-                    // SG10 CCI+Z36 Versorgungsart (ZC9/ZD0/ZE3/ZZD). When absent
+                    // SG10 CCI+Z36 Versorgungsart (ZC9/ZD0/ZE3). When absent
                     // marktd defaults to Ersatzversorgung (§38 ipso iure).
                     versorgungsart: super::extract_versorgungsart(u.segments())
                         .and_then(|c| mako_gpke::Versorgungsart::from_code(&c)),

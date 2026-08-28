@@ -49,7 +49,22 @@ pub struct LfAntwort {
     /// `FTX+ACB` Erläuterung, mandatory alongside the catch-all codes
     /// (`A99` Strom, `E14` Gas) and wherever the EBD says „ist in der Antwort
     /// zu beschreiben".
+    ///
+    /// A remark and nothing else. On a 55608 the UTILMD AHB admits the segment
+    /// under Bedingung `[48]` — „Wenn in dieser SG4 das STS+E01++A99 vorhanden" —
+    /// which is the 55609 Ablehnung, so a Bilanzkreis carried here rides a
+    /// segment the Bestätigung may not contain. It has its own field.
     pub bemerkung: Option<String>,
+    /// `SG8 SEQ+Z79` / `SG10 CAV+ZV4` — the Bilanzkreis a Zuordnungs-Zustimmung
+    /// names.
+    ///
+    /// `E_0603`–`E_0606` publish one Prüfschritt each, so the substance of a
+    /// 55608 is not the code: it is which balancing circle the generation is
+    /// booked into (GPKE Teil 2 § 2.4.2.2 Nr. 2). The Codeliste der
+    /// Konfigurationen 1.4 Kap. 6.1.1 makes the Bilanzkreis product
+    /// (`9991000002082`) unconditional in the Produktpaket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bilanzkreis: Option<String>,
     /// `SG4 DTM+93` — the date the answer states, `YYYYMMDD`.
     ///
     /// Several codes require the supplier's *own* date rather than the
@@ -68,6 +83,7 @@ impl LfAntwort {
             ebd: Some(ebd.into()),
             zustimmung: true,
             bemerkung: None,
+            bilanzkreis: None,
             termin: None,
         }
     }
@@ -80,6 +96,7 @@ impl LfAntwort {
             ebd: Some(ebd.into()),
             zustimmung: false,
             bemerkung: None,
+            bilanzkreis: None,
             termin: None,
         }
     }
@@ -88,6 +105,13 @@ impl LfAntwort {
     #[must_use]
     pub fn with_bemerkung(mut self, text: impl Into<String>) -> Self {
         self.bemerkung = Some(text.into());
+        self
+    }
+
+    /// Name the Bilanzkreis of a Zuordnungs-Zustimmung (`SG8 SEQ+Z79`).
+    #[must_use]
+    pub fn with_bilanzkreis(mut self, bk: impl Into<String>) -> Self {
+        self.bilanzkreis = Some(bk.into());
         self
     }
 
@@ -136,6 +160,9 @@ pub fn antwort_outbox(
     }
     if let Some(bemerkung) = &antwort.bemerkung {
         payload["bemerkung"] = serde_json::Value::String(bemerkung.clone());
+    }
+    if let Some(bilanzkreis) = &antwort.bilanzkreis {
+        payload["bilanzkreis"] = serde_json::Value::String(bilanzkreis.clone());
     }
     if let Some(referenz) = referenz_vorgangsnummer {
         payload["referenz_vorgangsnummer"] = serde_json::Value::String(referenz.to_owned());
@@ -201,6 +228,7 @@ mod tests {
             ebd: None,
             zustimmung: true,
             bemerkung: None,
+            bilanzkreis: None,
             termin: None,
         };
         assert!(outbox_for(&antwort).get("antwort_ebd").is_none());

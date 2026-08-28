@@ -120,6 +120,9 @@ async fn a_rejected_anmeldung_does_not_block_the_malo_forever() {
     let payload = serde_json::json!({
         "malo_id": MALO_ID,
         "lieferbeginn_datum": "2026-10-01",
+        // `SG8 SEQ+Z79` Produktpaket — Muss on a 55001 (UTILMD AHB Strom 2.2
+        // Kap. 5.3); the workflow refuses an Anmeldung without one.
+        "bilanzkreis": "11XBK-LF-------9",
     });
 
     // ── First Anmeldung ───────────────────────────────────────────────────────
@@ -224,6 +227,9 @@ async fn a_follow_up_command_still_resolves_after_a_replacement_process_spawns()
     let payload = serde_json::json!({
         "malo_id": MALO_ID,
         "lieferbeginn_datum": "2026-10-01",
+        // `SG8 SEQ+Z79` Produktpaket — Muss on a 55001 (UTILMD AHB Strom 2.2
+        // Kap. 5.3); the workflow refuses an Anmeldung without one.
+        "bilanzkreis": "11XBK-LF-------9",
     });
 
     let DispatchOutcome::Spawned {

@@ -77,6 +77,9 @@ billing      = { version = "0.14.0", features = ["serde"] }
 en16931         = { version = "0.6.0", features = ["billing", "serde", "time"] }
 en16931-formats = { version = "0.6.0", features = ["cii", "ubl", "serde", "zugferd"] }
 serde        = { version = "1", features = ["derive"] }
+# Jaro-Winkler for the `E_0624` Prüfschritt-50 name comparison. Already in the
+# tree via clap and darling, so it adds no supply-chain surface.
+strsim       = "0.11"
 serde_json   = "1"
 thiserror    = "2"
 time         = { version = "0.3", features = ["std", "macros", "serde-well-known", "serde-human-readable", "parsing", "formatting"] }

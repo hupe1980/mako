@@ -8,8 +8,8 @@ use crate::{
     messages::{
         core::MessageCore,
         segments::{
-            Bgm, Dtm, Ftx, Ide, Loc, Nad, Rff, Sts, collect_dtm, find_bgm, find_nad,
-            try_deserialize,
+            Bgm, Cav, Cci, Dtm, Ftx, Ide, Loc, Nad, Pia, Rff, Seq, Sts, collect_dtm, find_bgm,
+            find_nad, try_deserialize,
         },
     },
 };
@@ -55,6 +55,80 @@ pub struct UtilmdTransaction {
     transaktionsgrund: Option<crate::utilmd_codes::Transaktionsgrund>,
     /// `STS+E01` parsed with its DE 1131 EBD reference.
     antwort: Option<crate::utilmd_codes::AntwortStatus>,
+    /// SG12 `NAD` — the parties this Vorgang names beyond the message header:
+    /// `Z09` „Kunde des LF", `VY` the Neulieferant, `Z04`/`Z05` addresses.
+    pub parties: Vec<UtilmdParty>,
+    /// SG8 `SEQ` groups, each with the `SG10 CCI`/`CAV` Merkmale under it.
+    ///
+    /// The Anmeldung einer Zuordnung des LFN carries its **Bilanzkreis** here
+    /// (`SEQ+Z79` / `PIA+5+9991000002082:Z11` / `CAV+ZV4`), and the AHB makes
+    /// the group Muss on 55001, 55077, 55600, 55601, 55014 and 55608. Reading
+    /// it is what lets a receiver check the Bilanzkreis at all.
+    pub sequences: Vec<UtilmdSequence>,
+}
+
+/// One `SG12 NAD` of a Vorgang, with the full `C080` name composite.
+///
+/// [`Nad::party_name`] reads only the first of `C080`'s five interchangeable
+/// DE 3036 components. A „Kunde des LF" under Namensformat `Z01` is split
+/// across them — Nachname, Vorname, … — so a comparison against a contract
+/// holder needs all of them.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct UtilmdParty {
+    /// The typed `NAD`, including DE 3035 and the DE 3045 Namensformat.
+    pub nad: Nad,
+    /// Every non-empty DE 3036 of `C080`, in wire order.
+    pub name_parts: Vec<String>,
+}
+
+impl UtilmdParty {
+    /// The name components joined with a single space, or `None` when the
+    /// segment carried none.
+    #[must_use]
+    pub fn name(&self) -> Option<String> {
+        (!self.name_parts.is_empty()).then(|| self.name_parts.join(" "))
+    }
+}
+
+/// One SG8 `SEQ` group of a Vorgang, with the `SG10` Merkmale nested under it.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct UtilmdSequence {
+    /// `SEQ` — DE 1245 (`Z79` Produktpaket, `ZH0` Priorisierung, …) and the
+    /// Folgenummer.
+    pub seq: Seq,
+    /// SG8 `PIA+5` — the Produkt-Codes required in this Produktpaket.
+    pub products: Vec<Pia>,
+    /// SG8 `RFF` — references scoped to this group.
+    pub references: Vec<Rff>,
+    /// SG9/SG10 `QTY` — quantities scoped to this group.
+    pub quantities: Vec<crate::messages::segments::Qty>,
+    /// SG10 `CCI` with the `CAV` values that follow each one, in wire order.
+    pub characteristics: Vec<UtilmdCharacteristic>,
+}
+
+/// One `SG10` Merkmal: a `CCI` and every `CAV` that follows it.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct UtilmdCharacteristic {
+    /// `CCI` — DE 7059 Klassentyp, DE 7037 Merkmal, DE 4051 Relevanz.
+    pub cci: Cci,
+    /// The `CAV` values belonging to this `CCI`.
+    pub values: Vec<Cav>,
+}
+
+impl UtilmdSequence {
+    /// The value of the first `CAV` whose DE 7111 matches, across every `CCI`
+    /// in this group.
+    #[must_use]
+    pub fn value(&self, code: &str) -> Option<&str> {
+        self.characteristics
+            .iter()
+            .flat_map(|c| c.values.iter())
+            .find(|v| v.value_code.as_deref() == Some(code))
+            .and_then(|v| v.value.as_deref())
+    }
 }
 
 impl UtilmdTransaction {
@@ -84,6 +158,66 @@ impl UtilmdTransaction {
     #[must_use]
     pub fn messlokation(&self) -> Option<&str> {
         self.location(crate::Lokationstyp::Messlokation)
+    }
+
+    /// The **Bilanzkreis** this Vorgang registers the Lokation into.
+    ///
+    /// Two shapes, one per Festlegung, and a receiver has to accept whichever
+    /// its counterparty sends:
+    ///
+    /// - **GPKE Strom** carries it in the Produktpaket — `SG8 SEQ+Z79` with
+    ///   `PIA+5+9991000002082:Z11` and the value in `SG10 CAV+ZV4` (UTILMD AHB
+    ///   Strom 2.2 Kap. 5.3, Codeliste der Konfigurationen 1.4 Kap. 6.1.1).
+    /// - **`GeLi` Gas** has no Produktpaket and states it in `SG10 CCI+Z19`
+    ///   DE 7037 (UTILMD AHB Gas 1.2).
+    ///
+    /// The AHB makes one of the two Muss on every Anmeldung einer Zuordnung —
+    /// „ohne die Angabe eines für den LF gültigen Bilanzkreises `[kann]` der NB
+    /// den LF der Marktlokation bzw. Tranche nicht zuordnen" — so `None` on
+    /// such a message is a defect in the sender, not an optional field.
+    #[must_use]
+    pub fn bilanzkreis(&self) -> Option<&str> {
+        use crate::utilmd_codes::produkt;
+
+        // Strom: the Produktpaket whose PIA names the Bilanzkreis product.
+        let strom = self
+            .sequences
+            .iter()
+            .filter(|g| {
+                g.seq.action.as_deref() == Some(produkt::SEQ_PRODUKTPAKET)
+                    && g.products
+                        .iter()
+                        .any(|p| p.item_number.as_deref() == Some(produkt::BILANZKREIS))
+            })
+            .find_map(|g| g.value(produkt::CAV_WERT));
+        if strom.is_some() {
+            return strom;
+        }
+
+        // Gas: `CCI+Z19` with the Bilanzkreis in DE 7037.
+        self.sequences
+            .iter()
+            .flat_map(|g| g.characteristics.iter())
+            .find(|c| c.cci.category.as_deref() == Some(produkt::CCI_BILANZKREIS_GAS))
+            .and_then(|c| c.cci.characteristic_id.as_deref())
+    }
+
+    /// The first `SG12 NAD` with the given DE 3035 qualifier.
+    #[must_use]
+    pub fn party(&self, qualifier: &str) -> Option<&UtilmdParty> {
+        self.parties.iter().find(|p| p.nad.qualifier == qualifier)
+    }
+
+    /// `SG12 NAD+Z09` — „Kunde des LF", the customer the request names.
+    ///
+    /// `E_0624` Prüfschritt 50 („Ist der Kunde aus der Anfrage identisch mit
+    /// dem Kunden beim LFA?") is answerable only from this. The UTILMD AHB
+    /// marks the segment Muss on a 55010 whose Transaktionsgrundergänzung is
+    /// `ZW4`/`ZAP` (Bedingung `[279]`) and identifies it as „Kundenname aus
+    /// Anmeldung Lieferant neu" (Bedingung `[572]`).
+    #[must_use]
+    pub fn kunde(&self) -> Option<&UtilmdParty> {
+        self.party(crate::utilmd_codes::nad::KUNDE_DES_LF)
     }
 
     /// The first `SG4 DTM` with the given DE 2005 qualifier.
@@ -336,6 +470,128 @@ fn parse_references(segments: &[edifact_rs::Segment<'_>]) -> Vec<UtilmdReference
     result
 }
 
+/// The mutable state one `SG4 IDE` block accumulates while it is walked.
+struct Sg4Acc {
+    dtm: Vec<Dtm>,
+    locations: Vec<Loc>,
+    references: Vec<Rff>,
+    sts: Vec<Sts>,
+    ftx: Vec<Ftx>,
+    transaktionsgrund: Option<crate::utilmd_codes::Transaktionsgrund>,
+    antwort: Option<crate::utilmd_codes::AntwortStatus>,
+    parties: Vec<UtilmdParty>,
+    sequences: Vec<UtilmdSequence>,
+}
+
+/// Fold one segment of a Vorgang into the accumulator.
+///
+/// `SG8` opens on `SEQ` and everything until the next `SEQ` belongs to it;
+/// `CAV` attaches to the `CCI` above it, which is the only thing that says
+/// which Merkmal a value belongs to.
+fn collect_sg4_segment(seg: &edifact_rs::Segment<'_>, ctx: &mut Sg4Acc) {
+    match seg.tag {
+        "DTM" => {
+            if let Some(d) = try_deserialize::<Dtm>(seg) {
+                ctx.dtm.push(d);
+            }
+        }
+        "LOC" => {
+            if let Some(l) = try_deserialize::<Loc>(seg) {
+                ctx.locations.push(l);
+            }
+        }
+        "RFF" => {
+            if let Some(r) = try_deserialize::<Rff>(seg) {
+                ctx.references.push(r);
+            }
+        }
+        "STS" => {
+            // The repeated `C556` composites are read positionally from
+            // the raw segment: DE 9013 resolves to the *first*
+            // occurrence only, so a code-addressed read cannot see the
+            // Ergänzung at element 4 or the DE 1131 EBD reference.
+            match sts_category(seg) {
+                Some(crate::utilmd_codes::STS_TRANSAKTIONSGRUND) => {
+                    ctx.transaktionsgrund = parse_transaktionsgrund(seg);
+                }
+                Some(crate::utilmd_codes::STS_STATUS_ANTWORT) => {
+                    ctx.antwort = parse_antwort(seg);
+                }
+                _ => {}
+            }
+            if let Some(s) = try_deserialize::<Sts>(seg) {
+                ctx.sts.push(s);
+            }
+        }
+        "FTX" => {
+            if let Some(f) = try_deserialize::<Ftx>(seg) {
+                ctx.ftx.push(f);
+            }
+        }
+        // SG8 opens on `SEQ`; everything until the next `SEQ` (or the
+        // end of the Vorgang) belongs to it. `CAV` attaches to the
+        // `CCI` above it, which is the only thing that says which
+        // Merkmal a value belongs to — a flat list of `CAV` cannot.
+        "SEQ" => {
+            if let Some(seq) = try_deserialize::<Seq>(seg) {
+                ctx.sequences.push(UtilmdSequence {
+                    seq,
+                    products: Vec::new(),
+                    references: Vec::new(),
+                    quantities: Vec::new(),
+                    characteristics: Vec::new(),
+                });
+            }
+        }
+        "PIA" => {
+            if let (Some(group), Some(p)) = (ctx.sequences.last_mut(), try_deserialize::<Pia>(seg))
+            {
+                group.products.push(p);
+            }
+        }
+        "QTY" => {
+            if let (Some(group), Some(q)) = (
+                ctx.sequences.last_mut(),
+                try_deserialize::<crate::messages::segments::Qty>(seg),
+            ) {
+                group.quantities.push(q);
+            }
+        }
+        "CCI" => {
+            if let (Some(group), Some(cci)) =
+                (ctx.sequences.last_mut(), try_deserialize::<Cci>(seg))
+            {
+                group.characteristics.push(UtilmdCharacteristic {
+                    cci,
+                    values: Vec::new(),
+                });
+            }
+        }
+        "CAV" => {
+            if let (Some(merkmal), Some(cav)) = (
+                ctx.sequences
+                    .last_mut()
+                    .and_then(|g| g.characteristics.last_mut()),
+                try_deserialize::<Cav>(seg),
+            ) {
+                merkmal.values.push(cav);
+            }
+        }
+        // SG12 — the parties a Vorgang names. `NAD` also opens SG2 at
+        // message level, but that is outside any `IDE` and never
+        // reaches this loop.
+        "NAD" => {
+            if let Some(nad) = try_deserialize::<Nad>(seg) {
+                ctx.parties.push(UtilmdParty {
+                    nad,
+                    name_parts: c080_name_parts(seg),
+                });
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Parse SG4 transaction groups (IDE + nested DTM/LOC/RFF) from the message.
 ///
 /// Each `IDE` starts a new [`UtilmdTransaction`].
@@ -353,73 +609,57 @@ fn parse_transactions(segments: &[edifact_rs::Segment<'_>]) -> Vec<UtilmdTransac
             continue;
         };
 
-        let mut dtm = Vec::new();
-        let mut locations = Vec::new();
-        let mut references = Vec::new();
-        let mut sts = Vec::new();
-        let mut ftx = Vec::new();
-        let mut transaktionsgrund = None;
-        let mut antwort = None;
+        let mut ctx = Sg4Acc {
+            dtm: Vec::new(),
+            locations: Vec::new(),
+            references: Vec::new(),
+            sts: Vec::new(),
+            ftx: Vec::new(),
+            transaktionsgrund: None,
+            antwort: None,
+            parties: Vec::new(),
+            sequences: Vec::new(),
+        };
         let mut j = i + 1;
 
         while j < segments.len() && segments[j].tag != "IDE" && segments[j].tag != "UNT" {
-            match segments[j].tag {
-                "DTM" => {
-                    if let Some(d) = try_deserialize::<Dtm>(&segments[j]) {
-                        dtm.push(d);
-                    }
-                }
-                "LOC" => {
-                    if let Some(l) = try_deserialize::<Loc>(&segments[j]) {
-                        locations.push(l);
-                    }
-                }
-                "RFF" => {
-                    if let Some(r) = try_deserialize::<Rff>(&segments[j]) {
-                        references.push(r);
-                    }
-                }
-                "STS" => {
-                    // The repeated `C556` composites are read positionally from
-                    // the raw segment: DE 9013 resolves to the *first*
-                    // occurrence only, so a code-addressed read cannot see the
-                    // Ergänzung at element 4 or the DE 1131 EBD reference.
-                    match sts_category(&segments[j]) {
-                        Some(crate::utilmd_codes::STS_TRANSAKTIONSGRUND) => {
-                            transaktionsgrund = parse_transaktionsgrund(&segments[j]);
-                        }
-                        Some(crate::utilmd_codes::STS_STATUS_ANTWORT) => {
-                            antwort = parse_antwort(&segments[j]);
-                        }
-                        _ => {}
-                    }
-                    if let Some(s) = try_deserialize::<Sts>(&segments[j]) {
-                        sts.push(s);
-                    }
-                }
-                "FTX" => {
-                    if let Some(f) = try_deserialize::<Ftx>(&segments[j]) {
-                        ftx.push(f);
-                    }
-                }
-                _ => {}
-            }
+            collect_sg4_segment(&segments[j], &mut ctx);
             j += 1;
         }
 
         result.push(UtilmdTransaction {
             ide,
-            dtm,
-            locations,
-            references,
-            sts,
-            ftx,
-            transaktionsgrund,
-            antwort,
+            dtm: ctx.dtm,
+            locations: ctx.locations,
+            references: ctx.references,
+            sts: ctx.sts,
+            ftx: ctx.ftx,
+            transaktionsgrund: ctx.transaktionsgrund,
+            antwort: ctx.antwort,
+            parties: ctx.parties,
+            sequences: ctx.sequences,
         });
         i = j;
     }
     result
+}
+
+/// Every non-empty DE 3036 of `NAD`'s `C080` (element 4), in wire order.
+///
+/// The composite repeats DE 3036 five times, and the derive addresses only the
+/// first — so the parts of a person's name past the Nachname are invisible to
+/// it. `C080`'s sixth component is DE 3045, the Namensformat, and is skipped
+/// here; [`Nad::name_format`] reads it.
+fn c080_name_parts(seg: &edifact_rs::Segment<'_>) -> Vec<String> {
+    seg.get_element(3)
+        .map(|e| {
+            (0..5)
+                .filter_map(|c| e.get_component(c))
+                .filter(|c| !c.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// `STS` DE 9015 — the Statuskategorie, read from element 1 component 0.

@@ -72,14 +72,10 @@ pub fn pruefe_beendigung_zuordnung(anfrage: &LfAnfrage, lage: &LfVertragslage) -
         };
     }
 
-    // Prüfschritt 5 — „Ist die Anfrage ausgehend vom ÜT der Lieferanmeldung bis
-    // 07:00 Uhr des nächsten Werktages eingegangen?" This is the LFA's own
-    // Frist check on the *incoming* message, and it is the first thing the tree
-    // asks — before the Vorgang is even classified.
-    if let Some(uet) = anfrage.uet_lieferanmeldung
-        && !anfrage_rechtzeitig(uet, anfrage)
-    {
-        code!("A43", 5);
+    // Prüfschritt 5 — the LFA's own Frist check on the *incoming* message, and
+    // the first thing the tree asks, before the Vorgang is even classified.
+    if let Some(e) = pruefe_eingangsfrist(anfrage) {
+        return e;
     }
 
     // Prüfschritt 10 — „Wurde der Anwendungsfall für eine verbrauchende
@@ -89,7 +85,7 @@ pub fn pruefe_beendigung_zuordnung(anfrage: &LfAnfrage, lage: &LfVertragslage) -
     // `A39`–`A42` codes, not the verbrauchend `A30`–`A36` ones.
     let verbrauchend = match anfrage.lokationsart_oder_eskalation(ebd) {
         Ok(l) => l == Lokationsart::VerbrauchendeMalo,
-        Err(e) => return e,
+        Err(e) => return *e,
     };
 
     // Prüfschritt 20/200 — besteht zum Folgetag des genannten Termins noch eine
@@ -188,6 +184,37 @@ pub fn pruefe_beendigung_zuordnung(anfrage: &LfAnfrage, lage: &LfVertragslage) -
     }
 }
 
+/// `E_0624` Prüfschritt 5 — „Ist die Anfrage ausgehend vom ÜT der
+/// Lieferanmeldung bis 07:00 Uhr des nächsten Werktages eingegangen?"
+///
+/// Its anchor is `SG4 DTM+154`, which the UTILMD AHB marks Muss on a 55010. A
+/// message without one cannot be measured, and skipping the step accepts every
+/// late Anfrage — the one thing `A43` exists to refuse. `None` means the step
+/// found no objection.
+fn pruefe_eingangsfrist(anfrage: &LfAnfrage) -> Option<LfEntscheidung> {
+    let Some(uet) = anfrage.uet_lieferanmeldung else {
+        return Some(LfEntscheidung::eskalation(
+            5,
+            format!(
+                "Anfrage zur Beendigung der Zuordnung für MaLo {}: die Nachricht nennt \
+                 keinen ÜT der Lieferanmeldung (SG4 DTM+154), und E_0624 misst daran \
+                 seine erste Frist — bis 07:00 Uhr des nächsten Werktages, sonst A43.",
+                anfrage.malo_id
+            ),
+        ));
+    };
+    if anfrage_rechtzeitig(uet, anfrage) {
+        return None;
+    }
+    Some(antwort!(
+        E_0624_CODES,
+        EBD_BEENDIGUNG_ZUORDNUNG,
+        "A43",
+        5,
+        anfrage.termin
+    ))
+}
+
 /// `E_0624` Prüfschritte 50–60 — the Ein-/Auszug (Umzug) arm.
 ///
 /// Two questions, both about the *person*: is the customer named in the
@@ -278,6 +305,12 @@ pub fn pruefe_abmeldungsanfrage_gas(anfrage: &LfAnfrage, lage: &LfVertragslage) 
         gas_code!(list, ebd, "Z08", 0, termin);
     }
 
+    // `E17` Fristüberschreitung. Unlike `E_3002`, an unknown verdict does **not**
+    // escalate here: the Frist this code refuses is the one on the LFN's
+    // *Anmeldung* at the GNB, whose Übertragungstag the Abmeldeanfrage does not
+    // carry — so the LFA can only ever answer it from a bilateral finding, and
+    // escalating on it would park every 44010 an operator has nothing to add to.
+    // `E17` therefore reaches the wire only when the caller states the breach.
     match lage.vorlauffrist_eingehalten {
         Bekannt::Nein => gas_code!(list, ebd, "E17", 0, termin),
         Bekannt::Unbekannt | Bekannt::Ja => {}

@@ -25,6 +25,11 @@ pub const GPKE_NEUANLAGE_BESTAETIGEN: &str = "gpke.neuanlage.bestaetigen";
 pub const GPKE_NEUANLAGE_ABLEHNEN: &str = "gpke.neuanlage.ablehnen";
 /// NB: assign a contractless `MaLo` to the Grundversorger (UTILMD 55013, §38 `EnWG`).
 pub const GPKE_EOG_ANMELDEN: &str = "gpke.eog.anmelden";
+/// The E/G supplier confirms an assignment under § 36 / § 38 `EnWG` — 55014,
+/// `E_0615`. The Gas twin is [`GELI_EOG_BESTAETIGEN`].
+pub const GPKE_EOG_BESTAETIGEN: &str = "gpke.eog.bestaetigen";
+/// Refuse one — 55015, `E_0615` `A02` / `A03` / `A04` / `A05` / `A99`.
+pub const GPKE_EOG_ABLEHNEN: &str = "gpke.eog.ablehnen";
 /// NB: reject an inbound Lieferbeginn Anmeldung (UTILMD 55003 / 55080).
 pub const GPKE_LIEFERBEGINN_ABLEHNEN: &str = "gpke.lieferbeginn.ablehnen";
 /// LF: initiate a Lieferende Abmeldung (UTILMD 55004).
@@ -176,6 +181,8 @@ pub const INVOIC_SONSTIGE_LEISTUNG_ABLEHNEN: &str = "invoic.sonstige-leistung.ab
 pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     GPKE_LIEFERBEGINN_ANMELDEN,
     GPKE_EOG_ANMELDEN,
+    GPKE_EOG_BESTAETIGEN,
+    GPKE_EOG_ABLEHNEN,
     GPKE_LIEFERBEGINN_BESTAETIGEN,
     GPKE_LIEFERBEGINN_ABLEHNEN,
     GPKE_NEUANLAGE_BESTAETIGEN,

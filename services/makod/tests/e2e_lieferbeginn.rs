@@ -111,6 +111,7 @@ impl MockLfn {
                 location_id: MaLo::new(malo_id),
                 process_date: process_date.to_owned(),
                 transaktionsgrund: None,
+                bilanzkreis: Some("11XBK-LF-------9".to_owned()),
             })
             .await
             .expect("LFN: execute InitiateAnmeldung");
@@ -446,6 +447,7 @@ fn nb_antwort(accepted: bool, reason: Option<&str>) -> mako_gpke::LfAntwort {
         ebd: Some(ebd.to_owned()),
         zustimmung: accepted,
         bemerkung: reason.map(ToOwned::to_owned),
+        bilanzkreis: None,
         termin: None,
     }
 }

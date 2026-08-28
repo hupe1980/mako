@@ -152,8 +152,22 @@ pub struct Nad {
     #[edifact(element = "3055")]
     pub agency_code: Option<String>,
     /// DE 3036 — party name, component 0 of C080.
+    ///
+    /// `C080` carries up to **five** interchangeable name components; this is
+    /// the first. A `NAD+Z09` „Kunde des LF" with
+    /// [`name_format`](Self::name_format) `Z01` splits a person across them
+    /// (Nachname, Vorname, …), so a comparison against a contract holder reads
+    /// the whole composite, not this field alone.
     #[edifact(element = "3036")]
     pub party_name: Option<String>,
+    /// DE 3045 — Format für den Namen (`C080` component 6).
+    ///
+    /// `Z01` Struktur von Personennamen, `Z02` Struktur der Firmenbezeichnung.
+    /// The UTILMD AHB marks it Muss wherever a `NAD` carries a Kundenname —
+    /// without it the five `3036` components cannot be read back into a person
+    /// or a company.
+    #[edifact(element = "3045")]
+    pub name_format: Option<String>,
 }
 
 // ── RFF ───────────────────────────────────────────────────────────────────────
@@ -687,6 +701,61 @@ pub struct Cci {
     /// e.g. `"Z05"` = measured quantity.
     #[edifact(element = "7037")]
     pub characteristic_id: Option<String>,
+    /// DE 4051 — Relevanz des Merkmals, Code (**element 4**).
+    ///
+    /// The only element `CCI+Z65` „Umsetzungsgradvorgabe des Produktpakets"
+    /// uses, so its encoding is `CCI+Z65+++Z01` with `C502` and `C240` both
+    /// empty: `Z01` „Produktpaket ist vollumfänglich umzusetzen", `Z02`
+    /// „Produktpaket kann in Teilen umgesetzt werden" (UTILMD AHB Strom 2.2
+    /// Kap. 5.3).
+    #[edifact(element = "4051")]
+    pub relevance: Option<String>,
+}
+
+// ── CAV ───────────────────────────────────────────────────────────────────────
+
+/// `CAV` — Merkmalswert, the value of the `CCI` it follows.
+///
+/// | Component | DE   | Meaning |
+/// |---|---|---|
+/// | 1 | 7111 | Merkmalswert, Code — `ZH9` Code der Produkteigenschaft, `ZV4` Wertedetails zum Produkt, … |
+/// | 2 | 1131 | *Nicht benutzt* — keeps its slot |
+/// | 3 | 3055 | *Nicht benutzt* — keeps its slot |
+/// | 4 | 7110 | Merkmalswert |
+///
+/// Both middle components are unused in the BDEW profile and still occupy their
+/// slots, which is why the value sits at component 4:
+/// `CAV+ZV4:::11XBK-STD-----9`.
+#[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
+#[edifact(segment = "CAV", layout = crate::messages::layouts::CAV)]
+pub struct Cav {
+    /// DE 7111 — Merkmalswert, Code.
+    #[edifact(element = "7111")]
+    pub value_code: Option<String>,
+    /// DE 7110 — Merkmalswert.
+    #[edifact(element = "7110")]
+    pub value: Option<String>,
+}
+
+// ── SEQ ───────────────────────────────────────────────────────────────────────
+
+/// `SEQ` — Folgeangaben; opens a `SG8`.
+///
+/// | Element | DE   | Meaning |
+/// |---|---|---|
+/// | 1 | 1245 | Statusanlass der Folge — `Z79` Bestandteil eines Produktpakets, `ZH0` Priorisierung erforderliches Produktpaket, … |
+/// | 2 | 1050 | Folgenummer (`C286`) — the Produktpaket-ID |
+///
+/// `SEQ+Z79+1`.
+#[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
+#[edifact(segment = "SEQ", layout = crate::messages::layouts::SEQ)]
+pub struct Seq {
+    /// DE 1245 — Statusanlass der Folge.
+    #[edifact(element = "1245")]
+    pub action: Option<String>,
+    /// DE 1050 — Folgenummer (`C286`).
+    #[edifact(element = "1050")]
+    pub sequence_id: Option<String>,
 }
 
 // ── STS ───────────────────────────────────────────────────────────────────────

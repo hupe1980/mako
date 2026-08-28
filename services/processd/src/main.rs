@@ -94,6 +94,9 @@ impl Daemon for Processd {
                 nb_einsd_api_key: cfg.nb.einsd_api_key.clone().map(SecretString::from),
                 lf_auto_respond: cfg.lf.auto_respond,
                 lf_bilanzkreise: cfg.lf.bilanzkreise.clone(),
+                lf_grundversorgungs_netzgebiete: cfg.lf.grundversorgungs_netzgebiete.clone(),
+                lf_eog_auto_respond: cfg.lf.eog_auto_respond,
+                lf_eog_versorgungsart: cfg.lf.eog_versorgungsart.clone(),
                 vertragd_url: cfg.vertragd.as_ref().map(|v| v.url.clone()),
                 vertragd_api_key: cfg
                     .vertragd

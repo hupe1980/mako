@@ -1698,10 +1698,25 @@ interchange and dispatches it over AS4.
   "command": "gpke.lieferbeginn.anmelden",
   "payload": {
     "malo_id":            "10001234558",
-    "lieferbeginn_datum": "2026-10-01"
+    "lieferbeginn_datum": "2026-10-01",
+    "bilanzkreis":        "11XBK-STD-----9"
   }
 }
 ```
+
+`bilanzkreis` is **required** on an Anmeldung (55001, 55077); a command without
+one is refused. UTILMD AHB Strom 2.2 Kap. 5.3 makes the Produktpaket
+`SG8 SEQ+Z79` Muss there and names the reason — „ohne die Angabe eines für den
+LF gültigen Bilanzkreises [kann] der NB den LF der Marktlokation bzw. Tranche
+nicht zuordnen". It renders as Produkt-Code `9991000002082` with the value in
+`SG10 CAV+ZV4` and the Umsetzungsgrad in `SG8 SEQ+ZH0`, never as an `FTX+ACB`
+remark. An Abmeldung (55004) and a Kündigung (55016) register nothing and carry
+none.
+
+**GeLi Gas states it differently.** The Gas AHB has no Produktpaket: UTILMD AHB
+Gas 1.2 marks `SG10 CCI+Z19` DE 7037 Muss on a 44001, and
+`geli.lieferbeginn.anmelden` takes the same `bilanzkreis` field and renders that
+segment. Neither shape is sendable on the other Sparte.
 
 For multi-role commands, include `"marktrolle"` to disambiguate:
 
@@ -1801,7 +1816,7 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `gpke.kuendigung.anmelden` | `LF` | GPKE | 55016 | LFN terminates the old supply contract (Kündigung LFN → LFA; 55017 is the Bestätigung) |
 | `gpke.eog.anmelden` | `NB` | GPKE | 55013 | NB assigns a contractless MaLo to the Grundversorger (§36/§38 EnWG gap closure) |
 | `geli.eog.anmelden` | `GNB` | GeLi Gas | 44013 | Gas twin of `gpke.eog.anmelden` — GNB registers a contractless Gas-MaLo into E/G |
-| `gpke.eog.bestaetigen` | `LF` | GPKE | 55014 | E/G confirms the EoG Zuordnung (Versorgungsart + Bilanzkreis) |
+| `gpke.eog.bestaetigen` | `LF` | GPKE | 55014 | E/G confirms the EoG Zuordnung (Versorgungsart + Bilanzkreis, `SG8 SEQ+Z79`) |
 | `gpke.eog.ablehnen` | `LF` | GPKE | 55015 | E/G rejects the EoG Zuordnung (EBD E_0615: A02/A04/A05) |
 | `gpke.sperrung.beauftragen` | `LF` | GPKE | 17115 | LF orders a disconnection from the NB |
 | `gpke.entsperrung.beauftragen` | `LF` | GPKE | 17117 | LF orders a reconnection from the NB |
@@ -1849,7 +1864,7 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `gpke.nb-lieferende.ablehnen` | `LF` | GPKE | 55009 | LF rejects the NB's Ankündigung Lieferende |
 | `gpke.beendigung-zuordnung.bestaetigen` | `LF` | GPKE | 55011 | LFA confirms the Beendigung der Zuordnung (55010, `E_0624`) |
 | `gpke.beendigung-zuordnung.ablehnen` | `LF` | GPKE | 55012 | LFA rejects the Beendigung der Zuordnung |
-| `gpke.zuordnung-lf.bestaetigen` | `LF` | GPKE | 55608 | LFN confirms the Ankündigung Zuordnung LF (55607) |
+| `gpke.zuordnung-lf.bestaetigen` | `LF` | GPKE | 55608 | LFN confirms the Ankündigung Zuordnung LF (55607); `bilanzkreis` rides `SG8 SEQ+Z79`, not `FTX+ACB` |
 | `gpke.zuordnung-lf.ablehnen` | `LF` | GPKE | 55609 | LFN rejects the Ankündigung Zuordnung LF |
 | `maloid.lieferbeginn.fortsetzen` | `LF` | GPKE | 55001 | Resume an Anmeldung once the MaLo-ID arrived from the MaLo-ID-Vergabe |
 | `gpke.abrechnung.selbstausstellen` | `LF` | GPKE | 31006 | LF issues the MMM invoice itself (Gutschriftverfahren) |

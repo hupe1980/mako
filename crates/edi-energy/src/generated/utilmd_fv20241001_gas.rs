@@ -83,6 +83,15 @@ static SEGMENTS: &[SegmentDefinition] = &[
         ],
     ),
     SegmentDefinition::new(
+        "IMD",
+        "Identifikationslogik",
+        &[
+            ElementRef::new(1, "7077", Status::Conditional, 1),
+            ElementRef::new(2, "C272", Status::Conditional, 1),
+            ElementRef::new(3, "C273", Status::Conditional, 1),
+        ],
+    ),
+    SegmentDefinition::new(
         "STS",
         "Status",
         &[
@@ -114,6 +123,42 @@ static SEGMENTS: &[SegmentDefinition] = &[
             ElementRef::new(2, "C517", Status::Conditional, 1),
         ],
     ),
+    SegmentDefinition::new(
+        "SEQ",
+        "Sequence Details",
+        &[
+            ElementRef::new(1, "1245", Status::Conditional, 1),
+            ElementRef::new(2, "C286", Status::Conditional, 1),
+        ],
+    ),
+    SegmentDefinition::new(
+        "PIA",
+        "Erforderliches Produkt",
+        &[
+            ElementRef::new(1, "4347", Status::Mandatory, 1),
+            ElementRef::new(2, "C212", Status::Mandatory, 1),
+        ],
+    ),
+    SegmentDefinition::new(
+        "QTY",
+        "Quantity",
+        &[ElementRef::new(1, "C186", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "CCI",
+        "Characteristic/Class Id",
+        &[
+            ElementRef::new(1, "7059", Status::Conditional, 1),
+            ElementRef::new(2, "C502", Status::Conditional, 1),
+            ElementRef::new(3, "C240", Status::Conditional, 1),
+            ElementRef::new(4, "4051", Status::Conditional, 1),
+        ],
+    ),
+    SegmentDefinition::new(
+        "CAV",
+        "Merkmalswert",
+        &[ElementRef::new(1, "C889", Status::Mandatory, 1)],
+    ),
 ];
 
 static SEGMENT_MAP: LazyLock<std::collections::HashMap<&'static str, &'static SegmentDefinition>> =
@@ -126,9 +171,13 @@ pub(crate) fn segment_lookup(tag: &str) -> Option<&'static SegmentDefinition> {
 static CODES_1001: &[&str] = &["E01", "E02", "E03", "E0F", "E1A", "E35", "E44"];
 static CODES_1153: &[&str] = &["ACE", "AGI", "AGL", "MG", "TN", "Z13"];
 static CODES_1245: &[&str] = &["Z01", "Z02", "Z03"];
-static CODES_2005: &[&str] = &["137", "163", "164", "165", "166", "203"];
+static CODES_2005: &[&str] = &[
+    "137", "157", "158", "159", "294", "471", "752", "76", "92", "93", "Z01", "Z05", "Z06", "Z07",
+    "Z08", "Z09", "Z10", "Z20", "Z21", "Z22",
+];
 static CODES_3035: &[&str] = &["BF", "DDQ", "DER", "ELR", "EM", "MR", "MS", "Z01"];
 static CODES_3227: &[&str] = &["172", "Z01", "Z04", "ZST"];
+static CODES_4347: &[&str] = &["5"];
 static CODES_7495: &[&str] = &["Z18", "Z19", "Z31", "Z32"];
 static CODES_9015: &[&str] = &["E01", "E02", "E03", "E04", "E05", "E06", "E07", "E08"];
 
@@ -154,7 +203,8 @@ fn expected_components(tag: &str, idx: usize) -> Option<u8> {
         | ("IDE", 0)
         | ("STS", 0)
         | ("FTX", 0)
-        | ("LOC", 0) => Some(1),
+        | ("LOC", 0)
+        | ("PIA", 0) => Some(1),
         _ => None,
     }
 }
@@ -167,6 +217,7 @@ pub(crate) fn code_list(de_id: &str) -> Option<&'static [&'static str]> {
         "2005" => Some(CODES_2005),
         "3035" => Some(CODES_3035),
         "3227" => Some(CODES_3227),
+        "4347" => Some(CODES_4347),
         "7495" => Some(CODES_7495),
         "9015" => Some(CODES_9015),
         _ => None,
@@ -401,8 +452,11 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
             "SG1" | "SG6" => &["RFF"],
             "SG2" | "SG12" => &["NAD"],
             "SG3" => &["CTA", "COM"],
-            "SG4" => &["IDE", "DTM", "STS", "FTX", "AGR"],
+            "SG4" => &["IDE", "IMD", "DTM", "STS", "FTX", "AGR"],
             "SG5" => &["LOC"],
+            "SG8" => &["SEQ", "RFF", "PIA"],
+            "SG9" => &["QTY"],
+            "SG10" => &["CCI", "CAV"],
             _ => &[],
         }
     }

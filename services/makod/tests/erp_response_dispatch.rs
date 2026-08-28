@@ -136,6 +136,7 @@ async fn initiate_lf_anmeldung(
         location_id: MaLo::new(malo_id),
         process_date: "2026-10-01".into(),
         transaktionsgrund: None,
+        bilanzkreis: Some("11XBK-LF-------9".to_owned()),
     };
     process
         .execute_and_enqueue(cmd)
@@ -223,6 +224,7 @@ async fn handle_antwort_accepted_transitions_to_active() {
             location_id: MaLo::new(malo_id),
             process_date: "2026-10-01".into(),
             transaktionsgrund: None,
+            bilanzkreis: Some("11XBK-LF-------9".to_owned()),
         })
         .await
         .expect("InitiateAnmeldung");
@@ -272,6 +274,7 @@ async fn handle_antwort_rejected_transitions_to_rejected() {
             location_id: MaLo::new(malo_id),
             process_date: "2026-10-01".into(),
             transaktionsgrund: None,
+            bilanzkreis: Some("11XBK-LF-------9".to_owned()),
         })
         .await
         .unwrap();

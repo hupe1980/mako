@@ -70,8 +70,8 @@ This ensures §7 EnWG separation: an `nb-only` binary provably contains no LF PI
 
 ```toml
 [features]
-role-lf-strom  = ["mako-pruefung/role-lf"]  # LF answers 55007 / 55010 / 55016
-role-lf-gas    = ["mako-pruefung/role-lf"]  # LFA Gas 44007 / 44010 / 44016
+role-lf-strom  = ["mako-pruefung/role-lf"]  # LF answers 55007/55010/55013/55016/55607
+role-lf-gas    = ["mako-pruefung/role-lf"]  # LF Gas 44007 / 44010 / 44013 / 44016
 role-nb-strom  = ["mako-pruefung/role-nb"]  # GPKE STP (55001, 55077, 55004, 55600/55601), EoG closure
 role-nb-gas    = ["mako-pruefung/role-nb"]  # GeLi Gas An-/Abmeldung STP (44001, 44004)
 role-msb-strom = []                          # REQOTE→QUOTES, §14a ORDRSP, MSB-answered MSB-Wechsel,
@@ -354,17 +354,19 @@ notify_webhook_url       = "https://erp.example/hooks/eog"
 
 ## LF module — answering what the market asks a supplier
 
-Seven inbound processes, each with its own Entscheidungsbaum, its own Codeliste
+Nine inbound processes, each with its own Entscheidungsbaum, its own Codeliste
 and its own Antwortfrist:
 
 | Sparte | Inbound | Process | EBD | Answers | Frist |
 |---|---|---|---|---|---|
 | Strom | 55007 | Lieferende von NB an LF | `E_0609` | 55008 / 55009 | 05:00 Uhr des 1. WT nach dem ÜT |
 | Strom | 55010 | Beendigung der Zuordnung | `E_0624` | 55011 / 55012 | 09:00 Uhr des 1. WT nach dem ÜT |
+| Strom | 55013 | Anmeldung E/G (§ 36 / § 38 EnWG) | `E_0615` | 55014 / 55015 | **15:00 Uhr am ÜT** |
 | Strom | 55016 | Kündigung (LFN → LFA) | `E_0614` | 55017 / 55018 | Ablauf des 1. WT nach dem ÜT |
 | Strom | 55607 | Ankündigung Zuordnung LF (erz. MaLo / Tranche) | `E_0603`–`E_0606` | 55608 / 55609 | **15:00 Uhr am ÜT** |
 | Gas | 44007 | Lieferende von NB an LF | `E_3002` | 44008 / 44009 | Ablauf des 3. WT |
 | Gas | 44010 | Beendigung der Zuordnung | `E_3020` | 44011 / 44012 | Ablauf des 3. WT |
+| Gas | 44013 | Anmeldung E/G | `E_3008` | 44014 / 44015 | Ablauf des 2. WT |
 | Gas | 44016 | Kündigung beim Altlieferanten | `E_3001` | 44017 / 44018 | Ablauf des 3. WT |
 
 The same business process carries the same command name in both Sparten —
@@ -380,6 +382,17 @@ are the only two the four trees publish. Which BK is admissible is the BKV's
 grant — MaBiS § 10.2.1 issues the Zuordnungsermächtigung „je ZRT, BG, BK und
 LF" — so `[[lf.bilanzkreise]]` is keyed on the Bilanzierungsgebiet, and a regime
 with several authorised BKs is a choice the supplier makes, not a default.
+
+Which of the four Anwendungsfälle a 55607 belongs to is **on the wire**, not
+inferred: `SG4 STS+7` DE 9013 element 3 carries `ZW8` (Fall 1) to `ZX1`
+(Fall 4), and UTILMD AHB Strom 2.2 Bedingungen [161]–[164] map the four onto
+`E_0603`–`E_0606` in DE 1131 of the answer. That is a *different code space*
+from the `ZW3`/`ZW4`/`ZW5`/`ZAP` Lokationsart every other LF-answered Vorgang
+puts in the same element.
+
+The Bilanzkreis itself rides the Produktpaket — `SG8 SEQ+Z79` with Produkt-Code
+`9991000002082`, Merkmalswert in `SG10 CAV+ZV4` — because the UTILMD AHB admits
+`SG4 FTX+ACB` on the **55609 Ablehnung** only (Bedingung [48]).
 
 Two of the questions the trees ask decide the answer before any contract data is
 consulted, and both come from the message itself:
@@ -422,10 +435,27 @@ Half of what the trees ask is about a contract, not about supply state:
 |---|---|---|
 | `E_0624` 50 | Ist der Kunde aus der Anfrage identisch mit dem Kunden beim LFA? | `vertragd` |
 | `E_0624` 60 | Hat der LFA Informationen, dass sein Kunde nicht ausgezogen ist? | `vertragd` |
-| `E_0624` 90 | Bleibt das Vertragsverhältnis zum Folgetag bestehen? | `vertragd` |
-| `E_0614` 70 | Ist der Vertrag zum Kündigungstermin kündbar? | `vertragd` |
+| `E_0624` 90 / 220 | Bleibt das Vertragsverhältnis zum Folgetag bestehen? | `vertragd` — `kuendigung_zum` **and** `vertragsende`, whichever cuts first |
+| `E_0614` 40 / 50 / 80 | Wurde der Vertrag bereits gekündigt, und zu welchem Datum? | `vertragd` — `kuendigung_zum` **only** |
+| `E_0614` 70 / 580 | Ist der Vertrag zum Kündigungstermin kündbar? | `vertragd` — `naechstmoeglicher_kuendigungstermin ≤ Termin` |
+| `E_0614` 500 | Liegt zu dem genannten Objekt ein Vertrag vor? | `vertragd` — a contract row, not its absence |
 | `E_0609` 40 | Wurde die Vorlauffrist eingehalten? | `mako-fristen` |
+| `E_0624` 5 | Ging die Anfrage bis 07:00 Uhr des nächsten WT ein? | `SG4 DTM+154` on the message |
+| `E_0624` 50 | Ist der Kunde aus der Anfrage identisch mit dem Kunden beim LFA? | `SG12 NAD+Z09` on the message, compared by `vertragd` |
 | `E_0624` 20 | Besteht zum Folgetag noch eine Zuordnung? | `marktd` |
+| `E_0615` 20 | Liegt die MaLo im Grundversorgungsgebiet des Empfängers? | `[lf] grundversorgungs_netzgebiete` |
+
+**Prüfschritt 50 compares names, not strings.** `processd` forwards the
+`SG12 NAD+Z09` „Kunde des LF" as `?kunde=` and `vertragd` matches it against the
+contract holder on the **set** of normalised tokens. A shared Nachname and
+nothing else — a family member moving in — is `Unklar` and escalates, because
+`A32` refuses the Einzug and `A34` releases the Marktlokation. See
+[vertragd](@/docs/services/vertragd.md) for the matching rule.
+
+**`vertragd`'s three dates are three different facts.** `kuendigung_zum` records
+that somebody *has* terminated; `vertragsende` is the agreed Laufzeitende, which
+nobody terminated; `naechstmoeglicher_kuendigungstermin` is when notice could
+next take effect. The table above says which Prüfschritt reads which.
 
 Set `[lf] vertragd_url` to answer them. Without it those facts are
 `Bekannt::Unbekannt` and any decision reaching one escalates to an operator —
@@ -434,6 +464,27 @@ Vertragsbindung, and must not agree to release the customer instead.
 
 `auto_respond = false` means *an operator decides*, not *nobody answers*: the
 walk still runs and its outcome is queued with the Antwortfrist attached.
+
+### The E/G Anmeldung has its own switch
+
+`E_0615` / `E_3008` is the only **Anmeldung** a supplier is asked to check, and
+the only one whose Zustimmung accepts a statutory duty — § 36 / § 38 EnWG — for
+a customer this supplier has no contract with. Prüfschritt 20 asks whether the
+Marktlokation lies in the recipient's Grundversorgungsgebiet, which no BDEW
+process transports: `[lf] grundversorgungs_netzgebiete` lists the Netzbetreiber
+MP-IDs whose area this supplier serves, and an empty list escalates every 55013
+with its 15:00-Uhr Frist attached rather than answering from an absent record.
+
+Dispatch needs a second opt-in, `[lf] eog_auto_respond` (default `false`), on
+top of `auto_respond`. The walk runs either way, so the Frist is always
+visible.
+
+A **Zustimmung** additionally needs two facts no tree produces and the AHB marks
+Muss on a 55014: the Versorgungsart (`SG10 CCI+Z36` — `ZC9`, `ZD0`, `ZE3` and no
+more, since `ZZD` Übergangsversorgung is a Transaktionsgrund) from
+`[lf] eog_versorgungsart`, and the Bilanzkreis (`SG8 SEQ+Z79`) from
+`[[lf.bilanzkreise]]`. Missing either, the answer is queued with the missing
+field named.
 
 ### Approval queue
 
@@ -503,13 +554,22 @@ Initiates a GPKE Lieferbeginn (UTILMD 55001) with **LFW24 Vorlauffrist validatio
 curl -X POST http://processd:8580/api/v1/start-supply \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
-  -d '{"malo_id": "10001234558", "lieferbeginn_datum": "2026-10-01"}'
+  -d '{"malo_id": "10001234558", "lieferbeginn_datum": "2026-10-01",
+       "bilanzkreis": "11XBK-STD-----9"}'
 ```
 
 | Field | Required | Notes |
 |---|---|---|
 | `malo_id` | ✓ | 11-digit Strom Marktlokations-ID |
 | `lieferbeginn_datum` | ✓ | ISO-8601 date (YYYY-MM-DD) |
+| `bilanzkreis` | ✓* | `SG8 SEQ+Z79` Produktpaket, Produkt-Code `9991000002082` |
+
+\* Optional only where `[[lf.bilanzkreise]]` declares exactly one `standard`
+entry, which is then used. UTILMD AHB Strom 2.2 Kap. 5.3 makes the Produktpaket
+Muss on a 55001 — „ohne die Angabe eines für den LF gültigen Bilanzkreises
+[kann] der NB den LF der Marktlokation bzw. Tranche nicht zuordnen" — so a
+request that resolves to none is `422 MISSING_BILANZKREIS` rather than a message
+the NB must reject.
 
 **Vorlauffrist rules (LFW24, BK6-24-174 GPKE Teil 2, SD Lieferbeginn Prozessschritt 1):**
 
@@ -537,7 +597,8 @@ curl -X POST http://processd:8580/api/v1/start-supply-gas \
   -d '{
     "malo_id":    "10001234558",
     "zaehlpunkt": "DE00123456789012345678901234567890",
-    "process_date": "20261001"
+    "process_date": "20261001",
+    "bilanzkreis": "9870000000006"
   }'
 ```
 
@@ -546,7 +607,13 @@ curl -X POST http://processd:8580/api/v1/start-supply-gas \
 | `malo_id` | ✓ | Gas-MaLo-ID — rendered into `SG5 LOC+Z16` |
 | `zaehlpunkt` | ✓ | Zählpunktbezeichnung (RFF+Z13) |
 | `process_date` | ✓ | Lieferbeginn date (YYYYMMDD, CET/CEST) |
+| `bilanzkreis` | ✓* | `SG10 CCI+Z19` DE 7037 — **not** the Strom Produktpaket |
 | `transaktionsgrund` | — | `E03` Wechsel (default), `E01`/`E02` Einzug |
+
+\* Same fallback as the Strom endpoint. GeLi Gas has no Produktpaket at all:
+UTILMD AHB Gas 1.2 marks `SG10 CCI+Z19` Muss on a 44001, and the renderer emits
+that segment rather than `SG8 SEQ+Z79`. Sending either shape on the other Sparte
+is a segment the receiving AHB does not define.
 
 **Mindestvorlauffrist: 10 WT** for a Lieferantenwechsel (AWH GeLi Gas 2.0
 Kap. 2.5.2 Nr. 1), enforced here. An Einzug passes with a
@@ -654,6 +721,20 @@ einsd_api_key            = ""
 
 [lf]
 auto_respond = true   # false → every inbound LF process routed to approval_queue
+
+# The Netzgebiete this supplier is Grund-/Ersatzversorger in, by NB MP-ID.
+# `E_0615` Prüfschritt 20 asks for exactly this and no market message carries
+# it. Empty → every 55013 / 44013 escalates.
+grundversorgungs_netzgebiete = ["9900000000001"]
+# A resolved E_0615 / E_3008 answer accepts or declines a statutory supply duty,
+# so it needs its own opt-in on top of `auto_respond`.
+eog_auto_respond = false
+# SG10 CCI+Z36 — which fallback supply an automatic Zustimmung states:
+# ZC9 §38 Ersatzversorgung, ZD0 §36 Grundversorgung, ZE3 vertragliche
+# Ersatzbelieferung — the three codes DE 7037 publishes. The AHB marks it Muss on a
+# 55014 and no Entscheidungsbaum produces it; without it an automatic Zustimmung
+# is queued rather than dispatched.
+eog_versorgungsart = "ZD0"
 
 # The Bilanzkreise a 55607 Zustimmung may name, by Bilanzierungsgebiet and
 # regime. MaBiS § 10.2.1 grants the Zuordnungsermächtigung „je ZRT, BG, BK und

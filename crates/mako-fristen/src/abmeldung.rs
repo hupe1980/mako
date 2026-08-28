@@ -24,7 +24,9 @@
 //! transmission day of a Deaktivierungsmeldung between BKV and NB, which never
 //! reaches the supplier. `E_0609` checks that case at Prüfschritt 120 instead
 //! („Eingangsdatum nach dem 5. WT des Monats, in dem die Zuordnungsermächtigung
-//! endet?" → `A09`), so the honest verdict at 40 is [`AbmeldungVorlauf::Unbestimmt`].
+//! endet?" → `A09`), so Prüfschritt 40 has nothing to evaluate for it:
+//! [`AbmeldungVorlauf::AnPruefschritt120`] is a *pass through the step*, not an
+//! unknown.
 //!
 //! # Sources
 //!
@@ -59,6 +61,20 @@ pub enum AbmeldungVorlauf {
         /// What is missing, in the Festlegung's own terms.
         grund: &'static str,
     },
+    /// `ZQ7` — the Frist for this Grund is a **different Prüfschritt**.
+    ///
+    /// Its Vorlauffrist hangs on the ÜT of the Deaktivierungsmeldung between
+    /// BKV and NB, which never reaches the supplier, so the LF cannot refuse
+    /// at Prüfschritt 40 on it. `E_0609` gives the Grund its own, measurable
+    /// Frist further down — Prüfschritt 120 / 600, „Liegt das Eingangsdatum der
+    /// Abmeldung nach dem 5. WT des Monats, in dem die Zuordnungsermächtigung
+    /// endet?" → `A09` / `A28`.
+    ///
+    /// So this is neither *kept* nor *unknown*: Prüfschritt 40 has nothing to
+    /// evaluate and the walk continues. Escalating here would make the whole
+    /// BKV-Deaktivierungs-Zweig — Prüfschritte 85, 100, 120 and their `A05` /
+    /// `A07` / `A09` — unreachable.
+    AnPruefschritt120,
 }
 
 impl AbmeldungVorlauf {
@@ -71,11 +87,7 @@ impl AbmeldungVorlauf {
     #[must_use]
     pub fn fuer(transaktionsgrund: &str, eeg: Option<bool>) -> Self {
         if transaktionsgrund == BKV_DEAKTIVIERUNG {
-            return Self::Unbestimmt {
-                grund: "Der spätester ÜT hängt am ÜT der Deaktivierungsmeldung zwischen BKV \
-                        und NB, den die Abmeldung nicht mitführt (GPKE Teil 2 § 2.5.2 Nr. 1). \
-                        E_0609 prüft diesen Fall an Prüfschritt 120.",
-            };
+            return Self::AnPruefschritt120;
         }
         match eeg {
             Some(true) => Self::EinMonat,
@@ -94,8 +106,19 @@ impl AbmeldungVorlauf {
         match self {
             Self::TagVorDemLetztenWerktag => Some(VorlaufShape::TagVorDemLetztenWerktagVor),
             Self::EinMonat => Some(VorlaufShape::LatestMonateBefore(1)),
-            Self::Unbestimmt { .. } => None,
+            Self::Unbestimmt { .. } | Self::AnPruefschritt120 => None,
         }
+    }
+
+    /// `true` when Prüfschritt 40 has nothing to evaluate because the Frist for
+    /// this Grund lives at Prüfschritt 120.
+    ///
+    /// Distinguishes [`Self::AnPruefschritt120`] from [`Self::Unbestimmt`]:
+    /// both return `None` from [`Self::check`], but only the second is an
+    /// unevaluated window and therefore an escalation.
+    #[must_use]
+    pub const fn ist_an_pruefschritt_120(self) -> bool {
+        matches!(self, Self::AnPruefschritt120)
     }
 
     /// Check an Übertragungstag against the Zuordnungsende.
@@ -160,16 +183,21 @@ mod tests {
         );
     }
 
-    /// The BKV deactivation window is not derivable from the message, and
-    /// „not derivable" must not read as „kept".
+    /// The BKV deactivation has no window Prüfschritt 40 can measure — its
+    /// anchor is the ÜT of a Deaktivierungsmeldung the supplier never sees —
+    /// and `E_0609` gives the Grund its **own** Frist at Prüfschritt 120. So it
+    /// is neither kept nor unknown: the step has nothing to evaluate.
     #[test]
-    fn the_bkv_window_is_unbestimmt() {
+    fn the_bkv_window_is_checked_at_pruefschritt_120() {
         let w = AbmeldungVorlauf::fuer(BKV_DEAKTIVIERUNG, Some(false));
-        assert!(matches!(w, AbmeldungVorlauf::Unbestimmt { .. }));
+        assert_eq!(w, AbmeldungVorlauf::AnPruefschritt120);
+        assert!(w.ist_an_pruefschritt_120());
         assert!(
             w.check(date!(2026 - 08 - 31), date!(2026 - 09 - 01), CAL)
-                .is_none()
+                .is_none(),
+            "there is still no verdict to report from this step"
         );
+        assert!(!AbmeldungVorlauf::fuer(STILLLEGUNG, None).ist_an_pruefschritt_120());
     }
 
     /// An unknown EEG status is the same kind of unknown.

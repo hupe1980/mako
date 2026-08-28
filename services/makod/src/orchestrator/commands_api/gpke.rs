@@ -394,6 +394,14 @@ pub(super) async fn dispatch_lf_anmeldung(
             .get("transaktionsgrund")
             .and_then(|v| v.as_str())
             .map(str::to_owned),
+        // `SG8 SEQ+Z79` Produktpaket — Muss on 55001 / 55077. The workflow
+        // refuses an Anmeldung without one rather than sending a message the
+        // NB cannot act on (UTILMD AHB Strom 2.2 Kap. 5.3).
+        bilanzkreis: payload
+            .get("bilanzkreis")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned),
     };
 
     // ── Duplicate guard ───────────────────────────────────────────────────────
@@ -687,6 +695,14 @@ fn extract_lf_antwort(
             .get("bemerkung")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned),
+        // Its own key. A Bilanzkreis in `bemerkung` would go out as `FTX+ACB`,
+        // which the UTILMD AHB admits on the 55609 Ablehnung only, and leave
+        // the Muss Produktpaket of the 55608 Bestätigung empty.
+        bilanzkreis: payload
+            .get("bilanzkreis")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned),
         termin: payload
             .get("termin")
             .and_then(|v| v.as_str())
@@ -807,7 +823,8 @@ pub(super) async fn dispatch_gpke_beendigung_zuordnung_antwort(
 /// | `malo_id` | ✓ | Marktlokations-ID identifying the process |
 /// | `antwort_code` | ✓ | `SG4 STS+E01` DE 9013 — `A01` or `A99` |
 /// | `antwort_ebd` | — | `SG4 STS+E01` DE 1131 — the Anwendungsfall's EBD; defaults to `E_0603` |
-/// | `bemerkung` | ✓ on `A01` and `A99` | the Bilanzkreis on a Zustimmung, the Erläuterung on an Ablehnung |
+/// | `bilanzkreis` | ✓ on `A01` | `SG8 SEQ+Z79` Produktpaket, Produkt-Code `9991000002082` |
+/// | `bemerkung` | ✓ on `A99` | `SG4 FTX+ACB` Erläuterung — Bedingung `[48]`, the Ablehnung only |
 pub(super) async fn dispatch_gpke_zuordnung_lf_antwort(
     state: &CommandsApiState,
     payload: &serde_json::Value,
@@ -1414,7 +1431,7 @@ pub(super) async fn dispatch_gpke_eog_anmelden(
 /// | Field | Type | Notes |
 /// |---|---|---|
 /// | `malo_id` | string | Marktlokations-ID identifying the process |
-/// | `versorgungsart` | string | `ZC9`/`ZD0`/`ZE3`/`ZZD` — mandatory for Bestätigung |
+/// | `versorgungsart` | string | `SG10 CCI+Z36`: `ZC9`/`ZD0`/`ZE3` — mandatory for Bestätigung |
 /// | `bilanzkreis` | string (opt.) | EIC of the Bilanzkreis (Bestätigung) |
 /// | `reason` | string (opt.) | mandatory for Ablehnung |
 pub(super) async fn dispatch_gpke_eog_antwort(
@@ -1427,7 +1444,10 @@ pub(super) async fn dispatch_gpke_eog_antwort(
     let versorgungsart = match payload.get("versorgungsart").and_then(|v| v.as_str()) {
         Some(code) => Some(mako_gpke::Versorgungsart::from_code(code).ok_or_else(|| {
             DispatchError::InvalidPayload(format!(
-                "invalid \"versorgungsart\" {code:?} — expected ZC9, ZD0, ZE3, or ZZD",
+                "invalid \"versorgungsart\" {code:?} — SG10 CCI+Z36 DE 7037 publishes \
+                 ZC9 (§38 Ersatzversorgung), ZD0 (§36 Grundversorgung) and ZE3 \
+                 (vertragliche Ersatzbelieferung). ZZD Übergangsversorgung is a \
+                 Transaktionsgrund, not a Versorgungsart.",
             ))
         })?),
         None => None,

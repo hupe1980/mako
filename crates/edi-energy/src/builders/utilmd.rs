@@ -6,7 +6,8 @@ use edifact_rs::Writer;
 
 use crate::AgencyCode;
 use crate::utilmd_codes::{
-    AntwortStatus, IDE_VORGANG, STS_STATUS_ANTWORT, STS_TRANSAKTIONSGRUND, Transaktionsgrund,
+    AntwortStatus, IDE_VORGANG, Produktpaket, STS_STATUS_ANTWORT, STS_TRANSAKTIONSGRUND,
+    Transaktionsgrund,
 };
 use crate::{Error, Lokationstyp, Pruefidentifikator, Release};
 
@@ -30,6 +31,12 @@ struct UtilmdTransactionSpec {
     references: Vec<(String, String)>,
     /// `SG6 RFF+TN` — the Vorgangsnummer of the message being answered.
     referenz_vorgangsnummer: Option<String>,
+    /// `SG8 SEQ+Z79` — the Produktpakete an Anmeldung and its Bestätigung
+    /// carry. Muss on 55001, 55077, 55600, 55601, 55014 and 55608.
+    produktpakete: Vec<Produktpaket>,
+    /// `SG10 CCI` — Merkmale addressed by Klassentyp (DE 7059) with their value
+    /// in DE 7037.
+    merkmale: Vec<(String, String)>,
     customer_nad: Option<(String, String)>,
 }
 
@@ -259,6 +266,171 @@ fn emit_sg6<W: std::io::Write>(
     Ok(())
 }
 
+/// Emit the `SG8` / `SG10` Produktpakete of one Vorgang.
+///
+/// ```text
+/// SEQ+Z79+1
+/// PIA+5+9991000002082:Z11
+/// CCI+Z66
+/// CAV+ZV4:::11XBK-EEG-----1
+/// ```
+///
+/// The Anmeldung einer Zuordnung des LFN is not complete without one: the AHB
+/// marks `SG8 SEQ+Z79` Muss on 55001, 55077, 55600, 55601, 55014 and 55608, and
+/// the Codeliste der Konfigurationen 1.4 Kap. 6.1.1 makes the Bilanzkreis
+/// product unconditional inside it („zwingend anzugeben").
+///
+/// `CAV+ZH9` is conditional (Bedingung `[36]`): it appears only where the
+/// Codeliste gives the product a Code der Produkteigenschaft. The Bilanzkreis
+/// has none, so its package is `CCI+Z66` followed by `CAV+ZV4` alone.
+fn emit_sg8_produktpakete<W: std::io::Write>(
+    w: &mut Writer<W>,
+    tx: &UtilmdTransactionSpec,
+) -> Result<(), Error> {
+    use crate::utilmd_codes::produkt;
+
+    for paket in &tx.produktpakete {
+        emit_seg!(
+            w,
+            "SEQ",
+            produkt::SEQ_PRODUKTPAKET,
+            &paket.paket_id.to_string()
+        );
+        for p in &paket.produkte {
+            emit_comp!(
+                w,
+                "PIA",
+                [produkt::PIA_ERFORDERLICHES_PRODUKT],
+                [&p.produkt_code, produkt::PIA_TYP_PRODUKT]
+            );
+            emit_seg!(w, "CCI", produkt::CCI_PRODUKTEIGENSCHAFT);
+            if let Some(eigenschaft) = &p.eigenschaft {
+                emit_comp!(w, "CAV", [produkt::CAV_EIGENSCHAFT, "", "", eigenschaft]);
+            }
+            if let Some(wert) = &p.wert {
+                emit_comp!(w, "CAV", [produkt::CAV_WERT, "", "", wert]);
+            }
+        }
+    }
+    // `SG8 SEQ+ZH0` — „so oft zu wiederholen, wie es Produktpaket-ID in einem
+    // Geschäftsvorfall gibt" (AHB Kap. 5.3). The group is Muss wherever
+    // `SEQ+Z79` is, so it follows every package block rather than being
+    // optional: `CCI+Z65` DE 4051 tells the NB whether it may assign the LF on
+    // a partial application of the package.
+    //
+    // The `CAV` Priorisierung (`Z75`…`Z79`) is Bedingung [42] — „wenn mehr als
+    // ein SG8 SEQ+ZH0 vorhanden" — so a single package carries none.
+    for (idx, paket) in tx.produktpakete.iter().enumerate() {
+        emit_seg!(
+            w,
+            "SEQ",
+            produkt::SEQ_PRIORISIERUNG,
+            &paket.paket_id.to_string()
+        );
+        emit_seg!(
+            w,
+            "CCI",
+            produkt::CCI_UMSETZUNGSGRAD,
+            "",
+            "",
+            paket.umsetzung.code()
+        );
+        if tx.produktpakete.len() > 1
+            && let Some(prio) = produkt::PRIORITAET.get(idx)
+        {
+            emit_seg!(w, "CAV", prio);
+        }
+    }
+    Ok(())
+}
+
+/// Emit one `SG4 IDE` Vorgang and everything nested under it.
+///
+/// MIG Zähler order inside SG4: IDE (0190), DTM (0230), STS (0250), FTX (0280),
+/// AGR (0290), then SG5 LOC (0330), SG6 RFF (0360), SG8/SG10 (Produktpakete)
+/// and SG12 NAD. Layer 3.5 checks it, on both sides of the wire.
+fn emit_sg4<W: std::io::Write>(
+    w: &mut Writer<W>,
+    pid_str: &str,
+    tx: &UtilmdTransactionSpec,
+) -> Result<(), Error> {
+    // MIG Zähler order inside SG4: IDE (0190), DTM (0230), STS (0250),
+    // FTX (0280), AGR (0290), then SG5 LOC (0330), SG6 RFF (0360) and
+    // SG12 NAD. Layer 3.5 checks it, on both sides of the wire.
+    emit_seg!(w, "IDE", &tx.ide_qualifier, &tx.vorgangsnummer);
+    for (qualifier, date_val) in &tx.process_dates {
+        let fmt = sg4_dtm_format(qualifier);
+        let value = if fmt == "303" {
+            super::ccyymmddhhmm_utc(date_val)
+        } else {
+            date_val.clone()
+        };
+        emit_comp!(w, "DTM", [qualifier, &value, fmt]);
+    }
+    if let Some(grund) = &tx.transaktionsgrund {
+        // `STS+7++<grund>+<ergaenzung>+<befristet>` — Statuskategorie 7
+        // in C601, then one repeated C556 per code. C555 sits between
+        // C601 and the first C556 and is *nicht benutzt*, so it is
+        // written empty rather than omitted. MIG example:
+        // `STS+7++E01+ZW4+E03'`.
+        let ergaenzung = grund.ergaenzung.as_deref().unwrap_or("");
+        match grund.befristet.as_deref() {
+            Some(befristet) => emit_seg!(
+                w,
+                "STS",
+                STS_TRANSAKTIONSGRUND,
+                "",
+                &grund.grund,
+                ergaenzung,
+                befristet
+            ),
+            None if !ergaenzung.is_empty() => {
+                emit_seg!(
+                    w,
+                    "STS",
+                    STS_TRANSAKTIONSGRUND,
+                    "",
+                    &grund.grund,
+                    ergaenzung
+                );
+            }
+            None => emit_seg!(w, "STS", STS_TRANSAKTIONSGRUND, "", &grund.grund),
+        }
+    }
+    if let Some(antwort) = &tx.antwort {
+        // `STS+E01++<code>:<codeliste>` — the Prüfschritt code in C556
+        // DE 9013 and the Codeliste it comes from in DE 1131. The AHB
+        // marks this Muss on every Bestätigung and Ablehnung and
+        // constrains the code to that list's Zustimmungs- or
+        // Ablehnungs-Cluster.
+        if let Some(cl) = antwort.codeliste.as_deref() {
+            emit_comp!(w, "STS", [STS_STATUS_ANTWORT], [""], [&antwort.code, cl]);
+        } else {
+            emit_seg!(w, "STS", STS_STATUS_ANTWORT, "", &antwort.code);
+        }
+    }
+    for (ftx_q, ftx_text) in &tx.free_texts {
+        emit_comp!(w, "FTX", [ftx_q], [""], [""], [ftx_text]);
+    }
+    if let Some((svc_req, resp_type)) = &tx.agr {
+        emit_comp!(w, "AGR", [svc_req, resp_type]);
+    }
+    for (loc_q, loc_id) in &tx.locations {
+        emit_comp!(w, "LOC", [loc_q], [loc_id]);
+    }
+    emit_sg6(w, pid_str, tx)?;
+    for (klassentyp, wert) in &tx.merkmale {
+        // `CCI+<7059>++<7037>` — C502 „Einzelheiten zu Maßangaben" is
+        // nicht benutzt and still occupies element 2.
+        emit_seg!(w, "CCI", klassentyp, "", wert);
+    }
+    emit_sg8_produktpakete(w, tx)?;
+    if let Some((nad_q, nad_id)) = &tx.customer_nad {
+        emit_comp!(w, "NAD", [nad_q], [nad_id, "", "293"]);
+    }
+    Ok(())
+}
+
 impl<S, R> UtilmdBuilder<S, R> {
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         let pid_str = self
@@ -307,74 +479,7 @@ impl<S, R> UtilmdBuilder<S, R> {
             );
         }
         for tx in &self.inner.transactions {
-            // MIG Zähler order inside SG4: IDE (0190), DTM (0230), STS (0250),
-            // FTX (0280), AGR (0290), then SG5 LOC (0330), SG6 RFF (0360) and
-            // SG12 NAD. Layer 3.5 checks it, on both sides of the wire.
-            emit_seg!(w, "IDE", &tx.ide_qualifier, &tx.vorgangsnummer);
-            for (qualifier, date_val) in &tx.process_dates {
-                let fmt = sg4_dtm_format(qualifier);
-                let value = if fmt == "303" {
-                    super::ccyymmddhhmm_utc(date_val)
-                } else {
-                    date_val.clone()
-                };
-                emit_comp!(w, "DTM", [qualifier, &value, fmt]);
-            }
-            if let Some(grund) = &tx.transaktionsgrund {
-                // `STS+7++<grund>+<ergaenzung>+<befristet>` — Statuskategorie 7
-                // in C601, then one repeated C556 per code. C555 sits between
-                // C601 and the first C556 and is *nicht benutzt*, so it is
-                // written empty rather than omitted. MIG example:
-                // `STS+7++E01+ZW4+E03'`.
-                let ergaenzung = grund.ergaenzung.as_deref().unwrap_or("");
-                match grund.befristet.as_deref() {
-                    Some(befristet) => emit_seg!(
-                        w,
-                        "STS",
-                        STS_TRANSAKTIONSGRUND,
-                        "",
-                        &grund.grund,
-                        ergaenzung,
-                        befristet
-                    ),
-                    None if !ergaenzung.is_empty() => {
-                        emit_seg!(
-                            w,
-                            "STS",
-                            STS_TRANSAKTIONSGRUND,
-                            "",
-                            &grund.grund,
-                            ergaenzung
-                        );
-                    }
-                    None => emit_seg!(w, "STS", STS_TRANSAKTIONSGRUND, "", &grund.grund),
-                }
-            }
-            if let Some(antwort) = &tx.antwort {
-                // `STS+E01++<code>:<codeliste>` — the Prüfschritt code in C556
-                // DE 9013 and the Codeliste it comes from in DE 1131. The AHB
-                // marks this Muss on every Bestätigung and Ablehnung and
-                // constrains the code to that list's Zustimmungs- or
-                // Ablehnungs-Cluster.
-                if let Some(cl) = antwort.codeliste.as_deref() {
-                    emit_comp!(w, "STS", [STS_STATUS_ANTWORT], [""], [&antwort.code, cl]);
-                } else {
-                    emit_seg!(w, "STS", STS_STATUS_ANTWORT, "", &antwort.code);
-                }
-            }
-            for (ftx_q, ftx_text) in &tx.free_texts {
-                emit_comp!(w, "FTX", [ftx_q], [""], [""], [ftx_text]);
-            }
-            if let Some((svc_req, resp_type)) = &tx.agr {
-                emit_comp!(w, "AGR", [svc_req, resp_type]);
-            }
-            for (loc_q, loc_id) in &tx.locations {
-                emit_comp!(w, "LOC", [loc_q], [loc_id]);
-            }
-            emit_sg6(&mut w, &pid_str, tx)?;
-            if let Some((nad_q, nad_id)) = &tx.customer_nad {
-                emit_comp!(w, "NAD", [nad_q], [nad_id, "", "293"]);
-            }
+            emit_sg4(&mut w, &pid_str, tx)?;
         }
         w.finish_unt(&self.inner.message_ref)
             .map_err(Error::Parse)?;
@@ -559,6 +664,51 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
     /// ```
     pub fn referenz_vorgangsnummer(mut self, vorgangsnummer: impl Into<String>) -> Self {
         self.spec.referenz_vorgangsnummer = Some(vorgangsnummer.into());
+        self
+    }
+
+    /// Add a `SG10 CCI` Merkmal — Klassentyp in DE 7059, value in DE 7037.
+    ///
+    /// Emits `CCI+<klassentyp>++<wert>`. `GeLi` Gas carries the **Bilanzkreis**
+    /// this way (`CCI+Z19`, Muss on 44001), where GPKE Strom uses the
+    /// Produktpaket — see [`Self::produktpaket`]. The two Festlegungen model the
+    /// same fact differently, so neither shape may be sent on the other's
+    /// Sparte.
+    pub fn merkmal(mut self, klassentyp: impl Into<String>, wert: impl Into<String>) -> Self {
+        self.spec.merkmale.push((klassentyp.into(), wert.into()));
+        self
+    }
+
+    /// Add a `SG8 SEQ+Z79` Produktpaket to this Vorgang.
+    ///
+    /// The AHB marks the segment group Muss on every Anmeldung einer Zuordnung
+    /// des LFN and on its Bestätigung — 55001, 55077, 55600, 55601, 55014 and
+    /// 55608 — and the Codeliste der Konfigurationen 1.4 Kap. 6.1.1 makes the
+    /// Bilanzkreis product unconditional inside it.
+    ///
+    /// ```rust
+    /// # use edi_energy::{Release, Pruefidentifikator};
+    /// # use edi_energy::builders::UtilmdBuilder;
+    /// # use edi_energy::utilmd_codes::{Produktpaket, dtm};
+    /// let edi = UtilmdBuilder::new(Release::new("S2.2"))
+    ///     .pruefidentifikator(Pruefidentifikator::new(55608).unwrap())
+    ///     .sender("9900987654321")
+    ///     .receiver("9900123456789")
+    ///     .transaction("VORGANG-0001")
+    ///     .date(dtm::BEGINN_ZUM, "20261101")
+    ///     .produktpaket(Produktpaket::bilanzkreis("11XBK-EEG-----1"))
+    ///     .marktlokation("51238696012")
+    ///     .done()
+    ///     .serialize()?;
+    /// let text = String::from_utf8(edi).unwrap();
+    /// assert!(text.contains("SEQ+Z79+1"));
+    /// assert!(text.contains("PIA+5+9991000002082:Z11"));
+    /// assert!(text.contains("CCI+Z66"));
+    /// assert!(text.contains("CAV+ZV4:::11XBK-EEG-----1"));
+    /// # Ok::<(), edi_energy::Error>(())
+    /// ```
+    pub fn produktpaket(mut self, paket: Produktpaket) -> Self {
+        self.spec.produktpakete.push(paket);
         self
     }
 

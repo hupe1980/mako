@@ -53,6 +53,7 @@ use rust_decimal::Decimal;
 pub(crate) fn lf_vorgangsdaten(
     u: &edi_energy::messages::utilmd::UtilmdMessage,
 ) -> mako_engine::lf_vorgang::LfVorgangsdaten {
+    use edi_energy::messages::utilmd::UtilmdParty;
     use edi_energy::utilmd_codes::dtm;
 
     let first = u.transactions().first();
@@ -72,6 +73,18 @@ pub(crate) fn lf_vorgangsdaten(
         naechstmoeglicher_termin: first
             .and_then(|t| t.date(dtm::ENDE_NAECHSTMOEGLICH))
             .map(ToOwned::to_owned),
+        // `SG12 NAD+Z09` — the Kundenname the LFN put in its Anmeldung, which
+        // the NB copies into the 55010. `E_0624` Prüfschritt 50 has no other
+        // source for it, and without it the whole Ein-/Auszug arm escalates.
+        kunde_name: first.and_then(|t| t.kunde()).and_then(UtilmdParty::name),
+        kunde_namensformat: first
+            .and_then(|t| t.kunde())
+            .and_then(|k| k.nad.name_format.clone()),
+        // `SG12 NAD+VY` — the Neulieferant. The 55010 is the only message that
+        // names it to the LFA before the switch completes.
+        lfn_mp_id: first
+            .and_then(|t| t.party(edi_energy::utilmd_codes::nad::ZUGEHOERIGE_PARTEI))
+            .and_then(|p| p.nad.party_id.clone()),
     }
 }
 
@@ -441,7 +454,7 @@ fn build_wim_iftsta_command(msg: &AnyMessage) -> Result<DeviceChangeCommand, Eng
 
 /// `SG15 DTM+2380` — the day the MSBN actually takes over
 /// („Zeitpunkt, ab dem der MSBN tatsächlich den Messstellenbetrieb übernimmt",
-/// IFTSTA AHB 2.1 § 6.2 Bedingung [521]).
+/// IFTSTA AHB 2.1 § 6.2 Bedingung `[521]`).
 ///
 /// The AHB carries it as `CCYYMMDDHHMMZZZ` (DE 2379 = `303`), so only the first
 /// eight digits are the date. `DTM+137` is the document date and `DTM+293` the
@@ -1206,7 +1219,10 @@ pub(super) fn cav_codes_under_merkmal<'a>(
 /// `mako_gpke::Versorgungsart` via `from_code`.
 pub fn extract_versorgungsart(segs: &[OwnedSegment]) -> Option<String> {
     cci_merkmal_of_class(segs, "Z36")
-        .filter(|v| matches!(*v, "ZC9" | "ZD0" | "ZE3" | "ZZD"))
+        // `ZZD` is deliberately absent: the AHB publishes it as a
+        // Transaktionsgrund (`SG4 STS+7` DE 9013), never as a Versorgungsart in
+        // `SG10 CCI+Z36` DE 7037.
+        .filter(|v| matches!(*v, "ZC9" | "ZD0" | "ZE3"))
         .map(str::to_owned)
 }
 

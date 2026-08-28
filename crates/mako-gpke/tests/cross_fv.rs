@@ -167,6 +167,7 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
         location_id: MaLo::new(MALO_ID),
         process_date: "20250201".to_owned(),
         transaktionsgrund: None,
+        bilanzkreis: Some("11XBK-LF-------9".to_owned()),
     })
     .await
     .expect("LFN InitiateAnmeldung must succeed");
@@ -350,6 +351,7 @@ async fn cross_fv_rejection_also_terminates_cleanly() {
         location_id: MaLo::new(MALO_ID),
         process_date: "20250201".to_owned(),
         transaktionsgrund: None,
+        bilanzkreis: Some("11XBK-LF-------9".to_owned()),
     })
     .await
     .expect("LFN InitiateAnmeldung must succeed");
@@ -472,6 +474,7 @@ async fn cross_fv_s2_2_response_accepted_on_s2_1_process() {
         location_id: MaLo::new(MALO_ID),
         process_date: "20250201".to_owned(),
         transaktionsgrund: None,
+        bilanzkreis: Some("11XBK-LF-------9".to_owned()),
     })
     .await
     .expect("LFN InitiateAnmeldung (S2.1 process) must succeed");
@@ -553,6 +556,7 @@ fn nb_antwort(accepted: bool, reason: Option<&str>) -> mako_gpke::LfAntwort {
         ebd: Some(ebd.to_owned()),
         zustimmung: accepted,
         bemerkung: reason.map(ToOwned::to_owned),
+        bilanzkreis: None,
         termin: None,
     }
 }

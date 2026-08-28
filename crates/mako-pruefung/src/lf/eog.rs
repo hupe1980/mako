@@ -110,9 +110,13 @@ pub fn pruefe_anmeldung_eog(
         Bekannt::Unbekannt | Bekannt::Ja => {}
     }
 
-    // Prüfschritt 40 — Doppelmeldung: schon einmal zum selben Termin bestätigt.
-    if lage.beliefert
-        && let (Some(beginn), Some(t)) = (lage.bestaetigtes_zuordnungsende, termin)
+    // Prüfschritt 40 — „Wurde der angefragte Geschäftsvorfall dem Anfragenden
+    // bereits zum gleichen Zeitpunkt mit einer früheren Meldung bestätigt?"
+    //
+    // „Zum gleichen Zeitpunkt" is the **Zuordnungsbeginn** a 55013 carries in
+    // `SG4 DTM+92` — an unrelated Zuordnungsende falling on the same day is not
+    // a Doppelmeldung.
+    if let (Some(beginn), Some(t)) = (lage.bestaetigter_zuordnungsbeginn, termin)
         && beginn == t
     {
         code!(list, ebd, "A04", 40, termin);

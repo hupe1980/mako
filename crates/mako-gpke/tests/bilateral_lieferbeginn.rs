@@ -198,6 +198,7 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
         location_id: MaLo::new(MALO_ID),
         process_date: "20250201".to_owned(),
         transaktionsgrund: None,
+        bilanzkreis: Some("11XBK-LF-------9".to_owned()),
     };
 
     // Inspect outbox via the pure Workflow::handle — no store required.
@@ -484,6 +485,7 @@ async fn bilateral_lieferbeginn_rejection_path() {
         location_id: MaLo::new(MALO_ID),
         process_date: "20250301".to_owned(),
         transaktionsgrund: None,
+        bilanzkreis: Some("11XBK-LF-------9".to_owned()),
     })
     .await
     .expect("LFN Initiate");
@@ -585,6 +587,7 @@ async fn bilateral_antwortfrist_deadline_fires_on_timeout() {
         location_id: MaLo::new(MALO_ID),
         process_date: "20250301".to_owned(),
         transaktionsgrund: None,
+        bilanzkreis: Some("11XBK-LF-------9".to_owned()),
     })
     .await
     .unwrap();
@@ -701,6 +704,7 @@ fn nb_antwort(accepted: bool, reason: Option<&str>) -> mako_gpke::LfAntwort {
         ebd: Some(ebd.to_owned()),
         zustimmung: accepted,
         bemerkung: reason.map(ToOwned::to_owned),
+        bilanzkreis: None,
         termin: None,
     }
 }

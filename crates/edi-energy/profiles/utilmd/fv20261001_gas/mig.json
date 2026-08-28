@@ -221,6 +221,29 @@
           }
         },
         {
+          "tag": "IMD",
+          "name": "Identifikationslogik",
+          "mandatory": false,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "7077",
+              "status": "C",
+              "components": 1
+            },
+            {
+              "id": "C272",
+              "status": "C",
+              "components": 1
+            },
+            {
+              "id": "C273",
+              "status": "C",
+              "components": 1
+            }
+          ]
+        },
+        {
           "tag": "DTM",
           "name": "Date/Time/Period",
           "mandatory": false,
@@ -378,6 +401,142 @@
             }
           ],
           "groups": []
+        },
+        {
+          "id": "SG8",
+          "trigger_segment": "SEQ",
+          "mandatory": false,
+          "max_occurrences": 99999,
+          "segments": [
+            {
+              "tag": "SEQ",
+              "name": "Sequence Details",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "1245",
+                  "status": "C",
+                  "components": 1
+                },
+                {
+                  "id": "C286",
+                  "status": "C",
+                  "components": 5
+                }
+              ]
+            },
+            {
+              "tag": "RFF",
+              "name": "Reference",
+              "mandatory": false,
+              "max_occurrences": 9,
+              "elements": [
+                {
+                  "id": "C506",
+                  "status": "M",
+                  "components": 5
+                }
+              ]
+            },
+            {
+              "tag": "PIA",
+              "name": "Erforderliches Produkt",
+              "mandatory": false,
+              "max_occurrences": 9,
+              "elements": [
+                {
+                  "id": "4347",
+                  "status": "M",
+                  "components": 1
+                },
+                {
+                  "id": "C212",
+                  "status": "M",
+                  "components": 2
+                }
+              ],
+              "qualifier_restrictions": {
+                "4347": [
+                  "5"
+                ]
+              }
+            }
+          ],
+          "groups": [
+            {
+              "id": "SG9",
+              "trigger_segment": "QTY",
+              "mandatory": false,
+              "max_occurrences": 99,
+              "segments": [
+                {
+                  "tag": "QTY",
+                  "name": "Quantity",
+                  "mandatory": true,
+                  "max_occurrences": 1,
+                  "elements": [
+                    {
+                      "id": "C186",
+                      "status": "M",
+                      "components": 3
+                    }
+                  ]
+                }
+              ],
+              "groups": []
+            },
+            {
+              "id": "SG10",
+              "trigger_segment": "CCI",
+              "mandatory": false,
+              "max_occurrences": 99,
+              "segments": [
+                {
+                  "tag": "CCI",
+                  "name": "Characteristic/Class Id",
+                  "mandatory": true,
+                  "max_occurrences": 1,
+                  "elements": [
+                    {
+                      "id": "7059",
+                      "status": "C",
+                      "components": 1
+                    },
+                    {
+                      "id": "C502",
+                      "status": "C",
+                      "components": 3
+                    },
+                    {
+                      "id": "C240",
+                      "status": "C",
+                      "components": 3
+                    },
+                    {
+                      "id": "4051",
+                      "status": "C",
+                      "components": 1
+                    }
+                  ]
+                },
+                {
+                  "tag": "CAV",
+                  "name": "Merkmalswert",
+                  "mandatory": false,
+                  "max_occurrences": 99,
+                  "elements": [
+                    {
+                      "id": "C889",
+                      "status": "M",
+                      "components": 4
+                    }
+                  ]
+                }
+              ],
+              "groups": []
+            }
+          ]
         }
       ]
     }

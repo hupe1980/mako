@@ -37,6 +37,7 @@ fn initiate_cmd() -> LfAnmeldungCommand {
         location_id: MaLo::new("DE00123456789012345678901234567890"),
         process_date: "2025-10-01".to_owned(),
         transaktionsgrund: None,
+        bilanzkreis: Some("11XBK-LF-------9".to_owned()),
     }
 }
 

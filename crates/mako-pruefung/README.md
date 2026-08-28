@@ -141,6 +141,29 @@ there by falling past every branch:
   `Z01` „Zustimmung mit Terminänderung" on `[41] Wenn SG4 DTM+471 vorhanden`.
   Answering `Z12` to a `DTM+471` Kündigung is not merely the wrong business
   answer; it fails AHB validation at the counterparty.
+- **No `SG4 DTM+154`** on a 55010. `E_0624` Prüfschritt 5 is the tree's *first*
+  question and measures its window from the ÜT der Lieferanmeldung. A message
+  without one cannot be measured, and skipping the step accepts every late
+  Anfrage — the one thing `A43` exists to refuse.
+
+## Three contract dates, three questions
+
+The Kündigungs-Prüfschritte read three different dates and the crate keeps them
+apart, because collapsing any two of them answers a code that is false:
+
+| `LfVertragslage` field | What it is | Read by |
+|---|---|---|
+| `vertragsende` | a **recorded termination** — somebody has cancelled, to this date | `E_0614` 40/50/80 (`A03` „bereits gekündigt", `A05` „bereits in der Zukunft beendet"), Gas `Z29`/`Z34` |
+| `naechstmoeglicher_kuendigungstermin` | the next date notice could take effect, as of the Kündigungseingang | `E_0614` 70/580, the `DTM+157` on `A06`/`A15`, the `DTM+471` on a „nächstmöglich" Bestätigung, Gas `Z12`/`Z01` |
+| `vertragsbindung_am_folgetag` | does the Vertragsverhältnis survive the requested date | `E_0624` 90/220 and Gas `E_3020` — **and nothing else** |
+
+Prüfschritt 70 („kündbar unter Einhaltung der Kündigungsfrist?") compares the
+second against the requested Termin, not the third: every unterminated contract
+is running, so the third would refuse `A06` to every § 20a EnWG switch.
+
+`vertrag_vorhanden` is likewise a record, not an inference — `E_0614`
+Prüfschritt 500 produces `A18` only from a stated `Nein`, because a deployment
+that cannot look a contract up finds nothing for *every* object.
 
 ## Design constraints
 

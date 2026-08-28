@@ -1501,7 +1501,7 @@ mod utilts_roundtrip {
     /// fv20260401 (AHB 1.1, same MIG 1.1e) — Berechnungsformel (PID 25001).
     ///
     /// Validates that the wire format is identical to fv20241001 — the annual
-    /// change is AHB-only (new package conditions, role [63] NB added), not
+    /// change is AHB-only (new package conditions, role `[63]` NB added), not
     /// structural. The same builder and same PID work with both AHB versions.
     #[test]
     fn utilts_fv20260401_parses_berechnungsformel() {
@@ -1924,4 +1924,114 @@ mod utilts_roundtrip {
             "Z53 qualifier must appear in wire"
         );
     }
+}
+
+// ── UTILMD Produktpaket (SG8 / SG10) ─────────────────────────────────────────
+
+/// The Bilanzkreis survives the round trip. UTILMD AHB Strom 2.2 Kap. 5.3 makes
+/// `SG8 SEQ+Z79` Muss on 55001, 55077, 55600, 55601, 55014 and 55608, and the
+/// Codeliste der Konfigurationen 1.4 Kap. 6.1.1 makes the Bilanzkreis product
+/// unconditional inside it — „ohne die Angabe eines für den LF gültigen
+/// Bilanzkreises `[kann]` der NB den LF der Marktlokation bzw. Tranche nicht
+/// zuordnen".
+#[cfg(feature = "utilmd")]
+#[test]
+fn a_strom_anmeldung_round_trips_its_bilanzkreis_produktpaket() {
+    use edi_energy::EdiEnergyMessage;
+    use edi_energy::utilmd_codes::{Produktpaket, Transaktionsgrund, transaktionsgrund};
+
+    let bytes = edi_energy::builders::UtilmdBuilder::new(Release::new("S2.1"))
+        .pruefidentifikator(Pruefidentifikator::new(55001).expect("valid PID"))
+        .sender("4012345000023")
+        .receiver("9900357000004")
+        .document_date("202608280900")
+        .transaction("VORGANG-0001")
+        .date(dtm::BEGINN_ZUM, "20261101")
+        .transaktionsgrund(Transaktionsgrund::verbrauchende_malo(
+            transaktionsgrund::WECHSEL,
+        ))
+        .produktpaket(Produktpaket::bilanzkreis("11XBK-STD-----9"))
+        .marktlokation("51238696781")
+        .done()
+        .serialize()
+        .expect("serialises");
+
+    let raw = String::from_utf8_lossy(&bytes).into_owned();
+    assert!(raw.contains("SEQ+Z79+1"), "{raw}");
+    assert!(raw.contains("PIA+5+9991000002082:Z11"), "{raw}");
+    assert!(raw.contains("CAV+ZV4:::11XBK-STD-----9"), "{raw}");
+    assert!(raw.contains("CCI+Z65+++Z01"), "{raw}");
+
+    let msg = match Platform::with_all_profiles()
+        .parse(&bytes)
+        .expect("must re-parse")
+    {
+        edi_energy::AnyMessage::Utilmd(u) => u,
+        other => panic!("expected UTILMD, got {other:?}"),
+    };
+
+    // A conformant Anmeldung validates: the profile has to carry `PIA`, `CAV`
+    // and `CCI`'s fourth element for that.
+    let report = msg.validate().expect("profile is registered");
+    let errors: Vec<_> = report
+        .iter_issues()
+        .filter(|i| i.severity == edifact_rs::ValidationSeverity::Error)
+        .map(|i| i.message.clone())
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
+
+    // …and a receiver can read the Bilanzkreis back out of it.
+    let tx = msg.transactions().first().expect("one Vorgang");
+    assert_eq!(tx.bilanzkreis(), Some("11XBK-STD-----9"));
+    let paket = tx.sequences.first().expect("one Produktpaket");
+    assert_eq!(paket.seq.sequence_id.as_deref(), Some("1"));
+    assert_eq!(
+        paket.products[0].item_number.as_deref(),
+        Some("9991000002082")
+    );
+}
+
+/// `GeLi` Gas states the same fact in one segment — `SG10 CCI+Z19` DE 7037,
+/// Muss on a 44001 (UTILMD AHB Gas 1.2). There is no Produktpaket in the Gas
+/// AHB at all, so neither shape is sendable on the other Sparte.
+#[cfg(feature = "utilmd")]
+#[test]
+fn a_gas_anmeldung_round_trips_its_bilanzkreis_cci() {
+    use edi_energy::EdiEnergyMessage;
+    use edi_energy::utilmd_codes::{Transaktionsgrund, produkt, transaktionsgrund};
+
+    let bytes = edi_energy::builders::UtilmdBuilder::new(Release::new("G1.1"))
+        .pruefidentifikator(Pruefidentifikator::new(44001).expect("valid PID"))
+        .sender("9870000000006")
+        .receiver("9900357000004")
+        .document_date("202608280900")
+        .transaction("VORGANG-0001")
+        .date(dtm::BEGINN_ZUM, "20261101")
+        .transaktionsgrund(Transaktionsgrund::verbrauchende_malo(
+            transaktionsgrund::WECHSEL,
+        ))
+        .merkmal(produkt::CCI_BILANZKREIS_GAS, "9870000000006")
+        .marktlokation("51238696781")
+        .done()
+        .serialize()
+        .expect("serialises");
+
+    let raw = String::from_utf8_lossy(&bytes).into_owned();
+    assert!(raw.contains("CCI+Z19++9870000000006"), "{raw}");
+    assert!(!raw.contains("SEQ+Z79"), "Gas has no Produktpaket: {raw}");
+
+    let msg = match Platform::with_all_profiles()
+        .parse(&bytes)
+        .expect("must re-parse")
+    {
+        edi_energy::AnyMessage::Utilmd(u) => u,
+        other => panic!("expected UTILMD, got {other:?}"),
+    };
+    let report = msg.validate().expect("profile is registered");
+    let errors: Vec<_> = report
+        .iter_issues()
+        .filter(|i| i.severity == edifact_rs::ValidationSeverity::Error)
+        .map(|i| i.message.clone())
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
 }

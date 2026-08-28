@@ -57,7 +57,7 @@ pub fn pruefe_kuendigung(anfrage: &LfAnfrage, lage: &LfVertragslage) -> LfEntsch
     // „oder ruhende".
     let verbrauchend = match anfrage.lokationsart_oder_eskalation(ebd) {
         Ok(l) => l == Lokationsart::VerbrauchendeMalo,
-        Err(e) => return e,
+        Err(e) => return *e,
     };
     let c = |a: &'static str, b: &'static str| if verbrauchend { a } else { b };
 
@@ -73,9 +73,32 @@ pub fn pruefe_kuendigung(anfrage: &LfAnfrage, lage: &LfVertragslage) -> LfEntsch
     }
 
     // Prüfschritt 500 — the non-verbrauchend branch first asks whether a
-    // contract exists at all.
-    if !verbrauchend && !lage.beliefert && lage.vertragsende.is_none() {
-        code!("A18", 500);
+    // contract exists at all. `A18` is a *record* that there is none, never the
+    // absence of one: a deployment without `vertragd`, or a Tranche `marktd`
+    // does not carry, finds nothing for every object, and answering `A18` from
+    // that releases customers the supplier still holds.
+    if !verbrauchend {
+        match lage.vertrag_vorhanden {
+            Bekannt::Nein => code!("A18", 500),
+            Bekannt::Unbekannt => {
+                return LfEntscheidung::eskalation(
+                    500,
+                    format!(
+                        "Kündigung für {} an MaLo {}: es ist nicht festgestellt, ob zu \
+                         dem genannten Objekt überhaupt ein Vertrag vorliegt \
+                         (E_0614 Prüfschritt 500 → A18).",
+                        match anfrage.lokationsart {
+                            Some(Lokationsart::Tranche) => "eine Tranche",
+                            Some(Lokationsart::ErzeugendeMalo) => "eine erzeugende Marktlokation",
+                            Some(Lokationsart::RuhendeMalo) => "eine ruhende Marktlokation",
+                            _ => "dieses Objekt",
+                        },
+                        anfrage.malo_id
+                    ),
+                );
+            }
+            Bekannt::Ja => {}
+        }
     }
 
     let Some(kuendigungstermin) = anfrage.termin else {
@@ -165,6 +188,19 @@ pub fn pruefe_kuendigung(anfrage: &LfAnfrage, lage: &LfVertragslage) -> LfEntsch
 /// `DTM+93` — takes the nein-edge straight to the Vollmacht question: the LFA
 /// cannot disagree with a date the LFN did not name, so `A05`/`A06` are
 /// unreachable. `None` means the branch found no objection.
+///
+/// # Prüfschritt 70 is a date comparison
+///
+/// „Ist der Vertrag zum übermittelten Kündigungstermin **unter Einhaltung der
+/// Kündigungsfrist unter Berücksichtigung des Eingangsdatums der Kündigung**
+/// kündbar?" — not a question about whether a contract is running. Every
+/// unterminated contract is running, and almost all of them are terminable to a
+/// date far enough out. The step is decided from
+/// [`LfVertragslage::naechstmoeglicher_kuendigungstermin`], the date the LFA's
+/// own contract rules produce for this Eingangsdatum: the Kündigung is
+/// admissible exactly when that date is **on or before** the requested one.
+/// Deciding it from [`LfVertragslage::vertragsbindung_am_folgetag`] instead
+/// would refuse `A06` to every § 20a EnWG supplier switch.
 fn pruefe_kuendbarkeit(
     anfrage: &LfAnfrage,
     lage: &LfVertragslage,
@@ -177,59 +213,46 @@ fn pruefe_kuendbarkeit(
     let c = |a: &'static str, b: &'static str| if verbrauchend { a } else { b };
 
     // Prüfschritt 70/580 — Kündbarkeit zum genannten Termin.
-    match lage.vertragsbindung_am_folgetag {
-        Bekannt::Nein => None,
-        Bekannt::Unbekannt => Some(LfEntscheidung::eskalation(
+    let Some(naechster) = lage.naechstmoeglicher_kuendigungstermin else {
+        return Some(LfEntscheidung::eskalation(
             70,
             format!(
-                "MaLo {}: unbekannt, ob der Vertrag zum übermittelten Kündigungstermin \
-                 unter Einhaltung der Kündigungsfrist kündbar ist \
+                "MaLo {}: der nächstmögliche Kündigungstermin ist nicht bekannt, also ist \
+                 nicht feststellbar, ob der Vertrag zum übermittelten Termin \
+                 {kuendigungstermin} unter Einhaltung der Kündigungsfrist kündbar ist \
                  (E_0614 Prüfschritt 70 → A06 / A15).",
                 anfrage.malo_id
             ),
-        )),
-        // 80/590 — Vertrag bereits zu einem *späteren* Zeitpunkt beendet? That
-        // is a recorded termination, not merely a running contract: `A05`'s
-        // 55018 carries the already confirmed Kündigungsdatum in
-        // `DTM+Z05`/`Z06`, while `A06` carries `DTM+157`, „der Zeitpunkt, zu
-        // welchem der Vertrag am Tag des Versandes der Antwort noch kündbar ist".
-        Bekannt::Ja => Some(
-            if lage.vertragsende.is_some_and(|e| e > kuendigungstermin) {
-                antwort_mit_kuendbarkeit(c("A05", "A14"), 80, lage.vertragsende, lage)
-            } else {
-                antwort_mit_kuendbarkeit(
-                    c("A06", "A15"),
-                    80,
-                    lage.naechstmoeglicher_kuendigungstermin,
-                    lage,
-                )
-            },
-        ),
+        ));
+    };
+    if naechster <= kuendigungstermin {
+        // Kündbar — the tree goes straight to the Vollmacht question.
+        return None;
     }
+
+    // 80/590 — Vertrag bereits zu einem *späteren* Zeitpunkt beendet? That is a
+    // recorded termination, not merely a running contract: `A05`'s 55018
+    // carries the already confirmed Kündigungsdatum in `DTM+Z05`/`Z06`, while
+    // `A06` carries `DTM+157`, „der Zeitpunkt, zu welchem der Vertrag am Tag
+    // des Versandes der Antwort noch kündbar ist".
+    Some(match lage.vertragsende.filter(|e| *e > kuendigungstermin) {
+        Some(bestaetigtes_ende) => antwort_mit_kuendbarkeit(c("A05", "A14"), 80, bestaetigtes_ende),
+        None => antwort_mit_kuendbarkeit(c("A06", "A15"), 80, naechster),
+    })
 }
 
 /// An `E_0614` Ablehnung whose 55018 must carry a date beside the code.
 ///
-/// `A05`/`A14` name the already confirmed Kündigungsdatum, `A06`/`A15` the date
-/// the contract is still terminable to. When the caller could not supply it the
-/// answer would go out with an empty Muss segment, so the decision escalates.
+/// `A05`/`A14` name the already confirmed Kündigungsdatum (`SG4 DTM+Z05`/`Z06`),
+/// `A06`/`A15` the date the contract is still terminable to (`SG4 DTM+157`).
+/// Both are Muss, and both are already known by the time this is called:
+/// Prüfschritt 70 could not have refused without the nächstmöglicher Termin,
+/// and `A05` is reached only from a recorded Vertragsende.
 fn antwort_mit_kuendbarkeit(
     code: &'static str,
     pruefschritt: u16,
-    datum: Option<time::Date>,
-    lage: &LfVertragslage,
+    datum: time::Date,
 ) -> LfEntscheidung {
-    let Some(datum) = datum else {
-        return LfEntscheidung::eskalation(
-            pruefschritt,
-            format!(
-                "E_0614 Prüfschritt {pruefschritt} → {code}: die Ablehnung muss das Datum \
-                 nennen, zu dem der Vertrag noch kündbar ist (SG4 DTM+157 bzw. DTM+Z05/Z06). \
-                 Vertragsende {:?}, nächstmöglicher Kündigungstermin {:?}.",
-                lage.vertragsende, lage.naechstmoeglicher_kuendigungstermin
-            ),
-        );
-    };
     let entry = E_0614_CODES
         .iter()
         .find(|e| e.code == code)
@@ -310,18 +333,25 @@ pub fn pruefe_kuendigung_gas(anfrage: &LfAnfrage, lage: &LfVertragslage) -> LfEn
         gas_code!(list, ebd, "Z34", 0, termin);
     }
 
-    match lage.vertragsbindung_am_folgetag {
-        Bekannt::Ja => vertragsbindung(anfrage, lage, list, termin),
-        Bekannt::Unbekannt => LfEntscheidung::eskalation(
+    // Kündbarkeit — the same comparison `E_0614` Prüfschritt 70 makes on the
+    // Strom side, and for the same reason: „besteht noch eine Vertragsbindung"
+    // is true of every unterminated contract, while the question the answer
+    // turns on is whether *this* Termin honours the Kündigungsfrist.
+    let Some(naechster) = lage.naechstmoeglicher_kuendigungstermin else {
+        return LfEntscheidung::eskalation(
             0,
             format!(
-                "Gas-Kündigung für MaLo {}: unbekannt, ob zum Kündigungstermin noch eine \
-                 Vertragsbindung besteht (E_3001 → Z12 bzw. Z01).",
+                "Gas-Kündigung für MaLo {}: der nächstmögliche Kündigungszeitpunkt ist \
+                 nicht bekannt, also ist nicht feststellbar, ob zum angefragten Termin \
+                 noch eine Vertragsbindung besteht (E_3001 → Z12 bzw. Z01).",
                 anfrage.malo_id
             ),
-        ),
-        Bekannt::Nein => gas_code!(list, ebd, "E15", 0, termin),
+        );
+    };
+    if termin.is_some_and(|t| naechster <= t) {
+        gas_code!(list, ebd, "E15", 0, termin);
     }
+    vertragsbindung(anfrage, naechster, list)
 }
 
 /// `E_3001` when the contract is still bound at the requested Termin.
@@ -329,40 +359,27 @@ pub fn pruefe_kuendigung_gas(anfrage: &LfAnfrage, lage: &LfVertragslage) -> LfEn
 /// The Codeliste gates the two answers on the **date qualifier**, exactly as
 /// `E_0614` Prüfschritt 60 does on the Strom side:
 ///
-/// - `Z12` „Ablehnung Vertragsbindung" carries Bedingung **[43] Wenn `SG4
+/// - `Z12` „Ablehnung Vertragsbindung" carries Bedingung **`[43]` Wenn `SG4
 ///   DTM+93` (Ende zum) in der Anfrage vorhanden** — so it may answer only a
 ///   Kündigung to a **fixed** date. Its Anmerkung then requires the
 ///   nächstmöglicher Kündigungszeitpunkt in the DTM segment.
-/// - `Z01` „Zustimmung mit Terminänderung" carries Bedingung **[41] Wenn `SG4
+/// - `Z01` „Zustimmung mit Terminänderung" carries Bedingung **`[41]` Wenn `SG4
 ///   DTM+471` (Ende zum nächstmöglichen Termin) vorhanden** — the „nächstmöglich"
 ///   Kündigung the LFA cannot refuse, answered with the date it determined.
 ///
-/// Answering `Z12` on a `DTM+471` Kündigung breaks Bedingung [43], so it is not
+/// Answering `Z12` on a `DTM+471` Kündigung breaks Bedingung `[43]`, so it is not
 /// merely the wrong business answer: the message fails AHB validation at the
 /// counterparty. Both codes need the date, and a deployment that cannot
 /// determine it has nothing to put in the segment.
 fn vertragsbindung(
     anfrage: &LfAnfrage,
-    lage: &LfVertragslage,
+    naechster: time::Date,
     list: &'static [crate::codes::AntwortCode],
-    termin: Option<time::Date>,
 ) -> LfEntscheidung {
     let code = if anfrage.terminart == Terminart::Fix {
         "Z12"
     } else {
         "Z01"
-    };
-    let Some(naechster) = lage.naechstmoeglicher_kuendigungstermin else {
-        return LfEntscheidung::eskalation(
-            0,
-            format!(
-                "Gas-Kündigung für MaLo {}: zum Termin besteht eine Vertragsbindung, aber der \
-                 nächstmögliche Kündigungszeitpunkt ist nicht bekannt — {code} muss ihn im \
-                 DTM-Segment nennen (E_3001, Anmerkung zu Z12 bzw. Bedingung [41] zu Z01). \
-                 Angefragter Termin {termin:?}.",
-                anfrage.malo_id
-            ),
-        );
     };
     let entry = list
         .iter()

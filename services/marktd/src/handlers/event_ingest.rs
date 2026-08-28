@@ -633,9 +633,11 @@ pub async fn derive_supply_state(
             None | Some("ERSATZVERSORGUNG") => {
                 Some(mako_markt::repository::LieferStatus::Ersatzversorgung)
             }
-            // Vertragliche Ersatzbelieferung (ZE3) and §38a Übergangsversorgung
-            // (ZZD) are contract regimes outside the statutory fallback states —
-            // the operator records them via the REST upsert.
+            // Vertragliche Ersatzbelieferung (ZE3) — which is also how the
+            // §38a Übergangsversorgung arrives, marked by the Transaktionsgrund
+            // ZZD rather than by a Versorgungsart of its own — is a contract
+            // regime outside the statutory fallback states, so the operator
+            // records it via the REST upsert.
             Some(other) => {
                 warn!(
                     malo_id = %malo_str,
