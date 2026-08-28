@@ -536,6 +536,85 @@ fn msb_beendigung_before_delivery_is_rejected() {
 
 // ── Regressions ───────────────────────────────────────────────────────────────
 
+/// **UC 4.4 is a notification, not an answer.** The MSB ends the delivery on an
+/// MSB change at the Messlokation, on its contract with the AN ending, or on
+/// technical grounds — none of which waits for the ESA to be idle.
+///
+/// An ESA sitting out its 2-Werktage Storno window while the MeLo moves to
+/// another MSB is an ordinary race. Refusing the IFTSTA there would leave the
+/// process `Beliefert` for a subscription that has ended — holding its
+/// (Meldepunkt, Messprodukt) business key, and going quiet in a way the
+/// delivery surveillance reports as a gap.
+#[test]
+fn the_msb_may_end_a_delivery_with_a_stornierung_in_flight() {
+    let s = beliefert();
+    let (s, _) = step(
+        &s,
+        C::SendStornierung {
+            message_ref: mref("ESA-ST-9"),
+        },
+    )
+    .unwrap();
+    assert_eq!(s.label(), "StornierungGesendet");
+
+    let (s, out) = step(
+        &s,
+        C::ReceiveBeendigungDurchMsb {
+            message_ref: mref("IFT-21042-9"),
+            beendigung_zum: datetime!(2026-08-01 00:00 UTC),
+            reason: Some("Neuzuordnung der Messlokation".to_owned()),
+        },
+    )
+    .unwrap();
+    assert_eq!(s.label(), "Beendet");
+    assert!(matches!(
+        out.events.first(),
+        Some(EsaWertebestellungEvent::BeendetDurchMsb { .. })
+    ));
+    // …and a terminated process releases its business key, so the ESA can order
+    // those values again from whoever operates the Messlokation now.
+    use mako_engine::workflow::OccupiesBusinessKey as _;
+    assert!(!s.occupies_business_key());
+}
+
+/// **The prices tell an Angebot from an Ablehnung — never the Bindungsfrist.**
+/// QUOTES AHB 1.1a §4.3 makes `DTM+273` Muss on the only 15003 use case it
+/// publishes, so a refusal carries one too; what a priced offer has is the
+/// `SG31 PRI` position block and the `PIA+5 …:SRW` OBIS list.
+///
+/// `AngebotErhalten` means „an offer stands that the ESA may order against".
+/// Letting an unpriced 15003 create it parked the process in a state whose
+/// Bindungsfrist could only ever expire, holding the business key meanwhile.
+#[test]
+fn an_unpriced_quotes_is_not_an_angebot() {
+    let (s, _) = step(&S::default(), werteanfrage()).unwrap();
+    let err = W::handle(
+        &s,
+        C::ReceiveAngebot {
+            angebot: Box::default(),
+            fruehester_start: None,
+            message_ref: mref("QUO-LEER"),
+            bindungsfrist: datetime!(2099-01-01 00:00 UTC),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("ReceiveAnfrageAblehnung"),
+        "got: {err}"
+    );
+
+    // The same message through the Ablehnung path ends the process cleanly.
+    let (s, _) = step(
+        &s,
+        C::ReceiveAnfrageAblehnung {
+            message_ref: Some(mref("QUO-LEER")),
+            reason: Some("Gerätetechnik misst die angeforderten Werte nicht".to_owned()),
+        },
+    )
+    .unwrap();
+    assert_eq!(s.label(), "Abgelehnt");
+}
+
 /// UC 4.1 Nr. 3 admits no Bestellung past the Bindungsfrist, so `AngebotErhalten`
 /// can never advance once it lapses. Leaving the process there kept it occupying
 /// its (Meldepunkt, Messprodukt) business key for ever: `SendBestellung` could

@@ -74,13 +74,13 @@ role-lf-strom  = ["mako-pruefung/role-lf"]  # LF answers 55007/55010/55013/55016
 role-lf-gas    = ["mako-pruefung/role-lf"]  # LF Gas 44007 / 44010 / 44013 / 44016
 role-nb-strom  = ["mako-pruefung/role-nb"]  # GPKE STP (55001, 55077, 55004, 55600/55601), EoG closure
 role-nb-gas    = ["mako-pruefung/role-nb"]  # GeLi Gas An-/Abmeldung STP (44001, 44004)
-role-msb-strom = []                          # REQOTE→QUOTES, §14a ORDRSP, MSB-answered MSB-Wechsel,
+role-msb       = ["mako-pruefung/role-msb"]   # REQOTE→QUOTES, §14a ORDRSP, MSB-answered MSB-Wechsel,
                                              # ESA Wertebestellung (35003/17007/17008/39002)
 
 lf-only    = ["role-lf-strom", "role-lf-gas"]
 nb-only    = ["role-nb-strom", "role-nb-gas"]
-msb-only   = ["role-msb-strom"]
-integrated = ["role-lf-strom", "role-lf-gas", "role-nb-strom", "role-nb-gas", "role-msb-strom"]
+msb-only   = ["role-msb"]
+integrated = ["role-lf-strom", "role-lf-gas", "role-nb-strom", "role-nb-gas", "role-msb"]
 ```
 
 **PID 55016 „Kündigung" is not an NB process.** The *Anwendungsübersicht der
@@ -848,7 +848,7 @@ Alert when:
 
 `processd` evaluates inbound WiM MSB-Wechsel requests automatically:
 `role-nb-strom` answers 55042 (Anmeldung MSB) and 55051 (Ende MSB),
-`role-msb-strom` answers 55039 (Kündigung MSB) and 55168 (Verpflichtungsanfrage).
+`role-msb` answers 55039/44039 (Kündigung MSB) and 55168/44168 (Verpflichtungsanfrage) — **beide Sparten** under one feature, because AWH WiM Gas 2.0 restates WiM Strom Teil 1 use-case for use-case and one handler serves both.
 STP target: **≥ 80 %**.
 
 The Prüfschritte are `mako_pruefung::msb`, the executable form of the published
@@ -954,7 +954,7 @@ Set `auto_preisanfrage = false` to route every REQOTE to the approval queue inst
 ## MSB module — ESA Wertebestellung (WiM Teil 2 Kap. 4)
 
 Serving an Energieserviceanbieter is a **mandatory** Zusatzleistung (§34 Abs. 2
-S. 2 Nr. 10 MsbG), so `role-msb-strom` always carries these four obligations:
+S. 2 Nr. 10 MsbG), so `role-msb` always carries these four obligations:
 
 | Inbound PID | Process | Answered with | Frist | EBD |
 |---|---|---|---|---|
@@ -963,7 +963,7 @@ S. 2 Nr. 10 MsbG), so `role-msb-strom` always carries these four obligations:
 | **39002** | Stornierung der Bestellung | ORDRSP 19013/19014 | 2 WT | `E_0257` |
 | **17008** | Abbestellung von Werten | ORDRSP 19011/19012 | 2 WT | `E_0254` |
 
-The Prüfschritte are `mako_pruefung::msb::esa`; `esa_module.rs` is the plumbing.
+The Prüfschritte are `mako_pruefung::esa::wertebestellung`; `esa_module.rs` is the plumbing.
 
 ### Decision pipeline (`esa_module.rs`)
 
@@ -973,7 +973,7 @@ de.mako.process.initiated (PID 35003 / 17007 / 17008 / 39002)
   → GET marktd /api/v1/esa/consent-check           ← Einwilligung still valid?    (E_0256 Nr. 8)
   → GET marktd /api/v1/melos/{melo}/msb?at=        ← MSB assigned for the period? (E_0256 Nr. 7)
   → GET marktd /api/v1/malos/{malo}/buendel?at=    ← one MSB across the bundle?  (E_0256 Nr. 11)
-  → mako_pruefung::msb::esa::pruefe_{anfrage,bestellung,stornierung,beendigung}
+  → mako_pruefung::esa::wertebestellung::pruefe_{anfrage,bestellung,stornierung,beendigung}
       Accept   → wim.wertebestellung.*-beantworten (Zustimmungscode) [if auto_accept]
                  else approval_queue with the WiM Frist
       Reject   → the same command with the tree's Ablehnungscode      [if auto_reject]
@@ -1008,19 +1008,51 @@ candidate commands (`anbieten` / `anfrage-ablehnen`) attached.
 Anfrage against today, the Bestellung against the Zeitraum der
 Messwertermittlung.
 
-### What escalates on the order PIDs
+### The Messprodukt-Katalog answers the commercial question
 
-Three Prüfschritte reach facts no mako service holds, so the walk escalates
-rather than guessing:
+Whether *this* MSB offers an optional Kapitel-4.6 product is commercial, and
+`marktd`'s `esa_messprodukt_katalog` is where an operator states it —
+`PUT /api/v1/esa/messprodukte/{msb_mp_id}`, dated, with **separate flags for the
+two Abo modes** because `E_0256` refuses them with different codes (`A04` for a
+declined Abo, `A05` for a declined one-shot).
 
-- **Optional Messprodukte.** Whether *this* MSB offers a product is commercial.
-  The seven Pflichtprodukte (BNetzA *Mitteilung Nr. 3*) are answered; an
-  otherwise-clean order for an optional one escalates. „Pflicht" is **dated** —
-  the Codeliste lists `9991 00000 077 1` and `078 9` as „Optional ab 01.10.2023,
-  Pflicht ab 06.08.2024" — and a Vergangenheitswerte-Bestellung may reach back
-  before the cut-over, where the MSB's discretion still stood.
-- **Gerätetechnik** (`E_0252` Nr. 6, `E_0256` Nr. 9) is a device fact mako does
-  not hold, so it is never asserted false.
+Two rules keep the catalogue from deciding things it may not:
+
+- **Nothing recorded is not a refusal.** An absent row escalates; only a
+  catalogue that exists and omits the product yields `A02`/`A04`/`A05`. Those
+  codes are statements the MSB made, and a table nobody filled in has made none.
+- **The Pflichtprodukte are outside the operator's gift.** BNetzA *Mitteilung
+  Nr. 3* removed the MSB's discretion over the seven and §34 Abs. 2 S. 2 Nr. 10
+  MsbG makes serving an ESA a mandatory Zusatzleistung, so one is served
+  whatever the catalogue holds. „Pflicht" is **dated** — the Codeliste lists
+  `9991 00000 077 1` and `078 9` as „Optional ab 01.10.2023, Pflicht ab
+  06.08.2024" — and a Vergangenheitswerte-Bestellung may reach back before the
+  cut-over, where the MSB's discretion still stood and the catalogue is the
+  whole answer again.
+
+### Gerätetechnik — a device fact, read from the Zähler-Stammdaten
+
+`E_0252` Nr. 6 and `E_0256` Nr. 9 ask whether the installed equipment can
+produce the values the Messprodukt names. Three rules answer it from the
+Messlokation's own meters, and each is a fact about the device:
+
+| Rule | Source |
+|---|---|
+| A Kapitel-**4.6.2** product without an **iMS** cannot be served | UC 4.1.1 Vorbedingung: „Bei Übermittlung von Werten aus dem iMS: Alle … benötigten Messlokationen sind mit einem iMS ausgestattet." |
+| A **direction** with no register | `Zaehlwerk.richtung` — `AUSSP` Verbrauch, `EINSP` Erzeugung |
+| **Blindarbeit** with no Blindarbeit register | the OBIS **C group**: `1`/`2` Wirkarbeit, `3`–`8` Blindarbeit |
+
+Several meters at one Messlokation are judged on the **union** of their
+registers: the values come from the location, not from one device.
+
+### What still escalates on the order PIDs
+
+- **A ¼h Lastgang on a non-iMS meter.** It plainly needs registrierende
+  Leistungsmessung, but mako holds the `Zaehlertyp` and not the RLM capability,
+  and a refusal is a binding statement. An operator confirms it.
+- **No meter, or no registers, on record.** „Not established" is not
+  „established as impossible", and refusing there denies a §34-mandated
+  Zusatzleistung on a missing record.
 - **An unknown Abo start.** `E_0254` Prüfschritt 2 compares the requested end
   against it, and it is the `DTM+203` of the *Bestellung* — carried on the
   `ProcessInitiated` payload as `abo_beginn`. Never the Bindungsfrist of the

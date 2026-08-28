@@ -248,8 +248,11 @@ pub(super) fn cmd_gpke_abrechnung_annehmen<'a>(
         // The ERP (or invoicd) must supply the original INVOIC message-ref so
         // we can route to the correct billing process.
         let invoice_ref = extract_invoice_ref(p)?;
+        let message_ref = remadv_message_ref(p);
         dispatch_to_process::<GpkeAbrechnungWorkflow, _>(s, &invoice_ref, "gpke-abrechnung", || {
-            InvoicCommand::SettleInvoice
+            InvoicCommand::SettleInvoice {
+                message_ref: message_ref.clone(),
+            }
         })
         .await
     })
@@ -268,8 +271,14 @@ pub(super) fn cmd_gpke_abrechnung_ablehnen<'a>(
             .and_then(|v| v.as_str())
             .unwrap_or("Automatisch ermittelte Abweichung")
             .to_owned();
+        let message_ref = remadv_message_ref(p);
+        let antwort = remadv_antwort(p);
         dispatch_to_process::<GpkeAbrechnungWorkflow, _>(s, &invoice_ref, "gpke-abrechnung", || {
-            InvoicCommand::DisputeInvoice { reason }
+            InvoicCommand::DisputeInvoice {
+                message_ref: message_ref.clone(),
+                reason: reason.clone(),
+                antwort: antwort.clone(),
+            }
         })
         .await
     })

@@ -82,6 +82,18 @@ pub const REMADV_PIDS: &[u32] = &[33001, 33002, 33003, 33004];
 /// The single REMADV PID that confirms payment. Everything else disputes it.
 pub const REMADV_CONFIRMATION_PID: u32 = 33001;
 
+/// The REMADV a payer **sends** to confirm — the Zahlungsavis. It carries no
+/// `AJT` at all (REMADV AHB 1.0a § 3.1.1): agreement needs no Antwortcode.
+pub const ZAHLUNGSAVIS_PID: u32 = REMADV_CONFIRMATION_PID;
+
+/// The REMADV a payer sends to refuse an invoice whose tree answers with **one**
+/// code — the plain „Abweisung" of REMADV AHB 1.0a § 3.1.1.
+///
+/// Not the default for every refusal: § 3.1.2's 33003 / 33004 pair is what
+/// carries a *set* of codes, and DE 1082 admits a different list of trees on
+/// each. [`RemadvAntwort::remadv_pid`] is what picks between them.
+pub const ABWEISUNG_PID: u32 = 33002;
+
 /// COMDIS Prüfidentifikator for an inbound Ablehnung of a REMADV (payer side).
 ///
 /// Sent by the invoicer when it refuses the payer's REMADV — e.g. because the
@@ -161,6 +173,72 @@ pub struct InvoicData {
     /// where the document was rendered here rather than parsed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rechnung: Option<Box<Rechnung>>,
+    /// `SG1 RFF+ACE` — the **order this invoice answers**.
+    ///
+    /// Muss on the WiM- and MSB-Rechnung (INVOIC AHB 1.0b segment 00020). What
+    /// it names follows the Rechnungstyp: the ORDERS for `KON`/`TEC`, the
+    /// QUOTES for `MSB`.
+    ///
+    /// A process fact rather than a BO4E field, because BO4E's `Rechnung`
+    /// models the document and not the order behind it. `E_0264` Prüfschritt 40
+    /// („Basiert die Rechnung auf einer Bestellung?") is what reads it — WiM
+    /// Teil 2 UC 4.5.1: „Eine Rechnung referenziert auf die zugrundeliegende
+    /// Bestellung."
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bestellung_ref: Option<String>,
+    /// `IMD+7081` — the Rechnungstyp, and on PID 31009 the **Use-Case**.
+    ///
+    /// `KON` „Abrechnung von Konfigurationen (Universalbestellprozess)" is the
+    /// ESA billing of WiM Teil 2 Kap. 4.5 stated on the wire; `MSB` is the
+    /// Messstellenbetrieb billed toward NB or LF, `TEC` the Änderung der
+    /// Technik. One PID, three Use-Cases, three Entscheidungsbäume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rechnungstyp: Option<String>,
+}
+
+/// One `AJT` of a Nicht-Zahlungsavis — a published Antwortcode, the Ebene it
+/// came from and, on the Positionsebene, the Positionsnummer it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RemadvBefund {
+    /// `AJT` DE 4465 — the Code des Prüfschritts.
+    pub code: String,
+    /// `"kopf"`, `"position"` or `"summe"`. The Kopf- and Summenebene ride
+    /// REMADV 33003, the Positionsebene 33004.
+    pub ebene: String,
+    /// `SG26 LIN` Positionsnummer, on a position-level code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub positionsnummer: Option<u16>,
+    /// The written Erläuterung, where the code's own Hinweis requires one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// The market answer a Nicht-Zahlungsavis carries.
+///
+/// Not a bare code: `AJT` DE 1082 names the **Entscheidungsbaum**, and the same
+/// letter means different things across trees — `A70` is the Netznutzungs-
+/// Summenprüfung of `E_0406` and is undefined in the ESA tree `E_0264`, whose
+/// own total check is `A24`. The tree therefore travels with the codes, and
+/// `mako_pruefung::codes::rechnungspruefung` is what picks it from the PID
+/// and the recipient's Marktrolle.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RemadvAntwort {
+    /// `AJT` DE 1082 — the EBD that publishes the codes (`E_0264`, `E_0406`).
+    pub ebd: String,
+    /// The refusals. Empty is not a refusal and must not reach this type.
+    pub befunde: Vec<RemadvBefund>,
+    /// The REMADV Prüfidentifikator this answer must ride — **33002** for a
+    /// tree that answers with one code, **33003** („Abweisung Kopf und Summe")
+    /// or **33004** („Abweisung Position") for one that answers with a set.
+    pub remadv_pid: u32,
+}
+
+impl RemadvAntwort {
+    /// The head code — what a single-`AJT` rendering states.
+    #[must_use]
+    pub fn erster_code(&self) -> Option<&str> {
+        self.befunde.first().map(|b| b.code.as_str())
+    }
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -275,6 +353,12 @@ pub enum InvoicEvent {
         /// BO4E invoice object for downstream plausibility checking.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rechnung: Option<Box<Rechnung>>,
+        /// `SG1 RFF+ACE` — the order this invoice answers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bestellung_ref: Option<String>,
+        /// `IMD+7081` — the Rechnungstyp, and on 31009 the Use-Case.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rechnungstyp: Option<String>,
     },
     /// AHB validation succeeded; the settlement window opens.
     ValidationPassed {
@@ -374,6 +458,11 @@ pub enum InvoicCommand {
         validation_errors: Vec<String>,
         /// BO4E invoice object, when the adapter translated one.
         rechnung: Option<Box<Rechnung>>,
+        /// `SG1 RFF+ACE` — the order this invoice answers (INVOIC AHB 1.0b
+        /// segment 00020, Muss on the WiM- and MSB-Rechnung).
+        bestellung_ref: Option<String>,
+        /// `IMD+7081` — the Rechnungstyp; `KON` is the ESA Use-Case.
+        rechnungstyp: Option<String>,
     },
     /// **Issuer role:** record an outbound INVOIC so the payer's REMADV
     /// correlates back to it.
@@ -403,12 +492,32 @@ pub enum InvoicCommand {
         /// EDIFACT message reference of the COMDIS.
         comdis_ref: MessageRef,
     },
-    /// Settle the invoice — a positive answer goes back to the issuer.
-    SettleInvoice,
-    /// Dispute the invoice — a negative answer goes back to the issuer.
+    /// Settle the invoice — REMADV **33001** Zahlungsavis to the issuer.
+    SettleInvoice {
+        /// Belegnummer of the outbound REMADV. The issuer correlates its
+        /// invoice by the `RFF` this message echoes, so it must equal the wire
+        /// UNH reference the renderer emits.
+        message_ref: MessageRef,
+    },
+    /// Dispute the invoice — a Nicht-Zahlungsavis to the issuer.
+    ///
+    /// Settlement is „ganz oder gar nicht" (REMADV AHB 1.0a § 3): there is no
+    /// Teilzahlung, so this refuses the whole invoice.
     DisputeInvoice {
-        /// Human-readable dispute reason.
+        /// Belegnummer of the outbound REMADV.
+        message_ref: MessageRef,
+        /// Human-readable dispute reason — `SG7 FTX+ABO`.
         reason: String,
+        /// The published Antwortcode(s) the refusal states, and the tree that
+        /// publishes them.
+        ///
+        /// `SG7 AJT` is **Muss** on every Nicht-Zahlungsavis (REMADV AHB 1.0a
+        /// § 3.1.1 / § 3.1.2), so a refusal without one is a message the issuer
+        /// cannot act on. `None` is accepted only from a caller that could not
+        /// resolve a tree at all, and the renderer then refuses to put an
+        /// incomplete answer on the wire.
+        #[allow(clippy::struct_field_names)]
+        antwort: Option<RemadvAntwort>,
     },
     /// The settlement deadline fired before an answer was given.
     TimeoutExpired {
@@ -461,6 +570,8 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
                 document_date,
                 pruefidentifikator,
                 rechnung,
+                bestellung_ref,
+                rechnungstyp,
             } => InvoicState::InvoicReceived(InvoicData {
                 pruefidentifikator: *pruefidentifikator,
                 sender: sender.clone(),
@@ -468,6 +579,8 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
                 document_date: document_date.clone(),
                 invoice_ref: invoice_ref.clone(),
                 rechnung: rechnung.clone(),
+                bestellung_ref: bestellung_ref.clone(),
+                rechnungstyp: rechnungstyp.clone(),
             }),
 
             InvoicEvent::ValidationPassed { .. } => match state {
@@ -476,11 +589,23 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
             },
 
             InvoicEvent::InvoiceSettled => match state {
+                // The **second round**. WiM Teil 2 Kap. 4.5.2 Nr. 4 has the
+                // payer answer again after the issuer's COMDIS, and this time
+                // conceding: the invoice stands and is paid.
+                InvoicState::ComdisRejected(data) => InvoicState::Settled(data),
                 InvoicState::ValidationPassed(data) => InvoicState::Settled(data),
                 other => other,
             },
 
             InvoicEvent::InvoiceDisputed { reason } => match state {
+                // The second round, refusing again — `E_0266` `A25`, „der MSB
+                // konnte nicht alle Einwände entkräften". A third round is not
+                // published: „kommt es zu einer erneuten Ablehnung durch den
+                // MSB, ist eine bilaterale Klärung notwendig".
+                InvoicState::ComdisRejected(data) => InvoicState::Disputed {
+                    data,
+                    reason: reason.clone(),
+                },
                 InvoicState::ValidationPassed(data) => InvoicState::Disputed {
                     data,
                     reason: reason.clone(),
@@ -517,6 +642,10 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
                 document_date: document_date.clone(),
                 invoice_ref: invoice_ref.clone(),
                 rechnung: None,
+                // The issuer rendered the document here; the reference it put
+                // on the wire is the sender's own and is not read back.
+                bestellung_ref: None,
+                rechnungstyp: None,
             }),
 
             InvoicEvent::RemadvReceived {
@@ -560,6 +689,8 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
                 validation_passed,
                 validation_errors,
                 rechnung,
+                bestellung_ref,
+                rechnungstyp,
             } => {
                 if !matches!(state, InvoicState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -578,6 +709,8 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
                     document_date,
                     pruefidentifikator: pid,
                     rechnung: rechnung.clone(),
+                    bestellung_ref: bestellung_ref.clone(),
+                    rechnungstyp: rechnungstyp.clone(),
                 }];
                 let mut outbox: Vec<PendingOutbox> = Vec::new();
                 if validation_passed {
@@ -599,6 +732,12 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
                                 "workflow":     F::WORKFLOW_NAME,
                                 "rechnung":     serde_json::to_value(rechnung.as_deref())
                                     .unwrap_or(serde_json::Value::Null),
+                                // The two EDIFACT facts BO4E has no field for.
+                                // `E_0264` Prüfschritt 40 needs the first, and
+                                // the second states the Use-Case on the wire —
+                                // one PID, three of them.
+                                "bestellung_ref": bestellung_ref,
+                                "rechnungstyp":   rechnungstyp,
                             }),
                         )
                         // Caused by ValidationPassed (index 1).
@@ -612,27 +751,44 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
                 Ok(WorkflowOutput::with_outbox(events, outbox))
             }
 
-            InvoicCommand::SettleInvoice => {
-                if !matches!(state, InvoicState::ValidationPassed(_)) {
+            InvoicCommand::SettleInvoice { message_ref } => {
+                if !answerable(state) {
                     return Err(WorkflowError::invalid_state(
-                        "ValidationPassed",
+                        "ValidationPassed|ComdisRejected",
                         state.label(),
                     ));
                 }
                 Ok(WorkflowOutput::with_outbox(
                     vec![InvoicEvent::InvoiceSettled],
-                    vec![completion_outbox::<F>(state, "settled", None)],
+                    vec![
+                        remadv_outbox(state, ZAHLUNGSAVIS_PID, &message_ref, None, None),
+                        completion_outbox::<F>(state, "settled", None),
+                    ],
                 ))
             }
 
-            InvoicCommand::DisputeInvoice { reason } => {
-                if !matches!(state, InvoicState::ValidationPassed(_)) {
+            InvoicCommand::DisputeInvoice {
+                message_ref,
+                reason,
+                antwort,
+            } => {
+                if !answerable(state) {
                     return Err(WorkflowError::invalid_state(
-                        "ValidationPassed",
+                        "ValidationPassed|ComdisRejected",
                         state.label(),
                     ));
                 }
-                let outbox = vec![completion_outbox::<F>(state, "disputed", Some(&reason))];
+                // REMADV AHB 1.0a § 3.1.1/§ 3.1.2 make `SG7 AJT` Muss on every
+                // Nicht-Zahlungsavis, and the Prüfidentifikator follows the
+                // shape of the answer: 33002 for a tree that states one code,
+                // 33003/33004 for one that states a set. Defaulting to 33002
+                // here would put an `E_0264` code on a Prüfidentifikator whose
+                // DE 1082 does not admit that tree.
+                let pid = antwort.as_ref().map_or(ABWEISUNG_PID, |a| a.remadv_pid);
+                let outbox = vec![
+                    remadv_outbox(state, pid, &message_ref, Some(&reason), antwort.as_ref()),
+                    completion_outbox::<F>(state, "disputed", Some(&reason)),
+                ];
                 Ok(WorkflowOutput::with_outbox(
                     vec![InvoicEvent::InvoiceDisputed { reason }],
                     outbox,
@@ -749,6 +905,121 @@ impl<F: InvoicFamily> Workflow for InvoicWorkflow<F> {
 }
 
 /// The `ProcessCompleted` outbox entry for a settled or disputed invoice.
+/// The states a payer may answer an invoice from.
+///
+/// `ValidationPassed` is the first round. **`ComdisRejected` is the second**:
+/// the issuer answered the payer's Nicht-Zahlungsavis with a COMDIS 29001
+/// claiming its invoice was correct, and the payer owes another answer — WiM
+/// Teil 2 Kap. 4.5.2 Nr. 4 for an ESA, by the Zahlungsziel, and the tree is
+/// `E_0266` rather than `E_0264` (its Prüfschritt 1 asks whether the COMDIS
+/// actually rebutted the objections, which `E_0264` does not publish a code
+/// for).
+///
+/// Without this arm `ComdisRejected` is a dead end: the process records the
+/// COMDIS and can never answer it, so the round that either releases the
+/// payment or ends in bilateral clearing is unreachable.
+const fn answerable(state: &InvoicState) -> bool {
+    matches!(
+        state,
+        InvoicState::ValidationPassed(_) | InvoicState::ComdisRejected(_)
+    )
+}
+
+/// Build the **outbound REMADV** — the answer the invoice issuer is waiting on.
+///
+/// The market answer and the ERP notification are two different messages with
+/// two different audiences: `ProcessCompleted` tells this operator's own ERP
+/// what happened, and only this reaches the counterparty. Both go out, because
+/// an invoice recorded as answered in the § 147 AO trail and unanswered on the
+/// wire is the same invoice.
+///
+/// The recipient is the invoice's **issuer**: a REMADV travels back up the
+/// invoice, so sender and receiver are the mirror of the INVOIC's.
+fn remadv_outbox(
+    state: &InvoicState,
+    pid: u32,
+    message_ref: &MessageRef,
+    reason: Option<&str>,
+    antwort: Option<&RemadvAntwort>,
+) -> PendingOutbox {
+    let data = state.data();
+    let issuer = data.map(|d| d.sender.as_str()).unwrap_or_default();
+    let mut payload = serde_json::json!({
+        "pid":         pid,
+        "sender":      data.map(|d| d.recipient.as_str()).unwrap_or_default(),
+        "receiver":    issuer,
+        "message_ref": message_ref.as_str(),
+        // BGM DE 1001: `481` Zahlungsavis, `239` Abgelehnte Forderung
+        // (Nicht-Zahlungsavis) — REMADV AHB 1.0a § 3.1.1.
+        "document_code": if pid == ZAHLUNGSAVIS_PID { "481" } else { "239" },
+        // `SG5 RFF` — the invoice this answers. The issuer correlates on it.
+        "invoice_ref": data.map(|d| d.invoice_ref.to_string()).unwrap_or_default(),
+        "document_date": data.map(|d| d.document_date.clone()).unwrap_or_default(),
+    });
+    let Some(obj) = payload.as_object_mut() else {
+        return PendingOutbox::new("REMADV", issuer, payload);
+    };
+    // `SG5` — the invoice being answered, its fälliger Betrag and its
+    // Rechnungsdatum, all **Muss** (REMADV AHB 1.0a § 3.1.1 segments
+    // 00012–00015). Read off the stored BO4E `Rechnung`: the payer side keeps
+    // it precisely so the answer need not go back to the EDIFACT archive.
+    //
+    // The **Überweisungsbetrag** is not a copy of the fällige Betrag: condition
+    // `[926]` fixes it to `0` on an Abweisung, because refusing an invoice
+    // transfers nothing, and conditions `[3]`/`[4]` negate it on a Gutschrift.
+    if let Some(r) = data.and_then(|d| d.rechnung.as_deref()) {
+        let faellig = r
+            .zu_zahlen
+            .as_ref()
+            .or(r.gesamtbrutto.as_ref())
+            .and_then(|b| b.wert)
+            .unwrap_or_default();
+        let gutschrift = r.ist_storno == Some(true);
+        let ueberweisung = if pid == ZAHLUNGSAVIS_PID {
+            if gutschrift { -faellig } else { faellig }
+        } else {
+            rust_decimal::Decimal::ZERO
+        };
+        obj.insert(
+            "rechnungsbezug".to_owned(),
+            serde_json::json!({
+                // `SG5 DOC` DE 1001. A Storno of a self-billed invoice is `Z25`,
+                // of an ordinary one `457`; otherwise `389` self-billed and
+                // `380` Handelsrechnung.
+                "dokumentenart": match (gutschrift, r.ist_original == Some(false)) {
+                    (true, true) => "Z25",
+                    (true, false) => "457",
+                    (false, true) => "389",
+                    (false, false) => "380",
+                },
+                "rechnungsnummer": r.rechnungsnummer.clone().unwrap_or_default(),
+                "faelliger_betrag": faellig.round_dp(2).to_string(),
+                "ueberweisungsbetrag": ueberweisung.round_dp(2).to_string(),
+                "rechnungsdatum": r
+                    .rechnungsdatum
+                    .map(|d| d.date().to_string())
+                    .unwrap_or_default(),
+            }),
+        );
+    }
+    if let Some(reason) = reason {
+        obj.insert("ablehnungsgrund".to_owned(), serde_json::json!(reason));
+    }
+    if let Some(a) = antwort {
+        // `SG7 AJT` DE 4465 / DE 1082. The head code renders as the single
+        // `AJT` every REMADV carries; the full set travels alongside it for the
+        // itemised 33003/33004 rendering and for the audit trail, which has to
+        // show every Prüfschritt that refused.
+        obj.insert(
+            "antwort_code".to_owned(),
+            serde_json::json!(a.erster_code()),
+        );
+        obj.insert("antwort_ebd".to_owned(), serde_json::json!(a.ebd));
+        obj.insert("antwort_befunde".to_owned(), serde_json::json!(a.befunde));
+    }
+    PendingOutbox::new("REMADV", issuer, payload)
+}
+
 fn completion_outbox<F: InvoicFamily>(
     state: &InvoicState,
     outcome: &str,

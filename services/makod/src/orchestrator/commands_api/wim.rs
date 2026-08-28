@@ -147,8 +147,11 @@ pub(super) fn cmd_wim_rechnung_annehmen<'a>(
 > {
     Box::pin(async move {
         let invoice_ref = extract_invoice_ref(p)?;
+        let message_ref = remadv_message_ref(p);
         dispatch_to_process::<WimInvoicWorkflow, _>(s, &invoice_ref, "wim-invoic", || {
-            InvoicCommand::SettleInvoice
+            InvoicCommand::SettleInvoice {
+                message_ref: message_ref.clone(),
+            }
         })
         .await
     })
@@ -167,8 +170,18 @@ pub(super) fn cmd_wim_rechnung_ablehnen<'a>(
             .and_then(|v| v.as_str())
             .unwrap_or("Automatisch ermittelte Abweichung — WiM 31009")
             .to_owned();
+        // `SG7 AJT` is Muss on a Nicht-Zahlungsavis, and the tree it names
+        // depends on who received the invoice: 31009 is `E_0264` toward an ESA,
+        // `E_0566` toward an NB and `E_0210` toward an LF. `invoicd` resolves
+        // all three and puts them in the payload.
+        let message_ref = remadv_message_ref(p);
+        let antwort = remadv_antwort(p);
         dispatch_to_process::<WimInvoicWorkflow, _>(s, &invoice_ref, "wim-invoic", || {
-            InvoicCommand::DisputeInvoice { reason }
+            InvoicCommand::DisputeInvoice {
+                message_ref: message_ref.clone(),
+                reason: reason.clone(),
+                antwort: antwort.clone(),
+            }
         })
         .await
     })

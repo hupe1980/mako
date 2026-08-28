@@ -174,6 +174,23 @@ pub struct AntwortObligation {
     pub source: &'static str,
 }
 
+/// IFTSTA 21029 — the gMSB's Vorabinformation zum Ersteinbau eines iMS.
+///
+/// One Prüfidentifikator, four Prozessschritte, three recipients: the wMSB
+/// (WiM Teil 1 Kap. 3.5.2 Nr. 1), the LF (Nr. 3) and the NB (Nr. 4). Only the
+/// wMSB owes an answer, which is why this is a trigger here and the other three
+/// legs are Vorlauffristen on the *sender* — see
+/// [`vorlauf`](crate::vorlauf)'s `wim.vorabinformation-ersteinbau-ims` entries.
+pub const ERSTEINBAU_VORABINFORMATION_PID: u32 = 21_029;
+
+/// The wettbewerblicher MSB's window to answer a Vorabinformation zum
+/// Ersteinbau eines iMS, in Werktage (WiM Teil 1 Kap. 3.5.2 Nr. 2).
+///
+/// The same three Werktage the Vorlauffrist table states from the sender's
+/// side, and deliberately one number: the wMSB's answer is what the gMSB's
+/// „3 Monate und 3 WT" lead time buys, so the two must not drift.
+pub const ERSTEINBAU_ANTWORT_WERKTAGE: u32 = 3;
+
 /// The MSB's window to answer an Anfrage einer Konfiguration with a QUOTES
 /// Angebot or an IFTSTA Ablehnung, in Werktage (GPKE Teil 3 SD Prozessschritt 2).
 ///
@@ -781,7 +798,8 @@ pub fn gas_lieferbeginn_antwort_bei_ausbleiben(
 /// | 15002 | Angebot Rechnungsabwicklung über LF | LF | 8 WT | `E_0205`/`E_0208` |
 /// | 17006 | Beendigung Rechnungsabwicklung über LF | Gegenseite | 8 WT | `E_0206`/`E_0209` |
 /// | 35005 | Anfrage Angebot Änderung Technik | MSB | 10 WT | — |
-/// | 17011 | Beauftragung Änderung Technik | MSB | 10 WT | `E_0249`/`E_0250` ¹ |
+/// | 17011 | Beauftragung Änderung Technik | MSB | 10 WT | `E_0249`/`E_0250`/`E_0279`/`E_0283` ¹ |
+/// | 21029 | Vorabinformation Ersteinbau iMS | **wMSB** | 3 WT | `E_0233` |
 ///
 /// **The MSB-Wechsel windows are not one flat number** — 3 / 5 / 7 / 1
 /// Werktage („Unverzüglich, jedoch spätester ÜT ist der *n*. WT nach dem ÜT von
@@ -803,8 +821,12 @@ pub fn gas_lieferbeginn_antwort_bei_ausbleiben(
 /// forward window it is not. Size it with
 /// [`vorlauf::vorlauf("wim.antwort-geraetewechselabsicht")`](crate::vorlauf::vorlauf).
 ///
-/// ¹ A PID answered by two trees names neither: `ebd` is `None` for 17011 and
-/// 35004, and the caller picks the tree from the sender's Marktrolle.
+/// ¹ A PID answered by several trees names none: `ebd` is `None` for 17011 and
+/// 35004. 35004 is resolved by the sender's Marktrolle alone (`E_0524` NB /
+/// `E_0531` LF); 17011 needs the Marktrolle **and** the ORDERS' Zuordnung zu
+/// einem Objekt, because WiM Teil 1's direct Beauftragung and the AWH's
+/// Bestellung nach Angebot share both the request and the answer PIDs. See
+/// `mako_pruefung::msb::technik`.
 ///
 /// **23001 has no row.** WiM Teil 2 Kap. 1.2 Nr. 2 states two windows for the
 /// Störungsmeldung — 3 Werktage for a kME ohne RLM or an mME, 1 for a kME mit
@@ -966,15 +988,29 @@ pub const WIM: &[AntwortObligation] = &[
         name: "Beauftragung Änderung der Technik an der Messlokation",
         answered_by: "MSB",
         antwort_pids: (19_005, 19_006),
-        // Two trees on one PID: `E_0249` when the NB ordered the change,
-        // `E_0250` when the LF did — the LF variant adds the Vollmacht
-        // Prüfschritte `A03`/`A04`. The PID cannot pick between them, so none
-        // is named here; `mako_pruefung::msb::technikaenderung_ebd` takes the
-        // sender's Marktrolle instead.
+        // **Four** trees on one PID pair, and the PID picks none of them.
+        // WiM Teil 1 Kap. 3.3 answers a direct Beauftragung from `E_0249` (NB)
+        // or `E_0250` (LF); the AWH „Änderung der Technik an Lokationen" puts a
+        // REQOTE 35005 / QUOTES 15005 round in front and answers the resulting
+        // Bestellung from `E_0279` (NB) or `E_0283` (LF). The Marktrolle alone
+        // separates only the columns — the rows are told apart by the ORDERS'
+        // Zuordnung zu einem Objekt (`ZO-T15` against `ZG-T24`).
+        // `mako_pruefung::codes::aenderung_der_technik_baum` takes both.
         ebd: None,
         frist: FristShape::WerktageAtCutoff(TECHNIKAENDERUNG_WERKTAGE),
         family: Family::Wim,
         source: "WiM Strom Teil 1 Kap. 3.3.1.2 / 3.3.2.2 Nr. 2 — 10 Werktage",
+    },
+    AntwortObligation {
+        trigger_pid: ERSTEINBAU_VORABINFORMATION_PID,
+        name: "Vorabinformation zum Ersteinbau eines iMS in eine bestehende Messlokation",
+        answered_by: "wMSB",
+        antwort_pids: (21_030, 21_031),
+        ebd: Some("E_0233"),
+        frist: FristShape::WerktageAtCutoff(ERSTEINBAU_ANTWORT_WERKTAGE),
+        family: Family::Wim,
+        source: "WiM Strom Teil 1 Kap. 3.5.2 Nr. 2 — spätester ÜT ist der 3. WT nach dem ÜT \
+                 der Vorabinformation",
     },
     // ── ESA Wertebestellung (WiM Strom Teil 2 Kap. 4) ───────────────────────
     //
@@ -985,13 +1021,20 @@ pub const WIM: &[AntwortObligation] = &[
         trigger_pid: ESA_WERTEANFRAGE_PID,
         name: "Anfrage von Werten (ESA)",
         answered_by: "MSB",
-        // One PID carries both the Angebot and the Ablehnung; they are told
-        // apart by the Bindungsfrist (`DTM+273`), not by a second PID.
+        // One PID carries both the Angebot and the Ablehnung, and what tells
+        // them apart is the **prices**: `SG31 PRI` is Muss inside the
+        // `SG27 LIN` block of a priced offer, and a 15003 that prices nothing
+        // is the MSB declining. Never the Bindungsfrist — QUOTES AHB 1.1a §4.3
+        // makes `DTM+273` Muss on the only 15003 use case it publishes, so a
+        // refusal carries one too.
         antwort_pids: (15_003, 15_003),
-        // `E_0253` „Angebot zur Anfrage prüfen" is published without a tree —
-        // „derzeit ist für diese Entscheidung kein Entscheidungsbaum
-        // notwendig, da keine Antwort gegeben wird" — so the Ablehnung carries
-        // a free-text Begründung rather than an Antwortcode.
+        // The MSB's own tree here is `E_0252` („Anfrage prüfen"), but its codes
+        // never reach the wire: the QUOTES 15003 has **no `AJT` segment at
+        // all**, so the priced offer is the agreement and a refusal states its
+        // grounds in `FTX+ACB`. (`E_0253` is a different tree on the other side
+        // of the relationship — the *ESA's* look at the offer — and the EBD
+        // publishes it without a diagram: „derzeit ist für diese Entscheidung
+        // kein Entscheidungsbaum notwendig, da keine Antwort gegeben wird".)
         ebd: None,
         frist: FristShape::WerktageAtCutoff(ESA_ANGEBOT_WERKTAGE),
         family: Family::Wim,

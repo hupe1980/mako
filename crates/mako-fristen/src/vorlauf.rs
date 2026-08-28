@@ -389,6 +389,22 @@ pub const ANTWORT_IMS_RECHNUNG_NB_WT: u32 = 4;
 /// invoice the NB refused was correct after all (WiM Teil 1 Kap. 6.2 Nr. 3).
 pub const MITTEILUNG_RECHNUNG_KORREKT_WT: u32 = 2;
 
+/// Werktage before the Zahlungsziel by which the **ESA** must answer the MSB's
+/// Rechnung (WiM Strom **Teil 2** Kap. 4.5.2 Nr. 2).
+///
+/// The same lead the NB gets on the iMS-Rechnung, and deliberately not the
+/// LF's: WiM Teil 2 states the ESA's window as „spätester ÜT ist der 4. WT vor
+/// dem Zahlungsziel in der Rechnung", while WiM Teil 1 Kap. 3.6.3.8.2 has the
+/// LF answer *zum* Zahlungsziel. Both invoices arrive as PID 31009 and the
+/// message body does not say which Use-Case it belongs to — the recipient's
+/// Marktrolle does.
+pub const ANTWORT_ESA_RECHNUNG_WT: u32 = 4;
+
+/// Werktage before the Zahlungsziel by which the MSB must tell the **ESA** that
+/// the invoice it refused was correct after all — the COMDIS 29001 of
+/// WiM Strom Teil 2 Kap. 4.5.2 Nr. 3 (`E_0265`).
+pub const MITTEILUNG_ESA_RECHNUNG_KORREKT_WT: u32 = 2;
+
 /// Werktage the Zahlungsziel of a WiM-Rechnung may not fall short of, counted
 /// from the day the invoice is received (WiM Teil 1 Kap. 3.6.3.8.2 / 3.7.2 /
 /// 6.2 Nr. 1, AWH WiM Gas 2.0 Kap. 4.7.2 Nr. 1).
@@ -398,18 +414,54 @@ pub const MITTEILUNG_RECHNUNG_KORREKT_WT: u32 = 2;
 /// measured against that date.
 pub const ZAHLUNGSZIEL_MINDEST_WT: u32 = 10;
 
+// ── GeLi Gas — An-/Abmeldung ─────────────────────────────────────────────────
+//
+// These three live here rather than beside the `E_0622`/`E_0609` Prüfschritte
+// that read them because they are Fristen, and every Frist in mako has one
+// home: a role-gated crate cannot be the source of a window a role-agnostic
+// caller (a config default, an operator queue) also needs.
+
+/// Mindestvorlaufzeit for a Gas Lieferantenwechsel, in Werktagen
+/// (AWH GeLi Gas 2.0 V1.2, SD „Lieferbeginn" Prozessschritt 1).
+pub const GAS_WECHSEL_VORLAUF_WT: u32 = 10;
+
+/// How far back a Gas An-/Abmeldung that is **not** a Wechsel may reach, in
+/// weeks (AWH GeLi Gas 2.0 Kap. 2.2 Grundregel 3a — „bis zu sechs Wochen zzgl.
+/// einer zu berücksichtigenden Bearbeitungsfrist nach An- oder
+/// Abmeldedatum").
+pub const GAS_RUECKWIRKUNG_WOCHEN: i64 = 6;
+
+/// The Bearbeitungsfrist added to [`GAS_RUECKWIRKUNG_WOCHEN`], in Werktagen.
+///
+/// The AWH quantifies it only for the Ersatz-/Grundversorgung (3 WT) and the
+/// same value is applied to An-/Abmeldungen. It is a **default**, not a
+/// published Frist: operators override it in configuration, which is why it is
+/// the one constant in this module a caller may legitimately ignore.
+pub const GAS_BEARBEITUNGSFRIST_WT_DEFAULT: u32 = 3;
+
 /// Who received a WiM-Rechnung — the only thing that decides its answer window.
 ///
-/// WiM Strom Teil 1 states the same INVOIC twice with different numbers:
-/// Kap. 3.6.3.8.2 has the LF answer *zum* Zahlungsziel, Kap. 6.2 has the NB
-/// answer by the **4. WT davor**. Both arrive as PID 31009 and the message body
-/// does not say which Use-Case it belongs to — the recipient's Marktrolle does
-/// (BDEW Allgemeine Festlegungen §2.13: one MP-ID per Marktrolle).
+/// The **same PID 31009** carries three different Use-Cases with three
+/// different windows, and the message body says which one it is nowhere:
+///
+/// | Empfänger | Fundstelle | Spätester ÜT der Antwort |
+/// |---|---|---|
+/// | NB | WiM Teil 1 Kap. 6.2 Nr. 2 | 4. WT **vor** dem Zahlungsziel |
+/// | **ESA** | WiM Teil **2** Kap. 4.5.2 Nr. 2 | 4. WT **vor** dem Zahlungsziel |
+/// | LF / MSB | WiM Teil 1 Kap. 3.6.3.8.2, 3.7.2 | **zum** Zahlungsziel |
+///
+/// The recipient's Marktrolle is what tells them apart (BDEW Allgemeine
+/// Festlegungen §2.13: one MP-ID per Marktrolle). Folding the ESA into the LF
+/// arm gave it four Werktage it does not have, and the breach only becomes
+/// visible once the MSB has already stopped waiting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RechnungEmpfaenger {
     /// Netzbetreiber — Rechnung „Messstellenbetrieb mit iMS gegenüber dem NB",
     /// WiM Teil 1 Kap. 6.
     Netzbetreiber,
+    /// Energieserviceanbieter — „Abrechnung einer für den ESA erbrachten
+    /// Leistung", WiM Teil 2 Kap. 4.5. Its tree is `E_0264`, not `E_0406`.
+    Esa,
     /// Lieferant or ESA — Abrechnung Messstellenbetrieb gegenüber dem LF,
     /// WiM Teil 1 Kap. 3.6.3.8, and the Sparte-neutral Abrechnung von
     /// Dienstleistungen, Kap. 3.7.
@@ -422,8 +474,10 @@ pub const MSB_RECHNUNG_PID: u32 = 31_009;
 
 /// The latest Übertragungstag for the REMADV answering a WiM-Rechnung.
 ///
-/// The 4-Werktage lead applies to one combination — 31009 received by a
-/// Netzbetreiber. Everything else is answered *zum* Zahlungsziel.
+/// The 4-Werktage lead applies to two of the three 31009 Use-Cases — the one
+/// received by a **Netzbetreiber** (WiM Teil 1 Kap. 6.2 Nr. 2) and the one
+/// received by an **ESA** (WiM Teil 2 Kap. 4.5.2 Nr. 2). The LF answers *zum*
+/// Zahlungsziel, and so does every other WiM invoice PID.
 ///
 /// # Panics
 ///
@@ -435,11 +489,42 @@ pub fn rechnung_antwort_spaetester_uet(
     zahlungsziel: Date,
     cal: HolidayCalendar,
 ) -> Date {
-    if pid == MSB_RECHNUNG_PID && empfaenger == RechnungEmpfaenger::Netzbetreiber {
-        crate::sub_werktage(zahlungsziel, ANTWORT_IMS_RECHNUNG_NB_WT, cal)
-    } else {
-        zahlungsziel
+    if pid != MSB_RECHNUNG_PID {
+        return zahlungsziel;
     }
+    match empfaenger {
+        RechnungEmpfaenger::Netzbetreiber => {
+            crate::sub_werktage(zahlungsziel, ANTWORT_IMS_RECHNUNG_NB_WT, cal)
+        }
+        RechnungEmpfaenger::Esa => crate::sub_werktage(zahlungsziel, ANTWORT_ESA_RECHNUNG_WT, cal),
+        RechnungEmpfaenger::LieferantOderMsb => zahlungsziel,
+    }
+}
+
+/// The latest Übertragungstag for the **COMDIS 29001** with which the MSB tells
+/// an ESA that the invoice it refused was correct after all.
+///
+/// WiM Teil 2 Kap. 4.5.2 Nr. 3: „spätester ÜT ist der 2. WT vor dem
+/// Zahlungsziel in der Rechnung". The answer to *that* message (Nr. 4) is due
+/// **zum** Zahlungsziel — [`esa_zweite_antwort_spaetester_uet`].
+///
+/// # Panics
+///
+/// Panics only if date arithmetic overflows the Gregorian calendar.
+#[must_use]
+pub fn esa_comdis_spaetester_uet(zahlungsziel: Date, cal: HolidayCalendar) -> Date {
+    crate::sub_werktage(zahlungsziel, MITTEILUNG_ESA_RECHNUNG_KORREKT_WT, cal)
+}
+
+/// The latest Übertragungstag for the ESA's **second** REMADV — its answer to
+/// the MSB's COMDIS 29001 (WiM Teil 2 Kap. 4.5.2 Nr. 4, `E_0266`).
+///
+/// „spätester ÜT ist zum Zahlungsziel in der Rechnung" — no lead this time,
+/// because there is no further round: a second refusal ends the automation and
+/// the two parties clear it bilaterally.
+#[must_use]
+pub const fn esa_zweite_antwort_spaetester_uet(zahlungsziel: Date) -> Date {
+    zahlungsziel
 }
 
 /// WiM — every Prozessschritt whose window is anchored on a date in the payload
@@ -583,7 +668,7 @@ pub const WIM: &[VorlaufObligation] = &[
     },
     VorlaufObligation {
         key: "wim.vorabinformation-ersteinbau-ims",
-        pid: None,
+        pid: Some(21_029),
         pid_gas: None,
         name: "Vorabinformation zum Gerätewechsel (Ersteinbau iMS, gMSB → wMSB)",
         anchor: Anchor::Umstellungszeitpunkt,
@@ -595,8 +680,12 @@ pub const WIM: &[VorlaufObligation] = &[
                  dem geplanten Zeitpunkt der Ausstattung der Messlokation",
     },
     VorlaufObligation {
+        // The answer leg. `pid` names the *Zustimmung* 21030; the Ablehnung
+        // 21031 rides the same window, and `crate::antwort::WIM` carries the
+        // pair keyed on the trigger 21029 — this entry exists so a caller
+        // holding the answer PID finds the same three Werktage.
         key: "wim.information-bestandsschutz-eigenausbau",
-        pid: None,
+        pid: Some(21_030),
         pid_gas: None,
         name: "Information Bestandsschutz / Eigenausbau iMS (wMSB → gMSB)",
         anchor: Anchor::Uebertragungstag,
@@ -771,6 +860,58 @@ mod tests {
                 .check(d(2026, Month::March, 1), umstellung, CAL)
                 .is_ok()
         );
+    }
+
+    /// The ESA answers by the **4. WT vor dem Zahlungsziel** (WiM Teil 2
+    /// Kap. 4.5.2 Nr. 2), not zum Zahlungsziel like the LF — the same lead the
+    /// NB gets. Folding it into the LF arm handed the ESA four Werktage it does
+    /// not have.
+    #[test]
+    fn the_esa_answers_four_werktage_before_the_zahlungsziel() {
+        // Zahlungsziel Fri 2026-06-19; 4 WT before is Mon 2026-06-15.
+        let ziel = d(2026, Month::June, 19);
+        assert_eq!(
+            rechnung_antwort_spaetester_uet(MSB_RECHNUNG_PID, RechnungEmpfaenger::Esa, ziel, CAL),
+            d(2026, Month::June, 15)
+        );
+        assert_eq!(
+            rechnung_antwort_spaetester_uet(
+                MSB_RECHNUNG_PID,
+                RechnungEmpfaenger::Netzbetreiber,
+                ziel,
+                CAL
+            ),
+            rechnung_antwort_spaetester_uet(MSB_RECHNUNG_PID, RechnungEmpfaenger::Esa, ziel, CAL),
+            "Teil 1 Kap. 6.2 Nr. 2 and Teil 2 Kap. 4.5.2 Nr. 2 state the same lead"
+        );
+        assert_ne!(
+            rechnung_antwort_spaetester_uet(MSB_RECHNUNG_PID, RechnungEmpfaenger::Esa, ziel, CAL),
+            rechnung_antwort_spaetester_uet(
+                MSB_RECHNUNG_PID,
+                RechnungEmpfaenger::LieferantOderMsb,
+                ziel,
+                CAL
+            ),
+        );
+    }
+
+    /// The rest of the UC 4.5 round trip: the MSB's COMDIS is due by the 2. WT
+    /// before the Zahlungsziel (Nr. 3) and the ESA's answer to it *zum*
+    /// Zahlungsziel (Nr. 4) — three different windows on one invoice.
+    #[test]
+    fn the_esa_billing_round_trip_has_three_windows() {
+        let ziel = d(2026, Month::June, 19);
+        assert_eq!(
+            esa_comdis_spaetester_uet(ziel, CAL),
+            d(2026, Month::June, 17)
+        );
+        assert_eq!(esa_zweite_antwort_spaetester_uet(ziel), ziel);
+        // Strictly ordered: answer → COMDIS → second answer.
+        assert!(
+            rechnung_antwort_spaetester_uet(MSB_RECHNUNG_PID, RechnungEmpfaenger::Esa, ziel, CAL)
+                < esa_comdis_spaetester_uet(ziel, CAL)
+        );
+        assert!(esa_comdis_spaetester_uet(ziel, CAL) < esa_zweite_antwort_spaetester_uet(ziel));
     }
 
     /// Only 31009 to a Netzbetreiber gets the 4-Werktage lead; the same PID to

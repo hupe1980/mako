@@ -68,6 +68,12 @@ pub fn wim_invoic_registry() -> AdapterRegistry<WimInvoicWorkflow> {
                 validation_passed,
                 validation_errors,
                 rechnung: Some(Box::new(build_rechnung(inv.segments()))),
+                // `SG1 RFF+ACE` and `IMD+7081` — Muss on the wire, and BO4E
+                // has no field for either. The first is what `E_0264`
+                // Prüfschritt 40 compares against the order on record; the
+                // second states which Use-Case a shared PID belongs to.
+                bestellung_ref: rff_ace(inv.segments()),
+                rechnungstyp: imd_rechnungstyp(inv.segments()),
             })
         },
     ));
@@ -142,6 +148,91 @@ pub fn wim_invoic_comdis_registry() -> AdapterRegistry<WimInvoicWorkflow> {
             Ok(InvoicCommand::ReceiveComdis {
                 comdis_ref: MessageRef::new(msg.message_ref()),
             })
+        },
+    ));
+    registry
+}
+
+// ── WiM Ersteinbau eines iMS (PIDs 21029, 21030, 21031) ──────────────────────
+
+/// Build an [`AdapterRegistry`] for [`mako_wim::ersteinbau::WimErsteinbauWorkflow`].
+///
+/// WiM Strom Teil 1 Kap. 3.5. Three IFTSTA Prüfidentifikatoren, and the
+/// direction is what separates them: 21029 is the gMSB's Vorabinformation and
+/// opens the Vorgang, 21030/21031 are the wMSB's answer under `E_0233` and
+/// close it.
+///
+/// The Antwortcode rides `SG4 STS` on the answer legs. It is read here rather
+/// than defaulted, because `E_0233` `A04` („noch keine Aussage möglich") and
+/// `A01`/`A02` are all Ablehnungen on the same PID and only the code says
+/// which — an answer whose code we cannot read is a `ReceiveAntwort` with the
+/// PID's own meaning and nothing more.
+#[must_use]
+pub fn wim_ersteinbau_registry() -> AdapterRegistry<mako_wim::ersteinbau::WimErsteinbauWorkflow> {
+    use mako_wim::ersteinbau::{ABLEHNUNG_PID, ErsteinbauCommand, VORABINFORMATION_PID};
+
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for WiM Ersteinbau adapter".into(),
+                )
+            })?;
+            let AnyMessage::Iftsta(i) = msg else {
+                return Err(EngineError::Deserialization(
+                    "WiM Ersteinbau adapter: expected IFTSTA (PIDs 21029/21030/21031)".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "WiM Ersteinbau adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
+            let sender =
+                MarktpartnerCode::new(i.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""));
+            let receiver = MarktpartnerCode::new(
+                i.receiver()
+                    .and_then(|n| n.party_id.as_deref())
+                    .unwrap_or(""),
+            );
+
+            if pid.as_u32() == VORABINFORMATION_PID {
+                return Ok(ErsteinbauCommand::ReceiveVorabinformation {
+                    pid,
+                    gmsb: sender,
+                    wmsb: receiver,
+                    melo_id: mako_engine::types::MeLo::new(
+                        super::iftsta_location(i).unwrap_or_default(),
+                    ),
+                    // `SG15 DTM+2380` — the planned Umstellungszeitpunkt the
+                    // 3-Monats-Vorlauffrist of Kap. 3.5.2 Nr. 1 is measured
+                    // against.
+                    umstellungszeitpunkt: super::iftsta_zuordnungsbeginn(i).unwrap_or_default(),
+                    message_ref: MessageRef::new(msg.message_ref()),
+                    validation_passed,
+                    validation_errors,
+                });
+            }
+
+            // 21030/21031 — the wMSB's answer. The code is what the process
+            // records; the PID only says which side of the axis it sits on, and
+            // `DispatchAntwort` re-derives the PID from the code's cluster so
+            // the two cannot disagree.
+            let antwort_code = super::iftsta_antwortcode(i).unwrap_or_else(|| {
+                if pid.as_u32() == ABLEHNUNG_PID {
+                    "A04"
+                } else {
+                    "A03"
+                }
+                .to_owned()
+            });
+            Ok(ErsteinbauCommand::DispatchAntwort { antwort_code })
         },
     ));
     registry
@@ -1681,8 +1772,33 @@ pub fn wim_rechnungsabwicklung_registry()
                     pid,
                     message_ref: MessageRef::new(msg.message_ref()),
                 }),
+                // IFTSTA 21032 — the LF refuses the Angebot. Which tree its
+                // code belongs to follows the *sequence*, and both sequences
+                // end in this PID: `E_0205` when the MSB offered unprompted,
+                // `E_0208` when the LF asked with a REQOTE 35002 first.
+                //
+                // An adapter sees one message and not the Vorgang, so it states
+                // **no** Herkunft. Guessing would not fail closed: the two
+                // trees share `A01`–`A03` with different Bedeutungen, so a
+                // wrong guess passes the workflow's code check and records the
+                // wrong reason. The refusal is recorded verbatim instead and an
+                // operator resolves the tree — until the Herkunft is carried on
+                // the process from the REQOTE/QUOTES leg (see ROADMAP).
+                AnyMessage::Iftsta(i) => Ok(RechnungsabwicklungCommand::ReceiveAngebotAblehnung {
+                    sender: MarktpartnerCode::new(
+                        i.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                    ),
+                    receiver: MarktpartnerCode::new(
+                        i.receiver()
+                            .and_then(|n| n.party_id.as_deref())
+                            .unwrap_or(""),
+                    ),
+                    herkunft: None,
+                    antwort_code: super::iftsta_antwortcode(i),
+                    message_ref: MessageRef::new(msg.message_ref()),
+                }),
                 _ => Err(EngineError::Deserialization(
-                    "WiM Rechnungsabwicklung adapter: expected ORDERS or ORDRSP".into(),
+                    "WiM Rechnungsabwicklung adapter: expected ORDERS, ORDRSP or IFTSTA".into(),
                 )),
             }
         },

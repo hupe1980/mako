@@ -304,6 +304,7 @@ impl EdifactIngestDispatcher {
         "mabis-zp-lifecycle",
         "redispatch-aktivierung",
         "wim-device-change",
+        "wim-ersteinbau",
         "wim-geraeteubernahme",
         "wim-insrpt",
         "wim-invoic",
@@ -367,14 +368,21 @@ impl EdifactIngestDispatcher {
         }
     }
 
-    /// Which Marktrolle of ours a message is addressed to, for the one WiM
-    /// window that branches on it.
+    /// Which Marktrolle of ours a message is addressed to, for the WiM windows
+    /// that branch on it.
     ///
-    /// BDEW Allgemeine Festlegungen §2.13 gives every Marktrolle its own
-    /// MP-ID, so the interchange recipient identifies the role without the
-    /// message body saying anything. Anything that is not one of our
-    /// Netzbetreiber codes is treated as the LF/MSB side, which is the longer
-    /// window — a misread there answers late, never early.
+    /// PID 31009 carries **three** Use-Cases with three different answer
+    /// windows, and the message body says which one nowhere: the NB answers by
+    /// the 4. WT before the Zahlungsziel (WiM Teil 1 Kap. 6.2 Nr. 2), the
+    /// **ESA** by the 4. WT before it too (WiM Teil 2 Kap. 4.5.2 Nr. 2), and
+    /// the LF *zum* Zahlungsziel (Kap. 3.6.3.8.2). BDEW Allgemeine
+    /// Festlegungen §2.13 gives every Marktrolle its own MP-ID, so the
+    /// interchange recipient is what identifies it.
+    ///
+    /// Anything that matches none of our role codes falls to the LF/MSB arm,
+    /// which is the longest window — a misread there answers late, never early.
+    /// The ESA arm is *not* that fallback: it is the shortest of the three, and
+    /// reaching it by guesswork would report a breach that has not happened.
     pub(super) fn rechnung_empfaenger(
         &self,
         msg: &AnyMessage,
@@ -386,11 +394,21 @@ impl EdifactIngestDispatcher {
         let Some(empfaenger) = msg.nad_receiver() else {
             return RechnungEmpfaenger::LieferantOderMsb;
         };
+        // `IMD+7081` = `KON` („Abrechnung von Konfigurationen
+        // (Universalbestellprozess)") is the ESA Use-Case stated on the wire —
+        // INVOIC AHB 1.0b, and the strongest evidence there is. It wins over
+        // the MP-ID because a combined deployment may hold several roles while
+        // the message says which one this invoice is for.
+        if invoic_rechnungstyp(msg).as_deref() == Some("KON") {
+            return RechnungEmpfaenger::Esa;
+        }
         if ["NB", "GNB"]
             .iter()
             .any(|role| reg.mp_id_for_role(role) == Some(empfaenger))
         {
             RechnungEmpfaenger::Netzbetreiber
+        } else if reg.mp_id_for_role("ESA") == Some(empfaenger) {
+            RechnungEmpfaenger::Esa
         } else {
             RechnungEmpfaenger::LieferantOderMsb
         }
@@ -1363,6 +1381,27 @@ pub(crate) fn antwort_due_at(pid: u32, received: OffsetDateTime) -> OffsetDateTi
 /// Zahlungsziel that is already reflected in this date — so it is the correct
 /// deadline for a universal Stornorechnung (PID 31004) regardless of commodity.
 /// Returns `None` when the invoice omits DTM+265 (callers fall back to +10 Werktage).
+/// The `IMD+7081` Rechnungstyp of an inbound INVOIC.
+///
+/// **Muss** on every Anwendungsfall of the AHB, and on PID 31009 it is what
+/// says which of three Use-Cases the invoice belongs to: `KON` the ESA billing
+/// of WiM Teil 2 Kap. 4.5, `MSB` the Messstellenbetrieb toward NB or LF, `TEC`
+/// the Änderung der Technik. They answer under different trees, on different
+/// windows.
+fn invoic_rechnungstyp(msg: &AnyMessage) -> Option<String> {
+    let AnyMessage::Invoic(m) = msg else {
+        return None;
+    };
+    // `IMD+7077+C272+C273`: DE 7081 is the first component of `C272`, so a
+    // conformant segment reads `IMD++KON`.
+    m.segments()
+        .iter()
+        .find(|s| s.tag == "IMD")
+        .and_then(|s| s.component_str(1, 0))
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned)
+}
+
 pub(crate) fn faelligkeitsdatum_from_invoic(msg: &AnyMessage) -> Option<time::OffsetDateTime> {
     let AnyMessage::Invoic(m) = msg else {
         return None;

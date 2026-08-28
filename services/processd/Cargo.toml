@@ -12,8 +12,20 @@ publish          = false
 # ── Role-gated feature flags ──────────────────────────────────────────────────
 # Compile with exactly the Marktrolle(n) you operate.
 #
-# §7 EnWG (>= 100k Netzkunden): require separate binaries compiled with
-# `lf-only` and `nb-only` respectively. BNetzA examines binary SHA.
+# What these features are and are not. They select which **decision paths** are
+# compiled and registered, so a deployment carries only the answers it is meant
+# to give and an operator can read its obligations off the build. They are not a
+# regulatory artefact: §7 EnWG requires a separate *legal entity* for a VNB with
+# 100 000 or more connected customers (§7 Abs. 2 is the de-minimis threshold),
+# §7a operational and §6a informational separation — none of them speaks about
+# binaries, and no BNetzA procedure inspects a build hash. The separation that
+# matters legally happens above this file; what happens here is that a
+# `nb-only` binary cannot accidentally answer as an LF.
+#
+# Nor is the compiled artefact hermetic: `mako-gpke`, `mako-geli-gas` and
+# `mako-wim` are unconditional dependencies and each pins the `mako-pruefung`
+# trees it needs, so a role-gated build still *links* those catalogues. What the
+# feature gates is the handler that would use them.
 #
 # Features:
 #   role-lf-strom  — LF answers to the nine GPKE processes it is asked about,
@@ -22,7 +34,7 @@ publish          = false
 #   role-nb-strom  — GPKE Anmeldung STP (55001, 55016) via `mako-pruefung`;
 #                    EoG gap closure; the MSB-Wechsel PIDs the *NB* answers
 #   role-nb-gas    — GeLi Gas Anmeldung STP (44001) via `mako-pruefung`
-#   role-msb-strom — the MSB's own obligations: REQOTE→QUOTES, §14a
+#   role-msb       — the MSB's own obligations: REQOTE→QUOTES, §14a
 #                    Steuerungsauftrag ORDRSP, the MSB-Wechsel PIDs the *MSB*
 #                    answers, and the ESA Wertebestellung (WiM Teil 2 Kap. 4 —
 #                    35003/17007/17008/39002), a mandatory Zusatzleistung under
@@ -30,15 +42,15 @@ publish          = false
 #
 # The MSB role is its own feature because its work is its own: a Kündigung MSB
 # (55039) is MSBN → MSBA and never reaches the NB, and a Steuerungsauftrag
-# ORDRSP is the MSB's answer. Compiling those into an `nb-only` binary is
-# exactly what §7 EnWG separation exists to prevent, and it left a pure MSB
-# unable to deploy the automation at all.
+# ORDRSP is the MSB's answer. Before it existed a pure MSB could not deploy the
+# automation at all, and an `nb-only` build answered messages the NB never
+# receives.
 #
 # Compound feature flags:
 #   lf-only    = ["role-lf-strom", "role-lf-gas"]
 #   nb-only    = ["role-nb-strom", "role-nb-gas"]
-#   msb-only   = ["role-msb-strom"]
-#   integrated = every role (§6b EnWG combined deployment)
+#   msb-only   = ["role-msb"]
+#   integrated = every role (one operator holding several Marktrollen)
 [features]
 default = []
 
@@ -52,18 +64,20 @@ role-lf-gas   = ["mako-pruefung/role-lf"]
 role-nb-strom = ["mako-pruefung/role-nb"]
 ## GeLi Gas Anmeldung STP (PID 44001) via `mako-pruefung`.
 role-nb-gas   = ["mako-pruefung/role-nb"]
-## MSB obligations: REQOTE→QUOTES, §14a Steuerungsauftrag ORDRSP, MSB-answered
-## MSB-Wechsel PIDs.
-role-msb-strom = []
+## MSB obligations: REQOTE→QUOTES, §14a Steuerungsauftrag ORDRSP, the
+## MSB-answered MSB-Wechsel PIDs in **both Sparten** (55039/55168 and
+## 44039/44168 — AWH WiM Gas 2.0 restates WiM Strom Teil 1 use-case for
+## use-case, so one handler serves both), and the ESA Wertebestellung.
+role-msb  = ["mako-pruefung/role-msb"]
 
-## Pure LF deployment (§7 EnWG separated binary — no NB logic compiled in).
+## Pure LF deployment — no NB or MSB decision path registered.
 lf-only    = ["role-lf-strom", "role-lf-gas"]
-## Pure NB deployment (§7 EnWG separated binary — no LF or MSB logic compiled in).
+## Pure NB deployment — no LF or MSB decision path registered.
 nb-only    = ["role-nb-strom", "role-nb-gas"]
-## Pure MSB deployment (§7 EnWG separated binary).
-msb-only   = ["role-msb-strom"]
-## Integrated §6b EnWG deployment (every role in one binary).
-integrated = ["role-lf-strom", "role-lf-gas", "role-nb-strom", "role-nb-gas", "role-msb-strom"]
+## Pure MSB deployment, both Sparten.
+msb-only   = ["role-msb"]
+## One operator holding several Marktrollen — every decision path in one binary.
+integrated = ["role-lf-strom", "role-lf-gas", "role-nb-strom", "role-nb-gas", "role-msb"]
 
 [[bin]]
 name = "processd"
@@ -83,8 +97,8 @@ mako-gpke     = { path = "../../crates/mako-gpke" }
 mako-geli-gas = { path = "../../crates/mako-geli-gas" }
 mako-wim      = { workspace = true }
 # The role features above select which Entscheidungsbäume compile in, so a
-# role-gated binary carries only the decisions it is licensed to make (§7 EnWG).
-mako-pruefung  = { path = "../../crates/mako-pruefung", default-features = false }
+# role features above select which decision paths compile in — see the header.
+mako-pruefung  = { workspace = true }
 
 anyhow             = { workspace = true }
 thiserror          = { workspace = true }
@@ -113,7 +127,11 @@ mako-markt   = { workspace = true }
 # `mako-geli-gas`) and one consumer. The round-trip tests build the event with
 # the real builder rather than by hand — which is how the two drifted.
 mako-engine  = { workspace = true }
-mako-pruefung = { path = "../../crates/mako-pruefung" }
+# `role-nb` only: the SQL integration test builds a `Marktlokationsart` for the
+# `E_0608` Prüflauf. A bare path dependency here would pull the crate's default
+# features — every Marktrolle's trees — back into the test builds and quietly
+# undo what the workspace-level `default-features = false` is for.
+mako-pruefung = { workspace = true, features = ["role-nb"] }
 # The PID-contract guard compares processd's trigger PIDs against the canonical
 # workflow constants that drive makod's spawn table.
 tokio        = { version = "1", features = ["full"] }

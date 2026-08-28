@@ -15,7 +15,7 @@ mako-fristen  = { workspace = true }
 # The Antwortcode catalogue and the WiM Prüfschritte. `role-msb` only: the
 # workflows here never answer a GPKE tree, and a code has no meaning outside
 # the tree that publishes it.
-mako-pruefung = { workspace = true }
+mako-pruefung = { workspace = true, features = ["role-msb"] }
 rubo4e      = { workspace = true }
 mako-engine = { workspace = true }
 mako-invoic = { workspace = true }

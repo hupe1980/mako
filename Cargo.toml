@@ -132,7 +132,11 @@ asx-rs           = { version = "0.13" }
 mako-service     = { path = "crates/mako-service",     version = "0.17" }
 mako-plugin      = { path = "crates/mako-plugin",      version = "0.17" }
 invoic-checker   = { path = "crates/invoic-checker",   version = "0.17" }
-mako-pruefung      = { path = "crates/mako-pruefung",      version = "0.17" }
+# `default-features = false` on purpose: the crate's defaults are *every*
+# Marktrolle's Entscheidungsbäume. A member that inherits this dependency names
+# the roles it actually checks (`features = ["role-msb"]`), so the feature graph
+# says which trees a build carries instead of every build carrying all of them.
+mako-pruefung      = { path = "crates/mako-pruefung",      version = "0.17", default-features = false }
 energy-billing   = { path = "crates/energy-billing",   version = "0.17" }
 dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.17" }
 metering         = { version = "0.19" }

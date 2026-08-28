@@ -43,7 +43,7 @@
 //! **55016 „Kündigung" is not here**: it is LFN → LFA (Anwendungsübersicht 4.0
 //! lfd. Nr. 20030), answered by the Altlieferant under EBD `E_0614`.
 //!
-//! ## MSB module (`role-msb-strom`)
+//! ## MSB module (`role-msb`)
 //!
 //! The Messstellenbetreiber's own obligations, deliberately **not** compiled
 //! into an NB binary:
@@ -98,7 +98,7 @@ pub mod lf_module;
 #[cfg(any(
     feature = "role-nb-strom",
     feature = "role-nb-gas",
-    feature = "role-msb-strom"
+    feature = "role-msb"
 ))]
 pub mod esa_module;
 pub mod msb_module;

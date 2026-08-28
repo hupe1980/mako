@@ -48,7 +48,7 @@ use crate::codes::{
     EBD_ESA_ANFRAGE, EBD_ESA_BEENDIGUNG, EBD_ESA_BESTELLUNG, EBD_ESA_STORNIERUNG, lookup,
 };
 
-use super::types::MsbEntscheidung;
+use crate::antwort::MsbEntscheidung;
 
 /// Whether the order is a running series or a single transmission.
 ///
@@ -101,9 +101,18 @@ pub struct EsaAnfrage {
     /// Whether a signed Einwilligung for the location is on file
     /// (Prüfschritt 4).
     ///
-    /// `None` when the MSB holds no record: it holds only the ESA's
-    /// Zusicherung, and BNetzA *Mitteilung Nr. 3* forbids rejecting on consent
-    /// *form*. Same asymmetry as `E_0256` Prüfschritt 8.
+    /// `None` when the MSB holds no record — which is the ordinary case, not
+    /// an omission. WiM Teil 2 UC 4.1.1 lists the Vorbedingungen the MSB must
+    /// hold before an ESA may order, and the **Einwilligung is not among
+    /// them**: what the MSB holds is „die Zusicherung des ESA zur Einhaltung
+    /// der rechtlichen Vorgaben zum Datenschutz". The consent document never
+    /// travels in a market message.
+    ///
+    /// So `None` is „the ESA asserted compliance and mako holds no copy",
+    /// which is the designed state; `Some(false)` is „the MSB holds one and it
+    /// does not cover this" — only that refuses. BNetzA *Mitteilung Nr. 3*
+    /// adds that the MSB may not reject on the consent's *form* either. Same
+    /// asymmetry as `E_0256` Prüfschritt 8.
     pub einwilligung_vorhanden: Option<bool>,
     /// Whether the consent's own data are plausible and complete
     /// (Prüfschritt 5) — a *content* check, distinct from Prüfschritt 4's
@@ -172,7 +181,9 @@ pub fn pruefe_anfrage(a: &EsaAnfrage) -> MsbEntscheidung {
     }
 
     // 4 — liegt eine unterzeichnete Einwilligung vor? Ein *fehlender* Eintrag
-    // ist die Zusicherung des ESA und wird nicht abgelehnt (Mitteilung Nr. 3).
+    // ist die Zusicherung des ESA: UC 4.1.1 nennt als Vorbedingung genau diese
+    // Zusicherung und nicht die Einwilligung selbst, die nie in einer
+    // Marktnachricht reist. Nur ein vorliegender, ungültiger Nachweis lehnt ab.
     if a.einwilligung_vorhanden == Some(false) {
         return MsbEntscheidung::Reject(RejectReason::new(
             tree,
@@ -274,8 +285,9 @@ pub struct EsaBestellung {
     /// (Prüfschritt 7).
     pub zugeordnet: bool,
     /// Whether the datenschutzrechtliche Einwilligung is still valid
-    /// (Prüfschritt 8). `None` when the MSB holds no record — self-assertion,
-    /// which BNetzA *Mitteilung Nr. 3* forbids rejecting on.
+    /// (Prüfschritt 8). `None` when the MSB holds no record — the ordinary
+    /// case: UC 4.1.1's Vorbedingung is the ESA's *Zusicherung*, not the
+    /// consent document, which never travels in a market message.
     pub einwilligung_gueltig: Option<bool>,
     /// Whether the installed Gerätetechnik can produce the values
     /// (Prüfschritt 9).
@@ -349,8 +361,13 @@ pub fn pruefe_bestellung(b: &EsaBestellung) -> MsbEntscheidung {
     }
 
     // 8 — Einwilligung. An *explicitly* invalid consent refuses; an absent
-    // record does not, because the MSB holds only the ESA's Zusicherung and
-    // BNetzA Mitteilung Nr. 3 (07.02.2024) forbids rejecting on consent form.
+    // record does not, because UC 4.1.1's Vorbedingung is the ESA's
+    // Zusicherung rather than the consent itself, and BNetzA Mitteilung Nr. 3
+    // (07.02.2024) forbids rejecting on the consent's form on top of that.
+    //
+    // The ESA side is not symmetric: `mako_wim::consent::gate_outbound` fails
+    // **closed**, because there the ESA is the data controller and a missing
+    // record means it has no lawful basis of its own to point at.
     if b.einwilligung_gueltig == Some(false) {
         return MsbEntscheidung::Reject(RejectReason::new(
             tree,

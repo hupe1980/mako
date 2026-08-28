@@ -49,8 +49,8 @@ The four families that ship:
 ── Recipient (payer) ────────────────────────────────────────────────
 New ──ReceiveInvoic──► InvoicReceived ──[valid]──► ValidationPassed
                                        ╰─[invalid]──► Rejected
-ValidationPassed ──SettleInvoice──► Settled
-                 ╰─DisputeInvoice──► Disputed
+ValidationPassed ──SettleInvoice──► Settled     ⇢ REMADV 33001 Zahlungsavis
+                 ╰─DisputeInvoice──► Disputed   ⇢ REMADV 33002 / 33003 / 33004
 
 ── Issuer ───────────────────────────────────────────────────────────
 New ──SendInvoic──► InvoicSent ──ReceiveRemadv 33001──► PaymentConfirmed
@@ -64,6 +64,39 @@ Any non-terminal state ──TimeoutExpired──► Rejected
 
 A deadline that fires *after* the answer was given is absorbed: deadlines are
 never cancelled, so they fire on the healthy path too.
+
+## What an inbound invoice carries that BO4E does not model
+
+`InvoicData` keeps two EDIFACT facts beside the BO4E `Rechnung`, because
+`Rechnung` models the document and neither belongs to it:
+
+| Field | Segment | Why it is kept |
+|---|---|---|
+| `bestellung_ref` | `SG1 RFF+ACE` | The **order this invoice answers** — the ORDERS Dokumentennummer on `IMD++KON`/`TEC`, the QUOTES on `MSB` (INVOIC AHB 1.0b segment 00020, hints `[501]`/`[508]`). `E_0264` Prüfschritt 40 („Basiert die Rechnung auf einer Bestellung?") is what compares it against the orders on record. |
+| `rechnungstyp` | `IMD+7081` | The **Use-Case**. PID 31009 carries three — `KON` „Abrechnung von Konfigurationen (Universalbestellprozess)" is the ESA billing of WiM Teil 2 Kap. 4.5, `MSB` the Messstellenbetrieb toward NB or LF, `TEC` the Änderung der Technik — and they answer under different trees on different windows. |
+
+Both ride the `ProcessInitiated` payload so `invoicd` reads them without going
+back to the EDIFACT archive, exactly as the `Rechnung` does.
+
+## Answering means two messages, not one
+
+Settling or disputing emits **both** a `ProcessCompleted` — this operator's own
+ERP notification — and the **REMADV** the invoice issuer is waiting on. Only the
+second is visible to the market, and it is the one with a Frist attached: WiM
+Teil 2 Kap. 4.5.2 Nr. 2 gives an ESA until the 4. Werktag before the
+Zahlungsziel, Teil 1 Kap. 6.2 the same for an NB, and Kap. 3.6.3.8.2 gives the
+LF until the Zahlungsziel itself.
+
+The dispute carries a [`RemadvAntwort`]: `SG7 AJT` is **Muss** on every
+Nicht-Zahlungsavis, DE 4465 the code and DE 1082 the Entscheidungsbaum that
+publishes it. The tree is not a constant — PID 31009 alone carries three
+Use-Cases with three different quartets — so the caller resolves it from
+`mako_pruefung::codes::rechnungspruefung` and the workflow does not guess one.
+
+The answer's **shape** picks the Prüfidentifikator, because REMADV AHB 1.0a
+admits a different list of trees on each: § 3.1.1's 33002 for a tree that states
+one code, § 3.1.2's 33003 („Abweisung Kopf und Summe") / 33004 („Abweisung
+Position") for one that states a set.
 
 ## Registering a family
 

@@ -1,30 +1,47 @@
 //! WiM Strom/Gas Technikänderung — device/measurement-point change requests.
 //!
-//! This module handles ORDERS-based requests for technical changes to
-//! measurement devices, configuration, and data delivery, including
-//! LF→MSB, NB→MSB, and MSB→MSB processes defined in **WiM Strom Teil 1**
-//! and **WiM Gas AWH**:
+//! This module handles ORDERS-based requests for technical changes at a
+//! Messlokation:
 //!
 //! | PID   | Direction  | Description |
 //! |-------|------------|-------------|
-//! | 17011 | LF → MSB   | Beauftragung zur Änderung der Technik (Messlokationsänderung Strom) |
+//! | 17011 | NB / LF → MSB | Beauftragung resp. Bestellung zur Änderung der Technik |
 //! | 17118 | MSB → MSB  | Bestellung einer Konfigurationsänderung |
-//! | 17121 | NB → MSB   | Bestellung Änderung (NB an MSB, GPKE Teil 3) |
 //! | 19005 | MSB → NB/LF | Bestätigung Auftrag Änderung Technik |
 //! | 19006 | MSB → NB/LF | Ablehnung Auftrag Änderung Technik |
+//!
+//! **17121 is not here.** „Bestellung Änderung (NB an MSB)" belongs to GPKE
+//! Teil 3 and is answered with ORDRSP 19120 out of `E_0526`; `mako-gpke` owns
+//! it.
 //!
 //! The ESA Ab-/Bestellung PIDs (ORDERS 17007, ORDRSP 19011/19012/19013/19014)
 //! belong to [`crate::wertebestellung`], which models their own lifecycle.
 //!
+//! # Two documents, one message pair
+//!
+//! WiM Strom Teil 1 Kap. 3.3 has the NB or the LF order the change outright;
+//! the BDEW *AWH Prozesse zur Änderung der Technik an Lokationen* V1.1 puts a
+//! REQOTE 35005 / QUOTES 15005 round in front of the same order. Both end in
+//! ORDERS 17011 → ORDRSP 19005/19006, so **four** Entscheidungsbäume share one
+//! answer PID pair and the sender's Marktrolle resolves only half of it — see
+//! [`mako_pruefung::msb::technik`], which is where that resolution lives.
+//!
+//! The leg after the answer is the **Durchführung**: the MSB goes to the
+//! Lokation and reports back only if the visit failed, on IFTSTA 21027 (to the
+//! NB) resp. 21025 (to the LF) out of `E_0286`.
+//!
 //! # Regulatory basis
 //!
-//! - **BK6-22-024** — WiM Strom Teil 1 (Messstellenbetrieb)
-//! - **BK7-24-01-009** — WiM Gas AWH V2.0
+//! - **BK6-22-024** — WiM Strom Teil 1 Kap. 3.3 (Messlokationsänderung)
+//! - **BDEW AWH Prozesse zur Änderung der Technik an Lokationen** V1.1 (31.03.2025)
+//! - **Entscheidungsbaum-Diagramme und Codelisten 4.3** Kap. 8.6, 8.7, 9.1, 9.2
 //! - Antwortfrist: **10 Werktage** (WiM Strom Teil 1 Kap. 3.3.1.2 / 3.3.2.2
-//!   Nr. 2), against a Mindestvorlauffrist of **20 Werktagen** on the
-//!   Beauftragung itself (Nr. 1). Both are anchored differently: the answer
-//!   window runs forward from the ÜT, the Vorlauffrist backward from the
-//!   gewünschter Änderungstermin — see [`mako_fristen::vorlauf`].
+//!   Nr. 2), against a Mindestvorlauffrist of **20 Werktagen** on the direct
+//!   Beauftragung (Nr. 1). Both are anchored differently: the answer window runs
+//!   forward from the ÜT, the Vorlauffrist backward from the gewünschter
+//!   Änderungstermin — see [`mako_fristen::vorlauf`]. The AWH Bestellung has no
+//!   Vorlauffrist Prüfschritt at all; its Umsetzungszeitraum was agreed in the
+//!   Angebot.
 
 use mako_engine::{
     error::WorkflowError,
@@ -62,12 +79,15 @@ pub const ORDERS_PIDS: &[u32] = &[17011, 17118];
 ///   [`crate::weiterverpflichtung`].
 /// - **19007** „Ablehnung Anforderung von Werten" answers a Werteanforderung.
 ///
-/// # Two trees, one PID pair
+/// # Four trees, one PID pair
 ///
-/// 19005/19006 are shared by `E_0249` (the NB ordered the change) and `E_0250`
-/// (the LF did). `E_0250` adds the Vollmacht Prüfschritte `A03`/`A04` that
-/// `E_0249` has no need for, so a code must be resolved against the tree the
-/// **sender's** Marktrolle selects — never against the answer PID.
+/// 19005/19006 are shared by `E_0249`/`E_0250` (WiM Teil 1, direct
+/// Beauftragung) and `E_0279`/`E_0283` (AWH, Bestellung nach Angebot). The
+/// sender's Marktrolle separates the columns; the ORDERS' Zuordnung zu einem
+/// Objekt (`ZO-T15` against `ZG-T24`) separates the rows. Resolve with
+/// [`mako_pruefung::codes::aenderung_der_technik_baum`] — never against the
+/// answer PID, and never on the Marktrolle alone: `A02` is the Zustimmung of
+/// `E_0249` and an Ablehnung of `E_0279`.
 pub const ORDRSP_PIDS: &[u32] = &[19005, 19006];
 
 /// Positive ORDRSP PIDs (confirmation).

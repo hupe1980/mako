@@ -663,7 +663,7 @@ pub enum WertebestellungCommand {
     /// Ablehnungs-Cluster. The cluster therefore selects the PID — deriving it
     /// from a separate `accept` flag lets the two disagree.
     ///
-    /// Run [`mako_pruefung::msb::esa::pruefe_bestellung`] to obtain the code;
+    /// Run [`mako_pruefung::esa::wertebestellung::pruefe_bestellung`] to obtain the code;
     /// the tree is `E_0256` for a Bestellung and `E_0254` for an Abbestellung,
     /// selected here by the `IMD+7081` the order carried.
     AnswerBestellung {
@@ -687,7 +687,7 @@ pub enum WertebestellungCommand {
     },
     /// UC 4.1 Nr. 6 — answer the Stornierung (ORDRSP 19013/19014).
     ///
-    /// Code from `E_0257` ([`mako_pruefung::msb::esa::pruefe_stornierung`]):
+    /// Code from `E_0257` ([`mako_pruefung::esa::wertebestellung::pruefe_stornierung`]):
     /// `A04` confirms, `A01`–`A03` refuse. Note that a started delivery is
     /// refused with **different codes** for the two Abo modes.
     AnswerStornierung {
@@ -711,7 +711,7 @@ pub enum WertebestellungCommand {
     },
     /// UC 4.3 Nr. 2 — answer the Abbestellung (ORDRSP 19011/19012).
     ///
-    /// Code from `E_0254` ([`mako_pruefung::msb::esa::pruefe_beendigung`]):
+    /// Code from `E_0254` ([`mako_pruefung::esa::wertebestellung::pruefe_beendigung`]):
     /// `A05` confirms, `A01`–`A04` refuse. A refusal is not merely allowed but
     /// required in four cases — most importantly when the order was a one-shot
     /// (`A01`), which is stornierbar rather than abbestellbar.

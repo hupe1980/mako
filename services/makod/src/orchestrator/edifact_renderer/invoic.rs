@@ -102,6 +102,9 @@ pub(super) fn render_invoic(
 /// | `document_code` | no       | BGM type code (default `"239"`)               |
 /// | `document_date` | no       | Document date (`YYYYMMDD` or `YYYY-MM-DD`)    |
 /// | `message_ref`   | no       | Derived from `causation_event_id` when absent |
+/// | `pid`           | no       | `RFF+Z13` — 33001 / 33002 / 33003 / 33004    |
+/// | `waehrung`      | no       | `SG4 CUX` DE 6345 (default `EUR`)             |
+/// | `rechnungsbezug`| no       | `SG5` — the answered invoice and its amounts  |
 /// | `antwort_code`  | no       | `SG7 AJT` DE 4465 — the Antwortcode on an Abweisung |
 /// | `antwort_ebd`   | no       | `SG7 AJT` DE 1082 — the EBD the code comes from |
 /// | `ablehnungsgrund` | no     | Free-text reason, rendered as `FTX+ACB`        |
@@ -110,6 +113,15 @@ pub(super) fn render_invoic(
 ///
 /// `AJT` is what carries the reason: DE 4465 the code, DE 1082 the EBD. The
 /// REMADV twin of UTILMD's `STS+E01++<code>:<ebd>`.
+///
+/// # What the answer has to name
+///
+/// A REMADV that names no Prüfidentifikator reaches no process on the other
+/// side, and one that names no invoice answers nothing: `RFF+Z13` and the `SG5`
+/// block (`DOC`, `MOA+9`, `MOA+12`, `DTM+137`) are **Muss** on every use case
+/// REMADV AHB 1.0a publishes. `mako_invoic` fills them from the stored BO4E
+/// `Rechnung` — the payer side keeps it precisely so the answer need not go
+/// back to the EDIFACT archive.
 pub(super) fn render_remadv(
     p: &serde_json::Value,
     msg: &OutboxMessage,
@@ -157,11 +169,38 @@ pub(super) fn render_remadv(
     if let Some(d) = doc_date.as_deref() {
         builder = builder.document_date(d);
     }
+    // `RFF+Z13` — the Prüfidentifikator the receiving system routes on.
+    if let Some(pid) = p.get("pid").and_then(serde_json::Value::as_u64) {
+        builder = builder.pruefidentifikator(pid.to_string());
+    }
+    if let Some(w) = p.get("waehrung").and_then(|v| v.as_str()) {
+        builder = builder.waehrung(w);
+    }
+    // `SG5` — DOC, MOA+9, MOA+12, DTM+137. All Muss.
+    if let Some(r) = p.get("rechnungsbezug").filter(|v| v.is_object()) {
+        let field = |k: &str| r.get(k).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+        builder = builder.rechnungsbezug(builders::Rechnungsbezug {
+            dokumentenart: field("dokumentenart"),
+            rechnungsnummer: field("rechnungsnummer"),
+            faelliger_betrag: field("faelliger_betrag"),
+            ueberweisungsbetrag: field("ueberweisungsbetrag"),
+            rechnungsdatum: normalise_date(&field("rechnungsdatum")),
+        });
+    }
+    // `SG10 DLI` + `SG12 AJT` — the Positionsebene. `invoicd` puts every
+    // Befund of the walk in `antwort_befunde` with its Ebene and, on a
+    // position-level one, its Positionsnummer; `SG10` is Muss on 33004 and is
+    // repeated „bis alle Fehler der Positionsebene genannt sind".
+    let ebd = p.get("antwort_ebd").and_then(|v| v.as_str());
+    let positionsfehler = position_level_befunde(p, ebd);
+    if !positionsfehler.is_empty() {
+        builder = builder.positionsfehler(positionsfehler);
+    }
     // `SG7 AJT` — the Abweichungsgrund. An Abweisung without one gives the
     // invoice sender nothing to correct; `invoicd` computes the reason and it
     // must reach the wire.
     if let Some(code) = p.get("antwort_code").and_then(|v| v.as_str()) {
-        let grund = match p.get("antwort_ebd").and_then(|v| v.as_str()) {
+        let grund = match ebd {
             Some(ebd) => builders::Abweichungsgrund::new(code, ebd),
             None => builders::Abweichungsgrund {
                 code: code.to_owned(),
@@ -171,4 +210,52 @@ pub(super) fn render_remadv(
         builder = builder.abweichungsgrund(grund);
     }
     finish_interchange(builder.serialize(), sender, receiver, msg)
+}
+
+/// Group `antwort_befunde` into one [`builders::Positionsfehler`] per
+/// Positionsnummer, in wire order.
+///
+/// Kopf- and Summen-level Befunde are deliberately skipped: they ride `SG7`,
+/// which the caller emits once. Only a Befund that names a Positionsnummer
+/// belongs in `SG10`/`SG12`.
+fn position_level_befunde(
+    p: &serde_json::Value,
+    ebd: Option<&str>,
+) -> Vec<builders::Positionsfehler> {
+    let mut out: Vec<builders::Positionsfehler> = Vec::new();
+    for b in p
+        .get("antwort_befunde")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let (Some(code), Some(nr)) = (
+            b.get("code").and_then(|v| v.as_str()),
+            b.get("positionsnummer")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|n| u16::try_from(n).ok()),
+        ) else {
+            continue;
+        };
+        let grund = match ebd {
+            Some(ebd) => builders::Abweichungsgrund::new(code, ebd),
+            None => builders::Abweichungsgrund {
+                code: code.to_owned(),
+                ebd: None,
+            },
+        };
+        let detail = b.get("detail").and_then(|v| v.as_str()).map(str::to_owned);
+        match out.iter_mut().find(|pf| pf.positionsnummer == nr) {
+            Some(pf) => {
+                pf.gruende.push(grund);
+                pf.erlaeuterung = pf.erlaeuterung.take().or(detail);
+            }
+            None => out.push(builders::Positionsfehler {
+                positionsnummer: nr,
+                gruende: vec![grund],
+                erlaeuterung: detail,
+            }),
+        }
+    }
+    out
 }

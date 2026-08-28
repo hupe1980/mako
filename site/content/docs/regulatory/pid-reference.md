@@ -595,17 +595,17 @@ section on this page.
 | 21011 | Statusmeldung | WiM Gas / WiM Strom Teil 1 | NB → MSBN · NB → MSBA · NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 21012 | Statusmeldung | WiM Gas / WiM Strom Teil 1 | NB → MSBN | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 21013 | Statusmeldung | WiM Gas / WiM Strom Teil 1 | NB → MSBA · NB → MSBN · NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
-| 21015 | Informationsmeldung | WiM Gas | NB → MSBA | — | — | ✅ | ✅ | ⚠️ | `mako-wim` `wim-device-change` |
-| 21018 | Statusmeldung | WiM Gas / WiM Strom Teil 1 | NB → MSBA | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
+| 21015 | Informationsmeldung (zurückgezogen ab AHB 2.1) | WiM Gas | NB → MSBA | — | — | ✅ | ✅ | ⚠️ | `mako-wim` `wim-device-change` |
+| 21018 | Statusmeldung (ab AHB 2.1 nur Strom) | WiM Strom Teil 1 | NB → MSBA | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 21024 | Statusmeldung | WiM Gas | MSB → LF | — | — | ✅ | ✅ | ⚠️ | `mako-gpke` `gpke-supplier-change` |
-| 21025 | Statusmeldung | WiM Gas / WiM Strom Teil 1 / AWH Änd. Technik | MSB → LF · gMSB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
+| 21025 | Statusmeldung | WiM Gas / WiM Strom Teil 1 / AWH Änd. Technik | MSB → LF · gMSB → LF | `E_0286` | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
 | 21026 | Statusmeldung | WiM Gas | MSB → NB | — | — | ✅ | ✅ | ⚠️ | `mako-gpke` `gpke-supplier-change` |
-| 21027 | Statusmeldung | WiM Gas / WiM Strom Teil 1 / AWH Änd. Technik | MSB → NB · wMSB → gMSB · gMSB → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
+| 21027 | Statusmeldung | WiM Gas / WiM Strom Teil 1 / AWH Änd. Technik | MSB → NB · wMSB → gMSB · gMSB → NB | `E_0286` | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
 | 21028 | Informationsmeldung | GeLi Gas 2.0 | MSB → NB | — | — | ✅ | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
-| 21029 | Vorabinformation | WiM Strom Teil 1 | gMSB → LF · gMSB → wMSB · gMSB → NB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
-| 21030 | iMS-Ersteinbauzust. | WiM Strom Teil 1 | wMSB → gMSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
-| 21031 | Bestandss. / Eigenausbau iMS | WiM Strom Teil 1 | wMSB → gMSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
-| 21032 | Antwort auf das Angebot | WiM Strom Teil 1 | LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
+| 21029 | Vorabinformation | WiM Strom Teil 1 | gMSB → LF · gMSB → wMSB · gMSB → NB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-ersteinbau` |
+| 21030 | iMS-Ersteinbauzust. | WiM Strom Teil 1 | wMSB → gMSB | `E_0233` | ✅ | — | ✅ | ✅ | `mako-wim` `wim-ersteinbau` |
+| 21031 | Bestandss. / Eigenausbau iMS | WiM Strom Teil 1 | wMSB → gMSB | `E_0233` | ✅ | — | ✅ | ✅ | `mako-wim` `wim-ersteinbau` |
+| 21032 | Antwort auf das Angebot | WiM Strom Teil 1 | LF → MSB | `E_0205` · `E_0208` | ✅ | — | ✅ | ✅ | `mako-wim` `wim-rechnungsabwicklung` |
 | 21033 | Ablehnung der Anfrage | GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik | MSB → NB · MSB → LF · MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
 | 21035 | Rückmeld. a. Liefers. | GPKE Teil 2 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
 | 21036 | Zeitpunkt des Geräteausbaus | WiM Gas / WiM Strom Teil 1 | MSBN → MSBA | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |

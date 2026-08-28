@@ -383,6 +383,15 @@ pub async fn dispatch_migrations(
                 from,
                 to
             );
+            identity!(
+                report,
+                count,
+                store,
+                mako_wim::ersteinbau::WimErsteinbauWorkflow,
+                mako_wim::ersteinbau::WORKFLOW_NAME,
+                from,
+                to
+            );
 
             // ── GeLi Gas ──────────────────────────────────────────────────────
             identity!(

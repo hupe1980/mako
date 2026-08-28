@@ -34,12 +34,12 @@ use tracing::{debug, warn};
 
 /// The ESA module answers only in an MSB build — serving an ESA is an MSB
 /// obligation (§34 Abs. 2 S. 2 Nr. 10 MsbG), and no NB or LF ever receives one.
-#[cfg(feature = "role-msb-strom")]
+#[cfg(feature = "role-msb")]
 use crate::esa_module;
 #[cfg(any(
     feature = "role-nb-strom",
     feature = "role-nb-gas",
-    feature = "role-msb-strom"
+    feature = "role-msb"
 ))]
 use crate::msb_module;
 use crate::server::ProcessdState;
@@ -63,7 +63,7 @@ pub fn answerable_pids() -> Vec<u32> {
     }
     #[cfg(any(feature = "role-lf-strom", feature = "role-lf-gas"))]
     pids.extend(crate::lf_module::lf_antwort_processes().map(|p| p.trigger_pid));
-    #[cfg(feature = "role-msb-strom")]
+    #[cfg(feature = "role-msb")]
     {
         pids.extend_from_slice(crate::msb_module::MSB_ANSWERED_PIDS);
         pids.extend_from_slice(mako_wim::preisanfrage::REQOTE_PIDS);
@@ -79,7 +79,7 @@ pub fn answerable_pids() -> Vec<u32> {
 
 /// WiM Steuerungsauftrag confirmation window in Werktage (BK6-22-024) — the
 /// Frist `makod` registers as `mako_wim::STEUERUNGSAUFTRAG_DEADLINE_LABEL`.
-#[cfg(feature = "role-msb-strom")]
+#[cfg(feature = "role-msb")]
 const STEUERUNGSAUFTRAG_ANTWORT_FRIST_WT: u32 = 5;
 
 /// `POST /webhook` — receive a `de.mako.*` event from `marktd`.
@@ -226,7 +226,7 @@ pub async fn handle_webhook(
     #[cfg(any(
         feature = "role-nb-strom",
         feature = "role-nb-gas",
-        feature = "role-msb-strom"
+        feature = "role-msb"
     ))]
     {
         let pid = event
@@ -238,7 +238,7 @@ pub async fn handle_webhook(
         let mut answerable: Vec<u32> = Vec::new();
         #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
         answerable.extend_from_slice(msb_module::NB_ANSWERED_PIDS);
-        #[cfg(feature = "role-msb-strom")]
+        #[cfg(feature = "role-msb")]
         answerable.extend_from_slice(msb_module::MSB_ANSWERED_PIDS);
 
         // The recipient check only applies to the PIDs addressed *to the NB*
@@ -288,7 +288,7 @@ pub async fn handle_webhook(
     // The MSB's answers to an Energieserviceanbieter. Routed before the
     // Steuerungsauftrag block and keyed on its own PID set, which is disjoint
     // from every WiM Teil 1 PID the MSB module answers.
-    #[cfg(feature = "role-msb-strom")]
+    #[cfg(feature = "role-msb")]
     {
         let pid = event
             .get("makopid")
@@ -332,7 +332,7 @@ pub async fn handle_webhook(
     //
     // GPKE Teil 3 Kap. 1.3: MSB MUST only confirm a Steuerungsauftrag for
     // products that are under contract.  Uncontracted produktcode → ablehnen.
-    #[cfg(feature = "role-msb-strom")]
+    #[cfg(feature = "role-msb")]
     if event
         .get("makoworkflow")
         .and_then(|v| v.as_str())
@@ -551,7 +551,7 @@ pub async fn handle_webhook(
     // turning automation off means "an operator quotes", not "nobody answers",
     // so the disabled path still has to produce an approval-queue entry with
     // the WiM Antwortfrist on it.
-    #[cfg(feature = "role-msb-strom")]
+    #[cfg(feature = "role-msb")]
     {
         let queue = crate::pg::PgApprovalQueue::new(state.pool.clone());
         match msb_module::handle_preisanfrage_reqote(

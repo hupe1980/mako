@@ -393,6 +393,119 @@ mod tests {
         )
     }
 
+    /// **A REMADV names its Prüfidentifikator and the invoice it answers.**
+    ///
+    /// `RFF+Z13` and the whole `SG5` block (`DOC`, `MOA+9`, `MOA+12`,
+    /// `DTM+137`) plus `SG4 CUX` are Muss on every use case REMADV AHB 1.0a
+    /// publishes. Without the first, the answer routes to no process on the
+    /// other side; without the second, it answers nothing.
+    #[test]
+    fn a_remadv_carries_its_pid_and_the_invoice_it_answers() {
+        let msg = fake_msg(
+            "REMADV",
+            "9900357000004",
+            serde_json::json!({
+                "pid": 33_004,
+                "sender": "9905550000005",
+                "receiver": "9900357000004",
+                "message_ref": "REMADV000001",
+                "document_code": "239",
+                "document_id": "AVIS-2026-7",
+                "document_date": "2026-04-02",
+                "rechnungsbezug": {
+                    "dokumentenart": "380",
+                    "rechnungsnummer": "RE-2026-4711",
+                    "faelliger_betrag": "16.60",
+                    // Condition [926]: an Abweisung transfers nothing.
+                    "ueberweisungsbetrag": "0",
+                    "rechnungsdatum": "2026-04-01",
+                },
+                "antwort_ebd": "E_0264",
+                "antwort_befunde": [
+                    {
+                        "code": "A11",
+                        "ebene": "position",
+                        "positionsnummer": 7,
+                        "detail": "Preis weicht vom Angebot ab",
+                    },
+                    {
+                        "code": "A20",
+                        "ebene": "position",
+                        "positionsnummer": 7,
+                        "detail": "Rechenfehler",
+                    },
+                ],
+                "ablehnungsgrund": "Preis weicht vom Angebot ab",
+            }),
+        );
+        let rendered =
+            render_to_wire_bytes(&msg, &test_registry("9905550000005")).expect("REMADV renders");
+        let wire = String::from_utf8_lossy(&rendered.bytes);
+
+        assert!(wire.contains("RFF+Z13:33004"), "{wire}");
+        assert!(wire.contains("CUX+2:EUR:11"), "{wire}");
+        assert!(wire.contains("DOC+380+RE-2026-4711"), "{wire}");
+        assert!(wire.contains("MOA+9:16.60"), "{wire}");
+        assert!(wire.contains("MOA+12:0"), "{wire}");
+        // `SG10 DLI` names the Positionsnummer and `SG12 AJT` every code that
+        // position was refused with — repeated „bis alle Fehler der
+        // Positionsebene genannt sind" (condition [525]). One code where the
+        // walk found two tells the issuer to correct half of it.
+        assert!(wire.contains("DLI+1:7"), "{wire}");
+        // The ESA tree, not the Netznutzungs one — `A11` means nothing in
+        // `E_0406`, and DE 1082 is what the counterparty resolves against.
+        assert!(wire.contains("AJT+A11+E_0264"), "{wire}");
+        assert!(wire.contains("AJT+A20+E_0264"), "{wire}");
+        assert!(
+            wire.contains("UNS+S"),
+            "Trennung Positions-/Summenteil: {wire}"
+        );
+        assert!(wire.contains("BGM+239+AVIS-2026-7"), "{wire}");
+        edi_energy::EdiEnergyMessage::validate(&edi_energy::parse(wire.as_bytes()).expect("parse"))
+            .expect("validate")
+            .into_error_result()
+            .unwrap_or_else(|e| panic!("REMADV 33004 must be MIG-conformant: {e:#?}\n{wire}"));
+    }
+
+    /// A Zahlungsavis carries **no** `AJT` — agreement needs no Antwortcode
+    /// (REMADV AHB 1.0a § 3.1.1) — and its BGM code is `481`, not `239`.
+    #[test]
+    fn a_zahlungsavis_states_no_antwortcode() {
+        let msg = fake_msg(
+            "REMADV",
+            "9900357000004",
+            serde_json::json!({
+                "pid": 33_001,
+                "sender": "9905550000005",
+                "receiver": "9900357000004",
+                "message_ref": "REMADV000002",
+                "document_code": "481",
+                "rechnungsbezug": {
+                    "dokumentenart": "380",
+                    "rechnungsnummer": "RE-2026-4711",
+                    "faelliger_betrag": "16.60",
+                    "ueberweisungsbetrag": "16.60",
+                    "rechnungsdatum": "2026-04-01",
+                },
+            }),
+        );
+        let rendered =
+            render_to_wire_bytes(&msg, &test_registry("9905550000005")).expect("REMADV renders");
+        let wire = String::from_utf8_lossy(&rendered.bytes);
+        assert!(wire.contains("RFF+Z13:33001"), "{wire}");
+        assert!(wire.contains("BGM+481"), "{wire}");
+        assert!(
+            !wire.contains("AJT+"),
+            "a Zahlungsavis carries no AJT: {wire}"
+        );
+        // …and the Überweisungsbetrag is the fällige Betrag, not zero.
+        assert!(wire.contains("MOA+12:16.60"), "{wire}");
+        edi_energy::EdiEnergyMessage::validate(&edi_energy::parse(wire.as_bytes()).expect("parse"))
+            .expect("validate")
+            .into_error_result()
+            .unwrap_or_else(|e| panic!("REMADV 33001 must be MIG-conformant: {e}\n{wire}"));
+    }
+
     #[test]
     fn msg_ref_from_uuid_strips_dashes_and_truncates() {
         let uuid = "550e8400-e29b-41d4-a716-446655440000";

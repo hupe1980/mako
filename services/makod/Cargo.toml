@@ -25,7 +25,12 @@ mako-gpke        = { path = "../../crates/mako-gpke" }
 mako-invoic      = { path = "../../crates/mako-invoic" }
 # The Antwortcode catalogue: a code is validated against the Entscheidungsbaum
 # that publishes it before the answer can reach the wire.
-mako-pruefung      = { path = "../../crates/mako-pruefung", default-features = false }
+# `role-msb` implies `role-esa`, and both are used directly here (the WiM
+# adapters resolve Antwortcodes, the ESA ones the Wertebestellung trees).
+# Naming them is the point: they used to arrive only because `mako-wim` enables
+# them, so dropping that would have broken makod with an error pointing
+# somewhere else entirely.
+mako-pruefung      = { workspace = true, features = ["role-msb"] }
 mako-wim         = { path = "../../crates/mako-wim" }
 mako-geli-gas    = { path = "../../crates/mako-geli-gas" }
 dvgw-edi         = { path = "../../crates/dvgw-edi" }

@@ -1019,6 +1019,10 @@ mod tests {
                 mako_wim::esa_wertebestellung::WORKFLOW_NAME,
             ),
             (
+                "mako_wim::ersteinbau::WORKFLOW_NAME",
+                mako_wim::ersteinbau::WORKFLOW_NAME,
+            ),
+            (
                 "mako_wim::weiterverpflichtung::WORKFLOW_NAME",
                 mako_wim::weiterverpflichtung::WORKFLOW_NAME,
             ),

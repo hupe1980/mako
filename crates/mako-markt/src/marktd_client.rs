@@ -185,6 +185,73 @@ pub struct ZaehlerSummary {
     /// holds a meter without a classified type.
     #[serde(default)]
     pub zaehler_typ: Option<String>,
+    /// The meter's registers, projected out of the BO4E `Zaehler` the response
+    /// already carries.
+    ///
+    /// Which registers a meter has decides which Kapitel-4.6 Messprodukte it
+    /// can serve — `E_0252` Prüfschritt 6 / `E_0256` Prüfschritt 9 — and that
+    /// is a fact about the device, not a judgement about it. A narrow
+    /// projection rather than the whole `Zaehler`: the caller needs the
+    /// direction and the OBIS group, and pulling in the full BO would make
+    /// every consumer of this summary depend on the BO4E schema version.
+    #[serde(default, rename = "data")]
+    pub daten: Option<ZaehlerDaten>,
+}
+
+/// The slice of a BO4E `Zaehler` this client reads.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ZaehlerDaten {
+    /// `Zaehler.zaehlwerke`.
+    #[serde(default)]
+    pub zaehlwerke: Vec<ZaehlwerkDaten>,
+}
+
+/// One register of a meter — its direction and its OBIS-Kennzahl.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ZaehlwerkDaten {
+    /// BO4E `Energierichtung`: `AUSSP` (Ausspeisung aus dem Netz — the
+    /// customer's Verbrauch) or `EINSP` (Einspeisung — Erzeugung).
+    #[serde(default)]
+    pub richtung: Option<String>,
+    /// `obisKennzahl`. The OBIS **C group** says what is metered: `1`/`2` are
+    /// Wirkarbeit (Bezug / Lieferung), `3`–`8` the Blindarbeit registers and
+    /// their quadrants.
+    #[serde(default, rename = "obisKennzahl")]
+    pub obis_kennzahl: Option<String>,
+}
+
+impl ZaehlwerkDaten {
+    /// `true` when this register meters Ausspeisung aus dem Netz — Verbrauch.
+    #[must_use]
+    pub fn ist_verbrauch(&self) -> bool {
+        self.richtung.as_deref() == Some("AUSSP")
+    }
+
+    /// `true` when this register meters Einspeisung ins Netz — Erzeugung.
+    #[must_use]
+    pub fn ist_erzeugung(&self) -> bool {
+        self.richtung.as_deref() == Some("EINSP")
+    }
+
+    /// `true` when this is a Blindarbeit register.
+    ///
+    /// OBIS `A-B:C.D.E` groups by **C**: `1` Wirkarbeit Bezug, `2` Wirkarbeit
+    /// Lieferung, `3` Blindarbeit Bezug, `4` Blindarbeit Lieferung, `5`–`8` the
+    /// four quadrants. So `C >= 3` is the Blindarbeit family, and a meter
+    /// without one cannot serve a Blindarbeit Messprodukt whatever its
+    /// Energieflussrichtung.
+    #[must_use]
+    pub fn ist_blindarbeit(&self) -> bool {
+        let Some(obis) = self.obis_kennzahl.as_deref() else {
+            return false;
+        };
+        // `1-1:3.29.0` → take the field after the last `:`, then its first part.
+        obis.rsplit(':')
+            .next()
+            .and_then(|rest| rest.split('.').next())
+            .and_then(|c| c.parse::<u8>().ok())
+            .is_some_and(|c| (3..=8).contains(&c))
+    }
 }
 
 impl ZaehlerSummary {
@@ -200,6 +267,28 @@ impl ZaehlerSummary {
     pub fn ist_imsys(&self) -> bool {
         self.zaehler_typ.as_deref() == Some(Self::IMSYS)
     }
+}
+
+/// Whether an MSB serves a Kapitel-4.6 Messprodukt, and in which Abo mode.
+///
+/// The answer already folds in the dated **Pflicht** rule: a Pflichtprodukt is
+/// served whatever the catalogue holds — `BNetzA` *Mitteilung Nr. 3* and
+/// §34 Abs. 2 S. 2 Nr. 10 `MsbG` — so `als_abo` / `als_einmalig` come back
+/// `Some(true)` for one even when nothing is on file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+pub struct EsaProduktAngebot {
+    /// `true` when the product is Pflicht **on the requested date** — the
+    /// Codeliste dates it, and a Vergangenheitswerte-Bestellung may reach back
+    /// before the cut-over.
+    pub pflicht: bool,
+    /// `E_0256` Prüfschritt 4. `None` means „nothing recorded", which escalates
+    /// rather than refusing a §34-mandated Zusatzleistung on a guess.
+    pub als_abo: Option<bool>,
+    /// `E_0256` Prüfschritt 5.
+    pub als_einmalig: Option<bool>,
+    /// Whether a catalogue row exists at all — distinct from the two flags,
+    /// which a Pflichtprodukt answers without one.
+    pub im_katalog: bool,
 }
 
 impl MarktdClient {
@@ -526,6 +615,92 @@ impl MarktdClient {
     /// # Errors
     ///
     /// [`MarktdClientError::Http`] on a non-404 HTTP failure.
+    /// Ask an MSB's ESA Messprodukt-Katalog about one product on one date.
+    ///
+    /// `E_0252` Prüfschritt 2 and `E_0256` Prüfschritte 4/5 ask the one
+    /// commercial question in those walks that the Codeliste cannot answer:
+    /// which of the *optional* products this MSB carries. Without it every
+    /// optional order escalates to an operator.
+    ///
+    /// `Ok(None)` when the code is not in Codeliste Kapitel 4.6 at all — a
+    /// product this Marktrolle cannot order, which the ordering workflow
+    /// refuses before any of this runs.
+    ///
+    /// # Errors
+    ///
+    /// Transport or decode failures. A `404` is a fact, not an error.
+    pub async fn esa_messprodukt_angebot(
+        &self,
+        msb_mp_id: &str,
+        messprodukt: &str,
+        at: time::Date,
+    ) -> Result<Option<EsaProduktAngebot>, MarktdClientError> {
+        let url = format!(
+            "{}/api/v1/esa/messprodukte/{msb_mp_id}/{messprodukt}",
+            self.base_url
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("at", at.to_string())])
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        resp.json()
+            .await
+            .map(Some)
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
+    /// Which **Messprodukt** an ORDERS 17007 Belegnummer subscribed to.
+    ///
+    /// `edmd`'s Typ-2 delivery surveillance calls this to size its silence
+    /// threshold: the *Codeliste der Konfigurationen* Kap. 4.6 publishes a
+    /// delivery cadence **per product**, and an inbound MSCONS 13027 names only
+    /// the Belegnummer of the ORDERS it belongs to (`SG1 RFF+AGI`).
+    ///
+    /// `Ok(None)` on `404` — no accepted Angebot names that Belegnummer, which
+    /// is the ordinary state for a delivery whose sender omitted the Muss. The
+    /// caller falls back to its configured threshold rather than inventing a
+    /// cadence for a product it cannot identify.
+    ///
+    /// # Errors
+    ///
+    /// Transport or decode failures. A `404` is a fact, not an error.
+    pub async fn esa_messprodukt_of_bestellung(
+        &self,
+        bestellung_ref: &str,
+    ) -> Result<Option<String>, MarktdClientError> {
+        let url = format!(
+            "{}/api/v1/esa/subscriptions/{bestellung_ref}",
+            self.base_url
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))?;
+        Ok(body
+            .get("messprodukt")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned))
+    }
+
     pub async fn esa_preise(
         &self,
         msb_mp_id: &str,
@@ -1783,5 +1958,71 @@ mod tests {
             matches!(r, Err(MarktdClientError::Http(_))),
             "5xx must not read as an unknown partner"
         );
+    }
+
+    /// **The OBIS C group says what a register meters.** `A-B:C.D.E` — `1`
+    /// Wirkarbeit Bezug, `2` Wirkarbeit Lieferung, `3`/`4` Blindarbeit, `5`–`8`
+    /// the four quadrants. A meter without a `C >= 3` register cannot serve a
+    /// Blindarbeit Messprodukt whatever its Energieflussrichtung, which is
+    /// `E_0252` Prüfschritt 6 / `E_0256` Prüfschritt 9.
+    #[test]
+    fn the_obis_c_group_tells_wirkarbeit_from_blindarbeit() {
+        let werk = |obis: &str, richtung: &str| ZaehlwerkDaten {
+            richtung: Some(richtung.to_owned()),
+            obis_kennzahl: Some(obis.to_owned()),
+        };
+
+        // Wirkarbeit — Bezug and Lieferung.
+        assert!(!werk("1-1:1.29.0", "AUSSP").ist_blindarbeit());
+        assert!(!werk("1-1:2.29.0", "EINSP").ist_blindarbeit());
+        // Blindarbeit and its quadrants.
+        for obis in ["1-1:3.29.0", "1-1:4.29.0", "1-1:5.8.0", "1-1:8.8.0"] {
+            assert!(werk(obis, "AUSSP").ist_blindarbeit(), "{obis}");
+        }
+        // Beyond the Blindarbeit family again.
+        assert!(!werk("1-1:9.8.0", "AUSSP").ist_blindarbeit());
+
+        // Direction is its own axis: AUSSP is Ausspeisung aus dem Netz, which
+        // is the customer's Verbrauch; EINSP is Erzeugung. Reading them the
+        // other way round refuses every Erzeugung product at a solar site.
+        assert!(werk("1-1:1.29.0", "AUSSP").ist_verbrauch());
+        assert!(!werk("1-1:1.29.0", "AUSSP").ist_erzeugung());
+        assert!(werk("1-1:2.29.0", "EINSP").ist_erzeugung());
+
+        // A register with no OBIS says nothing rather than claiming Wirkarbeit.
+        let ohne = ZaehlwerkDaten {
+            richtung: Some("AUSSP".to_owned()),
+            obis_kennzahl: None,
+        };
+        assert!(!ohne.ist_blindarbeit());
+    }
+
+    /// The summary reads the registers straight out of the `Zaehler` the
+    /// endpoint already returns — no second round trip, and no dependency on
+    /// the BO4E schema version beyond the two fields it names.
+    #[test]
+    fn the_summary_projects_the_registers_off_the_wire() {
+        let wire = serde_json::json!({
+            "zaehler_id": "1ESA0000000001",
+            "zaehler_typ": "INTELLIGENTES_MESSSYSTEM",
+            "data": {
+                "zaehlwerke": [
+                    { "obisKennzahl": "1-1:1.29.0", "richtung": "AUSSP" },
+                    { "obisKennzahl": "1-1:2.29.0", "richtung": "EINSP" }
+                ]
+            }
+        });
+        let s: ZaehlerSummary = serde_json::from_value(wire).expect("summary");
+        assert!(s.ist_imsys());
+        let werke = &s.daten.expect("registers").zaehlwerke;
+        assert_eq!(werke.len(), 2);
+        assert!(werke.iter().any(ZaehlwerkDaten::ist_verbrauch));
+        assert!(werke.iter().any(ZaehlwerkDaten::ist_erzeugung));
+
+        // A response without the BO — an older projection, or a meter with no
+        // registers on file — deserialises rather than failing.
+        let bare: ZaehlerSummary =
+            serde_json::from_value(serde_json::json!({ "zaehler_id": "X" })).expect("summary");
+        assert!(bare.daten.is_none());
     }
 }

@@ -10,6 +10,7 @@
 //! | PID | Message | Meaning | Direction |
 //! |---|---|---|---|
 //! | 17005 | ORDERS | Bestellung Rechnungsabwicklung — the LF accepts the quote | LF → MSB |
+//! | 21032 | IFTSTA | Antwort auf das Angebot — the LF **refuses** it (`E_0205`/`E_0208`) | LF → MSB |
 //! | 17006 | ORDERS | Beendigung Rechnungsabwicklung | **either** direction |
 //! | 19009 | ORDRSP | Bestätigung der Beendigung | answered by the 17006 receiver |
 //! | 19010 | ORDRSP | Ablehnung der Beendigung | answered by the 17006 receiver |
@@ -21,6 +22,13 @@
 //!   Angebot", Prozessschritt 2/3 of the Angebot/Anfrage sequences) — receiving
 //!   it *is* the arrangement taking effect, so the process records it and
 //!   completes. Nothing further travels on the wire.
+//! - **…and it is only the positive half of that Prozessschritt.** The same
+//!   step is answered by ORDERS 17005 *or* by **IFTSTA 21032** „Antwort auf das
+//!   Angebot", and it is 21032 that carries the refusal and its
+//!   Entscheidungsbaum: `E_0205` when the MSB offered (lfd. Nr. 30920/30930),
+//!   `E_0208` when the LF asked first (31010/31020). A deployment that routes
+//!   only 17005 records every acceptance and can never receive a „nein" — the
+//!   Angebot then sits open until the operator notices.
 //! - **17006 flows both ways.** The MSB may end the arrangement (AD §2.9, EBD
 //!   `E_0206`) and so may the LF (AD §2.11, EBD `E_0209`); whichever side
 //!   *receives* the Beendigung answers with ORDRSP 19009/19010. The answer is
@@ -47,6 +55,48 @@ pub const RECHNUNGSABWICKLUNG_ORDERS_PIDS: &[u32] = &[17005, 17006];
 
 /// Inbound ORDRSP PIDs — the counterparty's answer to a Beendigung mako sent.
 pub const RECHNUNGSABWICKLUNG_ORDRSP_PIDS: &[u32] = &[19009, 19010];
+
+/// IFTSTA 21032 „Antwort auf das Angebot" — the LF's **refusal** of the
+/// Angebot, and the only carrier its Entscheidungsbaum has.
+///
+/// The acceptance is ORDERS 17005 and carries no code; this is the other half
+/// of the same Prozessschritt. Which tree the code belongs to follows the
+/// sequence, not the PID — see [`angebot_ablehnung_ebd`].
+pub const RECHNUNGSABWICKLUNG_ABLEHNUNG_PID: u32 = 21032;
+
+/// Which sequence a Rechnungsabwicklung Angebot came out of.
+///
+/// It decides the Entscheidungsbaum of an inbound IFTSTA 21032, and the PID
+/// cannot: both sequences end in the same message. `A02` is „ausschließlich
+/// kME" in `E_0205` and „kein Preisblatt vorhanden" in `E_0208`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AngebotHerkunft {
+    /// The MSB offered unprompted — WiM Teil 1 Kap. 3.6.3.2, `E_0205`.
+    AngebotDurchMsb,
+    /// The LF asked first with REQOTE 35002 — Kap. 3.6.3.4, `E_0208`.
+    AnfrageDurchLf,
+}
+
+/// The Entscheidungsbaum an inbound IFTSTA 21032 resolves against.
+///
+/// **The two alphabets overlap and disagree.** `E_0205` publishes `A01`–`A06`
+/// and `E_0208` publishes `A01`–`A03`, and the three they share mean different
+/// things — `A01` is „Kein gültiger Vertrag zwischen MSB und LF" in the first
+/// and „Vertragsverhältnis lässt das Beginndatum nicht zu" in the second. So a
+/// code cannot be validated into the right tree: the wrong tree accepts it and
+/// records the wrong reason. The Herkunft has to be *known*, which is why
+/// [`RechnungsabwicklungCommand::ReceiveAngebotAblehnung`] takes an `Option`
+/// and an unknown one records the code without claiming a meaning.
+#[must_use]
+pub const fn angebot_ablehnung_ebd(herkunft: AngebotHerkunft) -> &'static str {
+    match herkunft {
+        AngebotHerkunft::AngebotDurchMsb => mako_pruefung::codes::EBD_RECHNUNGSABWICKLUNG_ANGEBOT,
+        AngebotHerkunft::AnfrageDurchLf => {
+            mako_pruefung::codes::EBD_RECHNUNGSABWICKLUNG_ANFRAGE_ANTWORT
+        }
+    }
+}
 
 /// ORDRSP PID for a Zustimmung / an Ablehnung to a received Beendigung.
 #[must_use]
@@ -76,6 +126,26 @@ pub enum RechnungsabwicklungEvent {
         sender: MarktpartnerCode,
         /// GLN of the MSB whose invoicing the LF now runs.
         receiver: MarktpartnerCode,
+        /// EDIFACT message reference.
+        message_ref: MessageRef,
+    },
+    /// IFTSTA 21032 received — the LF **refused** the Angebot.
+    ///
+    /// The other half of the Prozessschritt `BestellungErhalten` records. Also
+    /// terminal on the wire: an Ablehnung is not answered.
+    AngebotAbgelehnt {
+        /// GLN of the refusing LF.
+        sender: MarktpartnerCode,
+        /// GLN of the MSB whose Angebot was refused.
+        receiver: MarktpartnerCode,
+        /// `E_0205` or `E_0208` — which one follows the sequence, not the PID.
+        ///
+        /// `None` when the Herkunft of the Angebot was not established. The
+        /// code is still recorded; what is not recorded is a meaning for it,
+        /// because the two trees overlap on `A01`–`A03` with different wording.
+        ebd: Option<String>,
+        /// The Antwortcode the LF stated, where the IFTSTA carried one.
+        antwort_code: Option<String>,
         /// EDIFACT message reference.
         message_ref: MessageRef,
     },
@@ -134,6 +204,7 @@ impl EventPayload for RechnungsabwicklungEvent {
     fn event_type(&self) -> &'static str {
         match self {
             Self::BestellungErhalten { .. } => "RechnungsabwicklungBestellungErhalten",
+            Self::AngebotAbgelehnt { .. } => "RechnungsabwicklungAngebotAbgelehnt",
             Self::BeendigungErhalten { .. } => "RechnungsabwicklungBeendigungErhalten",
             Self::BeendigungGesendet { .. } => "RechnungsabwicklungBeendigungGesendet",
             Self::AntwortGesendet { .. } => "RechnungsabwicklungAntwortGesendet",
@@ -180,6 +251,15 @@ pub enum RechnungsabwicklungState {
     New,
     /// ORDERS 17005 recorded — the arrangement is in force. Terminal.
     Bestellt(RechnungsabwicklungData),
+    /// IFTSTA 21032 recorded — the LF refused the Angebot. Terminal: no
+    /// arrangement comes into force and nothing answers an Ablehnung.
+    Abgelehnt {
+        /// `E_0205` or `E_0208`, or `None` when the Herkunft was unknown — see
+        /// [`angebot_ablehnung_ebd`].
+        ebd: Option<String>,
+        /// The code the LF stated, where it carried one.
+        antwort_code: Option<String>,
+    },
     /// ORDERS 17006 received; mako owes the ORDRSP decision.
     BeendigungEingegangen(RechnungsabwicklungData),
     /// ORDERS 17006 sent; awaiting the counterparty's ORDRSP.
@@ -216,6 +296,7 @@ impl RechnungsabwicklungState {
         match self {
             Self::New => "New",
             Self::Bestellt(_) => "Bestellt",
+            Self::Abgelehnt { .. } => "Abgelehnt",
             Self::BeendigungEingegangen(_) => "BeendigungEingegangen",
             Self::BeendigungAngefragt => "BeendigungAngefragt",
             Self::Beendet { .. } => "Beendet",
@@ -243,6 +324,28 @@ pub enum RechnungsabwicklungCommand {
         validation_passed: bool,
         /// Validation errors.
         validation_errors: Vec<String>,
+    },
+    /// Inbound IFTSTA 21032 — the LF refused the Angebot.
+    ///
+    /// `herkunft` is not derivable from the message: both sequences end in the
+    /// same PID and only the Vorgang the Angebot opened says which tree the
+    /// code belongs to.
+    ReceiveAngebotAblehnung {
+        /// GLN of the refusing LF.
+        sender: MarktpartnerCode,
+        /// GLN of this party.
+        receiver: MarktpartnerCode,
+        /// Which sequence the Angebot came out of — it picks `E_0205`/`E_0208`.
+        ///
+        /// `None` where the caller could not establish it. The refusal is then
+        /// recorded verbatim and left for an operator, which is the only honest
+        /// outcome: the two trees share `A01`–`A03` with different meanings, so
+        /// guessing does not fail closed — it records the wrong reason.
+        herkunft: Option<AngebotHerkunft>,
+        /// `SG4 STS` DE 9013, where the IFTSTA carried one.
+        antwort_code: Option<String>,
+        /// EDIFACT message reference.
+        message_ref: MessageRef,
     },
     /// Initiate a Beendigung (mako's side, via the ERP command API).
     SendBeendigung {
@@ -322,6 +425,12 @@ impl Workflow for WimRechnungsabwicklungWorkflow {
                 receiver: receiver.clone(),
                 message_ref: message_ref.clone(),
             }),
+            RechnungsabwicklungEvent::AngebotAbgelehnt {
+                ebd, antwort_code, ..
+            } => RechnungsabwicklungState::Abgelehnt {
+                ebd: ebd.clone(),
+                antwort_code: antwort_code.clone(),
+            },
             RechnungsabwicklungEvent::BeendigungErhalten {
                 sender,
                 receiver,
@@ -411,6 +520,42 @@ impl Workflow for WimRechnungsabwicklungWorkflow {
                     }
                 };
                 Ok(vec![event].into())
+            }
+
+            RechnungsabwicklungCommand::ReceiveAngebotAblehnung {
+                sender,
+                receiver,
+                herkunft,
+                antwort_code,
+                message_ref,
+            } => {
+                if !matches!(state, RechnungsabwicklungState::New) {
+                    return Err(WorkflowError::invalid_state("New", state.label()));
+                }
+                let ebd = herkunft.map(angebot_ablehnung_ebd);
+                // A code from another tree is not a softer refusal — it is
+                // unreadable at this end. `None` for the code is admissible
+                // (the AHB makes the STS conditional); a wrong code is not.
+                //
+                // With no Herkunft there is no tree to check against, and
+                // checking against a guessed one is worse than not checking:
+                // `E_0205` and `E_0208` share `A01`–`A03`, so the guess would
+                // pass and stamp the wrong Bedeutung on the refusal.
+                if let (Some(t), Some(c)) = (ebd, antwort_code.as_ref())
+                    && mako_pruefung::codes::lookup(t, c).is_none()
+                {
+                    return Err(WorkflowError::rejected(format!(
+                        "Antwortcode {c:?} is not published in {t}"
+                    )));
+                }
+                Ok(vec![RechnungsabwicklungEvent::AngebotAbgelehnt {
+                    sender,
+                    receiver,
+                    ebd: ebd.map(ToOwned::to_owned),
+                    antwort_code,
+                    message_ref,
+                }]
+                .into())
             }
 
             RechnungsabwicklungCommand::SendBeendigung {
@@ -711,4 +856,84 @@ mod tests {
     }
 
     use mako_engine::ids::DeadlineId;
+
+    /// The trap this module's `Option<AngebotHerkunft>` exists for: `E_0205`
+    /// and `E_0208` **share** `A01`–`A03` and disagree about what they mean, so
+    /// a guessed Herkunft does not fail closed — the code check passes and the
+    /// wrong Bedeutung is recorded.
+    #[test]
+    fn the_two_angebot_trees_overlap_and_disagree() {
+        use mako_pruefung::codes::lookup;
+        for c in ["A01", "A02", "A03"] {
+            let a = lookup("E_0205", c).unwrap_or_else(|| panic!("E_0205 publishes {c}"));
+            let b = lookup("E_0208", c).unwrap_or_else(|| panic!("E_0208 publishes {c}"));
+            assert_ne!(
+                a.bedeutung, b.bedeutung,
+                "{c} must mean different things in the two trees — that is the trap"
+            );
+        }
+        // …and the ones only `E_0205` has are what a wrong guess would reject
+        // instead, which is the visible half of the same defect.
+        for c in ["A04", "A05", "A06"] {
+            assert!(lookup("E_0205", c).is_some());
+            assert!(lookup("E_0208", c).is_none());
+        }
+    }
+
+    /// With no Herkunft the refusal is recorded and no tree is claimed.
+    #[test]
+    fn an_unknown_herkunft_records_the_code_without_a_tree() {
+        let out = WimRechnungsabwicklungWorkflow::handle(
+            &RechnungsabwicklungState::New,
+            RechnungsabwicklungCommand::ReceiveAngebotAblehnung {
+                sender: MarktpartnerCode::new("9900000000002"),
+                receiver: MarktpartnerCode::new("9900000000003"),
+                herkunft: None,
+                antwort_code: Some("A01".to_owned()),
+                message_ref: MessageRef::new("MSG-1"),
+            },
+        )
+        .expect("an unknown Herkunft is recorded, not refused");
+        let state = out
+            .events
+            .iter()
+            .fold(RechnungsabwicklungState::New, |s, e| {
+                WimRechnungsabwicklungWorkflow::apply(s, e)
+            });
+        let RechnungsabwicklungState::Abgelehnt { ebd, antwort_code } = &state else {
+            panic!("expected Abgelehnt, got {}", state.label());
+        };
+        assert_eq!(*ebd, None, "no tree may be claimed without the Herkunft");
+        assert_eq!(antwort_code.as_deref(), Some("A01"));
+    }
+
+    /// A stated Herkunft does resolve the tree, and a code outside it is refused.
+    #[test]
+    fn a_stated_herkunft_resolves_the_tree_and_checks_the_code() {
+        let cmd = |herkunft, code: &str| RechnungsabwicklungCommand::ReceiveAngebotAblehnung {
+            sender: MarktpartnerCode::new("9900000000002"),
+            receiver: MarktpartnerCode::new("9900000000003"),
+            herkunft: Some(herkunft),
+            antwort_code: Some(code.to_owned()),
+            message_ref: MessageRef::new("MSG-1"),
+        };
+        let out = WimRechnungsabwicklungWorkflow::handle(
+            &RechnungsabwicklungState::New,
+            cmd(AngebotHerkunft::AngebotDurchMsb, "A05"),
+        )
+        .expect("A05 is published in E_0205");
+        let RechnungsabwicklungEvent::AngebotAbgelehnt { ebd, .. } = &out.events[0] else {
+            panic!("expected an AngebotAbgelehnt");
+        };
+        assert_eq!(ebd.as_deref(), Some("E_0205"));
+
+        // `A05` does not exist in `E_0208` — the LF-initiated sequence.
+        assert!(
+            WimRechnungsabwicklungWorkflow::handle(
+                &RechnungsabwicklungState::New,
+                cmd(AngebotHerkunft::AnfrageDurchLf, "A05"),
+            )
+            .is_err()
+        );
+    }
 }

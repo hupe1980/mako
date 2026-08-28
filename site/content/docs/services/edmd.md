@@ -1009,16 +1009,32 @@ An hourly sweep asks the complementary question.
 
 ### The ESA Typ-2 stream
 
-Swept separately, with its own threshold (`typ2_silent_after_hours`), register
-rows (`stream = 'TYP2'`) and events (`de.messwert.esa.typ2.delivery.overdue` /
-`.resumed`). A Typ-2 gap breaches the §60 Abs. 1 MsbG delivery duty toward one
-ESA and reaches no billing run that could come up short, so nothing else would
-notice it.
+Swept separately, with its own register rows (`stream = 'TYP2'`) and events
+(`de.messwert.esa.typ2.delivery.overdue` / `.resumed`). A Typ-2 gap breaches the
+§60 Abs. 1 MsbG delivery duty toward one ESA and reaches no billing run that
+could come up short, so nothing else would notice it.
 
-Keyed on the delivered **OBIS register**: a MSCONS 13027 names its register per
-line item and its subscription only in `SG1 RFF+AGI`, which `esa_typ2_reads`
-does not record. Coverage is not scored — a Typ-2 series is delivered as ordered
-and never reconciled or substituted, so only silence is a defect.
+Keyed on **(Meldepunkt, subscription, register)**, all three of which
+`esa_typ2_reads` records: a MSCONS 13027 names its register per line item
+(`SG9 PIA+5 … :SRW`) and its subscription in `SG1 RFF+AGI` (MSCONS AHB 3.2
+§11.2 hint `[574]`). The register is the finer signal — a subscription whose
+Erzeugung register goes dark while Verbrauch keeps arriving is broken.
+
+**The silence threshold comes from the ordered Messprodukt**, because the
+*Codeliste der Konfigurationen* 1.4 Kap. 4.6 publishes a cadence per product:
+the Rohdaten products state „unverzüglich, jedoch spätestens bis 9:30 Uhr", so
+silence past **33 h** (a day plus the cut-off) is late, while the
+aufbereitete-Daten products defer to *WiM Teil 2 Kap. 2.5.5*, whose windows
+depend on the Werteart and the installed equipment.
+
+The MSCONS names only the Belegnummer, so the sweep resolves the product at
+`marktd` (`GET /api/v1/esa/subscriptions/{bestellung_ref}`). Where the product
+publishes no wall-clock deadline — or the Belegnummer resolves to nothing — the
+configured `typ2_silent_after_hours` (default 36) stands: asserting a clock the
+Codeliste does not state raises a breach that has not happened.
+
+Coverage is not scored — a Typ-2 series is delivered as ordered and never
+reconciled or substituted, so only silence is a defect.
 
 ```bash
 curl -s "http://edmd:8380/api/v1/surveillance/delivery?state=SILENT" \

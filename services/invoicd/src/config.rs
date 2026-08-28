@@ -10,7 +10,8 @@
 //! url = "env:DATABASE_URL"
 //!
 //! [identity]
-//! tenant = "9900357000004"
+//! tenant     = "9900357000004"
+//! marktrolle = "lieferant"   # lieferant (default) | netzbetreiber | esa
 //!
 //! [makod]
 //! url     = "http://makod:8080"
@@ -141,6 +142,50 @@ pub use mako_service::config::DatabaseConfig;
 pub struct IdentityConfig {
     /// Tenant identifier written to every receipt row.
     pub tenant: String,
+    /// The Marktrolle this deployment **receives** invoices in.
+    ///
+    /// PID 31009 carries five Use-Cases and the message body names none of
+    /// them: BDEW Allgemeine Festlegungen §2.13 gives every Marktrolle its own
+    /// MP-ID, so the recipient's role is half of the answer (`IMD+7081` is the
+    /// other half). Without it a Preisblatt-B invoice from an MSB cannot be
+    /// told from an NB's — `E_0270` and `E_0273` publish the same codes under
+    /// different numbers, and an answer naming the wrong one is undefined at
+    /// the counterparty.
+    ///
+    /// Defaults to [`EmpfaengerRolle::Lieferant`], which is what the previous
+    /// behaviour amounted to.
+    #[serde(default)]
+    pub marktrolle: EmpfaengerRolle,
+}
+
+/// The Marktrolle an `invoicd` deployment receives invoices in.
+///
+/// Deliberately narrower than `mako_fristen::vorlauf::RechnungEmpfaenger`,
+/// which folds LF and MSB into one arm because they share an answer window.
+/// They do **not** share a Preisblatt-B tree, so the split matters here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EmpfaengerRolle {
+    /// Lieferant — `E_0210` (Messstellenbetrieb) resp. `E_0270` (Preisblatt B).
+    #[default]
+    Lieferant,
+    /// Netzbetreiber — `E_0566` resp. `E_0273`.
+    Netzbetreiber,
+    /// Energieserviceanbieter — `E_0264`, whichever the Gegenstand.
+    Esa,
+}
+
+impl EmpfaengerRolle {
+    /// The answer-window arm this role falls in.
+    #[must_use]
+    pub const fn rechnung_empfaenger(self) -> mako_fristen::vorlauf::RechnungEmpfaenger {
+        use mako_fristen::vorlauf::RechnungEmpfaenger as R;
+        match self {
+            Self::Lieferant => R::LieferantOderMsb,
+            Self::Netzbetreiber => R::Netzbetreiber,
+            Self::Esa => R::Esa,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

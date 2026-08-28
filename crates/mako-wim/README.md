@@ -62,7 +62,11 @@ returns the wire value.
 | Weiterverpflichtung | `E_0203` / `E_2004` | `Z13` `Z14` / `Z22` | `S_0061` / `S_0062` | `G_0072` / `G_0073` |
 | Gerätewechselabsicht | `E_0204` / `E_2007` | `ZB4` / `ZB5`; `E17` `Z07` in beiden | `S_0065` / `S_0066` | `G_0059` / `G_0060` |
 | Bestellung Geräteübernahme | `E_0247` / `E_2011` | `Z13` / `5` `Z32` | `S_0067` / `S_0068` | `G_0061` / `G_0074` |
-| Messlokationsänderung | `E_0249` (NB) / `E_0250` (LF) | `A02` / `A01` (+ `A03` `A04`) | `E_0249` / `E_0250` | — |
+| Messlokationsänderung, direkt beauftragt | `E_0249` (NB) / `E_0250` (LF) | `A02` / `A01` (+ `A03` `A04`) | `E_0249` / `E_0250` | — |
+| Anfrage Änderung der Technik (35005) | `E_0278` (NB) / `E_0281` (LF) | — / `A01`–`A04` `A99` resp. `A01`–`A06` `A99` | `E_0278` / `E_0281` | — |
+| Bestellung Änderung der Technik nach Angebot | `E_0279` (NB) / `E_0283` (LF) | `A06` / `A01`–`A05` `A99` | `E_0279` / `E_0283` | — |
+| Messlokationsänderung durchführen | `E_0286` | — / `A01` `A02` `A03` `A99` | `E_0286` | — |
+| Ersteinbau iMS (21029 → 21030/21031) | `E_0233` | `A03` / `A01` `A02` `A04` | `E_0233` | — |
 
 None of these alphabets is a GPKE one — `A02` and `A05` appear in no
 MSB-Wechsel tree — and the Gas lists are not the Strom lists.
@@ -176,7 +180,8 @@ the Gastag boundary. This leg is what makes the Wechsel constitutive.
 | `geraetewechsel`   | PIDs 55039/55042/55051/55168 and their Gas twins 44039/44042/44051/44168, plus 44183 and the IFTSTA Gesamtvorgang leg 21009–21013 — MSB-Wechsel workflow + projection. Handles both directions: inbound UTILMD (`ReceiveUtilmd` → APERAK → `DispatchAntwort` → `ReceiveGesamtvorgang` → `DispatchZuordnung`) and ERP-initiated outbound orders (`InitiateDeviceChange` → `ReceiveAntwort` → `MeldeGesamtvorgang` → `ReceiveZuordnungsantwort`). Antwortfrist per process via `antwort_frist_werktage()`; the Realisierungskorridor is enforced on the Gesamtvorgang date. |
 | `geraeteubernahme` | ORDERS 17001 → ORDRSP 19001/19002 (Bestellbestätigung/Ablehnung) and ORDERS 17009 → 19015/19016 (Eigenausbau ja/nein) — WiM Teil 1 Kap. 3.1/3.2 |
 | `weiterverpflichtung` | ORDERS 17002 → ORDRSP 19003/19004 — the NB keeping the abgebender MSB on the Messlokation while the gMSB prepares to take over (Kap. 2.4.2 Nr. 5/6, `E_0203`) |
-| `technik_aenderung` | ORDERS 17011/17118 → ORDRSP 19005/19006 — Messlokationsänderung, **10 WT** Antwort against a **20 WT** Vorlauffrist (Kap. 3.3) |
+| `technik_aenderung` | REQOTE 35005 → QUOTES 15005 / IFTSTA 21033, ORDERS 17011/17118 → ORDRSP 19005/19006, IFTSTA 21025/21027 — Messlokationsänderung auf **beiden** Wegen; **10 WT** Antwort, **20 WT** Vorlauffrist nur auf der direkten Beauftragung (Kap. 3.3 / AWH Änd. Technik) |
+| `ersteinbau` | IFTSTA 21029 → 21030/21031 — Ersteinbau eines iMS in eine bestehende Messlokation, **3 WT** Antwort aus `E_0233` (Kap. 3.5, Strom only) |
 | `stammdaten`       | PIDs 17102–17133, 17132 — Stammdaten Anforderung / Übermittlung           |
 | `wertebestellung`  | PIDs 35003/15003/17007/17008, ORDCHG 39002 (Stornierung, answered by ORDRSP 19013/19014), ORDRSP 19011/19012, IFTSTA 21042 — **ESA Wertebestellung** (WiM Teil 2 Kap. 4): Anfrage → Angebot → Bestellung → Stornierung/Abbestellung, plus MSB-initiated termination. Fristen keyed on the positive AS4-Zustellquittung (ÜT); answers carry an `E_0254`/`E_0256`/`E_0257` Antwortcode. |
 | `invoic`           | PIDs 31009 (MSB-Rechnung, Strom) · 31003 (Abrechnung von Dienstleistungen, beide Sparten) · 31004 (Stornorechnung, Sparte-neutral). Both sides: **MSB** sends via `SendInvoic` (invoicer, awaits REMADV); **NB/LF/ESA** ingests via `ReceiveInvoic` then settles/disputes. Inbound REMADV 33001–33004 (incl. the Strom itemized Abweisungen 33003/34) + COMDIS 29001. Routed via `wim-invoic`; replies use conversation-ID correlation (RFF+Z13 → 31009 ref) so they resume this family even when the shared REMADV PID statically resolves to GPKE. The state machine is `mako-invoic`'s, shared with the GPKE, GaBi Gas and GeLi Gas billing families; this module declares only the family and the Gas Ablehnungs-Entscheidungsbaum. |
@@ -327,7 +332,7 @@ Zählwerk and belong to `edmd`.
 Prüfschritt code in DE 4465 with its EBD in DE 1082. Conditions [17]/[18] require
 the code to sit in that tree's Zustimmungs- resp. Ablehnungs-Cluster, so **the
 cluster selects the answer PID**. The MSB commands therefore take an
-`antwort_code` resolved against [`mako_pruefung::msb::esa`], never an `accept`
+`antwort_code` resolved against [`mako_pruefung::esa::wertebestellung`], never an `accept`
 flag alongside it.
 
 **And it is the whole content of a refusal on the receiving side too.** Those

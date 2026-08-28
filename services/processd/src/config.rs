@@ -290,7 +290,7 @@ pub struct NbConfig {
 }
 
 fn default_gas_bearbeitungsfrist_wt() -> u32 {
-    mako_pruefung::nb::anmeldung::GAS_BEARBEITUNGSFRIST_WT_DEFAULT
+    mako_fristen::vorlauf::GAS_BEARBEITUNGSFRIST_WT_DEFAULT
 }
 
 impl Default for NbConfig {

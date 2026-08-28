@@ -3242,6 +3242,50 @@ fn default_cert_state() -> String {
     "pending".to_owned()
 }
 
+/// One row of an MSB's **ESA Messprodukt-Katalog**: a Kapitel-4.6 product it
+/// serves, in which Abo mode, over which window.
+///
+/// Answers the one commercial question `E_0252` Prüfschritt 2 and `E_0256`
+/// Prüfschritte 4/5 ask and the Codeliste cannot: which of the *optional*
+/// products this MSB carries. The seven Pflichtprodukte are served regardless
+/// (BNetzA *Mitteilung Nr. 3*, §34 Abs. 2 S. 2 Nr. 10 MsbG), so an empty
+/// catalogue never refuses a mandated Zusatzleistung.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EsaMessproduktAngebot {
+    #[serde(default)]
+    pub tenant: String,
+    /// The MSB whose catalogue this belongs to.
+    pub msb_mp_id: String,
+    /// 13-digit Messprodukt-Code from Codeliste der Konfigurationen 1.4
+    /// Kap. 4.6, digits only.
+    pub messprodukt: String,
+    /// `E_0256` Prüfschritt 4 — served as a turnusmäßige Übermittlung
+    /// (`IMD++Z01`).
+    #[serde(default = "crate::repository::default_true")]
+    pub als_abo: bool,
+    /// `E_0256` Prüfschritt 5 — served as a single transmission (`IMD++Z03`).
+    ///
+    /// Separate from [`Self::als_abo`] because the tree refuses the two with
+    /// **different codes** — `A04` for the Abo, `A05` for the einmalige
+    /// Übermittlung — so collapsing them loses which one the MSB declined.
+    #[serde(default = "crate::repository::default_true")]
+    pub als_einmalig: bool,
+    /// Half-open `[valid_from, valid_to)`. A catalogue changes, and a
+    /// Vergangenheitswerte-Bestellung is judged against the period the values
+    /// are wanted for.
+    #[serde(default)]
+    pub valid_from: Option<time::Date>,
+    #[serde(default)]
+    pub valid_to: Option<time::Date>,
+}
+
+/// Default for the two catalogue flags: an entry that exists serves the product
+/// unless it says otherwise.
+#[must_use]
+pub const fn default_true() -> bool {
+    true
+}
+
 /// One priced Artikel-ID of an accepted QUOTES 15003 Angebot.
 ///
 /// **The ESA price basis**, and the only one it has. `PreisblattMessung` is what
@@ -3252,7 +3296,7 @@ fn default_cert_state() -> String {
 /// Übermittlung von Werten **und die damit verbundenen Kosten**", the offer
 /// carries a Bindungsfrist because it binds, and the MSB's later INVOIC 31009
 /// names the same Artikel-IDs back (`SG26 LIN` DE 7143 `Z09`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EsaMessproduktPreis {
     #[serde(default)]
     pub tenant: String,
@@ -3405,6 +3449,27 @@ pub trait EinwilligungRepository: Send + Sync {
     /// and was still active, so the caller can fire the 17008 Abbestellung.
     async fn revoke(&self, tenant: &str, id: Uuid) -> Result<Option<EinwilligungRecord>, MdmError>;
 
+    /// Close out every consent whose **`valid_to` has passed**, returning the
+    /// records so the caller can stop the deliveries they authorised.
+    ///
+    /// # Why expiry is not a quieter revocation
+    ///
+    /// A consent is the ESA's whole legal basis (§ 49 Abs. 2 Nr. 9 MsbG), and
+    /// `E_0256` Prüfschritt 8 makes its lapse market-visible: the MSB refuses a
+    /// *new* Bestellung with `A08` („widerrufen **oder ihre Gültigkeit ist
+    /// abgelaufen**"). But nothing in the protocol stops a delivery that is
+    /// already running — the only stop signal is the ORDERS 17008, and it is
+    /// the ESA that has to send it.
+    ///
+    /// Nothing else closes that gap: the gate refuses only *new* orders, the
+    /// registry's listing drops the row, and the MSB keeps sending until it is
+    /// told to stop.
+    ///
+    /// Idempotent by construction: it stamps `revoked_at` in the same statement
+    /// that selects, so a second sweep returns nothing and the 17008 is sent
+    /// once per consent.
+    async fn revoke_expired(&self, now: time::Date) -> Result<Vec<EinwilligungRecord>, MdmError>;
+
     /// Upsert a framework agreement.
     async fn upsert_framework(&self, rec: EsaFrameworkAgreement) -> Result<(), MdmError>;
 
@@ -3430,6 +3495,54 @@ pub trait EinwilligungRepository: Send + Sync {
     /// 31009 bills a Rahmenvertrag rather than a single Meldepunkt, and its
     /// positions name Artikel-IDs without saying which subscription each
     /// belongs to. Narrowing to one would refuse every position of the others.
+    /// Whether this MSB serves a Kapitel-4.6 Messprodukt on `at`, and in which
+    /// Abo mode.
+    ///
+    /// `E_0252` Prüfschritt 2 and `E_0256` Prüfschritte 4/5 ask a **commercial**
+    /// question the Codeliste cannot answer: which of the *optional* products
+    /// this MSB carries. Without a record both walks escalate every optional
+    /// order to an operator, which is the single change that moves most of them
+    /// to a decision.
+    ///
+    /// `Ok(None)` means the catalogue holds no entry for that product on that
+    /// date — „not carried" for an optional product, and **irrelevant** for a
+    /// Pflichtprodukt, which §34 Abs. 2 S. 2 Nr. 10 MsbG obliges the MSB to
+    /// serve whatever its catalogue says. The caller applies that rule; this
+    /// method reports only what is on file.
+    async fn esa_messprodukt_angebot(
+        &self,
+        tenant: &str,
+        msb_mp_id: &str,
+        messprodukt: &str,
+        at: time::Date,
+    ) -> Result<Option<EsaMessproduktAngebot>, MdmError>;
+
+    /// Record (or replace) what this MSB serves, for one validity window.
+    async fn upsert_esa_messprodukt_katalog(
+        &self,
+        eintraege: &[EsaMessproduktAngebot],
+    ) -> Result<(), MdmError>;
+
+    /// Which **Messprodukt** an ORDERS 17007 Belegnummer subscribed to.
+    ///
+    /// `esa_messprodukt_preise` is the only place that mapping exists outside
+    /// the running `makod` process: `makod` files the accepted Angebot there on
+    /// the ORDRSP 19011 with the Bestellung's Belegnummer beside the product.
+    ///
+    /// `edmd`'s Typ-2 delivery surveillance needs it because the Codeliste
+    /// publishes a delivery cadence **per product** — the Rohdaten products say
+    /// „unverzüglich, jedoch spätestens bis 9:30 Uhr", the aufbereitete-Daten
+    /// ones defer to WiM Teil 2 Kap. 2.5.5 — and an inbound MSCONS 13027 names
+    /// only the Belegnummer (`SG1 RFF+AGI`), never the product.
+    ///
+    /// `Ok(None)` when no accepted offer names that Belegnummer, which is the
+    /// ordinary state for a delivery whose sender omitted the Muss.
+    async fn esa_messprodukt_of_bestellung(
+        &self,
+        tenant: &str,
+        bestellung_ref: &str,
+    ) -> Result<Option<String>, MdmError>;
+
     async fn esa_preise_at(
         &self,
         tenant: &str,

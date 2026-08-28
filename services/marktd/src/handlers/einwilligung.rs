@@ -26,10 +26,10 @@ use axum::{
 };
 use mako_markt::{
     cloudevents::MarktEvent,
-    makod_client::{ForwardCommand, MakodClient},
+    makod_client::MakodClient,
     repository::{
         ConsentPerspective, EinwilligungRecord, EinwilligungRepository, EsaFrameworkAgreement,
-        EsaMessproduktPreis,
+        EsaMessproduktAngebot, EsaMessproduktPreis,
     },
 };
 use serde::Deserialize;
@@ -236,6 +236,10 @@ pub async fn revoke_einwilligung(
             "esa_mp_id": revoked.esa_mp_id,
             "anschlussnutzer_ref": revoked.anschlussnutzer_ref,
             "location_ids": revoked.location_ids,
+            // Which of the two ways the basis ended. An audit that cannot tell
+            // a Widerruf from an Ablauf cannot answer „did anyone withdraw
+            // consent this quarter" — see `consent_lifecycle`.
+            "grund": "einwilligung_widerrufen",
         }),
     )
     .await
@@ -245,39 +249,9 @@ pub async fn revoke_einwilligung(
     }
 
     // GDPR Art. 7(3): stopping value delivery requires an Abbestellung (17008)
-    // per covered location. Fire it at makod — best-effort so a makod outage
-    // never blocks the customer's revocation right.
-    //
-    // **No `messprodukt`, deliberately.** An ESA subscription is the
-    // (Meldepunkt, Messprodukt) pair and one location may carry several — the
-    // Codeliste offers `9991 00000 305 6` and `9991 00000 314 7` for the same
-    // Marktlokation. A Widerruf withdraws the lawful basis for all of them, and
-    // marktd has no idea how many are running: makod resolves an omitted
-    // `messprodukt` to *every* live subscription at the location and sends one
-    // 17008 each. Naming one here would stop one and leave the rest delivering.
-    for location_id in &revoked.location_ids {
-        let cmd = ForwardCommand {
-            command: "esa.abbestellung.beauftragen".to_owned(),
-            marktrolle: Some("ESA".to_owned()),
-            malo_id: Some(location_id.clone()),
-            melo_id: None,
-            payload: serde_json::json!({
-                "malo_id": location_id,
-                "esa_mp_id": revoked.esa_mp_id,
-                "grund": "einwilligung_widerrufen",
-                "einwilligung_id": id,
-            }),
-        };
-        let idem = format!("esa-abbestellung:{id}:{location_id}");
-        if let Err(e) = makod.post_command(&idem, &cmd).await {
-            tracing::warn!(
-                error = %e,
-                location_id,
-                "marktd: Abbestellung dispatch to makod failed after Widerruf — \
-                 de.markt.einwilligung.widerrufen was emitted; retry via that event"
-            );
-        }
-    }
+    // per covered location. The expiry sweep runs the same code — the two ways
+    // a consent stops being a lawful basis owe the market the same message.
+    crate::consent_lifecycle::stop_deliveries(&makod, "einwilligung_widerrufen", &revoked).await;
 
     StatusCode::NO_CONTENT.into_response()
 }
@@ -491,6 +465,183 @@ pub async fn get_esa_preise(
         .await
     {
         Ok(rows) => Json(rows).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// Body of `PUT /api/v1/esa/messprodukte/:msb_mp_id` — one catalogue entry.
+#[derive(Debug, Deserialize)]
+pub struct KatalogEintrag {
+    /// Messprodukt-Code from Codeliste der Konfigurationen 1.4 Kap. 4.6.
+    /// Accepted in the published spaced form or digits only.
+    pub messprodukt: String,
+    /// `E_0256` Prüfschritt 4 — served as a turnusmäßige Übermittlung.
+    #[serde(default = "yes")]
+    pub als_abo: bool,
+    /// `E_0256` Prüfschritt 5 — served as a single transmission.
+    #[serde(default = "yes")]
+    pub als_einmalig: bool,
+    #[serde(default)]
+    pub valid_from: Option<time::Date>,
+    #[serde(default)]
+    pub valid_to: Option<time::Date>,
+}
+
+const fn yes() -> bool {
+    true
+}
+
+/// `PUT /api/v1/esa/messprodukte/:msb_mp_id` — record which Kapitel-4.6
+/// Messprodukte this MSB serves an ESA, and in which Abo mode.
+///
+/// Answers `E_0252` Prüfschritt 2 and `E_0256` Prüfschritte 4/5, the one
+/// commercial question in those walks that the Codeliste cannot: which of the
+/// **optional** products this MSB carries. Without it every optional order
+/// escalates to an operator.
+///
+/// A code outside Kapitel 4.6 is refused here rather than stored: the catalogue
+/// of orderable products is code (`mako_wim::esa`), not data, and an entry for
+/// a product the Marktrolle may not order could only ever mislead a walk.
+pub async fn put_esa_messprodukt_katalog(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(repo): Extension<EinwilligungRepoExt>,
+    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Path(msb_mp_id): Path<String>,
+    Json(body): Json<Vec<KatalogEintrag>>,
+) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "write-einwilligung", &tenant)
+        .is_err()
+    {
+        return forbidden("write-einwilligung denied");
+    }
+    let mut eintraege = Vec::with_capacity(body.len());
+    for e in body {
+        let code = mako_wim::esa::normalize_code(&e.messprodukt);
+        if mako_wim::esa::messprodukt(&code).is_none() {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": format!(
+                        "Messprodukt {:?} steht nicht in der Codeliste der Konfigurationen 1.4                          Kapitel 4.6 — nur diese Produkte darf die Marktrolle ESA bestellen",
+                        e.messprodukt
+                    ),
+                })),
+            )
+                .into_response();
+        }
+        eintraege.push(EsaMessproduktAngebot {
+            tenant: tenant.clone(),
+            msb_mp_id: msb_mp_id.clone(),
+            messprodukt: code,
+            als_abo: e.als_abo,
+            als_einmalig: e.als_einmalig,
+            valid_from: e.valid_from,
+            valid_to: e.valid_to,
+        });
+    }
+    match repo.upsert_esa_messprodukt_katalog(&eintraege).await {
+        Ok(()) => (
+            StatusCode::NO_CONTENT,
+            Json(serde_json::json!({ "count": eintraege.len() })),
+        )
+            .into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// `GET /api/v1/esa/messprodukte/:msb_mp_id/:messprodukt?at=YYYY-MM-DD` — does
+/// this MSB serve the product on `at`, and in which mode?
+///
+/// The answer folds in the **Pflicht** rule: BNetzA *Mitteilung Nr. 3* makes
+/// seven Kapitel-4.6 products mandatory from a dated cut-over and §34 Abs. 2
+/// S. 2 Nr. 10 MsbG makes serving an ESA a mandatory Zusatzleistung, so a
+/// Pflichtprodukt is served whatever the catalogue holds. An operator cannot
+/// refuse one by leaving the table empty.
+pub async fn get_esa_messprodukt_angebot(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(repo): Extension<EinwilligungRepoExt>,
+    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Path((msb_mp_id, messprodukt)): Path<(String, String)>,
+    Query(q): Query<EsaPreiseQuery>,
+) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "read-einwilligung", &tenant)
+        .is_err()
+    {
+        return forbidden("read-einwilligung denied");
+    }
+    let at =
+        q.at.unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+    let code = mako_wim::esa::normalize_code(&messprodukt);
+    let Some(produkt) = mako_wim::esa::messprodukt(&code) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let eintrag = match repo
+        .esa_messprodukt_angebot(&tenant, &msb_mp_id, &code, at)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => return e.into_response(),
+    };
+    // „Pflicht" is dated: `9991 00000 077 1` and `078 9` read „Optional ab
+    // 01.10.2023, Pflicht ab 06.08.2024", and a Vergangenheitswerte-Bestellung
+    // may reach back before the cut-over — where the MSB's discretion still
+    // stood and the catalogue is the whole answer.
+    let pflicht = produkt.ist_pflicht_am(at);
+    Json(serde_json::json!({
+        "messprodukt": code,
+        "at": at.to_string(),
+        "pflicht": pflicht,
+        // `null` where nothing is on file and the product is optional: „not
+        // carried" is a decision, „nothing recorded" is not, and the walks
+        // escalate on the difference.
+        "als_abo": if pflicht { Some(true) } else { eintrag.as_ref().map(|e| e.als_abo) },
+        "als_einmalig": if pflicht { Some(true) } else { eintrag.as_ref().map(|e| e.als_einmalig) },
+        "im_katalog": eintrag.is_some(),
+    }))
+    .into_response()
+}
+
+/// `GET /api/v1/esa/subscriptions/:bestellung_ref` — which **Messprodukt** an
+/// ORDERS 17007 Belegnummer subscribed to.
+///
+/// `edmd`'s Typ-2 delivery surveillance is the caller. The Codeliste der
+/// Konfigurationen publishes a delivery cadence **per Messprodukt** — the
+/// Rohdaten products state „unverzüglich, jedoch spätestens bis 9:30 Uhr", the
+/// aufbereitete-Daten ones defer to WiM Teil 2 Kap. 2.5.5 — but an inbound
+/// MSCONS 13027 names only the Belegnummer of the ORDERS it belongs to
+/// (`SG1 RFF+AGI`), never the product. Without this the sweep applies one flat
+/// threshold to every subscription and alerts late on the fast ones.
+///
+/// `404` when no accepted Angebot names that Belegnummer — the ordinary state
+/// for a delivery whose sender omitted the `RFF+AGI` Muss, and the signal to
+/// fall back to the configured threshold rather than to invent a cadence.
+pub async fn get_esa_subscription(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(repo): Extension<EinwilligungRepoExt>,
+    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Path(bestellung_ref): Path<String>,
+) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "read-einwilligung", &tenant)
+        .is_err()
+    {
+        return forbidden("read-einwilligung denied");
+    }
+    match repo
+        .esa_messprodukt_of_bestellung(&tenant, &bestellung_ref)
+        .await
+    {
+        Ok(Some(messprodukt)) => Json(serde_json::json!({
+            "bestellung_ref": bestellung_ref,
+            "messprodukt": messprodukt,
+        }))
+        .into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => e.into_response(),
     }
 }

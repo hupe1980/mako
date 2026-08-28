@@ -270,7 +270,7 @@ pub use reqote::ReqoteBuilder;
 #[cfg(feature = "remadv")]
 mod remadv;
 #[cfg(feature = "remadv")]
-pub use remadv::{Abweichungsgrund, RemadvBuilder};
+pub use remadv::{Abweichungsgrund, Positionsfehler, Rechnungsbezug, RemadvBuilder};
 
 #[cfg(feature = "ordchg")]
 mod ordchg;

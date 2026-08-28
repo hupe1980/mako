@@ -745,7 +745,7 @@ pub(super) async fn dispatch_wim_wertebestellung_anfrage_ablehnen(
 /// replaces the old `accept: bool` rather than accompanying it — the two could
 /// disagree, and an answer to the market is a binding statement.
 ///
-/// Run [`mako_pruefung::msb::esa`] to obtain the code from the process facts.
+/// Run [`mako_pruefung::esa::wertebestellung`] to obtain the code from the process facts.
 fn esa_antwort_code(payload: &serde_json::Value, tree: &str) -> Result<String, DispatchError> {
     payload
         .get("antwort_code")
@@ -763,7 +763,7 @@ fn esa_antwort_code(payload: &serde_json::Value, tree: &str) -> Result<String, D
 /// (ORDRSP 19011/19012, UC 4.1 Nr. 4).
 ///
 /// `antwort_code` is required and comes from `E_0256`
-/// ([`mako_pruefung::msb::esa::pruefe_bestellung`]); its Cluster decides
+/// ([`mako_pruefung::esa::wertebestellung::pruefe_bestellung`]); its Cluster decides
 /// whether the answer rides 19011 or 19012.
 pub(super) async fn dispatch_wim_wertebestellung_bestellung_beantworten(
     state: &CommandsApiState,

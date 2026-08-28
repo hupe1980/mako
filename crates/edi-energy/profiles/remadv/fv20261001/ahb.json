@@ -2,26 +2,14 @@
   "schema_version": 1,
   "message_type": "REMADV",
   "release": "2.9f",
-  "source_document": "REMADV AHB 2.9f vom 01.04.2026 — SCAFFOLD: verify against BDEW publication before production use",
+  "source_document": "REMADV AHB 1.0a (Stand MIG: REMADV 2.9e), BDEW, Publikationsdatum 01.10.2025 — §3.1.1 Bestätigung und Abweisung (33001/33002), §3.1.2 Abweisung auf Kopf/Summen- und Positionsebene (33003/33004)",
   "pruefidentifikatoren": [
     {
       "code": 33001,
       "name": "Bestätigung",
       "segment_rules": [
         {
-          "tag": "AJT",
-          "requirement": "M"
-        },
-        {
           "tag": "BGM",
-          "requirement": "M"
-        },
-        {
-          "tag": "COM",
-          "requirement": "M"
-        },
-        {
-          "tag": "CTA",
           "requirement": "M"
         },
         {
@@ -49,9 +37,19 @@
           "requirement": "M"
         },
         {
-          "tag": "DLI",
+          "tag": "UNS",
+          "requirement": "M",
+          "_description": "UNS+S 'Trennung von Positions- und Summenteil' is Muss on all four use cases (segment 00026), followed by the Summenbetrag MOA+12."
+        },
+        {
+          "tag": "COM",
           "requirement": "O",
-          "_description": "DLI is optional per MIG 2.9e (no AHB constraint for PID 33001)"
+          "_description": "SG3 (Ansprechpartner) is Kann on every use case; COM is Muss only within it (see CTA)."
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "SG3 (Ansprechpartner) is Kann on every use case; [503] only recommends it on an Abweisung. CTA is Muss *within* SG3, so a flat M refuses every conformant REMADV that omits the optional group."
         },
         {
           "tag": "FTX",
@@ -74,18 +72,11 @@
       "segment_rules": [
         {
           "tag": "AJT",
-          "requirement": "M"
+          "requirement": "M",
+          "_description": "SG7 AJT (Abweichungsgrund) is Muss only on an Abweisung. The Bestätigung 33001 carries no AJT at all — agreement needs no Antwortcode (REMADV AHB 1.0a §3.1.1)."
         },
         {
           "tag": "BGM",
-          "requirement": "M"
-        },
-        {
-          "tag": "COM",
-          "requirement": "M"
-        },
-        {
-          "tag": "CTA",
           "requirement": "M"
         },
         {
@@ -113,9 +104,19 @@
           "requirement": "M"
         },
         {
-          "tag": "DLI",
+          "tag": "UNS",
+          "requirement": "M",
+          "_description": "UNS+S 'Trennung von Positions- und Summenteil' is Muss on all four use cases (segment 00026), followed by the Summenbetrag MOA+12."
+        },
+        {
+          "tag": "COM",
           "requirement": "O",
-          "_description": "DLI is optional per MIG 2.9e (no AHB constraint for PID 33002)"
+          "_description": "SG3 (Ansprechpartner) is Kann on every use case; COM is Muss only within it (see CTA)."
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "SG3 (Ansprechpartner) is Kann on every use case; [503] only recommends it on an Abweisung. CTA is Muss *within* SG3, so a flat M refuses every conformant REMADV that omits the optional group."
         },
         {
           "tag": "FTX",
@@ -138,26 +139,15 @@
       "segment_rules": [
         {
           "tag": "AJT",
-          "requirement": "M"
+          "requirement": "M",
+          "_description": "SG7 AJT (Abweichungsgrund) is Muss only on an Abweisung. The Bestätigung 33001 carries no AJT at all — agreement needs no Antwortcode (REMADV AHB 1.0a §3.1.1)."
         },
         {
           "tag": "BGM",
           "requirement": "M"
         },
         {
-          "tag": "COM",
-          "requirement": "M"
-        },
-        {
-          "tag": "CTA",
-          "requirement": "M"
-        },
-        {
           "tag": "CUX",
-          "requirement": "M"
-        },
-        {
-          "tag": "DLI",
           "requirement": "M"
         },
         {
@@ -179,6 +169,21 @@
         {
           "tag": "RFF",
           "requirement": "M"
+        },
+        {
+          "tag": "UNS",
+          "requirement": "M",
+          "_description": "UNS+S 'Trennung von Positions- und Summenteil' is Muss on all four use cases (segment 00026), followed by the Summenbetrag MOA+12."
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "SG3 (Ansprechpartner) is Kann on every use case; COM is Muss only within it (see CTA)."
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "SG3 (Ansprechpartner) is Kann on every use case; [503] only recommends it on an Abweisung. CTA is Muss *within* SG3, so a flat M refuses every conformant REMADV that omits the optional group."
         },
         {
           "tag": "FTX",
@@ -201,18 +206,11 @@
       "segment_rules": [
         {
           "tag": "AJT",
-          "requirement": "M"
+          "requirement": "M",
+          "_description": "SG7 AJT (Abweichungsgrund) is Muss only on an Abweisung. The Bestätigung 33001 carries no AJT at all — agreement needs no Antwortcode (REMADV AHB 1.0a §3.1.1)."
         },
         {
           "tag": "BGM",
-          "requirement": "M"
-        },
-        {
-          "tag": "COM",
-          "requirement": "M"
-        },
-        {
-          "tag": "CTA",
           "requirement": "M"
         },
         {
@@ -221,7 +219,8 @@
         },
         {
           "tag": "DLI",
-          "requirement": "M"
+          "requirement": "M",
+          "_description": "SG10 (Identifikation der Position) exists only on 33004 'Abweisung Position', repeated until every position-level defect is named (§3.1.2, condition [525]). 33003 is the Kopf/Summen Abweisung and has no Positionsebene."
         },
         {
           "tag": "DOC",
@@ -242,6 +241,21 @@
         {
           "tag": "RFF",
           "requirement": "M"
+        },
+        {
+          "tag": "UNS",
+          "requirement": "M",
+          "_description": "UNS+S 'Trennung von Positions- und Summenteil' is Muss on all four use cases (segment 00026), followed by the Summenbetrag MOA+12."
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "SG3 (Ansprechpartner) is Kann on every use case; COM is Muss only within it (see CTA)."
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "SG3 (Ansprechpartner) is Kann on every use case; [503] only recommends it on an Abweisung. CTA is Muss *within* SG3, so a flat M refuses every conformant REMADV that omits the optional group."
         },
         {
           "tag": "FTX",

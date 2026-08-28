@@ -487,11 +487,15 @@ pub async fn run_surveillance_sweep(
 }
 
 /// Spawn the delivery-surveillance worker. Runs until `shutdown` is cancelled.
+#[allow(clippy::too_many_arguments)] // one argument per collaborator
 pub fn spawn_surveillance_worker(
     repo: MeterStoreTimeSeriesRepository,
     typ2: Option<crate::store::MeterStoreTyp2Repository>,
     cfg: SurveillanceConfig,
     tenant: String,
+    // Resolves a subscription's Messprodukt so the Typ-2 sweep can use the
+    // cadence that product publishes rather than one flat setting.
+    marktd: Option<mako_markt::marktd_client::MarktdClient>,
     erp_webhook_url: Option<String>,
     erp_webhook_secret: Option<String>,
     shutdown: CancellationToken,
@@ -531,6 +535,7 @@ pub fn spawn_surveillance_worker(
                     repo.pool(),
                     &cfg,
                     &tenant,
+                    marktd.as_ref(),
                     erp_webhook_url.as_deref(),
                     erp_webhook_secret.as_deref(),
                 )
@@ -812,6 +817,7 @@ pub async fn assess_typ2_delivery(
     tenant: &str,
     cfg: &SurveillanceConfig,
     now: OffsetDateTime,
+    thresholds: &Typ2Thresholds,
 ) -> anyhow::Result<(Vec<DeliveryFinding>, usize, OffsetDateTime)> {
     let window_from = now - time::Duration::days(cfg.coverage_window_days);
     let store = typ2.store();
@@ -865,14 +871,18 @@ pub async fn assess_typ2_delivery(
                 OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
             });
         let hours_silent = last_end.map_or(i64::MAX, |t| (now - t).whole_hours());
-        if hours_silent < cfg.typ2_silent_after_hours {
-            continue;
-        }
         let bestellung_ref = row
             .get("bestellung_ref")
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .to_owned();
+        // **The threshold comes from the ordered Messprodukt.** The Codeliste
+        // publishes a cadence per product and they differ by a factor of
+        // several; one flat setting alerts late on the Rohdaten products, which
+        // are exactly the ones an ESA's own downstream service depends on.
+        if hours_silent < thresholds.for_subscription(&bestellung_ref) {
+            continue;
+        }
         findings.push(DeliveryFinding {
             // Packed `Meldepunkt|OBIS|Bestellnummer`; the sweep unpacks it for
             // the register row and the event. The finding keeps the Meldepunkt
@@ -889,6 +899,134 @@ pub async fn assess_typ2_delivery(
         });
     }
     Ok((findings, scanned, window_from))
+}
+
+/// Per-subscription silence thresholds, in hours.
+///
+/// # Why this is not one number
+///
+/// *Codeliste der Konfigurationen* 1.4 Kap. 4.6 publishes a delivery cadence
+/// **per Messprodukt**: the Rohdaten products state „unverzüglich, jedoch
+/// spätestens bis 9:30 Uhr" daily, while the aufbereitete-Daten products defer
+/// to *WiM Teil 2 Kap. 2.5.5*, whose windows depend on the Werteart and the
+/// installed equipment. Applying `typ2_silent_after_hours` to all of them
+/// alerts late on the fast ones and early on the slow ones.
+///
+/// An inbound MSCONS 13027 names only the Belegnummer of the ORDERS it belongs
+/// to (`SG1 RFF+AGI`), never the product — so the sweep resolves
+/// Belegnummer → Messprodukt at `marktd`, which holds it on the accepted
+/// Angebot, and asks [`mako_wim::esa::ueberfaellig_nach_stunden`] for the
+/// clock.
+///
+/// The **fallback is the configured setting**, deliberately. A product that
+/// publishes no wall-clock deadline gets no invented one, and neither does a
+/// subscription whose Belegnummer resolves to nothing — a delivery whose sender
+/// omitted the Muss is a conformance defect, not a reason to stop watching it.
+#[derive(Debug, Clone, Default)]
+pub struct Typ2Thresholds {
+    fallback: i64,
+    per_subscription: std::collections::HashMap<String, i64>,
+}
+
+impl Typ2Thresholds {
+    /// A table that answers `fallback` for everything — the shape a deployment
+    /// without a `marktd` client gets, and what the tests use.
+    #[must_use]
+    pub fn flat(fallback: i64) -> Self {
+        Self {
+            fallback,
+            per_subscription: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Record the clock a subscription's own Messprodukt publishes.
+    pub fn insert(&mut self, bestellung_ref: impl Into<String>, hours: i64) {
+        self.per_subscription.insert(bestellung_ref.into(), hours);
+    }
+
+    /// Hours of silence after which this subscription is overdue.
+    #[must_use]
+    pub fn for_subscription(&self, bestellung_ref: &str) -> i64 {
+        self.per_subscription
+            .get(bestellung_ref)
+            .copied()
+            .unwrap_or(self.fallback)
+    }
+}
+
+/// Resolve each subscription's published cadence from `marktd`.
+///
+/// One `marktd` round trip per distinct Belegnummer in the window, and only for
+/// the ones that resolve to a product with a clock. A lookup that fails is
+/// logged and left to the fallback: an unreachable `marktd` must not silence
+/// the sweep, which exists precisely because nothing else notices a Typ-2 gap.
+async fn resolve_typ2_thresholds(
+    marktd: Option<&mako_markt::marktd_client::MarktdClient>,
+    refs: &[String],
+    fallback: i64,
+) -> Typ2Thresholds {
+    let mut out = Typ2Thresholds::flat(fallback);
+    let Some(marktd) = marktd else {
+        return out;
+    };
+    for r in refs {
+        if r.is_empty() {
+            continue;
+        }
+        match marktd.esa_messprodukt_of_bestellung(r).await {
+            Ok(Some(code)) => {
+                if let Some(hours) = mako_wim::esa::ueberfaellig_nach_stunden(&code) {
+                    out.insert(r.clone(), hours);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!(
+                error = %e, bestellung_ref = %r,
+                "edmd: ESA Typ-2 surveillance: Messprodukt lookup failed — using the \
+                 configured threshold for this subscription"
+            ),
+        }
+    }
+    out
+}
+
+/// The distinct `bestellung_ref`s delivered in the surveillance window.
+async fn typ2_subscription_refs(
+    typ2: &crate::store::MeterStoreTyp2Repository,
+    tenant: &str,
+    window_from: OffsetDateTime,
+) -> Vec<String> {
+    let store = typ2.store();
+    let sql = format!(
+        r#"SELECT DISTINCT "bestellung_ref" FROM "{table}"
+            WHERE "tenant" = $1 AND "from" >= $2"#,
+        table = store.resolved_table(),
+    );
+    let rows = store
+        .query_with_params(
+            &sql,
+            vec![
+                datafusion::scalar::ScalarValue::Utf8(Some(tenant.to_owned())),
+                crate::server::ts_param(window_from),
+            ],
+        )
+        .await
+        .and_then(|r| r.to_json());
+    match rows {
+        Ok(rows) => rows
+            .into_iter()
+            .filter_map(|r| {
+                r.get("bestellung_ref")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+            })
+            .collect(),
+        Err(e) => {
+            tracing::warn!(error = %e, "edmd: ESA Typ-2 subscription scan failed");
+            Vec::new()
+        }
+    }
 }
 
 /// Unpack a Typ-2 finding key into `(Meldepunkt, OBIS-Kennzahl, Bestellnummer)`.
@@ -916,6 +1054,7 @@ pub async fn run_typ2_surveillance_sweep(
     pool: &sqlx::PgPool,
     cfg: &SurveillanceConfig,
     tenant: &str,
+    marktd: Option<&mako_markt::marktd_client::MarktdClient>,
     erp_webhook_url: Option<&str>,
     erp_webhook_secret: Option<&str>,
 ) -> SurveillanceReport {
@@ -931,8 +1070,15 @@ pub async fn run_typ2_surveillance_sweep(
         suppressed: 0,
     };
 
+    // Size the silence threshold per subscription before assessing: the
+    // Codeliste publishes a cadence per Messprodukt, and `marktd` is what maps
+    // a Belegnummer to the product that was ordered under it.
+    let window_start = scanned_at - time::Duration::days(cfg.coverage_window_days);
+    let refs = typ2_subscription_refs(typ2, tenant, window_start).await;
+    let thresholds = resolve_typ2_thresholds(marktd, &refs, cfg.typ2_silent_after_hours).await;
+
     let (findings, points_scanned, window_from) =
-        match assess_typ2_delivery(typ2, tenant, cfg, scanned_at).await {
+        match assess_typ2_delivery(typ2, tenant, cfg, scanned_at, &thresholds).await {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(error = %e, tenant, "edmd: ESA Typ-2 surveillance: scan failed");

@@ -7,12 +7,21 @@
 //! | [`pruefe_kuendigung`] | 55039 | **MSBA** | `E_0200` | 3 WT |
 //! | [`pruefe_abmeldung`] | 55051 | NB | `E_0202` | 7 WT |
 //! | [`pruefe_weiterverpflichtung`] | 17002 | **MSBA** | `E_0203` | 1 WT |
-//! | [`esa::pruefe_bestellung`] | 17007 | MSB | `E_0256` | 2 WT |
-//! | [`esa::pruefe_stornierung`] | 39002 | MSB | `E_0257` | 2 WT |
-//! | [`esa::pruefe_beendigung`] | 17008 | MSB | `E_0254` | 2 WT |
+//! | [`pruefe_ersteinbau`] | 21029 | **wMSB** | `E_0233` | 3 WT |
+//! | [`pruefe_technik_anfrage`] | 35005 | **MSB** | `E_0278` · `E_0281` | 10 WT |
+//! | [`pruefe_technik_bestellung`] | 17011 | **MSB** | `E_0249` · `E_0250` · `E_0279` · `E_0283` | 10 WT |
+//! | [`melde_technik_durchfuehrung`] | — | **MSB** | `E_0286` | — |
 //!
-//! The ESA trees ([`esa`]) answer with an **ORDRSP**, so their code rides
-//! `SG2 AJT` (DE 4465 code, DE 1082 tree) rather than `STS+E01`.
+//! The last three are one Use-Case family under two regulatory documents, and
+//! the four Bestellungs-Bäume share **one** answer PID pair (ORDRSP
+//! 19005/19006). [`technik`] is where that is resolved; the Marktrolle alone
+//! cannot do it.
+//!
+//! The MSB answers an ESA too — the Wertebestellung of WiM Teil 2 Kap. 4 —
+//! but those trees live with the rest of that relationship in
+//! [`crate::esa`], next to the billing trees the ESA runs back at the MSB.
+//! They also answer in a different segment: an ORDRSP carries `SG2 AJT`
+//! (DE 4465 code, DE 1082 tree) rather than `STS+E01`.
 //!
 //! The Verpflichtungsanfrage (55168 → `E_0240`) is deliberately absent: WiM
 //! Teil 1 Kap. 2.4.2 Nr. 4 leaves the answer to the gMSB's own commercial
@@ -56,18 +65,20 @@
 
 pub mod abmeldung;
 pub mod anmeldung;
-pub mod esa;
+pub mod ersteinbau;
 pub mod kuendigung;
+pub mod technik;
 pub mod types;
 pub mod weiterverpflichtung;
 
 pub use abmeldung::pruefe_abmeldung;
 pub use anmeldung::pruefe_anmeldung;
-pub use esa::{
-    Bestellart, EsaBeendigung, EsaBestellung, EsaStornierung, ebd_fuer_antwort, pruefe_beendigung,
-    pruefe_bestellung, pruefe_stornierung,
-};
+pub use ersteinbau::{ErsteinbauVorabinformation, pruefe_ersteinbau};
 pub use kuendigung::pruefe_kuendigung;
+pub use technik::{
+    MesslokationsAenderung, TechnikAnfrage, TechnikBestellung, TechnikDurchfuehrung,
+    melde_technik_durchfuehrung, pruefe_technik_anfrage, pruefe_technik_bestellung,
+};
 pub use types::{
     Abmeldegrund, AbmeldungMsb, AnmeldungMsb, Einrichtungsart, KuendigungMsb, Kuendigungstermin,
     MsbEntscheidung, Vertragslage, WeiterverpflichtungAuftrag,

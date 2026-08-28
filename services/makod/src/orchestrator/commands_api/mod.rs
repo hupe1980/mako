@@ -331,6 +331,78 @@ fn extract_invoice_ref(payload: &serde_json::Value) -> Result<String, DispatchEr
         })
 }
 
+/// The Belegnummer of the outbound REMADV a settle/dispute command emits.
+///
+/// It must equal the wire UNH reference the renderer puts out, because the
+/// invoice issuer correlates its process by it. Callers may supply one
+/// (`remadv_ref`) when they are re-driving an answer; otherwise a fresh one is
+/// minted, which is the ordinary case — the answer is sent once.
+fn remadv_message_ref(payload: &serde_json::Value) -> mako_engine::types::MessageRef {
+    let raw = payload
+        .get("remadv_ref")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map_or_else(
+            || {
+                crate::edifact_renderer::msg_ref_from_uuid(&format!(
+                    "REMADV{}",
+                    uuid::Uuid::new_v4()
+                ))
+            },
+            str::to_owned,
+        );
+    mako_engine::types::MessageRef::new(raw)
+}
+
+/// Read the published Antwortcode(s) a Nicht-Zahlungsavis must carry.
+///
+/// `SG7 AJT` is **Muss** on every REMADV Abweisung — DE 4465 the code, DE 1082
+/// the Entscheidungsbaum that publishes it — so a refusal without one gives the
+/// issuer nothing to correct. `invoicd` resolves both from
+/// [`mako_pruefung::codes::rechnungspruefung`] and puts them here.
+///
+/// `None` when the caller supplied neither. The workflow then falls back to the
+/// plain Abweisung 33002 and the renderer refuses to emit an `AJT` it does not
+/// have, which surfaces as an incomplete answer rather than a wrong one.
+fn remadv_antwort(payload: &serde_json::Value) -> Option<mako_invoic::RemadvAntwort> {
+    let ebd = payload
+        .get("antwort_ebd")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())?;
+    // The itemised form, when `invoicd` walked a tree that answers with a set.
+    let befunde: Vec<mako_invoic::RemadvBefund> = payload
+        .get("antwort_befunde")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_else(|| {
+            payload
+                .get("antwort_code")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|code| {
+                    vec![mako_invoic::RemadvBefund {
+                        code: code.to_owned(),
+                        ebene: "summe".to_owned(),
+                        positionsnummer: None,
+                        detail: None,
+                    }]
+                })
+                .unwrap_or_default()
+        });
+    if befunde.is_empty() {
+        return None;
+    }
+    let remadv_pid = payload
+        .get("remadv_pid")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|p| u32::try_from(p).ok())
+        .unwrap_or(mako_invoic::ABWEISUNG_PID);
+    Some(mako_invoic::RemadvAntwort {
+        ebd: ebd.to_owned(),
+        befunde,
+        remadv_pid,
+    })
+}
+
 // ── Submodules ────────────────────────────────────────────────────────────────
 //
 // `types`, `handler`, and `registry` hold the command-API machinery; the

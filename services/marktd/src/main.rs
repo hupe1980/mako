@@ -42,8 +42,9 @@ use marktd::{
         },
         dlq::{delete_dlq_entry, list_dlq, retry_dlq_entry},
         einwilligung::{
-            consent_check, get_einwilligung, get_esa_preise, get_framework, grant_einwilligung,
-            list_einwilligungen, put_esa_preise, put_framework, revoke_einwilligung,
+            consent_check, get_einwilligung, get_esa_messprodukt_angebot, get_esa_preise,
+            get_esa_subscription, get_framework, grant_einwilligung, list_einwilligungen,
+            put_esa_messprodukt_katalog, put_esa_preise, put_framework, revoke_einwilligung,
         },
         event_ingest::{InboundWebhookSecret, ingest_event},
         event_log::list_event_log,
@@ -181,7 +182,16 @@ impl Daemon for Marktd {
             tenant_gln: tenant.clone(),
         });
 
-        spawn_workers(&cfg, &pool, sub_repo, &http, &notify, &shutdown);
+        spawn_workers(
+            &cfg,
+            &pool,
+            sub_repo,
+            &http,
+            &notify,
+            &shutdown,
+            Arc::clone(&makod_client),
+            &tenant,
+        );
 
         let mcp = marktd::mcp_server::router(
             Arc::new(marktd::mcp_server::MdmdMcpState {
@@ -533,6 +543,24 @@ fn esa_routes() -> Router<S> {
             "/api/v1/esa/preise/{msb_mp_id}/{esa_mp_id}",
             put(put_esa_preise).get(get_esa_preise),
         )
+        // `E_0252` Prüfschritt 2 / `E_0256` Prüfschritte 4/5: which optional
+        // Kapitel-4.6 products this MSB serves an ESA. Without it every
+        // optional order escalates to an operator.
+        .route(
+            "/api/v1/esa/messprodukte/{msb_mp_id}",
+            put(put_esa_messprodukt_katalog),
+        )
+        .route(
+            "/api/v1/esa/messprodukte/{msb_mp_id}/{messprodukt}",
+            get(get_esa_messprodukt_angebot),
+        )
+        // `edmd`'s Typ-2 surveillance resolves a subscription's Messprodukt
+        // here: the Codeliste publishes a delivery cadence per product, and an
+        // inbound MSCONS 13027 names only the ORDERS Belegnummer.
+        .route(
+            "/api/v1/esa/subscriptions/{bestellung_ref}",
+            get(get_esa_subscription),
+        )
         // Inbound-message gate: revoked consent / unestablished framework
         // → allowed:false (the Ablehnung clearing case).
         .route("/api/v1/esa/consent-check", get(consent_check))
@@ -618,8 +646,9 @@ fn repository_layers(app: Router, pool: &PgPool) -> Router {
     )
 }
 
-/// Start the durable fan-out worker, the MMMA/MMM price import worker, and the
-/// `processed_events` retention sweep.
+/// Start the durable fan-out worker, the MMMA/MMM price import worker, the
+/// ESA consent-expiry sweep, and the `processed_events` retention sweep.
+#[allow(clippy::too_many_arguments)] // one argument per worker's dependencies
 fn spawn_workers(
     cfg: &Arc<Config>,
     pool: &PgPool,
@@ -627,6 +656,8 @@ fn spawn_workers(
     http: &reqwest::Client,
     notify: &Arc<tokio::sync::Notify>,
     shutdown: &tokio_util::sync::CancellationToken,
+    makod: Arc<mako_markt::makod_client::MakodClient>,
+    tenant: &str,
 ) {
     spawn_fanout(
         pool.clone(),
@@ -649,6 +680,18 @@ fn spawn_workers(
         cfg.markt.tenant.clone(),
         pool.clone(),
         Arc::clone(notify),
+        shutdown.clone(),
+    );
+
+    // §49 Abs. 2 Nr. 9 MsbG: an expired Einwilligung is no lawful basis, and the
+    // only way to stop a running delivery is the ORDERS 17008 the ESA sends.
+    // Nothing in the market stops on its own.
+    marktd::consent_lifecycle::spawn_expiry_sweep(
+        Arc::new(pg::PgEinwilligungRepository::new(pool.clone())),
+        makod,
+        pool.clone(),
+        Arc::clone(notify),
+        tenant.to_owned(),
         shutdown.clone(),
     );
 

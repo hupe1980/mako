@@ -766,7 +766,9 @@ impl Workflow for EsaWertebestellungWorkflow {
             // UC 4.4: the MSB ended the delivery — terminal from any
             // delivery-authorised state.
             E::BeendetDurchMsb { .. } => match state {
-                S::Beliefert(data) | S::AbbestellungGesendet(data) => S::Beendet(data),
+                S::Beliefert(data)
+                | S::AbbestellungGesendet(data)
+                | S::StornierungGesendet(data) => S::Beendet(data),
                 other => other,
             },
             // A refused Abbestellung leaves delivery running, unchanged.
@@ -955,6 +957,24 @@ impl Workflow for EsaWertebestellungWorkflow {
                     return Err(WorkflowError::invalid_state(
                         "AnfrageGesendet",
                         state.label(),
+                    ));
+                }
+                // An offer is a **priced** position: `SG31 PRI` is Muss inside
+                // the `SG27 LIN` block and the OBIS list says which registers
+                // will arrive. A 15003 carrying neither is the MSB declining,
+                // and `AngebotErhalten` means „an offer stands that the ESA may
+                // order against" — a state this message does not create.
+                //
+                // The ingest adapter already routes an unpriced 15003 to
+                // `ReceiveAnfrageAblehnung`; refusing it here too is what keeps
+                // a second caller (a replay, a hand-built command) from parking
+                // the process in a state whose Bindungsfrist can only ever
+                // expire, holding the (Meldepunkt, Messprodukt) business key.
+                if angebot.ist_leer() {
+                    return Err(WorkflowError::rejected(
+                        "QUOTES 15003 ohne bepreiste Position ist kein Angebot, sondern die \
+                         Ablehnung der Anfrage (SG31 PRI und die PIA+5 …:SRW OBIS-Kennzahlen \
+                         sind Muss, QUOTES AHB 1.1a §4.3) — nutze ReceiveAnfrageAblehnung",
                     ));
                 }
                 Ok(WorkflowOutput {
@@ -1270,10 +1290,25 @@ impl Workflow for EsaWertebestellungWorkflow {
                 beendigung_zum,
                 reason,
             } => {
-                // UC 4.4: only a delivery-authorised process can be ended by the
-                // MSB. Idempotent if already Beendet.
-                if !state.beliefert() && !matches!(state, S::Beendet(_)) {
-                    return Err(WorkflowError::invalid_state("Beliefert", state.label()));
+                // UC 4.4: the MSB ends the delivery unilaterally — on an MSB
+                // change at the Messlokation, on the MSB↔AN contract ending, or
+                // on technical grounds. Its Vorbedingung is that a delivery is
+                // running and the ESA has not already ended it, and it is *not*
+                // an answer: the ESA sent nothing the MSB is replying to, so
+                // whatever the ESA has in flight does not gate it.
+                //
+                // `StornierungGesendet` is therefore included. An ESA waiting
+                // out its 2-Werktage Storno window while the MeLo moves to
+                // another MSB is an ordinary race, and refusing the IFTSTA left
+                // the process `Beliefert` for a subscription that had ended —
+                // holding its business key and reporting a delivery gap that is
+                // not one.
+                if !state.beliefert() && !matches!(state, S::StornierungGesendet(_) | S::Beendet(_))
+                {
+                    return Err(WorkflowError::invalid_state(
+                        "Beliefert|StornierungGesendet",
+                        state.label(),
+                    ));
                 }
                 Ok(WorkflowOutput::events(vec![E::BeendetDurchMsb {
                     message_ref,

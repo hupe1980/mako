@@ -31,9 +31,9 @@ What it cannot decide it puts in front of an operator with the deadline attached
 | **MSB** | 55168 | WiM Verpflichtungsanfrage (NB → gMSB) | 1 WT | operator queue |
 | **MSB** | 35001, 35002, 35004, 35005 | REQOTE Preisanfrage | 5 WT | `PreisblattMessung` from `marktd` |
 | **MSB** | 35003 | ESA Werteanfrage (WiM Teil 2 Kap. 4) | 5 WT | operator queue — `E_0253` publishes no tree |
-| **MSB** | 17007 | ESA Bestellung von Werten | 2 WT | `mako_pruefung::msb::esa` (`E_0256`) |
-| **MSB** | 39002 | ESA Stornierung der Bestellung | 2 WT | `mako_pruefung::msb::esa` (`E_0257`) |
-| **MSB** | 17008 | ESA Abbestellung von Werten | 2 WT | `mako_pruefung::msb::esa` (`E_0254`) |
+| **MSB** | 17007 | ESA Bestellung von Werten | 2 WT | `mako_pruefung::esa::wertebestellung` (`E_0256`) |
+| **MSB** | 39002 | ESA Stornierung der Bestellung | 2 WT | `mako_pruefung::esa::wertebestellung` (`E_0257`) |
+| **MSB** | 17008 | ESA Abbestellung von Werten | 2 WT | `mako_pruefung::esa::wertebestellung` (`E_0254`) |
 | **MSB** | *(workflow)* | § 14a Steuerungsauftrag → ORDRSP | 5 WT | contracted `konfigurationsprodukte` |
 
 Four properties of that table, each of which fails silently when broken:
@@ -81,27 +81,33 @@ headroom so an operator's answer still reaches the counterparty in time.
 **PID 55016 „Kündigung" is not an NB process.** The EDI@Energy
 *Anwendungsübersicht der Prüfidentifikatoren 4.0* (lfd. Nr. 20030) has it going
 **LFN → LFA**, answered 55017/55018 by the *Altlieferant* under EBD `E_0614`.
-Answering it from an `nb-only` binary would breach the § 7 EnWG separation the
-Cargo features exist for; it belongs to `role-lf-strom`, which answers it as the
-Altlieferant.
+Answering it from an `nb-only` binary would put a Willenserklärung on the market
+in a role that build does not hold; it belongs to `role-lf-strom`, which answers
+it as the Altlieferant.
 
-## § 7 EnWG role separation
+## Role-gated builds
 
-An operator with ≥ 100 000 Netzkunden runs the roles as separate entities, and
-the BNetzA audit examines the deployed binary. The Cargo features are that
-separation:
+Compile with exactly the Marktrolle(n) you operate. The features select which
+decision paths are registered, so a deployment cannot answer as a role it was
+not built for — `tests/role_separation.rs` asserts that per build.
+
+This is an operational guard, not a regulatory one. §7 EnWG requires a separate
+*legal entity* for a VNB at or above 100 000 connected customers (§7 Abs. 2 is
+the de-minimis threshold), §7a operational and §6a informational separation.
+None is discharged by a build flag and no BNetzA procedure inspects a binary;
+unbundling is decided above this repository.
 
 ```text
 role-lf-strom   # LF answers to NB-initiated GPKE processes + LFN Strom bootstrap
 role-lf-gas     # LF answers to NB-initiated GeLi Gas processes
 role-nb-strom   # GPKE An-/Abmeldung STP, EoG gap closure, NB-answered MSB-Wechsel
 role-nb-gas     # GeLi Gas An-/Abmeldung STP
-role-msb-strom  # REQOTE→QUOTES, §14a ORDRSP, MSB-answered MSB-Wechsel
+role-msb        # REQOTE→QUOTES, §14a ORDRSP, MSB-answered MSB-Wechsel (beide Sparten)
 
 lf-only     = role-lf-strom  + role-lf-gas
 nb-only     = role-nb-strom  + role-nb-gas
-msb-only    = role-msb-strom
-integrated  = every role (§6b EnWG combined deployment)
+msb-only    = role-msb
+integrated  = every role (one operator holding several Marktrollen)
 ```
 
 `tests/role_separation.rs` asserts the exclusion per build — an `nb-only` binary
@@ -434,7 +440,7 @@ On the shared `/metrics` (registered on the same Prometheus registry
 ## Quick start
 
 ```bash
-# NB-only deployment (§7 EnWG separated binary)
+# NB-only deployment — no LF or MSB decision path registered
 PROCESSD_DATABASE__URL=postgres://processd:secret@postgres/processd \
 PROCESSD_IDENTITY__OWN_MP_ID=9900000000002 \
 PROCESSD_MAKOD__URL=http://makod:8080 \

@@ -1843,6 +1843,1526 @@ pub const E_0250_CODES: &[AntwortCode] = &[
     ),
 ];
 
+// ── Abrechnung der Leistungen des Preisblatts B des MSB ──────────────────────
+//
+// BDEW *AWH Prozesse zur Änderung der Technik an Lokationen*, EBD 4.3 Kap. 9.3
+// (MSB ↔ LF) and 9.4 (MSB ↔ NB). What the MSB bills here is not the
+// Messstellenbetrieb but the one-off Leistung the counterparty ordered through
+// the REQOTE 35005 / ORDERS 17011 round — and it rides the **same**
+// Prüfidentifikator 31009 as the Messstellenbetriebsrechnung.
+//
+// Both chapters publish the identical tree under different numbers, because a
+// code is resolved against the tree the answer names and the two answers come
+// from different Marktrollen. `E_0270`/`E_0273` are the first round,
+// `E_0276`/`E_0277` the round after a COMDIS 29001, `E_0271`/`E_0274` the MSB's
+// check of the refusal, and `E_0272`/`E_0275` the Storno.
+//
+// The alphabet is the ESA invoice tree's (`E_0264`/`E_0266`) plus **`A08`** —
+// „Es liegt kein gültiges Preisblatt vor". That is the whole difference in
+// substance: an ESA has no Preisblatt (its prices come from the accepted QUOTES
+// 15003), while a Preisblatt-B invoice is checked against the PRICAT 27002 the
+// MSB transmitted, where the sheet is called „Preisblatt Technik".
+//
+// `codes_verfuegbar` is `true` for these four quartets: the codes are here.
+
+/// The Artikel-ID an MSB bills when it could **not** perform the ordered
+/// Leistung — `E_0270`/`E_0273` Prüfschritte 300/310.
+///
+/// A position carrying it is not a defect: the AWH bills the failed attempt.
+/// Any other Artikel-ID must come from the confirmed Bestellung.
+pub const ARTIKEL_ID_SCHEITERN: &str = "9991000003030-01";
+
+/// `E_0270` — Rechnung einer Leistung des Preisblatts B prüfen, MSB → **LF**.
+/// Prüfende Rolle: **LF**.
+pub const EBD_PREISBLATT_B_RECHNUNG_LF: &str = "E_0270";
+const E_0270: Option<&'static str> = Some(EBD_PREISBLATT_B_RECHNUNG_LF);
+
+/// `E_0273` — dieselbe Prüfung, MSB → **NB**. Prüfende Rolle: **NB**.
+pub const EBD_PREISBLATT_B_RECHNUNG_NB: &str = "E_0273";
+const E_0273: Option<&'static str> = Some(EBD_PREISBLATT_B_RECHNUNG_NB);
+
+/// `E_0276` — erneute Prüfung nach einem COMDIS 29001, MSB → **LF**.
+pub const EBD_PREISBLATT_B_RECHNUNG_ERNEUT_LF: &str = "E_0276";
+const E_0276: Option<&'static str> = Some(EBD_PREISBLATT_B_RECHNUNG_ERNEUT_LF);
+
+/// `E_0277` — erneute Prüfung nach einem COMDIS 29001, MSB → **NB**.
+pub const EBD_PREISBLATT_B_RECHNUNG_ERNEUT_NB: &str = "E_0277";
+const E_0277: Option<&'static str> = Some(EBD_PREISBLATT_B_RECHNUNG_ERNEUT_NB);
+
+/// `E_0271` — Nicht-Zahlungsavis prüfen, MSB ↔ LF. Prüfende Rolle: **MSB**.
+pub const EBD_PREISBLATT_B_NICHT_ZAHLUNGSAVIS_LF: &str = "E_0271";
+const E_0271: Option<&'static str> = Some(EBD_PREISBLATT_B_NICHT_ZAHLUNGSAVIS_LF);
+
+/// `E_0274` — Nicht-Zahlungsavis prüfen, MSB ↔ NB. Prüfende Rolle: **MSB**.
+pub const EBD_PREISBLATT_B_NICHT_ZAHLUNGSAVIS_NB: &str = "E_0274";
+const E_0274: Option<&'static str> = Some(EBD_PREISBLATT_B_NICHT_ZAHLUNGSAVIS_NB);
+
+/// `E_0272` — prüfen, ob eine Antwort auf die Stornierung nötig ist, MSB ↔ LF.
+pub const EBD_PREISBLATT_B_STORNO_LF: &str = "E_0272";
+const E_0272: Option<&'static str> = Some(EBD_PREISBLATT_B_STORNO_LF);
+
+/// `E_0275` — prüfen, ob eine Antwort auf die Stornierung nötig ist, MSB ↔ NB.
+pub const EBD_PREISBLATT_B_STORNO_NB: &str = "E_0275";
+const E_0275: Option<&'static str> = Some(EBD_PREISBLATT_B_STORNO_NB);
+
+/// `E_0270` — the LF's 24 grounds for refusing a Preisblatt-B invoice.
+///
+/// Kopf (10–100), Position (300–430) and Summe (500–550), exactly as
+/// [`E_0264_CODES`] — plus `A08` for the Preisblatt version. The Zustimmung at
+/// Prüfschritt 560 is the Zahlungsavis 33001 and carries no code.
+pub const E_0270_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0270,
+        Ablehnung,
+        "Rechnung entspricht nicht §14 Abs. 4 UStG (Kopf, Prüfschritt 10)",
+        bemerkung
+    ),
+    code!(
+        "A02",
+        E_0270,
+        Ablehnung,
+        "Rechnungsdatum liegt in der Zukunft (Kopf, Prüfschritt 20)"
+    ),
+    code!(
+        "A03",
+        E_0270,
+        Ablehnung,
+        "Das Rechnungsdatum liegt vor dem Ausführungsdatum/Leistungszeitraum (Kopf, Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0270,
+        Ablehnung,
+        "Die Rechnung basiert auf keiner Bestellung des Rechnungsempfängers (Kopf, Prüfschritt 40)"
+    ),
+    code!(
+        "A05",
+        E_0270,
+        Ablehnung,
+        "Rechnungsnummer wurde bereits verwendet (Kopf, Prüfschritt 50)"
+    ),
+    code!(
+        "A06",
+        E_0270,
+        Ablehnung,
+        "Bei der Abrechnung des MSB kann es nicht zu einer Rückerstattung kommen (Kopf, Prüfschritt 60)"
+    ),
+    code!(
+        "A07",
+        E_0270,
+        Ablehnung,
+        "Das Zahlungsziel ist unterschritten — weniger als 10 WT ab Rechnungseingang (Kopf, Prüfschritt 70)"
+    ),
+    code!(
+        "A08",
+        E_0270,
+        Ablehnung,
+        "Es liegt kein gültiges Preisblatt in der angegebenen Version vor — Preisblatt B heißt in der PRICAT „Preisblatt Technik\u{201c} (Kopf, Prüfschritt 80)"
+    ),
+    code!(
+        "A25",
+        E_0270,
+        Ablehnung,
+        "Abrechnungszeitraum wird doppelt abgerechnet — die Nummer der früheren Rechnung ist zu nennen (Kopf, Prüfschritt 90)",
+        bemerkung
+    ),
+    code!(
+        "A90",
+        E_0270,
+        Ablehnung,
+        "Sonstiger Fehler auf Kopfebene (Prüfschritt 100) — Nutzungsmöglichkeit endet 01.10.2027 00:00 Uhr",
+        bemerkung
+    ),
+    code!(
+        "A09",
+        E_0270,
+        Ablehnung,
+        "In der Rechnungsposition wurde weder eine Artikel-ID aus der bestätigten Bestellung noch die für das Scheitern (9991000003030-01) verwendet (Position, Prüfschritt 300)"
+    ),
+    code!(
+        "A10",
+        E_0270,
+        Ablehnung,
+        "Die abzurechnende Leistung wurde nicht vom MSB durchgeführt (Position, Prüfschritt 310)"
+    ),
+    code!(
+        "A11",
+        E_0270,
+        Ablehnung,
+        "Der Preis in der Rechnungsposition entspricht nicht dem Preis aus der Version des Preisblatts der bestätigten Bestellung (Position, Prüfschritt 320)"
+    ),
+    code!(
+        "A12",
+        E_0270,
+        Ablehnung,
+        "Der gültige Umsatzsteuersatz für die Rechnungsposition wurde für diesen Zeitpunkt/Zeitraum nicht korrekt angegeben (Position, Prüfschritt 330)"
+    ),
+    code!(
+        "A13",
+        E_0270,
+        Ablehnung,
+        "Der Leistungszeitraum bzw. das Ausführungsdatum der Rechnungsposition liegt nicht innerhalb des Leistungszeitraums der Kopfebene (Position, Prüfschritt 350)"
+    ),
+    code!(
+        "A14",
+        E_0270,
+        Ablehnung,
+        "Es existiert in dieser Rechnung eine weitere Rechnungsposition mit identischer Artikel-ID und identischem oder überschneidendem Leistungszeitraum (Position, Prüfschritt 360)"
+    ),
+    code!(
+        "A15",
+        E_0270,
+        Ablehnung,
+        "Die Artikel-ID wurde in einer vorherigen, nicht stornierten Rechnung für denselben Leistungszeitraum bereits abgerechnet — die Rechnungsnummer ist anzugeben (Position, Prüfschritt 370)",
+        bemerkung
+    ),
+    code!(
+        "A20",
+        E_0270,
+        Ablehnung,
+        "Rechenfehler in der Rechnungsposition (Position, Prüfschritt 420)"
+    ),
+    code!(
+        "A99",
+        E_0270,
+        Ablehnung,
+        "Sonstiger Fehler auf Positionsebene (Prüfschritt 430) — Nutzungsmöglichkeit endet 01.10.2027 00:00 Uhr",
+        bemerkung
+    ),
+    code!(
+        "A21",
+        E_0270,
+        Ablehnung,
+        "Erwartete Position nicht vorhanden — die fehlenden Positionen aus dem bestätigten Angebot sind unter Angabe ihrer Positionsnummer zu nennen (Summe, Prüfschritt 500)",
+        bemerkung
+    ),
+    code!(
+        "A22",
+        E_0270,
+        Ablehnung,
+        "Die genannte Besteuerungsgrundlage passt nicht zur Summe der Einzelpositionen dieses Steuersatzes (Summe, Prüfschritt 510)",
+        bemerkung
+    ),
+    code!(
+        "A23",
+        E_0270,
+        Ablehnung,
+        "Die Summe aller Netto-Rechnungspositionen dieses Steuersatzes, multipliziert mit dem Steuersatz, entspricht nicht dem angegebenen Steuerbetrag (Summe, Prüfschritt 520)",
+        bemerkung
+    ),
+    code!(
+        "A24",
+        E_0270,
+        Ablehnung,
+        "Rechnungsbetrag (Besteuerungsgrundlage inklusive Steuerbetrag) der Summe ist nicht korrekt (Summe, Prüfschritt 540)"
+    ),
+    code!(
+        "A96",
+        E_0270,
+        Ablehnung,
+        "Sonstiger Fehler auf Summenebene (Prüfschritt 550) — Nutzungsmöglichkeit endet 01.10.2027 00:00 Uhr",
+        bemerkung
+    ),
+];
+
+/// `E_0273` — the NB's grounds, code for code [`E_0270_CODES`].
+///
+/// Kept as its own list rather than aliased: a code is resolved against the
+/// tree the REMADV names, and an `E_0270` code on an answer that names
+/// `E_0273` is undefined at the counterparty.
+pub const E_0273_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0273,
+        Ablehnung,
+        "Rechnung entspricht nicht §14 Abs. 4 UStG (Kopf, Prüfschritt 10)",
+        bemerkung
+    ),
+    code!(
+        "A02",
+        E_0273,
+        Ablehnung,
+        "Rechnungsdatum liegt in der Zukunft (Kopf, Prüfschritt 20)"
+    ),
+    code!(
+        "A03",
+        E_0273,
+        Ablehnung,
+        "Das Rechnungsdatum liegt vor dem Ausführungsdatum/Leistungszeitraum (Kopf, Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0273,
+        Ablehnung,
+        "Die Rechnung basiert auf keiner Bestellung des Rechnungsempfängers (Kopf, Prüfschritt 40)"
+    ),
+    code!(
+        "A05",
+        E_0273,
+        Ablehnung,
+        "Rechnungsnummer wurde bereits verwendet (Kopf, Prüfschritt 50)"
+    ),
+    code!(
+        "A06",
+        E_0273,
+        Ablehnung,
+        "Bei der Abrechnung des MSB kann es nicht zu einer Rückerstattung kommen (Kopf, Prüfschritt 60)"
+    ),
+    code!(
+        "A07",
+        E_0273,
+        Ablehnung,
+        "Das Zahlungsziel ist unterschritten — weniger als 10 WT ab Rechnungseingang (Kopf, Prüfschritt 70)"
+    ),
+    code!(
+        "A08",
+        E_0273,
+        Ablehnung,
+        "Es liegt kein gültiges Preisblatt in der angegebenen Version vor — Preisblatt B heißt in der PRICAT „Preisblatt Technik\u{201c} (Kopf, Prüfschritt 80)"
+    ),
+    code!(
+        "A25",
+        E_0273,
+        Ablehnung,
+        "Abrechnungszeitraum wird doppelt abgerechnet — die Nummer der früheren Rechnung ist zu nennen (Kopf, Prüfschritt 90)",
+        bemerkung
+    ),
+    code!(
+        "A90",
+        E_0273,
+        Ablehnung,
+        "Sonstiger Fehler auf Kopfebene (Prüfschritt 100) — Nutzungsmöglichkeit endet 01.10.2027 00:00 Uhr",
+        bemerkung
+    ),
+    code!(
+        "A09",
+        E_0273,
+        Ablehnung,
+        "In der Rechnungsposition wurde weder eine Artikel-ID aus der bestätigten Bestellung noch die für das Scheitern (9991000003030-01) verwendet (Position, Prüfschritt 300)"
+    ),
+    code!(
+        "A10",
+        E_0273,
+        Ablehnung,
+        "Die abzurechnende Leistung wurde nicht vom MSB durchgeführt (Position, Prüfschritt 310)"
+    ),
+    code!(
+        "A11",
+        E_0273,
+        Ablehnung,
+        "Der Preis in der Rechnungsposition entspricht nicht dem Preis aus der Version des Preisblatts der bestätigten Bestellung (Position, Prüfschritt 320)"
+    ),
+    code!(
+        "A12",
+        E_0273,
+        Ablehnung,
+        "Der gültige Umsatzsteuersatz für die Rechnungsposition wurde für diesen Zeitpunkt/Zeitraum nicht korrekt angegeben (Position, Prüfschritt 330)"
+    ),
+    code!(
+        "A13",
+        E_0273,
+        Ablehnung,
+        "Der Leistungszeitraum bzw. das Ausführungsdatum der Rechnungsposition liegt nicht innerhalb des Leistungszeitraums der Kopfebene (Position, Prüfschritt 350)"
+    ),
+    code!(
+        "A14",
+        E_0273,
+        Ablehnung,
+        "Es existiert in dieser Rechnung eine weitere Rechnungsposition mit identischer Artikel-ID und identischem oder überschneidendem Leistungszeitraum (Position, Prüfschritt 360)"
+    ),
+    code!(
+        "A15",
+        E_0273,
+        Ablehnung,
+        "Die Artikel-ID wurde in einer vorherigen, nicht stornierten Rechnung für denselben Leistungszeitraum bereits abgerechnet — die Rechnungsnummer ist anzugeben (Position, Prüfschritt 370)",
+        bemerkung
+    ),
+    code!(
+        "A20",
+        E_0273,
+        Ablehnung,
+        "Rechenfehler in der Rechnungsposition (Position, Prüfschritt 420)"
+    ),
+    code!(
+        "A99",
+        E_0273,
+        Ablehnung,
+        "Sonstiger Fehler auf Positionsebene (Prüfschritt 430) — Nutzungsmöglichkeit endet 01.10.2027 00:00 Uhr",
+        bemerkung
+    ),
+    code!(
+        "A21",
+        E_0273,
+        Ablehnung,
+        "Erwartete Position nicht vorhanden — die fehlenden Positionen aus dem bestätigten Angebot sind unter Angabe ihrer Positionsnummer zu nennen (Summe, Prüfschritt 500)",
+        bemerkung
+    ),
+    code!(
+        "A22",
+        E_0273,
+        Ablehnung,
+        "Die genannte Besteuerungsgrundlage passt nicht zur Summe der Einzelpositionen dieses Steuersatzes (Summe, Prüfschritt 510)",
+        bemerkung
+    ),
+    code!(
+        "A23",
+        E_0273,
+        Ablehnung,
+        "Die Summe aller Netto-Rechnungspositionen dieses Steuersatzes, multipliziert mit dem Steuersatz, entspricht nicht dem angegebenen Steuerbetrag (Summe, Prüfschritt 520)",
+        bemerkung
+    ),
+    code!(
+        "A24",
+        E_0273,
+        Ablehnung,
+        "Rechnungsbetrag (Besteuerungsgrundlage inklusive Steuerbetrag) der Summe ist nicht korrekt (Summe, Prüfschritt 540)"
+    ),
+    code!(
+        "A96",
+        E_0273,
+        Ablehnung,
+        "Sonstiger Fehler auf Summenebene (Prüfschritt 550) — Nutzungsmöglichkeit endet 01.10.2027 00:00 Uhr",
+        bemerkung
+    ),
+];
+
+/// `E_0276` — the LF's grounds on the **second** round, after the MSB stated
+/// with a COMDIS 29001 that its invoice was correct.
+///
+/// [`E_0270_CODES`] plus **`AC1`** at Prüfschritt 1, „Konnte der MSB alle
+/// Einwände des Rechnungsempfängers entkräften?". The ESA family asks the same
+/// question at the same Prüfschritt and answers it with **`A25`**
+/// ([`E_0266_CODES`]) — and `A25` is already taken here, for the doppelter
+/// Abrechnungszeitraum at Prüfschritt 90. One spelling, two meanings, two
+/// families; [`crate::rechnung::RechnungsFamilie::erneut_einwand_code`] is what
+/// keeps them apart.
+pub const E_0276_CODES: &[AntwortCode] = &[
+    code!(
+        "AC1",
+        E_0276,
+        Ablehnung,
+        "Der MSB konnte nicht alle Einwände des Rechnungsempfängers entkräften — der Einwand ist in der Antwort zu beschreiben (Kopf, Prüfschritt 1)",
+        bemerkung
+    ),
+    code!(
+        "A01",
+        E_0276,
+        Ablehnung,
+        "Rechnung entspricht nicht §14 Abs. 4 UStG (Kopf, Prüfschritt 10)",
+        bemerkung
+    ),
+    code!(
+        "A02",
+        E_0276,
+        Ablehnung,
+        "Rechnungsdatum liegt in der Zukunft (Kopf, Prüfschritt 20)"
+    ),
+    code!(
+        "A03",
+        E_0276,
+        Ablehnung,
+        "Das Rechnungsdatum liegt vor dem Ausführungsdatum/Leistungszeitraum (Kopf, Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0276,
+        Ablehnung,
+        "Die Rechnung basiert auf keiner Bestellung des Rechnungsempfängers (Kopf, Prüfschritt 40)"
+    ),
+    code!(
+        "A05",
+        E_0276,
+        Ablehnung,
+        "Rechnungsnummer wurde bereits verwendet (Kopf, Prüfschritt 50)"
+    ),
+    code!(
+        "A06",
+        E_0276,
+        Ablehnung,
+        "Bei der Abrechnung des MSB kann es nicht zu einer Rückerstattung kommen (Kopf, Prüfschritt 60)"
+    ),
+    code!(
+        "A07",
+        E_0276,
+        Ablehnung,
+        "Das Zahlungsziel ist unterschritten — weniger als 10 WT ab Rechnungseingang (Kopf, Prüfschritt 70)"
+    ),
+    code!(
+        "A08",
+        E_0276,
+        Ablehnung,
+        "Es liegt kein gültiges Preisblatt in der angegebenen Version vor — Preisblatt B heißt in der PRICAT „Preisblatt Technik\u{201c} (Kopf, Prüfschritt 80)"
+    ),
+    code!(
+        "A25",
+        E_0276,
+        Ablehnung,
+        "Abrechnungszeitraum wird doppelt abgerechnet — die Nummer der früheren Rechnung ist zu nennen (Kopf, Prüfschritt 90)",
+        bemerkung
+    ),
+    code!(
+        "A90",
+        E_0276,
+        Ablehnung,
+        "Sonstiger Fehler auf Kopfebene (Prüfschritt 100) — Nutzungsmöglichkeit endet 01.10.2027 00:00 Uhr",
+        bemerkung
+    ),
+    code!(
+        "A09",
+        E_0276,
+        Ablehnung,
+        "In der Rechnungsposition wurde weder eine Artikel-ID aus der bestätigten Bestellung noch die für das Scheitern (9991000003030-01) verwendet (Position, Prüfschritt 300)"
+    ),
+    code!(
+        "A10",
+        E_0276,
+        Ablehnung,
+        "Die abzurechnende Leistung wurde nicht vom MSB durchgeführt (Position, Prüfschritt 310)"
+    ),
+    code!(
+        "A11",
+        E_0276,
+        Ablehnung,
+        "Der Preis in der Rechnungsposition entspricht nicht dem Preis aus der Version des Preisblatts der bestätigten Bestellung (Position, Prüfschritt 320)"
+    ),
+    code!(
+        "A12",
+        E_0276,
+        Ablehnung,
+        "Der gültige Umsatzsteuersatz für die Rechnungsposition wurde für diesen Zeitpunkt/Zeitraum nicht korrekt angegeben (Position, Prüfschritt 330)"
+    ),
+    code!(
+        "A13",
+        E_0276,
+        Ablehnung,
+        "Der Leistungszeitraum bzw. das Ausführungsdatum der Rechnungsposition liegt nicht innerhalb des Leistungszeitraums der Kopfebene (Position, Prüfschritt 350)"
+    ),
+    code!(
+        "A14",
+        E_0276,
+        Ablehnung,
+        "Es existiert in dieser Rechnung eine weitere Rechnungsposition mit identischer Artikel-ID und identischem oder überschneidendem Leistungszeitraum (Position, Prüfschritt 360)"
+    ),
+    code!(
+        "A15",
+        E_0276,
+        Ablehnung,
+        "Die Artikel-ID wurde in einer vorherigen, nicht stornierten Rechnung für denselben Leistungszeitraum bereits abgerechnet — die Rechnungsnummer ist anzugeben (Position, Prüfschritt 370)",
+        bemerkung
+    ),
+    code!(
+        "A20",
+        E_0276,
+        Ablehnung,
+        "Rechenfehler in der Rechnungsposition (Position, Prüfschritt 420)"
+    ),
+    code!(
+        "A99",
+        E_0276,
+        Ablehnung,
+        "Sonstiger Fehler auf Positionsebene (Prüfschritt 430) — Nutzungsmöglichkeit endet 01.10.2027 00:00 Uhr",
+        bemerkung
+    ),
+    code!(
+        "A21",
+        E_0276,
+        Ablehnung,
+        "Erwartete Position nicht vorhanden — die fehlenden Positionen aus dem bestätigten Angebot sind unter Angabe ihrer Positionsnummer zu nennen (Summe, Prüfschritt 500)",
+        bemerkung
+    ),
+    code!(
+        "A22",
+        E_0276,
+        Ablehnung,
+        "Die genannte Besteuerungsgrundlage passt nicht zur Summe der Einzelpositionen dieses Steuersatzes (Summe, Prüfschritt 510)",
+        bemerkung
+    ),
+    code!(
+        "A23",
+        E_0276,
+        Ablehnung,
+        "Die Summe aller Netto-Rechnungspositionen dieses Steuersatzes, multipliziert mit dem Steuersatz, entspricht nicht dem angegebenen Steuerbetrag (Summe, Prüfschritt 520)",
+        bemerkung
+    ),
+    code!(
+        "A24",
+        E_0276,
+        Ablehnung,
+        "Rechnungsbetrag (Besteuerungsgrundlage inklusive Steuerbetrag) der Summe ist nicht korrekt (Summe, Prüfschritt 540)"
+    ),
+    code!(
+        "A96",
+        E_0276,
+        Ablehnung,
+        "Sonstiger Fehler auf Summenebene (Prüfschritt 550) — Nutzungsmöglichkeit endet 01.10.2027 00:00 Uhr",
+        bemerkung
+    ),
+];
+
+/// `E_0277` — the NB's grounds on the second round. `AC1` as in [`E_0276_CODES`].
+pub const E_0277_CODES: &[AntwortCode] = &[
+    code!(
+        "AC1",
+        E_0277,
+        Ablehnung,
+        "Der MSB konnte nicht alle Einwände des Rechnungsempfängers entkräften — der Einwand ist in der Antwort zu beschreiben (Kopf, Prüfschritt 1)",
+        bemerkung
+    ),
+    code!(
+        "A01",
+        E_0277,
+        Ablehnung,
+        "Rechnung entspricht nicht §14 Abs. 4 UStG (Kopf, Prüfschritt 10)",
+        bemerkung
+    ),
+    code!(
+        "A02",
+        E_0277,
+        Ablehnung,
+        "Rechnungsdatum liegt in der Zukunft (Kopf, Prüfschritt 20)"
+    ),
+    code!(
+        "A03",
+        E_0277,
+        Ablehnung,
+        "Das Rechnungsdatum liegt vor dem Ausführungsdatum/Leistungszeitraum (Kopf, Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0277,
+        Ablehnung,
+        "Die Rechnung basiert auf keiner Bestellung des Rechnungsempfängers (Kopf, Prüfschritt 40)"
+    ),
+    code!(
+        "A05",
+        E_0277,
+        Ablehnung,
+        "Rechnungsnummer wurde bereits verwendet (Kopf, Prüfschritt 50)"
+    ),
+    code!(
+        "A06",
+        E_0277,
+        Ablehnung,
+        "Bei der Abrechnung des MSB kann es nicht zu einer Rückerstattung kommen (Kopf, Prüfschritt 60)"
+    ),
+    code!(
+        "A07",
+        E_0277,
+        Ablehnung,
+        "Das Zahlungsziel ist unterschritten — weniger als 10 WT ab Rechnungseingang (Kopf, Prüfschritt 70)"
+    ),
+    code!(
+        "A08",
+        E_0277,
+        Ablehnung,
+        "Es liegt kein gültiges Preisblatt in der angegebenen Version vor — Preisblatt B heißt in der PRICAT „Preisblatt Technik\u{201c} (Kopf, Prüfschritt 80)"
+    ),
+    code!(
+        "A25",
+        E_0277,
+        Ablehnung,
+        "Abrechnungszeitraum wird doppelt abgerechnet — die Nummer der früheren Rechnung ist zu nennen (Kopf, Prüfschritt 90)",
+        bemerkung
+    ),
+    code!(
+        "A90",
+        E_0277,
+        Ablehnung,
+        "Sonstiger Fehler auf Kopfebene (Prüfschritt 100) — Nutzungsmöglichkeit endet 01.10.2027 00:00 Uhr",
+        bemerkung
+    ),
+    code!(
+        "A09",
+        E_0277,
+        Ablehnung,
+        "In der Rechnungsposition wurde weder eine Artikel-ID aus der bestätigten Bestellung noch die für das Scheitern (9991000003030-01) verwendet (Position, Prüfschritt 300)"
+    ),
+    code!(
+        "A10",
+        E_0277,
+        Ablehnung,
+        "Die abzurechnende Leistung wurde nicht vom MSB durchgeführt (Position, Prüfschritt 310)"
+    ),
+    code!(
+        "A11",
+        E_0277,
+        Ablehnung,
+        "Der Preis in der Rechnungsposition entspricht nicht dem Preis aus der Version des Preisblatts der bestätigten Bestellung (Position, Prüfschritt 320)"
+    ),
+    code!(
+        "A12",
+        E_0277,
+        Ablehnung,
+        "Der gültige Umsatzsteuersatz für die Rechnungsposition wurde für diesen Zeitpunkt/Zeitraum nicht korrekt angegeben (Position, Prüfschritt 330)"
+    ),
+    code!(
+        "A13",
+        E_0277,
+        Ablehnung,
+        "Der Leistungszeitraum bzw. das Ausführungsdatum der Rechnungsposition liegt nicht innerhalb des Leistungszeitraums der Kopfebene (Position, Prüfschritt 350)"
+    ),
+    code!(
+        "A14",
+        E_0277,
+        Ablehnung,
+        "Es existiert in dieser Rechnung eine weitere Rechnungsposition mit identischer Artikel-ID und identischem oder überschneidendem Leistungszeitraum (Position, Prüfschritt 360)"
+    ),
+    code!(
+        "A15",
+        E_0277,
+        Ablehnung,
+        "Die Artikel-ID wurde in einer vorherigen, nicht stornierten Rechnung für denselben Leistungszeitraum bereits abgerechnet — die Rechnungsnummer ist anzugeben (Position, Prüfschritt 370)",
+        bemerkung
+    ),
+    code!(
+        "A20",
+        E_0277,
+        Ablehnung,
+        "Rechenfehler in der Rechnungsposition (Position, Prüfschritt 420)"
+    ),
+    code!(
+        "A99",
+        E_0277,
+        Ablehnung,
+        "Sonstiger Fehler auf Positionsebene (Prüfschritt 430) — Nutzungsmöglichkeit endet 01.10.2027 00:00 Uhr",
+        bemerkung
+    ),
+    code!(
+        "A21",
+        E_0277,
+        Ablehnung,
+        "Erwartete Position nicht vorhanden — die fehlenden Positionen aus dem bestätigten Angebot sind unter Angabe ihrer Positionsnummer zu nennen (Summe, Prüfschritt 500)",
+        bemerkung
+    ),
+    code!(
+        "A22",
+        E_0277,
+        Ablehnung,
+        "Die genannte Besteuerungsgrundlage passt nicht zur Summe der Einzelpositionen dieses Steuersatzes (Summe, Prüfschritt 510)",
+        bemerkung
+    ),
+    code!(
+        "A23",
+        E_0277,
+        Ablehnung,
+        "Die Summe aller Netto-Rechnungspositionen dieses Steuersatzes, multipliziert mit dem Steuersatz, entspricht nicht dem angegebenen Steuerbetrag (Summe, Prüfschritt 520)",
+        bemerkung
+    ),
+    code!(
+        "A24",
+        E_0277,
+        Ablehnung,
+        "Rechnungsbetrag (Besteuerungsgrundlage inklusive Steuerbetrag) der Summe ist nicht korrekt (Summe, Prüfschritt 540)"
+    ),
+    code!(
+        "A96",
+        E_0277,
+        Ablehnung,
+        "Sonstiger Fehler auf Summenebene (Prüfschritt 550) — Nutzungsmöglichkeit endet 01.10.2027 00:00 Uhr",
+        bemerkung
+    ),
+];
+
+/// `E_0271` — the MSB's check of a Nicht-Zahlungsavis, MSB ↔ LF.
+///
+/// One Prüfschritt with one code: `A99` states that the refusal was **not**
+/// justified and the invoice stands, and it rides the COMDIS 29001. „Ja"
+/// publishes no code — the MSB sends the Stornorechnung 31004 instead.
+pub const E_0271_CODES: &[AntwortCode] = &[code!(
+    "A99",
+    E_0271,
+    Ablehnung,
+    "Die Rechnung wird als korrekt angesehen — es ist zu begründen, warum (Prüfschritt 10)",
+    bemerkung
+)];
+
+/// `E_0274` — the MSB's check of a Nicht-Zahlungsavis, MSB ↔ NB.
+pub const E_0274_CODES: &[AntwortCode] = &[code!(
+    "A99",
+    E_0274,
+    Ablehnung,
+    "Die Rechnung wird als korrekt angesehen — es ist zu begründen, warum (Prüfschritt 10)",
+    bemerkung
+)];
+
+/// `E_0272` — whether the Stornorechnung needs an answer at all, MSB ↔ LF.
+///
+/// Two things make this tree different from every other invoice tree here.
+///
+/// Its **Zustimmung carries no code**: Prüfschritt 70 „Wurde der ursprünglichen
+/// Rechnung zugestimmt?" ends with „Stornorechnung zustimmen und im
+/// Zahlungslauf berücksichtigen" — a REMADV 33001.
+///
+/// And its Prüfschritte 70/80 decide whether to answer **at all**. A Storno of
+/// an invoice that was refused with a Nicht-Zahlungsavis draws no answer, and
+/// neither does a Storno of an invoice that was never answered. Only the
+/// avisierte invoice's Storno is confirmed. [`storno_antwort_erforderlich`] is
+/// that rule; sending a REMADV where the tree says none is due is traffic the
+/// counterparty cannot correlate.
+pub const E_0272_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0272,
+        Ablehnung,
+        "Die zu stornierende Rechnung ist beim Empfänger nicht vorhanden (Prüfschritt 10)"
+    ),
+    code!(
+        "A06",
+        E_0272,
+        Ablehnung,
+        "Die in der Stornorechnung verwendete Rechnungsnummer wurde bereits verwendet (Prüfschritt 15)"
+    ),
+    code!(
+        "A07",
+        E_0272,
+        Ablehnung,
+        "Die Stornorechnung entspricht nicht §14 Abs. 4 UStG (Prüfschritt 17)",
+        bemerkung
+    ),
+    code!(
+        "A02",
+        E_0272,
+        Ablehnung,
+        "Die zu stornierende Rechnung wurde bereits storniert (Prüfschritt 20)"
+    ),
+    code!(
+        "A03",
+        E_0272,
+        Ablehnung,
+        "Der Rechnungstyp der Stornorechnung ist nicht identisch mit dem der ursprünglichen Rechnung (Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0272,
+        Ablehnung,
+        "Abrechnungszeitraum bzw. Ausführungsdatum der Stornorechnung sind nicht identisch mit denen der ursprünglichen Rechnung (Prüfschritt 40)"
+    ),
+    code!(
+        "A05",
+        E_0272,
+        Ablehnung,
+        "Mindestens ein mit (-1) multiplizierter Betrag der Stornorechnung passt nicht zum Betrag der ursprünglichen Rechnung (Prüfschritt 50)"
+    ),
+    code!(
+        "A99",
+        E_0272,
+        Ablehnung,
+        "Sonstiges (Prüfschritt 60) — Nutzungsmöglichkeit endet 01.04.2027 00:00 Uhr",
+        bemerkung
+    ),
+];
+
+/// `E_0275` — whether the Stornorechnung needs an answer at all, MSB ↔ NB.
+///
+/// Code for code [`E_0272_CODES`], under the number the NB's REMADV names.
+pub const E_0275_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0275,
+        Ablehnung,
+        "Die zu stornierende Rechnung ist beim Empfänger nicht vorhanden (Prüfschritt 10)"
+    ),
+    code!(
+        "A06",
+        E_0275,
+        Ablehnung,
+        "Die in der Stornorechnung verwendete Rechnungsnummer wurde bereits verwendet (Prüfschritt 15)"
+    ),
+    code!(
+        "A07",
+        E_0275,
+        Ablehnung,
+        "Die Stornorechnung entspricht nicht §14 Abs. 4 UStG (Prüfschritt 17)",
+        bemerkung
+    ),
+    code!(
+        "A02",
+        E_0275,
+        Ablehnung,
+        "Die zu stornierende Rechnung wurde bereits storniert (Prüfschritt 20)"
+    ),
+    code!(
+        "A03",
+        E_0275,
+        Ablehnung,
+        "Der Rechnungstyp der Stornorechnung ist nicht identisch mit dem der ursprünglichen Rechnung (Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0275,
+        Ablehnung,
+        "Abrechnungszeitraum bzw. Ausführungsdatum der Stornorechnung sind nicht identisch mit denen der ursprünglichen Rechnung (Prüfschritt 40)"
+    ),
+    code!(
+        "A05",
+        E_0275,
+        Ablehnung,
+        "Mindestens ein mit (-1) multiplizierter Betrag der Stornorechnung passt nicht zum Betrag der ursprünglichen Rechnung (Prüfschritt 50)"
+    ),
+    code!(
+        "A99",
+        E_0275,
+        Ablehnung,
+        "Sonstiges (Prüfschritt 60) — Nutzungsmöglichkeit endet 01.04.2027 00:00 Uhr",
+        bemerkung
+    ),
+];
+
+/// Whether a Stornorechnung 31004 is answered at all — `E_0272`/`E_0275`
+/// Prüfschritte 70 and 80, and `E_0267` Prüfschritt 80 for the ESA.
+///
+/// The three published outcomes:
+///
+/// | Was the original invoice answered? | Answer to the Storno |
+/// |---|---|
+/// | Zahlungsavis (33001) | **yes** — confirm the Storno |
+/// | Nicht-Zahlungsavis (33003/33004) | **no** |
+/// | not yet answered | **no** — and the original is not answered either |
+///
+/// Only reached once the Prüfschritte above found no defect; a defect is
+/// refused whatever the original's fate.
+#[must_use]
+pub const fn storno_antwort_erforderlich(ursprung: UrsprungsRechnungStatus) -> bool {
+    matches!(ursprung, UrsprungsRechnungStatus::Avisiert)
+}
+
+/// How the recipient answered the invoice a Storno cancels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum UrsprungsRechnungStatus {
+    /// A Zahlungsavis 33001 went out — the Storno is confirmed in turn.
+    Avisiert,
+    /// A Nicht-Zahlungsavis 33003/33004 went out — the Storno is not answered.
+    Abgelehnt,
+    /// Neither. Nothing is answered, in either direction.
+    Unbeantwortet,
+}
+
+// ── Rechnungsabwicklung des Messstellenbetriebs über den LF ──────────────────
+//
+// WiM Strom Teil 1 Kap. 3.6.3. The LF collects the MSB's Messentgelt from the
+// Letztverbraucher in the MSB's name and for its account (§ 10 Abs. 1 Satz 4
+// UStG — a durchlaufender Posten). Five trees over two mirrored sequences:
+//
+// ```text
+// Angebot durch den MSB   QUOTES 15002 ─▶ ORDERS 17005 Bestellung   (Zustimmung)
+//                                      └▶ IFTSTA 21032              E_0205
+// Anfrage durch den LF    REQOTE 35002 ─▶ QUOTES 15002 / IFTSTA 21033   E_0207
+//                                      ─▶ ORDERS 17005 Bestellung   (Zustimmung)
+//                                      └▶ IFTSTA 21032              E_0208
+// Beendigung              ORDERS 17006 ─▶ ORDRSP 19009/19010        E_0206 · E_0209
+// ```
+//
+// **The acceptance and the refusal ride different message types.** The
+// Prozessschritt „Antwort auf das Angebot" is answered either by ORDERS 17005
+// — which carries no code, because sending it *is* the agreement — or by
+// IFTSTA 21032, which carries the `E_0205`/`E_0208` refusal. A deployment that
+// routes only 17005 can never receive the LF's „nein" (PID-Übersicht 4.0
+// lfd. Nr. 30920/30930 and 31010/31020).
+//
+// Source: *Entscheidungsbaum-Diagramme und Codelisten* 4.3 Kap. 8.9–8.12.
+
+/// `E_0205` — Angebot zur Rechnungsabwicklung prüfen. Prüfende Rolle: **LF**.
+///
+/// Ablehnungen only: the agreement is the ORDERS 17005 Bestellung
+/// („Bestellung versenden" at Prüfschritt 80), which carries no code.
+pub const EBD_RECHNUNGSABWICKLUNG_ANGEBOT: &str = "E_0205";
+const E_0205: Option<&'static str> = Some(EBD_RECHNUNGSABWICKLUNG_ANGEBOT);
+
+/// `E_0205` — the LF's six grounds for refusing an MSB's Angebot.
+pub const E_0205_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0205,
+        Ablehnung,
+        "Kein gültiger Vertrag zwischen MSB und LF über die Rechnungsabwicklung (Prüfschritt 10)"
+    ),
+    code!(
+        "A02",
+        E_0205,
+        Ablehnung,
+        "Alle Messlokationen der angefragten Marktlokationen sind ausschließlich mit kME ausgestattet (Prüfschritt 20)"
+    ),
+    code!(
+        "A03",
+        E_0205,
+        Ablehnung,
+        "Das Vertragsverhältnis mit dem Dritten lässt die Abrechnung des Messstellenbetriebs nicht zu (Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0205,
+        Ablehnung,
+        "Das Vertragsverhältnis mit dem Dritten lässt das im Angebot benannte Beginndatum nicht zu (Prüfschritt 40)"
+    ),
+    code!(
+        "A05",
+        E_0205,
+        Ablehnung,
+        "Kein gültiges Preisblatt mit allen im Angebot angegebenen Artikel-IDs vorhanden (Prüfschritt 70)"
+    ),
+    code!(
+        "A06",
+        E_0205,
+        Ablehnung,
+        "Angebotspositionen weichen vom Vertragsverhältnis mit dem Kunden ab (Prüfschritt 80)"
+    ),
+];
+
+/// `E_0208` — Angebot bzw. Ablehnung der Anfrage verarbeiten. Prüfende Rolle: **LF**.
+///
+/// The LF-initiated sequence's answer. Three codes against `E_0205`'s six: the
+/// Vertragslage and the kME question were already settled by the MSB at
+/// `E_0207`, so the LF only re-checks what the Angebot itself introduced. The
+/// numbers therefore mean different things in the two trees — `A02` is
+/// „ausschließlich kME" in `E_0205` and „kein Preisblatt" here.
+pub const EBD_RECHNUNGSABWICKLUNG_ANFRAGE_ANTWORT: &str = "E_0208";
+const E_0208: Option<&'static str> = Some(EBD_RECHNUNGSABWICKLUNG_ANFRAGE_ANTWORT);
+
+/// `E_0208` — the LF's three grounds for refusing the Angebot it asked for.
+pub const E_0208_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0208,
+        Ablehnung,
+        "Das Vertragsverhältnis mit dem Dritten lässt das im Angebot benannte Beginndatum nicht zu (Prüfschritt 10)"
+    ),
+    code!(
+        "A02",
+        E_0208,
+        Ablehnung,
+        "Kein gültiges Preisblatt mit allen im Angebot angegebenen Artikel-IDs vorhanden (Prüfschritt 40)"
+    ),
+    code!(
+        "A03",
+        E_0208,
+        Ablehnung,
+        "Angebotspositionen weichen vom Vertragsverhältnis ab (Prüfschritt 50)"
+    ),
+];
+
+/// `E_0207` — Anfrage zur Rechnungsabwicklung prüfen. Prüfende Rolle: **MSB**.
+///
+/// The MSB's answer to REQOTE 35002. Ablehnungen only: agreeing means sending
+/// the QUOTES 15002 Angebot, which carries no code; the refusals ride
+/// IFTSTA 21033.
+pub const EBD_RECHNUNGSABWICKLUNG_ANFRAGE: &str = "E_0207";
+const E_0207: Option<&'static str> = Some(EBD_RECHNUNGSABWICKLUNG_ANFRAGE);
+
+/// `E_0207` — the MSB's grounds for refusing an LF's Anfrage.
+///
+/// `A08` sits at Prüfschritt 2, out of numeric order, because it was inserted
+/// after the rest: an Anfrage whose Beginn falls inside an arrangement the MSB
+/// already confirmed with this LF is a duplicate, not a contract problem.
+pub const E_0207_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0207,
+        Ablehnung,
+        "Kein gültiger Vertrag zwischen MSB und LF über die Rechnungsabwicklung (Prüfschritt 1)"
+    ),
+    code!(
+        "A08",
+        E_0207,
+        Ablehnung,
+        "Die Abwicklung des Messentgelts ist für diesen Zeitraum bereits vollzogen (Prüfschritt 2)"
+    ),
+    code!(
+        "A02",
+        E_0207,
+        Ablehnung,
+        "Alle Messlokationen der angefragten Marktlokation sind ausschließlich mit kME ausgestattet (Prüfschritt 3)"
+    ),
+    code!(
+        "A03",
+        E_0207,
+        Ablehnung,
+        "Das Vertragsverhältnis mit dem Anschlussnehmer nach MsbG lässt das nicht zu (Prüfschritt 4)"
+    ),
+    code!(
+        "A04",
+        E_0207,
+        Ablehnung,
+        "Das Vertragsverhältnis mit dem Dritten schließt eine Abrechnung über den LF aus (Prüfschritt 6)"
+    ),
+    code!(
+        "A05",
+        E_0207,
+        Ablehnung,
+        "Das Entgelt wird bereits über die erzeugende Marktlokation abgerechnet (Prüfschritt 7)"
+    ),
+    code!(
+        "A06",
+        E_0207,
+        Ablehnung,
+        "Das Entgelt wird über eine andere Marktlokation abgerechnet (Prüfschritt 8)"
+    ),
+];
+
+/// `E_0206` — Beendigung prüfen, **vom MSB** angestoßen. Prüfende Rolle: **LF**.
+pub const EBD_RECHNUNGSABWICKLUNG_BEENDIGUNG_MSB: &str = "E_0206";
+const E_0206: Option<&'static str> = Some(EBD_RECHNUNGSABWICKLUNG_BEENDIGUNG_MSB);
+
+/// `E_0206` — the LF's answer to an MSB-initiated Beendigung (ORDRSP 19009/19010).
+pub const E_0206_CODES: &[AntwortCode] = &[
+    code!("A02", E_0206, Zustimmung, "Zustimmung (Prüfschritt 1)"),
+    code!(
+        "A01",
+        E_0206,
+        Ablehnung,
+        "Keine Vereinbarung über die Abrechnung des Messstellenbetriebs über den LF (Prüfschritt 1)"
+    ),
+];
+
+/// `E_0209` — Beendigung prüfen, **vom LF** angestoßen. Prüfende Rolle: **MSB**.
+///
+/// The mirror of `E_0206` with one extra Prüfschritt, and it is a Frist the LF
+/// cannot see coming: the Beendigungsdatum must lie after
+/// „Eingangsdatum − (6 Wochen + 5 WT)", so a Beendigung reaching too far back
+/// is refused with `A04` rather than moved.
+pub const EBD_RECHNUNGSABWICKLUNG_BEENDIGUNG_LF: &str = "E_0209";
+const E_0209: Option<&'static str> = Some(EBD_RECHNUNGSABWICKLUNG_BEENDIGUNG_LF);
+
+/// `E_0209` — the MSB's answer to an LF-initiated Beendigung (ORDRSP 19009/19010).
+pub const E_0209_CODES: &[AntwortCode] = &[
+    code!("A02", E_0209, Zustimmung, "Zustimmung (Prüfschritt 2)"),
+    code!(
+        "A01",
+        E_0209,
+        Ablehnung,
+        "Der LF ist nicht Zahler des Messstellenbetriebs (Prüfschritt 1)"
+    ),
+    code!(
+        "A04",
+        E_0209,
+        Ablehnung,
+        "Frist nicht eingehalten — das Beendigungsdatum liegt vor dem Stichtag Eingangsdatum − (6 Wochen + 5 WT) (Prüfschritt 2)"
+    ),
+];
+
+/// The Rückwirkungsfrist of an LF-initiated Beendigung der Rechnungsabwicklung.
+///
+/// `E_0209` Prüfschritt 2 computes the Stichtag as
+/// „Eingangsdatum der Nachricht − (6 Wochen + 5 WT)" and refuses a
+/// Beendigungsdatum before it with `A04`. Both halves are needed: six calendar
+/// weeks and then five Werktage further back.
+pub const BEENDIGUNG_RUECKWIRKUNG_WOCHEN: i64 = 6;
+
+/// The Werktage added to [`BEENDIGUNG_RUECKWIRKUNG_WOCHEN`] — `E_0209` Prüfschritt 2.
+pub const BEENDIGUNG_RUECKWIRKUNG_WT: u32 = 5;
+
+// ── AWH „Änderung der Technik an Lokationen" — E_0278 … E_0287 ───────────────
+//
+// A second, longer road to the same ORDRSP pair. WiM Strom Teil 1 Kap. 3.3 has
+// the NB or the LF order a Messlokationsänderung directly (ORDERS 17011 →
+// 19005/19006, `E_0249`/`E_0250`). The BDEW *AWH Prozesse zur Änderung der
+// Technik an Lokationen* 1.1 puts a quotation round in front of it:
+//
+// ```text
+// REQOTE 35005 Anfrage ─▶ QUOTES 15005 Angebot          (E_0278 / E_0281 decide
+//                      └▶ IFTSTA 21033 Ablehnung          which of the two goes out)
+// ORDERS 17011 Bestellung ─▶ ORDRSP 19005/19006          (E_0279 / E_0283)
+// … Durchführung ──────────▶ IFTSTA 21027/21025          (E_0286)
+// ```
+//
+// **19005/19006 therefore answer four trees, not two.** The Marktrolle of the
+// besteller separates `E_0249` from `E_0250` and `E_0279` from `E_0283`, but it
+// cannot separate `E_0249` from `E_0279`: both are NB → MSB → NB on the same
+// PID pair. The discriminator is the *Zuordnung zu einem Objekt* the AHB gives
+// the inbound 17011 (Anwendungsübersicht 4.0 rows 30660/30720 against
+// 36030/36120): `ZO-T15` opens a new Vorgang and is the WiM Teil 1
+// Beauftragung, `ZG-T24` answers an existing one and is the AWH Bestellung.
+// [`aenderung_der_technik_baum`] is that resolution.
+//
+// Getting it wrong is not a nuance. `A02` is the **Zustimmung** of `E_0249`
+// and the **Ablehnung** „MSB ist der Lokation nicht mehr zugeordnet" of
+// `E_0279` — the same spelling, the same PID, opposite meanings.
+//
+// Source: *Entscheidungsbaum-Diagramme und Codelisten* 4.3 Kap. 9;
+// BDEW *AWH Änderung der Technik an Lokationen* V1.1 (31.03.2025).
+
+/// `E_0278` — Anfrage prüfen, Messlokationsänderung **vom NB**. Prüfende Rolle: **MSB**.
+///
+/// Answers the REQOTE 35005. A Zustimmung is „Angebot versenden" and carries no
+/// code — it goes out as QUOTES 15005; every published code is an Ablehnung and
+/// rides IFTSTA 21033.
+pub const EBD_TECHNIK_ANFRAGE_NB: &str = "E_0278";
+const E_0278: Option<&'static str> = Some(EBD_TECHNIK_ANFRAGE_NB);
+
+/// `E_0278` — the four Ablehnungen of the NB-initiated Anfrage, plus `A99`.
+pub const E_0278_CODES: &[AntwortCode] = &[
+    code!(
+        "A03",
+        E_0278,
+        Ablehnung,
+        "Der MSB bietet die Leistung nicht an (Prüfschritt 10)"
+    ),
+    code!(
+        "A04",
+        E_0278,
+        Ablehnung,
+        "Der NB hat keine Berechtigung dieses Produkt anzufragen (Prüfschritt 20)"
+    ),
+    code!(
+        "A01",
+        E_0278,
+        Ablehnung,
+        "Bestellte Technik liegt bereits vor (Prüfschritt 30)"
+    ),
+    code!(
+        "A02",
+        E_0278,
+        Ablehnung,
+        "Gewünschte Technik ist an der betroffenen Lokation nicht möglich (Prüfschritt 40)"
+    ),
+    code!(
+        "A99",
+        E_0278,
+        Ablehnung,
+        "Sonstiges (Prüfschritt 50) — Nutzungsmöglichkeit endet 01.04.2027 00:00 Uhr",
+        bemerkung
+    ),
+];
+
+/// `E_0281` — Anfrage prüfen, Messlokationsänderung **vom LF**. Prüfende Rolle: **MSB**.
+///
+/// The LF twin of [`E_0278_CODES`], and **not** a renumbering of it: the LF
+/// variant opens with the Vollmacht des Letztverbrauchers, so `A01`/`A02` mean
+/// the Vollmacht here and the Technik there. Six codes against five.
+pub const EBD_TECHNIK_ANFRAGE_LF: &str = "E_0281";
+const E_0281: Option<&'static str> = Some(EBD_TECHNIK_ANFRAGE_LF);
+
+/// `E_0281` — the six Ablehnungen of the LF-initiated Anfrage.
+pub const E_0281_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0281,
+        Ablehnung,
+        "Vollmacht des Letztverbrauchers bzw. Erzeugers liegt nicht vor (Prüfschritt 20)"
+    ),
+    code!(
+        "A02",
+        E_0281,
+        Ablehnung,
+        "Vollmacht ist nicht plausibel und gültig (Prüfschritt 30)"
+    ),
+    code!(
+        "A05",
+        E_0281,
+        Ablehnung,
+        "Der MSB bietet die Leistung nicht an (Prüfschritt 40)"
+    ),
+    code!(
+        "A06",
+        E_0281,
+        Ablehnung,
+        "Der LF hat keine Berechtigung dieses Produkt anzufragen (Prüfschritt 50)"
+    ),
+    code!(
+        "A03",
+        E_0281,
+        Ablehnung,
+        "Bestellte Technik liegt bereits vor (Prüfschritt 60)"
+    ),
+    code!(
+        "A04",
+        E_0281,
+        Ablehnung,
+        "Gewünschte Technik ist an der betroffenen Lokation nicht möglich (Prüfschritt 70)"
+    ),
+    code!(
+        "A99",
+        E_0281,
+        Ablehnung,
+        "Sonstiges (Prüfschritt 80) — Nutzungsmöglichkeit endet 01.04.2027 00:00 Uhr",
+        bemerkung
+    ),
+];
+
+/// `E_0279` — Bestellung prüfen, Messlokationsänderung **vom NB**. Prüfende Rolle: **MSB**.
+///
+/// Answers ORDERS 17011 with ORDRSP 19005/19006 — the same pair `E_0249` uses,
+/// with a different alphabet. `A06` is the sole Zustimmung; `A02` is an
+/// Ablehnung where `E_0249`'s `A02` is the Zustimmung.
+pub const EBD_TECHNIK_BESTELLUNG_NB: &str = "E_0279";
+const E_0279: Option<&'static str> = Some(EBD_TECHNIK_BESTELLUNG_NB);
+
+/// `E_0279` — the AWH Bestellung answer, NB → MSB.
+pub const E_0279_CODES: &[AntwortCode] = &[
+    code!(
+        "A06",
+        E_0279,
+        Zustimmung,
+        "Bestellbestätigung versenden (Prüfschritt 60)"
+    ),
+    code!(
+        "A01",
+        E_0279,
+        Ablehnung,
+        "Bestellte Technik liegt bereits vor (Prüfschritt 10)"
+    ),
+    code!(
+        "A02",
+        E_0279,
+        Ablehnung,
+        "MSB ist der betroffenen Lokation zum Beginn des Umsetzungszeitraums nicht mehr zugeordnet (Prüfschritt 20)"
+    ),
+    code!(
+        "A03",
+        E_0279,
+        Ablehnung,
+        "Gewünschte Technik ist an der betroffenen Lokation nicht möglich (Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0279,
+        Ablehnung,
+        "Realisierung ist im gewünschten Umsetzungszeitraum nicht möglich — ein alternativer Umsetzungszeitraum ist anzugeben (Prüfschritt 40)"
+    ),
+    code!(
+        "A05",
+        E_0279,
+        Ablehnung,
+        "Das angegebene Preisblatt kann in der angegebenen Version nicht akzeptiert werden (Prüfschritt 50)"
+    ),
+    code!(
+        "A99",
+        E_0279,
+        Ablehnung,
+        "Sonstiges (Prüfschritt 60) — Nutzungsmöglichkeit endet 01.04.2027 00:00 Uhr",
+        bemerkung
+    ),
+];
+
+/// `E_0283` — Bestellung prüfen, Messlokationsänderung **vom LF**. Prüfende Rolle: **MSB**.
+///
+/// Code for code identical to [`E_0279_CODES`]; the Vollmacht was already
+/// settled in `E_0281` at the Anfrage. Kept as its own list because a code is
+/// resolved against its tree and `E_0283` is the tree the LF's ORDRSP names.
+pub const EBD_TECHNIK_BESTELLUNG_LF: &str = "E_0283";
+const E_0283: Option<&'static str> = Some(EBD_TECHNIK_BESTELLUNG_LF);
+
+/// `E_0283` — the AWH Bestellung answer, LF → MSB.
+pub const E_0283_CODES: &[AntwortCode] = &[
+    code!(
+        "A06",
+        E_0283,
+        Zustimmung,
+        "Bestellbestätigung versenden (Prüfschritt 60)"
+    ),
+    code!(
+        "A01",
+        E_0283,
+        Ablehnung,
+        "Bestellte Technik liegt bereits vor (Prüfschritt 10)"
+    ),
+    code!(
+        "A02",
+        E_0283,
+        Ablehnung,
+        "MSB ist der betroffenen Lokation zum Beginn des Umsetzungszeitraums nicht mehr zugeordnet (Prüfschritt 20)"
+    ),
+    code!(
+        "A03",
+        E_0283,
+        Ablehnung,
+        "Gewünschte Technik ist an der betroffenen Lokation nicht möglich (Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0283,
+        Ablehnung,
+        "Realisierung ist im gewünschten Umsetzungszeitraum nicht möglich — ein alternativer Umsetzungszeitraum ist anzugeben (Prüfschritt 40)"
+    ),
+    code!(
+        "A05",
+        E_0283,
+        Ablehnung,
+        "Das angegebene Preisblatt kann in der angegebenen Version nicht akzeptiert werden (Prüfschritt 50)"
+    ),
+    code!(
+        "A99",
+        E_0283,
+        Ablehnung,
+        "Sonstiges (Prüfschritt 60) — Nutzungsmöglichkeit endet 01.04.2027 00:00 Uhr",
+        bemerkung
+    ),
+];
+
+/// `E_0286` — Messlokationsänderung durchführen. Prüfende Rolle: **MSB**.
+///
+/// The leg mako had no tree for: after the Bestellung is confirmed the MSB goes
+/// to the Lokation, and `E_0286` is how it reports that the visit failed —
+/// IFTSTA **21027** to the NB, **21025** to the LF. Success publishes no code
+/// („Stammdatenänderung vom MSB ausgehend versenden"), so every entry here is a
+/// Gescheitert.
+///
+/// `E_0284`, `E_0285` and `E_0287` are the same tree under three more numbers:
+/// EBD 4.3 §§ 8.6.2, 8.7.2 and 9.2.3 each say „Es ist das EBD E_0286 zu
+/// nutzen". [`EBD_TECHNIK_DURCHFUEHRUNG_ALIASES`] records that so a caller
+/// holding one of the three resolves to a real Codeliste instead of an empty
+/// one.
+pub const EBD_TECHNIK_DURCHFUEHRUNG: &str = "E_0286";
+const E_0286: Option<&'static str> = Some(EBD_TECHNIK_DURCHFUEHRUNG);
+
+/// The EBD numbers that delegate to [`EBD_TECHNIK_DURCHFUEHRUNG`].
+///
+/// `E_0284` (WiM Teil 1 Messlokationsänderung vom NB), `E_0285` (… vom LF) and
+/// `E_0287` (AWH, vom LF). All three print one sentence and no codes.
+pub const EBD_TECHNIK_DURCHFUEHRUNG_ALIASES: &[&str] = &["E_0284", "E_0285", "E_0287"];
+
+/// `E_0286` — why a Messlokationsänderung failed on site.
+pub const E_0286_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0286,
+        Ablehnung,
+        "Der Monteur hat keinen Zugang zur Lokation (Prüfschritt 10)"
+    ),
+    code!(
+        "A02",
+        E_0286,
+        Ablehnung,
+        "Die Änderung der Technik ist aufgrund einer fehlenden oder mangelhaften Kommunikationsverbindung nicht möglich (Prüfschritt 30)"
+    ),
+    code!(
+        "A03",
+        E_0286,
+        Ablehnung,
+        "Die bestellte Zuordnung der genannten TR zur SR/NeLo lässt sich aufgrund der Situation vor Ort nicht realisieren (Prüfschritt 50)"
+    ),
+    code!(
+        "A99",
+        E_0286,
+        Ablehnung,
+        "Sonstiges (Prüfschritt 60) — Nutzungsmöglichkeit endet 01.04.2027 00:00 Uhr",
+        bemerkung
+    ),
+];
+
+/// Which Beauftragungs-Prozess an inbound `SG?` Zuordnung belongs to.
+///
+/// The one fact that separates the WiM Teil 1 Messlokationsänderung from the
+/// AWH one on PID 17011 — see the module note above.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TechnikBeauftragung {
+    /// `ZO-T15` — the ORDERS opens the Vorgang. WiM Strom Teil 1 Kap. 3.3,
+    /// answered from `E_0249` (NB) or `E_0250` (LF).
+    DirekteBeauftragung,
+    /// `ZG-T24` — the ORDERS answers an existing Vorgang, so a REQOTE 35005 and
+    /// a QUOTES 15005 came first. AWH Änderung der Technik, answered from
+    /// `E_0279` (NB) or `E_0283` (LF).
+    BestellungNachAngebot,
+}
+
+/// Who ordered the Messlokationsänderung.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TechnikBesteller {
+    /// Netzbetreiber — `E_0249` resp. `E_0279`.
+    Netzbetreiber,
+    /// Lieferant — `E_0250` resp. `E_0283`.
+    Lieferant,
+}
+
+/// The Entscheidungsbaum an ORDRSP 19005/19006 must resolve against.
+///
+/// Both inputs are required and neither is redundant: the Marktrolle alone
+/// cannot tell `E_0249` from `E_0279`, and the Beauftragungsart alone cannot
+/// tell `E_0249` from `E_0250`. Answering out of the wrong one puts `A02` on
+/// the wire meaning „Änderung kann durchgeführt werden" while the counterparty
+/// reads „MSB ist der Lokation nicht mehr zugeordnet".
+#[must_use]
+pub const fn aenderung_der_technik_baum(
+    besteller: TechnikBesteller,
+    art: TechnikBeauftragung,
+) -> &'static str {
+    match (besteller, art) {
+        (TechnikBesteller::Netzbetreiber, TechnikBeauftragung::DirekteBeauftragung) => {
+            EBD_MESSLOKATIONSAENDERUNG_NB
+        }
+        (TechnikBesteller::Lieferant, TechnikBeauftragung::DirekteBeauftragung) => {
+            EBD_MESSLOKATIONSAENDERUNG_LF
+        }
+        (TechnikBesteller::Netzbetreiber, TechnikBeauftragung::BestellungNachAngebot) => {
+            EBD_TECHNIK_BESTELLUNG_NB
+        }
+        (TechnikBesteller::Lieferant, TechnikBeauftragung::BestellungNachAngebot) => {
+            EBD_TECHNIK_BESTELLUNG_LF
+        }
+    }
+}
+
+/// The Entscheidungsbaum a REQOTE 35005 Anfrage is answered from.
+///
+/// Only the AWH process has an Anfrage step, so the Beauftragungsart is not a
+/// parameter here.
+#[must_use]
+pub const fn technik_anfrage_baum(besteller: TechnikBesteller) -> &'static str {
+    match besteller {
+        TechnikBesteller::Netzbetreiber => EBD_TECHNIK_ANFRAGE_NB,
+        TechnikBesteller::Lieferant => EBD_TECHNIK_ANFRAGE_LF,
+    }
+}
+
+// ── E_0233 — Ersteinbau eines iMS in eine bestehende Messlokation ────────────
+//
+// WiM Strom Teil 1 Kap. 3.5. The grundzuständiger MSB announces an iMS rollout
+// at a Messlokation a *wettbewerblicher* MSB operates (IFTSTA 21029), and the
+// wMSB answers whether the rollout may proceed. It is one of the few WiM
+// answers where the counterparty is another Messstellenbetreiber rather than
+// the NB, and the only one whose Ablehnungsgründe are statutory rather than
+// procedural: § 19 Abs. 5 MsbG Bestandsschutz and the wMSB's own Selbsteinbau.
+//
+// The cluster picks the Prüfidentifikator, as everywhere: the one Zustimmung
+// rides **21030** „iMS-Ersteinbauzustimmung" and all three Ablehnungen ride
+// **21031** „Bestandsschutz / Eigenausbau iMS" (PID-Übersicht 4.0 rows
+// 30800/30810, both naming `E_0233`).
+//
+// Source: *Entscheidungsbaum-Diagramme und Codelisten* 4.3 Kap. 8.8.2.
+
+/// `E_0233` — Prüfung Selbsteinbau oder Bestandsschutz nach § 19 Abs. 5 MsbG.
+/// Prüfende Rolle: **wMSB** am Objekt Messlokation.
+pub const EBD_ERSTEINBAU_IMS: &str = "E_0233";
+const E_0233: Option<&'static str> = Some(EBD_ERSTEINBAU_IMS);
+
+/// `E_0233` — the wettbewerblicher MSB's answer to a Vorabinformation über den
+/// Ersteinbau eines iMS.
+///
+/// `A04` is not a refusal on the merits — „Zum jetzigen Zeitpunkt noch keine
+/// Aussage hinsichtlich Selbsteinbau möglich" says the wMSB has not decided.
+/// The BDEW still clusters it as an Ablehnung, so it rides 21031 and the gMSB
+/// may not roll out; treating it as a soft yes would install a device the wMSB
+/// never consented to.
+pub const E_0233_CODES: &[AntwortCode] = &[
+    code!(
+        "A03",
+        E_0233,
+        Zustimmung,
+        "Auf den Selbsteinbau eines iMS oder einer mME wird verzichtet (Prüfschritt 4)"
+    ),
+    code!(
+        "A01",
+        E_0233,
+        Ablehnung,
+        "Bestandsschutz gemäß § 19 Abs. 5 MsbG für die Messlokation, auf den nicht verzichtet wird (Prüfschritt 2)"
+    ),
+    code!(
+        "A02",
+        E_0233,
+        Ablehnung,
+        "Selbsteinbau eines iMS oder einer mME geplant (Prüfschritt 3)"
+    ),
+    code!(
+        "A04",
+        E_0233,
+        Ablehnung,
+        "Zum jetzigen Zeitpunkt noch keine Aussage hinsichtlich Selbsteinbau möglich (Prüfschritt 4)"
+    ),
+];
+
 // ── E_0232 / E_2003 — Mitteilung über Gesamtvorgang prüfen ───────────────────
 //
 // The leg that makes a Zuordnung constitutive. The NB answers the MSBN's
@@ -2535,6 +4055,445 @@ pub const E_0254_CODES: &[AntwortCode] = &[
     ),
 ];
 
+// ── UC 4.5 — Abrechnung einer für den ESA erbrachten Leistung ─────────────────
+//
+// EBD 4.3 Kap. 8.27 publishes **four** trees for the ESA billing round trip,
+// and they are not variations of one another:
+//
+// | Tree | Prüfende Rolle | Inbound | Answer |
+// |---|---|---|---|
+// | `E_0264` | **ESA** | INVOIC 31009 | REMADV 33001 / 33003 / 33004 |
+// | `E_0265` | MSB | REMADV 33003/33004 | COMDIS 29001 |
+// | `E_0266` | **ESA** | INVOIC 31009 nach COMDIS | REMADV 33001 / 33003 / 33004 |
+// | `E_0267` | **ESA** | INVOIC 31004 Storno | REMADV 33001 / 33002 |
+//
+// `E_0264` and `E_0266` answer with a **set** of (Ebene, Positionsnummer,
+// code) triples rather than one code — which is exactly the shape REMADV
+// 33003 („Abweisung Kopf und Summe") and 33004 („Abweisung Position") carry.
+// `E_0267` answers with a single code and rides 33002, and it is the only one
+// of the three that REMADV AHB 1.0a §3.1.1 admits in the `SG7 AJT` DE 1082 of
+// the plain Abweisung; §3.1.2 admits `E_0264` and `E_0266` on 33003/33004.
+// Sending an `E_0264` code on a 33002 is therefore a non-conformant answer,
+// not merely a mislabelled one.
+
+/// `E_0264` — Rechnung einer für den ESA erbrachten Leistung prüfen
+/// (INVOIC 31009 → REMADV 33001/33003/33004).
+pub const EBD_ESA_RECHNUNG: &str = "E_0264";
+const E_0264: Option<&'static str> = Some(EBD_ESA_RECHNUNG);
+
+/// `E_0264` — the **ESA's** check of the MSB's Rechnung (EBD 4.3 Kap. 8.27.1).
+///
+/// Three levels with disjoint code ranges, which is what lets one flat list
+/// serve them: Kopf 10–90 (`A01`–`A07`, `A90`), Position 300–430
+/// (`A09`–`A15`, `A20`, `A99`), Summe 500–550 (`A21`–`A24`, `A96`).
+///
+/// **Ablehnungscodes only.** The tree's positive exit at Prüfschritt 560 reads
+/// „Zahlung der Rechnung avisieren und im Zahlungslauf berücksichtigen" — a
+/// REMADV 33001, which carries no `AJT` at all (REMADV AHB 1.0a §3.1.1). The
+/// agreement is the Zahlungsavis itself.
+pub const E_0264_CODES: &[AntwortCode] = &[
+    // ── Kopfebene (Prüfschritte 10–90) ──
+    code!(
+        "A01",
+        E_0264,
+        Ablehnung,
+        "Rechnung entspricht nicht §14 Abs. 4 UStG (Prüfschritt 10)",
+        bemerkung
+    ),
+    code!(
+        "A02",
+        E_0264,
+        Ablehnung,
+        "Rechnungsdatum liegt in der Zukunft (Prüfschritt 20)"
+    ),
+    code!(
+        "A03",
+        E_0264,
+        Ablehnung,
+        "Das Rechnungsdatum liegt vor dem Ausführungsdatum/Leistungszeitraum (Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0264,
+        Ablehnung,
+        "Der Rechnungsempfänger lehnt die Zahlung ab, da die Rechnung auf keiner Bestellung basiert (Prüfschritt 40)"
+    ),
+    code!(
+        "A05",
+        E_0264,
+        Ablehnung,
+        "Rechnungsnummer wurde bereits verwendet (Prüfschritt 50)"
+    ),
+    code!(
+        "A06",
+        E_0264,
+        Ablehnung,
+        "Bei der Abrechnung des MSB kann es nicht zu einer Rückerstattung kommen (Prüfschritt 60)"
+    ),
+    code!(
+        "A07",
+        E_0264,
+        Ablehnung,
+        "Das Zahlungsziel ist unterschritten (Prüfschritt 70)"
+    ),
+    code!(
+        "A90",
+        E_0264,
+        Ablehnung,
+        "Sonstiger Fehler auf Kopfebene (Prüfschritt 90)",
+        bemerkung
+    ),
+    // ── Positionsebene (Prüfschritte 300–430) ──
+    code!(
+        "A09",
+        E_0264,
+        Ablehnung,
+        "Es wurde in der Rechnungsposition nicht die Artikel-ID aus der Bestellung verwendet (Prüfschritt 300)"
+    ),
+    code!(
+        "A10",
+        E_0264,
+        Ablehnung,
+        "Der Rechnungsempfänger lehnt die Zahlung ab, da die abzurechnende Leistung nicht erfolgreich vom MSB durchgeführt wurde (Prüfschritt 310)"
+    ),
+    code!(
+        "A11",
+        E_0264,
+        Ablehnung,
+        "Der Preis in der Rechnungsposition entspricht nicht dem Preis aus dem Angebot (Prüfschritt 320)"
+    ),
+    code!(
+        "A12",
+        E_0264,
+        Ablehnung,
+        "Der gültige Umsatzsteuersatz für die Rechnungsposition für diesen Zeitpunkt/Zeitraum wurde nicht korrekt angegeben (Prüfschritt 330)"
+    ),
+    code!(
+        "A13",
+        E_0264,
+        Ablehnung,
+        "Der Leistungszeitraum bzw. das Ausführungsdatum der Rechnungsposition ist nicht identisch mit dem Leistungszeitraum aus dem Kopfteil (Prüfschritt 350)"
+    ),
+    code!(
+        "A14",
+        E_0264,
+        Ablehnung,
+        "Es existiert in dieser Rechnung eine weitere Rechnungsposition mit identischer Artikel-ID und identischem oder überschneidendem Leistungszeitraum bzw. identischem Ausführungsdatum (Prüfschritt 360)"
+    ),
+    code!(
+        "A15",
+        E_0264,
+        Ablehnung,
+        "Die Artikel-ID wurde bereits in einer vorherigen nicht stornierten Rechnung für den identischen Leistungszeitraum bzw. identischem Ausführungsdatum bereits abgerechnet (Prüfschritt 370)",
+        bemerkung
+    ),
+    code!(
+        "A20",
+        E_0264,
+        Ablehnung,
+        "Rechenfehler liegt vor (Prüfschritt 420)"
+    ),
+    code!(
+        "A99",
+        E_0264,
+        Ablehnung,
+        "Sonstiger Fehler auf Positionsebene (Prüfschritt 430)",
+        bemerkung
+    ),
+    // ── Summenebene (Prüfschritte 500–550) ──
+    code!(
+        "A21",
+        E_0264,
+        Ablehnung,
+        "Erwartete Position nicht vorhanden (Prüfschritt 500)",
+        bemerkung
+    ),
+    code!(
+        "A22",
+        E_0264,
+        Ablehnung,
+        "Genannte Besteuerungsgrundlage passt nicht zu der Summe der Einzelpositionen des Steuersatzes (Prüfschritt 510)",
+        bemerkung
+    ),
+    code!(
+        "A23",
+        E_0264,
+        Ablehnung,
+        "Summe aller Rechnungspositionen (Netto) dieser Rechnung, denen dieser Steuersatz zugeordnet ist, multipliziert mit diesem Steuersatz entspricht nicht der Angabe des Steuerbetrages für diesen Steuersatz (Prüfschritt 520)",
+        bemerkung
+    ),
+    code!(
+        "A24",
+        E_0264,
+        Ablehnung,
+        "Rechnungsbetrag (Besteuerungsgrundlage inklusive Steuerbetrag) der Summe ist nicht korrekt (Prüfschritt 540)"
+    ),
+    code!(
+        "A96",
+        E_0264,
+        Ablehnung,
+        "Sonstiger Fehler auf Summenebene (Prüfschritt 550)",
+        bemerkung
+    ),
+];
+
+/// `E_0266` — erneut Rechnung einer für den ESA erbrachten Leistung prüfen
+/// (INVOIC 31009 nach COMDIS 29001 → REMADV 33001/33003/33004).
+pub const EBD_ESA_RECHNUNG_ERNEUT: &str = "E_0266";
+const E_0266: Option<&'static str> = Some(EBD_ESA_RECHNUNG_ERNEUT);
+
+/// `E_0266` — `E_0264` plus **Prüfschritt 1** (EBD 4.3 Kap. 8.27.3).
+///
+/// The MSB answered a Nicht-Zahlungsavis with a COMDIS 29001 saying its
+/// invoice was correct. The ESA re-checks it, and the first question is
+/// whether that answer actually held: „Konnte der MSB alle Einwände des
+/// Rechnungsempfängers entkräften?" — `A25` when it did not. Everything after
+/// it is `E_0264` verbatim, which is why the two must not be collapsed: `A25`
+/// is undefined in `E_0264`, and sending an `E_0264` code on the second round
+/// loses the fact that this is a second round.
+pub const E_0266_CODES: &[AntwortCode] = &[
+    code!(
+        "A25",
+        E_0266,
+        Ablehnung,
+        "Der Rechnungsempfänger lehnt die Zahlung der Rechnung weiterhin ab, da der MSB nicht alle Einwände des Rechnungsempfängers entkräften konnte (Prüfschritt 1)",
+        bemerkung
+    ),
+    code!(
+        "A01",
+        E_0266,
+        Ablehnung,
+        "Rechnung entspricht nicht §14 Abs. 4 UStG (Prüfschritt 10)",
+        bemerkung
+    ),
+    code!(
+        "A02",
+        E_0266,
+        Ablehnung,
+        "Rechnungsdatum liegt in der Zukunft (Prüfschritt 20)"
+    ),
+    code!(
+        "A03",
+        E_0266,
+        Ablehnung,
+        "Das Rechnungsdatum liegt vor dem Ausführungsdatum/Leistungszeitraum (Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0266,
+        Ablehnung,
+        "Der Rechnungsempfänger lehnt die Zahlung ab, da die Rechnung auf keiner Bestellung basiert (Prüfschritt 40)"
+    ),
+    code!(
+        "A05",
+        E_0266,
+        Ablehnung,
+        "Rechnungsnummer wurde bereits verwendet (Prüfschritt 50)"
+    ),
+    code!(
+        "A06",
+        E_0266,
+        Ablehnung,
+        "Bei der Abrechnung des MSB kann es nicht zu einer Rückerstattung kommen (Prüfschritt 60)"
+    ),
+    code!(
+        "A07",
+        E_0266,
+        Ablehnung,
+        "Das Zahlungsziel ist unterschritten (Prüfschritt 70)"
+    ),
+    code!(
+        "A90",
+        E_0266,
+        Ablehnung,
+        "Sonstiger Fehler auf Kopfebene (Prüfschritt 90)",
+        bemerkung
+    ),
+    code!(
+        "A09",
+        E_0266,
+        Ablehnung,
+        "Es wurde in der Rechnungsposition nicht die Artikel-ID aus der Bestellung verwendet (Prüfschritt 300)"
+    ),
+    code!(
+        "A10",
+        E_0266,
+        Ablehnung,
+        "Der Rechnungsempfänger lehnt die Zahlung ab, da die abzurechnende Leistung nicht erfolgreich vom MSB durchgeführt wurde (Prüfschritt 310)"
+    ),
+    code!(
+        "A11",
+        E_0266,
+        Ablehnung,
+        "Der Preis in der Rechnungsposition entspricht nicht dem Preis aus dem Angebot (Prüfschritt 320)"
+    ),
+    code!(
+        "A12",
+        E_0266,
+        Ablehnung,
+        "Der gültige Umsatzsteuersatz für die Rechnungsposition für diesen Zeitpunkt/Zeitraum wurde nicht korrekt angegeben (Prüfschritt 330)"
+    ),
+    code!(
+        "A13",
+        E_0266,
+        Ablehnung,
+        "Der Leistungszeitraum bzw. das Ausführungsdatum der Rechnungsposition ist nicht identisch mit dem Leistungszeitraum aus dem Kopfteil (Prüfschritt 350)"
+    ),
+    code!(
+        "A14",
+        E_0266,
+        Ablehnung,
+        "Es existiert in dieser Rechnung eine weitere Rechnungsposition mit identischer Artikel-ID und identischem oder überschneidendem Leistungszeitraum bzw. identischem Ausführungsdatum (Prüfschritt 360)"
+    ),
+    code!(
+        "A15",
+        E_0266,
+        Ablehnung,
+        "Die Artikel-ID wurde bereits in einer vorherigen nicht stornierten Rechnung für den identischen Leistungszeitraum bzw. identischem Ausführungsdatum bereits abgerechnet (Prüfschritt 370)",
+        bemerkung
+    ),
+    code!(
+        "A20",
+        E_0266,
+        Ablehnung,
+        "Rechenfehler liegt vor (Prüfschritt 420)"
+    ),
+    code!(
+        "A99",
+        E_0266,
+        Ablehnung,
+        "Sonstiger Fehler auf Positionsebene (Prüfschritt 430)",
+        bemerkung
+    ),
+    code!(
+        "A21",
+        E_0266,
+        Ablehnung,
+        "Erwartete Position nicht vorhanden (Prüfschritt 500)",
+        bemerkung
+    ),
+    code!(
+        "A22",
+        E_0266,
+        Ablehnung,
+        "Genannte Besteuerungsgrundlage passt nicht zu der Summe der Einzelpositionen des Steuersatzes (Prüfschritt 510)",
+        bemerkung
+    ),
+    code!(
+        "A23",
+        E_0266,
+        Ablehnung,
+        "Summe aller Rechnungspositionen (Netto) dieser Rechnung, denen dieser Steuersatz zugeordnet ist, multipliziert mit diesem Steuersatz entspricht nicht der Angabe des Steuerbetrages für diesen Steuersatz (Prüfschritt 520)",
+        bemerkung
+    ),
+    code!(
+        "A24",
+        E_0266,
+        Ablehnung,
+        "Rechnungsbetrag (Besteuerungsgrundlage inklusive Steuerbetrag) der Summe ist nicht korrekt (Prüfschritt 540)"
+    ),
+    code!(
+        "A96",
+        E_0266,
+        Ablehnung,
+        "Sonstiger Fehler auf Summenebene (Prüfschritt 550)",
+        bemerkung
+    ),
+];
+
+/// `E_0265` — Nicht-Zahlungsavis prüfen (REMADV 33003/33004 → COMDIS 29001).
+pub const EBD_ESA_NICHT_ZAHLUNGSAVIS: &str = "E_0265";
+const E_0265: Option<&'static str> = Some(EBD_ESA_NICHT_ZAHLUNGSAVIS);
+
+/// `E_0265` — the **MSB's** look at the ESA's rejection (EBD 4.3 Kap. 8.27.2).
+///
+/// One Prüfschritt with two exits, and only one of them is a message with a
+/// code: „Ergibt die Prüfung der abgelehnten Rechnung, dass die Ablehnung
+/// durch den Rechnungsempfänger gerechtfertigt war?" — **nein** sends COMDIS
+/// 29001 with `A99` („Die Rechnung wird als korrekt angesehen"), **ja** sends
+/// the Stornorechnung 31004 and no answer code at all.
+///
+/// The `Nutzungsmöglichkeit Ende` on `A99` is **offen** — unlike the other
+/// catch-alls of this family, which the EBD retires on 01.04.2027.
+pub const E_0265_CODES: &[AntwortCode] = &[code!(
+    "A99",
+    E_0265,
+    Ablehnung,
+    "Die Rechnung wird als korrekt angesehen — die Ablehnung des Rechnungsempfängers war nicht gerechtfertigt (Prüfschritt 10)",
+    bemerkung
+)];
+
+/// `E_0267` — Prüfen, ob Antwort auf Stornierung erforderlich
+/// (INVOIC 31004 → REMADV 33001/33002, oder keine Antwort).
+pub const EBD_ESA_STORNO_RECHNUNG: &str = "E_0267";
+const E_0267: Option<&'static str> = Some(EBD_ESA_STORNO_RECHNUNG);
+
+/// `E_0267` — the **ESA's** check of the MSB's Stornorechnung
+/// (EBD 4.3 Kap. 8.27.4).
+///
+/// Its name is the point: the tree decides *whether an answer is owed at all*.
+/// Prüfschritte 10–60 refuse the Storno; 70 confirms it (REMADV 33001, no
+/// `AJT`); and 80 is the case where **nothing is sent** — the original invoice
+/// was itself refused with a Nicht-Zahlungsavis, or was never answered, so the
+/// Storno needs no answer either. `mako_pruefung::esa_rechnung::StornoAntwort`
+/// is that three-way outcome; collapsing it into accept/reject sends a REMADV
+/// the MSB does not expect.
+///
+/// This is the one tree of the family REMADV AHB 1.0a §3.1.1 admits in the
+/// `SG7 AJT` DE 1082 of the plain Abweisung **33002** — `E_0264`/`E_0266`
+/// belong to the itemised 33003/33004 of §3.1.2.
+pub const E_0267_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0267,
+        Ablehnung,
+        "Die zu stornierende Rechnung ist nicht vorhanden (Prüfschritt 10)"
+    ),
+    code!(
+        "A06",
+        E_0267,
+        Ablehnung,
+        "Rechnungsnummer wurde bereits verwendet (Prüfschritt 15)"
+    ),
+    code!(
+        "A07",
+        E_0267,
+        Ablehnung,
+        "Rechnung entspricht nicht §14 Abs. 4 UStG (Prüfschritt 17)"
+    ),
+    code!(
+        "A02",
+        E_0267,
+        Ablehnung,
+        "Die zu stornierende Rechnung wurde bereits storniert (Prüfschritt 20)"
+    ),
+    code!(
+        "A03",
+        E_0267,
+        Ablehnung,
+        "Der Rechnungstyp der Stornorechnung ist nicht identisch mit dem Rechnungstyp der ursprünglichen Rechnung (Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0267,
+        Ablehnung,
+        "Der Abrechnungszeitraum bzw. das Ausführungsdatum der Stornorechnung ist nicht identisch mit dem der ursprünglichen Rechnung (Prüfschritt 40)"
+    ),
+    code!(
+        "A05",
+        E_0267,
+        Ablehnung,
+        "Mindestens ein Betrag der Stornorechnung passt nicht zu dem Betrag der ursprünglichen Rechnung (Prüfschritt 50)"
+    ),
+    code!(
+        "A99",
+        E_0267,
+        Ablehnung,
+        "Ablehnung Sonstiges (Prüfschritt 60)",
+        bemerkung
+    ),
+];
+
 /// Every Codeliste this crate knows, keyed by its EBD id.
 pub const CODELISTEN: &[(&str, &[AntwortCode])] = &[
     (EBD_ANMELDUNG_DIREKT_ABLEHNBAR, E_0622_CODES),
@@ -2566,6 +4525,25 @@ pub const CODELISTEN: &[(&str, &[AntwortCode])] = &[
     (EBD_WEITERVERPFLICHTUNG, E_0203_CODES),
     (EBD_GERAETEWECHSELABSICHT, E_0204_CODES),
     (EBD_BESTELLUNG_GERAETEUEBERNAHME, E_0247_CODES),
+    (EBD_ERSTEINBAU_IMS, E_0233_CODES),
+    (EBD_PREISBLATT_B_RECHNUNG_LF, E_0270_CODES),
+    (EBD_PREISBLATT_B_RECHNUNG_NB, E_0273_CODES),
+    (EBD_PREISBLATT_B_RECHNUNG_ERNEUT_LF, E_0276_CODES),
+    (EBD_PREISBLATT_B_RECHNUNG_ERNEUT_NB, E_0277_CODES),
+    (EBD_PREISBLATT_B_NICHT_ZAHLUNGSAVIS_LF, E_0271_CODES),
+    (EBD_PREISBLATT_B_NICHT_ZAHLUNGSAVIS_NB, E_0274_CODES),
+    (EBD_PREISBLATT_B_STORNO_LF, E_0272_CODES),
+    (EBD_PREISBLATT_B_STORNO_NB, E_0275_CODES),
+    (EBD_RECHNUNGSABWICKLUNG_ANGEBOT, E_0205_CODES),
+    (EBD_RECHNUNGSABWICKLUNG_BEENDIGUNG_MSB, E_0206_CODES),
+    (EBD_RECHNUNGSABWICKLUNG_ANFRAGE, E_0207_CODES),
+    (EBD_RECHNUNGSABWICKLUNG_ANFRAGE_ANTWORT, E_0208_CODES),
+    (EBD_RECHNUNGSABWICKLUNG_BEENDIGUNG_LF, E_0209_CODES),
+    (EBD_TECHNIK_ANFRAGE_NB, E_0278_CODES),
+    (EBD_TECHNIK_ANFRAGE_LF, E_0281_CODES),
+    (EBD_TECHNIK_BESTELLUNG_NB, E_0279_CODES),
+    (EBD_TECHNIK_BESTELLUNG_LF, E_0283_CODES),
+    (EBD_TECHNIK_DURCHFUEHRUNG, E_0286_CODES),
     (EBD_MESSLOKATIONSAENDERUNG_NB, E_0249_CODES),
     (EBD_MESSLOKATIONSAENDERUNG_LF, E_0250_CODES),
     (EBD_GESAMTVORGANG, E_0232_CODES),
@@ -2584,11 +4562,16 @@ pub const CODELISTEN: &[(&str, &[AntwortCode])] = &[
     (EBD_WIM_RECHNUNG_MELO_GAS, E_2016_CODES),
     (EBD_WIM_STORNO_GAS, E_2018_CODES),
     (EBD_WIM_STORNO_MSBN_GAS, E_2019_CODES),
-    // WiM Strom Teil 2 — ESA Wertebestellung.
+    // WiM Strom Teil 2 — ESA Wertebestellung (Kap. 4.1–4.4).
     (EBD_ESA_ANFRAGE, E_0252_CODES),
     (EBD_ESA_BESTELLUNG, E_0256_CODES),
     (EBD_ESA_STORNIERUNG, E_0257_CODES),
     (EBD_ESA_BEENDIGUNG, E_0254_CODES),
+    // WiM Strom Teil 2 — Abrechnung einer für den ESA erbrachten Leistung (Kap. 4.5).
+    (EBD_ESA_RECHNUNG, E_0264_CODES),
+    (EBD_ESA_NICHT_ZAHLUNGSAVIS, E_0265_CODES),
+    (EBD_ESA_RECHNUNG_ERNEUT, E_0266_CODES),
+    (EBD_ESA_STORNO_RECHNUNG, E_0267_CODES),
 ];
 
 /// The trees that publish **Ablehnungscodes only**, each paired with the tree
@@ -2620,6 +4603,41 @@ pub const ABLEHNUNG_ONLY_TREES: &[(&str, &str)] = &[
         EBD_ESA_ANFRAGE,
         "QUOTES: the 15003 Angebot carries no AJT at all — the priced offer is \
          the agreement (QUOTES AHB 1.1a §4.3)",
+    ),
+    (
+        EBD_RECHNUNGSABWICKLUNG_ANGEBOT,
+        "ORDERS: the Zustimmung is „Bestellung versenden\u{201c} — ORDERS 17005, which \
+         carries no code; only the Ablehnung rides IFTSTA 21032 \
+         (PID-Übersicht 4.0 rows 30920/30930)",
+    ),
+    (
+        EBD_RECHNUNGSABWICKLUNG_ANFRAGE_ANTWORT,
+        "ORDERS: the Zustimmung is „Bestellung versenden\u{201c} — ORDERS 17005, which \
+         carries no code; only the Ablehnung rides IFTSTA 21032 \
+         (PID-Übersicht 4.0 rows 31010/31020)",
+    ),
+    (
+        EBD_RECHNUNGSABWICKLUNG_ANFRAGE,
+        "QUOTES: the Zustimmung is the Angebot 15002, which carries no AJT; only \
+         the Ablehnung rides IFTSTA 21033 (PID-Übersicht 4.0 rows 30990/31000)",
+    ),
+    (
+        EBD_TECHNIK_ANFRAGE_NB,
+        "QUOTES: the Zustimmung is „Angebot versenden\u{201c} — QUOTES 15005, which \
+         carries no AJT; only the Ablehnung rides IFTSTA 21033 \
+         (PID-Übersicht 4.0 rows 36010/36020)",
+    ),
+    (
+        EBD_TECHNIK_ANFRAGE_LF,
+        "QUOTES: the Zustimmung is „Angebot versenden\u{201c} — QUOTES 15005, which \
+         carries no AJT; only the Ablehnung rides IFTSTA 21033 \
+         (PID-Übersicht 4.0 rows 36100/36110)",
+    ),
+    (
+        EBD_TECHNIK_DURCHFUEHRUNG,
+        "IFTSTA: success publishes no code („Stammdatenänderung vom MSB \
+         ausgehend versenden\u{201c}); only the Gescheitert rides 21027 to the NB \
+         resp. 21025 to the LF (PID-Übersicht 4.0 rows 30710/30770)",
     ),
     (
         EBD_NETZNUTZUNGSRECHNUNG,
@@ -2655,7 +4673,241 @@ pub const ABLEHNUNG_ONLY_TREES: &[(&str, &str)] = &[
         EBD_WIM_STORNO_MSBN_GAS,
         "REMADV: the Gas Zahlungsavis 33001 carries no AJT at all",
     ),
+    (
+        EBD_ESA_RECHNUNG,
+        "REMADV: the Zustimmung at Prüfschritt 560 is the Zahlungsavis 33001, \
+         which carries no AJT at all (REMADV AHB 1.0a §3.1.1)",
+    ),
+    (
+        EBD_PREISBLATT_B_RECHNUNG_LF,
+        "REMADV: the Zustimmung at Prüfschritt 560 is the Zahlungsavis 33001, \
+         which carries no AJT at all (REMADV AHB 1.0a §3.1.1)",
+    ),
+    (
+        EBD_PREISBLATT_B_RECHNUNG_NB,
+        "REMADV: the Zustimmung at Prüfschritt 560 is the Zahlungsavis 33001, \
+         which carries no AJT at all (REMADV AHB 1.0a §3.1.1)",
+    ),
+    (
+        EBD_PREISBLATT_B_RECHNUNG_ERNEUT_LF,
+        "REMADV: the Zustimmung at Prüfschritt 560 is the Zahlungsavis 33001, \
+         which carries no AJT at all (REMADV AHB 1.0a §3.1.1)",
+    ),
+    (
+        EBD_PREISBLATT_B_RECHNUNG_ERNEUT_NB,
+        "REMADV: the Zustimmung at Prüfschritt 560 is the Zahlungsavis 33001, \
+         which carries no AJT at all (REMADV AHB 1.0a §3.1.1)",
+    ),
+    (
+        EBD_PREISBLATT_B_NICHT_ZAHLUNGSAVIS_LF,
+        "COMDIS/INVOIC: „ja\u{201c} at Prüfschritt 10 publishes no code — the MSB \
+         sends the Stornorechnung 31004 instead of an answer",
+    ),
+    (
+        EBD_PREISBLATT_B_NICHT_ZAHLUNGSAVIS_NB,
+        "COMDIS/INVOIC: „ja\u{201c} at Prüfschritt 10 publishes no code — the MSB \
+         sends the Stornorechnung 31004 instead of an answer",
+    ),
+    (
+        EBD_PREISBLATT_B_STORNO_LF,
+        "REMADV: the Zustimmung at Prüfschritt 70 is the Zahlungsavis 33001, \
+         which carries no AJT; Prüfschritte 70/80 also decide whether any \
+         answer is due at all — see `storno_antwort_erforderlich`",
+    ),
+    (
+        EBD_PREISBLATT_B_STORNO_NB,
+        "REMADV: the Zustimmung at Prüfschritt 70 is the Zahlungsavis 33001, \
+         which carries no AJT; Prüfschritte 70/80 also decide whether any \
+         answer is due at all — see `storno_antwort_erforderlich`",
+    ),
+    (
+        EBD_ESA_RECHNUNG_ERNEUT,
+        "REMADV: the Zustimmung at Prüfschritt 560 is the Zahlungsavis 33001, \
+         which carries no AJT at all (REMADV AHB 1.0a §3.1.1)",
+    ),
+    (
+        EBD_ESA_NICHT_ZAHLUNGSAVIS,
+        "COMDIS: the positive exit sends the Stornorechnung 31004, not an \
+         answer — only the refusal of the ESA's Ablehnung carries a code",
+    ),
+    (
+        EBD_ESA_STORNO_RECHNUNG,
+        "REMADV: Prüfschritt 70 confirms with the Zahlungsavis 33001, which \
+         carries no AJT — and Prüfschritt 80 sends no answer at all",
+    ),
 ];
+
+// ── Which tree checks which invoice ──────────────────────────────────────────
+
+/// The four Entscheidungsbäume of one invoice Use-Case.
+///
+/// Every BDEW invoice process publishes the same quartet — check the invoice,
+/// check the refusal, check the re-issued invoice, check the Storno — and the
+/// names differ per Use-Case, never the shape. [`rechnungspruefung`] is the
+/// table that picks the quartet; without it an answer names whichever tree the
+/// code was hard-coded against, which the recipient's own systems then cannot
+/// resolve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RechnungspruefungTrees {
+    /// The recipient's check of the invoice (REMADV 33001 / 33003 / 33004).
+    pub rechnung: &'static str,
+    /// The issuer's check of the recipient's refusal (COMDIS 29001).
+    pub nicht_zahlungsavis: &'static str,
+    /// The recipient's second look, after that COMDIS. `None` where the
+    /// Use-Case publishes no second round.
+    pub erneut: Option<&'static str>,
+    /// „Prüfen, ob Antwort auf Stornierung erforderlich" (REMADV 33001 / 33002
+    /// / none at all).
+    pub storno: &'static str,
+    /// `true` when [`CODELISTEN`] carries the `rechnung` tree's codes, so an
+    /// answer under it can actually be resolved.
+    ///
+    /// The alternative to checking this is emitting a code the named tree does
+    /// not publish, which is a non-conformant answer rather than an
+    /// approximate one — `A70` is `E_0406` Prüfschritt 900 and means nothing
+    /// in `E_0210`.
+    pub codes_verfuegbar: bool,
+}
+
+/// What the MSB is billing on PID 31009.
+///
+/// The recipient's Marktrolle is **not enough** to pick the tree, and this is
+/// the fact that completes it. WiM Strom Teil 1 gives the MSB two invoices to
+/// the same counterparties, and the BDEW *AWH Prozesse zur Änderung der Technik
+/// an Lokationen* adds a third pair on the very same Prüfidentifikator:
+///
+/// | Empfänger | Was abgerechnet wird | Rechnung | Fundstelle |
+/// |---|---|---|---|
+/// | NB | Messstellenbetrieb mit iMS | `E_0566` | WiM Teil 1 Kap. 6 |
+/// | NB | Leistungen des **Preisblatts B** | `E_0273` | AWH Kap. 9.4 |
+/// | LF | Messstellenbetrieb | `E_0210` | WiM Teil 1 Kap. 3.6.3.8 |
+/// | LF | Leistungen des **Preisblatts B** | `E_0270` | AWH Kap. 9.3 |
+/// | ESA | eine für den ESA erbrachte Leistung | `E_0264` | WiM Teil 2 Kap. 4.5 |
+///
+/// The wire does not label it: INVOIC AHB 1.0b carries only `SG1 RFF+Z13`
+/// with the PID. What separates them is which Preisblatt the positions' Artikel-IDs
+/// come from — `SG26 LIN` DE 7140, Bedingung `[520]` „Es sind nur die Artikel-IDs
+/// aus dem Preisblatt erlaubt" — and the Preisblatt B is transmitted separately
+/// as PRICAT 27002 („Preisblatt Technik", `E_0270` Prüfschritt 80). A recipient
+/// that holds one Preisblatt per MSB per kind can decide it; one that cannot
+/// must escalate rather than guess, because `A02` is a Kopf-Ablehnung in one
+/// tree and a Positions-Ablehnung in the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MsbRechnungsgegenstand {
+    /// The Messstellenbetrieb itself — the ordinary WiM Teil 1 invoice.
+    #[default]
+    Messstellenbetrieb,
+    /// A Leistung of the MSB's Preisblatt B, ordered through the AWH „Änderung
+    /// der Technik an Lokationen" and billed against the confirmed Bestellung.
+    PreisblattB,
+}
+
+/// The Entscheidungsbäume that check an inbound INVOIC, by Prüfidentifikator,
+/// **recipient Marktrolle** and what is being billed.
+///
+/// PID 31009 alone carries **five** Use-Cases with five different quartets, and
+/// the message body says which one nowhere. Two facts together identify it:
+/// BDEW Allgemeine Festlegungen §2.13 gives every Marktrolle its own MP-ID, so
+/// the recipient narrows it to at most two, and
+/// [`MsbRechnungsgegenstand`] picks between those.
+///
+/// | PID | Empfänger | Gegenstand | Rechnung | Nicht-Zahlungsavis | erneut | Storno | Fundstelle |
+/// |---|---|---|---|---|---|---|---|
+/// | 31001/31002/31005/31006 | LF | — | `E_0406` | `E_0452` | `E_0407` | `E_0459` | EBD 4.3 Kap. 6.10 |
+/// | 31009 | **ESA** | — | `E_0264` | `E_0265` | `E_0266` | `E_0267` | Kap. 8.27 |
+/// | 31009 | NB | Messstellenbetrieb | `E_0566` | `E_0567` | `E_0568` | `E_0569` | Kap. 8.14 |
+/// | 31009 | NB | **Preisblatt B** | `E_0273` | `E_0274` | `E_0277` | `E_0275` | Kap. 9.4 |
+/// | 31009 | LF | Messstellenbetrieb | `E_0210` | `E_0211` | — | `E_0243` | Kap. 8.13 |
+/// | 31009 | LF | **Preisblatt B** | `E_0270` | `E_0271` | `E_0276` | `E_0272` | Kap. 9.3 |
+/// | 31003 | NB / MSBN | — | `E_0259` | `E_0260` | — | `E_0261` | Kap. 8.15 |
+///
+/// The ESA row ignores the Gegenstand: an ESA has no Preisblatt B — its prices
+/// come from the accepted QUOTES 15003, not from a PRICAT.
+///
+/// Returns `None` for a PID this catalogue does not cover — a Gas invoice
+/// (whose trees `mako_wim::invoic::gas_ablehnungs_ebd` resolves by who refuses
+/// whose invoice) or the Sparte-neutral Storno 31004, which belongs to
+/// whichever Use-Case issued the invoice it cancels.
+#[must_use]
+pub const fn rechnungspruefung(
+    pid: u32,
+    empfaenger: mako_fristen::vorlauf::RechnungEmpfaenger,
+    gegenstand: MsbRechnungsgegenstand,
+) -> Option<RechnungspruefungTrees> {
+    use mako_fristen::vorlauf::RechnungEmpfaenger as R;
+    match (pid, empfaenger, gegenstand) {
+        // Netznutzungsabrechnung — the only Strom quartet whose codes this
+        // crate carries beyond the ESA one, and only in part
+        // (see [`E_0406_CODES`]).
+        (31_001 | 31_002 | 31_005 | 31_006, _, _) => Some(RechnungspruefungTrees {
+            rechnung: EBD_NETZNUTZUNGSRECHNUNG,
+            nicht_zahlungsavis: "E_0452",
+            erneut: Some("E_0407"),
+            storno: "E_0459",
+            codes_verfuegbar: true,
+        }),
+        // Abrechnung einer für den ESA erbrachten Leistung (WiM Teil 2 Kap. 4.5).
+        (31_009, R::Esa, _) => Some(RechnungspruefungTrees {
+            rechnung: EBD_ESA_RECHNUNG,
+            nicht_zahlungsavis: EBD_ESA_NICHT_ZAHLUNGSAVIS,
+            erneut: Some(EBD_ESA_RECHNUNG_ERNEUT),
+            storno: EBD_ESA_STORNO_RECHNUNG,
+            codes_verfuegbar: true,
+        }),
+        // Rechnung Messstellenbetrieb mit iMS gegenüber dem NB (WiM Teil 1 Kap. 6).
+        (31_009, R::Netzbetreiber, MsbRechnungsgegenstand::Messstellenbetrieb) => {
+            Some(RechnungspruefungTrees {
+                rechnung: "E_0566",
+                nicht_zahlungsavis: "E_0567",
+                erneut: Some("E_0568"),
+                storno: "E_0569",
+                codes_verfuegbar: false,
+            })
+        }
+        // Abrechnung Leistungen des Preisblatts B zwischen MSB und NB
+        // (AWH Änderung der Technik an Lokationen, EBD 4.3 Kap. 9.4).
+        (31_009, R::Netzbetreiber, MsbRechnungsgegenstand::PreisblattB) => {
+            Some(RechnungspruefungTrees {
+                rechnung: EBD_PREISBLATT_B_RECHNUNG_NB,
+                nicht_zahlungsavis: EBD_PREISBLATT_B_NICHT_ZAHLUNGSAVIS_NB,
+                erneut: Some(EBD_PREISBLATT_B_RECHNUNG_ERNEUT_NB),
+                storno: EBD_PREISBLATT_B_STORNO_NB,
+                codes_verfuegbar: true,
+            })
+        }
+        // Abrechnung Messstellenbetrieb gegenüber dem LF (WiM Teil 1 Kap. 3.6.3.8).
+        (31_009, R::LieferantOderMsb, MsbRechnungsgegenstand::Messstellenbetrieb) => {
+            Some(RechnungspruefungTrees {
+                rechnung: "E_0210",
+                nicht_zahlungsavis: "E_0211",
+                erneut: None,
+                storno: "E_0243",
+                codes_verfuegbar: false,
+            })
+        }
+        // Abrechnung Leistungen des Preisblatts B zwischen MSB und LF
+        // (AWH Änderung der Technik an Lokationen, EBD 4.3 Kap. 9.3).
+        (31_009, R::LieferantOderMsb, MsbRechnungsgegenstand::PreisblattB) => {
+            Some(RechnungspruefungTrees {
+                rechnung: EBD_PREISBLATT_B_RECHNUNG_LF,
+                nicht_zahlungsavis: EBD_PREISBLATT_B_NICHT_ZAHLUNGSAVIS_LF,
+                erneut: Some(EBD_PREISBLATT_B_RECHNUNG_ERNEUT_LF),
+                storno: EBD_PREISBLATT_B_STORNO_LF,
+                codes_verfuegbar: true,
+            })
+        }
+        // Abrechnung von Dienstleistungen im Messwesen (WiM Teil 1 Kap. 3.7).
+        (31_003, _, _) => Some(RechnungspruefungTrees {
+            rechnung: "E_0259",
+            nicht_zahlungsavis: "E_0260",
+            erneut: None,
+            storno: "E_0261",
+            codes_verfuegbar: false,
+        }),
+        _ => None,
+    }
+}
 
 /// `true` when `ebd` publishes Ablehnungscodes only — see [`ABLEHNUNG_ONLY_TREES`].
 #[must_use]
@@ -2687,6 +4939,174 @@ pub fn lookup(ebd: &str, code: &str) -> Option<&'static AntwortCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The **five** Use-Cases of PID 31009 resolve to five different quartets,
+    /// and the recipient's Marktrolle narrows it only to two. Answering an ESA
+    /// invoice under `E_0406` names a tree whose codes mean something else
+    /// entirely — `A70` is the Netznutzungs-Summenprüfung, and `E_0264`'s own
+    /// total check is `A24`.
+    #[test]
+    fn one_invoice_pid_resolves_to_five_different_tree_quartets() {
+        use MsbRechnungsgegenstand::{Messstellenbetrieb, PreisblattB};
+        use mako_fristen::vorlauf::RechnungEmpfaenger as R;
+        let q = |empf, geg| {
+            rechnungspruefung(31_009, empf, geg)
+                .unwrap_or_else(|| panic!("{empf:?}/{geg:?} is published"))
+                .rechnung
+        };
+        assert_eq!(q(R::Esa, Messstellenbetrieb), EBD_ESA_RECHNUNG);
+        assert_eq!(q(R::Netzbetreiber, Messstellenbetrieb), "E_0566");
+        assert_eq!(q(R::Netzbetreiber, PreisblattB), "E_0273");
+        assert_eq!(q(R::LieferantOderMsb, Messstellenbetrieb), "E_0210");
+        assert_eq!(q(R::LieferantOderMsb, PreisblattB), "E_0270");
+
+        // Five distinct trees on one Prüfidentifikator.
+        let mut all = [
+            q(R::Esa, Messstellenbetrieb),
+            q(R::Netzbetreiber, Messstellenbetrieb),
+            q(R::Netzbetreiber, PreisblattB),
+            q(R::LieferantOderMsb, Messstellenbetrieb),
+            q(R::LieferantOderMsb, PreisblattB),
+        ];
+        all.sort_unstable();
+        let distinct = {
+            let mut v = all.to_vec();
+            v.dedup();
+            v.len()
+        };
+        assert_eq!(distinct, 5, "31009 carries five Use-Cases, not three");
+
+        // The ESA has no Preisblatt B — its prices come from the accepted
+        // QUOTES 15003 — so the Gegenstand does not move its tree.
+        assert_eq!(q(R::Esa, PreisblattB), EBD_ESA_RECHNUNG);
+
+        // Netznutzung does not branch on either axis — one Use-Case.
+        for pid in [31_001u32, 31_002, 31_005, 31_006] {
+            for empf in [R::Esa, R::Netzbetreiber, R::LieferantOderMsb] {
+                for geg in [Messstellenbetrieb, PreisblattB] {
+                    assert_eq!(
+                        rechnungspruefung(pid, empf, geg).map(|t| t.rechnung),
+                        Some(EBD_NETZNUTZUNGSRECHNUNG),
+                    );
+                }
+            }
+        }
+        // The Sparte-neutral Storno belongs to the invoice it cancels, so it
+        // has no quartet of its own.
+        assert!(rechnungspruefung(31_004, R::Esa, Messstellenbetrieb).is_none());
+    }
+
+    /// **Every tree name in the table, pinned to the EBD chapter it comes
+    /// from.**
+    ///
+    /// The Preisblatt-B quartets are in [`CODELISTEN`]; the WiM Teil 1 ones are
+    /// carried so an answer can *name* the right tree, and nothing resolves
+    /// them — so a mistyped or invented name would reach the wire unchallenged.
+    /// This test is the check: changing a name here means re-reading the cited
+    /// chapter of *Entscheidungsbaum-Diagramme und Codelisten* 4.3.
+    #[test]
+    fn every_named_tree_is_pinned_to_its_ebd_chapter() {
+        use MsbRechnungsgegenstand::{Messstellenbetrieb, PreisblattB};
+        use mako_fristen::vorlauf::RechnungEmpfaenger as R;
+        // (PID, Empfänger, Gegenstand, chapter, [Rechnung, Nicht-Zahlungsavis, erneut, Storno])
+        let published: &[(u32, R, MsbRechnungsgegenstand, &str, [&str; 4])] = &[
+            (
+                31_002,
+                R::LieferantOderMsb,
+                Messstellenbetrieb,
+                "6.10.1–6.10.7",
+                ["E_0406", "E_0452", "E_0407", "E_0459"],
+            ),
+            (
+                31_009,
+                R::Esa,
+                Messstellenbetrieb,
+                "8.27.1–8.27.4",
+                ["E_0264", "E_0265", "E_0266", "E_0267"],
+            ),
+            (
+                31_009,
+                R::Netzbetreiber,
+                Messstellenbetrieb,
+                "8.14.1–8.14.4",
+                ["E_0566", "E_0567", "E_0568", "E_0569"],
+            ),
+            (
+                31_009,
+                R::Netzbetreiber,
+                PreisblattB,
+                "9.4.1–9.4.4",
+                ["E_0273", "E_0274", "E_0277", "E_0275"],
+            ),
+            (
+                31_009,
+                R::LieferantOderMsb,
+                Messstellenbetrieb,
+                "8.13.1–8.13.3",
+                ["E_0210", "E_0211", "—", "E_0243"],
+            ),
+            (
+                31_009,
+                R::LieferantOderMsb,
+                PreisblattB,
+                "9.3.1–9.3.4",
+                ["E_0270", "E_0271", "E_0276", "E_0272"],
+            ),
+            (
+                31_003,
+                R::LieferantOderMsb,
+                Messstellenbetrieb,
+                "8.15.1–8.15.3",
+                ["E_0259", "E_0260", "—", "E_0261"],
+            ),
+        ];
+        for (pid, empf, geg, kapitel, [rechnung, nza, erneut, storno]) in published {
+            let t = rechnungspruefung(*pid, *empf, *geg)
+                .unwrap_or_else(|| panic!("{pid}/{empf:?}/{geg:?} is in the table"));
+            assert_eq!(&t.rechnung, rechnung, "EBD 4.3 Kap. {kapitel}");
+            assert_eq!(&t.nicht_zahlungsavis, nza, "EBD 4.3 Kap. {kapitel}");
+            assert_eq!(&t.storno, storno, "EBD 4.3 Kap. {kapitel}");
+            let erneut_erwartet = (*erneut != "—").then_some(*erneut);
+            assert_eq!(t.erneut, erneut_erwartet, "EBD 4.3 Kap. {kapitel}");
+        }
+    }
+
+    /// A Storno is answered only where the original invoice was avisiert —
+    /// `E_0272`/`E_0275` Prüfschritte 70/80.
+    #[test]
+    fn a_storno_is_answered_only_after_a_zahlungsavis() {
+        use UrsprungsRechnungStatus as U;
+        assert!(storno_antwort_erforderlich(U::Avisiert));
+        assert!(!storno_antwort_erforderlich(U::Abgelehnt));
+        assert!(!storno_antwort_erforderlich(U::Unbeantwortet));
+    }
+
+    /// `codes_verfuegbar` must not lie: it is what stops a caller emitting a
+    /// code the named tree does not publish.
+    #[test]
+    fn the_code_availability_flag_matches_the_catalogue() {
+        use mako_fristen::vorlauf::RechnungEmpfaenger as R;
+        for pid in [31_001u32, 31_002, 31_003, 31_005, 31_006, 31_009] {
+            for empf in [R::Esa, R::Netzbetreiber, R::LieferantOderMsb] {
+                for geg in [
+                    MsbRechnungsgegenstand::Messstellenbetrieb,
+                    MsbRechnungsgegenstand::PreisblattB,
+                ] {
+                    let Some(t) = rechnungspruefung(pid, empf, geg) else {
+                        continue;
+                    };
+                    let carried = CODELISTEN.iter().any(|(id, _)| *id == t.rechnung);
+                    assert_eq!(
+                        t.codes_verfuegbar,
+                        carried,
+                        "{pid}/{empf:?}/{geg:?}: {} is{} in CODELISTEN",
+                        t.rechnung,
+                        if carried { "" } else { " not" }
+                    );
+                }
+            }
+        }
+    }
 
     /// Every Codeliste must offer **both sides of whichever axis it uses** — a
     /// tree with one cluster cannot answer its process.

@@ -84,6 +84,8 @@ async fn a_comdis_is_refused() {
         validation_passed: true,
         validation_errors: vec![],
         rechnung: None,
+        bestellung_ref: None,
+        rechnungstyp: None,
     })
     .await
     .expect("a valid 31011 is accepted");
@@ -112,6 +114,8 @@ async fn a_foreign_pid_is_refused_on_both_legs() {
             validation_passed: true,
             validation_errors: vec![],
             rechnung: None,
+            bestellung_ref: None,
+            rechnungstyp: None,
         })
         .await
         .is_err(),

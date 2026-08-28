@@ -8,7 +8,7 @@
 //!
 //! The module only exists in a build carrying the MSB role; `role_separation.rs`
 //! asserts its absence elsewhere.
-#![cfg(feature = "role-msb-strom")]
+#![cfg(feature = "role-msb")]
 
 use processd::esa_module::{ESA_ANSWERED_PIDS, EsaOrderPayload};
 

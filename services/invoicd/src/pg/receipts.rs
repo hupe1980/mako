@@ -132,6 +132,81 @@ pub async fn upsert_receipt(pool: &PgPool, row: &ReceiptRow) -> Result<(), sqlx:
 /// # Errors
 ///
 /// Returns `sqlx::Error` on database failure.
+/// The `outcome` recorded for an invoice this tenant answered, by its
+/// **Rechnungsnummer**.
+///
+/// `E_0267` Prüfschritte 70/80 turn on how the original was answered: a Storno
+/// of an invoice the ESA paid is confirmed, one of an invoice it *refused* — or
+/// never answered — needs **no answer at all**. A Stornorechnung names its
+/// predecessor by Rechnungsnummer and nothing else, so that is the key.
+///
+/// `Ok(None)` means „never answered", which is Prüfschritt 80's second branch
+/// and not an error.
+/// **Prüfschritt 50** — has this Rechnungssteller used this Rechnungsnummer
+/// before?
+///
+/// Every invoice tree in `mako_pruefung::rechnung` asks it (`A05`), and it is
+/// answerable from this service's own receipt store: § 14 Abs. 4 Nr. 4 UStG
+/// makes the Rechnungsnummer einmalig **per Rechnungssteller**, so the pair
+/// (`sender_mp_id`, `rechnungsnummer`) is the key.
+///
+/// `process_id` is the invoice being checked and is **excluded**: a redelivery
+/// of the same process must not refuse itself. Duplicate detection across
+/// processes is what the Prüfschritt is for.
+///
+/// Returns `Ok(false)` when nothing matches. A query error propagates — a
+/// transport failure is not evidence of absence, and answering `A05` on a
+/// database blip refuses a correct invoice.
+pub async fn rechnungsnummer_bereits_verwendet(
+    pool: &PgPool,
+    tenant: &str,
+    sender_mp_id: &str,
+    rechnungsnummer: &str,
+    process_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    // No cancellation filter: `outcome` has no stornierte state — the seven
+    // values are Ok / AcceptedPartial / Warn / Dispute / Resolved / Dispatched
+    // / Paid, and a Storno arrives as its own receipt rather than mutating the
+    // original's. So a number whose invoice was later cancelled still counts as
+    // used, which is the § 14 Abs. 4 Nr. 4 UStG reading anyway: the
+    // Rechnungsnummer is einmalig vergeben, not einmalig *wirksam*.
+    let found: Option<(bool,)> = sqlx::query_as(
+        r"SELECT true
+            FROM invoic_receipts
+           WHERE tenant          = $1
+             AND sender_mp_id    = $2
+             AND rechnungsnummer = $3
+             AND process_id     <> $4
+           LIMIT 1",
+    )
+    .bind(tenant)
+    .bind(sender_mp_id)
+    .bind(rechnungsnummer)
+    .bind(process_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(found.is_some())
+}
+
+pub async fn receipt_outcome(
+    pool: &PgPool,
+    tenant: &str,
+    rechnungsnummer: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    // Newest first: a Rechnungsnummer is unique per Rechnungssteller, but a
+    // redelivery can leave more than one row and the latest verdict is the one
+    // that went out.
+    sqlx::query_scalar(
+        "SELECT outcome FROM invoic_receipts \
+         WHERE tenant = $1 AND rechnungsnummer = $2 AND direction = 'inbound' \
+         ORDER BY checked_at DESC NULLS LAST LIMIT 1",
+    )
+    .bind(tenant)
+    .bind(rechnungsnummer)
+    .fetch_optional(pool)
+    .await
+}
+
 pub async fn mark_dispatched(
     pool: &PgPool,
     process_id: Uuid,

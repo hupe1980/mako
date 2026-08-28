@@ -992,6 +992,156 @@ impl Bestellgegenstand {
     }
 }
 
+// ── Gerätetechnik (E_0252 Prüfschritt 6 / E_0256 Prüfschritt 9) ──────────────
+
+/// What the equipment installed at a Messlokation can actually produce.
+///
+/// The facts a Zähler answers, reduced to the four the Kapitel-4.6 catalogue
+/// asks about. Derived from the BO4E `Zaehler` and its `Zaehlwerke`, which is
+/// where `marktd` holds them.
+#[allow(clippy::struct_excessive_bools)] // one field per device capability
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Geraeteausstattung {
+    /// `Zaehlertyp::INTELLIGENTES_MESSSYSTEM` — a Smart-Meter-Gateway is
+    /// installed. The Kapitel-4.6.2 products deliver **directly out of the iMS**
+    /// over SM-PKI, so without one they cannot be served at all.
+    pub ist_ims: bool,
+    /// A `Zaehlwerk` with `richtung = AUSSP` — Ausspeisung aus dem Netz, i.e.
+    /// the customer's Verbrauch.
+    pub hat_verbrauchsregister: bool,
+    /// A `Zaehlwerk` with `richtung = EINSP` — Einspeisung ins Netz, i.e.
+    /// Erzeugung.
+    pub hat_erzeugungsregister: bool,
+    /// A Blindarbeit register. OBIS groups the Wirkarbeit registers under
+    /// C = 1/2 and the Blindarbeit ones under C = 3/4 (and 5–8 for the
+    /// quadrants), so a meter without one cannot serve a Blindarbeit product
+    /// whatever its Energieflussrichtung.
+    pub hat_blindarbeitsregister: bool,
+}
+
+/// Whether the installed equipment can produce the values a Messprodukt names —
+/// `E_0252` Prüfschritt 6 and `E_0256` Prüfschritt 9.
+///
+/// `Some(false)` on three device facts:
+///
+/// - a **Kapitel-4.6.2** product without an **iMS** — WiM Teil 2 UC 4.1.1 states
+///   it among the Vorbedingungen: „Bei Übermittlung von Werten aus dem iMS: Alle
+///   … benötigten Messlokationen sind mit einem iMS ausgestattet";
+/// - a **direction** the meter has no register for;
+/// - **Blindarbeit** without a Blindarbeit register.
+///
+/// `None` — „not established" — for no device on record, and for a ¼-stündliche
+/// Werteart on a meter that is neither an iMS nor known to register intervals.
+/// That case plainly needs registrierende Leistungsmessung, but mako holds the
+/// `Zaehlertyp` and not the capability, and a refusal is a binding statement to
+/// the market.
+///
+/// Hence `Option<bool>`: „not established" and „established as impossible" reach
+/// different Prüfergebnisse, and collapsing them refuses a §34-mandated
+/// Zusatzleistung on a missing record.
+#[must_use]
+pub fn geraetetechnik_geeignet(
+    produkt: &Messprodukt,
+    ausstattung: Option<&Geraeteausstattung>,
+    intervallfaehig: Option<bool>,
+) -> Option<bool> {
+    let a = ausstattung?;
+
+    // UC 4.1.1 Vorbedingung — the 4.6.2 path delivers out of the iMS itself.
+    if produkt.weg == Uebertragungsweg::Smgw && !a.ist_ims {
+        return Some(false);
+    }
+
+    // Blindarbeit needs a Blindarbeit register, whichever quadrants.
+    if produkt.wert == Wert::Blindarbeit && !a.hat_blindarbeitsregister {
+        return Some(false);
+    }
+
+    // The Energieflussrichtung has to have a register behind it.
+    let braucht_verbrauch = matches!(
+        produkt.richtung,
+        Energieflussrichtung::Verbrauch
+            | Energieflussrichtung::VerbrauchUndErzeugung
+            | Energieflussrichtung::Q1Q4
+    );
+    let braucht_erzeugung = matches!(
+        produkt.richtung,
+        Energieflussrichtung::Erzeugung
+            | Energieflussrichtung::VerbrauchUndErzeugung
+            | Energieflussrichtung::Q2Q3
+    );
+    if braucht_verbrauch && !a.hat_verbrauchsregister {
+        return Some(false);
+    }
+    if braucht_erzeugung && !a.hat_erzeugungsregister {
+        return Some(false);
+    }
+
+    // A ¼-stündliche Werteart needs interval metering. An iMS has it by
+    // definition; for anything else mako holds only the Zählertyp, and the
+    // caller says whether that type registers intervals — `None` where it
+    // cannot tell, which escalates rather than refusing.
+    if produkt.braucht_intervallmessung() && !a.ist_ims {
+        return match intervallfaehig {
+            Some(true) => Some(true),
+            Some(false) => Some(false),
+            None => None,
+        };
+    }
+
+    Some(true)
+}
+
+impl Messprodukt {
+    /// `true` when the product's Werteart is a time series rather than a single
+    /// quantity, so the meter has to register intervals.
+    ///
+    /// Every Lastgang and Zählerstandsgang in Kapitel 4.6 is ¼-stündlich; an
+    /// Arbeitsmenge über ein Zeitintervall is a meter reading difference and
+    /// needs no interval register. The SMGW Momentanwerte products are their own
+    /// case — they are only orderable on an iMS at all, so the iMS check above
+    /// has already settled them.
+    #[must_use]
+    pub const fn braucht_intervallmessung(&self) -> bool {
+        matches!(
+            self.werteart,
+            Werteart::Lastgang | Werteart::Zaehlerstandsgang
+        )
+    }
+}
+
+/// How long a subscription may stay silent before the delivery is overdue —
+/// **from the ordered product**, not from one flat setting.
+///
+/// The *Codeliste der Konfigurationen* 1.4 Kap. 4.6 publishes a cadence per
+/// Messprodukt, and they differ by a factor of several: the Rohdaten products
+/// state „unverzüglich, jedoch spätestens bis 9:30 Uhr" every day, while the
+/// aufbereitete-Daten products defer to *WiM Teil 2 Kap. 2.5.5*, whose windows
+/// depend on the Werteart and the installed equipment.
+///
+/// So this returns:
+///
+/// - `Some(33)` for a product with a daily 09:30 clock — one full day plus the
+///   09:30 cut-off (`24 + 9`). A delivery covering yesterday is due by 09:30
+///   today; anything past that is late whatever a global setting says.
+/// - **`None`** for a product that publishes no wall-clock deadline. The caller
+///   falls back to its own configured threshold, because
+///   [`Lieferrhythmus::taegliche_frist`] returning `None` means the Codeliste
+///   states no clock — and asserting one would raise a breach that has not
+///   happened.
+/// - `None` for a code outside Kapitel 4.6, which this role cannot have
+///   ordered.
+///
+/// Applying one threshold to every subscription alerts late on the fast
+/// products and early on the slow ones; the fast ones are the Rohdaten
+/// products, where an ESA's own downstream service is what goes stale.
+#[must_use]
+pub fn ueberfaellig_nach_stunden(messprodukt: &str) -> Option<i64> {
+    let p = self::messprodukt(messprodukt)?;
+    let frist = p.rhythmus.taegliche_frist()?;
+    Some(i64::from(24 + frist.hour()))
+}
+
 /// The business key one ESA subscription occupies: the location **and** the
 /// Messprodukt.
 ///
@@ -1299,19 +1449,19 @@ pub const fn korrelation(pid: u32) -> Option<Korrelation> {
 // ── EBD (ORDRSP SG2 AJT) ──────────────────────────────────────────────────────
 //
 // The three answer trees of this process — `E_0256` Bestellung, `E_0257`
-// Stornierung, `E_0254` Beendigung — live in [`mako_pruefung::msb::esa`]
+// Stornierung, `E_0254` Beendigung — live in [`mako_pruefung::esa::wertebestellung`]
 // together with their Codelisten and executable Prüfschritte, for the same
 // reason every other answer tree does: an Antwortcode has no meaning without
 // naming its tree (`A01` means three different things across the three), and
 // the code's **Cluster** — not an `accept: bool` passed alongside — is what
 // decides whether the ORDRSP rides 19011 or 19012.
 //
-// [`mako_pruefung::msb::esa::ebd_fuer_antwort`] resolves which tree an
+// [`mako_pruefung::esa::wertebestellung::ebd_fuer_antwort`] resolves which tree an
 // ORDRSP 19011/19012 belongs to from the `IMD+7081` it carries, since those
 // two PIDs answer both the Bestellung and the Beendigung.
 
 pub use mako_pruefung::codes::{EBD_ESA_BEENDIGUNG, EBD_ESA_BESTELLUNG, EBD_ESA_STORNIERUNG};
-pub use mako_pruefung::msb::esa::{
+pub use mako_pruefung::esa::wertebestellung::{
     Bestellart, EsaBeendigung, EsaBestellung, EsaStornierung, ebd_fuer_antwort, pruefe_beendigung,
     pruefe_bestellung, pruefe_stornierung,
 };
@@ -1705,5 +1855,158 @@ mod tests {
         assert_eq!(roh.rhythmus.taegliche_frist(), Some(ROHDATEN_FRIST));
         let aufbereitet = messprodukt("9991000003056").unwrap();
         assert_eq!(aufbereitet.rhythmus.taegliche_frist(), None);
+    }
+
+    fn ausstattung() -> Geraeteausstattung {
+        Geraeteausstattung {
+            ist_ims: true,
+            hat_verbrauchsregister: true,
+            hat_erzeugungsregister: true,
+            hat_blindarbeitsregister: true,
+        }
+    }
+
+    /// **UC 4.1.1 states the iMS requirement, so the walk may refuse on it.**
+    /// „Bei Übermittlung von Werten aus dem iMS: Alle … benötigten
+    /// Messlokationen sind mit einem iMS ausgestattet."
+    #[test]
+    fn a_smgw_product_without_an_ims_cannot_be_served() {
+        let smgw = messprodukt("9991000003121").expect("SMGW Pflichtprodukt");
+        let ohne_ims = Geraeteausstattung {
+            ist_ims: false,
+            ..ausstattung()
+        };
+        assert_eq!(
+            geraetetechnik_geeignet(smgw, Some(&ohne_ims), Some(true)),
+            Some(false)
+        );
+        assert_eq!(
+            geraetetechnik_geeignet(smgw, Some(&ausstattung()), None),
+            Some(true),
+            "an iMS is interval-capable by definition, so the flag is not consulted"
+        );
+    }
+
+    /// A direction the meter has no register for is a fact about the device.
+    #[test]
+    fn a_direction_without_a_register_cannot_be_served() {
+        // `078 9` is an Erzeugung product; a meter that only meters Ausspeisung
+        // has nothing to read.
+        let erzeugung = messprodukt("9991000000789").expect("Erzeugung Pflichtprodukt");
+        let nur_verbrauch = Geraeteausstattung {
+            hat_erzeugungsregister: false,
+            ..ausstattung()
+        };
+        assert_eq!(
+            geraetetechnik_geeignet(erzeugung, Some(&nur_verbrauch), Some(true)),
+            Some(false)
+        );
+
+        // …and the Verbrauch product at the same meter is fine.
+        let verbrauch = messprodukt("9991000000771").expect("Verbrauch Pflichtprodukt");
+        assert_eq!(
+            geraetetechnik_geeignet(verbrauch, Some(&nur_verbrauch), Some(true)),
+            Some(true)
+        );
+    }
+
+    /// Blindarbeit needs a Blindarbeit register, whichever quadrant pair.
+    #[test]
+    fn blindarbeit_needs_its_own_register() {
+        let blind = messprodukt("9991000000797").expect("Blindarbeit Q1Q4");
+        let ohne = Geraeteausstattung {
+            hat_blindarbeitsregister: false,
+            ..ausstattung()
+        };
+        assert_eq!(
+            geraetetechnik_geeignet(blind, Some(&ohne), Some(true)),
+            Some(false)
+        );
+    }
+
+    /// **„Not established" is not „established as impossible".** No device on
+    /// record, and an interval product on a meter whose capability mako cannot
+    /// tell, both escalate — refusing there would deny a §34-mandated
+    /// Zusatzleistung on a missing record.
+    #[test]
+    fn what_cannot_be_judged_escalates_rather_than_refusing() {
+        let lastgang = messprodukt("9991000000771").expect("Lastgang Pflichtprodukt");
+        assert_eq!(geraetetechnik_geeignet(lastgang, None, Some(true)), None);
+
+        let kein_ims = Geraeteausstattung {
+            ist_ims: false,
+            ..ausstattung()
+        };
+        assert_eq!(
+            geraetetechnik_geeignet(lastgang, Some(&kein_ims), None),
+            None,
+            "a ¼h Lastgang on a meter of unknown capability is a question, not a refusal"
+        );
+        assert_eq!(
+            geraetetechnik_geeignet(lastgang, Some(&kein_ims), Some(false)),
+            Some(false),
+            "…and once the caller says the meter registers no intervals, it is an answer"
+        );
+        assert_eq!(
+            geraetetechnik_geeignet(lastgang, Some(&kein_ims), Some(true)),
+            Some(true),
+            "an RLM meter serves a Backend Lastgang without an iMS"
+        );
+    }
+
+    /// An Arbeitsmenge über ein Zeitintervall is a reading difference and needs
+    /// no interval register — so it never reaches the capability question.
+    #[test]
+    fn an_arbeitsmenge_needs_no_interval_register() {
+        let menge = messprodukt("9991000003147").expect("Energiemenge Pflichtprodukt");
+        assert!(!menge.braucht_intervallmessung());
+        let kein_ims = Geraeteausstattung {
+            ist_ims: false,
+            ..ausstattung()
+        };
+        assert_eq!(
+            geraetetechnik_geeignet(menge, Some(&kein_ims), None),
+            Some(true)
+        );
+    }
+
+    /// …and the surveillance threshold follows the product, not a global
+    /// setting: 33 h for a daily-09:30 Rohdaten product, and `None` — „use
+    /// your own" — where the Codeliste states no clock.
+    #[test]
+    fn the_silence_threshold_comes_from_the_ordered_product() {
+        assert_eq!(ueberfaellig_nach_stunden("9991000000416"), Some(33));
+        // Pflichtprodukt 305 6 defers to WiM Kap. 2.5.5 — no clock to assert.
+        assert_eq!(ueberfaellig_nach_stunden("9991 00000 305 6"), None);
+        // A direct iMS connection delivers on its own Erfassungsintervall.
+        assert_eq!(ueberfaellig_nach_stunden("9991000001183"), None);
+        // Not orderable by this role at all.
+        assert_eq!(ueberfaellig_nach_stunden("9992000000011"), None);
+    }
+
+    /// The threshold is derived from the catalogue, never hard-coded per
+    /// product: every product with a published clock answers, every product
+    /// without one abstains, and the two sets partition the catalogue.
+    #[test]
+    fn every_product_with_a_clock_yields_a_threshold_and_no_other_does() {
+        for p in BACKEND_PRODUKTE.iter().chain(SMGW_PRODUKTE) {
+            let hours = ueberfaellig_nach_stunden(p.code);
+            match p.rhythmus.taegliche_frist() {
+                Some(frist) => assert_eq!(
+                    hours,
+                    Some(i64::from(24 + frist.hour())),
+                    "{}: a published clock must size the threshold",
+                    p.code
+                ),
+                None => assert_eq!(
+                    hours, None,
+                    "{}: WiM Kap. 2.5.5 states no clock — do not invent one",
+                    p.code
+                ),
+            }
+        }
+        // The Rohdaten clock is 09:30, so a daily product is overdue at 33 h —
+        // one full day plus the cut-off, not a second setting to keep in sync.
+        assert_eq!(ROHDATEN_FRIST.hour(), 9);
     }
 }

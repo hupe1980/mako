@@ -1429,6 +1429,60 @@ COMMENT ON TABLE esa_messprodukt_preise IS
     'Messprodukte (§35 MsbG), so the offer the ESA ordered against is the '
     'agreement.';
 
+-- ── ESA Messprodukt-Katalog (which Kapitel-4.6 products this MSB serves) ─────
+--
+-- `E_0252` Prüfschritt 2 („Wird das vom ESA gewünschte Messprodukt entsprechend
+-- der Codeliste der Konfigurationen angeboten?") and `E_0256` Prüfschritte 4/5
+-- („Bietet der MSB das gewünschte Messprodukt … als Abo / als einmalige
+-- Übermittlung an?") ask a **commercial** question the Codeliste cannot answer:
+-- which of the optional products *this* MSB carries. Without a record the walks
+-- escalate every optional order to an operator.
+--
+-- **The Pflichtprodukte are not in this table's gift.** BNetzA Mitteilung Nr. 3
+-- makes seven of them mandatory from a dated cut-over (`Messprodukt::
+-- ist_pflicht_am`), and §34 Abs. 2 S. 2 Nr. 10 MsbG makes serving an ESA a
+-- mandatory Zusatzleistung. So an empty table means „no optional product is
+-- carried", never „no product is served" — the resolver answers `true` for a
+-- Pflichtprodukt whatever this table says, and an operator cannot refuse a
+-- §34-mandated product by forgetting to fill it in.
+--
+-- Dated because the answer changes: a product an MSB adds in June was not
+-- carried in May, and a Vergangenheitswerte-Bestellung is judged against the
+-- period the values are wanted for, not against today.
+
+CREATE TABLE esa_messprodukt_katalog (
+    tenant       TEXT        NOT NULL,
+    -- The MSB whose catalogue this is. A combined deployment holds one per role.
+    msb_mp_id    TEXT        NOT NULL,
+    -- 13-digit Messprodukt-Code from Codeliste der Konfigurationen 1.4 Kap. 4.6,
+    -- digits only. Not FK-checkable — the catalogue is code, not data — so the
+    -- API refuses a code outside Kapitel 4.6 before it reaches this table.
+    messprodukt  TEXT        NOT NULL,
+    -- `E_0256` Prüfschritt 4 — offered as a turnusmäßige Übermittlung (`IMD++Z01`).
+    als_abo      BOOLEAN     NOT NULL DEFAULT TRUE,
+    -- `E_0256` Prüfschritt 5 — offered as a single transmission (`IMD++Z03`).
+    -- Separate from `als_abo` because the tree refuses them with **different
+    -- codes** (`A04` vs `A05`), so collapsing the two loses which one the MSB
+    -- declined.
+    als_einmalig BOOLEAN     NOT NULL DEFAULT TRUE,
+    -- Half-open `[valid_from, valid_to)`, as every other dated table here.
+    valid_from   DATE        NOT NULL DEFAULT CURRENT_DATE,
+    valid_to     DATE,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    UNIQUE NULLS NOT DISTINCT (tenant, msb_mp_id, messprodukt, valid_from)
+);
+
+CREATE INDEX esa_katalog_lookup
+    ON esa_messprodukt_katalog (tenant, msb_mp_id, messprodukt, valid_from DESC);
+
+COMMENT ON TABLE esa_messprodukt_katalog IS
+    'Which optional Kapitel-4.6 Messprodukte this MSB serves an ESA, and in '
+    'which Abo mode (E_0252 Prüfschritt 2, E_0256 Prüfschritte 4/5). The seven '
+    'Pflichtprodukte are served regardless — BNetzA Mitteilung Nr. 3 — so an '
+    'empty table never refuses a mandated Zusatzleistung.';
+
 -- ── §20b EnWG Netzzugangsplattform — request registry ─────────────────────────
 --
 -- Projection of §20b requests submitted through the makod netzzugang adapter:

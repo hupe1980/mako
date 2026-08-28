@@ -175,7 +175,11 @@ addr = "0.0.0.0:8280"
 url = "env:DATABASE_URL"
 
 [identity]
-tenant = "9900357000004"
+tenant     = "9900357000004"
+# The Marktrolle this deployment *receives* invoices in: lieferant (default),
+# netzbetreiber or esa. PID 31009 carries five Use-Cases and the message names
+# none; this is half the lookup and `IMD+7081` is the other half.
+marktrolle = "lieferant"
 
 [makod]
 url     = "http://makod:8080"

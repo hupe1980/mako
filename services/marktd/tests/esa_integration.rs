@@ -327,6 +327,241 @@ async fn accepted_angebot_prices_are_tenant_scoped() {
     );
 }
 
+/// **The Messprodukt-Katalog answers the walks' one commercial question — and
+/// cannot refuse a Pflichtprodukt.**
+///
+/// `E_0252` Prüfschritt 2 and `E_0256` Prüfschritte 4/5 ask which of the
+/// *optional* Kapitel-4.6 products this MSB carries. The seven Pflichtprodukte
+/// are outside the operator's gift: BNetzA *Mitteilung Nr. 3* removed the MSB's
+/// discretion over them and §34 Abs. 2 S. 2 Nr. 10 MsbG makes serving an ESA a
+/// mandatory Zusatzleistung, so an empty catalogue must never turn into a
+/// refusal.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_messprodukt_katalog_answers_optional_products_only() {
+    use mako_markt::repository::EsaMessproduktAngebot;
+
+    let Some((pool, _pg)) = test_pool("esa_katalog").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool);
+    let at = time::macros::date!(2026 - 04 - 01);
+
+    // An optional Rohdaten product, served as an Abo but not one-off.
+    repo.upsert_esa_messprodukt_katalog(&[EsaMessproduktAngebot {
+        tenant: TENANT.to_owned(),
+        msb_mp_id: MSB.to_owned(),
+        messprodukt: "9991000000416".to_owned(),
+        als_abo: true,
+        als_einmalig: false,
+        valid_from: Some(time::macros::date!(2026 - 01 - 01)),
+        valid_to: None,
+    }])
+    .await
+    .expect("record the catalogue");
+
+    let carried = repo
+        .esa_messprodukt_angebot(TENANT, MSB, "9991000000416", at)
+        .await
+        .expect("lookup")
+        .expect("on file");
+    assert!(carried.als_abo);
+    // The two modes are separate because `E_0256` refuses them with different
+    // codes — `A04` for a declined Abo, `A05` for a declined one-shot.
+    assert!(!carried.als_einmalig);
+
+    // An optional product with **no** row is „nothing recorded", not „not
+    // carried": the walks escalate on the difference.
+    assert!(
+        repo.esa_messprodukt_angebot(TENANT, MSB, "9991000000747", at)
+            .await
+            .expect("lookup")
+            .is_none()
+    );
+
+    // Dated: the same product before the window opened is not yet carried.
+    assert!(
+        repo.esa_messprodukt_angebot(
+            TENANT,
+            MSB,
+            "9991000000416",
+            time::macros::date!(2025 - 06 - 01)
+        )
+        .await
+        .expect("lookup")
+        .is_none(),
+        "a catalogue entry does not apply before its valid_from"
+    );
+
+    // Tenant-scoped like every other read here.
+    assert!(
+        repo.esa_messprodukt_angebot("9900002000002", MSB, "9991000000416", at)
+            .await
+            .expect("lookup")
+            .is_none()
+    );
+}
+
+/// **A subscription's Messprodukt is resolvable from its Belegnummer.**
+///
+/// `edmd`'s Typ-2 delivery surveillance sizes its silence threshold from the
+/// cadence the ordered product publishes (Codeliste 1.4 Kap. 4.6 — the Rohdaten
+/// products state „spätestens bis 9:30 Uhr", the aufbereitete-Daten ones defer
+/// to WiM Kap. 2.5.5). An inbound MSCONS 13027 names only the Belegnummer of the
+/// ORDERS it belongs to (`SG1 RFF+AGI`), never the product, and
+/// `esa_messprodukt_preise` is the only place that pairing exists outside the
+/// running `makod` process.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_belegnummer_resolves_to_the_messprodukt_it_ordered() {
+    let Some((pool, _pg)) = test_pool("esa_subscription").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool);
+
+    let preis = |artikel: &str, messprodukt: &str, bestellung: &str| EsaMessproduktPreis {
+        tenant: TENANT.to_owned(),
+        esa_mp_id: ESA.to_owned(),
+        msb_mp_id: MSB.to_owned(),
+        lokations_id: "51238696012".to_owned(),
+        messprodukt: messprodukt.to_owned(),
+        artikel_id: artikel.to_owned(),
+        preistyp: "Z03".to_owned(),
+        betrag: "0.004500".parse().expect("decimal"),
+        einheit: "DAY".to_owned(),
+        waehrung: "EUR".to_owned(),
+        bestellung_ref: Some(bestellung.to_owned()),
+        valid_from: Some(time::macros::date!(2026 - 03 - 01)),
+        valid_to: None,
+    };
+
+    repo.upsert_esa_preise(&[
+        // One subscription, priced over two Artikel-IDs — both name the same
+        // product, which is why `DISTINCT` collapses them to one answer.
+        preis("9990001100001", "9991000000416", "ESABE0000000001"),
+        preis("9990001100002", "9991000000416", "ESABE0000000001"),
+        // A second subscription at the same location, on a different product.
+        preis("9990001100003", "9991000003056", "ESABE0000000002"),
+    ])
+    .await
+    .expect("record the accepted Angebote");
+
+    assert_eq!(
+        repo.esa_messprodukt_of_bestellung(TENANT, "ESABE0000000001")
+            .await
+            .expect("lookup")
+            .as_deref(),
+        Some("9991000000416"),
+    );
+    assert_eq!(
+        repo.esa_messprodukt_of_bestellung(TENANT, "ESABE0000000002")
+            .await
+            .expect("lookup")
+            .as_deref(),
+        Some("9991000003056"),
+    );
+    // A Belegnummer nothing was filed under is the ordinary state for a
+    // delivery whose sender omitted the `RFF+AGI` Muss — `None`, not an error,
+    // and the sweep falls back to its configured threshold.
+    assert!(
+        repo.esa_messprodukt_of_bestellung(TENANT, "UNBEKANNT")
+            .await
+            .expect("lookup")
+            .is_none()
+    );
+    // Tenant-scoped like every other read here.
+    assert!(
+        repo.esa_messprodukt_of_bestellung("9900002000002", "ESABE0000000001")
+            .await
+            .expect("lookup")
+            .is_none()
+    );
+}
+
+/// **An expired consent is no lawful basis, and nothing stops on its own.**
+///
+/// §49 Abs. 2 Nr. 9 MsbG makes the Einwilligung the ESA's whole entitlement,
+/// and `E_0256` Prüfschritt 8 treats a lapsed one exactly like a withdrawn one
+/// („widerrufen **oder ihre Gültigkeit ist abgelaufen**" → `A08`). But the only
+/// protocol-level stop is the ORDERS 17008 the *ESA* sends. Nothing else closes
+/// the gap: the gate refuses only *new* orders, the list endpoint drops the row,
+/// and the MSB has no reason to act.
+///
+/// `revoke_expired` is what the hourly sweep calls to close them and get the
+/// records back, so it can stop each covered location.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_expired_consent_is_closed_and_returned_for_the_abbestellung() {
+    let Some((pool, _pg)) = test_pool("expiry").await else {
+        return;
+    };
+    let repo = PgEinwilligungRepository::new(pool);
+    let today = time::macros::date!(2026 - 06 - 15);
+
+    // Expired yesterday — `valid_to` is the last day the consent is good for.
+    let abgelaufen = repo
+        .grant(EinwilligungRecord {
+            valid_to: Some(time::macros::date!(2026 - 06 - 14)),
+            ..consent("AN-EXP", &["51238696012", "51238696013"])
+        })
+        .await
+        .unwrap();
+    // Expires **today**, so it is still a basis today.
+    let heute = repo
+        .grant(EinwilligungRecord {
+            valid_to: Some(today),
+            ..consent("AN-HEUTE", &["51238696014"])
+        })
+        .await
+        .unwrap();
+    // Open-ended — only a Widerruf ends it.
+    let offen = repo
+        .grant(consent("AN-OFFEN", &["51238696015"]))
+        .await
+        .unwrap();
+
+    let expired = repo.revoke_expired(today).await.expect("sweep");
+    assert_eq!(
+        expired.len(),
+        1,
+        "only the lapsed consent closes: {expired:?}"
+    );
+    assert_eq!(expired[0].id, abgelaufen);
+    assert_eq!(
+        expired[0].location_ids.len(),
+        2,
+        "every covered location comes back — losing the basis loses it for all \
+         of them, and each needs its own 17008"
+    );
+
+    // Idempotent: the 17008 goes out once per consent, so a second sweep must
+    // return nothing.
+    assert!(
+        repo.revoke_expired(today).await.expect("sweep").is_empty(),
+        "a closed consent must not be swept twice"
+    );
+
+    // The two that are still valid are untouched and still gate as active.
+    for (id, label) in [(heute, "expires today"), (offen, "open-ended")] {
+        let rec = repo.get(TENANT, id).await.unwrap().expect(label);
+        assert!(rec.revoked_at.is_none(), "{label} must stay active");
+    }
+    let decision = repo
+        .consent_check(
+            TENANT,
+            ESA,
+            MSB,
+            "51238696012",
+            ConsentPerspective::EsaOutbound,
+        )
+        .await
+        .expect("check");
+    assert!(
+        !decision.allowed,
+        "the swept consent no longer authorises its locations"
+    );
+}
+
 async fn pg_container() -> Option<(String, PgContainer)> {
     use testcontainers::ImageExt;
     use testcontainers::runners::AsyncRunner;

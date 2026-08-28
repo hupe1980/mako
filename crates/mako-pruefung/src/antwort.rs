@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::codes::AntwortCode;
+use crate::codes::{AntwortCode, Cluster};
 
 /// A resolved Antwortcode: the code, the tree that publishes it, and the BDEW's
 /// own wording.
@@ -130,5 +130,105 @@ impl RejectReason {
     pub fn mit_termin(mut self, termin: time::Date) -> Self {
         self.antwort.abweichender_termin = Some(termin);
         self
+    }
+}
+
+// ── Decision outcome ──────────────────────────────────────────────
+
+/// The outcome of a check that answers with **one** code.
+///
+/// Named for the Marktrolle it was written for, and shared since: the WiM
+/// Messstellenbetrieb trees, the ESA Wertebestellung trees and anything else
+/// whose answer is a single `STS+E01` or `SG2 AJT` return it. The trees that
+/// answer with a *set* of codes do not — `E_0264` returns a
+/// [`crate::esa::RechnungsAntwort`] instead, because one invoice can be wrong
+/// in several places at once and REMADV carries all of them.
+///
+/// The three variants exist for the same reason they do on the NB side: an
+/// unfounded Ablehnung is a binding statement to the market, so a Prüfschritt
+/// the caller's records cannot answer escalates rather than resolving to a
+/// plausible code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "decision", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MsbEntscheidung {
+    /// Every applicable Prüfschritt passed; carries the Zustimmungscode the
+    /// Bestätigung must state.
+    ///
+    /// `SG4 STS+E01` is Muss on every WiM Antwortnachricht, so an acceptance
+    /// carries a code — `E15`, or `Z01` when the answer moves the date.
+    Accept(AntwortDetail),
+    /// A deterministic Prüfschritt failed.
+    Reject(RejectReason),
+    /// The decision needs a human.
+    Escalate {
+        /// What the operator has to establish.
+        reason: String,
+    },
+}
+
+impl MsbEntscheidung {
+    /// Build an `Accept` from a published Zustimmungscode.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, when `code` is an Ablehnung.
+    #[must_use]
+    pub fn accept(tree: &'static str, code: &'static AntwortCode) -> Self {
+        debug_assert_eq!(
+            code.cluster,
+            Cluster::Zustimmung,
+            "{} is an Ablehnungscode and cannot carry a Bestätigung",
+            code.code
+        );
+        Self::Accept(AntwortDetail::new(tree, code))
+    }
+
+    /// The Antwortcode this decision puts on the wire, for either cluster.
+    #[must_use]
+    pub fn antwortcode(&self) -> Option<&str> {
+        match self {
+            Self::Accept(a) => Some(&a.antwortcode),
+            Self::Reject(r) => Some(&r.antwort.antwortcode),
+            Self::Escalate { .. } => None,
+        }
+    }
+
+    /// The EBD the Antwortcode belongs to.
+    #[must_use]
+    pub fn ebd(&self) -> Option<&str> {
+        match self {
+            Self::Accept(a) => Some(&a.tree),
+            Self::Reject(r) => Some(&r.antwort.tree),
+            Self::Escalate { .. } => None,
+        }
+    }
+
+    /// Whether this decision agrees, as the **variant** states it.
+    ///
+    /// `None` on an `Escalate`, which has decided nothing yet. This is the
+    /// authority for „which Prüfidentifikator does the answer ride" — the
+    /// variant, never a boolean the caller carries alongside. It cannot
+    /// disagree with the code's own cluster: [`Self::accept`] refuses to build
+    /// an `Accept` around an Ablehnungscode.
+    #[must_use]
+    pub const fn ist_zustimmung(&self) -> Option<bool> {
+        match self {
+            Self::Accept(_) => Some(true),
+            Self::Reject(_) => Some(false),
+            Self::Escalate { .. } => None,
+        }
+    }
+
+    /// The date the answer confirms, when it differs from the requested one.
+    ///
+    /// `Z01`, `Z12` and `Z14` all assert a Terminänderung, and an answer that
+    /// asserts one without naming the date is incomplete.
+    #[must_use]
+    pub const fn abweichender_termin(&self) -> Option<time::Date> {
+        match self {
+            Self::Accept(a) => a.abweichender_termin,
+            Self::Reject(r) => r.antwort.abweichender_termin,
+            Self::Escalate { .. } => None,
+        }
     }
 }

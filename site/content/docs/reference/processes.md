@@ -606,16 +606,38 @@ Angebot.
 
 **Workflow:** `wim-technik-aenderung`
 
-ORDERS-based requests for device or configuration changes defined in WiM Strom
-Teil 1 und AWH Änderung der Technik. Antwortfrist: **10 Werktage**
-(Kap. 3.3.1.2 / 3.3.2.2 Nr. 2); die APERAK läuft daneben auf ihren eigenen
-45 Minuten.
+Requests for device or configuration changes at a Messlokation. **Two
+regulatory documents describe the same change**, and they end in the same
+messages: WiM Strom Teil 1 Kap. 3.3 has the NB or the LF order it outright, while
+the BDEW *AWH Prozesse zur Änderung der Technik an Lokationen* V1.1 puts a
+quotation round in front of it.
 
-| Process | Initiator → Responder | ORDERS PID | Antwort | Crate |
-|---|---|---|---|---|
-| Änderung der Technik (Messlokationsänderung Strom) | LF → MSB | **17011** | ORDRSP 19005/19006 | `mako-wim` ✅ |
-| Konfigurationsänderung | MSB → MSB | **17118** | ORDRSP 19003/19004 | `mako-wim` ✅ |
-| Bestellung Änderung (GPKE Teil 3) | NB → MSB | **17121** | ORDRSP 19003/19004 | `mako-wim` ✅ |
+Antwortfrist: **10 Werktage** (Kap. 3.3.1.2 / 3.3.2.2 Nr. 2) on both the REQOTE
+and the ORDERS; die APERAK läuft daneben auf ihren eigenen 45 Minuten. The AWH
+Bestellung has **no** Vorlauffrist Prüfschritt — the Umsetzungszeitraum was
+agreed in the Angebot — while the direct Beauftragung is refused with `A01` when
+the requested date is less than 20 Werktage out.
+
+| Process | Initiator → Responder | ORDERS PID | Antwort | EBD | Crate |
+|---|---|---|---|---|---|
+| Messlokationsänderung, **direkt beauftragt** | NB → MSB | **17011** (`ZO-T15`) | ORDRSP 19005/19006 | `E_0249` | `mako-wim` ✅ |
+| Messlokationsänderung, **direkt beauftragt** | LF → MSB | **17011** (`ZO-T15`) | ORDRSP 19005/19006 | `E_0250` | `mako-wim` ✅ |
+| Anfrage Angebot Änderung der Technik | NB / LF → MSB | REQOTE **35005** | QUOTES 15005 / IFTSTA 21033 | `E_0278` · `E_0281` | `mako-wim` ✅ |
+| Bestellung **nach Angebot** | NB → MSB | **17011** (`ZG-T24`) | ORDRSP 19005/19006 | `E_0279` | `mako-wim` ✅ |
+| Bestellung **nach Angebot** | LF → MSB | **17011** (`ZG-T24`) | ORDRSP 19005/19006 | `E_0283` | `mako-wim` ✅ |
+| Durchführung — Scheitermeldung | MSB → NB / LF | — | IFTSTA **21027** / **21025** | `E_0286` | `mako-wim` ✅ |
+| Konfigurationsänderung | MSB → MSB | **17118** | ORDRSP 19127 | — | `mako-wim` ✅ |
+| Bestellung Änderung (GPKE Teil 3) | NB → MSB | **17121** | ORDRSP 19120 | `E_0526` | `mako-gpke` |
+
+> **One answer PID pair, four trees.** ORDRSP 19005/19006 carries all four
+> Bestellungs-Bäume. The sender's Marktrolle separates the NB column from the LF
+> one; what separates the WiM Teil 1 rows from the AWH rows is the ORDERS'
+> **Zuordnung zu einem Objekt** — `ZO-T15` opens a Vorgang, `ZG-T24` answers one
+> (Anwendungsübersicht 4.0 rows 30660/30720 against 36030/36120).
+> `mako_pruefung::codes::aenderung_der_technik_baum(besteller, art)` takes both.
+>
+> **`A02` is the Zustimmung of `E_0249` and an Ablehnung of `E_0279`** — same
+> spelling, same PID, opposite meaning.
 
 
 > **ORDRSP semantics:** 19005 = Auftragsbestätigung Änderung Technik · 19006 = Ablehnung ·
@@ -625,9 +647,9 @@ Teil 1 und AWH Änderung der Technik. Antwortfrist: **10 Werktage**
 > `BGM` response code. The ESA Ab-/Bestellung answers (ORDRSP 19011–19014)
 > belong to the ESA Wertebestellung below, **not** here.
 >
-> **Direction:** mako implements the **requester** side of all three rows — it
-> sends the ORDERS and ingests the ORDRSP. MSB-side inbound handling of
-> 17011/17118 is out of scope for this workflow.
+> **Direction:** mako implements both sides. As requester it sends the ORDERS and
+> ingests the ORDRSP; as MSB it answers 35005 and 17011 out of the four trees
+> above and reports the Durchführung with `E_0286`.
 
 ### ESA Wertebestellung (WiM Strom Teil 2, Kap. 4)
 
@@ -789,22 +811,54 @@ IFTSTA messages carry status updates that the NB or MSB sends to inform the LF o
 the outgoing MSB about the progress of an ongoing WiM process. The LF receives
 these passively — no workflow state change is required on the LF side.
 
-| IFTSTA PID | Description | Sender → Empfänger |
+Directions are the *Anwendungsübersicht der Prüfidentifikatoren 4.0*'s. They are
+worth stating precisely: the Gesamtvorgang leg's numeric order is the reverse of
+its reading order (21009 is the failure, 21010 the success), and one PID serves
+several Prozessschritte.
+
+| IFTSTA PID | Prozessschritt | Sender → Empfänger |
 |---|---|---|
-| 21007 | Statusmeldung Gerätewechsel | NB → MSBA / NB → LF |
-| 21009 | Statusmeldung MSB-Wechsel nach MsbG an LF | NB → LF |
-| 21010 | Statusmeldung MSB-Wechsel nach MsbG an NB | MSB alt → NB |
-| 21011 | Statusmeldung MSB-Wechsel nach MsbG an NB | MSB neu → NB |
-| 21012 | Statusmeldung MSB-Wechsel nach MsbG an BKV | NB → BKV |
-| 21013 | Statusmeldung MSB-Wechsel nach MsbG an ÜNB | NB → ÜNB |
-| 21015 | Statusmeldung Einbau iMS | wMSB → gMSB |
-| 21018 | Statusmeldung Anforderung Datenzugang | MSB → LF |
-| 21029 | Vorabinformation iMS-Einbau | wMSB → NB |
-| 21030 | iMS-Ersteinbauzustand | wMSB → gMSB |
-| 21031 | Bestandssituation / Eigenausbau iMS | wMSB → gMSB |
-| 21032 | Antwort auf das Angebot | LF → MSB |
+| 21007 | Beginn MSB 3/4 — Information über die vorläufige Bestätigung | NB → MSBA · NB → LF |
+| 21009 | Beginn MSB 7 — Mitteilung über den Gesamtvorgang, **gescheitert** | MSBN → NB |
+| 21010 | Beginn MSB 7 — Mitteilung über den Gesamtvorgang, **erfolgreich** | MSBN → NB |
+| 21010 | Verpflichtung gMSB 3 · Gerätewechsel 3 | gMSB → NB · MSBN → MSBA |
+| 21011 | Beginn MSB 8 — Antwort (`E_0232`) · 14/15 Scheitern | NB → MSBN · NB → MSBA · NB → LF |
+| 21012 | Beginn MSB 8 — Antwort, erfolgreich | NB → MSBN |
+| 21013 | Beginn MSB 16/17/18 — Mitteilung über das Scheitern | NB → MSBN · MSBA · LF |
+| 21015 | Informationsmeldung (**Gas, `fv20251001` only** — zurückgezogen in IFTSTA AHB 2.1 Änd-ID 27061) | NB → MSBA |
+| 21018 | Verpflichtung gMSB 4 — Information über die Verpflichtung (**ab AHB 2.1 nur Strom**) | NB → MSBA |
+| 21036 | Gerätewechsel 6 — Zeitpunkt des Geräteausbaus | MSBN → MSBA |
 
 All PIDs above are routed to `mako-wim` `wim-device-change` ✅.
+
+**Three IFTSTA PIDs that look like status lines and are not**, each owned by its
+own workflow because each carries a decision:
+
+| IFTSTA PID | Prozessschritt | EBD | Sender → Empfänger | Workflow |
+|---|---|---|---|---|
+| 21029 → 21030/21031 | Ersteinbau eines iMS in eine bestehende Messlokation (WiM Teil 1 Kap. 3.5) | `E_0233` | gMSB → wMSB, Antwort zurück | `wim-ersteinbau` |
+| 21025 · 21027 | Messlokationsänderung durchführen — Scheitermeldung | `E_0286` | MSB → LF · MSB → NB | `wim-technik-aenderung` |
+| 21032 | Antwort auf das Angebot Rechnungsabwicklung — die **Ablehnung** | `E_0205` · `E_0208` | LF → MSB | `wim-rechnungsabwicklung` |
+
+### IFTSTA — Ersteinbau eines iMS (WiM Strom Teil 1 Kap. 3.5)
+
+**Workflow:** `wim-ersteinbau` (crate `mako-wim`) — Strom only.
+
+The gMSB carries the § 29 MsbG rollout obligation and it reaches Messlokationen a
+*wettbewerblicher* MSB operates. It announces the planned Umstellungszeitpunkt
+**3 Monate und 3 Werktage** ahead (21029), and the wMSB has **3 Werktage** to
+answer out of `E_0233`:
+
+| Code | Cluster | Bedeutung | PID |
+|---|---|---|---|
+| `A03` | Zustimmung | Auf den Selbsteinbau wird verzichtet | 21030 |
+| `A01` | Ablehnung | Bestandsschutz nach § 19 Abs. 5 MsbG, auf den nicht verzichtet wird | 21031 |
+| `A02` | Ablehnung | Selbsteinbau eines iMS oder einer mME geplant | 21031 |
+| `A04` | Ablehnung | Zum jetzigen Zeitpunkt keine Aussage möglich | 21031 |
+
+`A04` reads like a deferral and the BDEW clusters it as an **Ablehnung** — the
+gMSB may not roll out against it, and neither may it roll out against an expired
+window. Both leave the Vorgang in `Abgelehnt`.
 
 ### INSRPT — Störungsmeldungen (WiM Strom)
 

@@ -5,7 +5,7 @@ use mako_markt::{
     error::MdmError,
     repository::{
         ConsentCode, ConsentDecision, ConsentPerspective, EinwilligungRecord,
-        EinwilligungRepository, EsaFrameworkAgreement, EsaMessproduktPreis,
+        EinwilligungRepository, EsaFrameworkAgreement, EsaMessproduktAngebot, EsaMessproduktPreis,
     },
 };
 use sqlx::{PgPool, Row, postgres::PgRow};
@@ -146,6 +146,29 @@ impl EinwilligungRepository for PgEinwilligungRepository {
         .map_err(|e| MdmError::Internal(e.to_string()))
     }
 
+    async fn revoke_expired(&self, now: time::Date) -> Result<Vec<EinwilligungRecord>, MdmError> {
+        // One statement, so selecting and closing cannot race: a concurrent
+        // sweep or an operator revocation takes the row first and this returns
+        // nothing for it, which is what keeps the 17008 to one per consent.
+        //
+        // `valid_to` is the last day the consent is good for — the gate reads
+        // it as `valid_to >= CURRENT_DATE` — so a row expires the day *after*
+        // it, and `< $1` is that boundary.
+        sqlx::query(
+            "UPDATE esa_einwilligungen SET revoked_at = now(), updated_at = now() \
+             WHERE revoked_at IS NULL AND valid_to IS NOT NULL AND valid_to < $1 \
+             RETURNING *",
+        )
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?
+        .iter()
+        .map(map_consent)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| MdmError::Internal(e.to_string()))
+    }
+
     async fn upsert_framework(&self, rec: EsaFrameworkAgreement) -> Result<(), MdmError> {
         sqlx::query(
             "INSERT INTO esa_framework_agreements \
@@ -245,6 +268,92 @@ impl EinwilligungRepository for PgEinwilligungRepository {
         tx.commit()
             .await
             .map_err(|e| MdmError::Internal(e.to_string()))
+    }
+
+    async fn esa_messprodukt_angebot(
+        &self,
+        tenant: &str,
+        msb_mp_id: &str,
+        messprodukt: &str,
+        at: time::Date,
+    ) -> Result<Option<EsaMessproduktAngebot>, MdmError> {
+        // Half-open `[valid_from, valid_to)`, as every dated table here.
+        sqlx::query(
+            "SELECT * FROM esa_messprodukt_katalog \
+             WHERE tenant = $1 AND msb_mp_id = $2 AND messprodukt = $3 \
+               AND valid_from <= $4 AND (valid_to IS NULL OR valid_to > $4) \
+             ORDER BY valid_from DESC LIMIT 1",
+        )
+        .bind(tenant)
+        .bind(msb_mp_id)
+        .bind(messprodukt)
+        .bind(at)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?
+        .as_ref()
+        .map(|row| {
+            Ok::<_, sqlx::Error>(EsaMessproduktAngebot {
+                tenant: row.try_get("tenant")?,
+                msb_mp_id: row.try_get("msb_mp_id")?,
+                messprodukt: row.try_get("messprodukt")?,
+                als_abo: row.try_get("als_abo")?,
+                als_einmalig: row.try_get("als_einmalig")?,
+                valid_from: row.try_get("valid_from").ok(),
+                valid_to: row.try_get("valid_to").unwrap_or(None),
+            })
+        })
+        .transpose()
+        .map_err(|e| MdmError::Internal(e.to_string()))
+    }
+
+    async fn upsert_esa_messprodukt_katalog(
+        &self,
+        eintraege: &[EsaMessproduktAngebot],
+    ) -> Result<(), MdmError> {
+        for e in eintraege {
+            sqlx::query(
+                "INSERT INTO esa_messprodukt_katalog \
+                     (tenant, msb_mp_id, messprodukt, als_abo, als_einmalig, \
+                      valid_from, valid_to) \
+                 VALUES ($1,$2,$3,$4,$5,COALESCE($6, CURRENT_DATE),$7) \
+                 ON CONFLICT (tenant, msb_mp_id, messprodukt, valid_from) DO UPDATE \
+                 SET als_abo      = EXCLUDED.als_abo, \
+                     als_einmalig = EXCLUDED.als_einmalig, \
+                     valid_to     = EXCLUDED.valid_to, \
+                     updated_at   = now()",
+            )
+            .bind(&e.tenant)
+            .bind(&e.msb_mp_id)
+            .bind(&e.messprodukt)
+            .bind(e.als_abo)
+            .bind(e.als_einmalig)
+            .bind(e.valid_from)
+            .bind(e.valid_to)
+            .execute(&self.pool)
+            .await
+            .map_err(|err| MdmError::Internal(err.to_string()))?;
+        }
+        Ok(())
+    }
+
+    async fn esa_messprodukt_of_bestellung(
+        &self,
+        tenant: &str,
+        bestellung_ref: &str,
+    ) -> Result<Option<String>, MdmError> {
+        // One Bestellung is one (Meldepunkt, Messprodukt) subscription, priced
+        // over one to three Artikel-IDs — so every row for a Belegnummer names
+        // the same product and `DISTINCT` collapses them.
+        sqlx::query_scalar(
+            "SELECT DISTINCT messprodukt FROM esa_messprodukt_preise \
+             WHERE tenant = $1 AND bestellung_ref = $2 LIMIT 1",
+        )
+        .bind(tenant)
+        .bind(bestellung_ref)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))
     }
 
     async fn esa_preise_at(

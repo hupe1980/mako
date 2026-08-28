@@ -360,31 +360,53 @@ pub fn antwort_pid_for(request_pid: u32, bestaetigt: bool) -> Option<u32> {
         .map(|(antwort, _, _)| *antwort)
 }
 
-/// WiM Strom IFTSTA Prüfidentifikatoren (PIDs 21007, 21009–21015, 21018, 21029–21032).
+/// The IFTSTA Prüfidentifikatoren this workflow correlates — the MSB-Wechsel
+/// status messages of WiM Strom Teil 1 and AWH WiM Gas 2.0.
 ///
-/// These status messages are part of the WiM MSB-Wechsel (WiM Strom Teil 1)
-/// process. All are routed to `"wim-device-change"` for correlation.
+/// Directions are the *Anwendungsübersicht der Prüfidentifikatoren* 4.0's, read
+/// off the Absender/Empfänger columns. They are worth stating precisely,
+/// because the numeric order of the Gesamtvorgang leg is the reverse of the
+/// reading order and the same PID serves several Prozessschritte:
 ///
-/// Per IFTSTA AHB these PIDs are "WiM / Statusmeldung MSB-Wechsel nach MsbG".
+/// | PID | Prozessschritt | Von → An |
+/// |---|---|---|
+/// | 21007 | Beginn MSB 3/4 — Information über die vorläufige Bestätigung | NB → MSBA, NB → LF |
+/// | 21009 | Beginn MSB 7 — Mitteilung über den Gesamtvorgang, **gescheitert** | **MSBN → NB** |
+/// | 21010 | Beginn MSB 7 — Mitteilung über den Gesamtvorgang, **erfolgreich** | **MSBN → NB** |
+/// | 21010 | Verpflichtung gMSB 3 — Bestätigung der Übernahme | gMSB → NB |
+/// | 21010 | Gerätewechsel 3 — Zeitpunkt der Übernahme des Messstellenbetriebs | MSBN → MSBA |
+/// | 21011 | Beginn MSB 8 — Antwort auf die Mitteilung (`E_0232`) | **NB → MSBN** |
+/// | 21011 | Beginn MSB 14/15 — Information über das Scheitern (`E_0232`) | NB → MSBA, NB → LF |
+/// | 21012 | Beginn MSB 8 — Antwort auf die Mitteilung, erfolgreich | **NB → MSBN** |
+/// | 21013 | Beginn MSB 16/17/18 — Mitteilung über das Scheitern | NB → MSBN / MSBA / LF |
+/// | 21015 | Informationsmeldung (**Gas only, FV2025-10-01 only**) | NB → MSBA |
+/// | 21018 | Verpflichtung gMSB 4 — Information über die Verpflichtung | NB → MSBA |
+/// | 21036 | Gerätewechsel 6 — Zeitpunkt des Geräteausbaus | MSBN → MSBA |
 ///
-/// | PID   | Beschreibung | Richtung |
-/// |-------|---|---|
-/// | 21007 | Statusmeldung NB→LF / NB→MSBA | WiM Strom Teil 1 / WiM Gas |
-/// | 21009 | Statusmeldung MSB-Wechsel nach MsbG an LF | NB → LF |
-/// | 21010 | Statusmeldung MSB-Wechsel nach MsbG an NB | MSB alt → NB |
-/// | 21011 | Statusmeldung MSB-Wechsel nach MsbG an NB | MSB neu → NB |
-/// | 21012 | Statusmeldung MSB-Wechsel nach MsbG an BKV | NB → BKV |
-/// | 21013 | Statusmeldung MSB-Wechsel nach MsbG an ÜNB | NB → ÜNB |
-/// | 21015 | Statusmeldung Einbau iMS | wMSB → gMSB |
-/// | 21018 | Statusmeldung Anforderung Datenzugang | MSB → LF |
-/// | 21029 | Vorabinformation | wMSB → NB |
-/// | 21030 | iMS-Ersteinbauzustand | wMSB → gMSB |
-/// | 21031 | Bestandssituation / Eigenausbau iMS | wMSB → gMSB |
-/// | 21032 | Antwort auf das Angebot | LF → MSB |
-/// | 21036 | Zeitpunkt des Geräteausbaus | MSBN → MSBA |
+/// **21015 is routed only because `fv20251001` still publishes it.** IFTSTA AHB
+/// 2.1 Änd-ID 27061 removes the Anwendungsfall („wird gemäß AWH WiM Gas 2.0
+/// nicht mehr benötigt"), so it is in neither Anwendungsübersicht 4.0 nor the
+/// `fv20261001` profile. EDIFACT has no Übergangsfrist (Allgemeine
+/// Festlegungen §2.5) — an interchange is entirely on one format version — so a
+/// counterparty on FV2025-10-01 may still send one, and dropping it would
+/// dead-letter a conformant message. It goes when `fv20251001` does.
+///
+/// **21018 is Strom-only from AHB 2.1** (Änd-ID 27062), for the same reason.
+/// The Einbau eines iMS is a Strom process on 21029 → 21030/21031 under
+/// `E_0233` — [`crate::ersteinbau`], not this workflow.
+///
+/// **21029–21032 are not MSB-Wechsel and are not here.** 21029/21030/21031
+/// belong to the Ersteinbau eines iMS in eine bestehende Messlokation
+/// (Kap. 3.5), where 21030/21031 are a real answer under `E_0233` rather than a
+/// status line — [`crate::ersteinbau`] owns them. 21032 „Antwort auf das
+/// Angebot" is the LF's answer in the Rechnungsabwicklung über den LF
+/// (`E_0205`/`E_0208`) and belongs to [`crate::rechnungsabwicklung`].
+///
+/// **21025/21027 are the Durchführungsmeldung**, not a Wechsel status: the MSB
+/// reports that a Messlokationsänderung failed, to the LF (21025) resp. the NB
+/// (21027) under `E_0286`. [`crate::technik_aenderung`] owns them.
 pub const IFTSTA_PIDS: &[u32] = &[
-    21_007, 21_009, 21_010, 21_011, 21_012, 21_013, 21_015, 21_018, 21_029, 21_030, 21_031, 21_032,
-    21_036,
+    21_007, 21_009, 21_010, 21_011, 21_012, 21_013, 21_015, 21_018, 21_036,
 ];
 
 /// The five IFTSTA PIDs of the **Mitteilung über Gesamtvorgang** — the leg that

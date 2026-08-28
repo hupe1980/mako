@@ -107,18 +107,13 @@ use super::types::{
 
 /// Gas Lieferantenwechsel (E03): minimum lead, Anmeldung → Lieferbeginn
 /// (AWH GeLi Gas 2.0 V1.2, SD Lieferbeginn Prozessschritt 1).
-pub const GAS_WECHSEL_VORLAUF_WT: u32 = 10;
-
-/// Gas non-Wechsel retroactive window: 6 weeks (AWH GeLi Gas 2.0 Kap. 2.2
-/// Grundregel 3a — „bis zu sechs Wochen zzgl. einer zu berücksichtigenden
-/// Bearbeitungsfrist nach An- oder Abmeldedatum").
-pub const GAS_RUECKWIRKUNG_WOCHEN: i64 = 6;
-
-/// Default Gas Bearbeitungsfrist (in Werktage) added to the 6-week window.
-/// The AWH quantifies it only for the Ersatz-/Grundversorgung (3 WT); the same
-/// default is applied to An-/Abmeldungen. Operators may override it via
-/// [`NetzCheckConfig::gas_bearbeitungsfrist_wt`].
-pub const GAS_BEARBEITUNGSFRIST_WT_DEFAULT: u32 = 3;
+///
+/// Re-exported from [`mako_fristen::vorlauf`], which owns every Frist. This
+/// module is behind `role-nb`; the same windows are read by callers that
+/// compile no Marktrolle at all.
+pub use mako_fristen::vorlauf::{
+    GAS_BEARBEITUNGSFRIST_WT_DEFAULT, GAS_RUECKWIRKUNG_WOCHEN, GAS_WECHSEL_VORLAUF_WT,
+};
 
 /// The Vorlauffrist of an EEG-Veräußerungsformwechsel, in whole months
 /// (§ 21c EEG 2023; GPKE Teil 2 § 2.1.1 „Spätester ÜT liegt 1 Monat vor dem

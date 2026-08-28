@@ -1,12 +1,19 @@
-//! § 7 EnWG role separation, asserted per role build.
+//! Role separation, asserted per role build.
 //!
-//! An operator with ≥ 100 000 Netzkunden must run the supplier and the network
-//! operator as separate entities, and the BNetzA audit examines the deployed
-//! binary. processd's Cargo features exist for exactly that: `nb-only` is
-//! supposed to contain no supplier logic, and vice versa.
+//! processd's Cargo features decide which Marktrolle's decision paths are
+//! compiled and registered. This file is what keeps that a property rather than
+//! a comment: an `nb-only` build must not answer a message only a Lieferant or
+//! a Messstellenbetreiber ever receives.
 //!
-//! A claim that lives only in a comment is not a separation, which is what these
-//! assertions are for.
+//! **What this is not.** It is not a regulatory control. §7 EnWG requires a
+//! separate legal entity for a VNB at or above 100 000 connected customers
+//! (§7 Abs. 2 is the de-minimis threshold), §7a operational and §6a
+//! informational separation; none of them is discharged by a build flag and no
+//! BNetzA procedure inspects a binary. Unbundling is decided above this
+//! repository. What these assertions buy is narrower and still worth having: a
+//! deployment cannot answer as a role it was not built for, so a
+//! misconfiguration fails closed instead of putting an unauthorised
+//! Willenserklärung on the market.
 //!
 //! Run per feature set:
 //!
@@ -52,15 +59,16 @@ fn assert_disjoint(pids: &[u32], forbidden: &[u32], role: &str, other: &str) {
         .collect();
     assert!(
         leaked.is_empty(),
-        "a {role} build answers {other} PIDs {leaked:?} — § 7 EnWG separation is what \
-         these Cargo features are for, and the BNetzA audit examines the binary"
+        "a {role} build answers {other} PIDs {leaked:?} — the role features exist so a \
+         deployment cannot put a Willenserklärung on the market for a Marktrolle it was \
+         not built for"
     );
 }
 
 #[cfg(all(
     any(feature = "role-nb-strom", feature = "role-nb-gas"),
     not(any(feature = "role-lf-strom", feature = "role-lf-gas")),
-    not(feature = "role-msb-strom")
+    not(feature = "role-msb")
 ))]
 #[test]
 fn an_nb_only_build_answers_no_lf_or_msb_process() {
@@ -96,7 +104,7 @@ fn an_nb_only_build_answers_no_lf_or_msb_process() {
 #[cfg(all(
     any(feature = "role-lf-strom", feature = "role-lf-gas"),
     not(any(feature = "role-nb-strom", feature = "role-nb-gas")),
-    not(feature = "role-msb-strom")
+    not(feature = "role-msb")
 ))]
 #[test]
 fn an_lf_only_build_answers_no_nb_or_msb_process() {
@@ -128,7 +136,7 @@ fn an_lf_only_build_answers_no_nb_or_msb_process() {
 }
 
 #[cfg(all(
-    feature = "role-msb-strom",
+    feature = "role-msb",
     not(any(feature = "role-nb-strom", feature = "role-nb-gas")),
     not(any(feature = "role-lf-strom", feature = "role-lf-gas"))
 ))]

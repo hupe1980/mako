@@ -16,7 +16,12 @@ path = "src/main.rs"
 [dependencies]
 mako-events = { workspace = true }
 # The Antwortcode catalogue for the REMADV Abweichungsgrund (`AJT`).
-mako-pruefung  = { path = "../../crates/mako-pruefung", default-features = false }
+mako-pruefung  = { workspace = true, features = ["role-esa"] }
+# The Antwortfrist table and `RechnungEmpfaenger`, which picks both the answer
+# window and the Entscheidungsbaum for the three Use-Cases of PID 31009.
+mako-fristen   = { workspace = true }
+# `RemadvAntwort` — the shape a Nicht-Zahlungsavis carries to makod.
+mako-invoic    = { path = "../../crates/mako-invoic" }
 invoic-checker  = { workspace = true }
 mako-markt      = { workspace = true, features = ["makod-client", "marktd-client"] }
 grid-billing    = { workspace = true, features = ["bo4e"] }

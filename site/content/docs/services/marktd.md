@@ -385,6 +385,9 @@ sub-resource cannot leave the column and the document disagreeing.
 | `PUT` | `/api/v1/esa/preise/{msb_mp_id}/{esa_mp_id}` | `write-einwilligung` | Record the prices of an **accepted QUOTES 15003 Angebot** (`esa_messprodukt_preise`). Filed by makod on the ORDRSP 19011 — the moment the offer becomes the agreement |
 | `GET` | `/api/v1/esa/preise/{msb_mp_id}/{esa_mp_id}?at=` | `read-einwilligung` | The prices in force on `at`. Read by invoicd to check an INVOIC 31009: an ESA has **no Preisblatt** (§35 MsbG leaves the Entgelt for a Zusatzleistung to be agreed per request), so the offer it ordered against is the price basis |
 | `PUT`/`GET` | `/api/v1/esa/framework/{msb_mp_id}/{esa_mp_id}` | — | Bilateral EDI@Energy framework agreement + AS4 cert state |
+| `PUT` | `/api/v1/esa/messprodukte/{msb_mp_id}` | `write-einwilligung` | Record which optional **Kapitel-4.6 Messprodukte** this MSB serves an ESA, and in which Abo mode (`E_0252` Prüfschritt 2, `E_0256` Prüfschritte 4/5). A code outside Kapitel 4.6 is refused with `422` — the catalogue of orderable products is code, not data |
+| `GET` | `/api/v1/esa/messprodukte/{msb_mp_id}/{messprodukt}?at=` | `read-einwilligung` | Does this MSB serve the product on `at`, in which mode? The answer folds in the dated **Pflicht** rule: a Pflichtprodukt is served whatever the catalogue holds (BNetzA Mitteilung Nr. 3, §34 Abs. 2 S. 2 Nr. 10 MsbG). `als_abo`/`als_einmalig` are `null` where nothing is recorded — „not carried" is a decision, „nothing recorded" is not, and the walks escalate on the difference |
+| `GET` | `/api/v1/esa/subscriptions/{bestellung_ref}` | `read-einwilligung` | Which **Messprodukt** an ORDERS 17007 Belegnummer subscribed to. `edmd`'s Typ-2 surveillance is the caller: the Codeliste publishes a delivery cadence per product, but an inbound MSCONS 13027 names only the Belegnummer (`SG1 RFF+AGI`). `404` → fall back to the configured threshold rather than invent a cadence |
 | `GET` | `/api/v1/esa/consent-check` | — | Gate an ESA message (`?esa_mp_id=&msb_mp_id=&location_id=&perspective=`) → `{allowed, code, reason}`. `perspective=msb_inbound` (default, lenient: missing record = self-assertion) or `esa_outbound` (strict: missing record = no lawful basis). makod calls this before running the Wertebestellung workflow |
 | `GET` | `/api/v1/mabis-zp` | `read-mabis-zp` | Every Bilanzierungsgebiet → MaBiS-Zählpunkt assignment for the tenant |
 | `GET` | `/api/v1/bilanzierungsgebiete/{eic}/mabis-zp` | `read-mabis-zp` | Resolve the MaBiS-Zählpunkt (MSCONS SG6 `LOC+172`) for a territory. `404` is the signal `mabis-syncd` turns into a refused submission — it must never be read as "use the Bilanzierungsgebiet EIC instead" |
@@ -457,6 +460,22 @@ sub-resource cannot leave the column and the document disagreeing.
 | `DELETE` | `/admin/fanout/dlq/{event_id}/{subscriber_id}` | `manage-fanout` | Discard a dead-lettered delivery |
 | `GET` | `/admin/events` | `manage-fanout` | CloudEvent replay log — `?from=RFC3339&to=RFC3339&type=&limit=` |
 | `GET` | `/metrics` | — | Prometheus metrics (no auth, internal only) |
+
+### Consent expiry
+
+A consent stops being a lawful basis two ways — Widerruf (GDPR Art. 7(3)) and
+expiry — and `E_0256` Prüfschritt 8 names both in one code: `A08` is „widerrufen
+**oder ihre Gültigkeit ist abgelaufen**". Both owe the same message, because the
+only protocol-level stop is the ORDERS 17008 the ESA sends.
+
+`DELETE` covers the Widerruf; an **hourly sweep** closes every consent whose
+`valid_to` has passed and stops the deliveries it authorised, through the same
+code path. Idempotent by construction: `revoked_at` is stamped in the statement
+that selects, so a second sweep — or a `DELETE` racing it — returns nothing.
+
+Both paths emit `de.markt.einwilligung.widerrufen`. The payload's `grund`
+(`einwilligung_widerrufen` / `einwilligung_abgelaufen`) is what lets an audit
+tell them apart.
 
 ---
 

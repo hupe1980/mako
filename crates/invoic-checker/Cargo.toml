@@ -1,7 +1,7 @@
 [package]
 name         = "invoic-checker"
 version.workspace     = true
-description  = "Automated INVOIC plausibility and tariff validation for German energy market suppliers (LF/LFG). Pure library — no I/O, no async."
+description  = "Automated INVOIC plausibility and tariff validation over BO4E for German energy market invoice recipients (LF, NB, ESA). Pure library — no I/O, no async."
 authors.workspace     = true
 edition.workspace     = true
 license.workspace     = true
@@ -13,6 +13,9 @@ categories   = ["data-structures", "finance"]
 
 [dependencies]
 billing      = { workspace = true }
+# The published `E_0264`/`E_0266` Antwortcodes an ESA's REMADV must carry. Only
+# the ESA trees: this crate answers invoices, not Messstellenbetrieb processes.
+mako-pruefung = { workspace = true, features = ["role-esa"] }
 rubo4e       = { workspace = true }
 rust_decimal = { workspace = true }
 serde       = { workspace = true }

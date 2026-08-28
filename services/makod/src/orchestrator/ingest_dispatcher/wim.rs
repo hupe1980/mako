@@ -569,7 +569,12 @@ impl EdifactIngestDispatcher {
                         &deadlines,
                     )
                     .await
-                } else if mako_wim::RECHNUNGSABWICKLUNG_ORDRSP_PIDS.contains(&pid) {
+                } else if mako_wim::RECHNUNGSABWICKLUNG_ORDRSP_PIDS.contains(&pid)
+                    || pid == mako_wim::rechnungsabwicklung::RECHNUNGSABWICKLUNG_ABLEHNUNG_PID
+                {
+                    // 19009/19010 answer a Beendigung mako sent; IFTSTA 21032 is
+                    // the LF refusing an Angebot mako sent. Both resume — with
+                    // no open Vorgang there is nothing being answered.
                     let cmd = adapters::wim_rechnungsabwicklung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<mako_wim::WimRechnungsabwicklungWorkflow>(
@@ -677,6 +682,55 @@ impl EdifactIngestDispatcher {
                 // resuming a process it does not belong to.
                 _ => Ok(IngestOutcome::Skipped {
                     workflow_name: mako_wim::weiterverpflichtung::WORKFLOW_NAME,
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+            // ── WiM Ersteinbau eines iMS (WiM Strom Teil 1 Kap. 3.5) ─────────
+            //
+            // IFTSTA 21029 opens the Vorgang and arms the wMSB's three-Werktage
+            // answer window; 21030/21031 are that answer and resume it. The
+            // Vorgang is keyed on the **Messlokation**, which is what the
+            // rollout is about — the gMSB may have many open at once.
+            mako_wim::ersteinbau::WORKFLOW_NAME => match pid {
+                mako_wim::ersteinbau::VORABINFORMATION_PID => {
+                    let cmd = adapters::wim_ersteinbau_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_malo_from_msg(msg);
+                    // Three Werktage, from the same table `processd` sizes its
+                    // operator queue by and `obsd` raises the breach against.
+                    let process_due_at =
+                        mako_fristen::antwort::antwort_deadline(pid, OffsetDateTime::now_utc())
+                            .unwrap_or_else(|| {
+                                fristen::deadline_at_werktage(
+                                    OffsetDateTime::now_utc(),
+                                    mako_fristen::antwort::ERSTEINBAU_ANTWORT_WERKTAGE,
+                                    HolidayCalendar::BdewMaKo,
+                                )
+                            });
+                    self.spawn_or_resume_guarded::<mako_wim::ersteinbau::WimErsteinbauWorkflow>(
+                        melo_id.as_str(),
+                        mako_wim::ersteinbau::WORKFLOW_NAME,
+                        cmd,
+                        &fv,
+                        &[(mako_wim::ersteinbau::ANTWORT_WINDOW_LABEL, process_due_at)],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
+                    )
+                    .await
+                }
+                // 21030/21031 answer a Vorabinformation **we** sent. With no
+                // open Vorgang they are skipped rather than spawning an orphan
+                // — an answer to a rollout nobody announced decides nothing.
+                mako_wim::ersteinbau::ZUSTIMMUNG_PID | mako_wim::ersteinbau::ABLEHNUNG_PID => {
+                    let cmd = adapters::wim_ersteinbau_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_malo_from_msg(msg);
+                    self.resume_by_key::<mako_wim::ersteinbau::WimErsteinbauWorkflow>(
+                        melo_id.as_str(),
+                        mako_wim::ersteinbau::WORKFLOW_NAME,
+                        cmd,
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: mako_wim::ersteinbau::WORKFLOW_NAME,
                     reason: "pid_not_in_dispatch_table",
                 }),
             },

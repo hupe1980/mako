@@ -26,16 +26,22 @@ pub(super) async fn dispatch_gabi_gas_invoic(
         .and_then(|v| v.as_str())
         .unwrap_or("Automatisch ermittelte Abweichung — GaBi Gas Rechnung")
         .to_owned();
+    let message_ref = remadv_message_ref(payload);
+    let antwort = remadv_antwort(payload);
     dispatch_to_process::<GaBiGasInvoicWorkflow, _>(
         state,
         &invoice_ref,
         GABI_GAS_INVOIC_WORKFLOW_NAME,
         move || {
             if settle {
-                InvoicCommand::SettleInvoice
+                InvoicCommand::SettleInvoice {
+                    message_ref: message_ref.clone(),
+                }
             } else {
                 InvoicCommand::DisputeInvoice {
+                    message_ref: message_ref.clone(),
                     reason: reason.clone(),
+                    antwort: antwort.clone(),
                 }
             }
         },

@@ -677,7 +677,7 @@ The three ORDRSP answer commands take an **`antwort_code`**, not an `accept` fla
 `SG2 AJT` is Muss on all four ORDRSP PIDs (ORDRSP AHB 1.1b §4.15) and its code
 must sit in the named EBD's Zustimmungs- or Ablehnungs-Cluster, so **the cluster
 selects the PID**. Resolve the code by running the matching walk in
-`mako_pruefung::msb::esa`; an unpublished code, or one off the agreement axis, is
+`mako_pruefung::esa::wertebestellung`; an unpublished code, or one off the agreement axis, is
 refused with `422`.
 
 Three consequences worth knowing:
@@ -740,7 +740,7 @@ irrelevant for a particular operator — reducing binary size and attack surface
 | `role-lf-gas` | `mako-geli-gas` (LF side): `geli-gas-stornierung-lf`, `geli-gas-sperrung-lf`, `geli-gas-mscons` |
 | `role-nb-strom` | `mako-gpke` (NB side): `gpke-supplier-change`, `gpke-sperrung`, `gpke-konfiguration`, `gpke-konfiguration-aenderung`, `gpke-neuanlage`, `gpke-partin`, `mako-wim` (NB side); `mako-mabis`: `mabis-billing`, `mabis-zp-lifecycle`, `mabis-listenabgleich`, `mabis-clearingliste`, `mabis-anforderung`, `mabis-profile`; `mako-redispatch`: `redispatch-stammdaten`, `redispatch-aktivierung`, `redispatch-verfuegbarkeit`, `redispatch-netzengpass`, `redispatch-kaskade`, `redispatch-planungsdaten`, `redispatch-statusanfrage`, `redispatch-kostenblatt` (Redispatch 2.0 is gated to NB Strom / ÜNB — LF and MSB deployments are out of scope per BK6-20-059/060/061) |
 | `role-nb-gas` | `mako-geli-gas` (GNB side): `geli-gas-supplier-change`, `geli-gas-sperrung-nb`, `geli-gas-stornierung`, `geli-gas-datenabruf`, `geli-gas-partin`, `geli-gas-sperrprozesse-invoic` |
-| `role-msb-strom` | `mako-wim`: `wim-device-change`, `wim-geraeteubernahme`, `wim-stammdaten`, `wim-preisanfrage`, `wim-rechnungsabwicklung`, `wim-preisliste`, `wim-invoic`, `wim-insrpt`, `wim-wertebestellung`, `wim-technik-aenderung`, `esa-wertebestellung` |
+| `role-msb-strom` | `mako-wim`: `wim-device-change`, `wim-ersteinbau`, `wim-geraeteubernahme`, `wim-stammdaten`, `wim-preisanfrage`, `wim-rechnungsabwicklung`, `wim-preisliste`, `wim-invoic`, `wim-insrpt`, `wim-wertebestellung`, `wim-technik-aenderung`, `esa-wertebestellung` |
 | `role-msb-gas` | `mako-wim`: the WiM workflows on the Gas Prüfidentifikatoren |
 
 ### Composite flags
@@ -1824,7 +1824,7 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `gpke.sperrung.bestaetigen` | `NB` | GPKE | 17115/17117 | NB reports successful execution → IFTSTA 21039 |
 | `gpke.sperrung.fehlgeschlagen` | `NB` | GPKE | 17115/17117 | NB reports failed execution + reason → IFTSTA 21039 |
 | `gpke.abrechnung.annehmen` | `LF` | GPKE | 31001/31002 | The LF settles an inbound Netznutzungsabrechnung → REMADV 33001 |
-| `gpke.abrechnung.ablehnen` | `LF` | GPKE | 31001/31002 | The LF disputes it → REMADV 33002, `AJT` code from `E_0406` |
+| `gpke.abrechnung.ablehnen` | `LF` | GPKE | 31001/31002 | The LF disputes it → REMADV 33003/33004, `AJT` code from `E_0406` |
 | `geli.lieferbeginn.anmelden` | `LFG` | GeLi Gas | 44001 | Gas supplier registers supply start |
 | `geli.lieferbeginn.bestaetigen` | `GNB` | GeLi Gas | 44002/44003 | Gas DSO accepts/rejects supply start |
 | `geli.lieferende.anmelden` | `LFG` | GeLi Gas | 44004 | Gas supplier registers supply end (Abmeldung NN) |
@@ -1890,7 +1890,7 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `wim.stoerung.ablehnen` | `MSB` | WiM | 23003 | MSB rejects the Störungsmeldung; the Use-Case ends |
 | `wim.stoerung.ergebnis-melden` | `MSB` | WiM | 23008 | MSB sends the Ergebnisbericht and closes the Use-Case |
 | `wim.rechnung.annehmen` | `LF`, `NB`, `GNB`, `MSB`, `NMSB`, `ESA` | WiM | 31009 · 31003 · 31004 | the payer accepts the invoice (REMADV) |
-| `wim.rechnung.ablehnen` | `LF`, `NB`, `GNB`, `MSB`, `NMSB`, `ESA` | WiM | 31009 · 31003 · 31004 | the payer disputes the invoice (REMADV with `E_0406` codes) |
+| `wim.rechnung.ablehnen` | `LF`, `NB`, `GNB`, `MSB`, `NMSB`, `ESA` | WiM | 31009 · 31003 · 31004 | the payer disputes the invoice (REMADV; the `AJT` tree comes from `rechnungspruefung(pid, empfaenger, gegenstand)` — `E_0264` toward an ESA, `E_0566`/`E_0273` an NB, `E_0210`/`E_0270` an LF, the second of each pair when `IMD+7081` is `TEC`) |
 | `invoic.stornorechnung.annehmen` | the union of every billing family's recipients | INVOIC | 31004 | Accept a Sparte-neutral Stornorechnung (REMADV). 31004 cancels an invoice from *any* family, so whoever could receive the original can receive its cancellation — the permitted set is derived from the family commands, not restated |
 | `invoic.stornorechnung.ablehnen` | the union of every billing family's recipients | INVOIC | 31004 | Dispute a Stornorechnung by the invoice's Zahlungsziel |
 | `invoic.sonstige-leistung.stellen` | `NB` or `GNB` | Sparte-neutral | 31011 | Rechnung sonstige Leistung (GPKE Teil 2 · AWH Sperrprozesse Gas) |

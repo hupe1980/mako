@@ -139,17 +139,99 @@ agreed per request.
 
 An ESA's basis is the QUOTES 15003 it ordered against. `makod` files the
 accepted offer at `marktd` on the ORDRSP 19011 (`esa_messprodukt_preise`) and
-`invoicd` looks it up. **An offer on record for (this MSB, this tenant) selects
-the branch** — not a configured role: it is the statement „we are the ESA here,
-and this is what we agreed to pay". The join is exact rather than a plausibility
-band, because the offer prices Artikel-IDs (`SG27 PIA+Z02`) and the invoice
-names the same ones back (`SG26 LIN` DE 7143 `Z09`).
+`invoicd` looks it up. The join is exact rather than a plausibility band,
+because the offer prices Artikel-IDs (`SG27 PIA+Z02`) and the invoice names the
+same ones back (`SG26 LIN` DE 7143 `Z09`).
+
+**The wire says which Use-Case this is.** `IMD+7081` = `KON` („Abrechnung von
+Konfigurationen (**Universalbestellprozess**)") is the ESA billing of WiM Teil 2
+Kap. 4.5 — the Kapitel-4.6 Messprodukte *are* the Konfigurationen. `MSB` is the
+Messstellenbetrieb billed toward NB or LF, `TEC` the Änderung der Technik. An
+accepted offer on record is the fallback for a sender that omits the qualifier,
+but not the primary signal: the 4-Werktage answer window is owed whether or not
+mako filed the offer.
+
+**`SG1 RFF+ACE` names the order.** Muss on the 31009 (segment 00020), carrying
+the ORDERS Dokumentennummer on `IMD++KON` (hint `[501]`) or the QUOTES on
+`IMD++MSB` (`[508]`) — the reference `E_0264` Prüfschritt 40 („Basiert die
+Rechnung auf einer Bestellung?") checks. BO4E has no field for it or for the
+Rechnungstyp, so both ride the process rather than the BO4E document.
 
 | Finding | Meaning |
 |---|---|
 | `AngebotDeviation` | a position billed away from the agreed price — dispute |
 | `AngebotPositionUnknown` | an Artikel-ID the offer never priced — a charge nobody agreed to; dispute |
 | `TariffNotFound` | no accepted offer on record — **warn and skip**, never dispute: a gap in mako's records is not a defect in the invoice |
+
+### The answer names the tree the Use-Case publishes
+
+A REMADV Abweisung carries `SG7 AJT`: DE 4465 the code, DE 1082 the
+**Entscheidungsbaum** that publishes it. The tree is not a constant — every
+invoice Use-Case has its own quartet, and PID 31009 alone has three of them:
+
+| PID | Empfänger | Rechnung | Nicht-Zahlungsavis | erneut | Storno |
+|---|---|---|---|---|---|
+| 31001/31002/31005/31006 | LF | `E_0406` | `E_0452` | `E_0407` | `E_0459` |
+| 31009 | **ESA** (`IMD+7081` = `KON`) | `E_0264` | `E_0265` | `E_0266` | `E_0267` |
+| 31009 | NB, Messstellenbetrieb (`MSB`) | `E_0566` | `E_0567` | `E_0568` | `E_0569` |
+| 31009 | NB, **Preisblatt B** (`TEC`) | `E_0273` | `E_0274` | `E_0277` | `E_0275` |
+| 31009 | LF, Messstellenbetrieb (`MSB`) | `E_0210` | `E_0211` | — | `E_0243` |
+| 31009 | LF, **Preisblatt B** (`TEC`) | `E_0270` | `E_0271` | `E_0276` | `E_0272` |
+| 31003 | NB / MSBN | `E_0259` | `E_0260` | — | `E_0261` |
+
+`mako_pruefung::codes::rechnungspruefung(pid, empfaenger, gegenstand)` is that
+table. **PID 31009 carries five Use-Cases**, and the recipient's Marktrolle
+narrows it only to two: the message body names no Use-Case (Allgemeine
+Festlegungen §2.13 gives every Marktrolle its own MP-ID), so the second fact is
+`IMD+7081` — `TEC` „Abrechnung von Technik" is a Leistung of the MSB's
+**Preisblatt B**, ordered through the AWH „Änderung der Technik an Lokationen"
+round and priced from the PRICAT 27002 („Preisblatt Technik"); `MSB` and `KON`
+are the Messstellenbetrieb and the ESA's.
+
+An unlabelled invoice is read as the Messstellenbetrieb, deliberately:
+`E_0270`/`E_0273` open with „Basiert die Rechnung auf einer Bestellung des
+Rechnungsempfängers?" and refuse with `A04` where there is none, so the other
+default would refuse every ordinary MSB invoice.
+
+The **answer's shape** then picks the REMADV Prüfidentifikator. REMADV AHB 1.0a
+publishes two: §3.1.1 „Bestätigung und Abweisung" (33001/33002) and §3.1.2
+„Abweisung auf Kopf/Summen- und Positionsebene" (33003/33004), and DE 1082
+admits a different list of trees on each. A tree that answers with one code
+rides 33002; one that answers with a *set* rides 33003 (Kopf/Summe) or 33004
+(Position).
+
+`invoicd` walks the **ESA** and both **Preisblatt-B** families in full and emits
+their codes with the Ebene and Positionsnummer. Which family is decided by
+`[identity] marktrolle` plus `IMD+7081`. All three run the one walk in
+`mako_pruefung::rechnung`; what differs is the second round's Prüfschritt-1 code
+(`A25` against **`AC1`**) and the two Preisblatt-only Kopf-Prüfschritte 80/90.
+
+`E_0566` and `E_0210` — the Messstellenbetriebs-Rechnung toward an NB resp. an
+LF — are named correctly and carry no Codeliste here, so `invoicd` answers under
+the right tree with **no** code and logs the dispute for an operator. A code
+borrowed from another tree would be worse than none: `A70` is `E_0406`
+Prüfschritt 900 and means nothing in `E_0210`.
+
+**The Marktrolle is configuration, not inference.** `E_0270` and `E_0273`
+publish the same spellings under different tree numbers, so reading an NB
+deployment as an LF one answers with codes the counterparty's Codeliste does not
+contain. A walked ESA answer outranks the setting: it exists only where the wire
+said `KON` or an accepted Angebot corroborated it.
+
+**`E_0264` — what the ESA checks.** Three levels with disjoint code ranges:
+Kopf 10–90 (`A01`–`A07`, `A90`), Position 300–430 (`A09`–`A15`, `A20`, `A99`),
+Summe 500–550 (`A21`–`A24`, `A96`). A Kopf-level refusal ends the walk; position
+defects are all reported, each under its Positionsnummer. Settlement is
+„ganz oder gar nicht" (WiM Teil 2 UC 4.5.1), so one Befund refuses the whole
+invoice.
+
+Five Prüfschritte need facts no INVOIC carries — whether the Rechnungsnummer is
+a repeat (50), whether the service was performed (310), whether the Artikel-ID
+was billed before (370), whether the § 14 Abs. 4 UStG content is complete (10),
+and whether the MSB's COMDIS rebutted the objections (`E_0266` 1). Each is
+optional on `EsaRechnungsFakten`, and an unknown answer never refuses. A
+`marktd` outage likewise passes Prüfschritt 40 rather than refusing on evidence
+`invoicd` does not have.
 
 **PID 31004 (Stornorechnung)** is a single universal, **Sparte-neutral** Storno
 (INVOIC AHB §3.1.2) cancelling an original invoice from any process — GPKE, MMM
@@ -376,8 +458,8 @@ curl -s http://invoicd:8280/api/v1/zahlungsstatus/10001234558 \
 ```mermaid
 stateDiagram-v2
     [*] --> Received : invoicd persists receipt (atomic)
-    Received --> Dispatched : REMADV 33001 sent
-    Received --> Disputed : REMADV 33002 sent (Dispute outcome)
+    Received --> Dispatched : REMADV 33001 Zahlungsavis sent
+    Received --> Disputed : REMADV 33002 / 33003 / 33004 sent (Dispute outcome)
     Dispatched --> Settled : POST /confirm-payment (ERP ack)
     Dispatched --> Overdue : pay_by passes without confirmation
     Overdue --> Settled : POST /confirm-payment (late ERP ack)
@@ -423,7 +505,8 @@ url             = "env:DATABASE_URL"   # required; use env: for secrets
 max_connections = 5                    # default
 
 [identity]
-tenant = "9900357000004"               # required — MP-ID of the operator
+tenant     = "9900357000004"           # required — MP-ID of the operator
+marktrolle = "lieferant"               # lieferant (default) | netzbetreiber | esa
 
 [makod]
 url     = "http://makod:8080"          # required

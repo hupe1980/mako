@@ -20,6 +20,9 @@ path = "src/lib.rs"
 [dependencies]
 mako-events = { workspace = true }
 mako-markt = { path = "../../crates/mako-markt", features = ["makod-client"] }
+# The Kapitel-4.6 Messprodukt catalogue: the ESA product registry refuses a
+# code the Marktrolle may not order, and folds in the dated Pflicht rule.
+mako-wim   = { workspace = true }
 metering   = { workspace = true, features = ["serde"] }
 rubo4e    = { workspace = true, features = ["sqlx"] }
 

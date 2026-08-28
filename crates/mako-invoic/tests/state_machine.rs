@@ -96,6 +96,8 @@ fn receive(p: u32, validation_passed: bool) -> InvoicCommand {
             vec!["INVOIC AHB segment MOA+77 missing mandatory net amount".to_owned()]
         },
         rechnung: None,
+        bestellung_ref: Some("ESABE0000000001".to_owned()),
+        rechnungstyp: Some("KON".to_owned()),
     }
 }
 
@@ -186,10 +188,23 @@ async fn settling_and_disputing_both_complete_the_process() {
         let p = process::<BothRoles>();
         p.execute(receive(31002, true)).await.unwrap();
         let cmd = if settle {
-            InvoicCommand::SettleInvoice
+            InvoicCommand::SettleInvoice {
+                message_ref: MessageRef::new("REMADV-1"),
+            }
         } else {
             InvoicCommand::DisputeInvoice {
+                message_ref: MessageRef::new("REMADV-1"),
                 reason: "Netzentgelt weicht vom Preisblatt ab".to_owned(),
+                antwort: Some(mako_invoic::RemadvAntwort {
+                    ebd: "E_0406".to_owned(),
+                    befunde: vec![mako_invoic::RemadvBefund {
+                        code: "A70".to_owned(),
+                        ebene: "summe".to_owned(),
+                        positionsnummer: None,
+                        detail: None,
+                    }],
+                    remadv_pid: 33_003,
+                }),
             }
         };
         let (_, outbox) = p.execute_and_collect(cmd).await.unwrap();
@@ -206,11 +221,174 @@ async fn settling_and_disputing_both_complete_the_process() {
     }
 }
 
+/// **The answer the market sees.** `ProcessCompleted` notifies this operator's
+/// own ERP and reaches no counterparty; the REMADV is the one the market waits
+/// on, and WiM Teil 2 UC 4.5.2 Nr. 2 and its Teil 1 counterparts put it on a
+/// hard Frist.
+#[tokio::test]
+async fn an_answered_invoice_puts_a_remadv_on_the_wire() {
+    // Zahlungsavis: BGM `481`, PID 33001, and no AJT — agreement carries no
+    // Antwortcode (REMADV AHB 1.0a § 3.1.1).
+    let p = process::<BothRoles>();
+    p.execute(receive(31002, true)).await.unwrap();
+    let (_, outbox) = p
+        .execute_and_collect(InvoicCommand::SettleInvoice {
+            message_ref: MessageRef::new("REMADV-OK"),
+        })
+        .await
+        .unwrap();
+    let avis = outbox
+        .iter()
+        .find(|o| &*o.message_type == "REMADV")
+        .expect("a settled invoice answers the issuer");
+    assert_eq!(avis.payload["pid"], 33_001);
+    assert_eq!(avis.payload["document_code"], "481");
+    assert_eq!(avis.payload["invoice_ref"], "INV-2026-001");
+    assert!(
+        avis.payload.get("antwort_code").is_none(),
+        "{:?}",
+        avis.payload
+    );
+    // A REMADV travels back up the invoice: the payer answers the issuer, so
+    // sender and receiver are the mirror of the INVOIC's.
+    assert_eq!(avis.payload["receiver"], issuer().as_str());
+    assert_eq!(avis.payload["sender"], payer().as_str());
+    assert_eq!(&*avis.recipient, issuer().as_str());
+
+    // Nicht-Zahlungsavis: BGM `239`, the tree's own Prüfidentifikator, and the
+    // `AJT` naming both the code and the tree that publishes it.
+    let p = process::<BothRoles>();
+    p.execute(receive(31002, true)).await.unwrap();
+    let (_, outbox) = p
+        .execute_and_collect(InvoicCommand::DisputeInvoice {
+            message_ref: MessageRef::new("REMADV-NOK"),
+            reason: "Rechnungsbetrag ≠ Summe der Positionen".to_owned(),
+            antwort: Some(mako_invoic::RemadvAntwort {
+                ebd: "E_0406".to_owned(),
+                befunde: vec![mako_invoic::RemadvBefund {
+                    code: "A70".to_owned(),
+                    ebene: "summe".to_owned(),
+                    positionsnummer: None,
+                    detail: None,
+                }],
+                remadv_pid: 33_003,
+            }),
+        })
+        .await
+        .unwrap();
+    let abweisung = outbox
+        .iter()
+        .find(|o| &*o.message_type == "REMADV")
+        .expect("a disputed invoice answers the issuer");
+    assert_eq!(abweisung.payload["pid"], 33_003);
+    assert_eq!(abweisung.payload["document_code"], "239");
+    assert_eq!(abweisung.payload["antwort_code"], "A70");
+    assert_eq!(abweisung.payload["antwort_ebd"], "E_0406");
+    assert!(abweisung.payload["ablehnungsgrund"].is_string());
+}
+
+/// **The second round.** WiM Teil 2 Kap. 4.5.2 Nr. 3/4: the issuer answers a
+/// Nicht-Zahlungsavis with a COMDIS 29001 claiming its invoice was correct, and
+/// the payer owes another answer — by the Zahlungsziel, under `E_0266` rather
+/// than `E_0264` (whose Prüfschritt 1, `A25`, asks whether the COMDIS actually
+/// rebutted the objections).
+///
+/// Without it `ComdisRejected` is terminal in practice, and the round that
+/// either releases the payment or ends in bilateral clearing never runs.
+#[tokio::test]
+async fn a_comdis_reopens_the_answer_for_a_second_round() {
+    // Round one: refuse.
+    let p = process::<BothRoles>();
+    p.execute(receive(31002, true)).await.unwrap();
+    p.execute(InvoicCommand::DisputeInvoice {
+        message_ref: MessageRef::new("REMADV-1"),
+        reason: "Preis weicht ab".to_owned(),
+        antwort: None,
+    })
+    .await
+    .unwrap();
+    assert_eq!(p.state().await.unwrap().label(), "Disputed");
+
+    // The issuer insists.
+    p.execute(InvoicCommand::ReceiveComdis {
+        comdis_ref: MessageRef::new("COMDIS-1"),
+    })
+    .await
+    .unwrap();
+    assert_eq!(p.state().await.unwrap().label(), "ComdisRejected");
+
+    // Round two: concede — and a REMADV goes out for it, because the issuer is
+    // waiting on one just as it was in round one.
+    let (_, outbox) = p
+        .execute_and_collect(InvoicCommand::SettleInvoice {
+            message_ref: MessageRef::new("REMADV-2"),
+        })
+        .await
+        .unwrap();
+    assert_eq!(p.state().await.unwrap().label(), "Settled");
+    let avis = outbox
+        .iter()
+        .find(|o| &*o.message_type == "REMADV")
+        .expect("the second answer also reaches the market");
+    assert_eq!(avis.payload["pid"], 33_001);
+}
+
+/// …and the second round may refuse again (`E_0266` `A25`). A **third** round
+/// is not published — „kommt es zu einer erneuten Ablehnung durch den MSB, ist
+/// eine bilaterale Klärung notwendig" — so the process rests in `Disputed`.
+#[tokio::test]
+async fn the_second_round_may_refuse_again() {
+    let p = process::<BothRoles>();
+    p.execute(receive(31002, true)).await.unwrap();
+    p.execute(InvoicCommand::DisputeInvoice {
+        message_ref: MessageRef::new("REMADV-1"),
+        reason: "Preis weicht ab".to_owned(),
+        antwort: None,
+    })
+    .await
+    .unwrap();
+    p.execute(InvoicCommand::ReceiveComdis {
+        comdis_ref: MessageRef::new("COMDIS-1"),
+    })
+    .await
+    .unwrap();
+    let (_, outbox) = p
+        .execute_and_collect(InvoicCommand::DisputeInvoice {
+            message_ref: MessageRef::new("REMADV-2"),
+            reason: "Einwände nicht entkräftet".to_owned(),
+            antwort: Some(mako_invoic::RemadvAntwort {
+                ebd: "E_0266".to_owned(),
+                befunde: vec![mako_invoic::RemadvBefund {
+                    code: "A25".to_owned(),
+                    ebene: "kopf".to_owned(),
+                    positionsnummer: None,
+                    detail: None,
+                }],
+                remadv_pid: 33_003,
+            }),
+        })
+        .await
+        .unwrap();
+    assert_eq!(p.state().await.unwrap().label(), "Disputed");
+    let abweisung = outbox
+        .iter()
+        .find(|o| &*o.message_type == "REMADV")
+        .expect("the second refusal reaches the market too");
+    // `A25` is undefined in `E_0264`; naming the wrong tree loses the fact that
+    // this is a second round.
+    assert_eq!(abweisung.payload["antwort_ebd"], "E_0266");
+    assert_eq!(abweisung.payload["antwort_code"], "A25");
+}
+
 #[tokio::test]
 async fn an_invoice_cannot_be_settled_before_it_validates() {
     let p = process::<BothRoles>();
     assert!(
-        p.execute(InvoicCommand::SettleInvoice).await.is_err(),
+        p.execute(InvoicCommand::SettleInvoice {
+            message_ref: MessageRef::new("REMADV-1")
+        })
+        .await
+        .is_err(),
         "settling a process with no invoice in it must fail"
     );
 }
@@ -300,7 +478,11 @@ async fn a_deadline_firing_after_the_answer_is_absorbed() {
         let p = process::<BothRoles>();
         if terminal == "Settled" {
             p.execute(receive(31002, true)).await.unwrap();
-            p.execute(InvoicCommand::SettleInvoice).await.unwrap();
+            p.execute(InvoicCommand::SettleInvoice {
+                message_ref: MessageRef::new("REMADV-1"),
+            })
+            .await
+            .unwrap();
         } else {
             p.execute(send(31009)).await.unwrap();
             p.execute(remadv(33002)).await.unwrap();
@@ -389,10 +571,17 @@ async fn a_comdis_is_accepted_in_every_payer_state() {
         let p = process::<BothRoles>();
         p.execute(receive(31002, true)).await.unwrap();
         match answer {
-            Some(true) => p.execute(InvoicCommand::SettleInvoice).await.unwrap(),
+            Some(true) => p
+                .execute(InvoicCommand::SettleInvoice {
+                    message_ref: MessageRef::new("REMADV-1"),
+                })
+                .await
+                .unwrap(),
             Some(false) => p
                 .execute(InvoicCommand::DisputeInvoice {
+                    message_ref: MessageRef::new("REMADV-1"),
                     reason: "Preisblatt".to_owned(),
+                    antwort: None,
                 })
                 .await
                 .unwrap(),

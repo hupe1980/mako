@@ -728,16 +728,22 @@ pub(super) async fn dispatch_geli_gas_invoic(
         .and_then(|v| v.as_str())
         .unwrap_or("Automatisch ermittelte Abweichung — GeLi Gas 31011")
         .to_owned();
+    let message_ref = remadv_message_ref(payload);
+    let antwort = remadv_antwort(payload);
     dispatch_to_process::<GeliGasSperrprozesseInvoicWorkflow, _>(
         state,
         &invoice_ref,
         GELI_GAS_SPERRPROZESSE_INVOIC_WORKFLOW_NAME,
         move || {
             if settle {
-                InvoicCommand::SettleInvoice
+                InvoicCommand::SettleInvoice {
+                    message_ref: message_ref.clone(),
+                }
             } else {
                 InvoicCommand::DisputeInvoice {
+                    message_ref: message_ref.clone(),
                     reason: reason.clone(),
+                    antwort: antwort.clone(),
                 }
             }
         },

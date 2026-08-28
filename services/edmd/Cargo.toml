@@ -20,6 +20,9 @@ path = "src/lib.rs"
 [dependencies]
 mako-events = { workspace = true }
 mako-markt = { workspace = true, features = ["marktd-client"] }
+# The Kapitel-4.6 Messprodukt catalogue: the ESA Typ-2 surveillance sizes its
+# silence threshold from the cadence the ordered product publishes.
+mako-wim   = { workspace = true }
 metering  = { workspace = true, features = ["serde"] }
 # `default-features = false` drops meterstore's `rest-catalog` default
 # (`iceberg-catalog-rest`): edmd constructs its cold tier with a `SqlCatalog`, not

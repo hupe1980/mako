@@ -13,6 +13,9 @@ categories   = ["data-structures"]
 [dependencies]
 mako-engine = { workspace = true }
 rubo4e      = { workspace = true }
+# The REMADV `SG5 MOA` amounts are copied from the answered invoice, and money
+# is never a float.
+rust_decimal = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
 

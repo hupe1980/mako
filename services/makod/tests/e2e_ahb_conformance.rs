@@ -683,6 +683,8 @@ async fn ahb_31001_invoic_validates_and_dispatches() {
         validation_passed: report.is_valid(), // authoritative AHB result — no bypass
         validation_errors: report.errors().iter().map(|e| format!("{e}")).collect(),
         rechnung: None,
+        bestellung_ref: None,
+        rechnungstyp: None,
     };
     assert!(
         cmd_valid,

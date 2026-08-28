@@ -18,7 +18,7 @@
 //!   → GET /api/v1/esa/consent-check              ← marktd (Einwilligung gültig?)
 //!   → GET /api/v1/melos/{melo}/msb?at=           ← marktd (zugeordnet?)
 //!   → GET /api/v1/malos/{malo}/buendel?at=       ← marktd (ein MSB im Bündel?)
-//!   → mako_pruefung::msb::esa::pruefe_{anfrage,bestellung,stornierung,beendigung}
+//!   → mako_pruefung::esa::wertebestellung::pruefe_{anfrage,bestellung,stornierung,beendigung}
 //!       Accept   → wim.wertebestellung.*-beantworten [if auto_accept]
 //!                  else approval_queue with the WiM Frist
 //!       Reject   → the same command with the tree's Ablehnungscode
@@ -275,6 +275,125 @@ impl EsaDecisionOutcome {
     }
 }
 
+/// `E_0252` Prüfschritt 6 / `E_0256` Prüfschritt 9 — can the installed
+/// Gerätetechnik produce the values the Messprodukt names?
+///
+/// Reads the Messlokation's meters from `marktd` and reduces them to the four
+/// facts [`mako_wim::esa::geraetetechnik_geeignet`] asks about. A Messlokation
+/// with several meters is judged on the **union** of their registers: the values
+/// have to come from the location, not from one device.
+///
+/// `Ok(None)` — escalate — when no meter is on record, or when the walk cannot
+/// tell whether a non-iMS meter registers intervals. Refusing there would deny a
+/// §34-mandated Zusatzleistung on a missing record.
+async fn geraetetechnik(
+    marktd: &mako_markt::marktd_client::MarktdClient,
+    melo_id: &str,
+    produkt: &mako_wim::esa::Messprodukt,
+) -> anyhow::Result<Option<bool>> {
+    if melo_id.is_empty() {
+        return Ok(None);
+    }
+    let zaehler = marktd.list_zaehler(melo_id).await?;
+    if zaehler.is_empty() {
+        return Ok(None);
+    }
+    let werke = || {
+        zaehler
+            .iter()
+            .filter_map(|z| z.daten.as_ref())
+            .flat_map(|d| d.zaehlwerke.iter())
+    };
+    let ausstattung = mako_wim::esa::Geraeteausstattung {
+        ist_ims: zaehler
+            .iter()
+            .any(mako_markt::marktd_client::ZaehlerSummary::ist_imsys),
+        hat_verbrauchsregister: werke()
+            .any(mako_markt::marktd_client::ZaehlwerkDaten::ist_verbrauch),
+        hat_erzeugungsregister: werke()
+            .any(mako_markt::marktd_client::ZaehlwerkDaten::ist_erzeugung),
+        hat_blindarbeitsregister: werke()
+            .any(mako_markt::marktd_client::ZaehlwerkDaten::ist_blindarbeit),
+    };
+    // A meter with no registers on record says nothing about the location: the
+    // registry holds the device but not what it meters, and the direction
+    // checks would then refuse every product.
+    if werke().next().is_none() {
+        return Ok(None);
+    }
+    // Whether a **non-iMS** meter registers ¼-hour intervals is a capability
+    // mako does not hold — only the `Zaehlertyp` — so it stays unanswered and
+    // the walk escalates rather than refusing a Lastgang on a guess.
+    Ok(mako_wim::esa::geraetetechnik_geeignet(
+        produkt,
+        Some(&ausstattung),
+        None,
+    ))
+}
+
+/// Prüfschritt 2 of `E_0252` — does this MSB carry the product at all?
+///
+/// `Ok(None)` when nothing is on file, which escalates. `Ok(Some(false))` is a
+/// **decision**: the operator recorded a catalogue and this product is not in
+/// it, so `A02` („das vom ESA gewünschte Messprodukt wird vom MSB nicht
+/// angeboten") is a statement the MSB actually made.
+///
+/// The distinction is the whole point — refusing a §34-mandated Zusatzleistung
+/// because a table was never filled in is exactly the failure this escalation
+/// exists to prevent.
+async fn katalog_gefuehrt(
+    marktd: &mako_markt::marktd_client::MarktdClient,
+    msb_mp_id: &str,
+    produkt: &mako_wim::esa::Messprodukt,
+    am: time::Date,
+) -> anyhow::Result<Option<bool>> {
+    let angebot = marktd
+        .esa_messprodukt_angebot(msb_mp_id, produkt.code, am)
+        .await?;
+    Ok(angebot.and_then(|a| {
+        // A Pflichtprodukt is carried whatever the catalogue says, and either
+        // mode satisfies „wird angeboten" — Prüfschritt 2 asks about the
+        // product, not about the Betriebsart.
+        if a.pflicht {
+            return Some(true);
+        }
+        a.im_katalog
+            .then(|| a.als_abo.unwrap_or(false) || a.als_einmalig.unwrap_or(false))
+    }))
+}
+
+/// Prüfschritte 4/5 of `E_0256` — does this MSB serve the product **in the
+/// ordered mode**?
+///
+/// The two Prüfschritte refuse with different codes (`A04` for a declined Abo,
+/// `A05` for a declined einmalige Übermittlung), so the catalogue answers them
+/// separately rather than through one „carried" flag.
+async fn katalog_lieferbar(
+    marktd: &mako_markt::marktd_client::MarktdClient,
+    msb_mp_id: &str,
+    produkt: &mako_wim::esa::Messprodukt,
+    am: time::Date,
+    abonnement: mako_wim::esa::Abonnement,
+) -> anyhow::Result<Option<bool>> {
+    let Some(a) = marktd
+        .esa_messprodukt_angebot(msb_mp_id, produkt.code, am)
+        .await?
+    else {
+        return Ok(None);
+    };
+    if a.pflicht {
+        return Ok(Some(true));
+    }
+    if !a.im_katalog {
+        return Ok(None);
+    }
+    Ok(Some(if abonnement.ist_abo() {
+        a.als_abo.unwrap_or(false)
+    } else {
+        a.als_einmalig.unwrap_or(false)
+    }))
+}
+
 /// The makod command that answers each inbound PID, and the Marktrolle it runs
 /// under.
 const fn answer_command(pid: u32) -> Option<(&'static str, &'static str)> {
@@ -327,7 +446,7 @@ async fn evaluate(
     payload: &EsaOrderPayload,
     marktd: &mako_markt::marktd_client::MarktdClient,
 ) -> anyhow::Result<EsaDecisionOutcome> {
-    use mako_pruefung::msb::esa;
+    use mako_pruefung::esa::wertebestellung;
 
     // ── Werteanfrage (35003) — `E_0252` ──────────────────────────────
     //
@@ -392,6 +511,19 @@ async fn evaluate(
                 .unwrap_or_else(|| payload.received_at.date());
             let pflicht = produkt.ist_pflicht_am(pflicht_am);
 
+            // Prüfschritt 9: the Gerätetechnik. `None` — „not established" —
+            // escalates; only a provable impossibility refuses.
+            let Some(geraete) = geraetetechnik(marktd, &payload.melo_id, produkt).await? else {
+                return Ok(EsaDecisionOutcome::Escalate {
+                    reason: format!(
+                        "`E_0256` Prüfschritt 9: ob die Gerätetechnik an {} die Werte des \
+                         Messprodukts {} liefern kann, ist aus den Zähler-Stammdaten nicht \
+                         feststellbar",
+                        payload.lokations_id, produkt.code
+                    ),
+                });
+            };
+
             // Prüfschritt 6: is the ESA-Rahmenvertrag in force?
             let framework = marktd
                 .esa_framework_established(&cfg.own_mp_id, &payload.esa_mp_id)
@@ -418,6 +550,33 @@ async fn evaluate(
                     | mako_wim::esa::Lokationsebene::Netzlokation
                     | mako_wim::esa::Lokationsebene::Tranche
             );
+            // Prüfschritte 4/5, from the MSB's own ESA Messprodukt-Katalog. An
+            // absent answer escalates rather than refusing: `messprodukt_
+            // lieferbar: false` sends `A04`/`A05` — „der MSB sieht für das
+            // gewünschte Messprodukt keine Übermittlung als Abo vor" — which is
+            // a commercial statement mako must not make on a missing row.
+            let Some(lieferbar) =
+                katalog_lieferbar(marktd, &cfg.own_mp_id, produkt, pflicht_am, abonnement).await?
+            else {
+                return Ok(EsaDecisionOutcome::Escalate {
+                    reason: format!(
+                        "`E_0256` Prüfschritt {}: ob dieser MSB das optionale Messprodukt {} \
+                         {} anbietet, steht nicht im ESA-Messprodukt-Katalog — eine \
+                         kaufmännische Entscheidung",
+                        if art == wertebestellung::Bestellart::Abo {
+                            4
+                        } else {
+                            5
+                        },
+                        produkt.code,
+                        if art == wertebestellung::Bestellart::Abo {
+                            "als Abo"
+                        } else {
+                            "als einmalige Übermittlung"
+                        },
+                    ),
+                });
+            };
             let buendel_einheitlich = match (gebuendelt, payload.ausfuehrungsdatum) {
                 (false, _) | (_, None) => None,
                 (true, Some(am)) => {
@@ -436,21 +595,27 @@ async fn evaluate(
                 });
             };
 
-            let anfrage = esa::EsaBestellung {
+            let anfrage = wertebestellung::EsaBestellung {
                 bindungsfrist,
                 eingegangen_am: payload.uebertragungstag(),
                 akzeptiert_nach_bindungsfrist: cfg.accept_after_bindungsfrist,
                 art,
-                // Only a Pflichtprodukt can be asserted deliverable without an
-                // MSB product catalogue; an optional one escalates below.
-                messprodukt_lieferbar: true,
+                // Prüfschritte 4/5 — does this MSB serve the product **in the
+                // ordered mode**? The two refuse with different codes (`A04`
+                // Abo, `A05` einmalig), so the catalogue answers them
+                // separately. A Pflichtprodukt answers `true` without a
+                // catalogue row: §34 Abs. 2 S. 2 Nr. 10 MsbG makes serving an
+                // ESA mandatory and BNetzA *Mitteilung Nr. 3* removes the MSB's
+                // discretion over those seven.
+                messprodukt_lieferbar: lieferbar,
                 vertrag_gueltig: framework,
                 zugeordnet,
                 einwilligung_gueltig: einwilligung,
-                // Whether the installed Gerätetechnik can produce the values is
-                // a device fact mako does not hold, so it is not asserted
-                // false — the walk would then reject on a guess.
-                geraetetechnik_geeignet: true,
+                // Prüfschritt 9 — can the installed Gerätetechnik produce the
+                // values? A 4.6.2 product without an iMS cannot (UC 4.1.1
+                // Vorbedingung), and neither can a direction the meter has no
+                // register for. Anything mako cannot establish escalated above.
+                geraetetechnik_geeignet: geraete,
                 gebuendelte_ebene: gebuendelt,
                 // Prüfschritt 11: a MaLo/Tranche/NeLo order presupposes one MSB
                 // across the whole Lokationsbündel (UC 4.1.1 Vorbedingung).
@@ -458,7 +623,7 @@ async fn evaluate(
                 // escalates rather than refusing.
                 msb_aller_messlokationen: buendel_einheitlich,
             };
-            let decision = esa::pruefe_bestellung(&anfrage);
+            let decision = wertebestellung::pruefe_bestellung(&anfrage);
             // An optional product may be declined outright, and only the
             // operator knows whether this MSB serves it.
             if !pflicht && matches!(decision, mako_pruefung::msb::MsbEntscheidung::Accept(_)) {
@@ -479,7 +644,7 @@ async fn evaluate(
 
         // ── Stornierung (39002) — `E_0257` ───────────────────────────────
         39_002 => {
-            let anfrage = esa::EsaStornierung {
+            let anfrage = wertebestellung::EsaStornierung {
                 // The Stornierung reached a running process at all, which is
                 // what Prüfschritt 1 asks: makod resumes it only from
                 // `BestellungBestaetigt`.
@@ -488,7 +653,7 @@ async fn evaluate(
                 uebermittlung_begonnen: payload.lieferung_begonnen,
             };
             Ok(EsaDecisionOutcome::from_entscheidung(
-                esa::pruefe_stornierung(&anfrage),
+                wertebestellung::pruefe_stornierung(&anfrage),
                 mako_pruefung::codes::EBD_ESA_STORNIERUNG,
             ))
         }
@@ -514,9 +679,9 @@ async fn evaluate(
             // Only asked of an Abo: Prüfschritt **1** refuses a one-shot with
             // `A01` before ever reaching this, and it needs no start date.
             let abo_beginn = match (art, payload.abo_beginn) {
-                (esa::Bestellart::Einmalig, _) => beendigung_zum,
-                (esa::Bestellart::Abo, Some(beginn)) => beginn,
-                (esa::Bestellart::Abo, None) => {
+                (wertebestellung::Bestellart::Einmalig, _) => beendigung_zum,
+                (wertebestellung::Bestellart::Abo, Some(beginn)) => beginn,
+                (wertebestellung::Bestellart::Abo, None) => {
                     return Ok(EsaDecisionOutcome::Escalate {
                         reason: format!(
                             "Der Beginn der turnusmäßigen Übermittlung zu {} ist unbekannt — \
@@ -531,7 +696,7 @@ async fn evaluate(
             // „nichts beendet, nichts geliefert" — an assertion, not an unknown
             // — so it is only passed on when the process actually said so. The
             // `de.mako.process.initiated` payload carries both.
-            let anfrage = esa::EsaBeendigung {
+            let anfrage = wertebestellung::EsaBeendigung {
                 art,
                 beendigung_zum,
                 abo_beginn,
@@ -539,7 +704,7 @@ async fn evaluate(
                 juengste_lieferung: payload.juengste_lieferung,
             };
             Ok(EsaDecisionOutcome::from_entscheidung(
-                esa::pruefe_beendigung(&anfrage),
+                wertebestellung::pruefe_beendigung(&anfrage),
                 mako_pruefung::codes::EBD_ESA_BEENDIGUNG,
             ))
         }
@@ -561,7 +726,7 @@ async fn evaluate_anfrage(
     payload: &EsaOrderPayload,
     marktd: &mako_markt::marktd_client::MarktdClient,
 ) -> anyhow::Result<EsaDecisionOutcome> {
-    use mako_pruefung::msb::esa;
+    use mako_pruefung::esa::wertebestellung;
 
     // The Anfrage is checked against the period the values are wanted for.
     // Without a `DTM+76` Wunschtermin on the message, today is the honest read.
@@ -609,12 +774,27 @@ async fn evaluate_anfrage(
         None
     };
 
-    let anfrage = esa::EsaAnfrage {
+    // Prüfschritt 6: the Gerätetechnik. `None` — „not established" — escalates,
+    // because refusing here denies a §34-mandated Zusatzleistung on a record
+    // mako does not have.
+    let Some(geraete) = geraetetechnik(marktd, &payload.melo_id, produkt).await? else {
+        return Ok(EsaDecisionOutcome::Escalate {
+            reason: format!(
+                "`E_0252` Prüfschritt 6: ob die Gerätetechnik an {} die Werte des Messprodukts \
+                 {} liefern kann, ist aus den Zähler-Stammdaten nicht feststellbar",
+                payload.lokations_id, produkt.code
+            ),
+        });
+    };
+
+    let anfrage = wertebestellung::EsaAnfrage {
         pflichtprodukt: produkt.ist_pflicht_am(am),
-        // Whether *this* MSB carries an optional product is a commercial fact
-        // mako does not hold; `None` escalates rather than refusing a
-        // §34-mandated Zusatzleistung on a guess.
-        messprodukt_angeboten: None,
+        // Prüfschritt 2 — does this MSB carry the product at all? Read from its
+        // own ESA Messprodukt-Katalog. `None` where nothing is recorded, which
+        // escalates rather than refusing a §34-mandated Zusatzleistung on a
+        // missing row; a Pflichtprodukt never reaches this Prüfschritt, because
+        // Prüfschritt 1 branches past it.
+        messprodukt_angeboten: katalog_gefuehrt(marktd, &cfg.own_mp_id, produkt, am).await?,
         vertrag_vorhanden,
         einwilligung_vorhanden: einwilligung,
         // Prüfschritt 5 asks whether the consent's own *contents* are plausible
@@ -624,14 +804,16 @@ async fn evaluate_anfrage(
         // say here and says nothing, rather than echoing Prüfschritt 4's answer
         // into a question it did not ask.
         einwilligung_plausibel: None,
-        // Device capability is not in any mako store either — asserting `false`
-        // would refuse on a guess.
-        geraetetechnik_geeignet: true,
+        // Prüfschritt 6 — the Gerätetechnik, from the Messlokation's own meters.
+        // A 4.6.2 product without an iMS cannot be served (UC 4.1.1
+        // Vorbedingung) and neither can a direction the meter has no register
+        // for; anything mako cannot establish escalated above.
+        geraetetechnik_geeignet: geraete,
         gebuendelte_ebene: gebuendelt,
         msb_aller_messlokationen: buendel_einheitlich,
     };
 
-    let decision = esa::pruefe_anfrage(&anfrage);
+    let decision = wertebestellung::pruefe_anfrage(&anfrage);
     if matches!(decision, mako_pruefung::msb::MsbEntscheidung::Accept(_)) {
         // The tree survived, but its positive exit is „Angebot zur Anfrage
         // erstellen" and the QUOTES carries no Antwortcode. Bindungsfrist,
@@ -1133,12 +1315,12 @@ mod tests {
     /// so the module must not collapse the two.
     #[test]
     fn a_started_delivery_refuses_the_storno_per_betriebsart() {
-        use mako_pruefung::msb::esa;
+        use mako_pruefung::esa::wertebestellung;
         for (abo, expected) in [
             (mako_wim::esa::Abonnement::StartAbo, "A02"),
             (mako_wim::esa::Abonnement::OhneAbo, "A03"),
         ] {
-            let d = esa::pruefe_stornierung(&esa::EsaStornierung {
+            let d = wertebestellung::pruefe_stornierung(&wertebestellung::EsaStornierung {
                 bestellung_bestaetigt: true,
                 art: abo.bestellart(),
                 uebermittlung_begonnen: true,
@@ -1179,6 +1361,41 @@ mod tests {
         assert!(
             answer_command(19_011).is_none(),
             "outbound PIDs are not ours"
+        );
+    }
+
+    /// **The Pflicht rule is not the operator's to override.** BNetzA
+    /// *Mitteilung Nr. 3* removed the MSB's discretion over the seven
+    /// Pflichtprodukte and §34 Abs. 2 S. 2 Nr. 10 MsbG makes serving an ESA a
+    /// mandatory Zusatzleistung — so an empty catalogue must never become a
+    /// refusal, and „Pflicht" is dated: `077 1` was Optional until 06.08.2024,
+    /// and a Vergangenheitswerte-Bestellung is judged against the period the
+    /// values are wanted for.
+    #[test]
+    fn a_pflichtprodukt_is_served_whatever_the_catalogue_says() {
+        let p = mako_wim::esa::messprodukt("9991 00000 077 1").expect("Pflichtprodukt 077 1");
+        assert!(p.ist_pflicht_am(time::macros::date!(2026 - 03 - 01)));
+        // …and before the cut-over it is the MSB's own decision again, which is
+        // exactly when the catalogue is the whole answer.
+        assert!(!p.ist_pflicht_am(time::macros::date!(2024 - 08 - 05)));
+
+        // `E_0252` Prüfschritt 1 branches past Prüfschritt 2 for a
+        // Pflichtprodukt, so the catalogue is never consulted for one there —
+        // even when the catalogue says the MSB does not carry it.
+        use mako_pruefung::esa::wertebestellung;
+        let entschieden = wertebestellung::pruefe_anfrage(&wertebestellung::EsaAnfrage {
+            pflichtprodukt: true,
+            messprodukt_angeboten: Some(false),
+            vertrag_vorhanden: true,
+            einwilligung_vorhanden: Some(true),
+            einwilligung_plausibel: Some(true),
+            geraetetechnik_geeignet: true,
+            gebuendelte_ebene: false,
+            msb_aller_messlokationen: None,
+        });
+        assert!(
+            matches!(entschieden, mako_pruefung::msb::MsbEntscheidung::Accept(_)),
+            "a Pflichtprodukt cannot be refused with A02: {entschieden:?}"
         );
     }
 }

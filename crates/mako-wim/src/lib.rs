@@ -14,6 +14,7 @@
 //! | Ende MSB / Abmeldung (**MSBA → NB**) | 55051 → 55052/55053 | UTILMD | `geraetewechsel` | `E_0202` |
 //! | Verpflichtungsanfrage (NB → **gMSB**) | 55168 → 55169/55170 | UTILMD | `geraetewechsel` | `E_0240` |
 //! | Weiterverpflichtung (**NB → MSBA**) | 17002 → 19003/19004 | ORDERS/ORDRSP | `weiterverpflichtung` | `E_0203` |
+//! | Ersteinbau iMS (**gMSB → wMSB**) | 21029 → 21030/21031 | IFTSTA | `ersteinbau` | `E_0233` |
 //! | Geräteübernahme Bestellung (MSBN → MSBA) | 17001 → 19001/19002 | ORDERS/ORDRSP | `geraeteubernahme` | `E_0247` |
 //! | Anzeige Gerätewechselabsicht (MSBN → MSBA) | 17009 → 19015/19016 | ORDERS/ORDRSP | `geraeteubernahme` | `E_0204` |
 //! | Messlokationsänderung (NB/LF → MSB) | 17011/17118 → 19005/19006 | ORDERS/ORDRSP | `technik_aenderung` | `E_0249`/`E_0250` |
@@ -100,6 +101,7 @@
 #![allow(clippy::items_after_statements)]
 
 pub mod consent;
+pub mod ersteinbau;
 pub mod esa;
 pub mod esa_wertebestellung;
 pub mod geraeteubernahme;
@@ -413,6 +415,16 @@ impl mako_engine::builder::EngineModule for WimModule {
             router.register(pid, rechnungsabwicklung::WORKFLOW_NAME);
         }
 
+        // IFTSTA 21032 „Antwort auf das Angebot" — the *other* half of the
+        // Prozessschritt ORDERS 17005 answers. 17005 is the LF's acceptance
+        // and carries no code; 21032 is its refusal and carries `E_0205` resp.
+        // `E_0208` (PID-Übersicht 4.0 lfd. Nr. 30930/31020). Registering only
+        // 17005 records every yes and dead-letters every no.
+        router.register(
+            rechnungsabwicklung::RECHNUNGSABWICKLUNG_ABLEHNUNG_PID,
+            rechnungsabwicklung::WORKFLOW_NAME,
+        );
+
         // ── ESA Wertebestellung (WiM Teil 2 Kap. 4) ───────────────────────
         //
         // The two sides register disjoint PIDs, so an integrated deployment can
@@ -521,6 +533,22 @@ impl mako_engine::builder::EngineModule for WimModule {
             router.register(pid, "wim-device-change");
         }
 
+        // Ersteinbau eines iMS in eine bestehende Messlokation — WiM Strom
+        // Teil 1 Kap. 3.5 (IFTSTA 21029 → 21030/21031, `E_0233`).
+        //
+        // Registered unconditionally because both sides of it are MSB work and
+        // a deployment can hold either: the grundzuständiger MSB sends the
+        // Vorabinformation and receives the answer, the wettbewerblicher MSB
+        // receives it and owes one in three Werktagen. Nothing else claims
+        // 21029–21031 — the Anwendungsübersicht 4.0 publishes them under
+        // „WiM Strom Teil 1 / Ersteinbau" alone.
+        //
+        // Strom only: there is no iMS rollout obligation in Gas, so AWH WiM Gas
+        // 2.0 has no Kap. 3.5 equivalent.
+        for &pid in ersteinbau::ERSTEINBAU_PIDS {
+            router.register(pid, ersteinbau::WORKFLOW_NAME);
+        }
+
         // `wim-steuerungsauftrag` is intentionally NOT registered here.
         //
         // The Steuerungsauftrag workflow is driven exclusively by the BDEW
@@ -589,7 +617,8 @@ impl mako_engine::builder::EngineModule for WimModule {
             },
             ProfileRequirement {
                 message_type: "IFTSTA",
-                label: "IFTSTA Statusmeldung (WiM 21007, 21009–21015, 21018, 21029–21032)",
+                label: "IFTSTA (WiM MSB-Wechsel 21007/21009–21013/21018/21036, \
+                        Ersteinbau iMS 21029–21031, Durchführungsmeldung 21025/21027)",
             },
             ProfileRequirement {
                 message_type: "INVOIC",

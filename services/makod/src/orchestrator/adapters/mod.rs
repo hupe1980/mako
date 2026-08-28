@@ -470,6 +470,42 @@ fn iftsta_zuordnungsbeginn(i: &edi_energy::messages::iftsta::IftstaMessage) -> O
         .map(|raw| raw.chars().filter(char::is_ascii_digit).take(8).collect())
 }
 
+/// The Messlokation an inbound WiM IFTSTA addresses — `LOC`, component 1.
+///
+/// The IFTSTA AHB profile carries exactly one `LOC` for the WiM Use-Cases, and
+/// which kind of location it holds depends on the process: a MaLo for the GPKE
+/// Sperrung and Lieferantenwechsel legs, a **MeLo** for everything in WiM. The
+/// caller knows which it asked for; this only reads the element.
+fn iftsta_location(i: &edi_energy::messages::iftsta::IftstaMessage) -> Option<String> {
+    i.segments()
+        .iter()
+        .find(|s| s.tag == "LOC")
+        .and_then(|s| s.component_str(1, 0))
+        .filter(|v| !v.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// The Antwortcode an IFTSTA answer leg carries — `SG4 STS`, DE 9013.
+///
+/// Used by the Ersteinbau answers 21030/21031, whose `E_0233` code is the whole
+/// content of the message: the PID says only which side of the axis the answer
+/// sits on, and three of the four codes ride the same PID.
+///
+/// `None` when the segment is absent, which is a finding rather than a default
+/// — the caller decides what an answer with no readable code means.
+fn iftsta_antwortcode(i: &edi_energy::messages::iftsta::IftstaMessage) -> Option<String> {
+    i.segments()
+        .iter()
+        .filter(|s| s.tag == "STS")
+        .find_map(|s| {
+            // `STS+E01++<code>:<Codeliste>` — the code is the third composite.
+            s.component_str(2, 0)
+                .or_else(|| s.component_str(1, 0))
+                .filter(|v| !v.is_empty())
+        })
+        .map(ToOwned::to_owned)
+}
+
 /// The Versionsangabe of the Summenzeitreihe an inbound MaBiS IFTSTA refers to.
 ///
 /// `SG4 RFF+AUU`, DE 1154 `an17`. The MIG is explicit that this *is* the
@@ -737,6 +773,7 @@ coverage_table! {
     wim_stammdaten_uebermittlung_registry,
     wim_technik_aenderung_registry,
     wim_weiterverpflichtung_registry(mako_engine::types::Sparte::Strom),
+    wim_ersteinbau_registry(),
     wim_wertebestellung_registry,
 }
 
@@ -958,6 +995,56 @@ fn dtm<'a>(segs: &'a [OwnedSegment], qualifier: &str) -> Option<&'a str> {
     segs.iter()
         .find(|s| s.tag == "DTM" && s.component_str(0, 0) == Some(qualifier))
         .and_then(|s| s.component_str(0, 1))
+}
+
+/// The `SG1 RFF+ACE` „Nummer des zugehörigen Dokuments" of an INVOIC.
+///
+/// **Muss** on the WiM- and MSB-Rechnung (INVOIC AHB 1.0b, segment 00020), and
+/// what it points at follows the `IMD+7081` Rechnungstyp:
+///
+/// | `IMD+7081` | `RFF+ACE` names | Fundstelle |
+/// |---|---|---|
+/// | `KON` Abrechnung von Konfigurationen (Universalbestellprozess) | the **ORDERS** | `[66] ∧ [501]` |
+/// | `MSB` Rechnung für Messstellenbetrieb | the **QUOTES** | `[73] ∧ [508]` |
+/// | `TEC` Abrechnung von Technik | the **ORDERS** | `[87] ∧ [501]` |
+///
+/// BO4E has no field for it — `Rechnung` models the document, not the order it
+/// answers — so it travels as a process fact rather than being smuggled into
+/// the BO4E object. `E_0264` Prüfschritt 40 („Basiert die Rechnung auf einer
+/// Bestellung?") is what needs it, and without it that Prüfschritt could only
+/// ever be assumed true.
+fn rff_ace(segs: &[OwnedSegment]) -> Option<String> {
+    // `RFF` DE 1153/1154 are components of one `C506`.
+    segs.iter()
+        .find(|s| s.tag == "RFF" && s.component_str(0, 0) == Some("ACE"))
+        .and_then(|s| s.component_str(0, 1))
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned)
+}
+
+/// The `IMD+7081` Rechnungstyp of an INVOIC — **Muss** on every PID of the AHB.
+///
+/// `KON` („Abrechnung von Konfigurationen (Universalbestellprozess)") is the
+/// **ESA** Use-Case of WiM Teil 2 Kap. 4.5, stated on the wire: the Kapitel-4.6
+/// Messprodukte *are* the Konfigurationen, and the Universalbestellprozess is
+/// the REQOTE/QUOTES/ORDERS handshake that ordered them. `MSB` is the
+/// Messstellenbetrieb billed toward the NB or the LF, `TEC` the Änderung der
+/// Technik.
+///
+/// **One PID, five Use-Cases.** The recipient's Marktrolle narrows 31009 to at
+/// most two (§2.13 gives every Marktrolle its own MP-ID); this element picks
+/// between those. `TEC` is a Leistung of the MSB's Preisblatt B and resolves to
+/// `E_0273`/`E_0270`, where `MSB` resolves to `E_0566`/`E_0210` — trees whose
+/// codes mean something else. See `mako_pruefung::codes::rechnungspruefung`.
+fn imd_rechnungstyp(segs: &[OwnedSegment]) -> Option<String> {
+    // `IMD+7077+C272+C273`: DE 7081 is the first component of `C272`, so the
+    // wire reads `IMD++KON` — element 0 (7077) empty, the code in element 1.
+    // That is the same shape the ORDERS/ORDRSP builders emit.
+    segs.iter()
+        .find(|s| s.tag == "IMD")
+        .and_then(|s| s.component_str(1, 0))
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned)
 }
 
 /// Find the value of a `DTM` segment within a LIN group (slices of references).
@@ -1615,6 +1702,57 @@ mod fernsteuerbarkeit_tests {
     /// `CAV+<7111>`.
     fn cav(code: &str) -> OwnedSegment {
         seg("CAV", vec![vec![code]])
+    }
+
+    /// **The invoice names the order it answers, and its own Use-Case.**
+    ///
+    /// `SG1 RFF+ACE` is Muss on the WiM- and MSB-Rechnung (INVOIC AHB 1.0b
+    /// segment 00020) and carries the ORDERS Dokumentennummer when the
+    /// Rechnungstyp is `KON`; `IMD+7081` = `KON` („Abrechnung von
+    /// Konfigurationen (Universalbestellprozess)") is the ESA Use-Case of
+    /// WiM Teil 2 Kap. 4.5 stated on the wire.
+    ///
+    /// BO4E has no field for either, so both would be lost silently — and with
+    /// them `E_0264` Prüfschritt 40 („Basiert die Rechnung auf einer
+    /// Bestellung?") and the discriminator between the three Use-Cases PID
+    /// 31009 carries.
+    #[test]
+    fn the_invoice_names_its_order_and_its_use_case() {
+        // `RFF` DE 1153/1154 are components of one `C506`: `RFF+ACE:ESABE…`.
+        let rff = |qual: &str, val: &str| seg("RFF", vec![vec![qual, val]]);
+        // `IMD+7077+C272+…` — the code sits in element 1, so `IMD++KON`.
+        let imd = |code: &str| seg("IMD", vec![vec![""], vec![code]]);
+
+        let segs = vec![
+            rff("Z13", "31009"),
+            imd("KON"),
+            rff("ACE", "ESABE0000000001"),
+        ];
+        assert_eq!(rff_ace(&segs).as_deref(), Some("ESABE0000000001"));
+        assert_eq!(imd_rechnungstyp(&segs).as_deref(), Some("KON"));
+
+        // `RFF+Z13` is the Prüfidentifikator and must not be mistaken for the
+        // order reference — the qualifier is the whole discriminator.
+        assert_eq!(rff_ace(&[rff("Z13", "31009")]), None);
+
+        // The Messstellenbetrieb billed toward an NB or an LF is `MSB`, and its
+        // `RFF+ACE` names the QUOTES rather than the ORDERS (hint `[508]`).
+        let msb = vec![imd("MSB"), rff("ACE", "MSBANG00000001")];
+        assert_eq!(imd_rechnungstyp(&msb).as_deref(), Some("MSB"));
+
+        // `TEC` „Abrechnung von Technik" is the fourth and fifth Use-Case of
+        // 31009: a Leistung of the MSB's Preisblatt B, ordered through the AWH
+        // „Änderung der Technik an Lokationen" round. It is what tells
+        // `E_0273`/`E_0270` from `E_0566`/`E_0210`, and the recipient's
+        // Marktrolle cannot — see `mako_pruefung::codes::rechnungspruefung`.
+        let tec = vec![imd("TEC"), rff("ACE", "TECBST00000001")];
+        assert_eq!(imd_rechnungstyp(&tec).as_deref(), Some("TEC"));
+
+        // An invoice that carries neither answers `None` rather than a guess:
+        // both are Muss, and their absence is a conformance defect the
+        // Prüfschritte turn into a refusal.
+        assert_eq!(rff_ace(&[]), None);
+        assert_eq!(imd_rechnungstyp(&[]), None);
     }
 
     #[test]

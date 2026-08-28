@@ -230,6 +230,10 @@ async fn anmeldung_decisions_insert_and_list() {
 ///
 /// The case log is what makes that possible — a decision engine with no memory
 /// between runs cannot count Werktage or evidence the daily attempts.
+///
+/// `E_0608` is an NB tree, so `pg::neuanlage` compiles only for an NB build —
+/// an `msb-only` or `lf-only` binary has no Prüflauf to remember.
+#[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
 #[tokio::test]
 async fn neuanlage_pruflauf_defers_records_and_resolves() {
     use mako_pruefung::nb::types::Marktlokationsart;

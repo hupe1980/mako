@@ -713,11 +713,20 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
     // Delivery surveillance — the measuring points that have gone quiet. The
     // V-rules can only judge data that arrived; this is the other half.
     if cfg.surveillance.enabled {
+        // The Typ-2 half resolves each subscription's Messprodukt at `marktd`
+        // so it can use the cadence that product publishes (Codeliste 1.4
+        // Kap. 4.6) instead of one threshold for every subscription.
+        let marktd_for_surveillance = mako_markt::marktd_client::MarktdClient::new(
+            &cfg.marktd_url,
+            cfg.marktd_api_key.clone(),
+            mako_service::http::default_client(),
+        );
         crate::surveillance::spawn_surveillance_worker(
             repo_for_surveillance,
             Some(typ2_for_surveillance),
             cfg.surveillance.clone(),
             smgw_tenant.clone(),
+            Some(marktd_for_surveillance),
             smgw_webhook_url.clone(),
             smgw_webhook_secret.clone(),
             cfg.shutdown.clone(),

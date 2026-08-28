@@ -60,6 +60,10 @@ pub struct HandlerState {
     pub pool: sqlx::PgPool,
     /// Operator tenant written to every row.
     pub tenant: String,
+    /// The Marktrolle this deployment receives invoices in — `[identity]
+    /// marktrolle`. Half of the PID-31009 Use-Case lookup; `IMD+7081` is the
+    /// other half. See [`crate::config::EmpfaengerRolle`].
+    pub marktrolle: crate::config::EmpfaengerRolle,
     /// ERP webhook for `de.invoic.receipt.*` CloudEvents.
     pub erp_webhook_url: Option<String>,
     /// Standard Webhooks signing secret for outbound ERP deliveries.
@@ -137,7 +141,32 @@ struct Incoming {
     malo_id: Option<String>,
     rechnung: Rechnung,
     rechnung_json: serde_json::Value,
+    /// `SG1 RFF+ACE` — the order this invoice answers, Muss on the WiM- and
+    /// MSB-Rechnung (INVOIC AHB 1.0b segment 00020). BO4E has no field for it,
+    /// so it rides the process payload; `E_0264` Prüfschritt 40 is what
+    /// compares it against the order on record.
+    bestellung_ref: Option<String>,
+    /// `IMD+7081` — the Rechnungstyp. `KON` („Abrechnung von Konfigurationen
+    /// (Universalbestellprozess)") is the **ESA** Use-Case of WiM Teil 2
+    /// Kap. 4.5 stated on the wire; `MSB` is the Messstellenbetrieb billed
+    /// toward NB or LF. One PID, three Use-Cases.
+    rechnungstyp: Option<String>,
 }
+
+/// `IMD+7081` = `KON` „Abrechnung von Konfigurationen (Universalbestellprozess)"
+/// — the ESA billing Use-Case, as the wire states it.
+const RECHNUNGSTYP_ESA: &str = "KON";
+
+/// `IMD+7081` = `TEC` „Abrechnung von Technik" — a Leistung of the MSB's
+/// **Preisblatt B**, ordered through the AWH „Änderung der Technik an
+/// Lokationen" round and billed on the same PID 31009 as the
+/// Messstellenbetrieb.
+///
+/// This is the discriminator the AHB gives for the fourth and fifth Use-Case of
+/// 31009 (INVOIC AHB 1.0b, segment `IMD 7081`). Without it a Preisblatt-B
+/// invoice is checked against `E_0566`/`E_0210` — trees whose codes mean
+/// something else — instead of `E_0273`/`E_0270`.
+const RECHNUNGSTYP_TECHNIK: &str = "TEC";
 
 /// Check one INVOIC and answer it.
 async fn process_invoic(
@@ -157,7 +186,11 @@ async fn process_invoic(
     };
 
     let received_at = OffsetDateTime::now_utc();
-    let report = run_check(state, route, &incoming).await;
+    let Checked {
+        report,
+        markt_antwort,
+        storno_antwort,
+    } = run_check(state, route, &incoming, process_id).await;
     let checked_at = OffsetDateTime::now_utc();
 
     let verdict = Verdict::of(
@@ -216,21 +249,98 @@ async fn process_invoic(
         return;
     }
 
-    // ── Answer the market partner ────────────────────────────────────────────
+    // ── Answer the market partner — or deliberately do not ──────────────────
+    //
+    // `E_0267` („Prüfen, **ob** Antwort auf Stornierung erforderlich") has a
+    // third outcome the other trees do not: **no message at all**. A Storno of
+    // an invoice this ESA had itself refused with a Nicht-Zahlungsavis, or had
+    // not answered yet, needs no answer — „dann ist auf die Stornorechnung
+    // keine Antwort zu senden" (Prüfschritt 80).
+    //
+    // The receipt is written and the ERP is told either way; only the market
+    // message is withheld. Sending one anyway answers a message the MSB is not
+    // waiting on, and now that REMADVs actually reach the wire that is a
+    // message the counterparty has to reconcile away.
+    if let Some(mako_pruefung::esa::StornoAntwort::KeineAntwort { grund }) = storno_antwort {
+        info!(
+            %process_id, pid, grund,
+            "invoicd: Stornorechnung needs no answer (E_0267 Prüfschritt 80) —              receipt recorded, no REMADV sent"
+        );
+        emit_receipt_event(
+            state,
+            &PaymentEventCtx {
+                process_id,
+                pid,
+                direction: pg::receipts::DIRECTION_INBOUND,
+                sender_mp_id: &incoming.sender_mp_id,
+                outcome: verdict.label,
+                pay_by: incoming.rechnung.faelligkeitsdatum_date(),
+                findings_count: report.findings.len(),
+                dispatched: false,
+            },
+        )
+        .await;
+        return;
+    }
+
     let (command, payload) = if verdict.dispute {
         let reason = dispute_reason(&report.findings);
-        let antwort_code = dispute_antwortcode(&report.findings);
-        warn!(%process_id, pid, %reason, antwort_code, "invoicd: disputing invoice");
-        (
-            route.reject,
-            serde_json::json!({
-                "invoice_ref": incoming.invoice_ref,
-                "ablehnungsgrund": reason,
-                // `SG7 AJT` — DE 4465 the code, DE 1082 the EBD it comes from.
-                "antwort_code": antwort_code,
-                "antwort_ebd": mako_pruefung::codes::EBD_NETZNUTZUNGSRECHNUNG,
-            }),
-        )
+        let mut answer = serde_json::json!({
+            "invoice_ref": incoming.invoice_ref,
+            "ablehnungsgrund": reason,
+        });
+        let empfaenger = rechnung_empfaenger(state.marktrolle, markt_antwort.as_ref());
+        // `IMD+7081` = `TEC` marks a Leistung of the Preisblatt B; `MSB` (or
+        // nothing) the Messstellenbetrieb itself.
+        let gegenstand = rechnungsgegenstand(incoming.rechnungstyp.as_deref());
+        match abweichungsgrund(
+            pid,
+            empfaenger,
+            gegenstand,
+            markt_antwort.as_ref(),
+            storno_antwort.as_ref(),
+            &report.findings,
+        ) {
+            Some(grund) => {
+                warn!(
+                    %process_id, pid,
+                    tree = %grund.ebd, remadv_pid = grund.remadv_pid,
+                    codes = ?grund.befunde.iter().map(|b| &b.code).collect::<Vec<_>>(),
+                    %reason,
+                    "invoicd: disputing invoice"
+                );
+                if let Some(obj) = answer.as_object_mut() {
+                    // `SG7 AJT` — DE 4465 the code(s), DE 1082 the EBD they come
+                    // from — plus the Prüfidentifikator the answer's own shape
+                    // requires (33002 for one code, 33003/33004 for a set).
+                    obj.insert("antwort_ebd".to_owned(), serde_json::json!(grund.ebd));
+                    obj.insert(
+                        "antwort_code".to_owned(),
+                        serde_json::json!(grund.befunde.first().map(|b| &b.code)),
+                    );
+                    obj.insert(
+                        "antwort_befunde".to_owned(),
+                        serde_json::to_value(&grund.befunde).unwrap_or_default(),
+                    );
+                    obj.insert("remadv_pid".to_owned(), serde_json::json!(grund.remadv_pid));
+                }
+            }
+            None => {
+                // No tree this service can resolve a code in. `SG7 AJT` is Muss
+                // on every Nicht-Zahlungsavis, and a code the named tree does
+                // not publish is a non-conformant answer rather than an
+                // approximate one — `A70` is `E_0406` Prüfschritt 900 and means
+                // nothing in `E_0210`. So the refusal goes out without one and
+                // says so, for an operator to complete.
+                warn!(
+                    %process_id, pid, %reason,
+                    "invoicd: disputing invoice without an Antwortcode — no walked \
+                     Entscheidungsbaum for this PID and Empfänger; SG7 AJT must be \
+                     supplied by an operator before the REMADV is conformant"
+                );
+            }
+        }
+        (route.reject, answer)
     } else {
         (
             route.accept,
@@ -320,6 +430,14 @@ async fn extract(
 
     Ok(Incoming {
         invoice_ref,
+        bestellung_ref: data["bestellung_ref"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned),
+        rechnungstyp: data["rechnungstyp"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned),
         sender_mp_id: data["sender_mp_id"].as_str().unwrap_or_default().to_owned(),
         receiver_gln: data["receiver_gln"]
             .as_str()
@@ -331,8 +449,318 @@ async fn extract(
     })
 }
 
-/// Run the route's plausibility check.
-async fn run_check(state: &HandlerState, route: &PidRoute, inc: &Incoming) -> CheckReport {
+/// What a checked invoice produced: the operator-facing report, and — when the
+/// invoice belongs to a Use-Case whose tree this service walks — the **market**
+/// answer, in published Antwortcodes.
+///
+/// The two are not the same statement. [`CheckReport`] is mako's own
+/// vocabulary and drives the ERP event and the § 147 AO receipt; the
+/// [`RechnungsAntwort`](mako_pruefung::esa::RechnungsAntwort) is what the
+/// counterparty's own systems resolve, and it also says which REMADV
+/// Prüfidentifikator the answer must ride.
+struct Checked {
+    report: CheckReport,
+    markt_antwort: Option<mako_pruefung::esa::RechnungsAntwort>,
+    /// `E_0267` on an inbound Stornorechnung — **including its third outcome**,
+    /// which is that no answer is owed at all.
+    storno_antwort: Option<mako_pruefung::esa::StornoAntwort>,
+}
+
+/// Run the route's plausibility check, and the market tree where there is one.
+///
+/// # The ESA branch, and what selects it
+///
+/// INVOIC 31009 is „MSB-Rechnung" toward the **NB, the LF or the ESA** (WiM
+/// Teil 1 Kap. 6.2 / Teil 2 Kap. 4.5), and the three share neither a price
+/// basis nor an Entscheidungsbaum. `PreisblattMessung` is what an MSB
+/// *publishes* toward the NB and the LF; there is none for the Kapitel-4.6
+/// Messprodukte, because § 35 MsbG leaves the Entgelt for a Zusatzleistung to
+/// be agreed per request. An ESA running the sheet path therefore got
+/// `TariffNotFound` and **no price check at all**.
+///
+/// What it has instead is the QUOTES 15003 it ordered against, and **an
+/// accepted offer on record for (this MSB, us) is what selects the branch** —
+/// not a configured role. It is precisely the statement „we are the ESA in this
+/// relationship, and this is what we agreed to pay", and it is the same fact
+/// that makes the answer window the 4. WT before the Zahlungsziel rather than
+/// the LF's *zum* Zahlungsziel.
+async fn run_check(
+    state: &HandlerState,
+    route: &PidRoute,
+    inc: &Incoming,
+    process_id: Uuid,
+) -> Checked {
+    // ── The ESA's Stornorechnung: `E_0267` ───────────────────────────────────
+    //
+    // A Storno is answered — or deliberately **not** answered — on how the
+    // *original* was answered, which is a fact about this ESA's own books
+    // rather than about the document. `esa_storno_fakten` reads it from the
+    // receipts table; an original nothing can be found for leaves the tree at
+    // Prüfschritt 10 and refuses, which is the honest answer.
+    if invoic_checker::is_stornierung(&inc.rechnung)
+        && let Some(fakten) = esa_storno_fakten(state, inc).await
+    {
+        return Checked {
+            report: InvoicCheckEngine::check_storno(route.pid, &inc.rechnung, &state.check_config),
+            markt_antwort: None,
+            // A Storno belongs to whichever Use-Case issued the invoice it
+            // cancels, so the family is the same lookup — and `E_0267` /
+            // `E_0272` / `E_0275` are step-for-step identical, so an
+            // unresolvable family falls back to the ESA one rather than
+            // skipping the check.
+            storno_antwort: Some(invoic_checker::antwort_auf_stornorechnung(
+                familie_fuer(route.pid, state.marktrolle, inc.rechnungstyp.as_deref())
+                    .unwrap_or(mako_pruefung::rechnung::ESA),
+                &inc.rechnung,
+                &fakten,
+            )),
+        };
+    }
+    if route.check == CheckKind::Messung && !invoic_checker::is_stornierung(&inc.rechnung) {
+        let billing_date = billing_date_of(&inc.rechnung);
+        let agreed = esa_preise(state, inc, billing_date).await;
+        // **The wire states the Use-Case.** `IMD+7081` = `KON` („Abrechnung von
+        // Konfigurationen (Universalbestellprozess)") is the ESA billing of WiM
+        // Teil 2 Kap. 4.5 — the Kapitel-4.6 Messprodukte *are* the
+        // Konfigurationen, and the Universalbestellprozess is the handshake
+        // that ordered them. `MSB` is the Messstellenbetrieb billed toward the
+        // NB or the LF.
+        //
+        // An accepted offer on record corroborates it, and is the fallback for
+        // a sender that omitted the qualifier — but it must not be the *only*
+        // signal: the 4-Werktage answer window is owed whether or not mako
+        // filed the offer, and treating an unfiled subscription as the LF case
+        // gives away four Werktage that do not exist.
+        if inc.rechnungstyp.as_deref() == Some(RECHNUNGSTYP_ESA) || !agreed.is_empty() {
+            // The ÜT — the day the Übertragungsdatei was received — is what
+            // every WiM Frist is measured from, and `E_0264` Prüfschritte 20
+            // and 70 compare against it.
+            let mut fakten =
+                invoic_checker::EmpfaengerFakten::neu(OffsetDateTime::now_utc().date());
+            // Prüfschritt 50 — `A05`. Answerable from this service's own
+            // receipt store for every family, so it is answered here rather
+            // than left defaulted.
+            fakten.rechnungsnummer_bereits_verwendet =
+                rechnungsnummer_bereits_verwendet(state, inc, process_id).await;
+            // **Prüfschritt 40 is answerable, not assumed.** WiM Teil 2
+            // UC 4.5.1: „Eine Rechnung referenziert auf die zugrundeliegende
+            // Bestellung", and INVOIC AHB 1.0b makes `SG1 RFF+ACE` Muss on the
+            // 31009 carrying the ORDERS Dokumentennummer (`IMD++KON` → hint
+            // `[501]`). So the invoice names its order and mako holds the
+            // orders it placed — the two either match or the invoice bills
+            // against something this ESA never ordered.
+            //
+            // An invoice that names **no** order at all is Prüfschritt 40 by
+            // itself: the reference is Muss, and its absence is exactly the
+            // „auf keiner Bestellung basiert" the code is for.
+            fakten.bestellung_bekannt = match inc.bestellung_ref.as_deref() {
+                Some(r) => state
+                    .marktd
+                    .esa_messprodukt_of_bestellung(r)
+                    .await
+                    .unwrap_or_else(|e| {
+                        // A marktd outage must not refuse a correct invoice:
+                        // the ESA would be stating to the market that the MSB
+                        // billed against no order, on evidence it does not have.
+                        warn!(error = %e, bestellung_ref = r,
+                              "invoicd: order lookup failed — E_0264 Prüfschritt 40 passed");
+                        Some(r.to_owned())
+                    })
+                    .is_some(),
+                None => false,
+            };
+            return Checked {
+                report: InvoicCheckEngine::check_esa_rechnung(
+                    &inc.sender_mp_id,
+                    &inc.rechnung,
+                    &agreed,
+                    &state.check_config,
+                ),
+                markt_antwort: Some(invoic_checker::antwort_auf_rechnung(
+                    mako_pruefung::rechnung::ESA,
+                    &inc.rechnung,
+                    &agreed,
+                    &fakten,
+                    &state.check_config,
+                    mako_pruefung::HolidayCalendar::BdewMaKo,
+                )),
+                storno_antwort: None,
+            };
+        }
+
+        // ── Abrechnung der Leistungen des Preisblatts B ───────────────────────
+        //
+        // `IMD+7081` = `TEC` „Abrechnung von Technik": the same PID 31009, a
+        // different Use-Case, and its own quartet of trees — `E_0270`/`E_0271`/
+        // `E_0276`/`E_0272` toward an LF, `E_0273`/`E_0274`/`E_0277`/`E_0275`
+        // toward an NB (AWH „Prozesse zur Änderung der Technik an Lokationen"
+        // Kap. 9.3/9.4). The walk is the same one the ESA family runs; only the
+        // alphabet and two Kopf-Prüfschritte differ.
+        if let Some(familie) =
+            familie_fuer(route.pid, state.marktrolle, inc.rechnungstyp.as_deref())
+            && familie != mako_pruefung::rechnung::ESA
+        {
+            let fakten = preisblatt_b_fakten(state, inc, process_id).await;
+            return Checked {
+                report: run_report(state, route, inc).await,
+                markt_antwort: Some(invoic_checker::antwort_auf_rechnung(
+                    familie,
+                    &inc.rechnung,
+                    &agreed,
+                    &fakten,
+                    &state.check_config,
+                    mako_pruefung::HolidayCalendar::BdewMaKo,
+                )),
+                storno_antwort: None,
+            };
+        }
+    }
+    Checked {
+        report: run_report(state, route, inc).await,
+        markt_antwort: None,
+        storno_antwort: None,
+    }
+}
+
+/// What the recipient's own records contribute to a **Preisblatt-B** invoice.
+///
+/// Two Prüfschritte the ESA trees do not publish:
+///
+/// - **80** — is the Preisblatt version the invoice bills against on file? The
+///   sheet arrives as PRICAT 27002, where it is called „Preisblatt Technik".
+/// - **90** — was this Abrechnungszeitraum already settled by an accepted, not
+///   cancelled invoice? The code's Hinweis makes naming that Rechnungsnummer
+///   part of the answer, so this is the number and not a flag.
+///
+/// Both are `None`: neither store exists here — 80 wants a Preisblatt-B version
+/// register in `marktd`, 90 an `invoic_receipts` query keyed on
+/// (Rechnungssteller, Abrechnungszeitraum). `None` never refuses, so the
+/// remaining twenty-two Prüfschritte decide.
+async fn preisblatt_b_fakten(
+    state: &HandlerState,
+    inc: &Incoming,
+    process_id: Uuid,
+) -> invoic_checker::EmpfaengerFakten {
+    let mut fakten = invoic_checker::EmpfaengerFakten::neu(OffsetDateTime::now_utc().date());
+    // Prüfschritt 40 — „Basiert die Rechnung auf einer Bestellung des
+    // Rechnungsempfängers?" A Preisblatt-B Leistung is always billed against a
+    // confirmed ORDERS 17011, and INVOIC AHB 1.0b makes `SG1 RFF+ACE` Muss, so
+    // an invoice naming no order fails the step on the wire alone.
+    fakten.bestellung_bekannt = inc.bestellung_ref.is_some();
+    fakten.rechnungsnummer_bereits_verwendet =
+        rechnungsnummer_bereits_verwendet(state, inc, process_id).await;
+    fakten
+}
+
+/// **Prüfschritt 50** — `A05`, „Rechnungsnummer wurde bereits verwendet".
+///
+/// Answered from this service's own receipt store, which is the only place that
+/// knows. A lookup failure answers `false`: a database blip is not evidence
+/// that a number was reused, and `A05` on a correct invoice is a binding
+/// refusal to the market.
+async fn rechnungsnummer_bereits_verwendet(
+    state: &HandlerState,
+    inc: &Incoming,
+    process_id: Uuid,
+) -> bool {
+    let Some(nummer) = inc.rechnung.rechnungsnummer.as_deref() else {
+        return false;
+    };
+    match pg::receipts::rechnungsnummer_bereits_verwendet(
+        &state.pool,
+        &state.tenant,
+        &inc.sender_mp_id,
+        nummer,
+        process_id,
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(err) => {
+            warn!(%err, "invoicd: Rechnungsnummer-Dublettenprüfung fehlgeschlagen — Prüfschritt 50 wird nicht geprüft");
+            false
+        }
+    }
+}
+
+/// The period an invoice settles decides which price sheet version applies.
+///
+/// Falling back to today rather than a fixed date keeps a Rechnung with no
+/// dates at all comparing against the sheet in force now, instead of one from a
+/// hard-coded year that quietly stops existing.
+fn billing_date_of(rechnung: &Rechnung) -> time::Date {
+    rechnung
+        .billing_period()
+        .map(|p| *p.start())
+        .or_else(|| rechnung.rechnungsdatum_date())
+        .unwrap_or_else(|| OffsetDateTime::now_utc().date())
+}
+
+/// How this ESA answered the invoice a Stornorechnung cancels — `E_0267`
+/// Prüfschritte 70/80, and the only thing that decides whether an answer is
+/// owed at all.
+///
+/// Returns `None` when the ESA branch does not apply: no accepted Angebot is on
+/// record for this MSB, so this is somebody else's Storno and the ordinary
+/// arithmetic path answers it. That is the same signal that selects the ESA
+/// branch for a 31009 — an offer on record *is* the statement „we are the ESA
+/// in this relationship".
+async fn esa_storno_fakten(
+    state: &HandlerState,
+    inc: &Incoming,
+) -> Option<invoic_checker::StornoEmpfaengerFakten> {
+    let billing_date = billing_date_of(&inc.rechnung);
+    if esa_preise(state, inc, billing_date).await.is_empty() {
+        return None;
+    }
+    let original = inc.rechnung.original_rechnungsnummer.as_deref()?;
+    // The receipt of the original carries the outcome we sent: `Ok` means a
+    // Zahlungsavis went out, `Dispute` a Nicht-Zahlungsavis, and no row at all
+    // means we never answered it.
+    let ursprungsantwort = match pg::receipt_outcome(&state.pool, &state.tenant, original).await {
+        Ok(Some(outcome)) if outcome == "Dispute" => {
+            mako_pruefung::esa::UrsprungsAntwort::Abgelehnt
+        }
+        Ok(Some(_)) => mako_pruefung::esa::UrsprungsAntwort::Zugestimmt,
+        Ok(None) => mako_pruefung::esa::UrsprungsAntwort::Unbeantwortet,
+        Err(e) => {
+            // Not a guess: without the original's outcome the tree cannot reach
+            // 70 or 80, and answering either way is wrong half the time.
+            warn!(error = %e, original, "invoicd: original receipt lookup failed — E_0267 skipped");
+            return None;
+        }
+    };
+    Some(invoic_checker::StornoEmpfaengerFakten {
+        ursprungsrechnung_bekannt: !matches!(
+            ursprungsantwort,
+            mako_pruefung::esa::UrsprungsAntwort::Unbeantwortet
+        ),
+        ..invoic_checker::StornoEmpfaengerFakten::neu(ursprungsantwort)
+    })
+}
+
+/// The accepted QUOTES 15003 of this (MSB, us) pair, as `(Artikel-ID, Preis)`.
+async fn esa_preise(
+    state: &HandlerState,
+    inc: &Incoming,
+    billing_date: time::Date,
+) -> Vec<(String, invoic_checker::amount::EuroAmount)> {
+    state
+        .marktd
+        .esa_preise(&inc.sender_mp_id, &state.tenant, billing_date)
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|p| {
+            Some((
+                p.artikel_id.clone(),
+                invoic_checker::amount::euro_from_decimal(p.betrag)?,
+            ))
+        })
+        .collect()
+}
+
+async fn run_report(state: &HandlerState, route: &PidRoute, inc: &Incoming) -> CheckReport {
     let pid = route.pid;
     let rechnung = &inc.rechnung;
 
@@ -343,61 +771,15 @@ async fn run_check(state: &HandlerState, route: &PidRoute, inc: &Incoming) -> Ch
         return InvoicCheckEngine::check_storno(pid, rechnung, &state.check_config);
     }
 
-    // The period the invoice settles decides which price sheet version applies.
-    // Falling back to today rather than a fixed date keeps a Rechnung with no
-    // dates at all comparing against the sheet in force now, instead of one
-    // from a hard-coded year that quietly stops existing.
-    let billing_date = rechnung
-        .billing_period()
-        .map(|p| *p.start())
-        .or_else(|| rechnung.rechnungsdatum_date())
-        .unwrap_or_else(|| OffsetDateTime::now_utc().date());
+    let billing_date = billing_date_of(rechnung);
 
     if route.check == CheckKind::Messung {
-        // ── The ESA branch: the price basis is the offer, not a sheet ────────
-        //
-        // INVOIC 31009 is „MSB-Rechnung" toward the **NB, the LF or the ESA**
-        // (WiM Teil 1 Kap. 6.2 / Teil 2 Kap. 4.5), and the three do not share a
-        // price basis. `PreisblattMessung` is what an MSB *publishes* toward the
-        // NB and the LF; there is none for the Kapitel-4.6 Messprodukte, because
-        // §35 MsbG leaves the Entgelt for a Zusatzleistung to be agreed per
-        // request. An ESA running the sheet path therefore got `TariffNotFound`
-        // and **no price check at all** — every invoice it received was checked
-        // for arithmetic and totals and nothing else.
-        //
-        // What it has instead is the QUOTES 15003 it ordered against: UC 4.1.1
-        // has it asking for „die Übermittlung von Werten und die damit
-        // verbundenen Kosten", and the offer carries a Bindungsfrist because it
-        // binds. The invoice names the same Artikel-IDs back (`SG26 LIN` DE 7143
-        // `Z09`), so the two join exactly.
-        //
-        // **The presence of an accepted offer is what selects the branch**, not
-        // a configured role: an offer on record for (this MSB, us) is precisely
-        // the statement "we are the ESA in this relationship, and this is what
-        // we agreed to pay".
-        let agreed = state
-            .marktd
-            .esa_preise(&inc.sender_mp_id, &state.tenant, billing_date)
-            .await
-            .unwrap_or_default();
-        if !agreed.is_empty() {
-            let prices: Vec<(String, invoic_checker::amount::EuroAmount)> = agreed
-                .iter()
-                .filter_map(|p| {
-                    Some((
-                        p.artikel_id.clone(),
-                        invoic_checker::amount::euro_from_decimal(p.betrag)?,
-                    ))
-                })
-                .collect();
-            return InvoicCheckEngine::check_esa_rechnung(
-                &inc.sender_mp_id,
-                rechnung,
-                &prices,
-                &state.check_config,
-            );
-        }
-
+        // The ESA branch is decided in `run_check`, before this function runs:
+        // it needs the accepted Angebot for the market tree as well as for the
+        // price check, and fetching it twice would be the only way to keep the
+        // decision here. Reaching this line means no offer is on record, so the
+        // invoice is an MSB-Rechnung toward an NB or an LF and prices against
+        // the published `PreisblattMessung`.
         let sheet = state
             .marktd
             .get_preisblatt_messung(&inc.sender_mp_id, billing_date)
@@ -713,10 +1095,191 @@ pub fn ce_type_for(outcome: &str) -> &'static str {
     }
 }
 
-/// The `E_0406` Antwortcode a REMADV Abweisung carries in `AJT` DE 4465.
+/// Which Marktrolle received this invoice, for the tree and the answer window.
 ///
-/// A rejection without a code gives the invoice sender nothing to correct, and
-/// the MIG marks `AJT` DE 4465 Muss on the Abweichungsgrund segment.
+/// A walked `E_0264` means [`run_check`] already identified the ESA Use-Case —
+/// from `IMD+7081` = `KON` on the wire, or from an accepted Angebot on record.
+/// Everything else falls to the LF/MSB arm, which is both the longest answer
+/// window and the tree whose codes are not walked, so a misread refuses nothing
+/// it should not.
+const fn rechnung_empfaenger(
+    eigene_rolle: crate::config::EmpfaengerRolle,
+    markt_antwort: Option<&mako_pruefung::rechnung::RechnungsAntwort>,
+) -> mako_fristen::vorlauf::RechnungEmpfaenger {
+    use mako_fristen::vorlauf::RechnungEmpfaenger;
+    // A walked ESA answer *is* the ESA Use-Case — it only exists where the wire
+    // said `IMD++KON` or an accepted Angebot corroborated it, and that is a
+    // stronger signal than configuration.
+    if markt_antwort.is_some() {
+        return RechnungEmpfaenger::Esa;
+    }
+    eigene_rolle.rechnung_empfaenger()
+}
+
+/// The [`RechnungsFamilie`](mako_pruefung::rechnung::RechnungsFamilie) whose
+/// walk answers this invoice, or `None` where mako carries no Codeliste for it.
+///
+/// Both facts are required and neither is guessable: the recipient's Marktrolle
+/// (`[identity] marktrolle`) narrows PID 31009 to at most two Use-Cases and
+/// `IMD+7081` picks between them. `None` means the tree is *named* correctly by
+/// [`mako_pruefung::codes::rechnungspruefung`] but its codes are not carried —
+/// `E_0566` and `E_0210` — so the answer goes out without a code rather than
+/// with one borrowed from another tree.
+fn familie_fuer(
+    pid: u32,
+    eigene_rolle: crate::config::EmpfaengerRolle,
+    rechnungstyp: Option<&str>,
+) -> Option<mako_pruefung::rechnung::RechnungsFamilie> {
+    mako_pruefung::rechnung::familie_fuer(
+        pid,
+        eigene_rolle.rechnung_empfaenger(),
+        rechnungsgegenstand(rechnungstyp),
+    )
+}
+
+/// What an inbound INVOIC 31009 bills — the second half of the tree lookup.
+///
+/// The recipient's Marktrolle narrows PID 31009 to at most two Use-Cases; this
+/// picks between them. The wire carries no flag: INVOIC AHB 1.0b has only
+/// `SG1 RFF+Z13` with the PID. What tells them apart is which Preisblatt the
+/// positions' Artikel-IDs come from — `SG26 LIN` DE 7140, Bedingung `[520]` —
+/// and a Leistung of the Preisblatt B is always billed against a **confirmed
+/// Bestellung** out of the AWH „Änderung der Technik an Lokationen" round.
+///
+/// The wire does say it, in one element: `IMD+7081` distinguishes `MSB`
+/// „Rechnung für Messstellenbetrieb" from **`TEC` „Abrechnung von Technik"**,
+/// which is the Preisblatt-B invoice (INVOIC AHB 1.0b, segment `IMD 7081`;
+/// `KON` is the ESA's, handled by the Empfänger arm).
+///
+/// Anything else — including an absent `IMD` — is read as the
+/// Messstellenbetrieb, and that direction is deliberate. `E_0270`/`E_0273`
+/// open with „Basiert die Rechnung auf einer Bestellung des
+/// Rechnungsempfängers?" and refuse with `A04` when there is none, so treating
+/// an unlabelled invoice as Preisblatt B would refuse every ordinary
+/// Messstellenbetriebsrechnung. Reading it the other way names a tree whose
+/// codes are not walked here, which answers without a code — a weaker
+/// statement, not a wrong one.
+fn rechnungsgegenstand(rechnungstyp: Option<&str>) -> mako_pruefung::codes::MsbRechnungsgegenstand {
+    use mako_pruefung::codes::MsbRechnungsgegenstand as G;
+    if rechnungstyp == Some(RECHNUNGSTYP_TECHNIK) {
+        G::PreisblattB
+    } else {
+        G::Messstellenbetrieb
+    }
+}
+
+/// The `SG7 AJT` a REMADV Abweisung carries — the code(s), the tree that
+/// publishes them, and the Prüfidentifikator their shape requires.
+///
+/// # The tree is not a constant
+///
+/// Every invoice Use-Case has its own quartet, and PID 31009 alone has three
+/// of them ([`mako_pruefung::codes::rechnungspruefung`]). Stamping `E_0406` on
+/// all of them named the Netznutzungsabrechnung tree on an ESA's answer, whose
+/// codes mean something else entirely — `A70` is the `E_0406`
+/// Summenprüfung and is undefined in `E_0264`, whose own total check is `A24`.
+/// `E_0406` is not even admissible on REMADV 33002 (REMADV AHB 1.0a § 3.1.1
+/// lists the trees DE 1082 accepts, and it is not among them).
+///
+/// Returns `None` when this service walks no tree for the Use-Case: the answer
+/// then goes out without an `AJT` and an operator completes it, which is
+/// incomplete rather than wrong.
+fn abweichungsgrund(
+    pid: u32,
+    empfaenger: mako_fristen::vorlauf::RechnungEmpfaenger,
+    gegenstand: mako_pruefung::codes::MsbRechnungsgegenstand,
+    markt_antwort: Option<&mako_pruefung::esa::RechnungsAntwort>,
+    storno_antwort: Option<&mako_pruefung::esa::StornoAntwort>,
+    findings: &[invoic_checker::Finding],
+) -> Option<mako_invoic::RemadvAntwort> {
+    // `E_0267` answers with **one** code and rides the plain Abweisung 33002 —
+    // the one tree of the ESA family REMADV AHB 1.0a § 3.1.1 admits in DE 1082.
+    // Its `KeineAntwort` outcome never reaches here: the caller returns before
+    // building an answer at all.
+    if let Some(mako_pruefung::esa::StornoAntwort::Ablehnen {
+        antwort,
+        pruefschritt,
+        detail,
+    }) = storno_antwort
+    {
+        return Some(mako_invoic::RemadvAntwort {
+            ebd: antwort.tree.clone(),
+            remadv_pid: mako_invoic::ABWEISUNG_PID,
+            befunde: vec![mako_invoic::RemadvBefund {
+                code: antwort.antwortcode.clone(),
+                ebene: "kopf".to_owned(),
+                positionsnummer: None,
+                detail: Some(format!("Prüfschritt {pruefschritt}: {detail}")),
+            }],
+        });
+    }
+
+    // The ESA's own tree was walked in full: its Befunde already carry the
+    // Ebene and the Positionsnummer, and it knows its own REMADV PID.
+    //
+    // A walk that found **nothing** returns `None` rather than falling through:
+    // the tree said the invoice is payable, and a dispute reached here on
+    // mako's own monetary threshold instead. That escalation has no published
+    // code, and borrowing one from a Prüfschritt the walk cleared would state
+    // to the market that a check failed which did not.
+    if let Some(a) = markt_antwort {
+        if a.ist_zustimmung() {
+            return None;
+        }
+        return Some(mako_invoic::RemadvAntwort {
+            ebd: a.tree.to_owned(),
+            remadv_pid: a.remadv_pid(),
+            befunde: a
+                .befunde
+                .iter()
+                .map(|b| mako_invoic::RemadvBefund {
+                    code: b.antwort.antwortcode.clone(),
+                    ebene: match b.ebene {
+                        mako_pruefung::esa::Ebene::Kopf => "kopf".to_owned(),
+                        mako_pruefung::esa::Ebene::Position(_) => "position".to_owned(),
+                        mako_pruefung::esa::Ebene::Summe => "summe".to_owned(),
+                    },
+                    positionsnummer: match b.ebene {
+                        mako_pruefung::esa::Ebene::Position(nr) => Some(nr),
+                        _ => None,
+                    },
+                    detail: Some(b.detail.clone()),
+                })
+                .collect(),
+        });
+    }
+
+    // Everything else: a tree named from the table, and a code only where this
+    // service actually carries that tree's Codeliste. Today that is the
+    // Netznutzungsabrechnung alone — `E_0210`, `E_0259` and `E_0566` are named
+    // correctly and answered without a code until their Codelisten are walked.
+    let trees = mako_pruefung::codes::rechnungspruefung(pid, empfaenger, gegenstand)?;
+    if trees.rechnung != mako_pruefung::codes::EBD_NETZNUTZUNGSRECHNUNG {
+        return None;
+    }
+    let code = netznutzung_antwortcode(findings);
+    Some(mako_invoic::RemadvAntwort {
+        ebd: trees.rechnung.to_owned(),
+        // A single code from an unwalked tree is a Summen-level statement, and
+        // 33003 is „Abweisung Kopf und Summe".
+        remadv_pid: 33_003,
+        befunde: vec![mako_invoic::RemadvBefund {
+            code: code.to_owned(),
+            ebene: if findings
+                .iter()
+                .any(|f| f.is_dispute && f.line_number.is_some())
+            {
+                "position".to_owned()
+            } else {
+                "summe".to_owned()
+            },
+            positionsnummer: None,
+            detail: Some(dispute_reason(findings)),
+        }],
+    })
+}
+
+/// The `E_0406` Antwortcode a Netznutzungsabrechnung Abweisung carries.
 ///
 /// Only one finding maps to a code with an exact counterpart in the tree:
 /// [`FindingKind::TotalMismatch`] is Prüfschritt 900 („Entspricht der
@@ -726,8 +1289,9 @@ pub fn ce_type_for(outcome: &str) -> &'static str {
 ///
 /// The full tree — 205 Prüfschritte over Kopf-, Positions- und Summenebene,
 /// answering with a *set* of (Positionsnummer, code) pairs — is not walked
-/// here; see `mako_pruefung::codes::E_0406_CODES`.
-fn dispute_antwortcode(findings: &[invoic_checker::Finding]) -> &'static str {
+/// here; see `mako_pruefung::codes::E_0406_CODES`. The ESA tree `E_0264` **is**
+/// walked, in `invoic_checker::rechnung`.
+fn netznutzung_antwortcode(findings: &[invoic_checker::Finding]) -> &'static str {
     use invoic_checker::FindingKind;
     let disputes = findings.iter().filter(|f| f.is_dispute);
     for f in disputes {
@@ -885,7 +1449,7 @@ mod tests {
             actual: None,
             deviation_pct: None,
         };
-        assert_eq!(dispute_antwortcode(&[total]), "A70");
+        assert_eq!(netznutzung_antwortcode(&[total]), "A70");
 
         let line = Finding {
             kind: FindingKind::ArithmeticError,
@@ -897,13 +1461,13 @@ mod tests {
             deviation_pct: None,
         };
         assert_eq!(
-            dispute_antwortcode(&[line]),
+            netznutzung_antwortcode(&[line]),
             "A99",
             "a faulty line takes the Positionsebene catch-all"
         );
 
         assert_eq!(
-            dispute_antwortcode(&[]),
+            netznutzung_antwortcode(&[]),
             "A96",
             "a monetary escalation with no finding takes the Summenebene catch-all"
         );
@@ -919,6 +1483,211 @@ mod tests {
                 "{code} is not published by E_0406"
             );
         }
+    }
+
+    /// **The tree is not a constant.** PID 31009 toward an ESA is `E_0264`;
+    /// stamping `E_0406` on it named the Netznutzungsabrechnung tree, whose
+    /// `A70` is undefined there — and which REMADV AHB 1.0a § 3.1.1 does not
+    /// even admit in DE 1082 of the plain Abweisung.
+    #[test]
+    fn the_answer_names_the_tree_the_use_case_publishes() {
+        use mako_fristen::vorlauf::RechnungEmpfaenger as R;
+        use mako_pruefung::codes::MsbRechnungsgegenstand as G;
+
+        // Netznutzung: `E_0406`, with the codes this service resolves.
+        let total = Finding {
+            kind: FindingKind::TotalMismatch,
+            is_dispute: true,
+            message: "Gesamtnetto weicht ab".into(),
+            line_number: None,
+            expected: None,
+            actual: None,
+            deviation_pct: None,
+        };
+        let nn = abweichungsgrund(
+            31_002,
+            R::LieferantOderMsb,
+            G::Messstellenbetrieb,
+            None,
+            None,
+            &[total],
+        )
+        .expect("E_0406 codes are carried");
+        assert_eq!(nn.ebd, "E_0406");
+        assert_eq!(nn.erster_code(), Some("A70"));
+
+        // 31009 toward an LF is `E_0210`, whose codes this service does not
+        // carry — so it emits **no** code rather than one from another tree.
+        assert!(
+            abweichungsgrund(
+                31_009,
+                R::LieferantOderMsb,
+                G::Messstellenbetrieb,
+                None,
+                None,
+                &[]
+            )
+            .is_none(),
+            "an unwalked tree must not borrow another tree's codes"
+        );
+    }
+
+    /// The ESA answer comes from the walked `E_0264`, keeps every Befund with
+    /// its Ebene and Positionsnummer, and rides the Prüfidentifikator that
+    /// shape requires — 33004 for position-level refusals.
+    #[test]
+    fn the_esa_answer_carries_the_whole_walk() {
+        use mako_fristen::vorlauf::RechnungEmpfaenger as R;
+        use mako_pruefung::codes::MsbRechnungsgegenstand as G;
+        use mako_pruefung::esa;
+
+        let walk = esa::pruefe_rechnung(
+            &esa::RechnungsFakten {
+                einwaende_entkraeftet: None,
+                ustg_konform: Some(true),
+                rechnungsdatum: time::macros::date!(2026 - 04 - 01),
+                eingangsdatum: time::macros::date!(2026 - 04 - 01),
+                leistungszeitraum: None,
+                bestellung_bekannt: true,
+                rechnungsnummer_bereits_verwendet: false,
+                faelliger_betrag_nicht_negativ: true,
+                zahlungsziel: None,
+                preisblatt_version_gueltig: None,
+                zeitraum_bereits_abgerechnet_in: None,
+                sonstiger_kopffehler: None,
+                positionen: vec![esa::PositionsFakten {
+                    positionsnummer: 7,
+                    artikel_id: Some("9990001100002".to_owned()),
+                    artikel_id_aus_bestellung: true,
+                    leistung_erbracht: Some(true),
+                    preis_wie_angebot: Some(false),
+                    steuersatz_korrekt: Some(true),
+                    zeitraum: None,
+                    bereits_abgerechnet_in: None,
+                    rechenfehler: false,
+                    sonstiger_fehler: None,
+                }],
+                fehlende_artikel_ids: Vec::new(),
+                steuersaetze: Vec::new(),
+                rechnungsbetrag_stimmt: true,
+                sonstiger_summenfehler: None,
+            },
+            mako_pruefung::HolidayCalendar::BdewMaKo,
+        );
+
+        let grund = abweichungsgrund(
+            31_009,
+            R::Esa,
+            G::Messstellenbetrieb,
+            Some(&walk),
+            None,
+            &[],
+        )
+        .expect("E_0264 is walked");
+        assert_eq!(grund.ebd, "E_0264");
+        assert_eq!(grund.remadv_pid, 33_004, "Abweisung Position");
+        assert_eq!(grund.erster_code(), Some("A11"));
+        assert_eq!(grund.befunde[0].positionsnummer, Some(7));
+        assert_eq!(grund.befunde[0].ebene, "position");
+    }
+
+    /// A clean ESA invoice produces no Abweichungsgrund at all — the answer is
+    /// the Zahlungsavis 33001, which carries no `AJT`.
+    #[test]
+    fn a_clean_esa_invoice_states_no_antwortcode() {
+        use mako_fristen::vorlauf::RechnungEmpfaenger as R;
+        use mako_pruefung::codes::MsbRechnungsgegenstand as G;
+        let clean = mako_pruefung::esa::RechnungsAntwort {
+            tree: "E_0264",
+            befunde: Vec::new(),
+        };
+        assert!(clean.ist_zustimmung());
+        assert!(
+            abweichungsgrund(
+                31_009,
+                R::Esa,
+                G::Messstellenbetrieb,
+                Some(&clean),
+                None,
+                &[]
+            )
+            .is_none()
+        );
+    }
+
+    /// **`E_0267`'s three outcomes, and the quiet one is the point.** A Storno
+    /// of an invoice this ESA had itself refused — or had not answered yet —
+    /// needs no answer at all (Prüfschritt 80). A refusal rides the plain
+    /// Abweisung 33002, the one Prüfidentifikator REMADV AHB 1.0a § 3.1.1
+    /// admits `E_0267` in.
+    #[test]
+    fn the_storno_answer_is_a_three_way_decision() {
+        use mako_fristen::vorlauf::RechnungEmpfaenger as R;
+        use mako_pruefung::codes::MsbRechnungsgegenstand as G;
+        use mako_pruefung::esa::{StornoAntwort, UrsprungsAntwort, pruefe_stornorechnung};
+
+        let facts = |ursprungsantwort| mako_pruefung::esa::StornoFakten {
+            ursprungsrechnung_bekannt: true,
+            rechnungsnummer_bereits_verwendet: false,
+            ustg_konform: Some(true),
+            bereits_storniert: false,
+            rechnungstyp_identisch: true,
+            zeitraum_identisch: true,
+            betraege_negiert_identisch: true,
+            sonstiger_fehler: None,
+            ursprungsantwort,
+        };
+
+        // Paid → confirm with the Zahlungsavis, which carries no code.
+        let zugestimmt = pruefe_stornorechnung(&facts(UrsprungsAntwort::Zugestimmt));
+        assert_eq!(zugestimmt.remadv_pid(), Some(33_001));
+        assert!(
+            abweichungsgrund(
+                31_004,
+                R::Esa,
+                G::Messstellenbetrieb,
+                None,
+                Some(&zugestimmt),
+                &[]
+            )
+            .is_none(),
+            "a confirmed Storno states no Antwortcode"
+        );
+
+        // Refused or unanswered → **no message**. The caller returns before
+        // building an answer, so nothing reaches the wire.
+        for quiet in [UrsprungsAntwort::Abgelehnt, UrsprungsAntwort::Unbeantwortet] {
+            let a = pruefe_stornorechnung(&facts(quiet));
+            assert!(matches!(a, StornoAntwort::KeineAntwort { .. }), "{quiet:?}");
+            assert_eq!(a.remadv_pid(), None, "{quiet:?}");
+        }
+
+        // A defective Storno refuses with its own code on 33002 — never on
+        // 33003/33004, which DE 1082 does not admit `E_0267` in.
+        let doppelt = pruefe_stornorechnung(&mako_pruefung::esa::StornoFakten {
+            bereits_storniert: true,
+            ..facts(UrsprungsAntwort::Zugestimmt)
+        });
+        let grund = abweichungsgrund(
+            31_004,
+            R::Esa,
+            G::Messstellenbetrieb,
+            None,
+            Some(&doppelt),
+            &[],
+        )
+        .expect("a refused Storno states why");
+        assert_eq!(grund.ebd, "E_0267");
+        assert_eq!(grund.remadv_pid, 33_002);
+        assert_eq!(grund.erster_code(), Some("A02"));
+        assert!(
+            grund.befunde[0]
+                .detail
+                .as_deref()
+                .is_some_and(|d| d.contains("Prüfschritt 20")),
+            "the answer names the Prüfschritt it came from: {:?}",
+            grund.befunde[0].detail
+        );
     }
 
     /// A dispute must always carry a reason: `REMADV 33002` with an empty
@@ -971,6 +1740,105 @@ mod tests {
                 ce_type_for(settled),
                 mako_events::invoic::RECEIPT_SETTLED,
                 "{settled}"
+            );
+        }
+    }
+
+    /// PID 31009 carries five Use-Cases and the recipient's Marktrolle narrows
+    /// it to two. `IMD+7081` is what closes it: `TEC` „Abrechnung von Technik"
+    /// is a Leistung of the Preisblatt B and resolves to `E_0270`/`E_0273`,
+    /// where `MSB` and an absent element resolve to `E_0210`/`E_0566`.
+    ///
+    /// Getting this wrong names a tree whose codes mean something else — the
+    /// same class of defect as stamping `E_0406` on an ESA answer.
+    #[test]
+    fn imd_7081_tec_selects_the_preisblatt_b_trees() {
+        use mako_fristen::vorlauf::RechnungEmpfaenger as R;
+        use mako_pruefung::codes::{MsbRechnungsgegenstand as G, rechnungspruefung};
+
+        assert_eq!(rechnungsgegenstand(Some("TEC")), G::PreisblattB);
+        for typ in [Some("MSB"), Some("KON"), Some("WIM"), None] {
+            assert_eq!(
+                rechnungsgegenstand(typ),
+                G::Messstellenbetrieb,
+                "rechnungstyp {typ:?}"
+            );
+        }
+
+        let tree = |empf, typ| {
+            rechnungspruefung(31_009, empf, rechnungsgegenstand(typ))
+                .expect("31009 is published for every Marktrolle")
+                .rechnung
+        };
+        assert_eq!(tree(R::Netzbetreiber, Some("MSB")), "E_0566");
+        assert_eq!(tree(R::Netzbetreiber, Some("TEC")), "E_0273");
+        assert_eq!(tree(R::LieferantOderMsb, Some("MSB")), "E_0210");
+        assert_eq!(tree(R::LieferantOderMsb, Some("TEC")), "E_0270");
+        // An ESA has no Preisblatt B — its prices come from the accepted
+        // QUOTES 15003 — so `TEC` does not move its tree.
+        assert_eq!(tree(R::Esa, Some("TEC")), "E_0264");
+    }
+
+    /// The Preisblatt-B path: `IMD+7081` = `TEC` plus the deployment's own
+    /// Marktrolle select one of two quartets, and the ESA's `E_0264` is not
+    /// among them.
+    #[test]
+    fn tec_and_the_configured_role_select_the_preisblatt_b_family() {
+        use crate::config::EmpfaengerRolle as Rolle;
+        use mako_pruefung::rechnung::{ESA, PREISBLATT_B_LF, PREISBLATT_B_NB};
+
+        assert_eq!(
+            familie_fuer(31_009, Rolle::Lieferant, Some("TEC")),
+            Some(PREISBLATT_B_LF)
+        );
+        assert_eq!(
+            familie_fuer(31_009, Rolle::Netzbetreiber, Some("TEC")),
+            Some(PREISBLATT_B_NB)
+        );
+        // An ESA has no Preisblatt B — `TEC` does not move its family.
+        assert_eq!(familie_fuer(31_009, Rolle::Esa, Some("TEC")), Some(ESA));
+
+        // `MSB` and an absent qualifier are the Messstellenbetrieb, whose
+        // Codelisten this service does not carry: the tree is named correctly
+        // by `rechnungspruefung` and the answer goes out without a code.
+        for typ in [Some("MSB"), None] {
+            for rolle in [Rolle::Lieferant, Rolle::Netzbetreiber] {
+                assert_eq!(
+                    familie_fuer(31_009, rolle, typ),
+                    None,
+                    "rolle={rolle:?} typ={typ:?}"
+                );
+            }
+        }
+    }
+
+    /// The role is configuration and the ESA signal is evidence — a walked
+    /// `E_0264` answer outranks it, because it only exists where the wire said
+    /// `KON` or an accepted Angebot corroborated it.
+    #[test]
+    fn a_walked_esa_answer_outranks_the_configured_role() {
+        use crate::config::EmpfaengerRolle as Rolle;
+        use mako_fristen::vorlauf::RechnungEmpfaenger as R;
+
+        assert_eq!(
+            rechnung_empfaenger(Rolle::Lieferant, None),
+            R::LieferantOderMsb
+        );
+        assert_eq!(
+            rechnung_empfaenger(Rolle::Netzbetreiber, None),
+            R::Netzbetreiber
+        );
+        assert_eq!(rechnung_empfaenger(Rolle::Esa, None), R::Esa);
+
+        let walked = mako_pruefung::rechnung::RechnungsAntwort {
+            tree: mako_pruefung::codes::EBD_ESA_RECHNUNG,
+            befunde: vec![],
+        };
+        for rolle in [Rolle::Lieferant, Rolle::Netzbetreiber, Rolle::Esa] {
+            assert_eq!(
+                rechnung_empfaenger(rolle, Some(&walked)),
+                R::Esa,
+                "{rolle:?}"
             );
         }
     }

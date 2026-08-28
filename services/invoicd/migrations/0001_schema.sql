@@ -99,6 +99,14 @@ COMMENT ON COLUMN invoic_receipts.invoice_ref IS
 
 -- Per-counterparty billing history.
 CREATE INDEX invoic_sender_received   ON invoic_receipts (sender_mp_id, received_at DESC);
+-- Prüfschritt 50 („Rechnungsnummer wurde bereits verwendet", `A05`) of every
+-- invoice tree in `mako_pruefung::rechnung`. § 14 Abs. 4 Nr. 4 UStG makes the
+-- Rechnungsnummer einmalig **per Rechnungssteller**, so that pair is the key;
+-- the partial predicate skips the outbound rows and the ones that never carried
+-- a number.
+CREATE INDEX invoic_sender_rechnungsnummer
+    ON invoic_receipts (tenant, sender_mp_id, rechnungsnummer)
+    WHERE rechnungsnummer IS NOT NULL;
 -- Tenant-scoped dashboard.
 CREATE INDEX invoic_tenant_received   ON invoic_receipts (tenant, received_at DESC);
 -- MaLo payment lifecycle.

@@ -21,6 +21,7 @@
 //! | [`nb`] | Netzbetreiber | `E_0622` Anmeldung, `E_0607` Abmeldung |
 //! | [`lf`] | Lieferant | `E_0609`, `E_0624`, `E_0614`, `E_0615`, `E_0603`–`E_0606`; Gas `E_3001`, `E_3002`, `E_3020`, `E_3008` |
 //! | [`msb`] | Messstellenbetrieb | `E_0200`–`E_0203` und die WiM-Codelisten |
+//! | [`esa`] | MSB (Bestellung) und ESA (Abrechnung) | `E_0252`–`E_0257` und `E_0264`–`E_0267` |
 //! | [`mabis`] | NB, LF, BKV | the 28 MaBiS and Redispatch trees (`E_0004`–`E_0104`, `E_0901`, `E_0902`) |
 //!
 //! The document defines around sixty trees with the LF as prüfende Rolle;
@@ -89,6 +90,10 @@ pub mod antwort;
 pub mod codes;
 pub mod error;
 
+pub mod rechnung;
+
+#[cfg(feature = "role-esa")]
+pub mod esa;
 #[cfg(feature = "role-lf")]
 pub mod lf;
 #[cfg(feature = "role-mabis")]
@@ -102,6 +107,21 @@ pub use antwort::{AntwortDetail, RejectReason};
 pub use codes::{AntwortCode, Cluster};
 pub use error::CheckError;
 pub use mako_fristen::HolidayCalendar;
+
+// The invoice walk is shared by three families and is not ESA-specific — see
+// [`rechnung`]. Only the Wertebestellung half below is.
+pub use rechnung::{
+    PositionsFakten, RechnungsAntwort, RechnungsFakten, RechnungsFamilie, StornoAntwort,
+    StornoFakten,
+};
+
+#[cfg(feature = "role-esa")]
+pub use esa::{
+    Bestellart, EsaAnfrage, EsaBeendigung, EsaBestellung, EsaStornierung,
+    pruefe_anfrage as pruefe_esa_anfrage, pruefe_beendigung as pruefe_esa_beendigung,
+    pruefe_bestellung as pruefe_esa_bestellung, pruefe_rechnung as pruefe_esa_rechnung,
+    pruefe_stornierung as pruefe_esa_stornierung,
+};
 
 #[cfg(feature = "role-lf")]
 pub use lf::{

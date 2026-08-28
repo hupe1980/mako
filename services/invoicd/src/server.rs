@@ -760,6 +760,7 @@ pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Rout
         auto_dispute_threshold_raw: cfg.auto_dispute_threshold_raw(),
         pool: pool.clone(),
         tenant: tenant.clone(),
+        marktrolle: cfg.identity.marktrolle,
         erp_webhook_url: cfg.erp.webhook_url.clone(),
         erp_hmac_secret: erp_hmac_secret.clone(),
         edmd: cfg.edmd.url.as_deref().map(|url| {

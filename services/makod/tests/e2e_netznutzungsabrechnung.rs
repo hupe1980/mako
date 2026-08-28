@@ -104,6 +104,8 @@ impl MockNb {
                 validation_passed,
                 validation_errors: errors,
                 rechnung: None,
+                bestellung_ref: None,
+                rechnungstyp: None,
             })
             .await
             .expect("ReceiveInvoic");
@@ -112,7 +114,9 @@ impl MockNb {
     /// NB settles the invoice (positive CONTRL received from LF).
     async fn settle_invoice(&self) {
         self.process
-            .execute(InvoicCommand::SettleInvoice)
+            .execute(InvoicCommand::SettleInvoice {
+                message_ref: mako_engine::types::MessageRef::new("REMADV-OK"),
+            })
             .await
             .expect("SettleInvoice");
     }
@@ -121,7 +125,18 @@ impl MockNb {
     async fn dispute_invoice(&self, reason: &str) {
         self.process
             .execute(InvoicCommand::DisputeInvoice {
+                message_ref: mako_engine::types::MessageRef::new("REMADV-NOK"),
                 reason: reason.to_owned(),
+                antwort: Some(mako_invoic::RemadvAntwort {
+                    ebd: "E_0406".to_owned(),
+                    befunde: vec![mako_invoic::RemadvBefund {
+                        code: "A70".to_owned(),
+                        ebene: "summe".to_owned(),
+                        positionsnummer: None,
+                        detail: None,
+                    }],
+                    remadv_pid: 33_003,
+                }),
             })
             .await
             .expect("DisputeInvoice");
@@ -304,6 +319,8 @@ async fn e2e_gpke_abrechnung_invalid_pid_rejected() {
             validation_passed: true,
             validation_errors: vec![],
             rechnung: None,
+            bestellung_ref: None,
+            rechnungstyp: None,
         })
         .await;
 
@@ -340,6 +357,8 @@ async fn e2e_gpke_abrechnung_duplicate_receive_rejected() {
             validation_passed: true,
             validation_errors: vec![],
             rechnung: None,
+            bestellung_ref: None,
+            rechnungstyp: None,
         })
         .await;
 

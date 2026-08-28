@@ -78,6 +78,9 @@ use mako_redispatch::{
         StammdatenWorkflow as RedispatchStammdatenWorkflow, WORKFLOW_NAME as STAMMDATEN_WORKFLOW,
     },
 };
+use mako_wim::ersteinbau::{
+    ErsteinbauCommand, WORKFLOW_NAME as WIM_ERSTEINBAU_WORKFLOW, WimErsteinbauWorkflow,
+};
 use mako_wim::{
     DeviceChangeCommand, GeraeteubernahmeCommand, INSRPT_WORKFLOW_NAME as WIM_INSRPT_WORKFLOW,
     PreisanfrageCommand, PreislisteCommand, StammdatenCommand, SteuerungsauftragCommand,
@@ -235,6 +238,10 @@ deadline_dispatch! {
     "gpke-allokationsliste" => GpkeAllokationslisteWorkflow : AllokationslisteCommand::TimeoutExpired,
     "wim-technik-aenderung" => WimTechnikAenderungWorkflow : TechnikAenderungCommand::TimeoutExpired,
     "wim-weiterverpflichtung" => WimWeiterverpflichtungWorkflow : WeiterverpflichtungCommand::TimeoutExpired,
+    // An unanswered Vorabinformation is not a missing status line: without the
+    // wMSB's `A03` the gMSB may not fit the iMS, so the timer moves the Vorgang
+    // to `Abgelehnt` rather than letting it sit open (WiM Teil 1 Kap. 3.5.2).
+    WIM_ERSTEINBAU_WORKFLOW => WimErsteinbauWorkflow : ErsteinbauCommand::TimeoutExpired,
     }
     no_deadline: [
         // Pure receive-and-record workflows: they record an inbound message and

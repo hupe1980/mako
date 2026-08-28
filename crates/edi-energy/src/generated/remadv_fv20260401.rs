@@ -476,7 +476,7 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
     /// Header segment ordering (before UNS+D).
     const EXPECTED_HEADER_ORDER: &[&str] = &[
         "UNH", "BGM", "DTM", "RFF", "NAD", "CTA", "COM", "CUX", "DOC", "MOA", "DTM", "RFF", "AJT",
-        "FTX", "DLI",
+        "FTX", "DLI", "AJT", "RFF", "FTX",
     ];
     /// Detail segment ordering (after UNS+D).
     const EXPECTED_DETAIL_ORDER: &[&str] = &["MOA", "UNT"];
@@ -613,42 +613,12 @@ static AHB_33001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("REMADV-AHB-2.9e-33001")
             .for_message_type("REMADV")
             .for_release("2.9e")
-            .with_named_stateless_rule_fn("AHB-33001-AJT-M", |segs, issues| {
-                ahb_check_mandatory(
-                    segs,
-                    "AJT",
-                    "AHB-33001-AJT-M",
-                    "mandatory segment AJT is missing for Pruefidentifikator 33001",
-                    "33001",
-                    issues,
-                );
-            })
             .with_named_stateless_rule_fn("AHB-33001-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
                     "AHB-33001-BGM-M",
                     "mandatory segment BGM is missing for Pruefidentifikator 33001",
-                    "33001",
-                    issues,
-                );
-            })
-            .with_named_stateless_rule_fn("AHB-33001-COM-M", |segs, issues| {
-                ahb_check_mandatory(
-                    segs,
-                    "COM",
-                    "AHB-33001-COM-M",
-                    "mandatory segment COM is missing for Pruefidentifikator 33001",
-                    "33001",
-                    issues,
-                );
-            })
-            .with_named_stateless_rule_fn("AHB-33001-CTA-M", |segs, issues| {
-                ahb_check_mandatory(
-                    segs,
-                    "CTA",
-                    "AHB-33001-CTA-M",
-                    "mandatory segment CTA is missing for Pruefidentifikator 33001",
                     "33001",
                     issues,
                 );
@@ -713,6 +683,16 @@ static AHB_33001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
+            .with_named_stateless_rule_fn("AHB-33001-UNS-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "UNS",
+                    "AHB-33001-UNS-M",
+                    "mandatory segment UNS is missing for Pruefidentifikator 33001",
+                    "33001",
+                    issues,
+                );
+            })
             .with_max_issues_per_rule(50),
     )
 });
@@ -742,26 +722,6 @@ static AHB_33002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     "BGM",
                     "AHB-33002-BGM-M",
                     "mandatory segment BGM is missing for Pruefidentifikator 33002",
-                    "33002",
-                    issues,
-                );
-            })
-            .with_named_stateless_rule_fn("AHB-33002-COM-M", |segs, issues| {
-                ahb_check_mandatory(
-                    segs,
-                    "COM",
-                    "AHB-33002-COM-M",
-                    "mandatory segment COM is missing for Pruefidentifikator 33002",
-                    "33002",
-                    issues,
-                );
-            })
-            .with_named_stateless_rule_fn("AHB-33002-CTA-M", |segs, issues| {
-                ahb_check_mandatory(
-                    segs,
-                    "CTA",
-                    "AHB-33002-CTA-M",
-                    "mandatory segment CTA is missing for Pruefidentifikator 33002",
                     "33002",
                     issues,
                 );
@@ -826,6 +786,16 @@ static AHB_33002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
+            .with_named_stateless_rule_fn("AHB-33002-UNS-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "UNS",
+                    "AHB-33002-UNS-M",
+                    "mandatory segment UNS is missing for Pruefidentifikator 33002",
+                    "33002",
+                    issues,
+                );
+            })
             .with_max_issues_per_rule(50),
     )
 });
@@ -859,42 +829,12 @@ static AHB_33003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-33003-COM-M", |segs, issues| {
-                ahb_check_mandatory(
-                    segs,
-                    "COM",
-                    "AHB-33003-COM-M",
-                    "mandatory segment COM is missing for Pruefidentifikator 33003",
-                    "33003",
-                    issues,
-                );
-            })
-            .with_named_stateless_rule_fn("AHB-33003-CTA-M", |segs, issues| {
-                ahb_check_mandatory(
-                    segs,
-                    "CTA",
-                    "AHB-33003-CTA-M",
-                    "mandatory segment CTA is missing for Pruefidentifikator 33003",
-                    "33003",
-                    issues,
-                );
-            })
             .with_named_stateless_rule_fn("AHB-33003-CUX-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CUX",
                     "AHB-33003-CUX-M",
                     "mandatory segment CUX is missing for Pruefidentifikator 33003",
-                    "33003",
-                    issues,
-                );
-            })
-            .with_named_stateless_rule_fn("AHB-33003-DLI-M", |segs, issues| {
-                ahb_check_mandatory(
-                    segs,
-                    "DLI",
-                    "AHB-33003-DLI-M",
-                    "mandatory segment DLI is missing for Pruefidentifikator 33003",
                     "33003",
                     issues,
                 );
@@ -949,6 +889,16 @@ static AHB_33003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
+            .with_named_stateless_rule_fn("AHB-33003-UNS-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "UNS",
+                    "AHB-33003-UNS-M",
+                    "mandatory segment UNS is missing for Pruefidentifikator 33003",
+                    "33003",
+                    issues,
+                );
+            })
             .with_max_issues_per_rule(50),
     )
 });
@@ -978,26 +928,6 @@ static AHB_33004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     "BGM",
                     "AHB-33004-BGM-M",
                     "mandatory segment BGM is missing for Pruefidentifikator 33004",
-                    "33004",
-                    issues,
-                );
-            })
-            .with_named_stateless_rule_fn("AHB-33004-COM-M", |segs, issues| {
-                ahb_check_mandatory(
-                    segs,
-                    "COM",
-                    "AHB-33004-COM-M",
-                    "mandatory segment COM is missing for Pruefidentifikator 33004",
-                    "33004",
-                    issues,
-                );
-            })
-            .with_named_stateless_rule_fn("AHB-33004-CTA-M", |segs, issues| {
-                ahb_check_mandatory(
-                    segs,
-                    "CTA",
-                    "AHB-33004-CTA-M",
-                    "mandatory segment CTA is missing for Pruefidentifikator 33004",
                     "33004",
                     issues,
                 );
@@ -1068,6 +998,16 @@ static AHB_33004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     "RFF",
                     "AHB-33004-RFF-M",
                     "mandatory segment RFF is missing for Pruefidentifikator 33004",
+                    "33004",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-33004-UNS-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "UNS",
+                    "AHB-33004-UNS-M",
+                    "mandatory segment UNS is missing for Pruefidentifikator 33004",
                     "33004",
                     issues,
                 );
