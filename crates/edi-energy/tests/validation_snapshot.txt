@@ -1,6 +1,6 @@
 # Validation verdict per fixture: <path>\t<severity>\t<rule id>.
 # Regenerate with BLESS_VALIDATION_SNAPSHOT=1; read the diff before committing.
-# 388 fixtures, 1083 lines.
+# 391 fixtures, 1086 lines.
 aperak/invalid/missing_acw_ref.edi	error	AHB-29001-ERC-M
 aperak/invalid/missing_acw_ref.edi	error	AHB-29001-RFF-M
 aperak/invalid/missing_acw_ref.edi	error	MIG-APERAK-MIG-2.1i-GROUP-SG2-RFF-CARD-MIN
@@ -16,6 +16,7 @@ contrl/invalid/missing_uci.edi	warning	AHB-SKIP-NO-PID
 contrl/valid/accepted.edi	warning	AHB-SKIP-NO-PID
 contrl/valid/rejected.edi	warning	AHB-SKIP-NO-PID
 iftsta/gen/pid_21000.gen.edi	VALIDATE-ERROR
+iftsta/gen/pid_21000_2_1.gen.edi	VALIDATE-ERROR
 iftsta/gen/pid_21001.gen.edi	VALIDATE-ERROR
 iftsta/gen/pid_21002.gen.edi	VALIDATE-ERROR
 iftsta/gen/pid_21003.gen.edi	VALIDATE-ERROR
@@ -342,6 +343,7 @@ mscons/valid/beispiel_13002_gas_release_2_5.edi	clean
 mscons/valid/beispiel_13002_release_2_4c.edi	clean
 mscons/valid/pid_13002.edi	clean
 mscons/valid/pid_13003.edi	clean
+ordchg/gen/pid_39000_1_2.gen.edi	error	MIG-UNS-REQ
 ordchg/gen/pid_39001.gen.edi	error	MIG-UNS-REQ
 ordchg/gen/pid_39002.gen.edi	error	MIG-UNS-REQ
 ordchg/valid/pid_39000.edi	clean
@@ -840,6 +842,7 @@ reqote/gen/pid_35005.gen.edi	error	AHB-35005-LIN-M
 reqote/gen/pid_35005.gen.edi	error	AHB-35005-LOC-M
 reqote/gen/pid_35005.gen.edi	error	AHB-35005-PIA-M
 reqote/valid/pid_35004.edi	clean
+utilmd/gen/pid_44001_g1_2.gen.edi	clean
 utilmd/gen/pid_44002.gen.edi	clean
 utilmd/gen/pid_44003.gen.edi	clean
 utilmd/gen/pid_44004.gen.edi	clean

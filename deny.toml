@@ -731,3 +731,15 @@ reason  = "phf three-way split after cargo update: 0.11 (older crates), 0.12 (mi
 name    = "phf_shared"
 version = "=0.12"
 reason  = "paired with phf 0.12 skip."
+
+# ── miniz_oxide 0.8 (DEFLATE backend) ───────────────────────────────────────────
+# `flate2` — reached from `asx-rs` (mandatory AS4 gzip) and from datafusion's
+# `async-compression` — is on miniz_oxide 0.9. Two crates still hold 0.8:
+# `apache-avro` (iceberg → meterstore → edmd) and `png` (the image/Typst render
+# stack behind outputd's documents). Both are already at the newest version
+# their own parents admit, and neither is a direct workspace dependency, so
+# nothing here can move them. Resolve when apache-avro and png bump to 0.9.
+[[bans.skip]]
+name    = "miniz_oxide"
+version = "=0.8"
+reason  = "apache-avro (via iceberg) and png (via the Typst render stack) pin miniz_oxide 0.8; flate2 uses 0.9. No workspace crate depends on either directly."

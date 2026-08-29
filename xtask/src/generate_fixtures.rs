@@ -315,6 +315,72 @@ fn render_fixture(meta: &TypeMeta, pid: u32, release: &str, de1001: Option<&str>
 ///
 /// Ordering is by `valid_from`, never by the release string — release codes are
 /// BDEW labels, not versions, and `"2.10" < "2.9"` under a string sort.
+/// Every non-superseded (message type, release) pair and the lowest PID it
+/// declares.
+///
+/// `collect_active_pids` keeps one release per PID — the one in force today —
+/// so a profile whose Anwendungszeitpunkt has not arrived gets no fixture, and
+/// `validate-release-codes` then finds no witness for its release code. This
+/// supplies the missing ones.
+fn collect_release_witnesses(
+    profiles_dir: &str,
+    today: time::Date,
+) -> BTreeMap<(String, String), (u32, Option<String>)> {
+    let mut out: BTreeMap<(String, String), (u32, Option<String>)> = BTreeMap::new();
+    let base = Path::new(profiles_dir);
+    let Ok(msg_type_dirs) = std::fs::read_dir(base) else {
+        return out;
+    };
+    for msg_entry in msg_type_dirs.flatten() {
+        let msg_path = msg_entry.path();
+        if !msg_path.is_dir() {
+            continue;
+        }
+        let msg_type = msg_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase();
+        if msg_type == "schemas" {
+            continue;
+        }
+        let Ok(release_dirs) = std::fs::read_dir(&msg_path) else {
+            continue;
+        };
+        for rel_entry in release_dirs.flatten() {
+            let rel_path = rel_entry.path();
+            if !rel_path.is_dir() {
+                continue;
+            }
+            let (Ok(mig_raw), Ok(ahb_raw)) = (
+                std::fs::read_to_string(rel_path.join("mig.json")),
+                std::fs::read_to_string(rel_path.join("ahb.json")),
+            ) else {
+                continue;
+            };
+            let (Ok(mig), Ok(ahb)) = (
+                serde_json::from_str::<MigProfile>(&mig_raw),
+                serde_json::from_str::<AhbProfile>(&ahb_raw),
+            ) else {
+                continue;
+            };
+            // A superseded release needs no witness; the gate says so itself.
+            if mig.archived || iso_date(mig.valid_until.as_ref()).is_some_and(|until| until < today)
+            {
+                continue;
+            }
+            let Some(first) = ahb.pruefidentifikatoren.iter().min_by_key(|p| p.code) else {
+                continue;
+            };
+            out.insert(
+                (msg_type.clone(), mig.release.clone()),
+                (first.code, first.bgm_qualifier().map(ToOwned::to_owned)),
+            );
+        }
+    }
+    out
+}
+
 fn collect_active_pids(
     profiles_dir: &str,
     today: time::Date,
@@ -450,6 +516,42 @@ fn rank_for(
 }
 
 // ── Covered PIDs (mirrors validate_pruefids logic) ───────────────────────────
+
+/// Every `(message type, release)` a fixture already puts on the wire, read from
+/// `UNH` DE 0057 — the same field `validate-release-codes` looks at.
+fn observed_release_codes(dir: &Path) -> HashSet<(String, String)> {
+    let mut out = HashSet::new();
+    fn walk(dir: &Path, out: &mut HashSet<(String, String)>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("edi")
+                && let Ok(content) = std::fs::read_to_string(&path)
+            {
+                for seg in content.split('\'') {
+                    let seg = seg.trim();
+                    let Some(rest) = seg.strip_prefix("UNH+") else {
+                        continue;
+                    };
+                    // UNH+<0062>+<TYPE>:<0052>:<0054>:<0051>:<0057>
+                    let Some(s009) = rest.split('+').nth(1) else {
+                        continue;
+                    };
+                    let parts: Vec<&str> = s009.split(':').collect();
+                    if let (Some(ty), Some(rel)) = (parts.first(), parts.get(4)) {
+                        out.insert(((*ty).to_lowercase(), (*rel).to_owned()));
+                    }
+                }
+            }
+        }
+    }
+    walk(dir, &mut out);
+    out
+}
 
 fn collect_covered(dir: &Path, covered: &mut HashSet<u32>) {
     let entries = match std::fs::read_dir(dir) {
@@ -591,6 +693,59 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
             }
             generated += 1;
         }
+    }
+
+    // ── One witness per non-superseded release ──────────────────────────────
+    //
+    // The loop above emits a PID once, at the release in force today. A release
+    // whose Anwendungszeitpunkt has not arrived therefore appears on no fixture,
+    // and `validate-release-codes` fails for it. Emit the missing witnesses,
+    // named by release so they never collide with the per-PID file.
+    let observed = observed_release_codes(Path::new(&fixtures_base));
+    for ((msg_type, release), (pid, bgm)) in collect_release_witnesses(&profiles_dir, today) {
+        if let Some(ref f) = msg_type_filter
+            && &msg_type != f
+        {
+            continue;
+        }
+        if observed.contains(&(msg_type.clone(), release.clone())) {
+            continue;
+        }
+        let Some(meta) = type_meta(&msg_type) else {
+            continue;
+        };
+        let gen_dir = format!("{fixtures_base}/{msg_type}/gen");
+        if !dry_run
+            && !Path::new(&gen_dir).exists()
+            && let Err(e) = std::fs::create_dir_all(&gen_dir)
+        {
+            eprintln!("generate-fixtures: cannot create {gen_dir}: {e}");
+            return false;
+        }
+        let slug: String = release
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    c.to_ascii_lowercase()
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let path = format!("{gen_dir}/pid_{pid}_{slug}.gen.edi");
+        let content = render_fixture(&meta, pid, &release, bgm.as_deref());
+        if dry_run {
+            println!("DRY-RUN  would write {path} (release witness)");
+        } else {
+            match std::fs::write(&path, &content) {
+                Ok(()) => println!("GENERATE {path} (release witness)"),
+                Err(e) => {
+                    eprintln!("generate-fixtures: cannot write {path}: {e}");
+                    return false;
+                }
+            }
+        }
+        generated += 1;
     }
 
     eprintln!();
