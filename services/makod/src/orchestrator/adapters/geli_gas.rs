@@ -212,9 +212,7 @@ pub fn geli_gas_registry() -> AdapterRegistry<GeliGasSupplierChangeWorkflow> {
                     u.transactions()
                         .first()
                         // UTILMD Gas names every Lokation in `SG5 LOC+172`
-                        // Meldepunkt, not in the Strom `Z16`/`Z17` pair —
-                        // reading only those left `malo_id` empty on every
-                        // message a real Gas counterparty sends.
+                        // Meldepunkt, not in the Strom `Z16`/`Z17` pair.
                         .and_then(|t| t.lokation())
                         .unwrap_or(""),
                 ),

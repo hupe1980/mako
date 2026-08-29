@@ -629,7 +629,7 @@ pub struct Lin {
 /// **Builder note:** write the PIA composite through
 /// `Writer::write_composites` (the builders' `emit_comp!`), where the OBIS is
 /// one component and its colons are escaped structurally — never pre-join the
-/// composite with `:` and hand it to `write_raw`.
+/// composite with `:` and hand it to `write_simple`.
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
 #[edifact(segment = "PIA", layout = crate::messages::layouts::PIA)]
 pub struct Pia {

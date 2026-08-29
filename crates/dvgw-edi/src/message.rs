@@ -208,8 +208,7 @@ impl DvgwMessage {
     ///
     /// Returns [`Error::Serialize`] when a segment value cannot be encoded.
     pub fn serialize(&self) -> Result<Vec<u8>, Error> {
-        edifact_rs::segments_to_bytes_owned(&self.segments)
-            .map_err(|e| Error::Serialize(e.to_string()))
+        edifact_rs::segments_to_bytes(&self.segments).map_err(|e| Error::Serialize(e.to_string()))
     }
 
     // ── Construction ─────────────────────────────────────────────────────────
@@ -395,7 +394,7 @@ fn parse_items(
     let mut current_period: Option<DvgwPeriod> = None;
 
     for seg in segments {
-        match seg.tag.as_str() {
+        match &*seg.tag {
             "LIN" => {
                 items.push(LineItem {
                     number: seg

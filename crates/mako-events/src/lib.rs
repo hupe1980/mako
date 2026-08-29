@@ -66,6 +66,16 @@ pub mod mako {
     pub const CONTRL_RECEIVED: &str = "de.mako.contrl.received";
     /// MaLo identified during Lieferantenwechsel (GPKE identification step).
     pub const MALO_IDENTIFIED: &str = "de.mako.malo.identified";
+    /// The LFA answered the NB's Anfrage zur Beendigung der Zuordnung — or its
+    /// 09:00 window lapsed, which the Festlegung reads as a Zustimmung.
+    ///
+    /// Its own type rather than a `PROCESS_*` one because it is an **input to a
+    /// different process**: `processd` resumes the *Anmeldung* decision on it,
+    /// walking `E_0623` Prüfschritte 30–50 with the answer. `data` carries
+    /// `malo_id`, `anmeldung_process_id`, `lfa_mp_id`, `zustimmung`,
+    /// `fristablauf`, and — when the LFA named them — `antwortcode`, `grund`
+    /// and the Fall-b `zuordnungsende`.
+    pub const ABMELDEANFRAGE_BEANTWORTET: &str = "de.mako.abmeldeanfrage.beantwortet";
     /// Outbound EDIFACT interchange handed to the webhook EDIFACT sender.
     ///
     /// Emitted **only** by `WebhookEdifactSender`, the development / ERP
@@ -542,6 +552,7 @@ pub fn all() -> &'static [&'static str] {
         mako::APERAK_TIMEOUT,
         mako::CONTRL_RECEIVED,
         mako::MALO_IDENTIFIED,
+        mako::ABMELDEANFRAGE_BEANTWORTET,
         mako::EDIFACT_OUTBOUND,
         mako::NETZZUGANG_UEBERMITTLUNGSBEDARF,
         // de.markt.*

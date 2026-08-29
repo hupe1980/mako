@@ -1,6 +1,6 @@
 //! Guards for the builder writer discipline.
 //!
-//! `emit_seg!` writes through `Writer::write_raw`, where a `:` inside an
+//! `emit_seg!` writes through `Writer::write_simple`, where a `:` inside an
 //! element string is a component boundary. That is only safe for compile-time
 //! constants: a runtime value carrying a literal separator would be silently
 //! split instead of escaped. Runtime data must go through `emit_comp!`

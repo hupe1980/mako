@@ -249,6 +249,135 @@ pub struct AnmeldungAnfrage {
     /// random.
     #[serde(default)]
     pub erzeugung: Option<ErzeugungsAnmeldung>,
+    /// The state of the **Abmeldeanfrage** leg — what `E_0623` Prüfschritte
+    /// 20–50 / 410–440 read.
+    ///
+    /// GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4 decides whether
+    /// the NB may confirm at all or must first ask the incumbent LFA to release
+    /// the Marktlokation (55010, Nr. 3). Defaults to
+    /// [`Abmeldeanfrage::NichtErforderlich`], which is the correct value for an
+    /// unassigned Marktlokation and the *only* one a caller that cannot see the
+    /// Versorgungsstatus may use.
+    #[serde(default)]
+    pub abmeldeanfrage: Abmeldeanfrage,
+}
+
+// ── Abmeldeanfrage ────────────────────────────────────────────────────────────
+
+/// Where the NB stands on the Anfrage zur Beendigung der Zuordnung.
+///
+/// The three states are the three answers `E_0623` Prüfschritt 20 / 410 can get,
+/// plus the one that is not an answer at all: an Anfrage that is owed and has
+/// not gone out yet. Collapsing that into „no Anfrage" is what lets an NB
+/// confirm a Lieferantenwechsel without ever consulting the incumbent.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum Abmeldeanfrage {
+    /// No LFA holds the Marktlokation at the Zuordnungsbeginn — Prüfschritt 4
+    /// sends the NB straight to Prozessschritt 5, and Prüfschritt 20 answers
+    /// „nein".
+    #[default]
+    NichtErforderlich,
+    /// An LFA holds it and the 55010 has not been sent. Not an error: the NB
+    /// owes the Anfrage („parallel zu Nr. 2") before it may answer the LFN.
+    Erforderlich {
+        /// Every LFA to ask. More than one at Geschäftsvorfall 3, where the
+        /// Marktlokation is split across Tranchen and the Anfrage goes to all
+        /// of them (SD Lieferbeginn Nr. 3).
+        lfa_mp_ids: Vec<String>,
+    },
+    /// The Anfrage went out. `antwort` is `None` while the 09:00 window is still
+    /// open **and** after it lapsed — „Verstreicht die Frist, ohne dass eine
+    /// Antwort beim NB eingeht, gilt dies als Bestätigung nach Fall a)", so the
+    /// two are the same input to the tree and only the clock tells them apart.
+    Gestellt {
+        /// The LFA's answer, or `None` for silence.
+        antwort: Option<LfaAntwort>,
+    },
+}
+
+/// What the LFA answered the Anfrage zur Beendigung der Zuordnung with
+/// (55011 / 55012, `E_0624`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "cluster", rename_all = "snake_case")]
+pub enum LfaAntwort {
+    /// 55011 — the LFA releases the Marktlokation.
+    Zustimmung {
+        /// The `E_0624` Zustimmungscode (`A31`, `A34`, `A36`, `A38`, `A40`, `A42`).
+        code: String,
+        /// **Fall b** — the LFA confirms to a Zuordnungsende *earlier* than the
+        /// LFN's Zuordnungsbeginn (`A34` „teilt sein Lieferendedatum in der
+        /// Antwort mit"). Verbrauchende Marktlokationen only, and it must lie
+        /// „mindestens 1 WT nach dem ÜT der Anmeldung"; otherwise the
+        /// Zuordnungsende stays the Zuordnungsbeginn der Anmeldung
+        /// (GPKE Teil 2 § 2.1.2 Nr. 10).
+        #[serde(default, with = "crate::nb::types::date_opt")]
+        zuordnungsende: Option<Date>,
+    },
+    /// 55012 — the LFA refuses.
+    Widerspruch {
+        /// The `E_0624` Ablehnungscode. `A30` / `A41` („bereits abgemeldet")
+        /// is the one that still lets the Anmeldung through.
+        code: String,
+        /// „Hierbei übermittelt der LFA eine Begründung für den Widerspruch."
+        grund: Option<String>,
+    },
+}
+
+/// `Option<Date>` as an ISO-8601 string, for the wire.
+pub(crate) mod date_opt {
+    use serde::{Deserialize as _, Deserializer, Serializer};
+    use time::Date;
+    use time::format_description::well_known::Iso8601;
+
+    #[allow(clippy::ref_option, clippy::trivially_copy_pass_by_ref)]
+    pub fn serialize<S: Serializer>(v: &Option<Date>, s: S) -> Result<S::Ok, S::Error> {
+        match v {
+            Some(d) => s.serialize_some(
+                &d.format(&Iso8601::DATE)
+                    .map_err(serde::ser::Error::custom)?,
+            ),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Date>, D::Error> {
+        let raw = Option::<String>::deserialize(d)?;
+        raw.map(|s| Date::parse(&s, &Iso8601::DATE).map_err(serde::de::Error::custom))
+            .transpose()
+    }
+}
+
+// ── TranchenZuordnung ─────────────────────────────────────────────────────────
+
+/// The Tranchen arithmetic `E_0623` Prüfschritte 500–540 run on a
+/// Geschäftsvorfall 3.
+///
+/// A tranchierte Marktlokation is held by several LFA at once, so the question
+/// is not „did *the* LFA agree" but „did enough percentage come free". Four of
+/// the six `E_0623` outcomes live only here — two Ablehnungen (`A53`, `A54`) and
+/// two Zustimmungen that differ in what the NB does next (`A55` triggers
+/// „Herstellung einer 100 % LF-Zuordnung", `A56` does not).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct TranchenZuordnung {
+    /// Prüfschritt 500 — „Wurden Anfragen zur Beendigung der Zuordnung an die
+    /// zugeordneten Lieferanten der Tranchen … gestellt?" `false` when the
+    /// Marktlokation carried no Tranche to release.
+    pub anfragen_gestellt: bool,
+    /// Prüfschritt 510.
+    pub mindestens_eine_zustimmung: bool,
+    /// Prüfschritt 520.
+    pub ausreichender_prozentsatz: bool,
+    /// Prüfschritt 530 — „Verbleibt ein Anteil im Bilanzkreis des
+    /// Netzbetreibers?"
+    pub restanteil_im_nb_bilanzkreis: bool,
+    /// Prüfschritt 540.
+    pub direktvermarktungspflichtig: bool,
+    /// The share the LFN registered, for the rejection text.
+    pub gewuenschter_prozentsatz: String,
+    /// The share that actually came free, for the rejection text.
+    pub freigewordener_prozentsatz: String,
 }
 
 // ── AbmeldungAnfrage ──────────────────────────────────────────────────────────
@@ -345,6 +474,21 @@ pub enum NbEntscheidung {
         /// Human-readable explanation for the operator alert.
         reason: String,
     },
+    /// `E_0622` passed, but the Marktlokation is assigned at the
+    /// Zuordnungsbeginn — GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 1
+    /// **Prüfschritt 4** sends the NB to Prozessschritt 3 first.
+    ///
+    /// **Not an error and not an escalation.** Send the Anfrage zur Beendigung
+    /// der Zuordnung (55010 / 44010) to every named LFA, then decide again once
+    /// the answer arrives or the 09:00 window lapses — silence counts as
+    /// Zustimmung, so a lapsed window is a *result*, not a timeout.
+    AnfrageErforderlich {
+        /// Every LFA to ask. More than one at Geschäftsvorfall 3.
+        lfa_mp_ids: Vec<String>,
+        /// The Zuordnungsende to request — the Zuordnungsbeginn of this
+        /// Anmeldung (SD Lieferbeginn Nr. 3).
+        zuordnungsende: Date,
+    },
 }
 
 impl NbEntscheidung {
@@ -370,7 +514,7 @@ impl NbEntscheidung {
         match self {
             Self::Accept(a) => Some(&a.antwortcode),
             Self::Reject(r) => Some(&r.antwort.antwortcode),
-            Self::Escalate { .. } => None,
+            Self::Escalate { .. } | Self::AnfrageErforderlich { .. } => None,
         }
     }
 
@@ -380,7 +524,7 @@ impl NbEntscheidung {
         match self {
             Self::Accept(a) => a.ebd.as_deref(),
             Self::Reject(r) => r.antwort.ebd.as_deref(),
-            Self::Escalate { .. } => None,
+            Self::Escalate { .. } | Self::AnfrageErforderlich { .. } => None,
         }
     }
 
@@ -400,6 +544,13 @@ impl NbEntscheidung {
     #[must_use]
     pub const fn is_escalate(&self) -> bool {
         matches!(self, Self::Escalate { .. })
+    }
+
+    /// Returns `true` when the NB must first ask the LFA to release the
+    /// Marktlokation.
+    #[must_use]
+    pub const fn needs_abmeldeanfrage(&self) -> bool {
+        matches!(self, Self::AnfrageErforderlich { .. })
     }
 }
 

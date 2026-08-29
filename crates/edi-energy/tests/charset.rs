@@ -47,10 +47,7 @@ fn a_conformant_unoc_interchange_with_umlauts_parses() {
     assert!(
         carries_umlaut,
         "decoded interchange lost its umlauts: {:?}",
-        msg.segments()
-            .iter()
-            .map(|s| s.tag.as_str())
-            .collect::<Vec<_>>()
+        msg.segments().iter().map(|s| &*s.tag).collect::<Vec<_>>()
     );
 }
 

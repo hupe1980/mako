@@ -288,12 +288,14 @@ fn rule_ajt_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
 
 /// Layer 3 — verify the `NAD` segment group appears at most 99 times.
 ///
-/// Each occurrence of the trigger segment `NAD` marks the start of
-/// one group instance.  The MIG specifies a maximum of 99 instances.
+/// Counted over the group tree, so a nested group sharing the `NAD`
+/// trigger is not charged here.  The MIG specifies a maximum of 99 instances.
 fn rule_group_sg1_nad_max_occurrences(
+    _root: &edifact_rs::SegmentGroupIndexed<'_>,
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
+    // SG1 is not in GROUP_SCHEMA, so the tree cannot count it.
     let count = segments.iter().filter(|s| s.tag == "NAD").count();
     if count > 99 {
         issues.push(
@@ -309,12 +311,14 @@ fn rule_group_sg1_nad_max_occurrences(
 
 /// Layer 3 — verify the `DOC` segment group appears at most 9999 times.
 ///
-/// Each occurrence of the trigger segment `DOC` marks the start of
-/// one group instance.  The MIG specifies a maximum of 9999 instances.
+/// Counted over the group tree, so a nested group sharing the `DOC`
+/// trigger is not charged here.  The MIG specifies a maximum of 9999 instances.
 fn rule_group_sg2_doc_max_occurrences(
+    _root: &edifact_rs::SegmentGroupIndexed<'_>,
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
+    // SG2 is not in GROUP_SCHEMA, so the tree cannot count it.
     let count = segments.iter().filter(|s| s.tag == "DOC").count();
     if count > 9_999 {
         issues.push(
@@ -332,9 +336,11 @@ fn rule_group_sg2_doc_max_occurrences(
 ///
 /// The MIG specifies a minimum of 1 occurrence(s) for this group.
 fn rule_group_sg1_nad_min_occurrences(
+    _root: &edifact_rs::SegmentGroupIndexed<'_>,
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
+    // SG1 is not in GROUP_SCHEMA, so the tree cannot count it.
     let count = segments.iter().filter(|s| s.tag == "NAD").count();
     if count < 1 {
         issues.push(
@@ -352,9 +358,11 @@ fn rule_group_sg1_nad_min_occurrences(
 ///
 /// The MIG specifies a minimum of 1 occurrence(s) for this group.
 fn rule_group_sg2_doc_min_occurrences(
+    _root: &edifact_rs::SegmentGroupIndexed<'_>,
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
+    // SG2 is not in GROUP_SCHEMA, so the tree cannot count it.
     let count = segments.iter().filter(|s| s.tag == "DOC").count();
     if count < 1 {
         issues.push(
@@ -406,7 +414,7 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
                 let seg = &all_segs[idx];
                 if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {
                     cursor += pos;
-                } else if expected.contains(&seg.tag) {
+                } else if expected.contains(&seg.tag.as_ref()) {
                     // Tag is known for this group but already passed — ordering violation.
                     issues.push(
                         ValidationIssue::new(
@@ -414,7 +422,7 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
                             "segment appears out of order".to_owned(),
                         )
                         .with_rule_id(rule_id)
-                        .with_segment(seg.tag.to_owned()),
+                        .with_segment(seg.tag.as_ref()),
                     );
                 }
                 // Tags not in this group's expected order are unknown here;
@@ -435,19 +443,47 @@ static MIG_COMDIS_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("COMDIS-MIG-1.0g")
             .for_message_type("COMDIS")
             .for_release("1.0g")
-            .with_stateless_rule_fn(rule_unh_mandatory)
-            .with_stateless_rule_fn(rule_bgm_mandatory)
-            .with_stateless_rule_fn(rule_rff_mandatory)
-            .with_stateless_rule_fn(rule_dtm_mandatory)
-            .with_stateless_rule_fn(rule_unt_mandatory)
-            .with_stateless_rule_fn(rule_nad_mandatory)
-            .with_stateless_rule_fn(rule_doc_mandatory)
-            .with_stateless_rule_fn(rule_ajt_mandatory)
-            .with_stateless_rule_fn(rule_group_sg1_nad_max_occurrences)
-            .with_stateless_rule_fn(rule_group_sg2_doc_max_occurrences)
-            .with_stateless_rule_fn(rule_group_sg1_nad_min_occurrences)
-            .with_stateless_rule_fn(rule_group_sg2_doc_min_occurrences)
-            .with_stateless_rule_fn(rule_segment_order),
+            .with_rule_fn(rule_unh_mandatory)
+            .with_rule_fn(rule_bgm_mandatory)
+            .with_rule_fn(rule_rff_mandatory)
+            .with_rule_fn(rule_dtm_mandatory)
+            .with_rule_fn(rule_unt_mandatory)
+            .with_rule_fn(rule_nad_mandatory)
+            .with_rule_fn(rule_doc_mandatory)
+            .with_rule_fn(rule_ajt_mandatory)
+            .with_named_group_rule_fn(
+                "MIG-COMDIS-MIG-1.0g-GROUP-SG1-NAD-CARD-MAX",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg1_nad_max_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_named_group_rule_fn(
+                "MIG-COMDIS-MIG-1.0g-GROUP-SG2-DOC-CARD-MAX",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg2_doc_max_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_named_group_rule_fn(
+                "MIG-COMDIS-MIG-1.0g-GROUP-SG1-NAD-CARD-MIN",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg1_nad_min_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_named_group_rule_fn(
+                "MIG-COMDIS-MIG-1.0g-GROUP-SG2-DOC-CARD-MIN",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg2_doc_min_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_rule_fn(rule_segment_order),
     )
 });
 
@@ -467,7 +503,7 @@ static AHB_29001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("COMDIS-AHB-1.0g-29001")
             .for_message_type("COMDIS")
             .for_release("1.0g")
-            .with_named_stateless_rule_fn("AHB-29001-AJT-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29001-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "AJT",
@@ -477,7 +513,7 @@ static AHB_29001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-29001-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29001-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -487,7 +523,7 @@ static AHB_29001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-29001-COM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29001-COM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "COM",
@@ -497,7 +533,7 @@ static AHB_29001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-29001-CTA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29001-CTA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CTA",
@@ -507,7 +543,7 @@ static AHB_29001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-29001-CUX-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29001-CUX-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CUX",
@@ -517,7 +553,7 @@ static AHB_29001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-29001-DOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29001-DOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DOC",
@@ -527,7 +563,7 @@ static AHB_29001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-29001-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29001-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -537,7 +573,7 @@ static AHB_29001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-29001-MOA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29001-MOA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "MOA",
@@ -547,7 +583,7 @@ static AHB_29001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-29001-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29001-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -557,7 +593,7 @@ static AHB_29001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-29001-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29001-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -580,7 +616,7 @@ static AHB_29002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("COMDIS-AHB-1.0g-29002")
             .for_message_type("COMDIS")
             .for_release("1.0g")
-            .with_named_stateless_rule_fn("AHB-29002-AJT-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29002-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "AJT",
@@ -590,7 +626,7 @@ static AHB_29002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-29002-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29002-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -600,7 +636,7 @@ static AHB_29002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-29002-COM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29002-COM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "COM",
@@ -610,7 +646,7 @@ static AHB_29002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-29002-CTA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29002-CTA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CTA",
@@ -620,7 +656,7 @@ static AHB_29002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-29002-DOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29002-DOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DOC",
@@ -630,7 +666,7 @@ static AHB_29002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-29002-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29002-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -640,7 +676,7 @@ static AHB_29002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-29002-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29002-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -650,7 +686,7 @@ static AHB_29002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-29002-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29002-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -688,7 +724,7 @@ pub(crate) fn ahb_rule_pack(pid: Option<Pruefidentifikator>) -> Arc<ProfileRuleP
             None => Arc::clone(&AHB_ALL_PACK_COMDIS_1_0G),
             Some(_unknown) => Arc::new(ProfileRulePack::new("unknown-pid")
                 .for_message_type("COMDIS")
-                .with_named_stateless_rule_fn("AHB-UNKNOWN-PID", |_segs, issues| {
+                .with_named_rule_fn("AHB-UNKNOWN-PID", |_segs, issues| {
                     issues.push(ValidationIssue::new(
                         ValidationSeverity::Warning,
                         "Pruefidentifikator is not registered for this release — AHB rules were not applied",

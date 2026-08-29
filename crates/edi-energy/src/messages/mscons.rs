@@ -133,18 +133,14 @@ impl MsconsMessage {
         assoc_code: impl Into<Box<str>>,
         pruefidentifikator: Option<u32>,
     ) -> Self {
-        let (bgm, dtm, sender, receiver, references, delivery_points) = {
-            let borrowed: Vec<edifact_rs::Segment<'_>> =
-                segments.iter().map(|s| s.as_borrowed()).collect();
-            (
-                find_bgm(&borrowed),
-                collect_dtm_header(&borrowed),
-                find_nad(&borrowed, "MS"),
-                find_nad(&borrowed, "MR"),
-                parse_references(&borrowed),
-                parse_delivery_points(&borrowed),
-            )
-        };
+        let (bgm, dtm, sender, receiver, references, delivery_points) = (
+            find_bgm(&segments),
+            collect_dtm_header(&segments),
+            find_nad(&segments, "MS"),
+            find_nad(&segments, "MR"),
+            parse_references(&segments),
+            parse_delivery_points(&segments),
+        );
         Self {
             core: MessageCore::new(
                 segments,
@@ -219,7 +215,11 @@ impl EdifactDeserialize for MsconsMessage {
     ) -> Result<Self, edifact_rs::EdifactError> {
         let (message_ref, assoc_code) = MessageCore::extract_unh_fields(segments)?;
         let pid = MessageCore::extract_bgm_pid(segments);
-        let owned: Vec<OwnedSegment> = segments.iter().cloned().map(OwnedSegment::from).collect();
+        let owned: Vec<OwnedSegment> = segments
+            .iter()
+            .cloned()
+            .map(edifact_rs::Segment::into_owned)
+            .collect();
         Ok(Self::from_parts(owned, message_ref, assoc_code, pid))
     }
 }
@@ -348,7 +348,7 @@ fn parse_sg6_groups(
 
         // Consume DTM / RFF (SG7) / CCI (SG8) before any LIN.
         while i < detail.len() && !SG6_TERMINATORS.iter().any(|t| &detail[i].tag == t) {
-            match detail[i].tag {
+            match &*detail[i].tag {
                 "DTM" => {
                     if let Some(d) = try_deserialize::<Dtm>(&detail[i]) {
                         dtm.push(d);
@@ -462,7 +462,7 @@ fn parse_sg10_quantities(
         let mut status = Vec::new();
 
         while i < detail.len() && !SG10_TERMINATORS.iter().any(|t| &detail[i].tag == t) {
-            match detail[i].tag {
+            match &*detail[i].tag {
                 "DTM" => {
                     if let Some(d) = try_deserialize::<Dtm>(&detail[i]) {
                         dtm.push(d);
@@ -498,9 +498,9 @@ fn parse_sg10_quantities(
 fn mscons_semantic_pack() -> ProfileRulePack {
     ProfileRulePack::new("MSCONS-SEM")
         .for_message_type("MSCONS")
-        .with_stateless_rule_fn(rule_sem_location_format)
-        .with_stateless_rule_fn(rule_sem_period_order)
-        .with_stateless_rule_fn(rule_sem_unit_unknown)
+        .with_rule_fn(rule_sem_location_format)
+        .with_rule_fn(rule_sem_period_order)
+        .with_rule_fn(rule_sem_unit_unknown)
 }
 
 /// `SEM-MSCONS-LOCATION-FORMAT` — the Meldepunkt in `LOC+172` must carry either

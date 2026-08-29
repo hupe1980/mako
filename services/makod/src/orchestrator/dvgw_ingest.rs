@@ -92,7 +92,7 @@ struct DvgwEnvelope {
 }
 
 fn interchange_envelope(body: &[u8]) -> DvgwEnvelope {
-    edifact_rs::from_bytes_owned_with_config(body, edifact_rs::ReaderConfig::default())
+    edifact_rs::from_reader_with_config(body, edifact_rs::ReaderConfig::default())
         .take_while(Result::is_ok)
         .map_while(Result::ok)
         .take(2)

@@ -210,6 +210,23 @@ impl EdifactIngestDispatcher {
             // PID 55010 (Anfrage zur Beendigung der Zuordnung, NB → LFA) — GPKE
             // Teil 2. LFA-role makod receives 55010, answers 55011/55012.
             "gpke-beendigung-zuordnung" => match pid {
+                // The LFA's answer, coming back to the **NB** that asked. Not a
+                // spawn: the process is the one the 55010 opened, and it is
+                // keyed by MaLo. „Nach Ablauf der Frist eingehende Antworten
+                // sind für den Fortlauf dieses Prozesses unerheblich" — a late
+                // one resolves to `process_not_found` or is refused by the
+                // workflow, both of which leave the Anmeldung's outcome alone.
+                55011 | 55012 => {
+                    let cmd = adapters::gpke_beendigung_zuordnung_antwort_registry()
+                        .dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    self.resume_by_key::<GpkeBeendigungZuordnungWorkflow>(
+                        malo_id.as_str(),
+                        "gpke-beendigung-zuordnung",
+                        cmd,
+                    )
+                    .await
+                }
                 55010 => {
                     let cmd = adapters::gpke_beendigung_zuordnung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);

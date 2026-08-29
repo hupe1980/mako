@@ -1,6 +1,6 @@
 //! [`DvgwPlatform`] — the parse and validate entry points.
 
-use edifact_rs::{MessageWindowsIter, OwnedSegment, ReaderConfig};
+use edifact_rs::{MessageWindows, OwnedSegment, ReaderConfig};
 
 use crate::{error::Error, message::DvgwMessage, report::DvgwReport, validate};
 
@@ -73,7 +73,7 @@ impl DvgwPlatform {
         input: &[u8],
     ) -> impl Iterator<Item = Result<DvgwMessage, Error>> + use<> {
         let tokenized: Result<Vec<OwnedSegment>, Error> =
-            edifact_rs::from_bytes_owned_with_config(input, self.config)
+            edifact_rs::from_reader_with_config(input, self.config)
                 .collect::<Result<_, _>>()
                 .map_err(Error::Parse);
 
@@ -86,9 +86,7 @@ impl DvgwPlatform {
             segments
                 .into_iter()
                 .flat_map(|segments| {
-                    MessageWindowsIter::new(
-                        segments.into_iter().map(Ok::<_, edifact_rs::EdifactError>),
-                    )
+                    MessageWindows::new(segments.into_iter().map(Ok::<_, edifact_rs::EdifactError>))
                 })
                 .map(|window| {
                     let window = window.map_err(Error::Parse)?;
@@ -141,7 +139,7 @@ impl DvgwPlatform {
 #[must_use]
 pub fn sniff(input: &[u8]) -> Option<crate::document::DvgwDocument> {
     let segments: Vec<OwnedSegment> =
-        edifact_rs::from_bytes_owned_with_config(input, ReaderConfig::default())
+        edifact_rs::from_reader_with_config(input, ReaderConfig::default())
             .take_while(Result::is_ok)
             .map_while(Result::ok)
             // `BGM` is the second segment of a message, so there is no reason to

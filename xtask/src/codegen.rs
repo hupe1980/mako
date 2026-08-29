@@ -264,6 +264,21 @@ struct AhbGroupRule {
     /// `M` = mandatory in every occurrence, `N` = must not appear, `O` = optional
     /// (used only with `qualifier_restrictions` to enforce qualifier values).
     requirement: String,
+    /// Require the group itself to occur, not merely that `tag` is present
+    /// wherever the group does occur.
+    ///
+    /// `requirement: "M"` alone is a *conditional* obligation: it fires once per
+    /// group occurrence, so a message that omits the group entirely satisfies it
+    /// vacuously. Where the AHB marks the group Muss (a Bedingung such as `[518]`
+    /// „Es sind alle Altlieferanten anzugeben"), set this and the absence is
+    /// caught.
+    ///
+    /// Off by default: an AHB `Muss` on a segment does not by itself say the
+    /// enclosing group must appear, and turning presence on for a conditional
+    /// group would reject valid messages. Set it only against the AHB Bedingung
+    /// that says so.
+    #[serde(default)]
+    group_required: bool,
     /// Qualifier restrictions keyed by EDIFACT DE identifier string.
     /// Maps to the list of allowed qualifier values for that element (element 0,
     /// component 0 by default, matching `ahb_check_qualifier` semantics).
@@ -1518,9 +1533,12 @@ fn emit_profile_module(p: &ProfileData) -> String {
     emit_directory_validator_fn(&mut out, &p.message_type, &p.release);
 
     // Emit MIG rule pack
-    emit_mig_rule_pack(&mut out, &p.mig);
+    // The tree-counted cardinality rules can only answer for groups the pruned
+    // `GROUP_SCHEMA` actually carries, so the pack is told which those are.
+    let schema_group_ids = schema_group_ids(&p.mig.segment_groups, &p.ahb);
+    emit_mig_rule_pack(&mut out, &p.mig, &schema_group_ids);
 
-    // Emit segment group schema static (used by validate_lenient_grouped_owned)
+    // Emit segment group schema static (used by validate_grouped)
     emit_group_schema_static(&mut out, &p.mig.segment_groups, &p.ahb);
 
     // Emit AHB rule functions + pack
@@ -1661,7 +1679,7 @@ fn emit_segments_array(out: &mut String, segments: &[&MigSegment]) {
     writeln!(out, "    static SEGMENTS: &[SegmentDefinition] = &[").unwrap();
     let mut seen_tags = std::collections::HashSet::new();
     for seg in segments {
-        if !seen_tags.insert(seg.tag.as_str()) {
+        if !seen_tags.insert(&*seg.tag) {
             continue; // skip duplicate tags (same segment in multiple groups)
         }
         // `SegmentDefinition` is `#[non_exhaustive]`; its `const fn new` keeps
@@ -1823,7 +1841,7 @@ fn emit_expected_components(out: &mut String, segments: &[&MigSegment]) {
     let mut arms: Vec<(String, usize, u8)> = Vec::new();
     let mut seen_tags = std::collections::HashSet::new();
     for seg in segments {
-        if !seen_tags.insert(seg.tag.as_str()) {
+        if !seen_tags.insert(&*seg.tag) {
             continue;
         }
         for (i, elem) in seg.elements.iter().enumerate() {
@@ -1977,7 +1995,7 @@ fn mig_segment_sequence(mig: &MigProfile) -> Vec<String> {
     // Build the set of top-level tags so we can exclude trigger tags that would
     // create ambiguity with group-internal occurrences.
     let toplevel_tags: std::collections::HashSet<&str> =
-        mig.segments.iter().map(|s| s.tag.as_str()).collect();
+        mig.segments.iter().map(|s| &*s.tag).collect();
 
     // Step 1 — top-level header segments in declared order, excluding UNT.
     // Dedup while preserving order (PARTIN has repeated tags in mig.segments).
@@ -2029,11 +2047,15 @@ fn collect_relevant_group_ids(ahb: &AhbProfile) -> std::collections::HashSet<&st
 /// `relevant_ids`.  Used to prune the GROUP_SCHEMA to a minimal tree that only
 /// includes paths leading to groups with actual rules.
 ///
-/// Pruning is essential when two sibling groups share the same trigger tag:
+/// Pruning is essential when two **sibling** groups share the same trigger tag:
 /// `group_segments_indexed` picks the first schema match, so including an
 /// irrelevant sibling before a relevant one prevents the relevant one from
 /// ever being reached.  (MSCONS: SG2 and SG5 both trigger on NAD; SG5 leads
-/// to SG10 which has group rules, SG2 does not.)
+/// to SG10 which has group rules, SG2 does not.)  The trigger alone cannot say
+/// which of two same-level groups a segment opens, so the schema has to choose.
+///
+/// A **nested** group sharing an ancestor's trigger resolves on its own: UTILMD
+/// SG12 (`NAD`, inside SG4) nests rather than reopening the top-level SG2.
 fn group_is_relevant(group: &MigGroup, relevant_ids: &std::collections::HashSet<&str>) -> bool {
     if relevant_ids.contains(group.id.as_str()) {
         return true;
@@ -2054,7 +2076,7 @@ fn group_is_relevant(group: &MigGroup, relevant_ids: &std::collections::HashSet<
 /// correctly recognises the NAD that starts the rule-relevant subtree.
 ///
 /// For profiles with no group_rules the schema is empty (`&[]`), and
-/// `validate_lenient_grouped` short-circuits to pure flat validation.
+/// `validate_grouped` short-circuits to pure flat validation.
 fn emit_group_schema_static(out: &mut String, groups: &[MigGroup], ahb: &AhbProfile) {
     let relevant_ids = collect_relevant_group_ids(ahb);
     writeln!(out).unwrap();
@@ -2103,7 +2125,11 @@ fn emit_group_def(
     }
 }
 
-fn emit_mig_rule_pack(out: &mut String, mig: &MigProfile) {
+fn emit_mig_rule_pack(
+    out: &mut String,
+    mig: &MigProfile,
+    schema_group_ids: &std::collections::HashSet<String>,
+) {
     let pack_name = format!("{}-MIG-{}", mig.message_type, mig.release);
 
     // Collect segments that must appear in EVERY valid message (de-dup by tag).
@@ -2113,7 +2139,7 @@ fn emit_mig_rule_pack(out: &mut String, mig: &MigProfile) {
     let mandatory_segs: Vec<&MigSegment> = globally_mandatory
         .iter()
         .copied()
-        .filter(|s| seen_mandatory.insert(s.tag.as_str()))
+        .filter(|s| seen_mandatory.insert(&*s.tag))
         .collect();
 
     // Collect HEADER-ONLY segments with max_occurrences > 1.
@@ -2131,9 +2157,7 @@ fn emit_mig_rule_pack(out: &mut String, mig: &MigProfile) {
         .segments
         .iter()
         .filter(|s| {
-            s.max_occurrences > 1
-                && !group_tags.contains(s.tag.as_str())
-                && seen_card.insert(s.tag.as_str())
+            s.max_occurrences > 1 && !group_tags.contains(&*s.tag) && seen_card.insert(&*s.tag)
         })
         .collect();
 
@@ -2268,12 +2292,12 @@ fn emit_mig_rule_pack(out: &mut String, mig: &MigProfile) {
 
     // Emit group cardinality rule functions (enforce group max_occurrences)
     for group in &groups_with_max {
-        emit_group_cardinality_rule_fn(out, group, &pack_name);
+        emit_group_cardinality_rule_fn(out, group, &pack_name, schema_group_ids);
     }
 
     // Emit group minimum-occurrence rule functions (enforce mandatory group presence)
     for (group, min) in &groups_with_min {
-        emit_group_min_occurrences_rule_fn(out, group, *min, &pack_name);
+        emit_group_min_occurrences_rule_fn(out, group, *min, &pack_name, schema_group_ids);
     }
 
     //  emit combined-bounds rules for trigger tags shared by multiple top-level groups.
@@ -2306,37 +2330,51 @@ fn emit_mig_rule_pack(out: &mut String, mig: &MigProfile) {
     writeln!(out, "            .for_release({:?})", mig.release).unwrap();
     for seg in &mandatory_segs {
         let fn_name = mandatory_rule_fn_name(&seg.tag);
-        writeln!(out, "            .with_stateless_rule_fn({fn_name})").unwrap();
+        writeln!(out, "            .with_rule_fn({fn_name})").unwrap();
     }
     for seg in &card_segs {
         let fn_name = cardinality_rule_fn_name(&seg.tag);
-        writeln!(out, "            .with_stateless_rule_fn({fn_name})").unwrap();
+        writeln!(out, "            .with_rule_fn({fn_name})").unwrap();
     }
     for group in &groups_needing_window_rules {
         let fn_name = group_window_rule_fn_name(&group.trigger_segment);
-        writeln!(out, "            .with_stateless_rule_fn({fn_name})").unwrap();
+        writeln!(out, "            .with_rule_fn({fn_name})").unwrap();
     }
+    // Group cardinality is counted over the tree, so these register as group
+    // rules and act only at the root — one verdict per message, not per node.
     for group in &groups_with_max {
         let fn_name = group_cardinality_rule_fn_name(&group.trigger_segment, &group.id);
-        writeln!(out, "            .with_stateless_rule_fn({fn_name})").unwrap();
+        let rule_id = format!(
+            "MIG-{pack_name}-GROUP-{}-{}-CARD-MAX",
+            group.id, group.trigger_segment
+        );
+        writeln!(
+            out,
+            "            .with_named_group_rule_fn({rule_id:?}, |g, segs, _ctx, issues| {{ if g.definition == \"ROOT\" {{ {fn_name}(g, segs, issues); }} }})"
+        )
+        .unwrap();
     }
     for (group, _min) in &groups_with_min {
         let fn_name = group_min_occurrences_rule_fn_name(&group.trigger_segment, &group.id);
-        writeln!(out, "            .with_stateless_rule_fn({fn_name})").unwrap();
+        let rule_id = format!(
+            "MIG-{pack_name}-GROUP-{}-{}-CARD-MIN",
+            group.id, group.trigger_segment
+        );
+        writeln!(
+            out,
+            "            .with_named_group_rule_fn({rule_id:?}, |g, segs, _ctx, issues| {{ if g.definition == \"ROOT\" {{ {fn_name}(g, segs, issues); }} }})"
+        )
+        .unwrap();
     }
     for (trigger, _combined_max) in &combined_max_bounds {
         let fn_name = group_combined_max_rule_fn_name(trigger);
-        writeln!(out, "            .with_stateless_rule_fn({fn_name})").unwrap();
+        writeln!(out, "            .with_rule_fn({fn_name})").unwrap();
     }
     for (trigger, _combined_min) in &combined_min_bounds {
         let fn_name = group_combined_min_rule_fn_name(trigger);
-        writeln!(out, "            .with_stateless_rule_fn({fn_name})").unwrap();
+        writeln!(out, "            .with_rule_fn({fn_name})").unwrap();
     }
-    writeln!(
-        out,
-        "            .with_stateless_rule_fn(rule_segment_order)"
-    )
-    .unwrap();
+    writeln!(out, "            .with_rule_fn(rule_segment_order)").unwrap();
     writeln!(out, "        )").unwrap();
     writeln!(out, "    }});").unwrap();
     writeln!(out).unwrap();
@@ -2459,6 +2497,81 @@ fn emit_cardinality_rule_fn(out: &mut String, tag: &str, max: u32, _pack_name: &
     writeln!(out, "    }}").unwrap();
 }
 
+/// Emit the signature of a group-cardinality rule function.
+///
+/// Only one of the two inputs is read — which one depends on whether the tree
+/// can count this group — so the other is named `_`-prefixed rather than
+/// suppressed with an attribute.
+fn emit_group_count_signature(
+    out: &mut String,
+    fn_name: &str,
+    group: &MigGroup,
+    schema_group_ids: &std::collections::HashSet<String>,
+) {
+    let (root, segments) = if schema_group_ids.contains(&group.id) {
+        ("root", "_segments")
+    } else {
+        ("_root", "segments")
+    };
+    writeln!(
+        out,
+        "    fn {fn_name}({root}: &edifact_rs::SegmentGroupIndexed<'_>, {segments}: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {{"
+    )
+    .unwrap();
+}
+
+/// Emit the `let count = …` line for a group-cardinality rule.
+///
+/// Counting the group in the tree is exact — a nested group sharing the trigger
+/// is not charged to the outer one. It is only possible for a group the pruned
+/// `GROUP_SCHEMA` carries; for the rest, counting the trigger tag over the flat
+/// segment list stays the best available answer.
+fn emit_group_occurrence_count(
+    out: &mut String,
+    group: &MigGroup,
+    schema_group_ids: &std::collections::HashSet<String>,
+) {
+    let group_id = &group.id;
+    let trigger = &group.trigger_segment;
+    if schema_group_ids.contains(group_id) {
+        writeln!(out, "        let count = root.find({group_id:?}).count();").unwrap();
+    } else {
+        writeln!(
+            out,
+            "        // {group_id} is not in GROUP_SCHEMA, so the tree cannot count it."
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "        let count = segments.iter().filter(|s| s.tag == {trigger:?}).count();"
+        )
+        .unwrap();
+    }
+}
+
+/// Every group id the emitted `GROUP_SCHEMA` will carry, at any depth.
+fn schema_group_ids(groups: &[MigGroup], ahb: &AhbProfile) -> std::collections::HashSet<String> {
+    fn walk(
+        g: &MigGroup,
+        relevant: &std::collections::HashSet<&str>,
+        out: &mut std::collections::HashSet<String>,
+    ) {
+        if !group_is_relevant(g, relevant) {
+            return;
+        }
+        out.insert(g.id.clone());
+        for child in &g.groups {
+            walk(child, relevant, out);
+        }
+    }
+    let relevant = collect_relevant_group_ids(ahb);
+    let mut out = std::collections::HashSet::new();
+    for g in groups {
+        walk(g, &relevant, &mut out);
+    }
+    out
+}
+
 fn group_window_rule_fn_name(trigger_tag: &str) -> String {
     format!("rule_group_{}_window", trigger_tag.to_lowercase())
 }
@@ -2471,13 +2584,19 @@ fn group_cardinality_rule_fn_name(trigger_tag: &str, group_id: &str) -> String {
     )
 }
 
-/// Emit a rule function that enforces the maximum number of group occurrences
-/// for a given trigger segment.
+/// Emit a rule function that enforces the maximum number of group occurrences.
 ///
-/// The generated function counts occurrences of `trigger_segment` in the flat
-/// segment list.  Each occurrence marks the start of one group instance.  When
-/// the count exceeds `max_occurrences`, an `Error`-severity issue is emitted.
-fn emit_group_cardinality_rule_fn(out: &mut String, group: &MigGroup, pack_name: &str) {
+/// The count comes from the **indexed group tree**, not from occurrences of the
+/// trigger tag in the flat segment list. The two differ whenever a nested group
+/// shares its trigger with one further out — UTILMD SG12 and SG2 are both `NAD`
+/// — and the flat count then charges the inner group's segments to the outer
+/// group's cardinality.
+fn emit_group_cardinality_rule_fn(
+    out: &mut String,
+    group: &MigGroup,
+    pack_name: &str,
+    schema_group_ids: &std::collections::HashSet<String>,
+) {
     let trigger = &group.trigger_segment;
     let max = group.max_occurrences;
     let fn_name = group_cardinality_rule_fn_name(trigger, &group.id);
@@ -2492,24 +2611,16 @@ fn emit_group_cardinality_rule_fn(out: &mut String, group: &MigGroup, pack_name:
     writeln!(out, "    ///").unwrap();
     writeln!(
         out,
-        "    /// Each occurrence of the trigger segment `{trigger}` marks the start of"
+        "    /// Counted over the group tree, so a nested group sharing the `{trigger}`"
     )
     .unwrap();
     writeln!(
         out,
-        "    /// one group instance.  The MIG specifies a maximum of {max} instances."
+        "    /// trigger is not charged here.  The MIG specifies a maximum of {max} instances."
     )
     .unwrap();
-    writeln!(
-        out,
-        "    fn {fn_name}(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {{"
-    )
-    .unwrap();
-    writeln!(
-        out,
-        "        let count = segments.iter().filter(|s| s.tag == {trigger:?}).count();"
-    )
-    .unwrap();
+    emit_group_count_signature(out, &fn_name, group, schema_group_ids);
+    emit_group_occurrence_count(out, group, schema_group_ids);
     let max_lit = fmt_literal(u64::from(max));
     writeln!(out, "        if count > {max_lit} {{").unwrap();
     writeln!(out, "            issues.push(").unwrap();
@@ -2540,14 +2651,14 @@ fn group_min_occurrences_rule_fn_name(trigger_tag: &str, group_id: &str) -> Stri
 /// Emit a rule function that enforces the minimum number of group occurrences
 /// for a given trigger segment.
 ///
-/// The generated function counts occurrences of `trigger_segment` in the flat
-/// segment list.  When the count is below `min_occurrences`, an `Error`-severity
-/// issue is emitted.
+/// The count comes from the indexed group tree rather than the flat segment
+/// list, for the reason given on [`emit_group_cardinality_rule_fn`].
 fn emit_group_min_occurrences_rule_fn(
     out: &mut String,
     group: &MigGroup,
     min: u32,
     pack_name: &str,
+    schema_group_ids: &std::collections::HashSet<String>,
 ) {
     let trigger = &group.trigger_segment;
     let fn_name = group_min_occurrences_rule_fn_name(trigger, &group.id);
@@ -2565,16 +2676,8 @@ fn emit_group_min_occurrences_rule_fn(
         "    /// The MIG specifies a minimum of {min} occurrence(s) for this group."
     )
     .unwrap();
-    writeln!(
-        out,
-        "    fn {fn_name}(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {{"
-    )
-    .unwrap();
-    writeln!(
-        out,
-        "        let count = segments.iter().filter(|s| s.tag == {trigger:?}).count();"
-    )
-    .unwrap();
+    emit_group_count_signature(out, &fn_name, group, schema_group_ids);
+    emit_group_occurrence_count(out, group, schema_group_ids);
     writeln!(out, "        if count < {min} {{").unwrap();
     writeln!(out, "            issues.push(").unwrap();
     writeln!(out, "                ValidationIssue::new(").unwrap();
@@ -2735,7 +2838,7 @@ fn emit_group_window_rule_fn(out: &mut String, group: &MigGroup, pack_name: &str
         .segments
         .iter()
         .filter(|s| s.mandatory && s.tag != *trigger)
-        .map(|s| s.tag.as_str())
+        .map(|s| &*s.tag)
         .collect();
 
     if mandatory_inner.is_empty() {
@@ -2995,7 +3098,7 @@ fn emit_segment_order_rule_fn(out: &mut String, mig: &MigProfile, pack_name: &st
         writeln!(out, "                    cursor += pos;").unwrap();
         writeln!(
             out,
-            "                }} else if expected.contains(&seg.tag) {{"
+            "                }} else if expected.contains(&seg.tag.as_ref()) {{"
         )
         .unwrap();
         writeln!(out, "                    issues.push(").unwrap();
@@ -3014,7 +3117,7 @@ fn emit_segment_order_rule_fn(out: &mut String, mig: &MigProfile, pack_name: &st
         writeln!(out, "                        .with_rule_id(rule_id)").unwrap();
         writeln!(
             out,
-            "                        .with_segment(seg.tag.to_owned()),"
+            "                        .with_segment(seg.tag.as_ref()),"
         )
         .unwrap();
         writeln!(out, "                    );").unwrap();
@@ -3069,7 +3172,7 @@ fn emit_segment_order_rule_fn(out: &mut String, mig: &MigProfile, pack_name: &st
         .unwrap();
         writeln!(
             out,
-            "                if DETAIL_GROUP_TRIGGERS.contains(&seg.tag) {{"
+            "                if DETAIL_GROUP_TRIGGERS.contains(&seg.tag.as_ref()) {{"
         )
         .unwrap();
         writeln!(
@@ -3086,7 +3189,7 @@ fn emit_segment_order_rule_fn(out: &mut String, mig: &MigProfile, pack_name: &st
         writeln!(out, "                    cursor += pos;").unwrap();
         writeln!(
             out,
-            "                }} else if expected.contains(&seg.tag) {{"
+            "                }} else if expected.contains(&seg.tag.as_ref()) {{"
         )
         .unwrap();
         writeln!(out, "                    issues.push(").unwrap();
@@ -3105,7 +3208,7 @@ fn emit_segment_order_rule_fn(out: &mut String, mig: &MigProfile, pack_name: &st
         writeln!(out, "                        .with_rule_id(rule_id)").unwrap();
         writeln!(
             out,
-            "                        .with_segment(seg.tag.to_owned()),"
+            "                        .with_segment(seg.tag.as_ref()),"
         )
         .unwrap();
         writeln!(out, "                    );").unwrap();
@@ -3263,7 +3366,7 @@ fn emit_segment_order_rule_fn(out: &mut String, mig: &MigProfile, pack_name: &st
         writeln!(out, "                        cursor += pos;").unwrap();
         writeln!(
             out,
-            "                    }} else if expected.contains(&seg.tag) {{"
+            "                    }} else if expected.contains(&seg.tag.as_ref()) {{"
         )
         .unwrap();
         writeln!(out, "                        // Tag is known for this group but already passed — ordering violation.").unwrap();
@@ -3283,7 +3386,7 @@ fn emit_segment_order_rule_fn(out: &mut String, mig: &MigProfile, pack_name: &st
         writeln!(out, "                            .with_rule_id(rule_id)").unwrap();
         writeln!(
             out,
-            "                            .with_segment(seg.tag.to_owned()),"
+            "                            .with_segment(seg.tag.as_ref()),"
         )
         .unwrap();
         writeln!(out, "                        );").unwrap();
@@ -3338,7 +3441,7 @@ fn emit_segment_order_rule_fn(out: &mut String, mig: &MigProfile, pack_name: &st
         writeln!(out, "                cursor += pos;").unwrap();
         writeln!(
             out,
-            "            }} else if EXPECTED_ORDER.contains(&seg.tag) {{"
+            "            }} else if EXPECTED_ORDER.contains(&seg.tag.as_ref()) {{"
         )
         .unwrap();
         writeln!(
@@ -3356,11 +3459,7 @@ fn emit_segment_order_rule_fn(out: &mut String, mig: &MigProfile, pack_name: &st
         .unwrap();
         writeln!(out, "                    )").unwrap();
         writeln!(out, "                    .with_rule_id({rule_id:?})").unwrap();
-        writeln!(
-            out,
-            "                    .with_segment(seg.tag.to_owned()),"
-        )
-        .unwrap();
+        writeln!(out, "                    .with_segment(seg.tag.as_ref()),").unwrap();
         writeln!(out, "                );").unwrap();
         writeln!(out, "            }}").unwrap();
         writeln!(out, "            // Unknown tags are passed through — they get caught by the DirectoryValidator.").unwrap();
@@ -3475,7 +3574,7 @@ fn emit_ahb_rule_pack(out: &mut String, ahb: &AhbProfile, message_type: &str) {
     writeln!(out, "                .for_message_type({message_type:?})").unwrap();
     writeln!(
         out,
-        "                .with_named_stateless_rule_fn(\"AHB-UNKNOWN-PID\", |_segs, issues| {{"
+        "                .with_named_rule_fn(\"AHB-UNKNOWN-PID\", |_segs, issues| {{"
     )
     .unwrap();
     writeln!(out, "                    issues.push(ValidationIssue::new(").unwrap();
@@ -3546,8 +3645,8 @@ fn emit_ahb_pid_rule_fn(
     writeln!(out, "            .for_release({release:?})").unwrap();
 
     for rule in &pid.segment_rules {
-        let occ = *tag_occurrence.get(rule.tag.as_str()).unwrap_or(&0);
-        tag_occurrence.insert(rule.tag.as_str(), occ + 1);
+        let occ = *tag_occurrence.get(&*rule.tag).unwrap_or(&0);
+        tag_occurrence.insert(&*rule.tag, occ + 1);
         let tag = &rule.tag;
         let code = pid.code;
 
@@ -3575,7 +3674,7 @@ fn emit_ahb_pid_rule_fn(
             let msg = format!("mandatory segment {tag} is missing for Pruefidentifikator {code}");
             writeln!(
                 out,
-                "            .with_named_stateless_rule_fn({rule_id:?}, |segs, issues| {{"
+                "            .with_named_rule_fn({rule_id:?}, |segs, issues| {{"
             )
             .unwrap();
             writeln!(out, "                ahb_check_mandatory(segs, {tag:?}, {rule_id:?}, {msg:?}, \"{code}\", issues);").unwrap();
@@ -3589,7 +3688,7 @@ fn emit_ahb_pid_rule_fn(
                 format!("segment {tag} should be present for Pruefidentifikator {code} (Soll)");
             writeln!(
                 out,
-                "            .with_named_stateless_rule_fn({rule_id:?}, |segs, issues| {{"
+                "            .with_named_rule_fn({rule_id:?}, |segs, issues| {{"
             )
             .unwrap();
             writeln!(out, "                ahb_check_soll(segs, {tag:?}, {rule_id:?}, {msg:?}, \"{code}\", issues);").unwrap();
@@ -3603,7 +3702,7 @@ fn emit_ahb_pid_rule_fn(
                 format!("segment {tag} must not appear for Pruefidentifikator {code} (not used)");
             writeln!(
                 out,
-                "            .with_named_stateless_rule_fn({rule_id:?}, |segs, issues| {{"
+                "            .with_named_rule_fn({rule_id:?}, |segs, issues| {{"
             )
             .unwrap();
             writeln!(out, "                ahb_check_not_used(segs, {tag:?}, {rule_id:?}, {msg:?}, \"{code}\", issues);").unwrap();
@@ -3614,7 +3713,7 @@ fn emit_ahb_pid_rule_fn(
         // These stay as standalone functions (complex logic — see conditional fns above).
         for (i, _cond) in rule.conditional_rules.iter().enumerate() {
             let rfn = ahb_conditional_rule_fn_name(code, tag, i);
-            writeln!(out, "            .with_stateless_rule_fn({rfn})").unwrap();
+            writeln!(out, "            .with_rule_fn({rfn})").unwrap();
         }
 
         // ── Qualifier restrictions ──────────────────────────────────────────
@@ -3636,7 +3735,7 @@ fn emit_ahb_pid_rule_fn(
                     .join(" | ");
                 writeln!(
                     out,
-                    "            .with_named_stateless_rule_fn({rule_id:?}, |segs, issues| {{"
+                    "            .with_named_rule_fn({rule_id:?}, |segs, issues| {{"
                 )
                 .unwrap();
                 writeln!(out, "                ahb_check_qualifier(segs, {tag:?}, {rule_id:?}, {msg:?}, |q| matches!(q, {allowed_literal}), \"{code}\", issues);").unwrap();
@@ -3667,7 +3766,7 @@ fn emit_ahb_pid_rule_fn(
                     .join(" | ");
                 writeln!(
                     out,
-                    "            .with_named_stateless_rule_fn({rule_id:?}, |segs, issues| {{"
+                    "            .with_named_rule_fn({rule_id:?}, |segs, issues| {{"
                 )
                 .unwrap();
                 writeln!(out, "                ahb_check_field_value(segs, {tag:?}, {ei}, {rule_id:?}, {msg:?}, |v| matches!(v, {allowed_literal}), \"{code}\", issues);").unwrap();
@@ -3694,7 +3793,7 @@ fn emit_ahb_pid_rule_fn(
                     .join(" | ");
                 writeln!(
                     out,
-                    "            .with_named_stateless_rule_fn({rule_id:?}, |segs, issues| {{"
+                    "            .with_named_rule_fn({rule_id:?}, |segs, issues| {{"
                 )
                 .unwrap();
                 writeln!(out, "                ahb_check_required_qualifier(segs, {tag:?}, {rule_id:?}, {msg:?}, |q| matches!(q, {required_literal}), \"{code}\", issues);").unwrap();
@@ -3745,6 +3844,53 @@ fn emit_ahb_group_rule(out: &mut String, code: u32, gr: &AhbGroupRule) {
             "            .require_segment_in_group({group_id:?}, {tag:?}, {rule_id:?})"
         )
         .unwrap();
+    }
+
+    // ── The group itself must occur ─────────────────────────────────────────
+    //
+    // `require_segment_in_group` fires once per occurrence, so it says nothing
+    // about a group that never occurs at all — a message omitting the group
+    // satisfies it vacuously. This rule runs at the tree root and asks whether
+    // the group is anywhere in the message.
+    //
+    // `SegmentGroupIndexed::find` searches the whole subtree rather than direct
+    // children, so it reaches a group at any depth — including one that shares
+    // its trigger segment with a group further out, which is why this could not
+    // be expressed before edifact-rs 0.17.
+    if gr.group_required {
+        let rule_id = format!("AHB-{code}-{group_id}-PRESENT");
+        let msg =
+            format!("mandatory segment group {group_id} is missing for Pruefidentifikator {code}");
+        writeln!(
+            out,
+            "            .with_named_group_rule_fn({rule_id:?}, |group, _segs, _ctx, issues| {{"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "                if group.definition == \"ROOT\" && group.find({group_id:?}).next().is_none() {{"
+        )
+        .unwrap();
+        writeln!(out, "                    issues.push(").unwrap();
+        writeln!(
+            out,
+            "                        ValidationIssue::new(ValidationSeverity::Error, {msg:?}.to_owned())"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "                            .with_rule_id({rule_id:?})"
+        )
+        .unwrap();
+        writeln!(out, "                            .with_segment({tag:?})").unwrap();
+        writeln!(
+            out,
+            "                            .with_context_entry(\"pid\", \"{code}\"),"
+        )
+        .unwrap();
+        writeln!(out, "                    );").unwrap();
+        writeln!(out, "                }}").unwrap();
+        writeln!(out, "            }})").unwrap();
     }
 
     // ── Not-used in group ───────────────────────────────────────────────────
@@ -6026,6 +6172,7 @@ mod tests {
             group_id: "SG4".into(),
             tag: "STS".into(),
             requirement: "M".into(),
+            group_required: false,
             qualifier_restrictions: std::collections::BTreeMap::new(),
             conditional_rules: vec![],
             description: String::new(),
@@ -6048,6 +6195,7 @@ mod tests {
             group_id: "SG3".into(),
             tag: "FTX".into(),
             requirement: "N".into(),
+            group_required: false,
             qualifier_restrictions: std::collections::BTreeMap::new(),
             conditional_rules: vec![],
             description: String::new(),
@@ -6073,6 +6221,7 @@ mod tests {
             group_id: "SG3".into(),
             tag: "NAD".into(),
             requirement: "M".into(),
+            group_required: false,
             qualifier_restrictions: qr,
             conditional_rules: vec![],
             description: String::new(),
@@ -6101,6 +6250,7 @@ mod tests {
             group_id: "SG4".into(),
             tag: "BGM".into(),
             requirement: "O".into(),
+            group_required: false,
             qualifier_restrictions: qr,
             conditional_rules: vec![],
             description: String::new(),
@@ -6145,6 +6295,7 @@ mod tests {
             group_id: "SG10".into(),
             tag: "STS".into(),
             requirement: "C".into(),
+            group_required: false,
             qualifier_restrictions: std::collections::BTreeMap::new(),
             conditional_rules: vec![cond],
             description: String::new(),

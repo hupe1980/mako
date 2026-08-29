@@ -62,6 +62,7 @@ use uuid::Uuid;
 use mako_markt::domain::Sparte;
 use secrecy::SecretString;
 
+use crate::pg::abmeldeanfrage::{AbmeldeanfrageRecord, PgAbmeldeanfrageRepository};
 use crate::pg::anmeldung::{AnmeldungDecision, AnmeldungDecisionRecord, PgAnmeldungRepository};
 use crate::pg::approval::{ApprovalQueueEntry, PgApprovalQueue};
 
@@ -168,6 +169,15 @@ pub struct AnmeldungPayload {
     /// existierende Zuordnung, where the AHB marks it Muss. Without it the LFN
     /// receives a Meldung it cannot tie to the Anmeldung it just sent.
     pub vorgangsnummer: Option<String>,
+    /// `SG12 NAD+Z09` — the Letztverbraucher the LFN named.
+    ///
+    /// Copied verbatim onto the Anfrage zur Beendigung der Zuordnung, where
+    /// UTILMD AHB Strom Bedingung `[279]` marks it Muss for a verbrauchende
+    /// oder ruhende Marktlokation. It is what `E_0624` Prüfschritt 30 tells an
+    /// Einzug from a Wechsel by.
+    pub kunde_name: Option<String>,
+    /// `NAD` DE 3045 — `Z01` Personenname, `Z02` Firmenbezeichnung.
+    pub kunde_namensformat: Option<String>,
 }
 
 impl AnmeldungPayload {
@@ -213,6 +223,14 @@ impl AnmeldungPayload {
             .get("vorgangsnummer")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
+        let kunde_name = data
+            .get("kunde_name")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        let kunde_namensformat = data
+            .get("kunde_namensformat")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
 
         let date_str = data.get("process_date")?.as_str()?;
         let process_date = if date_str.len() == 8 {
@@ -236,6 +254,8 @@ impl AnmeldungPayload {
             veraeusserungsform,
             bilanzierungsmethode,
             vorgangsnummer,
+            kunde_name,
+            kunde_namensformat,
         })
     }
 
@@ -269,6 +289,12 @@ impl AnmeldungPayload {
             transaktionsgrund: self.transaktionsgrund,
             marktlokationsart,
             erzeugung,
+            // Filled in by `evaluate_and_decide` once it has read the
+            // Versorgungsstatus — SD Lieferbeginn Nr. 1 Prüfschritt 4 asks
+            // whether the Marktlokation is assigned, which the message does not
+            // say. `NichtErforderlich` is the only value a caller that cannot
+            // see the projection may use.
+            abmeldeanfrage: mako_pruefung::Abmeldeanfrage::NichtErforderlich,
         }
     }
 }
@@ -341,6 +367,7 @@ pub async fn evaluate_and_decide(
     makod: &MakodClient,
     repo: &PgAnmeldungRepository,
     queue: &PgApprovalQueue,
+    pending: &PgAbmeldeanfrageRepository,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     if let Some(payload) = AbmeldungPayload::parse(event) {
         return decide_abmeldung(payload, event, config, reader, makod, repo, queue).await;
@@ -427,6 +454,10 @@ pub async fn evaluate_and_decide(
     // Zuordnung must reference the LFN's own Vorgangsnummer, and the
     // Beendigung der Zuordnung names the Zuordnungsende, which is the
     // Zuordnungsbeginn of this Anmeldung.
+    let kunde = Kunde {
+        name: payload.kunde_name.clone(),
+        namensformat: payload.kunde_namensformat.clone(),
+    };
     let meldung = MeldepflichtContext {
         sparte: sparte_of(pid),
         lfn_mp_id: lf_mp_id.clone(),
@@ -465,6 +496,23 @@ pub async fn evaluate_and_decide(
             }
         }
     }
+    // ── SD Lieferbeginn Nr. 1 Prüfschritt 4 ───────────────────────────────
+    //
+    // „Ist die Marktlokation bzw. Tranche zum Zuordnungsbeginn einem LF
+    // zugeordnet, fährt der NB mit Prozessschritt 2 fort, ansonsten mit
+    // Prozessschritt 5." This is the branch that makes the NB's answer
+    // two-phase, and the fact it turns on — who holds the Marktlokation — lives
+    // in `marktd`, not in the message.
+    //
+    // Set unconditionally to `Erforderlich` here; phase two replaces it with
+    // `Gestellt` and the LFA's answer. A Marktlokation with no incumbent stays
+    // `NichtErforderlich`, which is `E_0623` Prüfschritt 20 „nein".
+    anfrage.abmeldeanfrage = match versorgung.as_ref().and_then(|v| v.lf_mp_id.clone()) {
+        Some(lfa) => mako_pruefung::Abmeldeanfrage::Erforderlich {
+            lfa_mp_ids: vec![lfa],
+        },
+        None => mako_pruefung::Abmeldeanfrage::NichtErforderlich,
+    };
     let anfrage = anfrage;
     let now = OffsetDateTime::now_utc();
 
@@ -492,7 +540,12 @@ pub async fn evaluate_and_decide(
     };
     let grid_ref = grid_nc.as_ref();
 
-    let result = mako_pruefung::evaluate(
+    // `E_0622` / `E_3005` is the **Vorprüfung**: every code it publishes is an
+    // Ablehnung, and surviving it means only that the Anmeldung is not
+    // *directly* refusable. What the NB answers comes from `E_0623` / `E_3007`,
+    // which reads the LFA's answer to the Anfrage zur Beendigung der Zuordnung.
+    // Answering out of `E_0622` alone can only ever say `A51`.
+    let vorpruefung = mako_pruefung::evaluate(
         &anfrage,
         vs_ref,
         grid_ref,
@@ -500,6 +553,15 @@ pub async fn evaluate_and_decide(
         now,
         &config.netz_check_config(),
     );
+    let result = if vorpruefung.is_accept() {
+        // Geschäftsvorfall 3 answers out of Prüfschritte 500–600, which read a
+        // Tranchen-Zuordnung `marktd` does not project — the tree escalates on
+        // its own rather than guessing between two Ablehnungen and two
+        // Zustimmungen. See ROADMAP.md.
+        mako_pruefung::evaluate_lieferbeginn(&anfrage, None)
+    } else {
+        vorpruefung
+    };
 
     info!(
         %process_id, pid, %malo_id,
@@ -570,7 +632,7 @@ pub async fn evaluate_and_decide(
                 )
                 .await?;
             } else if config.auto_accept {
-                dispatch(makod, pid, &malo_id, process_id, &result).await?;
+                dispatch(makod, pid, &malo_id, process_id, &result, None).await?;
                 info!(%process_id, pid, %malo_id, antwortcode = result.antwortcode(),
                       "processd NB: dispatched bestaetigen");
                 // Prozessschritt 10 — „unverzüglich nach dem ÜZ von Nr. 5",
@@ -590,7 +652,7 @@ pub async fn evaluate_and_decide(
             }
         }
         NbEntscheidung::Reject(reason) => {
-            dispatch(makod, pid, &malo_id, process_id, &result).await?;
+            dispatch(makod, pid, &malo_id, process_id, &result, None).await?;
             info!(%process_id, pid, %malo_id, antwortcode = %reason.antwort.antwortcode,
                   "processd NB: dispatched ablehnen");
         }
@@ -598,8 +660,388 @@ pub async fn evaluate_and_decide(
             warn!(%process_id, pid, %malo_id, %reason, "processd NB: Escalate — operator action required");
             enqueue_for_operator(queue, config, &payload_meta, reason).await?;
         }
+        // ── SD Lieferbeginn Nr. 3 ─────────────────────────────────────────
+        //
+        // Not an answer to the LFN yet. The Marktlokation is assigned, so the
+        // NB owes the incumbent an Anfrage zur Beendigung der Zuordnung
+        // („parallel zu Nr. 2") and may only decide once the LFA has answered
+        // or its 09:00 window has lapsed.
+        NbEntscheidung::AnfrageErforderlich {
+            lfa_mp_ids,
+            zuordnungsende,
+        } => {
+            let waiting = AbmeldeanfrageRecord {
+                anmeldung_process_id: process_id,
+                malo_id: malo_id.clone(),
+                lfn_mp_id: lf_mp_id.clone(),
+                lfa_mp_ids: lfa_mp_ids.clone(),
+                pid: pid as i32,
+                anfrage: serde_json::to_value(&anfrage)?,
+                received_at,
+                tenant: config.tenant.clone(),
+            };
+            // Written **before** the Anfrage goes out. The LFA can answer
+            // within milliseconds in a loopback deployment, and an answer that
+            // finds no waiting row cannot resume the Anmeldung — which would
+            // leave it unanswered past its own 11:00 Frist.
+            //
+            // `ON CONFLICT DO NOTHING`: a redelivered Anmeldung must not send a
+            // second Anfrage, so a row that is already there ends the handling.
+            if !pending.insert(&waiting).await? {
+                info!(
+                    %process_id, pid, %malo_id,
+                    "processd NB: Anfrage zur Beendigung der Zuordnung already pending — \
+                     redelivered Anmeldung ignored"
+                );
+                return Ok(true);
+            }
+            for lfa in lfa_mp_ids {
+                dispatch_abmeldeanfrage(
+                    makod,
+                    config,
+                    &malo_id,
+                    process_id,
+                    lfa,
+                    &lf_mp_id,
+                    *zuordnungsende,
+                    &anfrage,
+                    &kunde,
+                )
+                .await?;
+            }
+            info!(
+                %process_id, pid, %malo_id, lfa = ?lfa_mp_ids,
+                "processd NB: Anfrage zur Beendigung der Zuordnung sent — the Anmeldung \
+                 waits for the LFA (09:00 Uhr des 1. WT; silence counts as Zustimmung)"
+            );
+        }
     }
 
+    Ok(true)
+}
+
+/// The Letztverbraucher the LFN named, as the NB passes it to the LFA.
+///
+/// A pair rather than a bare string, because DE 3036 without DE 3045 cannot be
+/// read back: `Z01` splits the five components into Nachname, Vorname, …, and
+/// `Z02` is one Firmenbezeichnung.
+#[derive(Debug, Clone, Default)]
+pub struct Kunde {
+    /// `SG12 NAD+Z09` DE 3036.
+    pub name: Option<String>,
+    /// `NAD` DE 3045.
+    pub namensformat: Option<String>,
+}
+
+/// The LFA's own answer, as the NB must restate it on its Ablehnung.
+///
+/// GPKE Teil 2 § 2.1.2 Nr. 6: „Der NB gibt zusätzlich den Grund der Ablehnung des
+/// LFA an, sofern dieser in Prozessschritt 4 die Anfrage abgelehnt hat." It rides
+/// `SG4 STS+Z35` „Status der Antwort des dritten Marktbeteiligten", which UTILMD
+/// AHB Strom marks **Muss** whenever the NB's own code is `A50` or `A57`.
+#[derive(Debug, Clone)]
+pub struct DritterMarktbeteiligter {
+    /// The LFA's `E_0624` Ablehnungscode.
+    pub antwortcode: String,
+    /// DE 9012 — the MaLo-ID the restated answer is about. `None` on a
+    /// verbrauchende Marktlokation, whose AHB column is empty because there is
+    /// exactly one LFA and the Vorgang already names it.
+    pub referenz_lokation: Option<String>,
+    /// `ZW3` Erzeugende Marktlokation or `ZW5` Tranche, beside the reference.
+    pub objekt: Option<String>,
+}
+
+// ── Anfrage zur Beendigung der Zuordnung (SD Lieferbeginn Nr. 3) ─────────────
+
+/// Send the LFA the Anfrage zur Beendigung der Zuordnung (55010).
+///
+/// „Der NB teilt dem LFA … mit, dass eine Anmeldung vorliegt, verbunden mit der
+/// Anfrage, ob der LFA die Zuordnung zur Marktlokation bzw. Tranche zum
+/// Zuordnungsbeginn des LFN beendet." Sent „parallel zu Nr. 2", the Information
+/// über existierende Zuordnung, and on the same condition.
+///
+/// Failure **is** propagated, unlike a Meldepflicht: without the Anfrage the
+/// Anmeldung has no path to an answer at all, so failing the event and letting
+/// the fan-out redeliver is the only outcome that still meets the 11:00 Frist.
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_abmeldeanfrage(
+    makod: &MakodClient,
+    config: &NbModuleConfig,
+    malo_id: &str,
+    process_id: Uuid,
+    lfa_mp_id: &str,
+    lfn_mp_id: &str,
+    zuordnungsende: time::Date,
+    anfrage: &AnmeldungAnfrage,
+    kunde: &Kunde,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut payload = serde_json::json!({
+        "malo_id":              malo_id,
+        "lfa_mp_id":            lfa_mp_id,
+        // „zum Zuordnungsbeginn des LFN" — the date the NB asks the LFA to end
+        // its assignment on.
+        "process_date":         zuordnungsende.to_string(),
+        "anmeldung_process_id": process_id,
+        // `SG12 NAD+VY` — the Neulieferant (UTILMD AHB Strom Bedingung [567]).
+        "lfn_mp_id":            lfn_mp_id,
+        "tranche":              anfrage.marktlokationsart == Marktlokationsart::Erzeugend
+            && anfrage.erzeugung.as_ref().is_none_or(|e| {
+                e.geschaeftsvorfall != mako_pruefung::nb::types::Geschaeftsvorfall::Eins
+            }),
+    });
+    // `SG12 NAD+Z09` „Kunde des LF" — Muss on a verbrauchende oder ruhende
+    // Marktlokation (Bedingung [279]), „der Kundenname aus der Anmeldung
+    // Lieferant neu" ([572]). Copied verbatim: it is the LFN's own claim about
+    // who the customer is, and the LFA compares it against its own contract
+    // holder at `E_0624` Prüfschritt 30. Absent when the inbound Anmeldung
+    // carried none, which is itself a defect in the LFN's message rather than
+    // something to invent a value for.
+    if let Some(name) = kunde.name.as_deref().filter(|n| !n.is_empty()) {
+        let obj = payload.as_object_mut().expect("json! built an object");
+        obj.insert("kunde_name".into(), name.into());
+        if let Some(format) = kunde.namensformat.as_deref().filter(|f| !f.is_empty()) {
+            obj.insert("kunde_namensformat".into(), format.into());
+        }
+    }
+
+    let cmd = ForwardCommand {
+        marktrolle: Some("NB".to_owned()),
+        command: mako_markt::commands::GPKE_BEENDIGUNG_ZUORDNUNG_ANFRAGEN.to_owned(),
+        malo_id: Some(malo_id.to_owned()),
+        melo_id: None,
+        payload,
+    };
+    let _ = config;
+    makod
+        .post_command(
+            &format!("processd-nb-abmeldeanfrage-{process_id}-{lfa_mp_id}"),
+            &cmd,
+        )
+        .await
+        .inspect_err(
+            |e| warn!(%e, %process_id, %malo_id, "processd NB: Abmeldeanfrage dispatch failed"),
+        )?;
+    Ok(())
+}
+
+// ── Phase two: the LFA answered ──────────────────────────────────────────────
+
+/// Resume an Anmeldung decision on the LFA's answer to the 55010.
+///
+/// Consumes `de.mako.abmeldeanfrage.beantwortet`, which `makod` emits both when
+/// the LFA answers (55011 / 55012) and when its 09:00 window lapses — „Verstreicht
+/// die Frist, ohne dass eine Antwort beim NB eingeht, gilt dies als Bestätigung
+/// nach Fall a)". The two are the same input to `E_0623`, and only the clock
+/// tells them apart.
+///
+/// Returns `true` when this module handled the event.
+///
+/// # Errors
+///
+/// Propagates store and transport failures so the fan-out redelivers.
+pub async fn resume_after_lfa_antwort(
+    event: &serde_json::Value,
+    config: &NbModuleConfig,
+    makod: &MakodClient,
+    repo: &PgAnmeldungRepository,
+    queue: &PgApprovalQueue,
+    pending: &PgAbmeldeanfrageRepository,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    let data = &event["data"];
+    let Some(anmeldung_process_id) = data
+        .get("anmeldung_process_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<Uuid>().ok())
+    else {
+        return Ok(false);
+    };
+
+    // `take` is one statement with `WHERE resolved_at IS NULL`: the LFA's answer
+    // and the 09:00 lapse race by design, and the loser must find nothing. That
+    // is what makes the Anmeldung answered exactly once.
+    let Some(waiting) = pending.take(anmeldung_process_id, &config.tenant).await? else {
+        info!(
+            %anmeldung_process_id,
+            "processd NB: no Anmeldung waiting on this Abmeldeanfrage — already resolved"
+        );
+        return Ok(true);
+    };
+
+    let mut anfrage: AnmeldungAnfrage = serde_json::from_value(waiting.anfrage.clone())?;
+    let zustimmung = data
+        .get("zustimmung")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let fristablauf = data
+        .get("fristablauf")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let antwortcode = data
+        .get("antwortcode")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let grund = data
+        .get("grund")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+
+    // Silence carries no code, which is exactly what `E_0623` Prüfschritt 30
+    // „nein" reads: the tree goes straight to 60 and confirms.
+    anfrage.abmeldeanfrage = mako_pruefung::Abmeldeanfrage::Gestellt {
+        antwort: antwortcode.map(|code| {
+            if zustimmung {
+                mako_pruefung::LfaAntwort::Zustimmung {
+                    code,
+                    // **Fall b** — the LFA released the Marktlokation earlier
+                    // than asked, and `A34` „teilt sein Lieferendedatum in der
+                    // Antwort mit".
+                    zuordnungsende: data
+                        .get("zuordnungsende")
+                        .and_then(|v| v.as_str())
+                        .and_then(parse_civil_date),
+                }
+            } else {
+                mako_pruefung::LfaAntwort::Widerspruch { code, grund }
+            }
+        }),
+    };
+
+    let result = mako_pruefung::evaluate_lieferbeginn(&anfrage, None);
+    let pid = waiting.pid as u32;
+    let malo_id = waiting.malo_id.clone();
+
+    // `SG4 STS+Z35` — the LFA's own code, which the NB restates when its ground
+    // is that refusal (`A50` / `A57`). Built only for a Widerspruch: a
+    // Zustimmung is not a ground and the AHB marks the segment Muss on those two
+    // codes alone.
+    let dritter = match (&anfrage.abmeldeanfrage, result.antwortcode()) {
+        (
+            mako_pruefung::Abmeldeanfrage::Gestellt {
+                antwort: Some(mako_pruefung::LfaAntwort::Widerspruch { code, .. }),
+            },
+            Some(own),
+        ) if mako_pruefung::CODES_REQUIRING_DRITTER.contains(&own) => {
+            // The erzeugende form names which object the restated answer is
+            // about — Geschäftsvorfall 3 has several LFA, so „the LFA said no"
+            // is not enough on its own.
+            let erzeugend = anfrage.marktlokationsart == Marktlokationsart::Erzeugend;
+            Some(DritterMarktbeteiligter {
+                antwortcode: code.clone(),
+                referenz_lokation: erzeugend.then(|| malo_id.clone()),
+                objekt: erzeugend.then(|| {
+                    match anfrage.erzeugung.as_ref().map(|e| e.geschaeftsvorfall) {
+                        Some(mako_pruefung::nb::types::Geschaeftsvorfall::Eins) | None => "ZW3",
+                        // Geschäftsvorfall 2 and 3 both address a Tranche.
+                        Some(_) => "ZW5",
+                    }
+                    .to_owned()
+                }),
+            })
+        }
+        _ => None,
+    };
+    info!(
+        %anmeldung_process_id, pid, %malo_id, fristablauf, zustimmung, outcome = ?result,
+        "processd NB: E_0623 resolved after the LFA's answer"
+    );
+
+    let now = OffsetDateTime::now_utc();
+    let (decision, code, detail) = classify(&result);
+    let rec = AnmeldungDecisionRecord {
+        id: Uuid::new_v4(),
+        process_id: anmeldung_process_id,
+        pid: waiting.pid,
+        malo_id: malo_id.clone(),
+        lf_mp_id: waiting.lfn_mp_id.clone(),
+        decision,
+        antwortcode: code,
+        detail,
+        // Phase one already wrote the § 20 parity row for this process, and
+        // `insert` is ON CONFLICT DO NOTHING on `(process_id, tenant)` — so
+        // this is the *first* recorded decision, because phase one produced
+        // none. The affiliate flag is recomputed rather than carried.
+        initiator_is_affiliate: waiting.lfn_mp_id == config.own_mp_id,
+        decided_at: now,
+        tenant: config.tenant.clone(),
+    };
+    if repo.insert(&rec).await? {
+        crate::metrics::record_decision(decision.as_str(), pid);
+    }
+
+    let meta = AnmeldungMeta {
+        pid,
+        process_id: anmeldung_process_id,
+        malo_id: malo_id.clone(),
+        // The Anmeldung's own 11:00 window, which runs from *its* arrival — not
+        // from the LFA's answer, which lands two hours before it closes.
+        received_at: waiting.received_at,
+    };
+
+    match &result {
+        NbEntscheidung::Accept(_) => {
+            if rec.initiator_is_affiliate {
+                warn!(%anmeldung_process_id, pid, %malo_id,
+                      "processd NB: § 20 EnWG — affiliate Anmeldung held for operator review");
+                enqueue_for_operator(
+                    queue,
+                    config,
+                    &meta,
+                    "§ 20 EnWG affiliate Anmeldung — the LFA released the Marktlokation, but \
+                     an affiliate may not take the automatic path a third party does not get",
+                )
+                .await?;
+            } else if config.auto_accept {
+                dispatch(
+                    makod,
+                    pid,
+                    &malo_id,
+                    anmeldung_process_id,
+                    &result,
+                    dritter.as_ref(),
+                )
+                .await?;
+            } else {
+                enqueue_for_operator(
+                    queue,
+                    config,
+                    &meta,
+                    "the LFA released the Marktlokation and E_0623 confirms; auto_accept is \
+                     off, so the Bestätigung is dispatched on operator approval",
+                )
+                .await?;
+            }
+        }
+        NbEntscheidung::Reject(reason) => {
+            // `A50` / `A57` / `Z35` — the outcome that did not exist before the
+            // NB sent an Anfrage at all.
+            warn!(%anmeldung_process_id, pid, %malo_id, antwortcode = %reason.antwort.antwortcode,
+                  "processd NB: the LFA refused, so the Anmeldung is refused");
+            dispatch(
+                makod,
+                pid,
+                &malo_id,
+                anmeldung_process_id,
+                &result,
+                dritter.as_ref(),
+            )
+            .await?;
+        }
+        NbEntscheidung::Escalate { reason } => {
+            enqueue_for_operator(queue, config, &meta, reason).await?;
+        }
+        NbEntscheidung::AnfrageErforderlich { .. } => {
+            // Unreachable: the leg is `Gestellt` by construction above.
+            warn!(%anmeldung_process_id, "processd NB: a second Abmeldeanfrage was demanded");
+            enqueue_for_operator(
+                queue,
+                config,
+                &meta,
+                "E_0623 demanded a second Anfrage zur Beendigung der Zuordnung after the LFA \
+                 had already answered — the Anmeldung needs an operator",
+            )
+            .await?;
+        }
+    }
     Ok(true)
 }
 
@@ -745,7 +1187,7 @@ impl MeldepflichtContext {
     /// `Idempotency-Key` is keyed on the **process id**, which is stable across
     /// redeliveries, so `makod` replays the original `202` instead of sending a
     /// second Meldung. A redelivery whose payload differs — the Versorgungsstatus
-    /// has moved on, so `beteiligte_marktpartner` now names the LFN as its own
+    /// has moved on, so `beteiligte_marktpartner` names the LFN as its own
     /// Altlieferant — is refused as a key conflict rather than sent, which is
     /// the outcome that matters: the second message is the wrong one.
     async fn send(
@@ -1053,7 +1495,7 @@ async fn decide_abmeldung(
                 )
                 .await?;
             } else if config.auto_accept {
-                dispatch(makod, pid, &malo_id, process_id, &result).await?;
+                dispatch(makod, pid, &malo_id, process_id, &result, None).await?;
                 info!(%process_id, pid, %malo_id, antwortcode = result.antwortcode(),
                       "processd NB: dispatched Bestätigung Abmeldung");
             } else {
@@ -1068,13 +1510,26 @@ async fn decide_abmeldung(
             }
         }
         NbEntscheidung::Reject(reason) => {
-            dispatch(makod, pid, &malo_id, process_id, &result).await?;
+            dispatch(makod, pid, &malo_id, process_id, &result, None).await?;
             info!(%process_id, pid, %malo_id, antwortcode = %reason.antwort.antwortcode,
                   "processd NB: dispatched Ablehnung Abmeldung");
         }
         NbEntscheidung::Escalate { reason } => {
             warn!(%process_id, pid, %malo_id, %reason, "processd NB: Abmeldung escalated");
             enqueue_for_operator(queue, config, &meta, reason).await?;
+        }
+        // `E_0607` / `E_3019` has no Abmeldeanfrage leg: the Abmeldung *is* the
+        // supplier releasing the Marktlokation, so there is nobody to ask.
+        NbEntscheidung::AnfrageErforderlich { .. } => {
+            warn!(%process_id, pid, %malo_id, "processd NB: E_0607 cannot demand an Abmeldeanfrage");
+            enqueue_for_operator(
+                queue,
+                config,
+                &meta,
+                "the Abmeldung tree answered AnfrageErforderlich, which E_0607 / E_3019 does \
+                 not publish — the Abmeldung is itself the release of the Marktlokation",
+            )
+            .await?;
         }
     }
 
@@ -1107,6 +1562,18 @@ fn classify(result: &NbEntscheidung) -> (AnmeldungDecision, Option<String>, Opti
             Some(r.antwort.antwortcode.clone()),
             Some(r.detail.clone()),
         ),
+        // An owed Abmeldeanfrage is not a decision yet, and it is not an
+        // operator case either — but the audit log has one column for „no
+        // answer went out", and this is one. The detail says which.
+        NbEntscheidung::AnfrageErforderlich { lfa_mp_ids, .. } => (
+            AnmeldungDecision::Escalate,
+            None,
+            Some(format!(
+                "waiting on the Anfrage zur Beendigung der Zuordnung to {lfa_mp_ids:?} \
+                 (GPKE Teil 2 § 2.1.2 Nr. 3); the LFA answers by 09:00 Uhr des 1. WT and \
+                 silence counts as Zustimmung"
+            )),
+        ),
         NbEntscheidung::Escalate { reason } => {
             (AnmeldungDecision::Escalate, None, Some(reason.clone()))
         }
@@ -1131,12 +1598,13 @@ async fn dispatch(
     malo_id: &str,
     process_id: Uuid,
     result: &NbEntscheidung,
+    dritter: Option<&DritterMarktbeteiligter>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (accept_cmd, reject_cmd) = answer_commands(pid);
     let (antwort, accept, detail) = match result {
         NbEntscheidung::Accept(a) => (a, true, None),
         NbEntscheidung::Reject(r) => (&r.antwort, false, Some(r.detail.as_str())),
-        NbEntscheidung::Escalate { .. } => {
+        NbEntscheidung::Escalate { .. } | NbEntscheidung::AnfrageErforderlich { .. } => {
             return Err("an escalated decision has no market answer to dispatch".into());
         }
     };
@@ -1160,6 +1628,16 @@ async fn dispatch(
         payload["reason"] = serde_json::json!(format!("{}: {detail}", antwort.antwortcode));
         payload["detail"] = serde_json::json!(detail);
     }
+    // `SG4 STS+Z35` — Muss alongside `A50` / `A57` (UTILMD AHB Strom Bedingungen
+    // `[356]` / `[84]`). `makod` refuses to render the Ablehnung without it, so
+    // omitting it here is a dispatch failure and not a silently thinner message.
+    if let Some(d) = dritter {
+        payload["dritter_antwortcode"] = serde_json::json!(d.antwortcode);
+        if let Some(referenz) = &d.referenz_lokation {
+            payload["dritter_referenz_lokation"] = serde_json::json!(referenz);
+            payload["dritter_objekt"] = serde_json::json!(d.objekt);
+        }
+    }
 
     let cmd = ForwardCommand {
         marktrolle: Some("NB".to_owned()),
@@ -1181,6 +1659,125 @@ async fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── The two-phase Anmeldung (SD Lieferbeginn Nr. 1 Prüfschritt 4) ────────
+
+    use mako_pruefung::nb::types::Marktlokationsart;
+    use mako_pruefung::{Abmeldeanfrage, LfaAntwort};
+
+    fn anmeldung(art: Marktlokationsart) -> AnmeldungAnfrage {
+        AnmeldungAnfrage {
+            pid: 55_001,
+            process_id: Uuid::nil(),
+            malo_id: "51238696781".to_owned(),
+            new_supplier_gln: "9900555000005".to_owned(),
+            grid_operator_gln: "9900357000004".to_owned(),
+            bilanzierungsgebiet: None,
+            process_date: time::Date::from_calendar_date(2026, time::Month::November, 1)
+                .expect("valid date"),
+            sparte: Sparte::Strom,
+            messtyp: mako_pruefung::Messtyp::Slp,
+            transaktionsgrund: Some("E03".to_owned()),
+            marktlokationsart: art,
+            erzeugung: None,
+            abmeldeanfrage: Abmeldeanfrage::NichtErforderlich,
+        }
+    }
+
+    /// The branch the whole two-phase design turns on. An **unassigned**
+    /// Marktlokation is confirmed in one pass — Prüfschritt 4 sends the NB
+    /// straight to Prozessschritt 5.
+    #[test]
+    fn an_unassigned_marktlokation_still_answers_in_one_pass() {
+        let a = anmeldung(Marktlokationsart::Verbrauchend);
+        let out = mako_pruefung::evaluate_lieferbeginn(&a, None);
+        assert!(out.is_accept(), "{out:?}");
+        assert!(!out.needs_abmeldeanfrage());
+    }
+
+    /// An **assigned** one cannot be: the NB owes the incumbent an Anfrage
+    /// first, and answering the LFN before it is the defect this closes.
+    #[test]
+    fn an_assigned_marktlokation_waits_for_the_lfa() {
+        let mut a = anmeldung(Marktlokationsart::Verbrauchend);
+        a.abmeldeanfrage = Abmeldeanfrage::Erforderlich {
+            lfa_mp_ids: vec!["9900111000002".to_owned()],
+        };
+        let out = mako_pruefung::evaluate_lieferbeginn(&a, None);
+        assert!(out.needs_abmeldeanfrage(), "{out:?}");
+        // …and the audit log records *why* nothing went out, without claiming
+        // an operator has to act.
+        let (decision, code, detail) = classify(&out);
+        assert_eq!(decision, AnmeldungDecision::Escalate);
+        assert!(code.is_none(), "no answer reached the wire");
+        assert!(
+            detail.as_deref().is_some_and(|d| d.contains("09:00")),
+            "{detail:?}"
+        );
+    }
+
+    /// Phase two, silence: „Verstreicht die Frist … gilt dies als Bestätigung
+    /// nach Fall a)". The window closing **confirms** the Anmeldung.
+    #[test]
+    fn a_lapsed_lfa_window_confirms_the_anmeldung() {
+        let mut a = anmeldung(Marktlokationsart::Verbrauchend);
+        a.abmeldeanfrage = Abmeldeanfrage::Gestellt { antwort: None };
+        let out = mako_pruefung::evaluate_lieferbeginn(&a, None);
+        assert_eq!(out.antwortcode(), Some("A51"));
+    }
+
+    /// Phase two, refusal: the outcome the NB could not reach at all before it
+    /// sent an Anfrage.
+    #[test]
+    fn a_refusing_lfa_refuses_the_anmeldung() {
+        let mut a = anmeldung(Marktlokationsart::Verbrauchend);
+        a.abmeldeanfrage = Abmeldeanfrage::Gestellt {
+            antwort: Some(LfaAntwort::Widerspruch {
+                code: "A35".to_owned(),
+                grund: Some("Vertragsbindung".to_owned()),
+            }),
+        };
+        let out = mako_pruefung::evaluate_lieferbeginn(&a, None);
+        assert_eq!(out.antwortcode(), Some("A50"));
+        assert!(out.is_reject());
+        // …and the answer is dispatchable, unlike an escalation.
+        let (decision, code, _) = classify(&out);
+        assert_eq!(decision, AnmeldungDecision::Reject);
+        assert_eq!(code.as_deref(), Some("A50"));
+    }
+
+    /// `SG12 NAD+Z09` is Muss on the 55010 for a verbrauchende Marktlokation
+    /// (Bedingung `[279]`), and the only source for it is the LFN's own
+    /// Anmeldung (`[572]`) — so it has to survive the CloudEvent hop.
+    #[test]
+    fn the_anmeldung_payload_carries_the_kundenname() {
+        let event = serde_json::json!({
+            "makopid": 55001,
+            "subject": "550e8400-e29b-41d4-a716-446655440000",
+            "data": {
+                "malo_id": "51238696012",
+                "new_supplier": "9900555000005",
+                "grid_operator": "9900000000001",
+                "process_date": "20261001",
+                "kunde_name": "Mustermann",
+                "kunde_namensformat": "Z01"
+            }
+        });
+        let payload = AnmeldungPayload::parse(&event).expect("should parse");
+        assert_eq!(payload.kunde_name.as_deref(), Some("Mustermann"));
+        assert_eq!(payload.kunde_namensformat.as_deref(), Some("Z01"));
+    }
+
+    /// The command the NB sends is registered and permitted to the NB role —
+    /// a literal here is how a dead command reaches the dispatcher.
+    #[test]
+    fn the_abmeldeanfrage_command_is_catalogued() {
+        assert!(
+            mako_markt::commands::DISPATCHED_BY_SERVICES
+                .contains(&mako_markt::commands::GPKE_BEENDIGUNG_ZUORDNUNG_ANFRAGEN),
+            "gpke.beendigung-zuordnung.anfragen must be in the command catalogue"
+        );
+    }
 
     // ── Meldepflichten ────────────────────────────────────────────────────────
 

@@ -56,6 +56,19 @@ pub const GPKE_BEENDIGUNG_ZUORDNUNG_BESTAETIGEN: &str = "gpke.beendigung-zuordnu
 /// LFA: reject an NB `Anfrage zur Beendigung der Zuordnung` (UTILMD 55012).
 pub const GPKE_BEENDIGUNG_ZUORDNUNG_ABLEHNEN: &str = "gpke.beendigung-zuordnung.ablehnen";
 
+/// NB → LFA: UTILMD 55010 `Anfrage zur Beendigung der Zuordnung`.
+///
+/// GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 3, „parallel zu Nr. 2": whenever an
+/// Anmeldung lands on a Marktlokation that is already assigned at the
+/// Zuordnungsbeginn, the NB must ask the incumbent LFA to release it before it
+/// may confirm. The LFA answers by **09:00 Uhr des 1. WT**, and silence counts
+/// as Zustimmung — so the window closing is a result, not a timeout.
+///
+/// `E_0623` Prüfschritte 20–50 read that answer, which is why an NB that never
+/// sends this cannot reach `A50` „Der LFA hat der Anfrage zur Beendigung der
+/// Zuordnung widersprochen" at all.
+pub const GPKE_BEENDIGUNG_ZUORDNUNG_ANFRAGEN: &str = "gpke.beendigung-zuordnung.anfragen";
+
 /// NB → LFN: UTILMD 55036 „Information über existierende Zuordnung".
 ///
 /// One of the three **Meldepflichten** around the Lieferbeginn — messages the
@@ -69,6 +82,16 @@ pub const GPKE_ZUORDNUNG_BEENDEN: &str = "gpke.zuordnung.beenden";
 /// NB → LFZ: UTILMD 55038 „Aufhebung einer zukünftigen Zuordnung"
 /// (SD Lieferbeginn Nr. 13).
 pub const GPKE_ZUORDNUNG_AUFHEBEN: &str = "gpke.zuordnung.aufheben";
+/// NB → `MSB` / `MSBZ`: UTILMD 55611 „Beendigung der Zuordnung des `MSB` zur
+/// `MaLo` / `MeLo`".
+///
+/// A Meldepflicht of the SD **Lieferende von NB an LF** (§ 2.5.2 Nr. 11 and
+/// Nr. 13), not of the Lieferbeginn: the NB opens that process itself with a
+/// 55007, and this tells the `MSB` — or, on `ZH1`, the `MSBZ` — that its own
+/// Zuordnung ends. It is the one message in the family that may address a
+/// **Messlokation**, because the `MSB` is assigned to the `MeLo` and not to the
+/// `MaLo`.
+pub const GPKE_MSB_ZUORDNUNG_BEENDEN: &str = "gpke.msb-zuordnung.beenden";
 
 // ── GeLi Gas ──────────────────────────────────────────────────────────────────
 
@@ -218,9 +241,11 @@ pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     GPKE_NB_LIEFERENDE_ABLEHNEN,
     GPKE_BEENDIGUNG_ZUORDNUNG_BESTAETIGEN,
     GPKE_BEENDIGUNG_ZUORDNUNG_ABLEHNEN,
+    GPKE_BEENDIGUNG_ZUORDNUNG_ANFRAGEN,
     GPKE_ZUORDNUNG_INFORMIEREN,
     GPKE_ZUORDNUNG_BEENDEN,
     GPKE_ZUORDNUNG_AUFHEBEN,
+    GPKE_MSB_ZUORDNUNG_BEENDEN,
     GPKE_ZUORDNUNG_LF_BESTAETIGEN,
     GPKE_ZUORDNUNG_LF_ABLEHNEN,
     GPKE_KUENDIGUNG_BESTAETIGEN,

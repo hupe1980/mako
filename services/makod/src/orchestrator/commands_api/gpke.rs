@@ -1512,6 +1512,19 @@ pub(super) fn cmd_gpke_zuordnung_beenden<'a>(
     ))
 }
 
+pub(super) fn cmd_gpke_msb_zuordnung_beenden<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_gpke_zuordnungsmeldung(
+        s,
+        p,
+        mako_gpke::Zuordnungsmeldung::MsbBeendigung,
+    ))
+}
+
 pub(super) fn cmd_gpke_zuordnung_aufheben<'a>(
     s: &'a CommandsApiState,
     p: &'a serde_json::Value,
@@ -1525,7 +1538,7 @@ pub(super) fn cmd_gpke_zuordnung_aufheben<'a>(
     ))
 }
 
-/// Dispatch one of the NB's three Zuordnungs-Meldungen.
+/// Dispatch one of the NB's Zuordnungs-Meldungen.
 ///
 /// Called by the `processd` NB module while it decides an Anmeldung: 55036 the
 /// moment the Anmeldung arrives on an already-assigned Marktlokation, 55037 and
@@ -1562,10 +1575,20 @@ async fn dispatch_gpke_zuordnungsmeldung(
         sender: MarktpartnerCode::new(state.sender_party_id.clone()),
         receiver: MarktpartnerCode::new(receiver),
         location_id: malo_id.clone(),
-        tranche: payload
-            .get("tranche")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false),
+        // `SG5 LOC` DE 3227. `Z16` Marktlokation unless the caller names another
+        // object: `Z21` for a Tranche, `Z17` for the Messlokation a 55611 may
+        // address. `tranche: true` stays accepted as the common shorthand.
+        lokationstyp: payload
+            .get("lokationstyp")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                payload
+                    .get("tranche")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+                    .then(|| mako_gpke::zuordnungsmeldung::LOC_TRANCHE.to_owned())
+            }),
         transaktionsgrund,
         process_date: payload
             .get("process_date")
@@ -1585,4 +1608,124 @@ async fn dispatch_gpke_zuordnungsmeldung(
         domain_cmd,
     )
     .await
+}
+
+// ── GPKE Anfrage zur Beendigung der Zuordnung (55010, NB → LFA) ───────────────
+
+pub(super) fn cmd_gpke_beendigung_zuordnung_anfragen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_gpke_beendigung_zuordnung_anfragen(s, p))
+}
+
+/// Dispatch the NB's Anfrage zur Beendigung der Zuordnung (UTILMD 55010).
+///
+/// Issued by the `processd` NB module when `mako_pruefung` answers
+/// [`NbEntscheidung::AnfrageErforderlich`](mako_pruefung::NbEntscheidung::AnfrageErforderlich)
+/// — GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4.
+///
+/// ## Payload fields
+///
+/// | Field | Type | Notes |
+/// |---|---|---|
+/// | `malo_id` | string | Marktlokations-ID, or the MaLo-ID of the Tranche |
+/// | `lfa_mp_id` | string | The incumbent Lieferant being asked to release it |
+/// | `process_date` | string | The Zuordnungsende requested — the LFN's Zuordnungsbeginn |
+/// | `anmeldung_process_id` | string | The Anmeldung to resume once the answer lands |
+/// | `tranche` | bool (opt.) | `SG5 LOC+Z21` instead of `LOC+Z16` |
+/// | `kunde_name` | string (opt.) | `SG12 NAD+Z09`, Muss on `ZW4`/`ZAP` (Bedingung `[279]`) |
+/// | `lfn_mp_id` | string (opt.) | `SG12 NAD+VY`, the Neulieferant (`[567]`) |
+///
+/// The **09:00 Uhr des 1. WT** window is registered on the spawned process.
+/// Its expiry is a Zustimmung, not a failure, so it carries its own deadline
+/// label — see `mako_gpke::NB_ANFRAGE_WINDOW_LABEL`.
+async fn dispatch_gpke_beendigung_zuordnung_anfragen(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    let malo_id = extract_malo_id(payload)?;
+    let lfa_mp_id = require_payload_str(payload, "lfa_mp_id")?;
+    let process_date = require_payload_str(payload, "process_date")?;
+    let anmeldung_process_id = require_payload_str(payload, "anmeldung_process_id")?;
+
+    let domain_cmd = mako_gpke::BeendigungZuordnungCommand::Anfragen {
+        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        receiver: MarktpartnerCode::new(lfa_mp_id),
+        location_id: malo_id.clone(),
+        tranche: payload
+            .get("tranche")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        process_date,
+        // `SG4 IDE+24` must be unique per outbound Vorgang; the process the
+        // Anfrage opens is the only thing guaranteed to be.
+        vorgangsnummer: format!("ANF-{}", uuid::Uuid::new_v4().simple()),
+        anmeldung_process_id,
+        kunde_name: payload
+            .get("kunde_name")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned),
+        lfn_mp_id: payload
+            .get("lfn_mp_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned),
+    };
+
+    let workflow_id = WorkflowId::new(
+        mako_gpke::BEENDIGUNG_ZUORDNUNG_WORKFLOW_NAME,
+        latest_format_version(),
+    );
+    let process = mako_engine::process::Process::<
+        GpkeBeendigungZuordnungWorkflow,
+        Arc<mako_engine::store_slatedb::SlateDbStore>,
+    >::new(
+        Arc::clone(&state.store),
+        state.tenant_id,
+        workflow_id.clone(),
+    );
+    let process_id = process.process_id();
+    let identity = process.identity();
+
+    // 09:00 Uhr des 1. WT nach dem ÜT der Anmeldung — `mako_fristen::antwort`
+    // resolves it from the trigger PID, the same table `makod` sizes every
+    // other process window from.
+    let deadlines: Vec<Deadline> = mako_fristen::antwort::antwort_deadline(
+        mako_gpke::beendigung_zuordnung::ANFRAGE_PID,
+        time::OffsetDateTime::now_utc(),
+    )
+    .map(|due_at| {
+        Deadline::new(
+            process.stream_id().clone(),
+            process_id,
+            state.tenant_id,
+            workflow_id,
+            mako_gpke::NB_ANFRAGE_WINDOW_LABEL,
+            due_at,
+        )
+    })
+    .into_iter()
+    .collect();
+
+    process
+        .execute_and_enqueue_with_deadlines(domain_cmd, &deadlines)
+        .await?;
+
+    if let Err(e) = state
+        .store
+        .as_process_registry()
+        .register_correlated(state.tenant_id, malo_id.as_str(), process_id, identity)
+        .await
+    {
+        tracing::warn!(
+            %process_id,
+            malo_id = %malo_id,
+            error = %e,
+            "gpke.beendigung-zuordnung.anfragen: business-key registration failed — the LFA's \
+             answer cannot be correlated back, so the 09:00 window will decide the Anmeldung",
+        );
+    }
+    Ok(DispatchOutcome::Spawned { process_id })
 }

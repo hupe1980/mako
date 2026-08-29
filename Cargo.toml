@@ -59,7 +59,7 @@ rust-version = "1.94.1"
 [workspace.dependencies]
 anyhow      = "1"
 dashmap     = "6"
-edifact-rs   = "~0.16"
+edifact-rs   = "~0.17"
 miette       = { version = "7", features = ["fancy-no-syscall"] }
 # `validate` carries the BO4E cross-field rules (`mako_markt::bo4e`). Off:
 # `schemars` (no mako type exposes a rubo4e type in a JSON Schema) and `strum`

@@ -7,24 +7,24 @@
 //! market, regulated by the BDEW GeLi Gas process documentation and
 //! BNetzA rulings:
 //!
-//! | Process | PID | Status |
-//! |---|---|---|
-//! | Lieferbeginn Gas (Anfrage LFN → NB) | 44001 | ✅ Registered |
-//! | Abmeldung NN / Lieferende Gas (Anfrage LFN → NB) | 44004 | ✅ Registered |
-//! | Bestätigung Anmeldung NN | 44002 | ✅ Registered |
-//! | Ablehnung Anmeldung NN | 44003 | ✅ Registered |
-//! | Bestätigung Abmeldung NN | 44005 | ✅ Registered |
-//! | Ablehnung Abmeldung NN | 44006 | ✅ Registered |
-//! | Abmeldung NN vom NB | 44007–44009 | ✅ Registered |
-//! | Abmeldungsanfrage des NB | 44010–44012 | ✅ Registered |
-//! | Anmeldung/Abmeldung EoG | 44013–44015 | ✅ Registered |
-//! | Kündigung beim alten Lieferanten | 44016 | ✅ Registered |
-//! | Bestätigung / Ablehnung Kündigung (LFA → LFN) | 44017–44018 | ✅ Registered |
-//! | Bestandsliste / Änderungsmeldung | 44019–44021 | ✅ Registered |
-//! | Stornierung Anfrage (LF → GNB) | 44022 | ✅ Outbound (LF-side), ERP-initiated |
-//! | Stornierung Bestätigung (GNB → LF) | 44023 | ✅ Inbound (LF-side), `geli-gas-stornierung-lf` |
-//! | Stornierung Ablehnung (GNB → LF) | 44024 | ✅ Inbound (LF-side), `geli-gas-stornierung-lf` |
-//! | Stornierung (GNB-side) | 44022–44024 | ✅ Registered (`geli-gas-stornierung`, `Nb`-only deployments) |
+//! | Process | PID |
+//! |---|---|
+//! | Lieferbeginn Gas (Anfrage LFN → NB) | 44001 |
+//! | Abmeldung NN / Lieferende Gas (Anfrage LFN → NB) | 44004 |
+//! | Bestätigung Anmeldung NN | 44002 |
+//! | Ablehnung Anmeldung NN | 44003 |
+//! | Bestätigung Abmeldung NN | 44005 |
+//! | Ablehnung Abmeldung NN | 44006 |
+//! | Abmeldung NN vom NB | 44007–44009 |
+//! | Abmeldungsanfrage des NB | 44010–44012 |
+//! | Anmeldung/Abmeldung EoG | 44013–44015 |
+//! | Kündigung beim alten Lieferanten | 44016 |
+//! | Bestätigung / Ablehnung Kündigung (LFA → LFN) | 44017–44018 |
+//! | Bestandsliste / Änderungsmeldung | 44019–44021 |
+//!
+//! Stornierung splits by role. The LF side sends 44022 (ERP-initiated) and
+//! receives 44023 / 44024 into `geli-gas-stornierung-lf`; a `Nb`-only deployment
+//! takes all three into `geli-gas-stornierung` instead.
 //!
 //! ## Architecture
 //!
@@ -210,7 +210,6 @@ pub use gas_quality::normalize_gasqualitaet;
 pub use zuordnungsmeldung::{
     AUFHEBUNG_PID as GAS_AUFHEBUNG_PID, BEENDIGUNG_PID as GAS_BEENDIGUNG_PID,
     GeliGasZuordnungsmeldungWorkflow, INFORMATION_PID as GAS_INFORMATION_PID,
-    MELDUNG_WINDOW_LABEL as GAS_MELDUNG_WINDOW_LABEL,
     WORKFLOW_NAME as GAS_ZUORDNUNGSMELDUNG_WORKFLOW_NAME,
     ZUORDNUNGSMELDUNG_PIDS as GAS_ZUORDNUNGSMELDUNG_PIDS,
 };

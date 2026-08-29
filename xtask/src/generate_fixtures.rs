@@ -91,8 +91,10 @@ struct TypeMeta {
     /// PID to, where it states one; templates that do not carry a DE 1001
     /// ignore it.
     bgm: fn(u32, Option<&str>) -> String,
-    /// Extra lines between NAD+MR and UNT.  Empty for most types.
-    extra: &'static [&'static str],
+    /// Extra lines between NAD+MR and UNT, chosen by Sparte.  Empty for most
+    /// types; UTILMD differs because Strom and Gas name the Marktlokation with
+    /// different `LOC` qualifiers.
+    extra: fn(Sparte) -> &'static [&'static str],
     /// Segment count inside the message (UNH … UNT inclusive).
     /// Used for the UNT control count.  `0` means computed dynamically.
     seg_count_base: u32,
@@ -106,92 +108,143 @@ fn bgm_alphanum(prefix: &str, pid: u32, numeric_suffix: &str, suffix: &str) -> S
     format!("BGM+{prefix}{pid}{numeric_suffix}{suffix}'")
 }
 
+/// Which Sparte a fixture is rendered for.
+///
+/// Gas and Strom are separate code-list universes, not a formatting detail: the
+/// Marktlokation qualifier and the NAD DE 3055 Verzeichnis both differ, and a
+/// value from the wrong one is refused by the receiving AHB.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sparte {
+    Strom,
+    Gas,
+}
+
+impl Sparte {
+    /// The Sparte a profile release belongs to.
+    ///
+    /// UTILMD is the only message type published as two separate MIGs, and its
+    /// release codes say which: `S1.1a`/`S2.2` are Strom, `G1.0a`/`G1.2` Gas.
+    /// That prefix is the discriminator — the profile *directory* name is not
+    /// visible here, only the wire release code.
+    ///
+    /// Every other message type carries one MIG serving both Sparten
+    /// (MSCONS `2.4c`, INVOIC `2.8e`), so its release code cannot say, and this
+    /// answers Strom. That only reaches the NAD DE 3055 agency, which no code
+    /// list checks, and those skeletons exist to be routed rather than to stand
+    /// as a Sparte-correct example.
+    fn from_release(release: &str) -> Self {
+        if release.starts_with('G') || release.starts_with('g') {
+            Self::Gas
+        } else {
+            Self::Strom
+        }
+    }
+}
+
+/// NAD DE 3055 — the register that issued `mp_id`.
+///
+/// Mirrors `edi_energy::AgencyCode::for_mp_id`, which reads the MP-ID itself
+/// rather than the Sparte: a 13-character id starting `99` is a
+/// BDEW-Codenummer (`293`), `98` a DVGW-Codenummer (`332`), and any other
+/// 13-character id is a GS1 GLN (`9`). Duplicated rather than imported because
+/// `xtask` does not depend on `edi-energy`; `agency_matches_edi_energy` pins the
+/// two together.
+fn agency_for(mp_id: &str) -> &'static str {
+    match mp_id.len() {
+        13 if mp_id.starts_with("99") => "293",
+        13 if mp_id.starts_with("98") => "332",
+        13 => "9",
+        _ => "293",
+    }
+}
+
 fn type_meta(msg_type: &str) -> Option<TypeMeta> {
     match msg_type {
         "aperak" => Some(TypeMeta {
             unh_prefix: "APERAK:D:07B:UN",
             bgm: |pid, _| bgm_8digit("312+", pid, "+9"),
-            extra: &[],
+            extra: |_| &[],
             seg_count_base: 7,
         }),
         "comdis" => Some(TypeMeta {
             unh_prefix: "COMDIS:D:17A:UN",
             // ABL prefix used in practice; RFF+Z13 carries the pure PID for coverage.
             bgm: |pid, _| bgm_alphanum("739+ABL", pid, "001", ""),
-            extra: &[],
+            extra: |_| &[],
             seg_count_base: 7,
         }),
         "iftsta" => Some(TypeMeta {
             unh_prefix: "IFTSTA:D:18A:UN",
             bgm: |pid, _| bgm_8digit("Z03+", pid, ""),
-            extra: &[],
+            extra: |_| &[],
             seg_count_base: 6,
         }),
         "insrpt" => Some(TypeMeta {
             unh_prefix: "INSRPT:D:96A:UN",
             bgm: |pid, _| bgm_8digit("4+", pid, ""),
-            extra: &[],
+            extra: |_| &[],
             seg_count_base: 7,
         }),
         "invoic" => Some(TypeMeta {
             unh_prefix: "INVOIC:D:06A:UN",
             bgm: |pid, _| bgm_8digit("380+", pid, ""),
-            extra: &[],
+            extra: |_| &[],
             seg_count_base: 7,
         }),
         "mscons" => Some(TypeMeta {
             unh_prefix: "MSCONS:D:04B:UN",
             bgm: |pid, _| format!("BGM+7:::+{pid:08}::+9'"),
-            extra: &["UNS+D'", "LOC+172+51238696781'", "QTY+220:1500.000:KWH'"],
+            // MSCONS names the Messlokation with `LOC+172` in both Sparten.
+            extra: |_| &["UNS+D'", "LOC+172+51238696781'", "QTY+220:1500.000:KWH'"],
             seg_count_base: 10,
         }),
         "ordchg" => Some(TypeMeta {
             unh_prefix: "ORDCHG:D:20B:UN",
             bgm: |pid, _| bgm_8digit("Z51+", pid, ""),
-            extra: &[],
+            extra: |_| &[],
             seg_count_base: 7,
         }),
         "orders" => Some(TypeMeta {
             unh_prefix: "ORDERS:D:09B:UN",
             bgm: |pid, _| bgm_8digit("Z55+", pid, "+9"),
-            extra: &[],
+            extra: |_| &[],
             seg_count_base: 7,
         }),
         "ordrsp" => Some(TypeMeta {
             unh_prefix: "ORDRSP:D:10A:UN",
             bgm: |pid, _| bgm_8digit("7+", pid, ""),
-            extra: &[],
+            extra: |_| &[],
             seg_count_base: 7,
         }),
         "partin" => Some(TypeMeta {
             unh_prefix: "PARTIN:D:20B:UN",
             bgm: |pid, _| bgm_8digit("35+", pid, ""),
-            extra: &[],
+            extra: |_| &[],
             seg_count_base: 7,
         }),
         "pricat" => Some(TypeMeta {
             unh_prefix: "PRICAT:D:20B:UN",
             // PRIC prefix used in practice; RFF+Z13 carries the pure PID.
             bgm: |pid, _| bgm_alphanum("Z32+PRIC", pid, "001", ""),
-            extra: &[],
+            extra: |_| &[],
             seg_count_base: 7,
         }),
         "quotes" => Some(TypeMeta {
             unh_prefix: "QUOTES:D:10A:UN",
             bgm: |pid, _| bgm_8digit("310+", pid, ""),
-            extra: &[],
+            extra: |_| &[],
             seg_count_base: 7,
         }),
         "remadv" => Some(TypeMeta {
             unh_prefix: "REMADV:D:05A:UN",
             bgm: |pid, _| bgm_8digit("239+", pid, ""),
-            extra: &[],
+            extra: |_| &[],
             seg_count_base: 7,
         }),
         "reqote" => Some(TypeMeta {
             unh_prefix: "REQOTE:D:10A:UN",
             bgm: |pid, _| bgm_8digit("311+", pid, ""),
-            extra: &[],
+            extra: |_| &[],
             seg_count_base: 7,
         }),
         "utilmd" => Some(TypeMeta {
@@ -199,8 +252,12 @@ fn type_meta(msg_type: &str) -> Option<TypeMeta> {
             bgm: |pid, de1001| format!("BGM+{}:::+{pid:08}::+9'", de1001.unwrap_or("E01")),
             // `IDE+24` is the only Vorgangs-Qualifier UTILMD defines (DE 7495);
             // DE 7402 carries a Vorgangsnummer. The Marktlokation follows in
-            // `SG5 LOC+Z16`.
-            extra: &["IDE+24+VORGANG-0001'", "LOC+Z16+51238696781'"],
+            // SG5 `LOC` — `Z16` in Strom, `172` „Meldepunkt" in Gas, whose
+            // DE 3227 code list does not contain `Z16` at all.
+            extra: |sparte| match sparte {
+                Sparte::Strom => &["IDE+24+VORGANG-0001'", "LOC+Z16+51238696781'"],
+                Sparte::Gas => &["IDE+24+VORGANG-0001'", "LOC+172+51238696781'"],
+            },
             // UNH, BGM, DTM, RFF, NAD, NAD and UNT — `extra` is added on top.
             seg_count_base: 7,
         }),
@@ -208,7 +265,7 @@ fn type_meta(msg_type: &str) -> Option<TypeMeta> {
             unh_prefix: "UTILTS:D:18A:UN",
             // UTILTS prefix in practice; RFF+Z13 carries the pure PID.
             bgm: |pid, _| bgm_alphanum("Z36+UTILTS", pid, "001", ""),
-            extra: &[],
+            extra: |_| &[],
             seg_count_base: 7,
         }),
         _ => None,
@@ -219,18 +276,25 @@ fn type_meta(msg_type: &str) -> Option<TypeMeta> {
 
 fn render_fixture(meta: &TypeMeta, pid: u32, release: &str, de1001: Option<&str>) -> String {
     let bgm_line = (meta.bgm)(pid, de1001);
-    let seg_count = meta.seg_count_base + meta.extra.len() as u32;
+    let sparte = Sparte::from_release(release);
+    let extra = (meta.extra)(sparte);
+    let seg_count = meta.seg_count_base + extra.len() as u32;
+
+    // The two parties are issued by different registers, so they do not share a
+    // DE 3055: the sender is a GS1 GLN, the receiver a BDEW-Codenummer.
+    let sender = "4012345000023";
+    let receiver = "9900357000004";
 
     let mut lines = vec![
-        "UNB+UNOC:3+4012345000023:14+9900357000004:14+230101:0000+1'".to_string(),
+        format!("UNB+UNOC:3+{sender}:14+{receiver}:14+230101:0000+1'"),
         format!("UNH+1+{}:{}'", meta.unh_prefix, release),
         bgm_line,
         "DTM+137:20230101:102'".to_string(),
         format!("RFF+Z13:{pid}'"),
-        "NAD+MS+4012345000023::293'".to_string(),
-        "NAD+MR+9900357000004::293'".to_string(),
+        format!("NAD+MS+{sender}::{}'", agency_for(sender)),
+        format!("NAD+MR+{receiver}::{}'", agency_for(receiver)),
     ];
-    for extra in meta.extra {
+    for extra in extra {
         lines.push(extra.to_string());
     }
     lines.push(format!("UNT+{seg_count}+1'"));

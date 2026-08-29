@@ -39,18 +39,79 @@ crate therefore comes from `mako_fristen::antwort`, never from a literal, and
 `services/makod/tests/deadline_labels.rs` pins the registration sites to the
 constants the workflows match.
 
+### The Anmeldung is two trees, and on an assigned Marktlokation two phases
+
+`E_0622` „Prüfen, ob Anmeldung direkt ablehnbar" is a **Vorprüfung**: every code
+it publishes is an Ablehnung, and surviving it means only that the Anmeldung is
+not *directly* refusable. What the NB answers comes from **`E_0623`**, and that
+tree reads a fact the message does not carry — the incumbent LFA's answer to an
+Anfrage zur Beendigung der Zuordnung the NB has to send first.
+
+GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 1 **Prüfschritt 4** is the branch: „Ist
+die Marktlokation bzw. Tranche zum Zuordnungsbeginn einem LF zugeordnet, fährt
+der NB mit Prozessschritt 2 fort, ansonsten mit Prozessschritt 5." So an
+unassigned Marktlokation is confirmed in one pass and an assigned one is not.
+
+| Nr. | Message | Spätester ÜZ |
+|---|---|---|
+| 2 | 55036 Information über existierende Zuordnung → LFN | 07:00 Uhr des 1. WT |
+| 3 | **55010 Anfrage zur Beendigung der Zuordnung → LFA** | parallel zu Nr. 2 |
+| 4 | 55011 / 55012 Antwort des LFA (`E_0624`) | **09:00 Uhr des 1. WT** |
+| 5/6 | 55002 / 55003 → LFN | 11:00 Uhr des 1. WT |
+| 10 | 55037 Beendigung der Zuordnung → LFA | 12:00 Uhr des 1. WT |
+
+`gpke-beendigung-zuordnung` runs **both ends**, told apart by which command opens
+the process: `Anfragen` / `ReceiveAntwort` on the NB side, `ReceiveAnfrage` /
+`SendAntwort` on the LFA's.
+
+**Silence is a result, not a timeout.** „Verstreicht die Frist, ohne dass eine
+Antwort beim NB eingeht, gilt dies als Bestätigung nach Fall a). Nach Ablauf der
+Frist eingehende Antworten sind für den Fortlauf dieses Prozesses unerheblich."
+The NB's window on the LFA therefore **completes** the Anfrage, which is why it
+has its own deadline label and its own command — routing it through the ordinary
+`TimeoutExpired` would reject a Lieferantenwechsel the Festlegung confirms.
+
+`mako_pruefung::evaluate_lieferbeginn` walks `E_0623`. Four of its eight outcomes
+are refusals: `A50` / `A57` (the LFA widersprochen, and not with the „bereits
+abgemeldet" code `A30` / `A41`) and `A53` / `A54` (Geschäftsvorfall 3 — not
+enough percentage came free). Gas states the same rule as a flat code: `G_0011`
+`Z35` „Ablehnung der Abmeldeanfrage".
+
+**`A50` and `A57` oblige a second `SG4 STS`.** `STS+Z35` „Status der Antwort des
+dritten Marktbeteiligten" restates the LFA's own `E_0624` code (Bedingungen
+`[356]` / `[84]`) — Nr. 6's „der NB gibt zusätzlich den Grund der Ablehnung des
+LFA an", on the wire. `makod` refuses to render the Ablehnung without it; the
+55080 form additionally names which Tranche the restated answer is about, because
+Geschäftsvorfall 3 has several LFA.
+
+The Anfrage carries `SG12 NAD+Z09` „Kunde des LF" (Muss on `ZW4`/`ZAP`,
+Bedingung `[279]`) — the Kundenname from the LFN's own Anmeldung (`[572]`),
+which is how the LFA tells an Einzug from a Wechsel at `E_0624` Prüfschritt 30.
+It is a **name**, so it rides `C080` with the DE 3045 Namensformat and not the
+party-identification composite.
+
 ### Meldepflichten — obligations with no answer
 
-Three messages the NB owes around a Lieferbeginn have **no Bestätigung**, so a
-missing one produces no timeout and no alert:
+Four messages the NB owes have **no Bestätigung**, so a missing one produces no
+timeout and no alert:
 
 | PID | Message | NB → | Frist |
 |---|---|---|---|
 | 55036 | Information über existierende Zuordnung — **die Identität des LFA** | LFN | 07:00 Uhr des 1. WT nach dem ÜT |
 | 55037 | Beendigung der Zuordnung | LFA | 12:00 Uhr des 1. WT nach dem ÜT |
 | 55038 | Aufhebung einer zukünftigen Zuordnung | LFZ | 12:00 Uhr des 1. WT nach dem ÜT |
+| 55611 | Beendigung der Zuordnung des **MSB** zur MaLo / MeLo | MSB / MSBZ | 07:00 Uhr des 1. WT nach dem ÜT |
 
-`gpke-zuordnungsmeldung` renders all three. Whether one is *owed* is a
+`gpke-zuordnungsmeldung` renders all four. **55611 is the odd one**: it belongs
+to the SD „Lieferende von NB an LF" (§ 2.5.2 Nr. 11 / Nr. 13), which the NB opens
+itself with a 55007 rather than answering an inbound Anmeldung — so it is
+anchored on `MeldungAnchor::EigeneAnkuendigung`. It is also the only message here
+that may name a **Messlokation** (`SG5 LOC+Z17`), because „der MSB ist
+ausschließlich dem Objekt Messlokation zugeordnet", and the only one whose
+`SG4 DTM` qualifier follows the **Grund** instead of the PID: `DTM+93` under
+`ZC8`, `DTM+92` under `ZH1`.
+
+The other three follow the Lieferbeginn. Whether one is *owed* is a
 Versorgungsstatus question — GPKE Teil 2 § 2.1.2 Nr. 1 Prüfschritt 4 sends the
 NB to Prozessschritt 2 only „Ist die Marktlokation bzw. Tranche zum
 Zuordnungsbeginn einem LF zugeordnet" — so `processd` decides and issues

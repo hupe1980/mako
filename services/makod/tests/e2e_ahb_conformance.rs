@@ -260,6 +260,8 @@ async fn ahb_55001_lieferbeginn_validates_and_dispatches() {
         transaktionsgrund_ergaenzung: None,
         veraeusserungsform: None,
         vorgangsnummer: None,
+        kunde_name: None,
+        kunde_namensformat: None,
         message_ref: cmd_ref,
         received_at: time::OffsetDateTime::now_utc(),
         bilanzierungsgebiet: None,

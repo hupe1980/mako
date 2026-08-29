@@ -387,6 +387,11 @@ impl SupplierChangeState {
 /// parsing, no external calls. See the crate-level doc for a construction
 /// example.
 #[derive(Clone)]
+// `ReceiveUtilmd` is far larger than the other variants — it carries every
+// `SG4` fact the trees branch on, and boxing it would put an allocation on the
+// hot ingest path for no benefit: a command is constructed once, moved once and
+// dropped.
+#[allow(clippy::large_enum_variant)]
 pub enum SupplierChangeCommand {
     /// Inbound UTILMD accepted from the AS4 layer. Domain fields extracted and
     /// validation performed by the caller before constructing this command.
@@ -459,6 +464,19 @@ pub enum SupplierChangeCommand {
         /// only thing tying the Information über existierende Zuordnung to the
         /// Anmeldung that triggered it.
         vorgangsnummer: Option<String>,
+        /// `SG12 NAD+Z09` — the Letztverbraucher the LFN named in its Anmeldung.
+        ///
+        /// Carried through because the NB copies it into the Anfrage zur
+        /// Beendigung der Zuordnung: UTILMD AHB Strom Bedingung `[279]` marks
+        /// `SG12 NAD+Z09` **Muss** on a 55010 whose Ergänzung is `ZW4`/`ZAP`,
+        /// and `[572]` says it is „der Kundenname aus der Anmeldung Lieferant
+        /// neu". It is the fact `E_0624` Prüfschritt 30 tells an Einzug from a
+        /// Wechsel by — without it that whole arm of the LFA's tree escalates.
+        kunde_name: Option<String>,
+        /// `NAD` DE 3045 alongside it — `Z01` Personenname, `Z02`
+        /// Firmenbezeichnung. Without it the five DE 3036 components cannot be
+        /// read back into a person or a company.
+        kunde_namensformat: Option<String>,
         /// EDIFACT message reference.
         message_ref: MessageRef,
         /// UTC timestamp at which the inbound UTILMD was received at the transport layer.
@@ -791,6 +809,8 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 transaktionsgrund_ergaenzung,
                 veraeusserungsform,
                 vorgangsnummer,
+                kunde_name,
+                kunde_namensformat,
                 message_ref,
                 received_at,
                 validation_passed,
@@ -875,6 +895,10 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                                 // `SG4 IDE+24` DE 7402 — what `SG6 RFF+TN` on
                                 // the NB's 55036 Meldepflicht must echo.
                                 "vorgangsnummer":        vorgangsnummer,
+                                // `SG12 NAD+Z09` — what the NB's own 55010 must
+                                // carry (Bedingung [279]/[572]).
+                                "kunde_name":            kunde_name,
+                                "kunde_namensformat":    kunde_namensformat,
                             }),
                         )
                         // Caused by ValidationPassed (index 1), not Initiated (index 0),

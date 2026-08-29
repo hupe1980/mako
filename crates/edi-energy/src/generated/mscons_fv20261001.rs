@@ -131,10 +131,10 @@ pub(crate) fn segment_lookup(tag: &str) -> Option<&'static SegmentDefinition> {
 }
 
 static CODES_1001: &[&str] = &[
-    "270", "35", "7", "Z06", "Z15", "Z16", "Z21", "Z23", "Z27", "Z28", "Z41", "Z42", "Z43", "Z44",
-    "Z45", "Z48", "Z83", "Z85",
+    "270", "7", "BK", "Z06", "Z15", "Z16", "Z20", "Z21", "Z23", "Z24", "Z27", "Z28", "Z39", "Z41",
+    "Z42", "Z43", "Z44", "Z45", "Z46", "Z48", "Z50", "Z69", "Z83", "Z85",
 ];
-static CODES_1153: &[&str] = &["ACW", "AGI", "AGK", "MG", "Z13", "Z19"];
+static CODES_1153: &[&str] = &["ACW", "AGI", "AGK", "MG", "Z13", "Z30"];
 static CODES_1225: &[&str] = &["1", "9"];
 static CODES_2005: &[&str] = &["137", "163", "164", "25", "293", "306", "37", "7"];
 static CODES_3035: &[&str] = &["DP", "MR", "MS"];
@@ -296,12 +296,14 @@ fn rule_loc_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
 
 /// Layer 3 — verify the `RFF` segment group appears at most 9 times.
 ///
-/// Each occurrence of the trigger segment `RFF` marks the start of
-/// one group instance.  The MIG specifies a maximum of 9 instances.
+/// Counted over the group tree, so a nested group sharing the `RFF`
+/// trigger is not charged here.  The MIG specifies a maximum of 9 instances.
 fn rule_group_sg1_rff_max_occurrences(
+    _root: &edifact_rs::SegmentGroupIndexed<'_>,
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
+    // SG1 is not in GROUP_SCHEMA, so the tree cannot count it.
     let count = segments.iter().filter(|s| s.tag == "RFF").count();
     if count > 9 {
         issues.push(
@@ -317,13 +319,14 @@ fn rule_group_sg1_rff_max_occurrences(
 
 /// Layer 3 — verify the `NAD` segment group appears at most 99 times.
 ///
-/// Each occurrence of the trigger segment `NAD` marks the start of
-/// one group instance.  The MIG specifies a maximum of 99 instances.
+/// Counted over the group tree, so a nested group sharing the `NAD`
+/// trigger is not charged here.  The MIG specifies a maximum of 99 instances.
 fn rule_group_sg2_nad_max_occurrences(
-    segments: &[edifact_rs::Segment<'_>],
+    root: &edifact_rs::SegmentGroupIndexed<'_>,
+    _segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
-    let count = segments.iter().filter(|s| s.tag == "NAD").count();
+    let count = root.find("SG2").count();
     if count > 99 {
         issues.push(
             ValidationIssue::new(
@@ -338,13 +341,14 @@ fn rule_group_sg2_nad_max_occurrences(
 
 /// Layer 3 — verify the `LOC` segment group appears at most 99999 times.
 ///
-/// Each occurrence of the trigger segment `LOC` marks the start of
-/// one group instance.  The MIG specifies a maximum of 99999 instances.
+/// Counted over the group tree, so a nested group sharing the `LOC`
+/// trigger is not charged here.  The MIG specifies a maximum of 99999 instances.
 fn rule_group_sg5_loc_max_occurrences(
-    segments: &[edifact_rs::Segment<'_>],
+    root: &edifact_rs::SegmentGroupIndexed<'_>,
+    _segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
-    let count = segments.iter().filter(|s| s.tag == "LOC").count();
+    let count = root.find("SG5").count();
     if count > 99_999 {
         issues.push(
             ValidationIssue::new(
@@ -361,10 +365,11 @@ fn rule_group_sg5_loc_max_occurrences(
 ///
 /// The MIG specifies a minimum of 1 occurrence(s) for this group.
 fn rule_group_sg2_nad_min_occurrences(
-    segments: &[edifact_rs::Segment<'_>],
+    root: &edifact_rs::SegmentGroupIndexed<'_>,
+    _segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
-    let count = segments.iter().filter(|s| s.tag == "NAD").count();
+    let count = root.find("SG2").count();
     if count < 1 {
         issues.push(
             ValidationIssue::new(
@@ -381,10 +386,11 @@ fn rule_group_sg2_nad_min_occurrences(
 ///
 /// The MIG specifies a minimum of 1 occurrence(s) for this group.
 fn rule_group_sg5_loc_min_occurrences(
-    segments: &[edifact_rs::Segment<'_>],
+    root: &edifact_rs::SegmentGroupIndexed<'_>,
+    _segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
-    let count = segments.iter().filter(|s| s.tag == "LOC").count();
+    let count = root.find("SG5").count();
     if count < 1 {
         issues.push(
             ValidationIssue::new(
@@ -422,14 +428,14 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
         for seg in segs {
             if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {
                 cursor += pos;
-            } else if expected.contains(&seg.tag) {
+            } else if expected.contains(&seg.tag.as_ref()) {
                 issues.push(
                     ValidationIssue::new(
                         ValidationSeverity::Error,
                         "segment appears out of order".to_owned(),
                     )
                     .with_rule_id(rule_id)
-                    .with_segment(seg.tag.to_owned()),
+                    .with_segment(seg.tag.as_ref()),
                 );
             }
             // Unknown tags are passed through — they get caught by the DirectoryValidator.
@@ -453,7 +459,7 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
         for seg in segs {
             // A group trigger seen at or before the cursor opens a new
             // occurrence of that group; rewind to it.
-            if DETAIL_GROUP_TRIGGERS.contains(&seg.tag) {
+            if DETAIL_GROUP_TRIGGERS.contains(&seg.tag.as_ref()) {
                 if let Some(pos) = expected.iter().position(|&t| t == seg.tag) {
                     if pos <= cursor {
                         cursor = pos;
@@ -462,14 +468,14 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
             }
             if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {
                 cursor += pos;
-            } else if expected.contains(&seg.tag) {
+            } else if expected.contains(&seg.tag.as_ref()) {
                 issues.push(
                     ValidationIssue::new(
                         ValidationSeverity::Error,
                         "segment appears out of order".to_owned(),
                     )
                     .with_rule_id(rule_id)
-                    .with_segment(seg.tag.to_owned()),
+                    .with_segment(seg.tag.as_ref()),
                 );
             }
             // Unknown tags are passed through — they get caught by the DirectoryValidator.
@@ -500,19 +506,54 @@ static MIG_MSCONS_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("MSCONS-MIG-2.5")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_stateless_rule_fn(rule_unh_mandatory)
-            .with_stateless_rule_fn(rule_bgm_mandatory)
-            .with_stateless_rule_fn(rule_dtm_mandatory)
-            .with_stateless_rule_fn(rule_uns_mandatory)
-            .with_stateless_rule_fn(rule_unt_mandatory)
-            .with_stateless_rule_fn(rule_nad_mandatory)
-            .with_stateless_rule_fn(rule_loc_mandatory)
-            .with_stateless_rule_fn(rule_group_sg1_rff_max_occurrences)
-            .with_stateless_rule_fn(rule_group_sg2_nad_max_occurrences)
-            .with_stateless_rule_fn(rule_group_sg5_loc_max_occurrences)
-            .with_stateless_rule_fn(rule_group_sg2_nad_min_occurrences)
-            .with_stateless_rule_fn(rule_group_sg5_loc_min_occurrences)
-            .with_stateless_rule_fn(rule_segment_order),
+            .with_rule_fn(rule_unh_mandatory)
+            .with_rule_fn(rule_bgm_mandatory)
+            .with_rule_fn(rule_dtm_mandatory)
+            .with_rule_fn(rule_uns_mandatory)
+            .with_rule_fn(rule_unt_mandatory)
+            .with_rule_fn(rule_nad_mandatory)
+            .with_rule_fn(rule_loc_mandatory)
+            .with_named_group_rule_fn(
+                "MIG-MSCONS-MIG-2.5-GROUP-SG1-RFF-CARD-MAX",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg1_rff_max_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_named_group_rule_fn(
+                "MIG-MSCONS-MIG-2.5-GROUP-SG2-NAD-CARD-MAX",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg2_nad_max_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_named_group_rule_fn(
+                "MIG-MSCONS-MIG-2.5-GROUP-SG5-LOC-CARD-MAX",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg5_loc_max_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_named_group_rule_fn(
+                "MIG-MSCONS-MIG-2.5-GROUP-SG2-NAD-CARD-MIN",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg2_nad_min_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_named_group_rule_fn(
+                "MIG-MSCONS-MIG-2.5-GROUP-SG5-LOC-CARD-MIN",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg5_loc_min_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_rule_fn(rule_segment_order),
     )
 });
 
@@ -550,46 +591,46 @@ static AHB_13002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13002")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13002-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13002-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13002-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13002", "13002", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13002-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13002-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13002-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['7', 'Z27']", |q| matches!(q, "7" | "Z27"), "13002", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13002-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13002-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13002-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13002", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13002-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13002-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13002-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13002", "13002", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13002-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13002-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13002-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13002", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13002-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13002-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13002-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13002", "13002", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13002-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13002-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13002-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13002", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13002-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13002-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13002-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13002", "13002", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13002-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13002-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13002-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172']", |q| matches!(q, "172"), "13002", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13002-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13002-LIN-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LIN", "AHB-13002-LIN-M", "mandatory segment LIN is missing for Pruefidentifikator 13002", "13002", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13002-PIA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13002-PIA-M", |segs, issues| {
                 ahb_check_mandatory(segs, "PIA", "AHB-13002-PIA-M", "mandatory segment PIA is missing for Pruefidentifikator 13002", "13002", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13002-PIA-4347-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13002-PIA-4347-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "PIA", "AHB-13002-PIA-4347-Q", "segment PIA DE 4347 (element 0, component 0): qualifier is not one of the allowed values ['5']", |q| matches!(q, "5"), "13002", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13002-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13002-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13002-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13002", "13002", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13002-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13002-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13002-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220', '67']", |v| matches!(v, "220" | "67"), "13002", issues);
             })
 
@@ -637,37 +678,37 @@ static AHB_13003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13003")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13003-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13003-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13003-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13003", "13003", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13003-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13003-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13003-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['7', 'BK', 'Z39']", |q| matches!(q, "7" | "BK" | "Z39"), "13003", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13003-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13003-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13003-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13003", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13003-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13003-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13003-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13003", "13003", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13003-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13003-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13003-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13003", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13003-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13003-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13003-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13003", "13003", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13003-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13003-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13003-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13003", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13003-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13003-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13003-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13003", "13003", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13003-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13003-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13003-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172', '107', '237']", |q| matches!(q, "172" | "107" | "237"), "13003", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13003-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13003-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13003-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13003", "13003", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13003-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13003-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13003-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['79', '220', '67']", |v| matches!(v, "79" | "220" | "67"), "13003", issues);
             })
             .with_max_issues_per_rule(50)
@@ -682,37 +723,37 @@ static AHB_13005_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13005")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13005-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13005-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13005-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13005", "13005", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13005-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13005-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13005-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['Z15']", |q| matches!(q, "Z15"), "13005", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13005-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13005-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13005-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13005", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13005-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13005-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13005-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13005", "13005", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13005-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13005-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13005-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13005", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13005-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13005-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13005-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13005", "13005", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13005-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13005-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13005-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13005", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13005-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13005-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13005-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13005", "13005", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13005-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13005-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13005-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['237']", |q| matches!(q, "237"), "13005", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13005-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13005-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13005-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13005", "13005", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13005-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13005-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13005-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220', '67']", |v| matches!(v, "220" | "67"), "13005", issues);
             })
             .with_max_issues_per_rule(50)
@@ -727,37 +768,37 @@ static AHB_13006_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13006")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13006-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13006-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13006-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13006", "13006", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13006-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13006-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13006-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['7', '270', 'Z27', 'Z28', 'Z41', 'Z42', 'Z85']", |q| matches!(q, "7" | "270" | "Z27" | "Z28" | "Z41" | "Z42" | "Z85"), "13006", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13006-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13006-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13006-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['1']", |v| matches!(v, "1"), "13006", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13006-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13006-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13006-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13006", "13006", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13006-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13006-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13006-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13006", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13006-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13006-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13006-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13006", "13006", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13006-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13006-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13006-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13006", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13006-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13006-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-13006-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 13006", "13006", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13006-RFF-1153-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13006-RFF-1153-V", |segs, issues| {
                 ahb_check_field_value(segs, "RFF", 0, "AHB-13006-RFF-1153-V", "segment RFF DE 1153 (element 0, component 0): value is not one of the allowed values ['ACW']", |v| matches!(v, "ACW"), "13006", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13006-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13006-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13006-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13006", "13006", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13006-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13006-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13006-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172']", |q| matches!(q, "172"), "13006", issues);
             })
             .with_max_issues_per_rule(50)
@@ -772,37 +813,37 @@ static AHB_13007_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13007")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13007-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13007-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13007-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13007", "13007", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13007-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13007-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13007-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['Z21']", |q| matches!(q, "Z21"), "13007", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13007-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13007-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13007-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13007", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13007-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13007-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13007-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13007", "13007", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13007-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13007-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13007-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13007", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13007-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13007-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13007-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13007", "13007", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13007-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13007-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13007-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13007", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13007-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13007-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13007-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13007", "13007", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13007-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13007-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13007-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172']", |q| matches!(q, "172"), "13007", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13007-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13007-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13007-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13007", "13007", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13007-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13007-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13007-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220', '67']", |v| matches!(v, "220" | "67"), "13007", issues);
             })
             .with_max_issues_per_rule(50)
@@ -817,37 +858,37 @@ static AHB_13008_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13008")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13008-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13008-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13008-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13008", "13008", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13008-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13008-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13008-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['7']", |q| matches!(q, "7"), "13008", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13008-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13008-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13008-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13008", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13008-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13008-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13008-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13008", "13008", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13008-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13008-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13008-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13008", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13008-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13008-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13008-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13008", "13008", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13008-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13008-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13008-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13008", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13008-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13008-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13008-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13008", "13008", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13008-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13008-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13008-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172']", |q| matches!(q, "172"), "13008", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13008-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13008-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13008-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13008", "13008", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13008-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13008-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13008-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220', '67']", |v| matches!(v, "220" | "67"), "13008", issues);
             })
             .with_max_issues_per_rule(50)
@@ -862,37 +903,37 @@ static AHB_13009_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13009")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13009-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13009-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13009-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13009", "13009", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13009-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13009-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13009-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['7', 'Z27']", |q| matches!(q, "7" | "Z27"), "13009", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13009-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13009-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13009-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13009", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13009-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13009-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13009-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13009", "13009", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13009-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13009-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13009-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13009", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13009-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13009-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13009-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13009", "13009", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13009-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13009-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13009-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13009", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13009-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13009-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13009-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13009", "13009", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13009-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13009-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13009-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172']", |q| matches!(q, "172"), "13009", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13009-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13009-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13009-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13009", "13009", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13009-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13009-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13009-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220', '67']", |v| matches!(v, "220" | "67"), "13009", issues);
             })
 
@@ -940,31 +981,31 @@ static AHB_13010_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13010")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13010-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13010-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13010-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13010", "13010", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13010-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13010-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13010-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['Z06', 'Z16']", |q| matches!(q, "Z06" | "Z16"), "13010", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13010-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13010-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13010-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13010", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13010-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13010-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13010-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13010", "13010", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13010-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13010-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13010-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13010", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13010-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13010-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13010-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13010", "13010", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13010-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13010-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13010-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13010", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13010-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13010-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13010-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13010", "13010", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13010-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13010-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13010-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['Z04', 'Z06']", |q| matches!(q, "Z04" | "Z06"), "13010", issues);
             })
             .with_max_issues_per_rule(50)
@@ -979,31 +1020,31 @@ static AHB_13011_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13011")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13011-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13011-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13011-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13011", "13011", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13011-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13011-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13011-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['Z06', 'Z16']", |q| matches!(q, "Z06" | "Z16"), "13011", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13011-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13011-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13011-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13011", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13011-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13011-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13011-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13011", "13011", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13011-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13011-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13011-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13011", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13011-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13011-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13011-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13011", "13011", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13011-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13011-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13011-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13011", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13011-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13011-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13011-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13011", "13011", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13011-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13011-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13011-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['Z04', 'Z06']", |q| matches!(q, "Z04" | "Z06"), "13011", issues);
             })
             .with_max_issues_per_rule(50)
@@ -1018,31 +1059,31 @@ static AHB_13012_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13012")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13012-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13012-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13012-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13012", "13012", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13012-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13012-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13012-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['Z06', 'Z16']", |q| matches!(q, "Z06" | "Z16"), "13012", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13012-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13012-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13012-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13012", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13012-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13012-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13012-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13012", "13012", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13012-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13012-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13012-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13012", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13012-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13012-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13012-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13012", "13012", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13012-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13012-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13012-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13012", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13012-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13012-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13012-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13012", "13012", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13012-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13012-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13012-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['Z04', 'Z06']", |q| matches!(q, "Z04" | "Z06"), "13012", issues);
             })
             .with_max_issues_per_rule(50)
@@ -1057,37 +1098,37 @@ static AHB_13013_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13013")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13013-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13013-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13013-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13013", "13013", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13013-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13013-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13013-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['Z23']", |q| matches!(q, "Z23"), "13013", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13013-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13013-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13013-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13013", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13013-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13013-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13013-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13013", "13013", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13013-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13013-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13013-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13013", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13013-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13013-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13013-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13013", "13013", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13013-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13013-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13013-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13013", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13013-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13013-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13013-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13013", "13013", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13013-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13013-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13013-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172']", |q| matches!(q, "172"), "13013", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13013-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13013-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13013-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13013", "13013", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13013-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13013-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13013-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220', 'Z10']", |v| matches!(v, "220" | "Z10"), "13013", issues);
             })
             .with_max_issues_per_rule(50)
@@ -1102,37 +1143,37 @@ static AHB_13014_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13014")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13014-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13014-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13014-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13014", "13014", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13014-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13014-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13014-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['Z23']", |q| matches!(q, "Z23"), "13014", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13014-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13014-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13014-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13014", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13014-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13014-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13014-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13014", "13014", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13014-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13014-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13014-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13014", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13014-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13014-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13014-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13014", "13014", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13014-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13014-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13014-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13014", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13014-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13014-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13014-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13014", "13014", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13014-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13014-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13014-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172']", |q| matches!(q, "172"), "13014", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13014-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13014-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13014-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13014", "13014", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13014-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13014-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13014-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220', 'Z10']", |v| matches!(v, "220" | "Z10"), "13014", issues);
             })
             .with_max_issues_per_rule(50)
@@ -1147,37 +1188,37 @@ static AHB_13015_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13015")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13015-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13015-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13015-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13015", "13015", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13015-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13015-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13015-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['7', 'Z27']", |q| matches!(q, "7" | "Z27"), "13015", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13015-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13015-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13015-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13015", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13015-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13015-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13015-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13015", "13015", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13015-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13015-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13015-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13015", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13015-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13015-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13015-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13015", "13015", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13015-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13015-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13015-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13015", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13015-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13015-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13015-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13015", "13015", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13015-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13015-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13015-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172']", |q| matches!(q, "172"), "13015", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13015-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13015-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13015-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13015", "13015", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13015-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13015-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13015-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220', '67']", |v| matches!(v, "220" | "67"), "13015", issues);
             })
             .with_max_issues_per_rule(50)
@@ -1192,37 +1233,37 @@ static AHB_13016_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13016")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13016-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13016-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13016-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13016", "13016", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13016-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13016-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13016-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['7', 'Z27', 'Z28', 'Z42']", |q| matches!(q, "7" | "Z27" | "Z28" | "Z42"), "13016", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13016-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13016-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13016-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13016", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13016-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13016-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13016-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13016", "13016", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13016-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13016-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13016-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13016", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13016-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13016-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13016-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13016", "13016", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13016-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13016-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13016-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13016", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13016-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13016-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13016-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13016", "13016", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13016-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13016-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13016-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172']", |q| matches!(q, "172"), "13016", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13016-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13016-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13016-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13016", "13016", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13016-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13016-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13016-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220', '67', 'Z18']", |v| matches!(v, "220" | "67" | "Z18"), "13016", issues);
             })
             .with_max_issues_per_rule(50)
@@ -1237,46 +1278,46 @@ static AHB_13017_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13017")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13017-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13017-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13017-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13017", "13017", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13017-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13017-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13017-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['7']", |q| matches!(q, "7"), "13017", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13017-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13017-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13017-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13017", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13017-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13017-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13017-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13017", "13017", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13017-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13017-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13017-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13017", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13017-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13017-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13017-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13017", "13017", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13017-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13017-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13017-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13017", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13017-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13017-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13017-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13017", "13017", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13017-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13017-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13017-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172']", |q| matches!(q, "172"), "13017", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13017-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13017-LIN-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LIN", "AHB-13017-LIN-M", "mandatory segment LIN is missing for Pruefidentifikator 13017", "13017", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13017-PIA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13017-PIA-M", |segs, issues| {
                 ahb_check_mandatory(segs, "PIA", "AHB-13017-PIA-M", "mandatory segment PIA is missing for Pruefidentifikator 13017", "13017", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13017-PIA-4347-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13017-PIA-4347-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "PIA", "AHB-13017-PIA-4347-Q", "segment PIA DE 4347 (element 0, component 0): qualifier is not one of the allowed values ['5']", |q| matches!(q, "5"), "13017", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13017-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13017-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13017-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13017", "13017", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13017-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13017-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13017-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220', '67', 'Z18']", |v| matches!(v, "220" | "67" | "Z18"), "13017", issues);
             })
 
@@ -1313,37 +1354,37 @@ static AHB_13018_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13018")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13018-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13018-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13018-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13018", "13018", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13018-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13018-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13018-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['7', 'Z48']", |q| matches!(q, "7" | "Z48"), "13018", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13018-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13018-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13018-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13018", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13018-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13018-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13018-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13018", "13018", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13018-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13018-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13018-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13018", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13018-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13018-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13018-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13018", "13018", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13018-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13018-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13018-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13018", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13018-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13018-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13018-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13018", "13018", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13018-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13018-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13018-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172']", |q| matches!(q, "172"), "13018", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13018-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13018-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13018-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13018", "13018", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13018-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13018-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13018-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220', '67']", |v| matches!(v, "220" | "67"), "13018", issues);
             })
             .with_max_issues_per_rule(50)
@@ -1358,37 +1399,37 @@ static AHB_13019_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13019")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13019-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13019-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13019-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13019", "13019", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13019-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13019-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13019-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['7', 'Z27', 'Z41']", |q| matches!(q, "7" | "Z27" | "Z41"), "13019", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13019-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13019-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13019-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13019", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13019-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13019-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13019-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13019", "13019", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13019-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13019-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13019-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13019", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13019-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13019-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13019-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13019", "13019", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13019-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13019-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13019-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13019", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13019-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13019-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13019-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13019", "13019", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13019-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13019-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13019-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172']", |q| matches!(q, "172"), "13019", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13019-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13019-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13019-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13019", "13019", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13019-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13019-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13019-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220', '67']", |v| matches!(v, "220" | "67"), "13019", issues);
             })
             .with_max_issues_per_rule(50)
@@ -1403,37 +1444,37 @@ static AHB_13020_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13020")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13020-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13020-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13020-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13020", "13020", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13020-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13020-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13020-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['Z43']", |q| matches!(q, "Z43"), "13020", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13020-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13020-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13020-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13020", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13020-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13020-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13020-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13020", "13020", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13020-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13020-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13020-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13020", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13020-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13020-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13020-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13020", "13020", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13020-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13020-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13020-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13020", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13020-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13020-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13020-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13020", "13020", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13020-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13020-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13020-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172']", |q| matches!(q, "172"), "13020", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13020-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13020-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13020-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13020", "13020", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13020-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13020-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13020-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220']", |v| matches!(v, "220"), "13020", issues);
             })
             .with_max_issues_per_rule(50)
@@ -1448,37 +1489,37 @@ static AHB_13021_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13021")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13021-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13021-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13021-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13021", "13021", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13021-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13021-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13021-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['Z44']", |q| matches!(q, "Z44"), "13021", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13021-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13021-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13021-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13021", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13021-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13021-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13021-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13021", "13021", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13021-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13021-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13021-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13021", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13021-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13021-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13021-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13021", "13021", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13021-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13021-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13021-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13021", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13021-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13021-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13021-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13021", "13021", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13021-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13021-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13021-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172']", |q| matches!(q, "172"), "13021", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13021-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13021-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13021-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13021", "13021", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13021-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13021-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13021-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220']", |v| matches!(v, "220"), "13021", issues);
             })
             .with_max_issues_per_rule(50)
@@ -1493,37 +1534,37 @@ static AHB_13022_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13022")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13022-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13022-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13022-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13022", "13022", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13022-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13022-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13022-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['Z45']", |q| matches!(q, "Z45"), "13022", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13022-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13022-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13022-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13022", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13022-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13022-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13022-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13022", "13022", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13022-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13022-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13022-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13022", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13022-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13022-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13022-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13022", "13022", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13022-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13022-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13022-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13022", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13022-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13022-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13022-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13022", "13022", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13022-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13022-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13022-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172']", |q| matches!(q, "172"), "13022", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13022-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13022-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13022-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13022", "13022", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13022-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13022-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13022-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220']", |v| matches!(v, "220"), "13022", issues);
             })
             .with_max_issues_per_rule(50)
@@ -1538,37 +1579,37 @@ static AHB_13023_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13023")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13023-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13023-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13023-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13023", "13023", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13023-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13023-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13023-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['7', 'Z46']", |q| matches!(q, "7" | "Z46"), "13023", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13023-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13023-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13023-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13023", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13023-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13023-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13023-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13023", "13023", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13023-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13023-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13023-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13023", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13023-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13023-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13023-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13023", "13023", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13023-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13023-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13023-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13023", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13023-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13023-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13023-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13023", "13023", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13023-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13023-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13023-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172', '107', '237']", |q| matches!(q, "172" | "107" | "237"), "13023", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13023-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13023-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13023-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13023", "13023", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13023-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13023-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13023-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['79', '220', '67']", |v| matches!(v, "79" | "220" | "67"), "13023", issues);
             })
             .with_max_issues_per_rule(50)
@@ -1583,37 +1624,37 @@ static AHB_13025_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13025")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13025-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13025-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13025-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13025", "13025", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13025-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13025-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13025-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['7', 'Z48']", |q| matches!(q, "7" | "Z48"), "13025", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13025-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13025-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13025-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13025", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13025-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13025-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13025-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13025", "13025", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13025-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13025-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13025-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13025", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13025-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13025-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13025-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13025", "13025", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13025-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13025-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13025-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13025", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13025-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13025-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13025-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13025", "13025", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13025-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13025-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13025-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172']", |q| matches!(q, "172"), "13025", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13025-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13025-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13025-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13025", "13025", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13025-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13025-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13025-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220', '67']", |v| matches!(v, "220" | "67"), "13025", issues);
             })
             .with_max_issues_per_rule(50)
@@ -1628,37 +1669,37 @@ static AHB_13026_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13026")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13026-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13026-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13026-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13026", "13026", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13026-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13026-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13026-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['Z15']", |q| matches!(q, "Z15"), "13026", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13026-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13026-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13026-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13026", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13026-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13026-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13026-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13026", "13026", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13026-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13026-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13026-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13026", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13026-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13026-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13026-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13026", "13026", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13026-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13026-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13026-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13026", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13026-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13026-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13026-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13026", "13026", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13026-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13026-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13026-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['237']", |q| matches!(q, "237"), "13026", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13026-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13026-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13026-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13026", "13026", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13026-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13026-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13026-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220']", |v| matches!(v, "220"), "13026", issues);
             })
             .with_max_issues_per_rule(50)
@@ -1673,52 +1714,52 @@ static AHB_13027_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13027")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13027-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13027-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13027-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13027", "13027", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13027-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13027-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13027-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['Z83']", |q| matches!(q, "Z83"), "13027", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13027-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13027-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13027-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13027", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13027-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13027-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13027-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13027", "13027", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13027-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13027-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13027-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13027", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13027-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13027-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13027-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13027", "13027", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13027-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13027-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13027-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13027", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13027-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13027-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13027-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13027", "13027", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13027-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13027-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13027-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172']", |q| matches!(q, "172"), "13027", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13027-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13027-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13027-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13027", "13027", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13027-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13027-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13027-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220', '67', 'Z18']", |v| matches!(v, "220" | "67" | "Z18"), "13027", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13027-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13027-LIN-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LIN", "AHB-13027-LIN-M", "mandatory segment LIN is missing for Pruefidentifikator 13027", "13027", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13027-PIA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13027-PIA-M", |segs, issues| {
                 ahb_check_mandatory(segs, "PIA", "AHB-13027-PIA-M", "mandatory segment PIA is missing for Pruefidentifikator 13027", "13027", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13027-PIA-4347-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13027-PIA-4347-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "PIA", "AHB-13027-PIA-4347-Q", "segment PIA DE 4347 (element 0, component 0): qualifier is not one of the allowed values ['5']", |q| matches!(q, "5"), "13027", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13027-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13027-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-13027-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 13027", "13027", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13027-RFF-1153-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13027-RFF-1153-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "RFF", "AHB-13027-RFF-1153-RQ", "mandatory segment RFF with DE 1153 qualifier 'AGI' is missing", |q| matches!(q, "AGI"), "13027", issues);
             })
             .with_max_issues_per_rule(50)
@@ -1733,37 +1774,37 @@ static AHB_13028_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("MSCONS-AHB-2.5-13028")
             .for_message_type("MSCONS")
             .for_release("2.5")
-            .with_named_stateless_rule_fn("AHB-13028-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13028-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13028-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13028", "13028", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13028-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13028-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-13028-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['Z85']", |q| matches!(q, "Z85"), "13028", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13028-BGM-1225-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13028-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13028-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13028", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13028-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13028-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-13028-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 13028", "13028", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13028-DTM-2005-RQ", |segs, issues| {
+            .with_named_rule_fn("AHB-13028-DTM-2005-RQ", |segs, issues| {
                 ahb_check_required_qualifier(segs, "DTM", "AHB-13028-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "13028", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13028-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13028-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13028-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13028", "13028", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13028-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13028-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-13028-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13028", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13028-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13028-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13028-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13028", "13028", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13028-LOC-3227-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-13028-LOC-3227-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "LOC", "AHB-13028-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172']", |q| matches!(q, "172"), "13028", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13028-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-13028-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13028-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13028", "13028", issues);
             })
-            .with_named_stateless_rule_fn("AHB-13028-QTY-6063-V", |segs, issues| {
+            .with_named_rule_fn("AHB-13028-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13028-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['Z47']", |v| matches!(v, "Z47"), "13028", issues);
             })
             .with_max_issues_per_rule(50)
@@ -1886,7 +1927,7 @@ pub(crate) fn ahb_rule_pack(pid: Option<Pruefidentifikator>) -> Arc<ProfileRuleP
             None => Arc::clone(&AHB_ALL_PACK_MSCONS_2_5),
             Some(_unknown) => Arc::new(ProfileRulePack::new("unknown-pid")
                 .for_message_type("MSCONS")
-                .with_named_stateless_rule_fn("AHB-UNKNOWN-PID", |_segs, issues| {
+                .with_named_rule_fn("AHB-UNKNOWN-PID", |_segs, issues| {
                     issues.push(ValidationIssue::new(
                         ValidationSeverity::Warning,
                         "Pruefidentifikator is not registered for this release — AHB rules were not applied",

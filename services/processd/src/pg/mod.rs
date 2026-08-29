@@ -1,5 +1,6 @@
 //! PostgreSQL repository implementations for `processd`.
 
+pub mod abmeldeanfrage;
 pub mod anmeldung;
 pub mod approval;
 // `E_0608` is an NB tree; without the NB role there is no Prüflauf to remember.

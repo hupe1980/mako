@@ -318,12 +318,14 @@ fn rule_nad_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
 
 /// Layer 3 — verify the `NAD` segment group appears at most 3 times.
 ///
-/// Each occurrence of the trigger segment `NAD` marks the start of
-/// one group instance.  The MIG specifies a maximum of 3 instances.
+/// Counted over the group tree, so a nested group sharing the `NAD`
+/// trigger is not charged here.  The MIG specifies a maximum of 3 instances.
 fn rule_group_sg2_nad_max_occurrences(
+    _root: &edifact_rs::SegmentGroupIndexed<'_>,
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
+    // SG2 is not in GROUP_SCHEMA, so the tree cannot count it.
     let count = segments.iter().filter(|s| s.tag == "NAD").count();
     if count > 3 {
         issues.push(
@@ -339,12 +341,14 @@ fn rule_group_sg2_nad_max_occurrences(
 
 /// Layer 3 — verify the `LIN` segment group appears at most 200000 times.
 ///
-/// Each occurrence of the trigger segment `LIN` marks the start of
-/// one group instance.  The MIG specifies a maximum of 200000 instances.
+/// Counted over the group tree, so a nested group sharing the `LIN`
+/// trigger is not charged here.  The MIG specifies a maximum of 200000 instances.
 fn rule_group_sg29_lin_max_occurrences(
+    _root: &edifact_rs::SegmentGroupIndexed<'_>,
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
+    // SG29 is not in GROUP_SCHEMA, so the tree cannot count it.
     let count = segments.iter().filter(|s| s.tag == "LIN").count();
     if count > 200_000 {
         issues.push(
@@ -362,9 +366,11 @@ fn rule_group_sg29_lin_max_occurrences(
 ///
 /// The MIG specifies a minimum of 1 occurrence(s) for this group.
 fn rule_group_sg1_rff_min_occurrences(
+    _root: &edifact_rs::SegmentGroupIndexed<'_>,
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
+    // SG1 is not in GROUP_SCHEMA, so the tree cannot count it.
     let count = segments.iter().filter(|s| s.tag == "RFF").count();
     if count < 1 {
         issues.push(
@@ -382,9 +388,11 @@ fn rule_group_sg1_rff_min_occurrences(
 ///
 /// The MIG specifies a minimum of 1 occurrence(s) for this group.
 fn rule_group_sg2_nad_min_occurrences(
+    _root: &edifact_rs::SegmentGroupIndexed<'_>,
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
+    // SG2 is not in GROUP_SCHEMA, so the tree cannot count it.
     let count = segments.iter().filter(|s| s.tag == "NAD").count();
     if count < 1 {
         issues.push(
@@ -423,14 +431,14 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
         for seg in segs {
             if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {
                 cursor += pos;
-            } else if expected.contains(&seg.tag) {
+            } else if expected.contains(&seg.tag.as_ref()) {
                 issues.push(
                     ValidationIssue::new(
                         ValidationSeverity::Error,
                         "segment appears out of order".to_owned(),
                     )
                     .with_rule_id(rule_id)
-                    .with_segment(seg.tag.to_owned()),
+                    .with_segment(seg.tag.as_ref()),
                 );
             }
             // Unknown tags are passed through — they get caught by the DirectoryValidator.
@@ -454,7 +462,7 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
         for seg in segs {
             // A group trigger seen at or before the cursor opens a new
             // occurrence of that group; rewind to it.
-            if DETAIL_GROUP_TRIGGERS.contains(&seg.tag) {
+            if DETAIL_GROUP_TRIGGERS.contains(&seg.tag.as_ref()) {
                 if let Some(pos) = expected.iter().position(|&t| t == seg.tag) {
                     if pos <= cursor {
                         cursor = pos;
@@ -463,14 +471,14 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
             }
             if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {
                 cursor += pos;
-            } else if expected.contains(&seg.tag) {
+            } else if expected.contains(&seg.tag.as_ref()) {
                 issues.push(
                     ValidationIssue::new(
                         ValidationSeverity::Error,
                         "segment appears out of order".to_owned(),
                     )
                     .with_rule_id(rule_id)
-                    .with_segment(seg.tag.to_owned()),
+                    .with_segment(seg.tag.as_ref()),
                 );
             }
             // Unknown tags are passed through — they get caught by the DirectoryValidator.
@@ -501,18 +509,46 @@ static MIG_ORDERS_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-MIG-1.4b")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_stateless_rule_fn(rule_unh_mandatory)
-            .with_stateless_rule_fn(rule_bgm_mandatory)
-            .with_stateless_rule_fn(rule_dtm_mandatory)
-            .with_stateless_rule_fn(rule_uns_mandatory)
-            .with_stateless_rule_fn(rule_unt_mandatory)
-            .with_stateless_rule_fn(rule_rff_mandatory)
-            .with_stateless_rule_fn(rule_nad_mandatory)
-            .with_stateless_rule_fn(rule_group_sg2_nad_max_occurrences)
-            .with_stateless_rule_fn(rule_group_sg29_lin_max_occurrences)
-            .with_stateless_rule_fn(rule_group_sg1_rff_min_occurrences)
-            .with_stateless_rule_fn(rule_group_sg2_nad_min_occurrences)
-            .with_stateless_rule_fn(rule_segment_order),
+            .with_rule_fn(rule_unh_mandatory)
+            .with_rule_fn(rule_bgm_mandatory)
+            .with_rule_fn(rule_dtm_mandatory)
+            .with_rule_fn(rule_uns_mandatory)
+            .with_rule_fn(rule_unt_mandatory)
+            .with_rule_fn(rule_rff_mandatory)
+            .with_rule_fn(rule_nad_mandatory)
+            .with_named_group_rule_fn(
+                "MIG-ORDERS-MIG-1.4b-GROUP-SG2-NAD-CARD-MAX",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg2_nad_max_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_named_group_rule_fn(
+                "MIG-ORDERS-MIG-1.4b-GROUP-SG29-LIN-CARD-MAX",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg29_lin_max_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_named_group_rule_fn(
+                "MIG-ORDERS-MIG-1.4b-GROUP-SG1-RFF-CARD-MIN",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg1_rff_min_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_named_group_rule_fn(
+                "MIG-ORDERS-MIG-1.4b-GROUP-SG2-NAD-CARD-MIN",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg2_nad_min_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_rule_fn(rule_segment_order),
     )
 });
 
@@ -580,7 +616,7 @@ static AHB_17001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17001")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17001-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17001-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -590,7 +626,7 @@ static AHB_17001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17001-COM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17001-COM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "COM",
@@ -600,7 +636,7 @@ static AHB_17001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17001-CTA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17001-CTA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CTA",
@@ -610,7 +646,7 @@ static AHB_17001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17001-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17001-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -620,7 +656,7 @@ static AHB_17001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17001-FTX-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17001-FTX-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "FTX",
@@ -630,7 +666,7 @@ static AHB_17001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17001-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17001-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -640,7 +676,7 @@ static AHB_17001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17001-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17001-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -650,7 +686,7 @@ static AHB_17001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17001-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17001-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -673,7 +709,7 @@ static AHB_17002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17002")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17002-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17002-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -683,7 +719,7 @@ static AHB_17002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17002-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17002-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -693,7 +729,7 @@ static AHB_17002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17002-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17002-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -703,7 +739,7 @@ static AHB_17002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17002-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17002-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -713,7 +749,7 @@ static AHB_17002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17002-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17002-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -736,7 +772,7 @@ static AHB_17003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17003")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17003-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17003-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -746,7 +782,7 @@ static AHB_17003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17003-COM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17003-COM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "COM",
@@ -756,7 +792,7 @@ static AHB_17003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17003-CTA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17003-CTA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CTA",
@@ -766,7 +802,7 @@ static AHB_17003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17003-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17003-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -776,7 +812,7 @@ static AHB_17003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17003-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17003-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -786,7 +822,7 @@ static AHB_17003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17003-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17003-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -796,7 +832,7 @@ static AHB_17003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17003-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17003-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -806,7 +842,7 @@ static AHB_17003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17003-PIA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17003-PIA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "PIA",
@@ -816,7 +852,7 @@ static AHB_17003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17003-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17003-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -839,7 +875,7 @@ static AHB_17004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17004")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17004-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17004-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -849,7 +885,7 @@ static AHB_17004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17004-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17004-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -859,7 +895,7 @@ static AHB_17004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17004-IMD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17004-IMD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "IMD",
@@ -869,7 +905,7 @@ static AHB_17004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17004-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17004-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -879,7 +915,7 @@ static AHB_17004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17004-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17004-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -889,7 +925,7 @@ static AHB_17004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17004-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17004-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -899,7 +935,7 @@ static AHB_17004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17004-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17004-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -922,7 +958,7 @@ static AHB_17005_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17005")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17005-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17005-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -932,7 +968,7 @@ static AHB_17005_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17005-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17005-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -942,7 +978,7 @@ static AHB_17005_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17005-IMD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17005-IMD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "IMD",
@@ -952,7 +988,7 @@ static AHB_17005_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17005-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17005-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -962,7 +998,7 @@ static AHB_17005_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17005-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17005-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -972,7 +1008,7 @@ static AHB_17005_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17005-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17005-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -995,7 +1031,7 @@ static AHB_17006_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17006")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17006-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17006-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -1005,7 +1041,7 @@ static AHB_17006_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17006-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17006-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -1015,7 +1051,7 @@ static AHB_17006_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17006-IMD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17006-IMD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "IMD",
@@ -1025,7 +1061,7 @@ static AHB_17006_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17006-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17006-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -1035,7 +1071,7 @@ static AHB_17006_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17006-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17006-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -1045,7 +1081,7 @@ static AHB_17006_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17006-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17006-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -1055,7 +1091,7 @@ static AHB_17006_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17006-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17006-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -1078,7 +1114,7 @@ static AHB_17007_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17007")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17007-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17007-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -1088,7 +1124,7 @@ static AHB_17007_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17007-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17007-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -1098,7 +1134,7 @@ static AHB_17007_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17007-IMD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17007-IMD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "IMD",
@@ -1108,7 +1144,7 @@ static AHB_17007_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17007-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17007-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -1118,7 +1154,7 @@ static AHB_17007_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17007-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17007-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -1128,7 +1164,7 @@ static AHB_17007_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17007-CAV-N", |segs, issues| {
+            .with_named_rule_fn("AHB-17007-CAV-N", |segs, issues| {
                 ahb_check_not_used(
                     segs,
                     "CAV",
@@ -1138,7 +1174,7 @@ static AHB_17007_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17007-CCI-N", |segs, issues| {
+            .with_named_rule_fn("AHB-17007-CCI-N", |segs, issues| {
                 ahb_check_not_used(
                     segs,
                     "CCI",
@@ -1148,7 +1184,7 @@ static AHB_17007_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17007-LIN-N", |segs, issues| {
+            .with_named_rule_fn("AHB-17007-LIN-N", |segs, issues| {
                 ahb_check_not_used(
                     segs,
                     "LIN",
@@ -1158,7 +1194,7 @@ static AHB_17007_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17007-LOC-N", |segs, issues| {
+            .with_named_rule_fn("AHB-17007-LOC-N", |segs, issues| {
                 ahb_check_not_used(
                     segs,
                     "LOC",
@@ -1168,7 +1204,7 @@ static AHB_17007_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17007-PIA-N", |segs, issues| {
+            .with_named_rule_fn("AHB-17007-PIA-N", |segs, issues| {
                 ahb_check_not_used(
                     segs,
                     "PIA",
@@ -1178,7 +1214,7 @@ static AHB_17007_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17007-QTY-N", |segs, issues| {
+            .with_named_rule_fn("AHB-17007-QTY-N", |segs, issues| {
                 ahb_check_not_used(
                     segs,
                     "QTY",
@@ -1201,7 +1237,7 @@ static AHB_17008_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17008")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17008-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17008-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -1211,7 +1247,7 @@ static AHB_17008_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17008-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17008-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -1221,7 +1257,7 @@ static AHB_17008_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17008-IMD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17008-IMD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "IMD",
@@ -1231,7 +1267,7 @@ static AHB_17008_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17008-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17008-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -1241,7 +1277,7 @@ static AHB_17008_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17008-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17008-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -1251,7 +1287,7 @@ static AHB_17008_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17008-CAV-N", |segs, issues| {
+            .with_named_rule_fn("AHB-17008-CAV-N", |segs, issues| {
                 ahb_check_not_used(
                     segs,
                     "CAV",
@@ -1261,7 +1297,7 @@ static AHB_17008_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17008-CCI-N", |segs, issues| {
+            .with_named_rule_fn("AHB-17008-CCI-N", |segs, issues| {
                 ahb_check_not_used(
                     segs,
                     "CCI",
@@ -1271,7 +1307,7 @@ static AHB_17008_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17008-LIN-N", |segs, issues| {
+            .with_named_rule_fn("AHB-17008-LIN-N", |segs, issues| {
                 ahb_check_not_used(
                     segs,
                     "LIN",
@@ -1281,7 +1317,7 @@ static AHB_17008_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17008-LOC-N", |segs, issues| {
+            .with_named_rule_fn("AHB-17008-LOC-N", |segs, issues| {
                 ahb_check_not_used(
                     segs,
                     "LOC",
@@ -1291,7 +1327,7 @@ static AHB_17008_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17008-PIA-N", |segs, issues| {
+            .with_named_rule_fn("AHB-17008-PIA-N", |segs, issues| {
                 ahb_check_not_used(
                     segs,
                     "PIA",
@@ -1301,7 +1337,7 @@ static AHB_17008_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17008-QTY-N", |segs, issues| {
+            .with_named_rule_fn("AHB-17008-QTY-N", |segs, issues| {
                 ahb_check_not_used(
                     segs,
                     "QTY",
@@ -1324,7 +1360,7 @@ static AHB_17009_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17009")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17009-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17009-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -1334,7 +1370,7 @@ static AHB_17009_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17009-CCI-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17009-CCI-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CCI",
@@ -1344,7 +1380,7 @@ static AHB_17009_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17009-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17009-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -1354,7 +1390,7 @@ static AHB_17009_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17009-IMD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17009-IMD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "IMD",
@@ -1364,7 +1400,7 @@ static AHB_17009_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17009-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17009-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -1374,7 +1410,7 @@ static AHB_17009_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17009-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17009-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -1384,7 +1420,7 @@ static AHB_17009_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17009-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17009-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -1394,7 +1430,7 @@ static AHB_17009_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17009-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17009-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -1417,7 +1453,7 @@ static AHB_17011_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17011")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17011-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17011-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -1427,7 +1463,7 @@ static AHB_17011_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17011-COM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17011-COM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "COM",
@@ -1437,7 +1473,7 @@ static AHB_17011_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17011-CTA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17011-CTA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CTA",
@@ -1447,7 +1483,7 @@ static AHB_17011_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17011-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17011-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -1457,7 +1493,7 @@ static AHB_17011_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17011-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17011-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -1467,7 +1503,7 @@ static AHB_17011_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17011-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17011-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -1477,7 +1513,7 @@ static AHB_17011_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17011-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17011-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -1487,7 +1523,7 @@ static AHB_17011_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17011-PIA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17011-PIA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "PIA",
@@ -1497,7 +1533,7 @@ static AHB_17011_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17011-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17011-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -1520,7 +1556,7 @@ static AHB_17101_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17101")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17101-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17101-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -1530,7 +1566,7 @@ static AHB_17101_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17101-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17101-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -1540,7 +1576,7 @@ static AHB_17101_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17101-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17101-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -1550,7 +1586,7 @@ static AHB_17101_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17101-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17101-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -1560,7 +1596,7 @@ static AHB_17101_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17101-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17101-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -1570,7 +1606,7 @@ static AHB_17101_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17101-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17101-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -1593,7 +1629,7 @@ static AHB_17102_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17102")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17102-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17102-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -1603,7 +1639,7 @@ static AHB_17102_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17102-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17102-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -1613,8 +1649,8 @@ static AHB_17102_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_stateless_rule_fn(rule_ahb_17102_imd_cond_0)
-            .with_named_stateless_rule_fn("AHB-17102-LIN-M", |segs, issues| {
+            .with_rule_fn(rule_ahb_17102_imd_cond_0)
+            .with_named_rule_fn("AHB-17102-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -1624,7 +1660,7 @@ static AHB_17102_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17102-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17102-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -1634,7 +1670,7 @@ static AHB_17102_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17102-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17102-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -1644,7 +1680,7 @@ static AHB_17102_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17102-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17102-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -1667,7 +1703,7 @@ static AHB_17103_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17103")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17103-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17103-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -1677,7 +1713,7 @@ static AHB_17103_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17103-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17103-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -1687,7 +1723,7 @@ static AHB_17103_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17103-IMD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17103-IMD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "IMD",
@@ -1697,7 +1733,7 @@ static AHB_17103_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17103-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17103-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -1707,7 +1743,7 @@ static AHB_17103_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17103-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17103-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -1717,7 +1753,7 @@ static AHB_17103_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17103-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17103-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -1727,7 +1763,7 @@ static AHB_17103_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17103-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17103-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -1750,7 +1786,7 @@ static AHB_17104_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17104")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17104-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17104-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -1760,7 +1796,7 @@ static AHB_17104_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17104-COM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17104-COM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "COM",
@@ -1770,7 +1806,7 @@ static AHB_17104_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17104-CTA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17104-CTA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CTA",
@@ -1780,7 +1816,7 @@ static AHB_17104_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17104-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17104-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -1790,7 +1826,7 @@ static AHB_17104_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17104-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17104-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -1800,7 +1836,7 @@ static AHB_17104_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17104-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17104-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -1810,7 +1846,7 @@ static AHB_17104_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17104-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17104-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -1833,7 +1869,7 @@ static AHB_17110_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17110")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17110-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17110-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -1843,7 +1879,7 @@ static AHB_17110_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17110-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17110-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -1853,7 +1889,7 @@ static AHB_17110_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17110-IMD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17110-IMD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "IMD",
@@ -1863,7 +1899,7 @@ static AHB_17110_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17110-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17110-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -1873,7 +1909,7 @@ static AHB_17110_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17110-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17110-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -1896,7 +1932,7 @@ static AHB_17113_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17113")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17113-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17113-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -1906,7 +1942,7 @@ static AHB_17113_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17113-COM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17113-COM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "COM",
@@ -1916,7 +1952,7 @@ static AHB_17113_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17113-CTA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17113-CTA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CTA",
@@ -1926,7 +1962,7 @@ static AHB_17113_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17113-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17113-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -1936,7 +1972,7 @@ static AHB_17113_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17113-FTX-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17113-FTX-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "FTX",
@@ -1946,7 +1982,7 @@ static AHB_17113_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17113-IMD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17113-IMD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "IMD",
@@ -1956,7 +1992,7 @@ static AHB_17113_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17113-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17113-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -1966,7 +2002,7 @@ static AHB_17113_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17113-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17113-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -1976,7 +2012,7 @@ static AHB_17113_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17113-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17113-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -1986,7 +2022,7 @@ static AHB_17113_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17113-PIA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17113-PIA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "PIA",
@@ -1996,7 +2032,7 @@ static AHB_17113_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17113-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17113-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -2019,7 +2055,7 @@ static AHB_17114_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17114")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17114-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17114-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -2029,7 +2065,7 @@ static AHB_17114_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17114-COM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17114-COM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "COM",
@@ -2039,7 +2075,7 @@ static AHB_17114_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17114-CTA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17114-CTA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CTA",
@@ -2049,7 +2085,7 @@ static AHB_17114_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17114-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17114-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -2059,7 +2095,7 @@ static AHB_17114_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17114-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17114-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -2069,7 +2105,7 @@ static AHB_17114_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17114-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17114-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -2079,7 +2115,7 @@ static AHB_17114_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17114-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17114-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -2089,7 +2125,7 @@ static AHB_17114_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17114-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17114-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -2112,7 +2148,7 @@ static AHB_17115_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17115")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17115-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17115-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -2122,7 +2158,7 @@ static AHB_17115_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17115-COM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17115-COM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "COM",
@@ -2132,7 +2168,7 @@ static AHB_17115_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17115-CTA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17115-CTA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CTA",
@@ -2142,7 +2178,7 @@ static AHB_17115_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17115-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17115-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -2152,7 +2188,7 @@ static AHB_17115_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17115-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17115-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -2162,7 +2198,7 @@ static AHB_17115_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17115-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17115-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -2172,7 +2208,7 @@ static AHB_17115_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17115-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17115-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -2182,7 +2218,7 @@ static AHB_17115_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17115-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17115-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -2205,7 +2241,7 @@ static AHB_17116_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17116")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17116-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17116-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -2215,7 +2251,7 @@ static AHB_17116_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17116-COM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17116-COM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "COM",
@@ -2225,7 +2261,7 @@ static AHB_17116_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17116-CTA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17116-CTA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CTA",
@@ -2235,7 +2271,7 @@ static AHB_17116_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17116-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17116-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -2245,7 +2281,7 @@ static AHB_17116_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17116-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17116-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -2255,7 +2291,7 @@ static AHB_17116_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17116-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17116-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -2265,7 +2301,7 @@ static AHB_17116_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17116-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17116-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -2275,7 +2311,7 @@ static AHB_17116_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17116-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17116-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -2298,7 +2334,7 @@ static AHB_17117_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17117")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17117-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17117-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -2308,7 +2344,7 @@ static AHB_17117_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17117-COM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17117-COM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "COM",
@@ -2318,7 +2354,7 @@ static AHB_17117_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17117-CTA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17117-CTA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CTA",
@@ -2328,7 +2364,7 @@ static AHB_17117_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17117-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17117-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -2338,7 +2374,7 @@ static AHB_17117_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17117-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17117-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -2348,7 +2384,7 @@ static AHB_17117_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17117-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17117-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -2358,7 +2394,7 @@ static AHB_17117_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17117-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17117-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -2368,7 +2404,7 @@ static AHB_17117_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17117-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17117-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -2378,7 +2414,7 @@ static AHB_17117_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17117-IMD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17117-IMD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "IMD",
@@ -2401,7 +2437,7 @@ static AHB_17118_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17118")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17118-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17118-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -2411,7 +2447,7 @@ static AHB_17118_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17118-CAV-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17118-CAV-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CAV",
@@ -2421,7 +2457,7 @@ static AHB_17118_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17118-CCI-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17118-CCI-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CCI",
@@ -2431,7 +2467,7 @@ static AHB_17118_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17118-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17118-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -2441,7 +2477,7 @@ static AHB_17118_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17118-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17118-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -2451,7 +2487,7 @@ static AHB_17118_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17118-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17118-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -2461,7 +2497,7 @@ static AHB_17118_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17118-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17118-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -2471,7 +2507,7 @@ static AHB_17118_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17118-PIA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17118-PIA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "PIA",
@@ -2481,7 +2517,7 @@ static AHB_17118_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17118-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17118-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -2504,7 +2540,7 @@ static AHB_17120_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17120")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17120-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17120-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -2514,7 +2550,7 @@ static AHB_17120_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17120-CAV-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17120-CAV-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CAV",
@@ -2524,7 +2560,7 @@ static AHB_17120_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17120-CCI-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17120-CCI-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CCI",
@@ -2534,7 +2570,7 @@ static AHB_17120_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17120-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17120-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -2544,7 +2580,7 @@ static AHB_17120_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17120-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17120-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -2554,7 +2590,7 @@ static AHB_17120_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17120-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17120-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -2564,7 +2600,7 @@ static AHB_17120_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17120-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17120-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -2574,7 +2610,7 @@ static AHB_17120_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17120-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17120-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -2597,7 +2633,7 @@ static AHB_17121_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17121")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17121-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17121-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -2607,7 +2643,7 @@ static AHB_17121_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17121-CAV-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17121-CAV-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CAV",
@@ -2617,7 +2653,7 @@ static AHB_17121_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17121-CCI-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17121-CCI-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CCI",
@@ -2627,7 +2663,7 @@ static AHB_17121_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17121-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17121-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -2637,7 +2673,7 @@ static AHB_17121_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17121-IMD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17121-IMD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "IMD",
@@ -2647,7 +2683,7 @@ static AHB_17121_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17121-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17121-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -2657,7 +2693,7 @@ static AHB_17121_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17121-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17121-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -2667,7 +2703,7 @@ static AHB_17121_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17121-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17121-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -2677,7 +2713,7 @@ static AHB_17121_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17121-PIA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17121-PIA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "PIA",
@@ -2687,7 +2723,7 @@ static AHB_17121_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17121-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17121-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -2710,7 +2746,7 @@ static AHB_17122_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17122")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17122-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17122-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -2720,7 +2756,7 @@ static AHB_17122_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17122-CCI-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17122-CCI-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CCI",
@@ -2730,7 +2766,7 @@ static AHB_17122_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17122-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17122-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -2740,7 +2776,7 @@ static AHB_17122_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17122-FTX-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17122-FTX-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "FTX",
@@ -2750,7 +2786,7 @@ static AHB_17122_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17122-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17122-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -2760,7 +2796,7 @@ static AHB_17122_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17122-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17122-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -2770,7 +2806,7 @@ static AHB_17122_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17122-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17122-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -2793,7 +2829,7 @@ static AHB_17123_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17123")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17123-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17123-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -2803,7 +2839,7 @@ static AHB_17123_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17123-CCI-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17123-CCI-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CCI",
@@ -2813,7 +2849,7 @@ static AHB_17123_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17123-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17123-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -2823,7 +2859,7 @@ static AHB_17123_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17123-IMD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17123-IMD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "IMD",
@@ -2833,7 +2869,7 @@ static AHB_17123_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17123-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17123-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -2843,7 +2879,7 @@ static AHB_17123_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17123-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17123-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -2853,7 +2889,7 @@ static AHB_17123_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17123-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17123-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -2863,7 +2899,7 @@ static AHB_17123_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17123-PIA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17123-PIA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "PIA",
@@ -2873,7 +2909,7 @@ static AHB_17123_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17123-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17123-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -2896,7 +2932,7 @@ static AHB_17128_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17128")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17128-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17128-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -2906,7 +2942,7 @@ static AHB_17128_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17128-CCI-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17128-CCI-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CCI",
@@ -2916,7 +2952,7 @@ static AHB_17128_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17128-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17128-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -2926,7 +2962,7 @@ static AHB_17128_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17128-FTX-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17128-FTX-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "FTX",
@@ -2936,7 +2972,7 @@ static AHB_17128_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17128-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17128-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -2946,7 +2982,7 @@ static AHB_17128_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17128-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17128-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -2956,7 +2992,7 @@ static AHB_17128_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17128-PIA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17128-PIA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "PIA",
@@ -2966,7 +3002,7 @@ static AHB_17128_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17128-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17128-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -2989,7 +3025,7 @@ static AHB_17129_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17129")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17129-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17129-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -2999,7 +3035,7 @@ static AHB_17129_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17129-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17129-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -3009,7 +3045,7 @@ static AHB_17129_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17129-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17129-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -3019,7 +3055,7 @@ static AHB_17129_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17129-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17129-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -3042,7 +3078,7 @@ static AHB_17130_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17130")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17130-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17130-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -3052,7 +3088,7 @@ static AHB_17130_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17130-CCI-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17130-CCI-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CCI",
@@ -3062,7 +3098,7 @@ static AHB_17130_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17130-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17130-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -3072,7 +3108,7 @@ static AHB_17130_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17130-FTX-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17130-FTX-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "FTX",
@@ -3082,7 +3118,7 @@ static AHB_17130_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17130-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17130-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -3092,7 +3128,7 @@ static AHB_17130_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17130-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17130-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -3102,7 +3138,7 @@ static AHB_17130_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17130-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17130-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -3112,7 +3148,7 @@ static AHB_17130_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17130-PIA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17130-PIA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "PIA",
@@ -3122,7 +3158,7 @@ static AHB_17130_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17130-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17130-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -3145,7 +3181,7 @@ static AHB_17131_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17131")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17131-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17131-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -3155,7 +3191,7 @@ static AHB_17131_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17131-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17131-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -3165,7 +3201,7 @@ static AHB_17131_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17131-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17131-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -3175,7 +3211,7 @@ static AHB_17131_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17131-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17131-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -3198,7 +3234,7 @@ static AHB_17132_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17132")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17132-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17132-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -3208,7 +3244,7 @@ static AHB_17132_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17132-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17132-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -3218,7 +3254,7 @@ static AHB_17132_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17132-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17132-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -3228,7 +3264,7 @@ static AHB_17132_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17132-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17132-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -3238,7 +3274,7 @@ static AHB_17132_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17132-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17132-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -3261,7 +3297,7 @@ static AHB_17133_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17133")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17133-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17133-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -3271,7 +3307,7 @@ static AHB_17133_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17133-CAV-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17133-CAV-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CAV",
@@ -3281,7 +3317,7 @@ static AHB_17133_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17133-CCI-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17133-CCI-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CCI",
@@ -3291,7 +3327,7 @@ static AHB_17133_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17133-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17133-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -3301,7 +3337,7 @@ static AHB_17133_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17133-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17133-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -3311,7 +3347,7 @@ static AHB_17133_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17133-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17133-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -3321,7 +3357,7 @@ static AHB_17133_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17133-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17133-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -3331,7 +3367,7 @@ static AHB_17133_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17133-PIA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17133-PIA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "PIA",
@@ -3341,7 +3377,7 @@ static AHB_17133_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17133-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17133-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -3364,7 +3400,7 @@ static AHB_17134_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17134")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17134-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17134-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -3374,7 +3410,7 @@ static AHB_17134_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17134-CCI-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17134-CCI-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CCI",
@@ -3384,7 +3420,7 @@ static AHB_17134_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17134-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17134-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -3394,7 +3430,7 @@ static AHB_17134_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17134-IMD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17134-IMD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "IMD",
@@ -3404,7 +3440,7 @@ static AHB_17134_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17134-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17134-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -3414,7 +3450,7 @@ static AHB_17134_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17134-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17134-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -3424,7 +3460,7 @@ static AHB_17134_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17134-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17134-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -3434,7 +3470,7 @@ static AHB_17134_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17134-PIA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17134-PIA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "PIA",
@@ -3444,7 +3480,7 @@ static AHB_17134_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17134-QTY-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17134-QTY-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "QTY",
@@ -3454,7 +3490,7 @@ static AHB_17134_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17134-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17134-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -3477,7 +3513,7 @@ static AHB_17135_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17135")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17135-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17135-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -3487,7 +3523,7 @@ static AHB_17135_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17135-CCI-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17135-CCI-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "CCI",
@@ -3497,7 +3533,7 @@ static AHB_17135_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17135-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17135-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -3507,7 +3543,7 @@ static AHB_17135_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17135-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17135-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -3517,7 +3553,7 @@ static AHB_17135_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17135-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17135-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -3527,7 +3563,7 @@ static AHB_17135_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17135-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17135-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -3537,7 +3573,7 @@ static AHB_17135_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17135-PIA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17135-PIA-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "PIA",
@@ -3547,7 +3583,7 @@ static AHB_17135_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17135-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17135-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -3570,7 +3606,7 @@ static AHB_17209_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17209")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17209-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17209-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -3580,7 +3616,7 @@ static AHB_17209_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17209-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17209-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -3590,7 +3626,7 @@ static AHB_17209_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17209-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17209-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -3600,7 +3636,7 @@ static AHB_17209_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17209-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17209-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -3610,7 +3646,7 @@ static AHB_17209_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17209-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17209-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -3620,7 +3656,7 @@ static AHB_17209_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17209-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17209-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -3643,7 +3679,7 @@ static AHB_17210_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17210")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17210-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17210-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -3653,7 +3689,7 @@ static AHB_17210_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17210-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17210-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -3663,7 +3699,7 @@ static AHB_17210_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17210-IMD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17210-IMD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "IMD",
@@ -3673,7 +3709,7 @@ static AHB_17210_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17210-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17210-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LIN",
@@ -3683,7 +3719,7 @@ static AHB_17210_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17210-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17210-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -3693,7 +3729,7 @@ static AHB_17210_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17210-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17210-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -3703,7 +3739,7 @@ static AHB_17210_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17210-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17210-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -3726,7 +3762,7 @@ static AHB_17211_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17211")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17211-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17211-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -3736,7 +3772,7 @@ static AHB_17211_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17211-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17211-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -3746,7 +3782,7 @@ static AHB_17211_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17211-FTX-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17211-FTX-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "FTX",
@@ -3756,7 +3792,7 @@ static AHB_17211_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17211-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17211-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -3766,7 +3802,7 @@ static AHB_17211_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17211-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17211-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -3789,7 +3825,7 @@ static AHB_17301_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDERS-AHB-1.4b-17301")
             .for_message_type("ORDERS")
             .for_release("1.4b")
-            .with_named_stateless_rule_fn("AHB-17301-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17301-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -3799,7 +3835,7 @@ static AHB_17301_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17301-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17301-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -3809,8 +3845,8 @@ static AHB_17301_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_stateless_rule_fn(rule_ahb_17301_imd_cond_0)
-            .with_named_stateless_rule_fn("AHB-17301-LOC-M", |segs, issues| {
+            .with_rule_fn(rule_ahb_17301_imd_cond_0)
+            .with_named_rule_fn("AHB-17301-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "LOC",
@@ -3820,7 +3856,7 @@ static AHB_17301_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17301-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17301-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -3830,7 +3866,7 @@ static AHB_17301_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17301-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-17301-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -4008,7 +4044,7 @@ pub(crate) fn ahb_rule_pack(pid: Option<Pruefidentifikator>) -> Arc<ProfileRuleP
             None => Arc::clone(&AHB_ALL_PACK_ORDERS_1_4B),
             Some(_unknown) => Arc::new(ProfileRulePack::new("unknown-pid")
                 .for_message_type("ORDERS")
-                .with_named_stateless_rule_fn("AHB-UNKNOWN-PID", |_segs, issues| {
+                .with_named_rule_fn("AHB-UNKNOWN-PID", |_segs, issues| {
                     issues.push(ValidationIssue::new(
                         ValidationSeverity::Warning,
                         "Pruefidentifikator is not registered for this release — AHB rules were not applied",

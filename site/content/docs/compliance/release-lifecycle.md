@@ -191,12 +191,29 @@ and 250/250 (ORDERS 1.1b) mandatory segments. Three things still need a human:
 - **Group flattening at the margins.** A `Muss` nested in a conditioned group is
   kept as `M` — the safe direction for review, but stricter than some curated
   profiles, which relaxed it after reading the condition.
+- **Whether the group itself is mandatory.** `requirement: "M"` on a `group_rules`
+  entry fires once per occurrence of that group, so a message omitting the group
+  entirely satisfies it. Where the AHB Bedingung makes the group Muss, set
+  `"group_required": true` on the entry and the absence is caught at message
+  level. It is off by default because a `Muss` on a segment does not by itself
+  say the enclosing group must appear, and turning it on for a conditional group
+  rejects valid messages — set it against the Bedingung, never by inference.
 
 Diff a freshly extracted draft against the shipped profile before promoting it;
 the mandatory set should match exactly, and every remaining difference is one of
 the three above.
 
 ### 3. Import updated code lists
+
+Import the **whole** DE table from the MIG. A table split across a page break
+reads as complete on the first page, and a code copied from a neighbouring
+message type widens what mako accepts without any test noticing.
+
+`validate-profiles` cross-checks the result: every value an `ahb.json` rule
+demands must exist in the same profile's `codelists.json`, or no message can
+satisfy both layers. It runs only on profiles still in force — a lapsed one is
+frozen, kept so messages from its validity window still resolve.
+
 
 ```bash
 cargo xtask import-codelists \
@@ -277,6 +294,11 @@ asserting a pairing no AHB defines.
 # Verify fixture coverage
 cargo xtask validate-pruefids --message-type utilmd
 ```
+
+Adding a fixture moves `crates/edi-energy/tests/validation_snapshot.txt`, which
+records every fixture's verdict as one `rule id + severity` line. Regenerate it
+with `BLESS_VALIDATION_SNAPSHOT=1` and read the diff — a line that disappears is
+a check that was lost.
 
 ---
 

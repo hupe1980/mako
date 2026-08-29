@@ -733,6 +733,7 @@ coverage_table! {
     gpke_allokationsliste_ordrsp_registry,
     gpke_anfrage_bestellung_registry,
     gpke_ankuendigung_zuordnung_lf_registry,
+    gpke_beendigung_zuordnung_antwort_registry,
     gpke_beendigung_zuordnung_registry,
     gpke_kuendigung_registry,
     gpke_datenabruf_registry,
@@ -1684,16 +1685,17 @@ fn dvgw_gas_day(msg: &DvgwMessage) -> Option<mako_gabi_gas::GasDay> {
 #[cfg(test)]
 mod fernsteuerbarkeit_tests {
     use super::*;
-    use edifact_rs::OwnedElement;
+    use edifact_rs::{Element, Segment};
 
     fn seg(tag: &str, elements: Vec<Vec<&str>>) -> OwnedSegment {
-        OwnedSegment::new(
+        Segment::new(
             tag,
             elements
                 .into_iter()
-                .map(|comps| OwnedElement::of(&comps))
+                .map(|comps| Element::of(&comps))
                 .collect(),
         )
+        .into_owned()
     }
 
     /// `CCI+<7059>++<7037>` — element 1 is C502, which UTILMD never uses.

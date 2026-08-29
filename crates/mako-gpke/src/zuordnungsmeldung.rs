@@ -1,26 +1,26 @@
-//! GPKE Zuordnungs-Meldungen — the three one-way notifications the NB owes
-//! around a Lieferbeginn.
+//! GPKE Zuordnungs-Meldungen — the one-way notifications the NB owes when it
+//! moves a Zuordnung.
 //!
 //! # Why these are their own workflow
 //!
 //! A **Meldepflicht** is a message a Festlegung obliges a party to send with no
-//! answer expected back. That is the whole difficulty: nobody waits for a reply,
-//! so a missing one produces no timeout, no dead letter and no alert — it
-//! surfaces months later as a counterparty holding a stale view of who supplies
-//! the Marktlokation. Modelling them as processes puts the obligation, its
-//! Frist and its dispatch in the event log where a `§ 20 EnWG` audit can read
-//! them.
+//! answer expected back, so a missing one produces no timeout, no dead letter
+//! and no alert — it surfaces months later as a counterparty holding a stale
+//! view of who supplies the Marktlokation. Modelling them as processes puts the
+//! obligation and its dispatch in the event log, where a `§ 20 EnWG` audit can
+//! read them.
 //!
-//! | PID | Message | NB → | Prozessschritt | Spätester ÜZ |
+//! | PID | Message | NB → | Sequenzdiagramm | Spätester ÜZ |
 //! |---|---|---|---|---|
-//! | 55036 | Information über existierende Zuordnung | LFN | Nr. 2 | 07:00 Uhr des 1. WT nach dem ÜT |
-//! | 55037 | Beendigung der Zuordnung | LFA | Nr. 10 | 12:00 Uhr des 1. WT nach dem ÜT |
-//! | 55038 | Aufhebung einer zukünftigen Zuordnung | LFZ | Nr. 13 | 12:00 Uhr des 1. WT nach dem ÜT |
+//! | 55036 | Information über existierende Zuordnung | LFN | Lieferbeginn Nr. 2 | 07:00 Uhr des 1. WT |
+//! | 55037 | Beendigung der Zuordnung | LFA | Lieferbeginn Nr. 10 | 12:00 Uhr des 1. WT |
+//! | 55038 | Aufhebung einer zuk. Zuordnung | LFZ | Lieferbeginn Nr. 13 | 12:00 Uhr des 1. WT |
+//! | 55611 | Beendigung der Zuordnung des MSB | MSB / MSBZ | Lieferende von NB an LF Nr. 11 / 13 | 07:00 Uhr des 1. WT |
 //!
-//! All three windows run from the **Eingang der Anmeldung** (Nr. 1), not from
-//! the NB's own answer — so all three are resolvable the moment the Anmeldung
-//! arrives, and 55036's 07:00 closes four hours *before* the 11:00 Bestätigung
-//! of the same message. The catalogue is [`mako_fristen::meldung`].
+//! The first three run from the **Eingang der Anmeldung**, so all three are
+//! resolvable the moment it arrives, and 55036's 07:00 closes four hours
+//! *before* the 11:00 Bestätigung of the same message. 55611 runs from the NB's
+//! **own** 55007 instead. The catalogue is [`mako_fristen::meldung`].
 //!
 //! # The branch that decides whether they are owed
 //!
@@ -35,25 +35,30 @@
 //! decision belongs to `processd` — this workflow renders and records what
 //! `processd` decides.
 //!
-//! # Wire facts (UTILMD AHB Strom 2.1 Kap. 8.11 / 2.2 Kap. 8.11)
+//! # Wire facts (UTILMD AHB Strom 2.1 / 2.2 Kap. 8.11)
 //!
-//! - `BGM+E01` on 55036 (an Anmeldung), `BGM+E02` on 55037 and 55038.
+//! - `BGM+E01` on 55036 (an Anmeldung); `BGM+E02` on the three that end or
+//!   cancel one.
 //! - `SG4 STS+7` DE 9013 carries the Grund; the admissible set differs per PID
 //!   and is enforced by [`Zuordnungsmeldung::grund_is_admissible`].
 //! - `SG4 DTM`: **none** on 55036 — the Anwendungsfall carries no process date
 //!   at all — `DTM+93` Vertragsende on 55037, `DTM+92` Vertragsbeginn on 55038
-//!   („Ursprünglich vom NB bestätigtes Beginndatum", Bedingung `[507]`).
-//! - `SG5 LOC+Z16` Marktlokation **or** `LOC+Z21` Tranche, never both.
+//!   („Ursprünglich vom NB bestätigtes Beginndatum", Bedingung `[507]`). On
+//!   55611 the qualifier follows the **Grund**: `93` under `ZC8`, `92` under
+//!   `ZH1` (`[474]` / `[475]`).
+//! - `SG5 LOC+Z16` Marktlokation, `Z21` Tranche, or — on 55611 alone — `Z17`
+//!   Messlokation, because the MSB is assigned to the MeLo.
 //! - `SG6 RFF+Z13` Prüfidentifikator, plus `RFF+TN` with the Vorgangsnummer of
 //!   the triggering Anmeldung — Muss on 55036 alone.
 //! - `SG12 NAD+VY`: the Altlieferant on 55036 (Bedingung `[518]`: *all* of them,
 //!   because Geschäftsvorfall 3 splits a Marktlokation across Tranchen), the
 //!   auslösender Marktpartner on 55038 (`[579]`: LFN bei `ZH0`/`ZG9`, NB bei
-//!   `ZH1`), and none at all on 55037.
+//!   `ZH1`), and none on 55037 or 55611.
 //!
 //! # Regulatory basis
 //!
-//! - **BK6-24-174 GPKE Teil 2** § 2.1.2 SD Lieferbeginn Nr. 2 / 10 / 13
+//! - **BK6-24-174 GPKE Teil 2** § 2.1.2 SD Lieferbeginn Nr. 2 / 10 / 13 and
+//!   § 2.5.2 SD Lieferende von NB an LF Nr. 11 / 13
 //! - **UTILMD AHB Strom 2.1 / 2.2** Kap. 8.11
 //! - **APERAK AHB 1.0 § 2.4.1** — 45 Minuten on a Werktag, a separate clock
 
@@ -113,21 +118,28 @@ pub const INFORMATION_PID: u32 = 55_036;
 pub const BEENDIGUNG_PID: u32 = 55_037;
 /// PID 55038 — Aufhebung einer zukünftigen Zuordnung (NB → LFZ).
 pub const AUFHEBUNG_PID: u32 = 55_038;
+/// PID 55611 — Beendigung der Zuordnung des MSB zur MaLo / MeLo (NB → MSB / MSBZ).
+pub const MSB_BEENDIGUNG_PID: u32 = 55_611;
+
+/// `SG5 LOC` DE 3227 — `Z16` Marktlokation, the default object.
+pub const LOC_MARKTLOKATION: &str = "Z16";
+/// `SG5 LOC` DE 3227 — `Z21` Tranche.
+pub const LOC_TRANCHE: &str = "Z21";
+/// `SG5 LOC` DE 3227 — `Z17` Messlokation, admissible on a 55611 alone.
+pub const LOC_MESSLOKATION: &str = "Z17";
 
 /// Every Zuordnungs-Meldung, in Prozessschritt order — which is also the order
 /// their windows close.
-pub const ZUORDNUNGSMELDUNG_PIDS: &[u32] = &[INFORMATION_PID, BEENDIGUNG_PID, AUFHEBUNG_PID];
-
-/// Deadline label for the dispatch window.
-///
-/// One label for all three: the window differs per PID and comes from
-/// [`mako_fristen::meldung`], but what expiry means is the same — a Meldepflicht
-/// the NB owes went unsent.
-pub const MELDUNG_WINDOW_LABEL: &str = "gpke-zuordnungsmeldung-frist";
+pub const ZUORDNUNGSMELDUNG_PIDS: &[u32] = &[
+    INFORMATION_PID,
+    BEENDIGUNG_PID,
+    AUFHEBUNG_PID,
+    MSB_BEENDIGUNG_PID,
+];
 
 // ── Which message ─────────────────────────────────────────────────────────────
 
-/// One of the three Zuordnungs-Meldungen, resolved from its Prüfidentifikator.
+/// One Zuordnungs-Meldung, resolved from its Prüfidentifikator.
 ///
 /// The variant decides the BGM code, whether a process date rides in SG4, which
 /// DE 2005 qualifier it takes, and which Gründe the AHB admits — four facts a
@@ -142,6 +154,20 @@ pub enum Zuordnungsmeldung {
     Beendigung,
     /// 55038 — a future Zuordnung is cancelled, addressed to the **LFZ**.
     Aufhebung,
+    /// 55611 — the **MSB**'s own Zuordnung ends, or the **MSBZ**'s future one
+    /// is cancelled.
+    ///
+    /// A different Sequenzdiagramm from the other three: „Lieferende von NB an
+    /// LF" (§ 2.5.2 Nr. 11 and Nr. 13), which the NB opens itself with a 55007
+    /// rather than answering an inbound Anmeldung. Two things follow from that
+    /// and from the MSB being assigned to the **Messlokation**:
+    ///
+    /// - `SG5 LOC` carries `Z16` **or `Z17`** — the only message in this family
+    ///   that may name a Messlokation.
+    /// - The `SG4 DTM` qualifier follows the **Grund**, not the PID: `ZC8`
+    ///   ends an assignment and names `DTM+93`, `ZH1` cancels a future one and
+    ///   names `DTM+92` (Bedingungen `[474]` / `[475]`).
+    MsbBeendigung,
 }
 
 impl Zuordnungsmeldung {
@@ -153,6 +179,7 @@ impl Zuordnungsmeldung {
             INFORMATION_PID => Some(Self::Information),
             BEENDIGUNG_PID => Some(Self::Beendigung),
             AUFHEBUNG_PID => Some(Self::Aufhebung),
+            MSB_BEENDIGUNG_PID => Some(Self::MsbBeendigung),
             _ => None,
         }
     }
@@ -164,6 +191,7 @@ impl Zuordnungsmeldung {
             Self::Information => INFORMATION_PID,
             Self::Beendigung => BEENDIGUNG_PID,
             Self::Aufhebung => AUFHEBUNG_PID,
+            Self::MsbBeendigung => MSB_BEENDIGUNG_PID,
         }
     }
 
@@ -173,7 +201,7 @@ impl Zuordnungsmeldung {
     pub const fn bgm_document_code(self) -> &'static str {
         match self {
             Self::Information => "E01",
-            Self::Beendigung | Self::Aufhebung => "E02",
+            Self::Beendigung | Self::Aufhebung | Self::MsbBeendigung => "E02",
         }
     }
 
@@ -182,12 +210,22 @@ impl Zuordnungsmeldung {
     /// 55036 carries **no** SG4 date: the AHB's Kap. 8.11 column is empty for
     /// both „Beginn zum" and „Ende zum". Emitting one there is an unlisted
     /// segment, which is why this is an `Option` rather than a default.
+    ///
+    /// On a **55611** the qualifier follows the `transaktionsgrund` rather than
+    /// the PID — `ZC8` ends an assignment („Ende zum", `DTM+93`, Bedingung
+    /// `[474]`) and `ZH1` cancels a future one („Beginn zum", `DTM+92`,
+    /// `[475]`). The other three messages fix it per PID and ignore the
+    /// argument.
     #[must_use]
-    pub const fn dtm_qualifier(self) -> Option<&'static str> {
+    pub fn dtm_qualifier(self, transaktionsgrund: &str) -> Option<&'static str> {
         match self {
             Self::Information => None,
             Self::Beendigung => Some(ENDE_ZUM),
             Self::Aufhebung => Some(BEGINN_ZUM),
+            Self::MsbBeendigung if transaktionsgrund == grund::AUFHEBUNG_STILLLEGUNG => {
+                Some(BEGINN_ZUM)
+            }
+            Self::MsbBeendigung => Some(ENDE_ZUM),
         }
     }
 
@@ -207,6 +245,12 @@ impl Zuordnungsmeldung {
                 grund::AUFHEBUNG_FRUEHERE_ANMELDUNG,
                 grund::AUFHEBUNG_STILLLEGUNG,
             ],
+            // UTILMD AHB Strom Kap. 8.11, 55611 column: `ZC8` (Nr. 11, to the
+            // MSB) and `ZH1` (Nr. 13, to the MSBZ). The Aufhebungsgründe that
+            // name a *Lieferant* — `ZG5`, `ZG9`, `ZH0` — are not admissible
+            // here, and `ZD9`/`ZG6` are Beendigungsgründe of the LFA's
+            // Zuordnung, not the MSB's.
+            Self::MsbBeendigung => &[grund::BEENDIGUNG_ZUORDNUNG, grund::AUFHEBUNG_STILLLEGUNG],
         }
     }
 
@@ -226,7 +270,9 @@ impl Zuordnungsmeldung {
     pub fn requires_beteiligter(self, transaktionsgrund: &str) -> bool {
         match self {
             Self::Information => true,
-            Self::Beendigung => false,
+            // 55611's AHB column is empty: the message names the MSB in
+            // `SG2 NAD+MR` and no third party at all.
+            Self::Beendigung | Self::MsbBeendigung => false,
             Self::Aufhebung => transaktionsgrund != grund::AUFHEBUNG_EEG38,
         }
     }
@@ -365,8 +411,13 @@ pub enum ZuordnungsmeldungCommand {
         receiver: MarktpartnerCode,
         /// Marktlokations-ID, or the MaLo-ID of the Tranche.
         location_id: MaLo,
-        /// `SG5 LOC` qualifier — `Z16` Marktlokation or `Z21` Tranche.
-        tranche: bool,
+        /// `SG5 LOC` — which object the Vorgang names.
+        ///
+        /// `Z16` Marktlokation is the default; `Z21` Tranche on 55036–55038,
+        /// `Z17` Messlokation on a 55611, which is the one message here that may
+        /// address one („Der MSB ist ausschließlich dem Objekt Messlokation
+        /// zugeordnet", WiM Strom Teil 1 Kap. 2.1.2 d).
+        lokationstyp: Option<String>,
         /// `SG4 STS+7` DE 9013.
         transaktionsgrund: String,
         /// `YYYYMMDD`. Required on 55037 and 55038, refused on 55036.
@@ -447,7 +498,7 @@ impl Workflow for GpkeZuordnungsmeldungWorkflow {
                 sender,
                 receiver,
                 location_id,
-                tranche,
+                lokationstyp,
                 transaktionsgrund,
                 process_date,
                 beteiligte,
@@ -467,12 +518,17 @@ impl Workflow for GpkeZuordnungsmeldungWorkflow {
                 // The SG4 date is a per-PID fact, not a caller preference:
                 // 55036 has no „Beginn zum" or „Ende zum" column at all, and the
                 // other two mark theirs Muss.
-                match (meldung.dtm_qualifier(), process_date.as_deref()) {
+                match (
+                    meldung.dtm_qualifier(&transaktionsgrund),
+                    process_date.as_deref(),
+                ) {
                     (Some(_), None | Some("")) => {
                         return Err(WorkflowError::rejected(format!(
                             "PID {} requires a process date (SG4 DTM+{})",
                             meldung.pid(),
-                            meldung.dtm_qualifier().unwrap_or_default(),
+                            meldung
+                                .dtm_qualifier(&transaktionsgrund)
+                                .unwrap_or_default(),
                         )));
                     }
                     (None, Some(_)) => {
@@ -519,7 +575,7 @@ impl Workflow for GpkeZuordnungsmeldungWorkflow {
                         &sender,
                         &receiver,
                         &location_id,
-                        tranche,
+                        lokationstyp.as_deref(),
                         &transaktionsgrund,
                         process_date.as_deref(),
                         &beteiligte,
@@ -618,7 +674,7 @@ fn meldung_payload(
     sender: &MarktpartnerCode,
     receiver: &MarktpartnerCode,
     location_id: &MaLo,
-    tranche: bool,
+    lokationstyp: Option<&str>,
     transaktionsgrund: &str,
     process_date: Option<&str>,
     beteiligte: &[MarktpartnerCode],
@@ -632,10 +688,14 @@ fn meldung_payload(
         "malo":              location_id.as_str(),
         "document_code":     meldung.bgm_document_code(),
         "transaktionsgrund": transaktionsgrund,
+        // On a 55611 the `SG4 DTM` qualifier follows the Grund, not the PID, so
+        // the workflow resolves it here rather than leaving the renderer to
+        // guess from a PID that admits both.
+        "dtm_qualifier":     meldung.dtm_qualifier(transaktionsgrund),
         // `SG5 LOC+Z21` when the Vorgang is about a Tranche. Both carry a
         // MaLo-ID in DE 3225 (Bedingung [950]), so the qualifier is the only
         // thing that says which object it is.
-        "lokationstyp":      if tranche { "Z21" } else { "Z16" },
+        "lokationstyp":      lokationstyp.unwrap_or(LOC_MARKTLOKATION),
     });
     let obj = payload.as_object_mut().expect("json! built an object");
     if let Some(date) = process_date {
@@ -690,13 +750,19 @@ mod tests {
                 vec![mp("9900111000002")],
                 None,
             ),
+            Zuordnungsmeldung::MsbBeendigung => (
+                grund::BEENDIGUNG_ZUORDNUNG,
+                Some("20260701".to_owned()),
+                vec![],
+                None,
+            ),
         };
         ZuordnungsmeldungCommand::Senden {
             meldung,
             sender: mp("9900357000004"),
             receiver: mp("9900123456789"),
             location_id: malo(),
-            tranche: false,
+            lokationstyp: None,
             transaktionsgrund: grund.to_owned(),
             process_date: date,
             beteiligte,
@@ -733,7 +799,7 @@ mod tests {
             sender,
             receiver,
             location_id,
-            tranche,
+            lokationstyp,
             transaktionsgrund,
             beteiligte,
             referenz_vorgangsnummer,
@@ -749,7 +815,7 @@ mod tests {
                 sender,
                 receiver,
                 location_id,
-                tranche,
+                lokationstyp,
                 transaktionsgrund,
                 process_date: Some("20260701".to_owned()),
                 beteiligte,
@@ -764,8 +830,14 @@ mod tests {
     /// Vertragsbeginn (`92`). Swapping them states the wrong kind of date.
     #[test]
     fn the_two_dated_meldungen_take_different_qualifiers() {
-        assert_eq!(Zuordnungsmeldung::Beendigung.dtm_qualifier(), Some("93"));
-        assert_eq!(Zuordnungsmeldung::Aufhebung.dtm_qualifier(), Some("92"));
+        assert_eq!(
+            Zuordnungsmeldung::Beendigung.dtm_qualifier(grund::BEENDIGUNG_ZUORDNUNG),
+            Some("93")
+        );
+        assert_eq!(
+            Zuordnungsmeldung::Aufhebung.dtm_qualifier(grund::AUFHEBUNG_AUSZUG),
+            Some("92")
+        );
     }
 
     /// The three code spaces are disjoint: `ZC8` closes an assignment and `ZG9`
@@ -795,7 +867,7 @@ mod tests {
                 sender: mp("9900357000004"),
                 receiver: mp("9900123456789"),
                 location_id: malo(),
-                tranche: false,
+                lokationstyp: None,
                 transaktionsgrund: "E03".to_owned(),
                 process_date: Some("20260701".to_owned()),
                 beteiligte: vec![],
@@ -816,7 +888,7 @@ mod tests {
                 sender: mp("9900357000004"),
                 receiver: mp("9900123456789"),
                 location_id: malo(),
-                tranche: false,
+                lokationstyp: None,
                 transaktionsgrund: grund.to_owned(),
                 process_date: Some("20260801".to_owned()),
                 beteiligte,
@@ -843,7 +915,7 @@ mod tests {
             sender: mp("9900357000004"),
             receiver: mp("9900123456789"),
             location_id: malo(),
-            tranche: true,
+            lokationstyp: Some(LOC_TRANCHE.to_owned()),
             transaktionsgrund: grund::INFO_EXISTIERENDE_ZUORDNUNG.to_owned(),
             process_date: None,
             beteiligte: vec![mp("9900555000005"), mp("9900111000002")],
@@ -868,7 +940,7 @@ mod tests {
                 sender: mp("9900357000004"),
                 receiver: mp("9900123456789"),
                 location_id: malo(),
-                tranche: false,
+                lokationstyp: None,
                 transaktionsgrund: grund::INFO_EXISTIERENDE_ZUORDNUNG.to_owned(),
                 process_date: None,
                 beteiligte: vec![mp("9900555000005")],
@@ -911,9 +983,134 @@ mod tests {
 
     /// The catalogue and the workflow must agree on which PIDs exist and who
     /// receives them — they are edited in different crates.
+    ///
+    /// The Strom Meldepflichten sit in **two** catalogue tables, because they
+    /// belong to two Sequenzdiagramme: `GPKE` carries the three the Lieferbeginn
+    /// owes, `GPKE_LIEFERENDE` the one „Lieferende von NB an LF" owes the MSB.
+    /// One workflow renders both, so both have to be covered.
     #[test]
     fn the_workflow_covers_the_catalogued_strom_meldepflichten() {
-        let catalogued: Vec<u32> = mako_fristen::meldung::GPKE.iter().map(|m| m.pid).collect();
-        assert_eq!(catalogued, ZUORDNUNGSMELDUNG_PIDS.to_vec());
+        let mut catalogued: Vec<u32> = mako_fristen::meldung::GPKE
+            .iter()
+            .chain(mako_fristen::meldung::GPKE_LIEFERENDE)
+            .map(|m| m.pid)
+            .collect();
+        catalogued.sort_unstable();
+        let mut routed = ZUORDNUNGSMELDUNG_PIDS.to_vec();
+        routed.sort_unstable();
+        assert_eq!(catalogued, routed);
+    }
+}
+
+#[cfg(test)]
+mod msb_beendigung_tests {
+    use super::*;
+
+    fn mp(s: &str) -> MarktpartnerCode {
+        MarktpartnerCode::new(s.to_owned())
+    }
+
+    fn senden(g: &str, lokationstyp: &str, id: &str) -> ZuordnungsmeldungCommand {
+        ZuordnungsmeldungCommand::Senden {
+            meldung: Zuordnungsmeldung::MsbBeendigung,
+            sender: mp("9900357000004"),
+            receiver: mp("9900111000002"),
+            location_id: MaLo::new(id.to_owned()),
+            lokationstyp: Some(lokationstyp.to_owned()),
+            transaktionsgrund: g.to_owned(),
+            process_date: Some("20261101".to_owned()),
+            beteiligte: vec![],
+            referenz_vorgangsnummer: None,
+        }
+    }
+
+    fn run(cmd: ZuordnungsmeldungCommand) -> WorkflowOutput<ZuordnungsmeldungEvent> {
+        GpkeZuordnungsmeldungWorkflow::handle(&ZuordnungsmeldungState::New, cmd).expect("accepted")
+    }
+
+    /// The `SG4 DTM` qualifier follows the **Grund**, not the PID — the only
+    /// message in this family where it does. `ZC8` ends an assignment and names
+    /// a Vertragsende; `ZH1` cancels a future one and names its Vertragsbeginn
+    /// (UTILMD AHB Strom Kap. 8.11 Bedingungen `[474]` / `[475]`). Keying on the
+    /// PID would give both the same qualifier and state the wrong kind of date
+    /// on one of them.
+    #[test]
+    fn the_date_qualifier_follows_the_grund_not_the_pid() {
+        let beendigung = run(senden(
+            grund::BEENDIGUNG_ZUORDNUNG,
+            LOC_MESSLOKATION,
+            "51238696781",
+        ));
+        assert_eq!(beendigung.outbox[0].payload["dtm_qualifier"], "93");
+
+        let aufhebung = run(senden(
+            grund::AUFHEBUNG_STILLLEGUNG,
+            LOC_MESSLOKATION,
+            "51238696781",
+        ));
+        assert_eq!(aufhebung.outbox[0].payload["dtm_qualifier"], "92");
+    }
+
+    /// 55611 is the one message here that may address a **Messlokation** — „Der
+    /// MSB ist ausschließlich dem Objekt Messlokation zugeordnet" (WiM Strom
+    /// Teil 1 Kap. 2.1.2 d) — and it is `BGM+E02` like the other two Abmeldungen.
+    #[test]
+    fn it_may_name_a_messlokation_and_is_an_abmeldung() {
+        let out = run(senden(
+            grund::BEENDIGUNG_ZUORDNUNG,
+            LOC_MESSLOKATION,
+            "51238696781",
+        ));
+        let p = &out.outbox[0].payload;
+        assert_eq!(p["pid"], 55_611);
+        assert_eq!(p["document_code"], "E02");
+        assert_eq!(p["lokationstyp"], "Z17");
+        // No third party: the AHB's SG12 column is empty for 55611.
+        assert!(p.get("beteiligte_marktpartner").is_none());
+        assert!(
+            !Zuordnungsmeldung::MsbBeendigung.requires_beteiligter(grund::BEENDIGUNG_ZUORDNUNG)
+        );
+    }
+
+    /// The Gründe that name a *Lieferant* are not admissible on a message
+    /// addressed to the MSB, and the Beendigungsgründe of the LFA's own
+    /// Zuordnung are not either.
+    #[test]
+    fn only_zc8_and_zh1_are_admissible() {
+        for code in [
+            grund::AUFHEBUNG_EEG38,
+            grund::AUFHEBUNG_AUSZUG,
+            grund::AUFHEBUNG_FRUEHERE_ANMELDUNG,
+            grund::BEENDIGUNG_RUECKZUORDNUNG,
+            grund::BEENDIGUNG_EEG38,
+            grund::INFO_EXISTIERENDE_ZUORDNUNG,
+        ] {
+            assert!(
+                !Zuordnungsmeldung::MsbBeendigung.grund_is_admissible(code),
+                "{code} must not ride a 55611"
+            );
+        }
+        for code in [grund::BEENDIGUNG_ZUORDNUNG, grund::AUFHEBUNG_STILLLEGUNG] {
+            assert!(
+                Zuordnungsmeldung::MsbBeendigung.grund_is_admissible(code),
+                "{code}"
+            );
+        }
+    }
+
+    /// The catalogue and the workflow are edited in different crates. 55611 is
+    /// anchored on the NB's **own** 55007 rather than on an arrival, which is
+    /// the third anchor kind — resolving it against an Eingang would resolve it
+    /// against nothing.
+    #[test]
+    fn the_catalogue_agrees_and_anchors_on_the_nbs_own_message() {
+        let m = mako_fristen::meldung::meldepflicht(MSB_BEENDIGUNG_PID).expect("catalogued");
+        assert_eq!(m.sent_by, "NB");
+        assert_eq!(m.triggered_by, &[55_007]);
+        assert_eq!(
+            m.anchor,
+            mako_fristen::meldung::MeldungAnchor::EigeneAnkuendigung
+        );
+        assert!(ZUORDNUNGSMELDUNG_PIDS.contains(&MSB_BEENDIGUNG_PID));
     }
 }

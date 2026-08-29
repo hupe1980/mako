@@ -389,7 +389,7 @@ fn analyse_profile(
     // EDIFACT structure segments that are MIG-layer-enforced, not AHB-layer.
     let mut all_mig_tags: BTreeSet<String> = BTreeSet::new();
     for seg in &mig.segments {
-        if !EDIFACT_STRUCTURE_SEGS.contains(&seg.tag.as_str()) {
+        if !EDIFACT_STRUCTURE_SEGS.contains(&&*seg.tag) {
             all_mig_tags.insert(seg.tag.clone());
         }
     }
@@ -494,7 +494,7 @@ fn analyse_profile(
 fn collect_group_tags(group: &MigGroup, out: &mut BTreeSet<String>) {
     for seg in &group.segments {
         // Exclude EDIFACT structure segments from AHB coverage metrics.
-        if !EDIFACT_STRUCTURE_SEGS.contains(&seg.tag.as_str()) {
+        if !EDIFACT_STRUCTURE_SEGS.contains(&&*seg.tag) {
             out.insert(seg.tag.clone());
         }
     }

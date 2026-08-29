@@ -138,7 +138,7 @@ a workflow whose registered band does not yet include them.
 
 | Situation | PIDs |
 |---|---|
-| **Outbound-only** — generated or dispatched by mako, never received | 55011, 55012 · 17134, 17135 (ORDERS dispatched via the outbox by `GpkeKonfigurationWorkflow`) |
+| **Outbound-only** — generated or dispatched by mako, never received | 17134, 17135 (ORDERS dispatched via the outbox by `GpkeKonfigurationWorkflow`) |
 | **Role-conditional** — registered only under an explicit `NMSB` role build | 19001, 19002 (ORDRSP Bestellbestätigung/Ablehnung, answering ORDERS 17001) — GPKE Konfiguration claims the same two on an NB instance |
 | **Named but not routed** — constants exist or the band is narrower than the credit implies | 55035, 55060, 55095, 55173, 55175, 55177, 55180, 55194, 55225, 55227, 55230, 55232, 55553, 55559 |
 
@@ -149,19 +149,17 @@ silent, but it is not handled.
 
 ### Meldepflichten — obligations nothing waits for
 
-Six PIDs are a category of their own: **55036 / 55037 / 55038** (Strom) and
-**44036 / 44037 / 44038** (Gas) are one-way notifications the NB owes around a
-Lieferbeginn, with no Bestätigung in either direction. That is what makes them
-easy to omit — a missing one produces no timeout and no dead letter, because
-nobody is waiting for a reply, and it surfaces months later as a supplier
-holding a stale view of who serves the Marktlokation.
+Seven PIDs are a category of their own: **55036 / 55037 / 55038** and their Gas
+twins **44036 / 44037 / 44038** around a Lieferbeginn, plus **55611**, which the
+SD „Lieferende von NB an LF" owes the MSB / MSBZ. All are one-way — no
+Bestätigung in either direction — so a missing one produces no timeout and no
+dead letter, and surfaces months later as a counterparty holding a stale view of
+who serves the Marktlokation.
 
 They route to `gpke-zuordnungsmeldung` and `geli-gas-zuordnungsmeldung`. Because
-no ordinary alert can cover them, the guard is a test:
-`mako_fristen::meldung` catalogues the windows and Fundstellen, and
-`services/makod/tests/meldepflicht_coverage.rs` cross-checks the catalogue
-against the `PidRouter`, so an obligation added to one without the other fails
-the build.
+no alert can cover them, the guard is a test: `mako_fristen::meldung` catalogues
+the windows and Fundstellen and `meldepflicht_coverage.rs` cross-checks it
+against the `PidRouter`.
 
 The split is enforced: `pid_reference_guard` cross-checks this table against the
 `PidRouter` on every CI run, so a row added here without a matching registration
@@ -303,7 +301,7 @@ section on this page.
 | 55607 | Ankündigung Zuordnung / Zuordnung des LF zur MaLo/ Tranche | GPKE Teil 2 | NB → LFN (Notiz "LF des Unternehmens Netzbetreiber") · NB → LFN | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-ankuendigung-zuordnung-lf` |
 | 55608 | Bestätigung Zuordnung des LF zur MaLo/ Tranche | GPKE Teil 2 | LFN (Notiz "LF des Unternehmens Netzbetreiber") → NB · LFN → NB | — | ✅ | — | ✅ | ✅ | — |
 | 55609 | Ablehnung Zuordnung des LF zur MaLo/ Tranche | GPKE Teil 2 | LFN (Notiz "LF des Unternehmens Netzbetreiber") → NB · LFN → NB | — | ✅ | — | ✅ | ✅ | — |
-| 55611 | Beendigung der Zuordnung | GPKE Teil 2 | NB → MSB · NB → MSBZ | — | ✅ | — | ✅ | ✅ | — |
+| 55611 | Beendigung der Zuordnung des MSB zur MaLo / MeLo | GPKE Teil 2 | NB → MSB · NB → MSBZ | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-zuordnungsmeldung` |
 | 55613 | Abr.-Daten BK-Abr. verb. MaLo | GPKE Teil 2 | NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
 | 55614 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. verb. MaLo | GPKE Teil 2 | ÜNB → NB | 55613 | ✅ | — | ✅ | ✅ | — |
 | 55615 | Änderung Daten der NeLo | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |

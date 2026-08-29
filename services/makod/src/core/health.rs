@@ -96,7 +96,7 @@ pub(crate) struct HealthResponse {
     #[schema(example = "mako-prod-01-12345")]
     instance_id: String,
     /// Daemon version (`CARGO_PKG_VERSION`).
-    #[schema(example = "0.16.0")]
+    #[schema(example = "0.17.0")]
     version: &'static str,
     /// Present only when `status == "degraded"`. Stable category string — never
     /// contains internal paths or stack traces.

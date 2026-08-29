@@ -303,12 +303,14 @@ fn rule_loc_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
 
 /// Layer 3 — verify the `NAD` segment group appears at most 2 times.
 ///
-/// Each occurrence of the trigger segment `NAD` marks the start of
-/// one group instance.  The MIG specifies a maximum of 2 instances.
+/// Counted over the group tree, so a nested group sharing the `NAD`
+/// trigger is not charged here.  The MIG specifies a maximum of 2 instances.
 fn rule_group_sg2_nad_max_occurrences(
+    _root: &edifact_rs::SegmentGroupIndexed<'_>,
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
+    // SG2 is not in GROUP_SCHEMA, so the tree cannot count it.
     let count = segments.iter().filter(|s| s.tag == "NAD").count();
     if count > 2 {
         issues.push(
@@ -324,13 +326,14 @@ fn rule_group_sg2_nad_max_occurrences(
 
 /// Layer 3 — verify the `DOC` segment group appears at most 99 times.
 ///
-/// Each occurrence of the trigger segment `DOC` marks the start of
-/// one group instance.  The MIG specifies a maximum of 99 instances.
+/// Counted over the group tree, so a nested group sharing the `DOC`
+/// trigger is not charged here.  The MIG specifies a maximum of 99 instances.
 fn rule_group_sg3_doc_max_occurrences(
-    segments: &[edifact_rs::Segment<'_>],
+    root: &edifact_rs::SegmentGroupIndexed<'_>,
+    _segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
-    let count = segments.iter().filter(|s| s.tag == "DOC").count();
+    let count = root.find("SG3").count();
     if count > 99 {
         issues.push(
             ValidationIssue::new(
@@ -347,9 +350,11 @@ fn rule_group_sg3_doc_max_occurrences(
 ///
 /// The MIG specifies a minimum of 1 occurrence(s) for this group.
 fn rule_group_sg2_nad_min_occurrences(
+    _root: &edifact_rs::SegmentGroupIndexed<'_>,
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
+    // SG2 is not in GROUP_SCHEMA, so the tree cannot count it.
     let count = segments.iter().filter(|s| s.tag == "NAD").count();
     if count < 1 {
         issues.push(
@@ -367,10 +372,11 @@ fn rule_group_sg2_nad_min_occurrences(
 ///
 /// The MIG specifies a minimum of 1 occurrence(s) for this group.
 fn rule_group_sg3_doc_min_occurrences(
-    segments: &[edifact_rs::Segment<'_>],
+    root: &edifact_rs::SegmentGroupIndexed<'_>,
+    _segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
-    let count = segments.iter().filter(|s| s.tag == "DOC").count();
+    let count = root.find("SG3").count();
     if count < 1 {
         issues.push(
             ValidationIssue::new(
@@ -424,7 +430,7 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
                 let seg = &all_segs[idx];
                 if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {
                     cursor += pos;
-                } else if expected.contains(&seg.tag) {
+                } else if expected.contains(&seg.tag.as_ref()) {
                     // Tag is known for this group but already passed — ordering violation.
                     issues.push(
                         ValidationIssue::new(
@@ -432,7 +438,7 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
                             "segment appears out of order".to_owned(),
                         )
                         .with_rule_id(rule_id)
-                        .with_segment(seg.tag.to_owned()),
+                        .with_segment(seg.tag.as_ref()),
                     );
                 }
                 // Tags not in this group's expected order are unknown here;
@@ -453,20 +459,48 @@ static MIG_INSRPT_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("INSRPT-MIG-1.1a")
             .for_message_type("INSRPT")
             .for_release("1.1a")
-            .with_stateless_rule_fn(rule_unh_mandatory)
-            .with_stateless_rule_fn(rule_bgm_mandatory)
-            .with_stateless_rule_fn(rule_dtm_mandatory)
-            .with_stateless_rule_fn(rule_unt_mandatory)
-            .with_stateless_rule_fn(rule_nad_mandatory)
-            .with_stateless_rule_fn(rule_doc_mandatory)
-            .with_stateless_rule_fn(rule_rff_mandatory)
-            .with_stateless_rule_fn(rule_lin_mandatory)
-            .with_stateless_rule_fn(rule_loc_mandatory)
-            .with_stateless_rule_fn(rule_group_sg2_nad_max_occurrences)
-            .with_stateless_rule_fn(rule_group_sg3_doc_max_occurrences)
-            .with_stateless_rule_fn(rule_group_sg2_nad_min_occurrences)
-            .with_stateless_rule_fn(rule_group_sg3_doc_min_occurrences)
-            .with_stateless_rule_fn(rule_segment_order),
+            .with_rule_fn(rule_unh_mandatory)
+            .with_rule_fn(rule_bgm_mandatory)
+            .with_rule_fn(rule_dtm_mandatory)
+            .with_rule_fn(rule_unt_mandatory)
+            .with_rule_fn(rule_nad_mandatory)
+            .with_rule_fn(rule_doc_mandatory)
+            .with_rule_fn(rule_rff_mandatory)
+            .with_rule_fn(rule_lin_mandatory)
+            .with_rule_fn(rule_loc_mandatory)
+            .with_named_group_rule_fn(
+                "MIG-INSRPT-MIG-1.1a-GROUP-SG2-NAD-CARD-MAX",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg2_nad_max_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_named_group_rule_fn(
+                "MIG-INSRPT-MIG-1.1a-GROUP-SG3-DOC-CARD-MAX",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg3_doc_max_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_named_group_rule_fn(
+                "MIG-INSRPT-MIG-1.1a-GROUP-SG2-NAD-CARD-MIN",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg2_nad_min_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_named_group_rule_fn(
+                "MIG-INSRPT-MIG-1.1a-GROUP-SG3-DOC-CARD-MIN",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg3_doc_min_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_rule_fn(rule_segment_order),
     )
 });
 
@@ -508,28 +542,28 @@ static AHB_23001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("INSRPT-AHB-1.1a-23001")
             .for_message_type("INSRPT")
             .for_release("1.1a")
-            .with_named_stateless_rule_fn("AHB-23001-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23001-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-23001-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 23001", "23001", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23001-DOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23001-DOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DOC", "AHB-23001-DOC-M", "mandatory segment DOC is missing for Pruefidentifikator 23001", "23001", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23001-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23001-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-23001-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 23001", "23001", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23001-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23001-LIN-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LIN", "AHB-23001-LIN-M", "mandatory segment LIN is missing for Pruefidentifikator 23001", "23001", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23001-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23001-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-23001-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 23001", "23001", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23001-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23001-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-23001-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 23001", "23001", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23001-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23001-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-23001-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 23001", "23001", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23001-STS-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23001-STS-M", |segs, issues| {
                 ahb_check_mandatory(segs, "STS", "AHB-23001-STS-M", "mandatory segment STS is missing for Pruefidentifikator 23001", "23001", issues);
             })
 
@@ -566,28 +600,28 @@ static AHB_23003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("INSRPT-AHB-1.1a-23003")
             .for_message_type("INSRPT")
             .for_release("1.1a")
-            .with_named_stateless_rule_fn("AHB-23003-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23003-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-23003-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 23003", "23003", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23003-DOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23003-DOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DOC", "AHB-23003-DOC-M", "mandatory segment DOC is missing for Pruefidentifikator 23003", "23003", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23003-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23003-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-23003-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 23003", "23003", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23003-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23003-LIN-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LIN", "AHB-23003-LIN-M", "mandatory segment LIN is missing for Pruefidentifikator 23003", "23003", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23003-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23003-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-23003-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 23003", "23003", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23003-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23003-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-23003-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 23003", "23003", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23003-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23003-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-23003-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 23003", "23003", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23003-STS-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23003-STS-M", |segs, issues| {
                 ahb_check_mandatory(segs, "STS", "AHB-23003-STS-M", "mandatory segment STS is missing for Pruefidentifikator 23003", "23003", issues);
             })
 
@@ -624,28 +658,28 @@ static AHB_23004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("INSRPT-AHB-1.1a-23004")
             .for_message_type("INSRPT")
             .for_release("1.1a")
-            .with_named_stateless_rule_fn("AHB-23004-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23004-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-23004-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 23004", "23004", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23004-DOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23004-DOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DOC", "AHB-23004-DOC-M", "mandatory segment DOC is missing for Pruefidentifikator 23004", "23004", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23004-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23004-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-23004-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 23004", "23004", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23004-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23004-LIN-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LIN", "AHB-23004-LIN-M", "mandatory segment LIN is missing for Pruefidentifikator 23004", "23004", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23004-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23004-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-23004-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 23004", "23004", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23004-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23004-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-23004-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 23004", "23004", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23004-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23004-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-23004-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 23004", "23004", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23004-STS-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23004-STS-M", |segs, issues| {
                 ahb_check_mandatory(segs, "STS", "AHB-23004-STS-M", "mandatory segment STS is missing for Pruefidentifikator 23004", "23004", issues);
             })
 
@@ -682,28 +716,28 @@ static AHB_23005_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("INSRPT-AHB-1.1a-23005")
             .for_message_type("INSRPT")
             .for_release("1.1a")
-            .with_named_stateless_rule_fn("AHB-23005-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23005-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-23005-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 23005", "23005", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23005-DOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23005-DOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DOC", "AHB-23005-DOC-M", "mandatory segment DOC is missing for Pruefidentifikator 23005", "23005", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23005-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23005-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-23005-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 23005", "23005", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23005-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23005-LIN-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LIN", "AHB-23005-LIN-M", "mandatory segment LIN is missing for Pruefidentifikator 23005", "23005", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23005-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23005-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-23005-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 23005", "23005", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23005-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23005-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-23005-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 23005", "23005", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23005-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23005-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-23005-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 23005", "23005", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23005-STS-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23005-STS-M", |segs, issues| {
                 ahb_check_mandatory(segs, "STS", "AHB-23005-STS-M", "mandatory segment STS is missing for Pruefidentifikator 23005", "23005", issues);
             })
 
@@ -729,34 +763,34 @@ static AHB_23008_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("INSRPT-AHB-1.1a-23008")
             .for_message_type("INSRPT")
             .for_release("1.1a")
-            .with_named_stateless_rule_fn("AHB-23008-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23008-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-23008-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 23008", "23008", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23008-COM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23008-COM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "COM", "AHB-23008-COM-M", "mandatory segment COM is missing for Pruefidentifikator 23008", "23008", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23008-CTA-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23008-CTA-M", |segs, issues| {
                 ahb_check_mandatory(segs, "CTA", "AHB-23008-CTA-M", "mandatory segment CTA is missing for Pruefidentifikator 23008", "23008", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23008-DOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23008-DOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DOC", "AHB-23008-DOC-M", "mandatory segment DOC is missing for Pruefidentifikator 23008", "23008", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23008-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23008-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-23008-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 23008", "23008", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23008-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23008-LIN-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LIN", "AHB-23008-LIN-M", "mandatory segment LIN is missing for Pruefidentifikator 23008", "23008", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23008-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23008-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-23008-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 23008", "23008", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23008-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23008-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-23008-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 23008", "23008", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23008-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23008-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-23008-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 23008", "23008", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23008-STS-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23008-STS-M", |segs, issues| {
                 ahb_check_mandatory(segs, "STS", "AHB-23008-STS-M", "mandatory segment STS is missing for Pruefidentifikator 23008", "23008", issues);
             })
 
@@ -793,28 +827,28 @@ static AHB_23009_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("INSRPT-AHB-1.1a-23009")
             .for_message_type("INSRPT")
             .for_release("1.1a")
-            .with_named_stateless_rule_fn("AHB-23009-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23009-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-23009-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 23009", "23009", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23009-DOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23009-DOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DOC", "AHB-23009-DOC-M", "mandatory segment DOC is missing for Pruefidentifikator 23009", "23009", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23009-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23009-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-23009-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 23009", "23009", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23009-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23009-LIN-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LIN", "AHB-23009-LIN-M", "mandatory segment LIN is missing for Pruefidentifikator 23009", "23009", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23009-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23009-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-23009-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 23009", "23009", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23009-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23009-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-23009-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 23009", "23009", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23009-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23009-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-23009-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 23009", "23009", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23009-STS-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23009-STS-M", |segs, issues| {
                 ahb_check_mandatory(segs, "STS", "AHB-23009-STS-M", "mandatory segment STS is missing for Pruefidentifikator 23009", "23009", issues);
             })
 
@@ -840,28 +874,28 @@ static AHB_23011_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("INSRPT-AHB-1.1a-23011")
             .for_message_type("INSRPT")
             .for_release("1.1a")
-            .with_named_stateless_rule_fn("AHB-23011-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23011-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-23011-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 23011", "23011", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23011-DOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23011-DOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DOC", "AHB-23011-DOC-M", "mandatory segment DOC is missing for Pruefidentifikator 23011", "23011", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23011-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23011-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-23011-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 23011", "23011", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23011-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23011-LIN-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LIN", "AHB-23011-LIN-M", "mandatory segment LIN is missing for Pruefidentifikator 23011", "23011", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23011-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23011-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-23011-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 23011", "23011", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23011-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23011-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-23011-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 23011", "23011", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23011-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23011-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-23011-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 23011", "23011", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23011-STS-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23011-STS-M", |segs, issues| {
                 ahb_check_mandatory(segs, "STS", "AHB-23011-STS-M", "mandatory segment STS is missing for Pruefidentifikator 23011", "23011", issues);
             })
 
@@ -898,28 +932,28 @@ static AHB_23012_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("INSRPT-AHB-1.1a-23012")
             .for_message_type("INSRPT")
             .for_release("1.1a")
-            .with_named_stateless_rule_fn("AHB-23012-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23012-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-23012-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 23012", "23012", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23012-DOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23012-DOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DOC", "AHB-23012-DOC-M", "mandatory segment DOC is missing for Pruefidentifikator 23012", "23012", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23012-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23012-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-23012-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 23012", "23012", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23012-LIN-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23012-LIN-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LIN", "AHB-23012-LIN-M", "mandatory segment LIN is missing for Pruefidentifikator 23012", "23012", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23012-LOC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23012-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-23012-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 23012", "23012", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23012-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23012-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-23012-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 23012", "23012", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23012-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23012-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-23012-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 23012", "23012", issues);
             })
-            .with_named_stateless_rule_fn("AHB-23012-STS-M", |segs, issues| {
+            .with_named_rule_fn("AHB-23012-STS-M", |segs, issues| {
                 ahb_check_mandatory(segs, "STS", "AHB-23012-STS-M", "mandatory segment STS is missing for Pruefidentifikator 23012", "23012", issues);
             })
 
@@ -996,7 +1030,7 @@ pub(crate) fn ahb_rule_pack(pid: Option<Pruefidentifikator>) -> Arc<ProfileRuleP
             None => Arc::clone(&AHB_ALL_PACK_INSRPT_1_1A),
             Some(_unknown) => Arc::new(ProfileRulePack::new("unknown-pid")
                 .for_message_type("INSRPT")
-                .with_named_stateless_rule_fn("AHB-UNKNOWN-PID", |_segs, issues| {
+                .with_named_rule_fn("AHB-UNKNOWN-PID", |_segs, issues| {
                     issues.push(ValidationIssue::new(
                         ValidationSeverity::Warning,
                         "Pruefidentifikator is not registered for this release — AHB rules were not applied",

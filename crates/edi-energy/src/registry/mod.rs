@@ -141,7 +141,7 @@ pub trait Profile: Send + Sync {
     ///
     /// Used by [`edifact_rs::group_segments_indexed`] to build a
     /// [`edifact_rs::SegmentGroupIndexed`] tree, enabling group-aware validation
-    /// (`validate_lenient_grouped`). Each scoped group rule closure receives only
+    /// (`validate_grouped`). Each scoped group rule closure receives only
     /// the segments within its specific group occurrence via `group.total_span`,
     /// implementing the per-SG-instance segment window.
     ///

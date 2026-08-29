@@ -36,7 +36,7 @@ fn utilmd(sender: &str, receiver: &str, pid: u32, release: &str) -> String {
     String::from_utf8(bytes).expect("UNOC output is valid UTF-8 for ASCII payloads")
 }
 
-/// The defect this file exists to close: every Gas UTILMD used to carry `293`.
+/// A Gas party NAD carries DVGW `332`, never BDEW `293`.
 #[test]
 fn a_gas_utilmd_names_the_dvgw_code_list() {
     let wire = utilmd(GNB_GAS, LF_GAS, 44_002, "G1.1");
@@ -96,4 +96,81 @@ fn the_envelope_and_the_nad_agree_on_the_issuing_office() {
             "NAD DE 3055 for {mp_id}"
         );
     }
+}
+
+/// Every checked-in fixture stamps the DE 3055 its own MP-ID implies.
+///
+/// `xtask`'s fixture generator restates the derivation rather than importing it —
+/// `xtask` does not depend on `edi-energy` — so nothing stops the two from
+/// drifting. This checks the artefact instead of the copy: whatever the
+/// generator believes, what landed on disk has to agree with
+/// [`AgencyCode::for_mp_id`].
+///
+/// Fixtures that deliberately carry a wrong agency belong under `invalid/` with
+/// an `.expected.json`; this only reads `gen/`, which is machine-written.
+#[test]
+fn every_generated_fixture_stamps_the_agency_its_mp_id_implies() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let mut checked = 0usize;
+    let mut wrong: Vec<String> = Vec::new();
+
+    let mut dirs = vec![root.clone()];
+    while let Some(dir) = dirs.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+                continue;
+            }
+            if path.extension().is_none_or(|e| e != "edi")
+                || !path.to_string_lossy().contains("/gen/")
+            {
+                continue;
+            }
+            let raw = std::fs::read_to_string(&path).expect("fixture is UTF-8");
+            for seg in raw.split('\'').map(str::trim) {
+                let Some(rest) = seg.strip_prefix("NAD+") else {
+                    continue;
+                };
+                // NAD+<3035>+<mp-id>::<3055>
+                let mut parts = rest.split('+');
+                let _qualifier = parts.next();
+                let Some(c082) = parts.next() else { continue };
+                let mut comps = c082.split(':');
+                let (Some(mp_id), Some(_), Some(agency)) =
+                    (comps.next(), comps.next(), comps.next())
+                else {
+                    continue;
+                };
+                checked += 1;
+                let expected = AgencyCode::for_mp_id(mp_id).as_str();
+                if agency != expected {
+                    wrong.push(format!(
+                        "{}: NAD {mp_id} stamped {agency}, but for_mp_id says {expected}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        checked > 100,
+        "expected the generated corpus, saw {checked} NADs"
+    );
+    assert!(
+        wrong.is_empty(),
+        "{} generated NAD(s) name the wrong code list — regenerate with \
+         `cargo xtask generate-fixtures` after fixing `agency_for`:\n  {}",
+        wrong.len(),
+        wrong
+            .iter()
+            .take(15)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    );
 }

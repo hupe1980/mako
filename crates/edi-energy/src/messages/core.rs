@@ -175,7 +175,7 @@ impl MessageCore {
         // skipping the envelope check for bare messages lets callers validate
         // message-level content without first constructing a synthetic interchange.
         let interchange_header = if self.has_interchange_wrapper {
-            let vi = edifact_rs::validate_envelope_owned(&self.segments).map_err(Error::Parse)?;
+            let vi = edifact_rs::validate_envelope(&self.segments).map_err(Error::Parse)?;
             Some(crate::interchange::InterchangeHeader::from_edifact_envelope(vi.interchange))
         } else {
             None
@@ -184,12 +184,12 @@ impl MessageCore {
         // Build the owned message-content segment slice, filtering out interchange-envelope
         // segments (UNB/UNZ interchange wrapper, UNG/UNE functional group wrapper).
         // Staying on owned segments avoids a separate Vec<Segment<'_>> borrow allocation:
-        // group_owned_segments_indexed and validate_lenient_grouped_owned work on them
+        // group_segments_indexed and validate_grouped work on them
         // directly, so no borrowed intermediary is needed at this layer.
         let message_segments: Vec<edifact_rs::OwnedSegment> = self
             .segments
             .iter()
-            .filter(|s| !matches!(s.tag.as_str(), "UNB" | "UNZ" | "UNG" | "UNE"))
+            .filter(|s| !matches!(&*s.tag, "UNB" | "UNZ" | "UNG" | "UNE"))
             .cloned()
             .collect();
         match registry.profile_on(self.message_type, release, date) {
@@ -201,7 +201,7 @@ impl MessageCore {
                 // a Warning-severity synthetic rule so audit logs know validation was
                 // structurally incomplete.  Running the union-of-all-PIDs pack would
                 // produce guaranteed false positives because mutually-exclusive qualifier
-                // constraints (e.g. BGM+E01 for PID 55001 vs BGM+E0F for PID 55004)
+                // constraints (e.g. BGM+E01 for PID 55001 vs BGM+E02 for PID 55004)
                 // all fire on the same message.
                 let pid_result = self.detect_pruefidentifikator();
                 let ahb_pack_opt = match pid_result {
@@ -245,18 +245,13 @@ impl MessageCore {
                     ctx = ctx.with_profile_pack(sem);
                 }
                 // Build the segment-group tree from owned segments and validate using the
-                // fully-owned group-aware path.  group_owned_segments_indexed avoids a
+                // fully-owned group-aware path.  group_segments_indexed avoids a
                 // second borrow allocation when no group rules are registered (the O(1) early
-                // exit in validate_lenient_grouped_owned skips the borrow entirely).
+                // exit in validate_grouped skips the borrow entirely).
                 let group_schema = profile.group_schema();
-                let group_tree = edifact_rs::group_owned_segments_indexed(
-                    &message_segments,
-                    group_schema,
-                    "ROOT",
-                );
-                let report = ctx
-                    .build()
-                    .validate_lenient_grouped_owned(&group_tree, &message_segments);
+                let group_tree =
+                    edifact_rs::group_segments_indexed(&message_segments, group_schema, "ROOT");
+                let report = ctx.build().validate_grouped(&group_tree, &message_segments);
                 #[cfg(feature = "tracing")]
                 {
                     let error_count = report.errors().len();
@@ -335,7 +330,7 @@ impl MessageCore {
     }
 
     pub(crate) fn serialize(&self) -> Result<Vec<u8>, Error> {
-        Ok(edifact_rs::segments_to_bytes_owned(&self.segments)?)
+        Ok(edifact_rs::segments_to_bytes(&self.segments)?)
     }
 
     // ── edifact-rs trait helpers ──────────────────────────────────────────────
@@ -381,13 +376,13 @@ impl MessageCore {
         emitter: &mut E,
     ) -> Result<(), edifact_rs::EdifactError> {
         for seg in &self.segments {
-            emitter.emit(edifact_rs::EdifactEvent::StartSegment { tag: &seg.tag })?;
+            emitter.emit(edifact_rs::EdifactEvent::start(&*seg.tag))?;
             for element in &seg.elements {
                 for (i, (value, _span)) in element.components.iter().enumerate() {
                     if i == 0 {
-                        emitter.emit(edifact_rs::EdifactEvent::Element { value })?;
+                        emitter.emit(edifact_rs::EdifactEvent::element(&**value))?;
                     } else {
-                        emitter.emit(edifact_rs::EdifactEvent::ComponentElement { value })?;
+                        emitter.emit(edifact_rs::EdifactEvent::component(&**value))?;
                     }
                 }
             }

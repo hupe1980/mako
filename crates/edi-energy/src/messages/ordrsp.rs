@@ -58,22 +58,20 @@ impl OrdrespMessage {
         pruefidentifikator: Option<u32>,
     ) -> Self {
         let (bgm, dtm, sender, receiver, ftx, ajt) = {
-            let borrowed: Vec<edifact_rs::Segment<'_>> =
-                segments.iter().map(|s| s.as_borrowed()).collect();
-            let ftx = borrowed
+            let ftx = segments
                 .iter()
                 .filter(|s| s.tag == "FTX")
                 .filter_map(|s| try_deserialize::<Ftx>(s))
                 .collect::<Vec<_>>();
-            let ajt = borrowed
+            let ajt = segments
                 .iter()
                 .find(|s| s.tag == "AJT")
                 .and_then(|s| try_deserialize::<Ajt>(s));
             (
-                find_bgm(&borrowed),
-                collect_dtm(&borrowed),
-                find_nad(&borrowed, "MS"),
-                find_nad(&borrowed, "MR"),
+                find_bgm(&segments),
+                collect_dtm(&segments),
+                find_nad(&segments, "MS"),
+                find_nad(&segments, "MR"),
                 ftx,
                 ajt,
             )

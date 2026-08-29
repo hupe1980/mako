@@ -13,7 +13,7 @@
 //! envelope-only routing path, and typed deserialization — so a routing decision
 //! can never resolve a different code from the parse of the same bytes.
 
-use edifact_rs::{OwnedSegment, Segment};
+use edifact_rs::Segment;
 
 use crate::{Pruefidentifikator, registry::PidSource};
 
@@ -31,21 +31,11 @@ pub(crate) trait PidSegment {
     fn component(&self, element: usize, component: usize) -> Option<&str>;
 }
 
-impl PidSegment for OwnedSegment {
-    fn tag_str(&self) -> &str {
-        &self.tag
-    }
-    fn element(&self, index: usize) -> Option<&str> {
-        self.element_str(index)
-    }
-    fn component(&self, element: usize, component: usize) -> Option<&str> {
-        self.component_str(element, component)
-    }
-}
-
+// `OwnedSegment` is an alias for `Segment<'static>`, so this one impl serves
+// both the borrowed slice path and the owned stream path.
 impl PidSegment for Segment<'_> {
     fn tag_str(&self) -> &str {
-        self.tag
+        &self.tag
     }
     fn element(&self, index: usize) -> Option<&str> {
         self.element_str(index)
@@ -83,16 +73,14 @@ pub(crate) fn detect<S: PidSegment>(segments: &[S], source: PidSource) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edifact_rs::{OwnedElement, OwnedSegment};
+    use edifact_rs::{Element, OwnedSegment};
 
     fn seg(tag: &str, elements: &[&[&str]]) -> OwnedSegment {
-        OwnedSegment::new(
+        Segment::new(
             tag,
-            elements
-                .iter()
-                .map(|comps| OwnedElement::of(comps))
-                .collect(),
+            elements.iter().map(|comps| Element::of(comps)).collect(),
         )
+        .into_owned()
     }
 
     /// A Dokumentennummer that happens to be numeric must not outrank the real

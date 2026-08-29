@@ -140,8 +140,9 @@ pub use msb::{
 };
 #[cfg(feature = "role-nb")]
 pub use nb::{
-    AbmeldungAnfrage, AnmeldungAnfrage, MaloGridRecord, Messtyp, NbEntscheidung, NetzCheckConfig,
-    evaluate, evaluate_abmeldung,
+    Abmeldeanfrage, AbmeldungAnfrage, AnmeldungAnfrage, CODES_REQUIRING_DRITTER, LfaAntwort,
+    MaloGridRecord, Messtyp, NbEntscheidung, NetzCheckConfig, TranchenZuordnung, evaluate,
+    evaluate_abmeldung, evaluate_lieferbeginn,
 };
 
 // ── Transaktionsgrund codes the trees branch on ───────────────────────────────

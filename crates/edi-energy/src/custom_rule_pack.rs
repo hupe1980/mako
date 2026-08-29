@@ -38,17 +38,15 @@ impl CustomRulePack {
         let msg: Arc<str> = format!("required segment {tag} is missing").into();
         let rule_id_inner = Arc::clone(&rule_id);
         let msg_inner = Arc::clone(&msg);
-        self.0 = self
-            .0
-            .with_named_stateless_rule_fn(rule_id, move |segs, issues| {
-                if !segs.iter().any(|s| s.tag == tag) {
-                    issues.push(
-                        ValidationIssue::new(ValidationSeverity::Error, (*msg_inner).to_owned())
-                            .with_rule_id((*rule_id_inner).to_owned())
-                            .with_segment(tag.to_owned()),
-                    );
-                }
-            });
+        self.0 = self.0.with_named_rule_fn(rule_id, move |segs, issues| {
+            if !segs.iter().any(|s| s.tag == tag) {
+                issues.push(
+                    ValidationIssue::new(ValidationSeverity::Error, (*msg_inner).to_owned())
+                        .with_rule_id((*rule_id_inner).to_owned())
+                        .with_segment(tag.to_owned()),
+                );
+            }
+        });
         self
     }
 
@@ -59,19 +57,17 @@ impl CustomRulePack {
         let msg: Arc<str> = format!("segment {tag} must not appear").into();
         let rule_id_inner = Arc::clone(&rule_id);
         let msg_inner = Arc::clone(&msg);
-        self.0 = self
-            .0
-            .with_named_stateless_rule_fn(rule_id, move |segs, issues| {
-                for (occ, seg) in segs.iter().enumerate().filter(|(_, s)| s.tag == tag) {
-                    issues.push(
-                        ValidationIssue::new(ValidationSeverity::Error, (*msg_inner).to_owned())
-                            .with_span(seg.span)
-                            .with_rule_id((*rule_id_inner).to_owned())
-                            .with_segment(tag.to_owned())
-                            .with_segment_occurrence(occ as u16),
-                    );
-                }
-            });
+        self.0 = self.0.with_named_rule_fn(rule_id, move |segs, issues| {
+            for (occ, seg) in segs.iter().enumerate().filter(|(_, s)| s.tag == tag) {
+                issues.push(
+                    ValidationIssue::new(ValidationSeverity::Error, (*msg_inner).to_owned())
+                        .with_span(seg.span)
+                        .with_rule_id((*rule_id_inner).to_owned())
+                        .with_segment(tag.to_owned())
+                        .with_segment_occurrence(occ as u16),
+                );
+            }
+        });
         self
     }
 
@@ -85,7 +81,7 @@ impl CustomRulePack {
     ) -> Self {
         let rule_id: Arc<str> = format!("CUSTOM-{tag}-QUALIFIER").into();
         let rule_id_inner = Arc::clone(&rule_id);
-        self.0 = self.0.with_named_stateless_rule_fn(rule_id, move |segs, issues| {
+        self.0 = self.0.with_named_rule_fn(rule_id, move |segs, issues| {
             for (occ, seg) in segs.iter().enumerate().filter(|(_, s)| s.tag == tag) {
                 match seg.element_str(0) {
                     Some(q) if allowed.contains(&q) => {}
@@ -310,7 +306,7 @@ impl CustomRulePack {
         let rule_id: Arc<str> =
             format!("CUSTOM-{tag}-E{element_index}C{component_index}-VALUE").into();
         let rule_id_inner = Arc::clone(&rule_id);
-        self.0 = self.0.with_named_stateless_rule_fn(rule_id, move |segs, issues| {
+        self.0 = self.0.with_named_rule_fn(rule_id, move |segs, issues| {
             for (occ, seg) in segs.iter().enumerate().filter(|(_, s)| s.tag == tag) {
                 let actual = seg.component_str(element_index, component_index);
                 match actual {
@@ -383,7 +379,7 @@ impl CustomRulePack {
         let rule_id: Arc<str> =
             format!("CUSTOM-{tag}-E{element_index}C{component_index}-FORMAT").into();
         let rule_id_inner = Arc::clone(&rule_id);
-        self.0 = self.0.with_named_stateless_rule_fn(rule_id, move |segs, issues| {
+        self.0 = self.0.with_named_rule_fn(rule_id, move |segs, issues| {
             for (occ, seg) in segs.iter().enumerate().filter(|(_, s)| s.tag == tag) {
                 if let Some(v) = seg.component_str(element_index, component_index) {
                     if !validator(v) {
@@ -424,7 +420,7 @@ impl CustomRulePack {
     pub fn require_segment_combination(mut self, tag_a: &'static str, tag_b: &'static str) -> Self {
         let rule_id: Arc<str> = format!("CUSTOM-{tag_a}-{tag_b}-PAIR").into();
         let rule_id_inner = Arc::clone(&rule_id);
-        self.0 = self.0.with_named_stateless_rule_fn(rule_id, move |segs, issues| {
+        self.0 = self.0.with_named_rule_fn(rule_id, move |segs, issues| {
             let has_a = segs.iter().any(|s| s.tag == tag_a);
             let has_b = segs.iter().any(|s| s.tag == tag_b);
             if has_a && !has_b {

@@ -648,19 +648,17 @@ mod tests {
         );
     }
 
-    /// **Three things a Gas UTILMD does not carry.** Every one of them used to
-    /// ride out on every Gas message mako sent, and each is a segment or a code
-    /// the receiving AHB does not define for the Anwendungsfall:
+    /// **Three Strom shapes a Gas UTILMD must not carry**, each a segment or a
+    /// code the receiving AHB does not define for the Anwendungsfall:
     ///
-    /// | Wrong | Right | Fundstelle |
+    /// | Strom | Gas | Fundstelle |
     /// |---|---|---|
     /// | `NAD…::293` BDEW | `::332` DVGW | UTILMD AHB Gas Kap. 5, `SG2 NAD` DE 3055 |
     /// | `LOC+Z16` Marktlokation | `LOC+172` Meldepunkt | `SG5 LOC` DE 3227 — `172` in all 31 Anwendungsfälle |
     /// | `STS+7++E03+ZW4` | `STS+7++E03` | `ZW3`/`ZW4`/`ZW5`/`ZAP` appear nowhere in the Gas AHB |
     ///
-    /// The `293` also contradicted the `502` the same interchange already
-    /// declared in UNB DE 0007 — one message naming two issuing offices for the
-    /// same party.
+    /// A `293` would also contradict the `502` the same interchange declares in
+    /// UNB DE 0007 — one message naming two issuing offices for the same party.
     #[test]
     fn a_gas_utilmd_uses_the_gas_code_lists() {
         let msg = fake_msg(
@@ -828,6 +826,110 @@ mod tests {
         );
         assert!(gas_ende.contains("DTM+93:"), "{gas_ende}");
         assert!(gas_ende.contains("DTM+159:"), "{gas_ende}");
+    }
+
+    /// `SG4 STS+Z35` — the LFA's own Ablehnungsgrund, restated by the NB.
+    ///
+    /// GPKE Teil 2 § 2.1.2 Nr. 6: „Der NB gibt zusätzlich den Grund der
+    /// Ablehnung des LFA an, sofern dieser in Prozessschritt 4 die Anfrage
+    /// abgelehnt hat." Without it the LFN learns that its Anmeldung failed and
+    /// not why the incumbent would not release the Marktlokation — the one fact
+    /// it can act on.
+    #[test]
+    fn an_a50_ablehnung_restates_the_lfas_own_ground() {
+        let msg = fake_msg(
+            "UTILMD",
+            "9900987654321",
+            serde_json::json!({
+                "pid": 55_003_u32,
+                "sender": "9900123456789",
+                "receiver": "9900987654321",
+                "malo": "51238696012",
+                "process_date": "20261101",
+                "antwort_code": "A50",
+                "antwort_codeliste": "E_0623",
+                "dritter_antwortcode": "A35",
+            }),
+        );
+        let wire = render_to_wire_bytes(&msg, &test_registry("9900123456789")).expect("renders");
+        let text = String::from_utf8_lossy(&wire.bytes);
+        assert!(text.contains("STS+E01++A50:E_0623"), "{text}");
+        // The verbrauchende form: code and Codeliste only — a 55003's AHB
+        // column carries neither a Lokations-Referenz nor an object type.
+        assert!(text.contains("STS+Z35++A35:E_0624"), "{text}");
+    }
+
+    /// The erzeugende form names *which* object the restated answer is about,
+    /// because Geschäftsvorfall 3 splits a Marktlokation across Tranchen and
+    /// several LFA answer separately.
+    #[test]
+    fn an_a57_ablehnung_names_the_object_the_lfa_answered_for() {
+        let msg = fake_msg(
+            "UTILMD",
+            "9900987654321",
+            serde_json::json!({
+                "pid": 55_080_u32,
+                "sender": "9900123456789",
+                "receiver": "9900987654321",
+                "malo": "51238696012",
+                "process_date": "20261101",
+                "antwort_code": "A57",
+                "antwort_codeliste": "E_0623",
+                "dritter_antwortcode": "A39",
+                "dritter_referenz_lokation": "51238696012",
+                "dritter_objekt": "ZW5",
+            }),
+        );
+        let wire = render_to_wire_bytes(&msg, &test_registry("9900123456789")).expect("renders");
+        let text = String::from_utf8_lossy(&wire.bytes);
+        assert!(
+            text.contains("STS+Z35+51238696012+A39:E_0624+ZW5"),
+            "{text}"
+        );
+    }
+
+    /// The obligation is enforced, not documented: an `A50` without the third
+    /// party's ground is refused at render time rather than sent thinner than
+    /// the AHB requires.
+    #[test]
+    fn an_a50_without_the_third_partys_ground_is_refused() {
+        let msg = fake_msg(
+            "UTILMD",
+            "9900987654321",
+            serde_json::json!({
+                "pid": 55_003_u32,
+                "sender": "9900123456789",
+                "receiver": "9900987654321",
+                "malo": "51238696012",
+                "process_date": "20261101",
+                "antwort_code": "A50",
+                "antwort_codeliste": "E_0623",
+            }),
+        );
+        let err = render_to_wire_bytes(&msg, &test_registry("9900123456789"))
+            .expect_err("A50 requires SG4 STS+Z35");
+        assert!(format!("{err}").contains("dritter_antwortcode"), "{err}");
+    }
+
+    /// An ordinary Ablehnung is unaffected — the segment is Muss on exactly two
+    /// codes, and requiring it elsewhere would refuse every other refusal.
+    #[test]
+    fn an_ordinary_ablehnung_needs_no_third_party() {
+        let msg = fake_msg(
+            "UTILMD",
+            "9900987654321",
+            serde_json::json!({
+                "pid": 55_003_u32,
+                "sender": "9900123456789",
+                "receiver": "9900987654321",
+                "malo": "51238696012",
+                "process_date": "20261101",
+                "antwort_code": "A07",
+                "antwort_codeliste": "E_0622",
+            }),
+        );
+        let wire = render_to_wire_bytes(&msg, &test_registry("9900123456789")).expect("renders");
+        assert!(!String::from_utf8_lossy(&wire.bytes).contains("STS+Z35"));
     }
 
     /// Strom keeps its own three, so the Gas fix is not a global one.

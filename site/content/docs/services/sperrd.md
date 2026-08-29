@@ -87,6 +87,37 @@ when the LF wanted the work done, not when the Festlegung requires it.
 `frist_ueberschritten` for the regulatory window. A pending order past its
 6-Werktage window is announced once as `de.sperr.ausfuehrung.ueberfaellig`.
 
+### …and three Vorlauffristen, which count the other way
+
+Every clock above runs *forward*. Prozessschritt 1 and 3 state windows that run
+**backwards from the Sperrtermin**, so reading either as „n Werktage nach
+Eingang" is wrong by the whole lead time:
+
+| Prozessschritt | Frist | Owed by |
+|---|---|---|
+| Sperrauftrag, nicht termingebunden (Nr. 1) | spätester ÜT ist der **6. WT** vor dem frühestmöglichen Sperrtermin | LF |
+| Sperrauftrag, **termingebunden** (Nr. 1) | spätester ÜT ist der **12. WT** vor dem Sperrtermin | LF |
+| Anfrage Sperrung an den MSB (Nr. 3) | spätester ÜT ist der **3. WT** vor dem Sperrtermin | NB |
+
+The termingebundene case is not a variant of the ordinary one: it fixes Datum,
+Uhrzeit und Ort — the Festlegung's example is a Gerichtsvollzieher — so the NB
+cannot move the visit to fit its own scheduling and the LF has to give it twice
+the room. The wire tells the two apart on its own, because `DTM+203` and
+`DTM+469` are mutually exclusive on a 17115.
+
+`sperrd` records the verdict per order (`vorlauffrist_eingehalten`, plus the
+latest ÜT the order could have carried) and reports the total as
+`vorlauffrist_verletzt`. It does **not** refuse on it: Prozessschritt 2 lists
+what the NB checks before it answers — „ob die Marktlokation dem LF zugeordnet
+ist, ob die Marktlokation identifiziert werden kann und die Zusicherung der
+Berechtigung nach Netznutzungsvertrag vorliegt" — and the Vorlauffrist is not
+among them.
+
+Nr. 2 puts a floor on the **NB** instead: without a generelle Zustimmung des MSB
+„ist der Sperrtermin vom NB so festzulegen, dass dem MSB noch eine fristgerechte
+Antwort auf Anfrage vor dem Sperrtermin möglich ist" — the Anfrage's 3 WT plus
+the MSB's own 3 WT to answer, so six Werktage out.
+
 ### Two Sperrversuche
 
 „Der NB führt bis zu zwei Sperrversuche innerhalb eines Sperrauftrags durch"
@@ -143,6 +174,7 @@ retrying that forever only hides it behind a rising attempt count.
 | `iftsta_outstanding` | Dispatches in flight. Normal for seconds after an execution. |
 | `iftsta_ueberfaellig` | Past the 1-WT window of GPKE Teil 2 § 3.5.1.2 Nr. 5. |
 | `iftsta_stuck` | Past the retry budget. **This is the number that needs a human.** |
+| `vorlauffrist_verletzt` | Orders the *Lieferant* sent later than its own Vorlauffrist allowed. A contract question, not an operations one — the NB executes them anyway. |
 
 ### Diagnosing a stuck IFTSTA
 

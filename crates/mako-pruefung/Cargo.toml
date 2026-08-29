@@ -55,3 +55,9 @@ uuid         = { workspace = true }
 [dev-dependencies]
 serde_json   = { workspace = true }
 time         = { workspace = true }
+# Test-only, and deliberately not a real dependency: the trees here decide
+# *which* Antwortcodes oblige a `SG4 STS+Z35`, and `edi-energy` enforces it at
+# render time. Neither may depend on the other — a domain crate that pulled in
+# the wire library would make every role build carry it — so the two lists are
+# pinned together by a test instead.
+edi-energy   = { workspace = true, features = ["utilmd"] }

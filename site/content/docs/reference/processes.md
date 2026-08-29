@@ -198,7 +198,7 @@ Tuesday-11:00 Frist as healthy until Tuesday night.
 |---|---|---|---|---|
 | 1 | Anmeldung | 55001 / 55077 | LFN → NB | — (Vorlauffrist, s. u.) |
 | 2 | Information über existierende Zuordnung | **55036** | NB → LFN | **07:00 Uhr des 1. WT nach dem ÜT** |
-| 3 | Anfrage zur Beendigung der Zuordnung | 55010 | NB → LFA | parallel zu Nr. 2 |
+| 3 | Anfrage zur Beendigung der Zuordnung | **55010** | NB → LFA | parallel zu Nr. 2 |
 | 4 | Antwort auf die Anfrage | 55011 / 55012 | LFA → NB | **09:00 Uhr des 1. WT** — Schweigen gilt als Zustimmung |
 | 5 | Zuordnung des LFN (Bestätigung) | 55002 / 55078 | NB → LFN | **11:00 Uhr des 1. WT** |
 | 6 | Ablehnung der Anmeldung | 55003 / 55080 | NB → LFN | **11:00 Uhr des 1. WT** |
@@ -210,6 +210,24 @@ see [Meldepflichten](#meldepflichten-obligations-with-no-answer) below. Nr. 2
 and Nr. 3 share a condition: both fire only when the Marktlokation is already
 assigned at the Zuordnungsbeginn (Nr. 1 Prüfschritt 4), and Nr. 3 is „parallel zu
 Nr. 2" for that reason.
+
+**The NB's answer is two-phase whenever Nr. 3 fires.** `E_0622` („Prüfen, ob
+Anmeldung direkt ablehnbar") is a *Vorprüfung*: surviving it means only that the
+Anmeldung is not directly refusable. What the NB answers comes from `E_0623`,
+whose Prüfschritte 20–50 read the LFA's answer to the 55010 — so the Anfrage has
+to go out, and its 09:00 window has to close, before Nr. 5 or Nr. 6 can be
+decided. **Silence is a result:** „Verstreicht die Frist, ohne dass eine Antwort
+beim NB eingeht, gilt dies als Bestätigung nach Fall a). Nach Ablauf der Frist
+eingehende Antworten sind für den Fortlauf dieses Prozesses unerheblich."
+
+A Widerspruch that is **not** `A30` („die Belieferung wurde zum angefragten
+Termin bereits beendet und eine vom NB bestätigte Abmeldung liegt vor") refuses
+the Anmeldung with `E_0623` `A50` — `A57` on an erzeugende Marktlokation, `Z35`
+in Gas. `A30` itself confirms it: the assignment is already ending, which is what
+the NB asked for. The Ablehnung then carries a **second** `SG4 STS`, `Z35`
+„Status der Antwort des dritten Marktbeteiligten", restating the LFA's own
+`E_0624` code — that is Nr. 6's „der NB gibt zusätzlich den Grund der Ablehnung
+des LFA an", on the wire.
 
 **Vorlauffristen (BK6-24-174 GPKE Teil 2, SD Lieferbeginn Nr. 1):**
 
@@ -245,15 +263,13 @@ Antwort" and only on a confirmation.
 
 `processd` issues the Information and the Beendigung as part of the Anmeldung
 decision — the Information *before* the answer, because its 07:00 window closes
-four hours before the 11:00 Bestätigung of the same message. The Aufhebung is a
-command an operator or ERP issues: it addresses a supplier whose future
-Zuordnung the Anmeldung displaces, and mako's supply projection holds one future
-supplier per Marktlokation, which the incoming Anmeldung has already claimed.
+four hours before the 11:00 Bestätigung of the same message. The Aufhebung is an
+operator command: it addresses a supplier whose future Zuordnung the Anmeldung
+displaces, and the supply projection holds one future supplier per
+Marktlokation, which the incoming Anmeldung has already claimed.
 
-Because nothing waits for a Meldepflicht, no alert can cover it. The guard is a
-test: `mako_fristen::meldung` catalogues what is owed and by when, and
-`services/makod/tests/meldepflicht_coverage.rs` cross-checks the catalogue
-against the PID router on every CI run.
+Since no alert can cover a message nobody waits for, the guard is a test —
+`mako_fristen::meldung` against the PID router.
 
 **Ersatz-/Grundversorgung (EoG, §36/§38 EnWG):** When a MaLo draws energy
 without an assignable supply contract (after Lieferende without successor,

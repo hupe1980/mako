@@ -81,6 +81,47 @@ CREATE INDEX ad_tenant_decided ON anmeldung_decisions (tenant, decided_at DESC);
 CREATE INDEX ad_affiliate      ON anmeldung_decisions (tenant, initiator_is_affiliate, decided_at DESC)
     WHERE initiator_is_affiliate = true;
 
+-- ── NB Abmeldeanfragen: the Anmeldung decision that is waiting on an LFA ──────
+--
+-- GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4 makes the NB's answer
+-- two-phase whenever the Marktlokation is already assigned: ask the incumbent
+-- LFA to release it (55010, Nr. 3), then decide (Nr. 5/6) once the LFA answers
+-- or its 09:00 window lapses. `E_0623` Prüfschritte 20-50 read that answer.
+--
+-- One row per waiting Anmeldung. `anfrage` is the serialised
+-- `mako_pruefung::AnmeldungAnfrage`, because phase two re-runs the same pure
+-- evaluation with one more fact — reconstructing it from columns would put a
+-- second, drifting copy of the Anwendungsfall in SQL.
+CREATE TABLE abmeldeanfragen (
+    anmeldung_process_id   UUID        NOT NULL,
+    tenant                 TEXT        NOT NULL,
+    malo_id                TEXT        NOT NULL,
+    lfn_mp_id              TEXT        NOT NULL,
+    -- Every LFA the Anfrage went to. More than one at Geschäftsvorfall 3, where
+    -- the Marktlokation is split across Tranchen and Nr. 3 asks all of them.
+    lfa_mp_ids             TEXT[]      NOT NULL,
+    pid                    INTEGER     NOT NULL,
+    -- The replayable `AnmeldungAnfrage`; phase two adds only the LFA's answer.
+    anfrage                JSONB       NOT NULL,
+    -- When the Anmeldung arrived, so the operator queue can size the *answer*
+    -- window (11:00) rather than the Anfrage's (09:00).
+    received_at            TIMESTAMPTZ NOT NULL,
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Set when phase two ran, so a redelivered answer is a no-op rather than a
+    -- second Bestätigung. Silence and an answer both resolve it.
+    resolved_at            TIMESTAMPTZ,
+    PRIMARY KEY (anmeldung_process_id, tenant)
+);
+
+COMMENT ON TABLE abmeldeanfragen IS
+    'NB two-phase Anmeldung decisions waiting on the LFA''s answer to a 55010. '
+    'Written when mako-pruefung answers AnfrageErforderlich (GPKE Teil 2 § 2.1.2 '
+    'Nr. 1 Prüfschritt 4); resolved when the LFA answers 55011/55012 or its 09:00 '
+    'window lapses — which the Festlegung reads as a Zustimmung, not a timeout.';
+
+-- The resume path looks the row up by the MaLo the answer names.
+CREATE INDEX aa_tenant_malo ON abmeldeanfragen (tenant, malo_id) WHERE resolved_at IS NULL;
+
 -- ── EoG gap-closure case log (§36/§38 EnWG) ───────────────────────────────────
 --
 -- One row per Marktlokation currently (or last) in the Ersatz-/Grundversorgung

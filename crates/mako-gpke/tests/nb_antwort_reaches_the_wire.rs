@@ -41,6 +41,8 @@ fn answer(
         transaktionsgrund_ergaenzung: Some("ZW4".to_owned()),
         veraeusserungsform: None,
         vorgangsnummer: None,
+        kunde_name: None,
+        kunde_namensformat: None,
         message_ref: MessageRef::new("ANM-001"),
         received_at: time::OffsetDateTime::now_utc(),
         validation_passed: true,

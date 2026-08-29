@@ -229,12 +229,14 @@ fn rule_nad_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
 
 /// Layer 3 — verify the `NAD` segment group appears at most 2 times.
 ///
-/// Each occurrence of the trigger segment `NAD` marks the start of
-/// one group instance.  The MIG specifies a maximum of 2 instances.
+/// Counted over the group tree, so a nested group sharing the `NAD`
+/// trigger is not charged here.  The MIG specifies a maximum of 2 instances.
 fn rule_group_sg3_nad_max_occurrences(
+    _root: &edifact_rs::SegmentGroupIndexed<'_>,
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
+    // SG3 is not in GROUP_SCHEMA, so the tree cannot count it.
     let count = segments.iter().filter(|s| s.tag == "NAD").count();
     if count > 2 {
         issues.push(
@@ -250,12 +252,14 @@ fn rule_group_sg3_nad_max_occurrences(
 
 /// Layer 3 — verify the `ERC` segment group appears at most 99999 times.
 ///
-/// Each occurrence of the trigger segment `ERC` marks the start of
-/// one group instance.  The MIG specifies a maximum of 99999 instances.
+/// Counted over the group tree, so a nested group sharing the `ERC`
+/// trigger is not charged here.  The MIG specifies a maximum of 99999 instances.
 fn rule_group_sg4_erc_max_occurrences(
+    _root: &edifact_rs::SegmentGroupIndexed<'_>,
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
+    // SG4 is not in GROUP_SCHEMA, so the tree cannot count it.
     let count = segments.iter().filter(|s| s.tag == "ERC").count();
     if count > 99_999 {
         issues.push(
@@ -273,10 +277,11 @@ fn rule_group_sg4_erc_max_occurrences(
 ///
 /// The MIG specifies a minimum of 1 occurrence(s) for this group.
 fn rule_group_sg2_rff_min_occurrences(
-    segments: &[edifact_rs::Segment<'_>],
+    root: &edifact_rs::SegmentGroupIndexed<'_>,
+    _segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
-    let count = segments.iter().filter(|s| s.tag == "RFF").count();
+    let count = root.find("SG2").count();
     if count < 1 {
         issues.push(
             ValidationIssue::new(
@@ -293,9 +298,11 @@ fn rule_group_sg2_rff_min_occurrences(
 ///
 /// The MIG specifies a minimum of 1 occurrence(s) for this group.
 fn rule_group_sg3_nad_min_occurrences(
+    _root: &edifact_rs::SegmentGroupIndexed<'_>,
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
+    // SG3 is not in GROUP_SCHEMA, so the tree cannot count it.
     let count = segments.iter().filter(|s| s.tag == "NAD").count();
     if count < 1 {
         issues.push(
@@ -348,7 +355,7 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
                 let seg = &all_segs[idx];
                 if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {
                     cursor += pos;
-                } else if expected.contains(&seg.tag) {
+                } else if expected.contains(&seg.tag.as_ref()) {
                     // Tag is known for this group but already passed — ordering violation.
                     issues.push(
                         ValidationIssue::new(
@@ -356,7 +363,7 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
                             "segment appears out of order".to_owned(),
                         )
                         .with_rule_id(rule_id)
-                        .with_segment(seg.tag.to_owned()),
+                        .with_segment(seg.tag.as_ref()),
                     );
                 }
                 // Tags not in this group's expected order are unknown here;
@@ -377,17 +384,45 @@ static MIG_APERAK_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("APERAK-MIG-2.2")
             .for_message_type("APERAK")
             .for_release("2.2")
-            .with_stateless_rule_fn(rule_unh_mandatory)
-            .with_stateless_rule_fn(rule_bgm_mandatory)
-            .with_stateless_rule_fn(rule_dtm_mandatory)
-            .with_stateless_rule_fn(rule_unt_mandatory)
-            .with_stateless_rule_fn(rule_rff_mandatory)
-            .with_stateless_rule_fn(rule_nad_mandatory)
-            .with_stateless_rule_fn(rule_group_sg3_nad_max_occurrences)
-            .with_stateless_rule_fn(rule_group_sg4_erc_max_occurrences)
-            .with_stateless_rule_fn(rule_group_sg2_rff_min_occurrences)
-            .with_stateless_rule_fn(rule_group_sg3_nad_min_occurrences)
-            .with_stateless_rule_fn(rule_segment_order),
+            .with_rule_fn(rule_unh_mandatory)
+            .with_rule_fn(rule_bgm_mandatory)
+            .with_rule_fn(rule_dtm_mandatory)
+            .with_rule_fn(rule_unt_mandatory)
+            .with_rule_fn(rule_rff_mandatory)
+            .with_rule_fn(rule_nad_mandatory)
+            .with_named_group_rule_fn(
+                "MIG-APERAK-MIG-2.2-GROUP-SG3-NAD-CARD-MAX",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg3_nad_max_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_named_group_rule_fn(
+                "MIG-APERAK-MIG-2.2-GROUP-SG4-ERC-CARD-MAX",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg4_erc_max_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_named_group_rule_fn(
+                "MIG-APERAK-MIG-2.2-GROUP-SG2-RFF-CARD-MIN",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg2_rff_min_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_named_group_rule_fn(
+                "MIG-APERAK-MIG-2.2-GROUP-SG3-NAD-CARD-MIN",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg3_nad_min_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_rule_fn(rule_segment_order),
     )
 });
 
@@ -410,31 +445,31 @@ static AHB_29001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("APERAK-AHB-2.2-29001")
             .for_message_type("APERAK")
             .for_release("2.2")
-            .with_named_stateless_rule_fn("AHB-29001-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29001-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-29001-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 29001", "29001", issues);
             })
-            .with_named_stateless_rule_fn("AHB-29001-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-29001-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-29001-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['313']", |q| matches!(q, "313"), "29001", issues);
             })
-            .with_named_stateless_rule_fn("AHB-29001-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29001-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-29001-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 29001", "29001", issues);
             })
-            .with_named_stateless_rule_fn("AHB-29001-DTM-2005-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-29001-DTM-2005-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "DTM", "AHB-29001-DTM-2005-Q", "segment DTM DE 2005 (element 0, component 0): qualifier is not one of the allowed values ['137']", |q| matches!(q, "137"), "29001", issues);
             })
-            .with_named_stateless_rule_fn("AHB-29001-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29001-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-29001-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 29001", "29001", issues);
             })
-            .with_named_stateless_rule_fn("AHB-29001-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-29001-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-29001-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "29001", issues);
             })
-            .with_named_stateless_rule_fn("AHB-29001-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29001-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-29001-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 29001", "29001", issues);
             })
-            .with_named_stateless_rule_fn("AHB-29001-RFF-1153-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-29001-RFF-1153-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "RFF", "AHB-29001-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['ACW']", |q| matches!(q, "ACW"), "29001", issues);
             })
-            .with_named_stateless_rule_fn("AHB-29001-ERC-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29001-ERC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "ERC", "AHB-29001-ERC-M", "mandatory segment ERC is missing for Pruefidentifikator 29001", "29001", issues);
             })
             .with_max_issues_per_rule(50)
@@ -449,28 +484,28 @@ static AHB_29002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("APERAK-AHB-2.2-29002")
             .for_message_type("APERAK")
             .for_release("2.2")
-            .with_named_stateless_rule_fn("AHB-29002-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29002-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-29002-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 29002", "29002", issues);
             })
-            .with_named_stateless_rule_fn("AHB-29002-BGM-1001-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-29002-BGM-1001-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "BGM", "AHB-29002-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['312']", |q| matches!(q, "312"), "29002", issues);
             })
-            .with_named_stateless_rule_fn("AHB-29002-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29002-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-29002-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 29002", "29002", issues);
             })
-            .with_named_stateless_rule_fn("AHB-29002-DTM-2005-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-29002-DTM-2005-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "DTM", "AHB-29002-DTM-2005-Q", "segment DTM DE 2005 (element 0, component 0): qualifier is not one of the allowed values ['137']", |q| matches!(q, "137"), "29002", issues);
             })
-            .with_named_stateless_rule_fn("AHB-29002-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29002-NAD-M", |segs, issues| {
                 ahb_check_mandatory(segs, "NAD", "AHB-29002-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 29002", "29002", issues);
             })
-            .with_named_stateless_rule_fn("AHB-29002-NAD-3035-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-29002-NAD-3035-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "NAD", "AHB-29002-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "29002", issues);
             })
-            .with_named_stateless_rule_fn("AHB-29002-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-29002-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-29002-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 29002", "29002", issues);
             })
-            .with_named_stateless_rule_fn("AHB-29002-RFF-1153-Q", |segs, issues| {
+            .with_named_rule_fn("AHB-29002-RFF-1153-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "RFF", "AHB-29002-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['ACW']", |q| matches!(q, "ACW"), "29002", issues);
             })
             .with_max_issues_per_rule(50)
@@ -501,7 +536,7 @@ pub(crate) fn ahb_rule_pack(pid: Option<Pruefidentifikator>) -> Arc<ProfileRuleP
             None => Arc::clone(&AHB_ALL_PACK_APERAK_2_2),
             Some(_unknown) => Arc::new(ProfileRulePack::new("unknown-pid")
                 .for_message_type("APERAK")
-                .with_named_stateless_rule_fn("AHB-UNKNOWN-PID", |_segs, issues| {
+                .with_named_rule_fn("AHB-UNKNOWN-PID", |_segs, issues| {
                     issues.push(ValidationIssue::new(
                         ValidationSeverity::Warning,
                         "Pruefidentifikator is not registered for this release — AHB rules were not applied",

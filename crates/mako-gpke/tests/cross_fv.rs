@@ -209,6 +209,8 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
         transaktionsgrund_ergaenzung: None,
         veraeusserungsform: None,
         vorgangsnummer: None,
+        kunde_name: None,
+        kunde_namensformat: None,
         fallgruppe: None,
     })
     .await
@@ -435,6 +437,8 @@ async fn cross_fv_s2_2_response_accepted_on_s2_1_process() {
         transaktionsgrund_ergaenzung: None,
         veraeusserungsform: None,
         vorgangsnummer: None,
+        kunde_name: None,
+        kunde_namensformat: None,
         fallgruppe: None,
     })
     .await

@@ -140,6 +140,35 @@ pub async fn handle_webhook(
         };
     }
 
+    // 3b. The LFA answered the NB's Anfrage zur Beendigung der Zuordnung — or
+    //     its 09:00 window lapsed, which „gilt … als Bestätigung nach Fall a)".
+    //     Ahead of the `process.initiated` guard because it resumes a decision
+    //     rather than opening one: `E_0623` Prüfschritte 30–50 read this answer,
+    //     and the Anmeldung is unanswerable until it lands.
+    #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+    if ce_type == mako_events::mako::ABMELDEANFRAGE_BEANTWORTET {
+        use crate::nb_module;
+        if let Some(ref nb) = state.nb {
+            return match nb_module::resume_after_lfa_antwort(
+                &event,
+                &nb.config,
+                &nb.makod,
+                &nb.repo,
+                &nb.queue,
+                &nb.pending,
+            )
+            .await
+            {
+                Ok(_) => StatusCode::OK.into_response(),
+                Err(e) => {
+                    warn!(error = %e, "processd NB: Abmeldeanfrage resume failed");
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
+            };
+        }
+        return StatusCode::NO_CONTENT.into_response();
+    }
+
     if ce_type != mako_events::mako::PROCESS_INITIATED {
         debug!(ce_type, "processd: non-initiated event ignored");
         return StatusCode::NO_CONTENT.into_response();
@@ -185,6 +214,7 @@ pub async fn handle_webhook(
                 &nb.makod,
                 &nb.repo,
                 &nb.queue,
+                &nb.pending,
             )
             .await
             {

@@ -32,11 +32,18 @@ fn the_lf_module_triggers_on_the_pids_makod_spawns_from() {
         "the NB-seitiges Lieferende trigger must be the inbound PID of the \
          `gpke-lf-abmeldung` workflow, not one of its answers"
     );
+    // `BEENDIGUNG_ZUORDNUNG_PIDS` carries three since the NB started *sending*
+    // the Anfrage: the request and both answers all route to the workflow. The
+    // **LF's** trigger is the request alone — an LF that reacted to 55011/55012
+    // would be answering its own Bestätigung.
     assert_eq!(
-        mako_gpke::BEENDIGUNG_ZUORDNUNG_PIDS,
-        [BEENDIGUNG_ZUORDNUNG.trigger_pid],
-        "the Beendigung der Zuordnung trigger must be the inbound PID of the \
-         `gpke-beendigung-zuordnung` workflow"
+        mako_gpke::BEENDIGUNG_ZUORDNUNG_ANFRAGE_PID,
+        BEENDIGUNG_ZUORDNUNG.trigger_pid,
+        "the Beendigung der Zuordnung trigger must be the Anfrage the NB sends"
+    );
+    assert!(
+        !mako_gpke::BEENDIGUNG_ZUORDNUNG_ANTWORT_PIDS.contains(&BEENDIGUNG_ZUORDNUNG.trigger_pid),
+        "the LF trigger must not be one of the answers it sends itself"
     );
 }
 

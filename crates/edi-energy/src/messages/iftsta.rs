@@ -37,16 +37,12 @@ impl IftstaMessage {
         assoc_code: impl Into<Box<str>>,
         pruefidentifikator: Option<u32>,
     ) -> Self {
-        let (bgm, dtm, sender, receiver) = {
-            let borrowed: Vec<edifact_rs::Segment<'_>> =
-                segments.iter().map(|s| s.as_borrowed()).collect();
-            (
-                find_bgm(&borrowed),
-                collect_dtm(&borrowed),
-                find_nad(&borrowed, "MS"),
-                find_nad(&borrowed, "MR"),
-            )
-        };
+        let (bgm, dtm, sender, receiver) = (
+            find_bgm(&segments),
+            collect_dtm(&segments),
+            find_nad(&segments, "MS"),
+            find_nad(&segments, "MR"),
+        );
         Self {
             core: MessageCore::new(
                 segments,

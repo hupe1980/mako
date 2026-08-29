@@ -233,20 +233,13 @@ fn the_landing_page_figures_match_the_registered_engine() {
     // Deliberately explicit so a diff shows the number, not just a symbol.
     //
     // `LANDING_PAGE_PIDS` counts PIDs the engine *routes* (`PidRouter::table` is
-    // keyed by PID). It is **not** the same figure as the 346 that
-    // `cargo xtask validate-pruefids` reports, which counts PIDs with validated
-    // AHB profile coverage — the difference is the deliberate
-    // `KNOWN_PROFILE_GAPS` set, routed but without AHB rules. Both numbers are
-    // correct and appear in different places; do not "harmonise" them.
-    // Rose from 428 when the DVGW gas-transport PIDs stopped being a synthetic
-    // set of twelve and became the 33 codes DVGW actually publishes in RFF+Z13;
-    // fell by five when the SCHEDL/IMBNOT/TRANOT/DELORD/DELRES placeholders were
-    // dropped — `dvgw-edi` parses none of those formats, so their synthetic
-    // 900xx codes counted messages the daemon could never receive.
-    // Rose by six when the Zuordnungs-Meldungen shipped: 55036/55037/55038 and
-    // their Gas twins 44036/44037/44038 — Meldepflichten the NB owes around a
-    // Lieferbeginn, previously catalogued but unroutable.
-    const LANDING_PAGE_PIDS: usize = 455;
+    // keyed by PID). The page states a second, smaller figure beside it — how
+    // many of those also carry AHB rules — which `e2e_ahb_rule_coverage_guard`
+    // pins; the gap between them is the deliberate `KNOWN_PROFILE_GAPS` set.
+    // Both are correct and measure different things; do not "harmonise" them.
+    // The figure moves whenever a module registers or retires a PID; update it
+    // together with the page rather than reasoning about the delta here.
+    const LANDING_PAGE_PIDS: usize = 458;
     const LANDING_PAGE_WORKFLOWS: usize = 63;
 
     assert_eq!(

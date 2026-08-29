@@ -94,7 +94,7 @@ pub struct Unset;
 pub(super) fn bytes_to_segments(
     bytes: &[u8],
 ) -> Result<Vec<edifact_rs::OwnedSegment>, crate::Error> {
-    edifact_rs::from_bytes_owned(bytes)
+    edifact_rs::from_reader(bytes)
         .collect::<Result<_, _>>()
         .map_err(crate::Error::Parse)
 }
@@ -167,7 +167,7 @@ pub(super) fn now_ccyymmddhhmm() -> String {
 //
 // One shared pair for every builder.
 //
-// `emit_seg!` writes elements through `Writer::write_raw`: a `:` inside an
+// `emit_seg!` writes elements through `Writer::write_simple`: a `:` inside an
 // element string is a **component boundary**. Only compile-time constants may
 // carry composites through it — never interpolate runtime data into an
 // element, because a literal separator inside the value would be promoted to
@@ -189,7 +189,7 @@ macro_rules! emit_seg {
     ($writer:expr, $tag:expr, $($elem:expr),+ $(,)?) => {{
         let elements: &[&str] = &[$($elem),+];
         $writer
-            .write_raw($tag, elements)
+            .write_simple($tag, elements)
             .map_err(|e| $crate::Error::Parse(e.into()))?;
     }};
 }
@@ -215,10 +215,9 @@ macro_rules! emit_comp {
 /// `sender_agency`/`receiver_agency` override still wins, for the rare party
 /// whose registered code list differs from what its number implies.
 ///
-/// Hard-coding `293` here — as this used to — put a BDEW code list on every
-/// Gas message, which UTILMD AHB Gas G1.1/G1.2 does not define on a party NAD,
-/// and contradicted the DVGW `502` the same interchange already declared in
-/// UNB DE 0007.
+/// A fixed `293` here would put a BDEW code list on every Gas message — which
+/// UTILMD AHB Gas G1.1/G1.2 does not define on a party NAD — and contradict the
+/// DVGW `502` the same interchange declares in UNB DE 0007.
 #[cfg(any_message)]
 pub(crate) fn agency_for(explicit: Option<crate::AgencyCode>, mp_id: &str) -> &'static str {
     explicit

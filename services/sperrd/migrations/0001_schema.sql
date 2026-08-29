@@ -88,6 +88,23 @@ CREATE TABLE sperr_orders (
     -- window is reported once instead of on every sweep.
     ausfuehrung_eskaliert_at TIMESTAMPTZ,
 
+    -- ── The *Lieferant's* Vorlauffrist (GPKE Teil 2 § 3.5.1.2 Nr. 1) ─────────
+    -- Two windows, and the DTM the order carries tells them apart: 6 WT before
+    -- the frühestmöglicher Sperrtermin for a `DTM+469` order, **12 WT** before
+    -- the Sperrtermin for a `DTM+203` one, which fixes date, time and place
+    -- (the Festlegung's example is a Gerichtsvollzieher) and so leaves the NB
+    -- no room to reschedule.
+    --
+    -- Recorded, never enforced: Prozessschritt 2 lists what the NB checks
+    -- before it answers, and the Vorlauffrist is not among them. Refusing on a
+    -- ground the Festlegung does not publish is the § 20 EnWG-unsafe
+    -- direction, so a short lead surfaces to the operator instead. NULL when
+    -- the order names no Sperrtermin at all.
+    vorlauffrist_eingehalten BOOLEAN,
+    -- The latest ÜT the order could have carried, so the operator sees by how
+    -- much rather than only that.
+    vorlauffrist_spaetester_ut DATE,
+
     -- ── Execution ────────────────────────────────────────────────────────────
     status              TEXT        NOT NULL DEFAULT 'pending'
                         CHECK (status IN ('pending', 'executed', 'failed', 'cancelled')),
@@ -155,6 +172,10 @@ CREATE INDEX so_pending_due   ON sperr_orders (tenant, COALESCE(ausfuehrung_am, 
     WHERE status = 'pending';
 -- The § 3.5.1.2 Nr. 1 execution-window sweep: which pending orders are past the
 -- 6-Werktage deadline the Festlegung sets, soonest first.
+-- Orders the LF sent too late — the operator queue, and the number a
+-- Lieferantenrahmenvertrag review asks about.
+CREATE INDEX so_vorlauf_verletzt ON sperr_orders (tenant, created_at DESC)
+    WHERE vorlauffrist_eingehalten = false;
 CREATE INDEX so_pending_frist ON sperr_orders (tenant, ausfuehrung_faellig_am)
     WHERE status = 'pending' AND ausfuehrung_faellig_am IS NOT NULL
       AND ausfuehrung_eskaliert_at IS NULL;

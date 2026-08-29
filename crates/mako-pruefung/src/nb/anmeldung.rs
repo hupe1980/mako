@@ -996,6 +996,7 @@ mod tests {
             transaktionsgrund: Some("E03".to_owned()),
             marktlokationsart: Marktlokationsart::Verbrauchend,
             erzeugung: None,
+            abmeldeanfrage: crate::nb::Abmeldeanfrage::NichtErforderlich,
         }
     }
 

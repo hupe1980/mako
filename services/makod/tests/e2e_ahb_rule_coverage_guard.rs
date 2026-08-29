@@ -146,6 +146,7 @@ async fn every_routed_pid_has_ahb_rules() {
 
     let exempt: BTreeMap<u32, &str> = RULELESS_BY_DESIGN.iter().copied().collect();
     let mut gaps: Vec<String> = Vec::new();
+    let mut with_rules = 0usize;
     let mut closed: Vec<u32> = Vec::new();
 
     for (pid, workflow) in &routed {
@@ -172,12 +173,25 @@ async fn every_routed_pid_has_ahb_rules() {
             .profiles_for(mt)
             .any(|prof| prof.ahb_rule_pack(Some(p)).name() != "unknown-pid");
 
+        if has_rules {
+            with_rules += 1;
+        }
         match (has_rules, KNOWN_PROFILE_GAPS.contains(pid)) {
             (false, false) => gaps.push(format!("  {pid} (routed by `{workflow}`, {mt:?})")),
             (true, true) => closed.push(*pid),
             _ => {}
         }
     }
+
+    // `site/templates/index.html` states this next to the routed count. The two
+    // describe the same catalogue from different sides, so a PID gaining rules
+    // moves the page — update it to the number this reports.
+    const LANDING_PAGE_PIDS_WITH_RULES: usize = 349;
+    assert_eq!(
+        with_rules, LANDING_PAGE_PIDS_WITH_RULES,
+        "site/templates/index.html says {LANDING_PAGE_PIDS_WITH_RULES} routed PIDs carry \
+         AHB rules, the engine has {with_rules} — update the page"
+    );
 
     assert!(
         closed.is_empty(),

@@ -107,6 +107,21 @@ pub mod dtm {
 /// `STS` DE 9015 — Statuskategorie `7`, Transaktionsgrund (MIG Nr. 00033).
 pub const STS_TRANSAKTIONSGRUND: &str = "7";
 
+/// `STS` DE 9015 — Statuskategorie `Z35`, **Status der Antwort des dritten
+/// Marktbeteiligten** (MIG Nr. 00035).
+///
+/// A *second* `SG4 STS` beside `E01`, and the only place a Marktrolle restates
+/// somebody else's Antwortcode. UTILMD AHB Strom 2.1/2.2 marks it **Muss** on a
+/// 55003 „wenn `SG4 STS+E01++A50` vorhanden" (Bedingung `[356]`) and on a 55080
+/// „wenn `STS+E01++A57` vorhanden" (`[84]`) — the two codes that mean „der LFA
+/// hat der Anfrage zur Beendigung der Zuordnung widersprochen".
+///
+/// This is how GPKE Teil 2 § 2.1.2 Nr. 6's „der NB gibt zusätzlich den Grund der
+/// Ablehnung des LFA an" reaches the wire. Without it the LFN learns that its
+/// Anmeldung was refused and not why the incumbent refused to release the
+/// Marktlokation, which is the only fact it can act on.
+pub const STS_ANTWORT_DRITTER: &str = "Z35";
+
 /// `STS` DE 9015 — Statuskategorie `E01`, **Status der Antwort** (MIG Nr. 00034).
 ///
 /// Carries the EBD Antwortcode in DE 9013 and the EBD id in DE 1131:
@@ -468,6 +483,81 @@ pub struct AntwortStatus {
     /// `None` only for an answer whose AHB column really is empty.
     pub codeliste: Option<String>,
 }
+
+/// `SG4 STS+Z35` — the **third market participant's** answer, restated by the
+/// party that is refusing on the strength of it.
+///
+/// Only the Ablehnung einer Anmeldung uses it, and only when the ground is the
+/// LFA's Widerspruch (`A50` verbrauchend, `A57` erzeugend). The erzeugende form
+/// carries two more things than the verbrauchende one, because Geschäftsvorfall
+/// 3 splits a Marktlokation across Tranchen and several LFA answer: which object
+/// the restated answer is about (`ZW3` Erzeugende Marktlokation / `ZW5` Tranche)
+/// and its MaLo-ID (DE 9012, UTILMD AHB Strom 2.2 Bedingung `[950]`).
+///
+/// Wire form: `STS+Z35++A35:E_0624'` on a 55003,
+/// `STS+Z35+51238696781+A39:E_0624+ZW5'` on a 55080.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DritterAntwortStatus {
+    /// DE 9013 — the third party's own Prüfschritt code.
+    ///
+    /// „Bis auf den Code `A30` sind alle Codes aus EBD `E_0624` im Cluster
+    /// Ablehnung erlaubt" (Bedingung `[366]`; `[368]` says `A41` on the
+    /// erzeugende branch) — the „bereits abgemeldet" answer confirms the
+    /// Anmeldung instead, so it never reaches this segment.
+    pub code: String,
+    /// DE 1131 — always `E_0624`, the tree the LFA answered from.
+    pub codeliste: String,
+    /// DE 9012 in `C555` — „Referenz auf ID der Marktlokation / Tranche".
+    ///
+    /// `None` on a 55003, whose AHB column is empty: a verbrauchende
+    /// Marktlokation has exactly one LFA and the Vorgang already names it.
+    pub referenz_lokation: Option<String>,
+    /// The second DE 9013 — `ZW3` Erzeugende Marktlokation or `ZW5` Tranche.
+    ///
+    /// `None` on a 55003, for the same reason.
+    pub objekt: Option<String>,
+}
+
+impl DritterAntwortStatus {
+    /// The verbrauchende form — code and Codeliste only (PID 55003).
+    #[must_use]
+    pub fn verbrauchend(code: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            codeliste: EBD_BEENDIGUNG_ZUORDNUNG.to_owned(),
+            referenz_lokation: None,
+            objekt: None,
+        }
+    }
+
+    /// The erzeugende form — additionally naming the object the restated answer
+    /// is about (PID 55080).
+    #[must_use]
+    pub fn erzeugend(
+        code: impl Into<String>,
+        referenz_lokation: impl Into<String>,
+        objekt: impl Into<String>,
+    ) -> Self {
+        Self {
+            code: code.into(),
+            codeliste: EBD_BEENDIGUNG_ZUORDNUNG.to_owned(),
+            referenz_lokation: Some(referenz_lokation.into()),
+            objekt: Some(objekt.into()),
+        }
+    }
+}
+
+/// The EBD a `SG4 STS+Z35` always names in DE 1131 — the tree the LFA answered
+/// the Anfrage zur Beendigung der Zuordnung from.
+pub const EBD_BEENDIGUNG_ZUORDNUNG: &str = "E_0624";
+
+/// The `E_0623` Ablehnungscodes that make a `SG4 STS+Z35` **Muss**.
+///
+/// `A50` on a verbrauchende oder ruhende Marktlokation (Bedingung `[356]`),
+/// `A57` on an erzeugende one (`[84]`). Both mean „der LFA hat der Anfrage zur
+/// Beendigung der Zuordnung widersprochen", and neither is answerable without
+/// naming the LFA's own Grund.
+pub const CODES_REQUIRING_DRITTER: &[&str] = &["A50", "A57"];
 
 impl AntwortStatus {
     /// An Antwortcode together with the Codeliste DE 1131 must name.

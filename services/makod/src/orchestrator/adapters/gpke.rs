@@ -80,6 +80,20 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                     .first()
                     .and_then(|t| t.vorgangsnummer())
                     .map(ToOwned::to_owned),
+                // `SG12 NAD+Z09` — copied verbatim onto the NB's 55010, where
+                // Bedingung [279] marks it Muss on a verbrauchende oder ruhende
+                // Marktlokation and [572] names it „Kundenname aus Anmeldung
+                // Lieferant neu".
+                kunde_name: u
+                    .transactions()
+                    .first()
+                    .and_then(|t| t.kunde())
+                    .and_then(edi_energy::messages::utilmd::UtilmdParty::name),
+                kunde_namensformat: u
+                    .transactions()
+                    .first()
+                    .and_then(|t| t.kunde())
+                    .and_then(|k| k.nad.name_format.clone()),
                 // Bilanzierungsgebiet EIC from UTILMD NAD+Z09 / LOC+237.
                 // processd NB check 4 uses this field directly; when None,
                 // it falls back to marktd malo.bilanzierungsgebiet instead.
@@ -2104,6 +2118,86 @@ pub fn gpke_stammdaten_registry() -> AdapterRegistry<mako_gpke::GpkeStammdatenae
                 validation_passed,
                 validation_errors,
                 received_at: time::OffsetDateTime::now_utc(),
+            })
+        },
+    ));
+    registry
+}
+
+/// Build an [`AdapterRegistry`] for the **LFA's answer** to the NB's Anfrage
+/// zur Beendigung der Zuordnung (UTILMD 55011 / 55012).
+///
+/// The counterpart of [`gpke_beendigung_zuordnung_registry`], which adapts the
+/// 55010 for the LFA. This one runs on the **NB** and produces
+/// [`mako_gpke::BeendigungZuordnungCommand::ReceiveAntwort`].
+///
+/// The Antwortcode is what matters: `E_0623` Prüfschritt 50 asks whether the
+/// Widerspruch was `A30`, and Prüfschritt 40 whether there was one at all. The
+/// **Cluster** decides that, not the response PID — an LFA that answers 55012
+/// with a Zustimmungscode has contradicted itself, and `mako-pruefung`
+/// escalates rather than guessing.
+#[must_use]
+pub fn gpke_beendigung_zuordnung_antwort_registry()
+-> AdapterRegistry<GpkeBeendigungZuordnungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for the Beendigung-Zuordnung answer adapter".into(),
+                )
+            })?;
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "Beendigung-Zuordnung answer adapter: expected UTILMD message".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "Beendigung-Zuordnung answer adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+
+            let tx = u.transactions();
+            let vorgang = tx.first();
+            let antwort = vorgang.and_then(|t| t.antwort());
+            let antwortcode = antwort.map(|a| a.code.clone()).ok_or_else(|| {
+                EngineError::Deserialization(
+                    "the answer to an Anfrage zur Beendigung der Zuordnung carries no \
+                     SG4 STS+E01 — the AHB marks it Muss, and E_0624's Cluster is what \
+                     decides whether the Zuordnung was released"
+                        .into(),
+                )
+            })?;
+            // The Cluster, resolved against `E_0624`, and not the response PID:
+            // the code is the substance and the PID only its envelope.
+            let zustimmung = mako_pruefung::codes::lookup(
+                mako_pruefung::codes::EBD_BEENDIGUNG_ZUORDNUNG,
+                &antwortcode,
+            )
+            .is_some_and(|c| c.cluster == mako_pruefung::codes::Cluster::Zustimmung);
+
+            Ok(mako_gpke::BeendigungZuordnungCommand::ReceiveAntwort {
+                response_pid: pid,
+                antwortcode,
+                zustimmung,
+                // `FTX+ACB` — „Hierbei übermittelt der LFA eine Begründung für
+                // den Widerspruch", which the NB restates on its own Ablehnung.
+                grund: vorgang.and_then(|t| {
+                    t.ftx
+                        .iter()
+                        .find(|f| f.qualifier == "ACB")
+                        .and_then(|f| f.text.clone())
+                }),
+                // **Fall b** — the LFA agreed to an earlier Zuordnungsende and
+                // „teilt sein Lieferendedatum in der Antwort mit" (`A34`).
+                zuordnungsende: vorgang
+                    .and_then(|t| t.date(edi_energy::utilmd_codes::dtm::ENDE_ZUM))
+                    .map(ToOwned::to_owned),
             })
         },
     ));

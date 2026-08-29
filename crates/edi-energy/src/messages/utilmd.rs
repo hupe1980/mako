@@ -373,18 +373,14 @@ impl UtilmdMessage {
     ) -> Self {
         // Extract typed fields inside a scoped block so the borrow on `segments`
         // ends before it is moved into MessageCore.
-        let (bgm, dtm, sender, receiver, references, transactions) = {
-            let borrowed: Vec<edifact_rs::Segment<'_>> =
-                segments.iter().map(|s| s.as_borrowed()).collect();
-            (
-                find_bgm(&borrowed),
-                collect_dtm(&borrowed),
-                find_nad(&borrowed, "MS"),
-                find_nad(&borrowed, "MR"),
-                parse_references(&borrowed),
-                parse_transactions(&borrowed),
-            )
-        };
+        let (bgm, dtm, sender, receiver, references, transactions) = (
+            find_bgm(&segments),
+            collect_dtm(&segments),
+            find_nad(&segments, "MS"),
+            find_nad(&segments, "MR"),
+            parse_references(&segments),
+            parse_transactions(&segments),
+        );
         Self {
             core: MessageCore::new(
                 segments,
@@ -459,7 +455,11 @@ impl EdifactDeserialize for UtilmdMessage {
     ) -> Result<Self, edifact_rs::EdifactError> {
         let (message_ref, assoc_code) = MessageCore::extract_unh_fields(segments)?;
         let pid = MessageCore::extract_bgm_pid(segments);
-        let owned: Vec<OwnedSegment> = segments.iter().cloned().map(OwnedSegment::from).collect();
+        let owned: Vec<OwnedSegment> = segments
+            .iter()
+            .cloned()
+            .map(edifact_rs::Segment::into_owned)
+            .collect();
         Ok(Self::from_parts(owned, message_ref, assoc_code, pid))
     }
 }
@@ -532,7 +532,7 @@ struct Sg4Acc {
 /// `CAV` attaches to the `CCI` above it, which is the only thing that says
 /// which Merkmal a value belongs to.
 fn collect_sg4_segment(seg: &edifact_rs::Segment<'_>, ctx: &mut Sg4Acc) {
-    match seg.tag {
+    match &*seg.tag {
         "DTM" => {
             if let Some(d) = try_deserialize::<Dtm>(seg) {
                 ctx.dtm.push(d);
@@ -761,7 +761,7 @@ fn parse_antwort(seg: &edifact_rs::Segment<'_>) -> Option<crate::utilmd_codes::A
 fn utilmd_semantic_pack() -> ProfileRulePack {
     ProfileRulePack::new("UTILMD-SEM")
         .for_message_type("UTILMD")
-        .with_stateless_rule_fn(rule_sem_lokations_id_format)
+        .with_rule_fn(rule_sem_lokations_id_format)
 }
 
 /// `SEM-UTILMD-LOKATIONS-ID` — validate `SG5 LOC` location identifiers.

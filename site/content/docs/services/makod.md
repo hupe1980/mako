@@ -1814,9 +1814,11 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `gpke.lieferende.anmelden` | `LF` | GPKE | 55004 | Old supplier registers supply end (Abmeldung/Lieferende LF → NB) |
 | `gpke.lieferende.bestaetigen` | `NB` | GPKE | 55005/55006 | DSO accepts/rejects supply end |
 | `gpke.kuendigung.anmelden` | `LF` | GPKE | 55016 | LFN terminates the old supply contract (Kündigung LFN → LFA; 55017 is the Bestätigung) |
+| `gpke.beendigung-zuordnung.anfragen` | `NB` | GPKE | 55010 | Asks the incumbent LFA to release the Marktlokation (SD Lieferbeginn Nr. 3). The LFA answers 55011/55012 by **09:00 Uhr des 1. WT**; silence counts as Zustimmung |
 | `gpke.zuordnung.informieren` | `NB` | GPKE | 55036 | Tells the LFN **die Identität des LFA** when the MaLo is already assigned (SD Lieferbeginn Nr. 2, 07:00 Uhr des 1. WT nach dem ÜT) |
 | `gpke.zuordnung.beenden` | `NB` | GPKE | 55037 | Ends the LFA's Zuordnung, naming the Grund and the Zuordnungsende (Nr. 10, 12:00 Uhr des 1. WT) |
 | `gpke.zuordnung.aufheben` | `NB` | GPKE | 55038 | Cancels a future LFZ Zuordnung (Nr. 13, 12:00 Uhr des 1. WT) |
+| `gpke.msb-zuordnung.beenden` | `NB` | GPKE | 55611 | Tells the MSB its Zuordnung ends (`ZC8`) or the MSBZ that a future one is cancelled (`ZH1`) — SD **Lieferende von NB an LF** Nr. 11 / 13. The one message here that may name a Messlokation |
 | `geli.zuordnung.informieren` | `GNB` | GeLi Gas | 44036 | Gas twin — Ablauf des 4. WT nach Eingang der Anmeldung |
 | `geli.zuordnung.beenden` | `GNB` | GeLi Gas | 44037 | Gas twin — am selben Tag wie die Antwort, nur bei Bestätigung |
 | `geli.zuordnung.aufheben` | `GNB` | GeLi Gas | 44038 | Gas twin — am selben Tag wie die Antwort |

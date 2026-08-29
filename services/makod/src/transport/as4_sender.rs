@@ -2,9 +2,8 @@
 //!
 //! [`BdewAs4Sender`] is wired to the `OutboxWorker` in `main.rs` whenever
 //! a signing key/cert pair is available (i.e. `--as4-signing-key-pem` and
-//! `--as4-signing-cert-pem` are set).  It replaces the stub
-//! [`MaloIdentSender`]-only path that previously discarded all EDIFACT
-//! messages.
+//! `--as4-signing-cert-pem` are set).  Without one, only the
+//! [`MaloIdentSender`] path runs and EDIFACT messages are not delivered.
 //!
 //! ## Design
 //!

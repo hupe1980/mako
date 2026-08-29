@@ -30,6 +30,10 @@ pub struct NbState {
     pub makod: MakodClient,
     pub repo: PgAnmeldungRepository,
     pub queue: PgApprovalQueue,
+    /// Anmeldung decisions waiting on an LFA's answer to a 55010 — GPKE Teil 2
+    /// § 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4 makes the NB's answer
+    /// two-phase whenever the Marktlokation is already assigned.
+    pub pending: crate::pg::abmeldeanfrage::PgAbmeldeanfrageRepository,
 }
 
 /// State bundle for the LF module.
@@ -309,6 +313,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
             makod: makod.clone(),
             repo: PgAnmeldungRepository::new(pool.clone()),
             queue: PgApprovalQueue::new(pool.clone()),
+            pending: crate::pg::abmeldeanfrage::PgAbmeldeanfrageRepository::new(pool.clone()),
         }))
     };
 

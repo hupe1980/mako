@@ -15,7 +15,7 @@ graph TB
     marktd["marktd :8180<br/>fan-out"]
     processd["processd :8580<br/>(this service)"]
     makod["makod :8080"]
-    pg["PostgreSQL<br/>anmeldung_decisions<br/>approval_queue"]
+    pg["PostgreSQL<br/>anmeldung_decisions<br/>abmeldeanfragen<br/>approval_queue"]
 
     marktd -->|"de.mako.process.initiated<br/>de.markt.versorgung.gap-detected<br/>HMAC POST /webhook"| processd
 
@@ -106,7 +106,8 @@ de.mako.process.initiated
   │    → GET marktd /api/v1/versorgung/{malo_id}       → VersorgungsStatus
   │    → GET marktd /api/v1/malos/{malo_id}/grid       → MaloGridRecord
   │    → GET marktd /api/v1/partners/{lf_mp_id}        → partner_known
-  │    → mako_pruefung::evaluate(…)
+  │    → mako_pruefung::evaluate(…)             ← E_0622 / E_3005, the Vorprüfung
+  │    → mako_pruefung::evaluate_lieferbeginn(…) ← E_0623 / E_3007, what is answered
   └─ Abmeldung (55004 Strom / 44004 Gas)
        → GET marktd /api/v1/versorgung/{malo_id}       → VersorgungsStatus
        → mako_pruefung::evaluate_abmeldung(…)
@@ -117,7 +118,45 @@ de.mako.process.initiated
   Reject   → anmeldung_decisions(Reject, Antwortcode)
              → makod …ablehnen (antwort_code, antwort_ebd, bemerkung)
   Escalate → anmeldung_decisions(Escalate) → approval_queue
+  AnfrageErforderlich
+           → INSERT abmeldeanfragen (the waiting AnmeldungAnfrage)
+           → makod gpke.beendigung-zuordnung.anfragen  → UTILMD 55010 to the LFA
+             …09:00 Uhr des 1. WT, or the LFA answers 55011/55012…
+de.mako.abmeldeanfrage.beantwortet
+           → take abmeldeanfragen → mako_pruefung::evaluate_lieferbeginn(…)
+           → the Accept / Reject / Escalate paths above
 ```
+
+**The Anmeldung is two trees, and on an assigned Marktlokation two phases.**
+`E_0622` is a *Vorprüfung*: surviving it means only that the Anmeldung is not
+**directly** refusable. GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4
+then asks whether the Marktlokation is already assigned at the Zuordnungsbeginn —
+and if it is, the NB owes the incumbent LFA an **Anfrage zur Beendigung der
+Zuordnung** (55010, Nr. 3) before it may answer the LFN at all, because `E_0623`
+Prüfschritte 20–50 read that answer.
+
+The waiting decision is persisted in `abmeldeanfragen` as the serialised
+`AnmeldungAnfrage`, so phase two replays the same pure evaluation with one more
+fact. The row is written **before** the Anfrage goes out — a loopback answer can
+arrive in milliseconds, and one that finds no waiting row would leave the
+Anmeldung unanswered past its own 11:00 Frist. Resolving it is a single
+`UPDATE … WHERE resolved_at IS NULL`, because the LFA's answer and the 09:00
+lapse race by design and exactly one of them may answer the LFN.
+
+**Silence releases the Marktlokation.** „Verstreicht die Frist, ohne dass eine
+Antwort beim NB eingeht, gilt dies als Bestätigung nach Fall a). Nach Ablauf der
+Frist eingehende Antworten sind für den Fortlauf dieses Prozesses unerheblich."
+A Widerspruch that is **not** `A30` / `A41` („bereits abgemeldet") refuses the
+Anmeldung with `E_0623` `A50` / `A57` — `Z35` in Gas — outcomes an NB that never
+sends an Anfrage cannot reach at all. Those two codes oblige the Ablehnung to
+carry a second `SG4 STS`: `STS+Z35` restates the LFA's own `E_0624` code, which
+is GPKE Teil 2 § 2.1.2 Nr. 6's „der NB gibt zusätzlich den Grund der Ablehnung
+des LFA an". `processd` puts it on the `ablehnen` command and `makod` refuses to
+render the message without it.
+
+Geschäftsvorfall 3 is not decided automatically: Prüfschritte 500–600 read a
+Tranchen-Zuordnung the `versorgung` projection cannot express, so the tree
+escalates rather than choosing between two Ablehnungen and two Zustimmungen.
 
 **Three trees, three alphabets.** `E_0622` Prüfschritt 10 splits Strom into two
 branches that share no Antwortcode, and Gas answers from a different Codeliste:

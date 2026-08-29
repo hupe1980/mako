@@ -25,11 +25,11 @@
 //!
 //! ## API surface
 //!
-//! | API                    | Path prefix              | Handler trait             | Status |
-//! |------------------------|--------------------------|---------------------------|--------|
-//! | Control Measures v1    | `/steuerbefehl/`         | `ControlMeasuresHandler`  | ✅ wired |
-//! | MaLo Identification v1 | `/maloId/`               | `MaloIdentHandler`        | ✅ active |
-//! | WiM Order v1           | `/wimBestellung/v1/`     | `WimOrderHandler`         | ✅ wired |
+//! | API                    | Path prefix              | Handler trait             |
+//! |------------------------|--------------------------|---------------------------|
+//! | Control Measures v1    | `/steuerbefehl/`         | `ControlMeasuresHandler`  |
+//! | MaLo Identification v1 | `/maloId/`               | `MaloIdentHandler`        |
+//! | WiM Order v1           | `/wimBestellung/v1/`     | `WimOrderHandler`         |
 //!
 //! ## Authentication and caller identity
 //!

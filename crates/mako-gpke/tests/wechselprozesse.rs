@@ -173,6 +173,8 @@ async fn end_to_end_lieferbeginn_strom_pipeline() {
         transaktionsgrund_ergaenzung: None,
         veraeusserungsform: None,
         vorgangsnummer: None,
+        kunde_name: None,
+        kunde_namensformat: None,
         fallgruppe: None,
     };
 
@@ -288,6 +290,8 @@ async fn wrong_pid_returns_workflow_error() {
             transaktionsgrund_ergaenzung: None,
             veraeusserungsform: None,
             vorgangsnummer: None,
+            kunde_name: None,
+            kunde_namensformat: None,
             fallgruppe: None,
         })
         .await;

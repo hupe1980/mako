@@ -37,7 +37,8 @@
 //! | Antwortfrist        | clock time des 1. WT (GPKE Teil 2) | 4 / 3 Werktage (BK7-24-01-009 Kap. 3.1–3.2.3) |
 //! | MaLo source         | API-Webdienste Strom optional  | ERP must supply `malo_id` + `zaehlpunkt` |
 //! | Activation step     | explicit `Activate` command    | explicit `Activate` command            |
-//! | ProcessInitiated CE | ✅ emitted on spawn            | ✅ emitted on spawn                    |
+//!
+//! Both emit a `ProcessInitiated` CloudEvent on spawn.
 
 use mako_engine::{
     error::WorkflowError,

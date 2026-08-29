@@ -206,6 +206,14 @@ pub enum ErpEventType {
     /// The CE `data` payload carries `gas_day`, `deadline_label` and
     /// `sender_eic` / `receiver_eic` of the last ALOCAT recorded for the stream.
     GabiFinalAllocationOverdue,
+    /// The LFA answered the NB's Anfrage zur Beendigung der Zuordnung (55011 /
+    /// 55012), or its 09:00 window lapsed unanswered — „gilt dies als
+    /// Bestätigung nach Fall a)".
+    ///
+    /// Consumed by `processd`, which resumes the **Anmeldung** decision on it:
+    /// `E_0623` Prüfschritte 30–50 read the answer, and a Widerspruch that is
+    /// not `A30` refuses the Anmeldung with `A50`.
+    AbmeldeanfrageBeantwortet,
 }
 
 impl ErpEventType {
@@ -223,6 +231,7 @@ impl ErpEventType {
             Self::ProcessFailed { .. } => "process_failed",
             Self::VppDispatchConfirmed => "vpp_dispatch_confirmed",
             Self::GabiFinalAllocationOverdue => "gabi_final_allocation_overdue",
+            Self::AbmeldeanfrageBeantwortet => "abmeldeanfrage_beantwortet",
         }
     }
 
@@ -244,6 +253,7 @@ impl ErpEventType {
             Self::ProcessFailed { .. } => mako_events::mako::PROCESS_FAILED,
             Self::VppDispatchConfirmed => mako_events::vpp::DISPATCH_CONFIRMED,
             Self::GabiFinalAllocationOverdue => mako_events::gabi::ALOCAT_MISSING,
+            Self::AbmeldeanfrageBeantwortet => mako_events::mako::ABMELDEANFRAGE_BEANTWORTET,
         }
     }
 }

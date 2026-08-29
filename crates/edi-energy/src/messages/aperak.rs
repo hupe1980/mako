@@ -76,18 +76,14 @@ impl AperakMessage {
         assoc_code: impl Into<Box<str>>,
         pruefidentifikator: Option<u32>,
     ) -> Self {
-        let (bgm, dtm, sender, receiver, ref_acw, errors) = {
-            let borrowed: Vec<edifact_rs::Segment<'_>> =
-                segments.iter().map(|s| s.as_borrowed()).collect();
-            (
-                find_bgm(&borrowed),
-                collect_dtm(&borrowed),
-                find_nad(&borrowed, "MS"),
-                find_nad(&borrowed, "MR"),
-                find_rff(&borrowed, "ACW"),
-                parse_errors(&borrowed),
-            )
-        };
+        let (bgm, dtm, sender, receiver, ref_acw, errors) = (
+            find_bgm(&segments),
+            collect_dtm(&segments),
+            find_nad(&segments, "MS"),
+            find_nad(&segments, "MR"),
+            find_rff(&segments, "ACW"),
+            parse_errors(&segments),
+        );
         Self {
             core: MessageCore::new(
                 segments,
@@ -162,7 +158,11 @@ impl EdifactDeserialize for AperakMessage {
     ) -> Result<Self, edifact_rs::EdifactError> {
         let (message_ref, assoc_code) = MessageCore::extract_unh_fields(segments)?;
         let pid = MessageCore::extract_bgm_pid(segments);
-        let owned: Vec<OwnedSegment> = segments.iter().cloned().map(OwnedSegment::from).collect();
+        let owned: Vec<OwnedSegment> = segments
+            .iter()
+            .cloned()
+            .map(edifact_rs::Segment::into_owned)
+            .collect();
         Ok(Self::from_parts(owned, message_ref, assoc_code, pid))
     }
 }
@@ -202,7 +202,7 @@ fn parse_errors(segments: &[edifact_rs::Segment<'_>]) -> Vec<AperakError> {
         let mut references = Vec::new();
         let mut j = i + 1;
         while j < segments.len() && segments[j].tag != "ERC" && segments[j].tag != "UNT" {
-            match segments[j].tag {
+            match &*segments[j].tag {
                 "FTX" => {
                     if let Some(f) = try_deserialize::<Ftx>(&segments[j]) {
                         ftx.push(f);
@@ -237,7 +237,7 @@ fn parse_errors(segments: &[edifact_rs::Segment<'_>]) -> Vec<AperakError> {
 fn aperak_semantic_pack() -> ProfileRulePack {
     ProfileRulePack::new("APERAK-SEM")
         .for_message_type("APERAK")
-        .with_stateless_rule_fn(rule_sem_aperak_ref_missing)
+        .with_rule_fn(rule_sem_aperak_ref_missing)
 }
 
 /// `SEM-APERAK-REF-MISSING` — Every APERAK must reference the message it is

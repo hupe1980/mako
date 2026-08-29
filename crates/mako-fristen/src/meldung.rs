@@ -33,12 +33,15 @@
 //! |---|---|---|---|
 //! | 55037 | Fall 2 / 3 / 4: LF-Zuordnung bei EEG-/KWKG-Anlagen | 8 | **17:00 Uhr am ÜT** von Nr. 1 |
 //! | 55038 | Lieferende von NB an LF | 8 | **07:00 Uhr** des 1. WT nach dem ÜT von Nr. 1 |
-//! | 55611 | Lieferende von NB an LF | 11 / 13 | 07:00 Uhr des 1. WT nach dem ÜT von Nr. 1 |
 //!
-//! Those three run from the NB's **own** initiating message rather than from an
-//! inbound one, which is why they are not entries here: [`MeldungAnchor`] names
-//! an instant a receiver can resolve, and there is no arrival to resolve
-//! against. `ROADMAP.md` carries the work.
+//! Those two run from the NB's **own** initiating message rather than from an
+//! inbound one, and they would need a second entry under the same PID —
+//! [`meldepflicht`] resolves one per Prüfidentifikator, so the catalogue cannot
+//! hold both windows yet. `ROADMAP.md` carries the work.
+//!
+//! [`GPKE_LIEFERENDE`] is the same shape and *is* catalogued, because 55611
+//! appears in no other Sequenzdiagramm: it is anchored on
+//! [`MeldungAnchor::EigeneAnkuendigung`].
 //!
 //! `services/makod/tests/meldepflicht_coverage.rs` pins the catalogue against
 //! what the PID router actually handles, so a new entry here is either routed
@@ -67,6 +70,14 @@ pub enum MeldungAnchor {
     /// Sequenzdiagramm says „am selben Tag wie in Prozessschritt N" rather than
     /// counting from the Eingang.
     Antwort,
+    /// The instant **this party's own initiating message** went out.
+    ///
+    /// Not every Meldepflicht hangs off something that arrived. The SD
+    /// „Lieferende von NB an LF" is opened by the NB itself (55007, Nr. 1), and
+    /// the notifications it owes downstream count „nach dem ÜT von Nr. 1" —
+    /// which is the NB's own dispatch. Resolving those against an arrival
+    /// resolves them against nothing.
+    EigeneAnkuendigung,
 }
 
 /// One message a party is obliged to send, with no answer expected back.
@@ -224,7 +235,39 @@ pub const GELI_GAS: &[Meldepflicht] = &[
     },
 ];
 
-const TABLES: &[&[Meldepflicht]] = &[GPKE, GELI_GAS];
+/// GPKE Strom — the notification the NB owes the **MSB** when it ends a
+/// Zuordnung of its own accord.
+///
+/// A different Sequenzdiagramm from the three above: „Lieferende von NB an LF"
+/// is opened by the NB (55007, Nr. 1), not by an inbound Anmeldung, so this runs
+/// from [`MeldungAnchor::EigeneAnkuendigung`]. One PID, two Prozessschritte and
+/// two recipients — Nr. 11 tells the **MSB** its Zuordnung ends (`ZC8`), Nr. 13
+/// tells the **MSBZ** a future one is cancelled (`ZH1`) — on the same window.
+///
+/// It is the one message in the Zuordnungs-Meldung family that may name a
+/// **Messlokation**: „Der MSB ist ausschließlich dem Objekt Messlokation
+/// zugeordnet" (WiM Strom Teil 1 Kap. 2.1.2 d), so `SG5 LOC` carries `Z16` or
+/// `Z17` where the other three carry `Z16` or `Z21`.
+pub const GPKE_LIEFERENDE: &[Meldepflicht] = &[Meldepflicht {
+    pid: 55_611,
+    name: "Beendigung der Zuordnung des MSB zur MaLo / MeLo",
+    sent_by: "NB",
+    sent_to: "MSB / MSBZ",
+    triggered_by: &[55_007],
+    anchor: MeldungAnchor::EigeneAnkuendigung,
+    frist: FristShape::WerktagAt {
+        werktage: 1,
+        at: at(7),
+    },
+    family: Family::Gpke,
+    source: "BK6-24-174 GPKE Teil 2 § 2.5.2 SD Lieferende von NB an LF Nr. 11 und Nr. 13 — \
+             \"Unverzüglich nach dem ÜZ von Nr. 2, sofern es sich um eine Zustimmung handelt, \
+             bzw. nach dem ÜZ von Nr. 3, jedoch spätester ÜZ ist 07:00 Uhr des 1. WT nach dem \
+             ÜT von Nr. 1\". Nr. 11 beendet die Zuordnung des MSB (STS+7++ZC8), Nr. 13 hebt \
+             die des MSBZ auf (ZH1).",
+}];
+
+const TABLES: &[&[Meldepflicht]] = &[GPKE, GPKE_LIEFERENDE, GELI_GAS];
 
 /// Every catalogued Meldepflicht, across all families.
 pub fn all() -> impl Iterator<Item = &'static Meldepflicht> {

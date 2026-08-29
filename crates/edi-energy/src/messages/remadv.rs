@@ -37,16 +37,12 @@ impl RemadvMessage {
         assoc_code: impl Into<Box<str>>,
         pruefidentifikator: Option<u32>,
     ) -> Self {
-        let (bgm, dtm, sender, receiver) = {
-            let borrowed: Vec<edifact_rs::Segment<'_>> =
-                segments.iter().map(|s| s.as_borrowed()).collect();
-            (
-                find_bgm(&borrowed),
-                collect_dtm(&borrowed),
-                find_nad(&borrowed, "MS"),
-                find_nad(&borrowed, "MR"),
-            )
-        };
+        let (bgm, dtm, sender, receiver) = (
+            find_bgm(&segments),
+            collect_dtm(&segments),
+            find_nad(&segments, "MS"),
+            find_nad(&segments, "MR"),
+        );
         Self {
             core: MessageCore::new(
                 segments,
@@ -111,7 +107,7 @@ impl_edi_energy_message!(RemadvMessage, sem = remadv_semantic_pack());
 fn remadv_semantic_pack() -> ProfileRulePack {
     ProfileRulePack::new("REMADV-SEM")
         .for_message_type("REMADV")
-        .with_stateless_rule_fn(
+        .with_rule_fn(
             |segs: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>| {
                 // DTM+137 (Zahlungsdatum) is mandatory in BDEW REMADV messages.
                 if !segs

@@ -624,7 +624,7 @@ pub fn extract_zak_ze_zaehlwerke(segs: &[OwnedSegment]) -> Vec<serde_json::Value
     }
 
     for seg in segs {
-        match seg.tag.as_str() {
+        match &*seg.tag {
             "ZAK" => {
                 // Flush any in-progress register.
                 flush_saison(&mut cur_saison, &mut cur_tagtypen, &mut cur_saisons);
@@ -1080,7 +1080,7 @@ fn extract_angebot(msg: &AnyMessage) -> mako_wim::esa::Angebot {
     let mut artikel: Vec<String> = Vec::new();
     let mut naechster = 0usize;
     for seg in segs {
-        match seg.tag.as_str() {
+        match &*seg.tag {
             "LIN" => {
                 artikel.clear();
                 naechster = 0;

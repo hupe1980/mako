@@ -13,7 +13,7 @@
 /// ```
 use std::io::{BufReader, Read};
 
-use edifact_rs::{MessageWindowsIter, OwnedSegment, ReaderConfig, from_bufread_stream_with_config};
+use edifact_rs::{MessageWindows, OwnedSegment, ReaderConfig, from_bufread_with_config};
 
 use crate::{AnyMessage, Error, MessageType};
 
@@ -222,7 +222,7 @@ impl ParseConfig {
 pub fn parse_envelope_only(input: &[u8]) -> Result<crate::light_message::LightMessage, Error> {
     let cfg = ParseConfig::default().to_reader_config();
     let input = decode_repertoire(input)?;
-    let segments: Vec<OwnedSegment> = edifact_rs::from_bytes_owned_with_config(&input, cfg)
+    let segments: Vec<OwnedSegment> = edifact_rs::from_reader_with_config(input.as_ref(), cfg)
         .collect::<Result<_, _>>()
         .map_err(Error::Parse)?;
     crate::light_message::LightMessage::from_segments(
@@ -297,7 +297,7 @@ pub(crate) fn parse_with_registry(
     let per_msg_limit = config.max_segments_per_message;
     let cfg = config.to_reader_config();
     let input = decode_repertoire(input)?;
-    let segments: Vec<OwnedSegment> = edifact_rs::from_bytes_owned_with_config(&input, cfg)
+    let segments: Vec<OwnedSegment> = edifact_rs::from_reader_with_config(input.as_ref(), cfg)
         .collect::<Result<_, _>>()
         .map_err(Error::Parse)?;
     if let Some(lim) = per_msg_limit {
@@ -356,9 +356,8 @@ pub(crate) fn parse_interchange_with_registry(
 
 /// Shared implementation for both the `&'static` and `Arc`-owned registry paths.
 ///
-/// Eliminates the duplicate `max_messages_per_interchange` / `map` logic that
-/// previously appeared in both `parse_interchange_with_registry` and
-/// `parse_interchange_with_arc_registry`.
+/// Holds the `max_messages_per_interchange` / `map` logic once, for both
+/// `parse_interchange_with_registry` and `parse_interchange_with_arc_registry`.
 pub(crate) fn parse_interchange_impl(
     reader: impl Read,
     config: ParseConfig,
@@ -387,7 +386,7 @@ pub(crate) fn parse_interchange_impl(
         .into_iter()
         .chain(decoded.into_iter().flat_map(move |d| {
             let registry = std::sync::Arc::clone(&registry);
-            MessageWindowsIter::new(from_bufread_stream_with_config(BufReader::new(d), cfg))
+            MessageWindows::new(from_bufread_with_config(BufReader::new(d), cfg))
                 .enumerate()
                 .map(move |(index, window)| {
                     if let Some(lim) = limit {
@@ -435,7 +434,7 @@ pub(crate) fn parse_interchange_buffered_impl(
 ) -> Result<(crate::interchange::InterchangeHeader, InterchangeIter), Error> {
     let cfg = config.to_reader_config();
     let decoded = edifact_rs::decode_reader(BufReader::new(reader)).map_err(Error::Parse)?;
-    let segments: Vec<OwnedSegment> = from_bufread_stream_with_config(BufReader::new(decoded), cfg)
+    let segments: Vec<OwnedSegment> = from_bufread_with_config(BufReader::new(decoded), cfg)
         .collect::<Result<_, _>>()
         .map_err(Error::Parse)?;
 
@@ -454,7 +453,7 @@ pub(crate) fn parse_interchange_buffered_impl(
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(0);
 
-    let msg_iter = MessageWindowsIter::new(segments.into_iter().map(
+    let msg_iter = MessageWindows::new(segments.into_iter().map(
         Ok::<_, edifact_rs::EdifactError>
             as fn(OwnedSegment) -> Result<OwnedSegment, edifact_rs::EdifactError>,
     ));
@@ -579,10 +578,9 @@ impl Parser {
         // reading a `UNOC:3` interchange as UTF-8 rejects any message with an
         // umlaut in a party name, which is most of them.
         let decoded = edifact_rs::decode_reader(BufReader::new(reader)).map_err(Error::Parse)?;
-        let segments: Vec<OwnedSegment> =
-            from_bufread_stream_with_config(BufReader::new(decoded), cfg)
-                .collect::<Result<_, _>>()
-                .map_err(Error::Parse)?;
+        let segments: Vec<OwnedSegment> = from_bufread_with_config(BufReader::new(decoded), cfg)
+            .collect::<Result<_, _>>()
+            .map_err(Error::Parse)?;
         dispatch_message_on_date(
             segments,
             crate::registry::ReleaseRegistry::global(),
@@ -609,7 +607,7 @@ impl Parser {
     ) -> Result<crate::light_message::LightMessage, Error> {
         let cfg = self.config.to_reader_config();
         let input = decode_repertoire(input)?;
-        let segments: Vec<OwnedSegment> = edifact_rs::from_bytes_owned_with_config(&input, cfg)
+        let segments: Vec<OwnedSegment> = edifact_rs::from_reader_with_config(input.as_ref(), cfg)
             .collect::<Result<_, _>>()
             .map_err(Error::Parse)?;
         crate::light_message::LightMessage::from_segments(
@@ -692,7 +690,7 @@ impl Parser {
         let reader_cfg = self.config.to_reader_config();
         let decoded = edifact_rs::decode_reader(BufReader::new(reader)).map_err(Error::Parse)?;
         let segments: Vec<OwnedSegment> =
-            from_bufread_stream_with_config(BufReader::new(decoded), reader_cfg)
+            from_bufread_with_config(BufReader::new(decoded), reader_cfg)
                 .collect::<Result<_, _>>()
                 .map_err(Error::Parse)?;
         parse_interchange_full_from_segments(segments, &self.config)
@@ -709,7 +707,8 @@ impl Parser {
 /// returns `None` permanently.
 pub struct InterchangeIter {
     #[expect(clippy::type_complexity)]
-    inner: MessageWindowsIter<
+    inner: MessageWindows<
+        'static,
         std::iter::Map<
             std::vec::IntoIter<OwnedSegment>,
             fn(OwnedSegment) -> Result<OwnedSegment, edifact_rs::EdifactError>,
@@ -859,7 +858,7 @@ pub(crate) fn parse_interchange_full_with_arc_registry(
 ) -> Result<crate::interchange::ParsedInterchange, Error> {
     let cfg = config.to_reader_config();
     let data = decode_repertoire(data)?;
-    let segments: Vec<OwnedSegment> = edifact_rs::from_bytes_owned_with_config(&data, cfg)
+    let segments: Vec<OwnedSegment> = edifact_rs::from_reader_with_config(data.as_ref(), cfg)
         .collect::<Result<_, _>>()
         .map_err(Error::Parse)?;
     parse_interchange_full_from_segments_with_registry(segments, &config, registry)
@@ -945,8 +944,8 @@ fn parse_interchange_full_from_segments_with_registry(
         None => ("".into(), 0),
     };
 
-    // ── Dispatch all messages using MessageWindowsIter ────────────────────────
-    let msg_iter = edifact_rs::MessageWindowsIter::new(
+    // ── Dispatch all messages using MessageWindows ────────────────────────
+    let msg_iter = edifact_rs::MessageWindows::new(
         segments.into_iter().map(Ok::<_, edifact_rs::EdifactError>),
     );
 

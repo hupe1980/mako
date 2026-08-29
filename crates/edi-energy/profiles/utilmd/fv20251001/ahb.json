@@ -3009,7 +3009,7 @@
               "MR"
             ]
           },
-          "_description": "SG2 and SG12 are both triggered by NAD, and the hierarchy builder opens a top-level SG2 for the SG12 NAD+VY rather than nesting it — so a group-scoped DE 3035 restriction on SG2 fires on a party the AHB puts in SG12. The constraint is expressed on the flat NAD rule instead: MS and MR stay required, and VY is admitted. Tracked in ROADMAP.md."
+          "_description": "SG2 (Marktteilnehmer) and SG12 (dritte Partei) are both triggered by NAD; the qualifier restriction here covers every NAD in the message, and the SG12 group rule restricts the nested one. Bedingung [518]/[566]: the Altlieferant is Muss, so SG12 carries group_required."
         },
         {
           "tag": "IDE",
@@ -3140,7 +3140,8 @@
               "VY"
             ]
           },
-          "_description": "SG12 NAD+VY Muss — Altlieferant. Bedingung [518]: „Es sind alle Altlieferanten anzugeben, an die eine Abmeldeanfrage gesendet wird\"; [566] „Altlieferant\"."
+          "_description": "SG12 NAD+VY Muss — Altlieferant. Bedingung [518]: „Es sind alle Altlieferanten anzugeben, an die eine Abmeldeanfrage gesendet wird\"; [566] „Altlieferant\".",
+          "group_required": true
         }
       ]
     },
@@ -3375,7 +3376,7 @@
               "MR"
             ]
           },
-          "_description": "SG2 and SG12 are both triggered by NAD, and the hierarchy builder opens a top-level SG2 for the SG12 NAD+VY rather than nesting it — so a group-scoped DE 3035 restriction on SG2 fires on a party the AHB puts in SG12. The constraint is expressed on the flat NAD rule instead: MS and MR stay required, and VY is admitted. Tracked in ROADMAP.md."
+          "_description": "SG2 (Marktteilnehmer) and SG12 (dritte Partei) are both triggered by NAD; the qualifier restriction here covers every NAD in the message, and the SG12 group rule restricts the nested one. Bedingung [518]/[566]: the Altlieferant is Muss, so SG12 carries group_required."
         },
         {
           "tag": "IDE",
@@ -3514,7 +3515,8 @@
               "VY"
             ]
           },
-          "_description": "SG12 NAD+VY is Muss [206] „Wenn SG4 STS+7++ZG5 … nicht vorhanden\" — a negated condition the Bedingungsoperatoren cannot express, so presence is not enforced here and the qualifier is. The positive obligation lives in the workflow, which knows the Aufhebungsgrund. [579]: auslösender Marktpartner — LFN bei ZH0/ZG9, NB bei ZH1."
+          "_description": "SG12 NAD+VY is Muss [206] „Wenn SG4 STS+7++ZG5 … nicht vorhanden\" — a negated condition the Bedingungsoperatoren cannot express, so presence is not enforced here and the qualifier is. The positive obligation lives in the workflow, which knows the Aufhebungsgrund. [579]: auslösender Marktpartner — LFN bei ZH0/ZG9, NB bei ZH1.",
+          "group_required": true
         }
       ]
     },
@@ -6364,6 +6366,191 @@
             "9015": [
               "7",
               "E01"
+            ]
+          }
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "code": 55611,
+      "name": "Beendigung der Zuordnung des MSB zur MaLo / MeLo (NB an MSB / MSBZ)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E02"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z16",
+              "Z17"
+            ]
+          },
+          "_description": "SG5 LOC+Z16 Marktlokation XOR LOC+Z17 Messlokation — Bedingungen [348] „Wenn SG5 LOC+Z21 (Tranche) nicht vorhanden\" und [349] „Wenn SG5 LOC+Z17 (Messlokation) nicht vorhanden\". 55611 is the one message in the family that may name a Messlokation, because the MSB is assigned to the MeLo."
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        },
+        {
+          "group_id": "SG4",
+          "tag": "DTM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "2005": [
+              "92",
+              "93"
+            ]
+          },
+          "_description": "„Beginn zum\" DTM+92 unter STS+7++ZH1 (Bedingung [475]) XOR „Ende zum\" DTM+93 unter ZC8 ([474]) — the qualifier follows the Grund, not the PID."
+        },
+        {
+          "group_id": "SG4",
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          }
+        },
+        {
+          "group_id": "SG4",
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7"
+            ]
+          }
+        },
+        {
+          "group_id": "SG5",
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z16",
+              "Z17"
             ]
           }
         },

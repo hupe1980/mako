@@ -52,7 +52,7 @@ impl InterchangeHeader {
     }
 
     /// Convert from the `edifact_rs::InterchangeEnvelope` produced by
-    /// [`edifact_rs::validate_envelope_owned`] into edi-energy's typed header.
+    /// [`edifact_rs::validate_envelope`] into edi-energy's typed header.
     ///
     /// Used to attach envelope metadata to [`EdiEnergyReport`] so a single
     /// report carries both the interchange routing data (sender/receiver/control

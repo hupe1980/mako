@@ -194,8 +194,7 @@ impl ValidationIssueSummary {
             severity: issue.severity.as_str(),
             message: issue.message.clone(),
             rule_id: issue.rule_id.clone(),
-            // edifact-rs 0.13: error_code is now Option<Cow<'static, str>>, so it
-            // survives a serde round-trip; we own it here for a self-contained summary.
+            // Owned here so the summary is self-contained across a serde round-trip.
             error_code: issue.error_code.as_deref().map(str::to_owned),
             segment_tag: issue.segment_tag.clone(),
             segment_occurrence: issue.segment_occurrence,
@@ -204,7 +203,7 @@ impl ValidationIssueSummary {
             component_index: issue.component_index,
             message_ref: issue.message_ref.clone(),
             suggestion: issue.suggestion.clone(),
-            // edifact-rs 0.13: the redundant `offset` field was collapsed into `span`.
+            // `offset`/`byte_end` are the two ends of the issue's span.
             offset: issue.span.map(|s| s.start),
             byte_end: issue.span.map(|s| s.end),
             pruefidentifikator: resolved_pid,
@@ -244,7 +243,7 @@ pub struct EdiEnergyReport {
     ///
     /// `None` for bare messages (UNH…UNT only, no interchange wrapper).  Present
     /// when an interchange wrapper was detected and successfully validated by
-    /// `edifact_rs::validate_envelope_owned`.
+    /// `edifact_rs::validate_envelope`.
     ///
     /// Combines with the validation issues to provide a single comprehensive
     /// audit record (who sent it, when, control reference, and whether it was valid).

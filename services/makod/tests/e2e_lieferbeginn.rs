@@ -260,6 +260,8 @@ impl MockNb {
                     transaktionsgrund_ergaenzung: None,
                     veraeusserungsform: None,
                     vorgangsnummer: None,
+                    kunde_name: None,
+                    kunde_namensformat: None,
                     validation_passed: true, // bypass AHB profile check
                     validation_errors: vec![],
                 }

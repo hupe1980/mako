@@ -285,6 +285,8 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
         transaktionsgrund_ergaenzung: None,
         veraeusserungsform: None,
         vorgangsnummer: None,
+        kunde_name: None,
+        kunde_namensformat: None,
         fallgruppe: None,
     })
     .await
@@ -513,6 +515,8 @@ async fn bilateral_lieferbeginn_rejection_path() {
         transaktionsgrund_ergaenzung: None,
         veraeusserungsform: None,
         vorgangsnummer: None,
+        kunde_name: None,
+        kunde_namensformat: None,
         fallgruppe: None,
     })
     .await
@@ -616,6 +620,8 @@ async fn bilateral_antwortfrist_deadline_fires_on_timeout() {
         transaktionsgrund_ergaenzung: None,
         veraeusserungsform: None,
         vorgangsnummer: None,
+        kunde_name: None,
+        kunde_namensformat: None,
         fallgruppe: None,
     })
     .await

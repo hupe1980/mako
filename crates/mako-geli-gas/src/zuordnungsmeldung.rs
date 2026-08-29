@@ -99,9 +99,6 @@ pub const AUFHEBUNG_PID: u32 = 44_038;
 /// Every Gas Informationsmeldung, in Prozessschritt order.
 pub const ZUORDNUNGSMELDUNG_PIDS: &[u32] = &[INFORMATION_PID, BEENDIGUNG_PID, AUFHEBUNG_PID];
 
-/// Deadline label for the dispatch window.
-pub const MELDUNG_WINDOW_LABEL: &str = "geli-gas-zuordnungsmeldung-frist";
-
 // ── Which message ─────────────────────────────────────────────────────────────
 
 /// One of the three Gas Informationsmeldungen.

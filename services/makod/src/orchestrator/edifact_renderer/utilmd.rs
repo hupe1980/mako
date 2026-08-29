@@ -30,7 +30,13 @@ use super::*;
 /// | `document_code` | no       | `BGM` DE 1001, when the Anwendungsfall fixes one other than `E01` |
 /// | `lokationstyp`  | no       | `SG5 LOC` DE 3227 — `Z21` Tranche, Gas `172` Meldepunkt; defaults to the PID's own object |
 /// | `beteiligte_marktpartner` | on 55036/55038, 44036/44038 | `SG12 NAD+VY` — every Altlieferant, or the auslösender Marktpartner |
+/// | `kunde_name` | on 55010 (`ZW4`/`ZAP`) | `SG12 NAD+Z09` „Kunde des LF" — a **name**, in `C080`, not an MP-ID |
+/// | `kunde_namensformat` | with `kunde_name` | `NAD` DE 3045 — `Z01` Person, `Z02` Firma; defaults to `Z01` |
+/// | `dritter_antwortcode` | **on `A50` / `A57`** | `SG4 STS+Z35` — the LFA's own `E_0624` code, restated |
+/// | `dritter_referenz_lokation` | erzeugende Ablehnung | `STS+Z35` `C555` DE 9012 — which MaLo/Tranche the restated answer is about |
+/// | `dritter_objekt` | erzeugende Ablehnung | the second DE 9013 — `ZW3` Erzeugende MaLo / `ZW5` Tranche |
 /// | `bilanzierungsende` | Gas 44037/44038 | second `SG4 DTM+159`, Soll „wenn eine Bilanzierung stattfindet" |
+/// | `dtm_qualifier`  | 55611     | overrides the per-PID `SG4 DTM` DE 2005 — there it follows the Grund |
 ///
 /// \* Exactly one of `malo` / `melo` is required, depending on the PID range.
 ///
@@ -110,7 +116,16 @@ pub(super) fn render_utilmd(
         field: format!("pid value {pid} is invalid: {e}").into(),
     })?;
 
-    let dtm_qualifier = utilmd_dtm_qualifier(pid);
+    // The `SG4 DTM` DE 2005 qualifier is per-PID for almost everything, and the
+    // table below is that mapping. A 55611 is the exception: „Beginn zum" under
+    // `STS+7++ZH1` and „Ende zum" under `ZC8` (UTILMD AHB Strom Kap. 8.11
+    // Bedingungen `[475]` / `[474]`), so the qualifier follows the **Grund** and
+    // only the workflow knows it. An explicit value therefore wins.
+    let dtm_qualifier = p
+        .get("dtm_qualifier")
+        .and_then(|v| v.as_str())
+        .filter(|q| !q.is_empty())
+        .unwrap_or_else(|| utilmd_dtm_qualifier(pid));
     let process_date_yyyymmdd = process_date.map(normalise_date);
 
     // `SG4 SG6 RFF+Z13` carries the Prüfidentifikator and the builder emits it
@@ -214,6 +229,46 @@ pub(super) fn render_utilmd(
             None => AntwortStatus::bare(code),
         };
         tx = tx.antwort(antwort);
+
+        // `SG4 STS+Z35` — „Status der Antwort des dritten Marktbeteiligten".
+        //
+        // **Muss when the Antwortcode is `A50` or `A57`** (UTILMD AHB Strom
+        // Bedingungen `[356]` / `[84]`): both mean „der LFA hat der Anfrage zur
+        // Beendigung der Zuordnung widersprochen", and GPKE Teil 2 § 2.1.2 Nr. 6
+        // requires the NB to state that refusal's ground alongside its own.
+        // Refusing to render is the only way this stays true — an Ablehnung
+        // that omits it tells the LFN its Anmeldung failed and not why the
+        // incumbent would not release the Marktlokation, which is the one fact
+        // it can act on.
+        let dritter = p.get("dritter_antwortcode").and_then(|v| v.as_str());
+        if edi_energy::utilmd_codes::CODES_REQUIRING_DRITTER.contains(&code) && dritter.is_none() {
+            return Err(RenderError::MissingField {
+                message_type: mt.into(),
+                field: format!(
+                    "antwort_code {code} requires \"dritter_antwortcode\" — UTILMD AHB Strom                      marks SG4 STS+Z35 Muss alongside it, and GPKE Teil 2 § 2.1.2 Nr. 6 has the                      NB state the LFA's own Ablehnungsgrund"
+                )
+                .into(),
+            });
+        }
+        if let Some(dritter_code) = dritter {
+            let referenz = p
+                .get("dritter_referenz_lokation")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty());
+            let objekt = p
+                .get("dritter_objekt")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty());
+            tx = tx.antwort_dritter(match (referenz, objekt) {
+                (Some(r), Some(o)) => {
+                    edi_energy::utilmd_codes::DritterAntwortStatus::erzeugend(dritter_code, r, o)
+                }
+                // The verbrauchende form: a 55003's AHB column carries neither,
+                // because a verbrauchende Marktlokation has exactly one LFA and
+                // the Vorgang already names it.
+                _ => edi_energy::utilmd_codes::DritterAntwortStatus::verbrauchend(dritter_code),
+            });
+        }
     }
 
     // `FTX+ACB` Bemerkung — mandatory alongside the catch-all Ablehnungscodes
@@ -248,6 +303,32 @@ pub(super) fn render_utilmd(
                 bilanzkreis,
             )),
         };
+    }
+
+    // `SG12 NAD+Z09` „Kunde des LF" — a **name**, so it rides `C080` and not
+    // the party-identification composite. Muss on a 55010 whose
+    // Transaktionsgrundergänzung is `ZW4`/`ZAP` (Bedingung [279]); it is the
+    // „Kundenname aus Anmeldung Lieferant neu" ([572]) the LFA compares against
+    // its own contract holder at `E_0624` Prüfschritt 30.
+    if let Some(name) = p
+        .get("kunde_name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        let format = p
+            .get("kunde_namensformat")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(edi_energy::utilmd_codes::namensformat::PERSON);
+        // A `Z01` Personenname splits across the five DE 3036 components as
+        // Nachname, Vorname, …; a `Z02` Firmenbezeichnung is one line. The
+        // separator is the caller's, so an unsplit name still renders.
+        let parts: Vec<String> = if format == edi_energy::utilmd_codes::namensformat::PERSON {
+            name.splitn(5, ',').map(|s| s.trim().to_owned()).collect()
+        } else {
+            vec![name.to_owned()]
+        };
+        tx = tx.kunde_des_lf(parts, format);
     }
 
     // `SG12 NAD+VY` — the beteiligte Marktpartner a Vorgang names beside sender
@@ -331,6 +412,12 @@ pub(super) fn utilmd_dtm_qualifier(pid: u32) -> &'static str {
         // and the default below would have given both `92`.
         55_037 | 44_037 => dtm::ENDE_ZUM,
         55_038 | 44_038 => dtm::BEGINN_ZUM,
+        // 55611 admits **both**: `DTM+93` under `STS+7++ZC8` and `DTM+92` under
+        // `ZH1`. The PID alone cannot choose, so the workflow passes
+        // `dtm_qualifier` explicitly and this is only the fallback for a caller
+        // that does not — „Ende zum", the commoner of the two (Nr. 11 ends an
+        // assignment; Nr. 13 cancels a future one).
+        55_611 => dtm::ENDE_ZUM,
         // Lieferbeginn: Anmeldung and its Bestätigung/Ablehnung.
         55_001..=55_003 | 55_013..=55_015 | 55_077 | 55_078 | 55_080 => dtm::BEGINN_ZUM,
         44_001..=44_003 | 44_013..=44_015 => dtm::BEGINN_ZUM,

@@ -1,4 +1,4 @@
-//! GPKE Strom answer Fristen — the table itself now lives in
+//! GPKE Strom answer Fristen — the table itself lives in
 //! [`mako_fristen::antwort`], and what stays here is the check that it
 //! agrees with these workflows.
 //!

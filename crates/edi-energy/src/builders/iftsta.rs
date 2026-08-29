@@ -325,6 +325,10 @@ mod tests {
         );
 
         let report = msg.validate().unwrap();
-        assert!(report.is_valid(), "21042 must be AHB-conformant: {report}");
+        assert!(
+            report.is_valid(),
+            "21042 must be AHB-conformant: {report}\n{:#?}",
+            report.errors()
+        );
     }
 }

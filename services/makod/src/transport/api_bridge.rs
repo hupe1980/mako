@@ -36,7 +36,7 @@ use mako_wim::steuerungsauftrag::LocationId as DomainLocationId;
 ///
 /// # Errors
 ///
-/// The API and domain layers now share the same validated identifier types
+/// The API and domain layers share the same validated identifier types
 /// (`rubo4e::identifiers`), so this is a variant remap with no re-parsing: the
 /// check digit was already enforced when the request was deserialized.
 #[must_use]

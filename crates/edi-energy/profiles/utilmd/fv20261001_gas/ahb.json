@@ -3341,7 +3341,7 @@
               "MR"
             ]
           },
-          "_description": "SG2 and SG12 are both triggered by NAD, and the hierarchy builder opens a top-level SG2 for the SG12 NAD+VY rather than nesting it — so a group-scoped DE 3035 restriction on SG2 fires on a party the AHB puts in SG12. The constraint is expressed on the flat NAD rule instead: MS and MR stay required, and VY is admitted. Tracked in ROADMAP.md."
+          "_description": "SG2 (Marktteilnehmer) and SG12 (dritte Partei) are both triggered by NAD; the qualifier restriction here covers every NAD in the message, and the SG12 group rule restricts the nested one. Bedingung [518]/[566]: the Altlieferant is Muss, so SG12 carries group_required."
         },
         {
           "tag": "IDE",
@@ -3470,7 +3470,8 @@
               "VY"
             ]
           },
-          "_description": "SG12 NAD+VY Muss — Altlieferant ([566])."
+          "_description": "SG12 NAD+VY Muss — Altlieferant ([566]).",
+          "group_required": true
         }
       ]
     },
@@ -3704,7 +3705,7 @@
               "MR"
             ]
           },
-          "_description": "SG2 and SG12 are both triggered by NAD, and the hierarchy builder opens a top-level SG2 for the SG12 NAD+VY rather than nesting it — so a group-scoped DE 3035 restriction on SG2 fires on a party the AHB puts in SG12. The constraint is expressed on the flat NAD rule instead: MS and MR stay required, and VY is admitted. Tracked in ROADMAP.md."
+          "_description": "SG2 (Marktteilnehmer) and SG12 (dritte Partei) are both triggered by NAD; the qualifier restriction here covers every NAD in the message, and the SG12 group rule restricts the nested one. Bedingung [518]/[566]: the Altlieferant is Muss, so SG12 carries group_required."
         },
         {
           "tag": "IDE",
@@ -3842,7 +3843,8 @@
               "VY"
             ]
           },
-          "_description": "SG12 NAD+VY Muss — auslösender Marktpartner ([571]): LFA bei ZG9, LFN bei ZH0, NB bei ZH1."
+          "_description": "SG12 NAD+VY Muss — auslösender Marktpartner ([571]): LFA bei ZG9, LFN bei ZH0, NB bei ZH1.",
+          "group_required": true
         }
       ]
     },

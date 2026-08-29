@@ -12,13 +12,15 @@
 //!
 //! #### Inbound ANFRAGE — routed to `gpke-supplier-change`
 //!
-//! | PID   | Process name (AHB)                                        | Status |
-//! |-------|-----------------------------------------------------------|--------|
-//! | 55001 | Anmeldung verb. MaLo — Lieferbeginn (LFN → NB)            | ✅ Implemented |
-//! | 55004 | Abmeldung — Lieferende (LFN → NB)                         | ✅ Implemented |
-//! | 55016 | Kündigung Lieferbeginn (LFN → LFA)                        | ✅ Implemented |
-//! | 55077 | Anmeldung erz. MaLo (LFN → NB, BK6-24-174)                | ✅ Implemented |
-//! | 55557 | Änderung MSB-Abrechnungsdaten der MaLo (GPKE Teil 4)      | `gpke-stammdatenaenderung`, answers 55559 |
+//! | PID   | Process name (AHB)                                        |
+//! |-------|-----------------------------------------------------------|
+//! | 55001 | Anmeldung verb. MaLo — Lieferbeginn (LFN → NB)            |
+//! | 55004 | Abmeldung — Lieferende (LFN → NB)                         |
+//! | 55016 | Kündigung Lieferbeginn (LFN → LFA)                        |
+//! | 55077 | Anmeldung erz. MaLo (LFN → NB, BK6-24-174)                |
+//!
+//! 55557 (Änderung MSB-Abrechnungsdaten der MaLo, GPKE Teil 4) routes to
+//! `gpke-stammdatenaenderung` instead and answers 55559.
 //!
 //! #### Outbound ANTWORT — derived by `GpkeSupplierChangeWorkflow`, NOT routed (NB role)
 //!
@@ -45,38 +47,38 @@
 //!
 //! #### Sperrung / Entsperrung — routed to `gpke-sperrung`
 //!
-//! | PID   | Process name (AWH)              | Status         |
-//! |-------|-------------------------------|----------------|
-//! | 17115 | Sperrauftrag (NB → LFN)        | ✅ Implemented |
-//! | 17116 | Anfrage Sperrung (NB → LFN)    | ✅ Implemented |
-//! | 17117 | Entsperrauftrag (NB → LFN)     | ✅ Implemented |
+//! | PID   | Process name (AWH)              |
+//! |-------|-------------------------------|
+//! | 17115 | Sperrauftrag (NB → LFN)        |
+//! | 17116 | Anfrage Sperrung (NB → LFN)    |
+//! | 17117 | Entsperrauftrag (NB → LFN)     |
 //!
 //! #### Stornierung — routed to `gpke-stornierung`
 //!
-//! | PID   | Process name (AHB)                      | Status |
-//! |-------|-----------------------------------------|--------|
-//! | 55022 | Anfrage nach Stornierung (LFN → NB)     | ✅ Implemented |
-//! | 55023 | Bestätigung Stornierung (NB → LFN)      | ✅ Implemented |
-//! | 55024 | Ablehnung Stornierung (NB → LFN)        | ✅ Implemented |
+//! | PID   | Process name (AHB)                      |
+//! |-------|-----------------------------------------|
+//! | 55022 | Anfrage nach Stornierung (LFN → NB)     |
+//! | 55023 | Bestätigung Stornierung (NB → LFN)      |
+//! | 55024 | Ablehnung Stornierung (NB → LFN)        |
 //!
 //! ### Neuanlage — routed to `gpke-neuanlage`
 //!
-//! | PID   | Process name (AHB)                               | Status |
-//! |-------|--------------------------------------------------|--------|
-//! | 55600 | Anmeldung neue verb. MaLo (LF → NB)             | ✅ Implemented |
-//! | 55601 | Anmeldung neue erz. MaLo (LF → NB)              | ✅ Implemented |
+//! | PID   | Process name (AHB)                               |
+//! |-------|--------------------------------------------------|
+//! | 55600 | Anmeldung neue verb. MaLo (LF → NB)             |
+//! | 55601 | Anmeldung neue erz. MaLo (LF → NB)              |
 //!
 //! ### NB-initiated Lieferende — routed to `gpke-lf-abmeldung`
 //!
-//! | PID   | Process name (AHB)                                   | Status |
-//! |-------|------------------------------------------------------|--------|
-//! | 55007 | Ankündigung NB-seitiges Lieferende (NB → LFN)        | ✅ Implemented |
+//! | PID   | Process name (AHB)                                   |
+//! |-------|------------------------------------------------------|
+//! | 55007 | Ankündigung NB-seitiges Lieferende (NB → LFN)        |
 //!
 //! ### Ankündigung Zuordnung LF — routed to `gpke-ankuendigung-zuordnung-lf`
 //!
-//! | PID   | Process name (AHB)                               | Status |
-//! |-------|--------------------------------------------------|--------|
-//! | 55607 | Ankündigung Zuordnung LF (NB → LFN)              | ✅ Implemented |
+//! | PID   | Process name (AHB)                               |
+//! |-------|--------------------------------------------------|
+//! | 55607 | Ankündigung Zuordnung LF (NB → LFN)              |
 //!
 //! PIDs 55608 (Bestätigung) and 55609 (Ablehnung) are outbound responses derived
 //! by `GpkeAnkuendigungZuordnungLfWorkflow` and never routed as inbound.
@@ -86,11 +88,11 @@
 //!
 //! ### Ersatz-/Grundversorgung — routed to `gpke-eog`
 //!
-//! | PID   | Process name (AHB)              | Direction | Status |
-//! |-------|---------------------------------|-----------|--------|
-//! | 55013 | Anmeldung / Zuordnung EOG       | NB → LF   | ✅ Implemented |
-//! | 55014 | Bestätigung EOG Anmeldung       | LF → NB   | ✅ Implemented |
-//! | 55015 | Ablehnung EOG Anmeldung         | LF → NB   | ✅ Implemented |
+//! | PID   | Process name (AHB)              | Direction |
+//! |-------|---------------------------------|-----------|
+//! | 55013 | Anmeldung / Zuordnung EOG       | NB → LF   |
+//! | 55014 | Bestätigung EOG Anmeldung       | LF → NB   |
+//! | 55015 | Ablehnung EOG Anmeldung         | LF → NB   |
 //!
 //! [`GpkeEogWorkflow`] covers both roles: the NB initiates the Zuordnung
 //! (statutory fallback supply, §36/§38 EnWG) and the Grundversorger
@@ -98,9 +100,9 @@
 //!
 //! ### Beendigung der Zuordnung — routed to `gpke-beendigung-zuordnung`
 //!
-//! | PID   | Process name (AHB)                          | Direction | Status |
-//! |-------|---------------------------------------------|-----------|--------|
-//! | 55010 | Anfrage zur Beendigung der Zuordnung        | NB → LFA  | ✅ Implemented |
+//! | PID   | Process name (AHB)                          | Direction |
+//! |-------|---------------------------------------------|-----------|
+//! | 55010 | Anfrage zur Beendigung der Zuordnung        | NB → LFA  |
 //!
 //! PID 55010 is the NB Abmeldeanfrage toward the LFA (BGM+E02 Abmeldungen,
 //! UTILMD AHB Strom 2.1). The responses PIDs 55011 (Bestätigung) and 55012
@@ -116,12 +118,12 @@
 //!
 //! ### INVOIC-based billing processes (GPKE Netznutzungsabrechnung / MMM Strom)
 //!
-//! | PID   | Process name                             | Status |
-//! |-------|------------------------------------------|--------|
-//! | 31001 | Abschlagsrechnung (Netznutzung)              | ✅ Implemented |
-//! | 31002 | NN-Rechnung (Netznutzungsabrechnung)          | ✅ Implemented |
-//! | 31005 | MMM-Rechnung (Mehr-/Mindermengensaldo)        | ✅ Implemented |
-//! | 31006 | MMM-Rechnung (selbst ausgestellt)            | ✅ Implemented |
+//! | PID   | Process name                             |
+//! |-------|------------------------------------------|
+//! | 31001 | Abschlagsrechnung (Netznutzung)              |
+//! | 31002 | NN-Rechnung (Netznutzungsabrechnung)          |
+//! | 31005 | MMM-Rechnung (Mehr-/Mindermengensaldo)        |
+//! | 31006 | MMM-Rechnung (selbst ausgestellt)            |
 //!
 //! All 4 PIDs use [`GpkeAbrechnungWorkflow`] (workflow name:
 //! `"gpke-abrechnung"`) — the shared INVOIC state machine from `mako-invoic`,
@@ -247,10 +249,11 @@ pub use antwortfrist::{
     ANTWORT_OBLIGATIONS, AntwortObligation, FristShape, antwort_deadline, antwort_obligation,
 };
 pub use beendigung_zuordnung::{
-    BEENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL, BEENDIGUNG_ZUORDNUNG_PIDS,
-    BeendigungZuordnungCommand, BeendigungZuordnungData, BeendigungZuordnungEvent,
-    BeendigungZuordnungState, GpkeBeendigungZuordnungWorkflow,
-    WORKFLOW_NAME as BEENDIGUNG_ZUORDNUNG_WORKFLOW_NAME,
+    ANFRAGE_PID as BEENDIGUNG_ZUORDNUNG_ANFRAGE_PID,
+    ANTWORT_PIDS as BEENDIGUNG_ZUORDNUNG_ANTWORT_PIDS, BEENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL,
+    BEENDIGUNG_ZUORDNUNG_PIDS, BeendigungZuordnungCommand, BeendigungZuordnungData,
+    BeendigungZuordnungEvent, BeendigungZuordnungState, GpkeBeendigungZuordnungWorkflow,
+    NB_ANFRAGE_WINDOW_LABEL, WORKFLOW_NAME as BEENDIGUNG_ZUORDNUNG_WORKFLOW_NAME,
 };
 pub use comdis::{
     COMDIS_APERAK_WINDOW_LABEL, COMDIS_PIDS, ComdisOutcome, GpkeComdisCommand, GpkeComdisData,
@@ -341,8 +344,8 @@ pub use wechselprozesse::{
 };
 pub use zuordnungsmeldung::{
     AUFHEBUNG_PID, BEENDIGUNG_PID, GpkeZuordnungsmeldungWorkflow, INFORMATION_PID,
-    MELDUNG_WINDOW_LABEL, WORKFLOW_NAME as ZUORDNUNGSMELDUNG_WORKFLOW_NAME, ZUORDNUNGSMELDUNG_PIDS,
-    Zuordnungsmeldung, ZuordnungsmeldungCommand, ZuordnungsmeldungEvent, ZuordnungsmeldungState,
+    WORKFLOW_NAME as ZUORDNUNGSMELDUNG_WORKFLOW_NAME, ZUORDNUNGSMELDUNG_PIDS, Zuordnungsmeldung,
+    ZuordnungsmeldungCommand, ZuordnungsmeldungEvent, ZuordnungsmeldungState,
 };
 
 // ── EngineModule ──────────────────────────────────────────────────────────────

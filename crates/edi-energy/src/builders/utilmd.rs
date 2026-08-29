@@ -24,6 +24,8 @@ struct UtilmdTransactionSpec {
     process_dates: Vec<(String, String)>,
     transaktionsgrund: Option<Transaktionsgrund>,
     antwort: Option<AntwortStatus>,
+    /// `SG4 STS+Z35` — the third market participant's answer, restated.
+    antwort_dritter: Option<crate::utilmd_codes::DritterAntwortStatus>,
     free_texts: Vec<(String, String)>,
     agr: Option<(String, String)>,
     /// `SG5 LOC` — one entry per Lokation the Vorgang names.
@@ -45,6 +47,15 @@ struct UtilmdTransactionSpec {
     /// Abmeldeanfrage gesendet wird" — Geschäftsvorfall 3 splits a Marktlokation
     /// across several Tranchen and so across several LFA.
     customer_nads: Vec<(String, String)>,
+    /// `SG12 NAD` parties named by **name** rather than by MP-ID —
+    /// `(DE 3035 qualifier, DE 3036 name parts, DE 3045 Namensformat)`.
+    ///
+    /// A different composite from [`Self::customer_nads`]: a Kunde des LF has
+    /// no MP-ID, so it rides `C080` (element 4) with the Namensformat as that
+    /// composite's sixth component, not `C082` (element 2). Writing a name into
+    /// the party-identification slot states a Marktpartner code that does not
+    /// exist.
+    named_nads: Vec<(String, Vec<String>, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -419,6 +430,34 @@ fn emit_sg4<W: std::io::Write>(
             emit_seg!(w, "STS", STS_STATUS_ANTWORT, "", &antwort.code);
         }
     }
+    // `SG4 STS+Z35` — „Status der Antwort des dritten Marktbeteiligten", the
+    // second STS of an Ablehnung whose ground is the LFA's Widerspruch.
+    //
+    // `STS+Z35++<code>:E_0624'` on a 55003; the erzeugende form additionally
+    // fills `C555` with the MaLo-ID the restated answer is about and a second
+    // `C556` with `ZW3`/`ZW5`, because Geschäftsvorfall 3 has several LFA and
+    // the LFN would otherwise not know whose refusal it is being told about.
+    if let Some(dritter) = &tx.antwort_dritter {
+        let referenz = dritter.referenz_lokation.as_deref().unwrap_or("");
+        if let Some(objekt) = dritter.objekt.as_deref() {
+            emit_comp!(
+                w,
+                "STS",
+                [crate::utilmd_codes::STS_ANTWORT_DRITTER],
+                [referenz],
+                [&dritter.code, &dritter.codeliste],
+                [objekt]
+            );
+        } else {
+            emit_comp!(
+                w,
+                "STS",
+                [crate::utilmd_codes::STS_ANTWORT_DRITTER],
+                [referenz],
+                [&dritter.code, &dritter.codeliste]
+            );
+        }
+    }
     for (ftx_q, ftx_text) in &tx.free_texts {
         emit_comp!(w, "FTX", [ftx_q], [""], [""], [ftx_text]);
     }
@@ -435,6 +474,21 @@ fn emit_sg4<W: std::io::Write>(
         emit_seg!(w, "CCI", klassentyp, "", wert);
     }
     emit_sg8_produktpakete(w, tx)?;
+    for (nad_q, parts, format) in &tx.named_nads {
+        // `NAD+<3035>++++<3036>:<3036>:…::<3045>` — C080 sits at element 4 and
+        // repeats DE 3036 five times before DE 3045. C082 and C058 stay empty:
+        // the party is identified by its name, not by a Marktpartner code.
+        let mut c080: Vec<&str> = parts.iter().map(String::as_str).take(5).collect();
+        c080.resize(5, "");
+        c080.push(format.as_str());
+        // `emit_comp!` takes fixed-arity composites; C080 is built at runtime,
+        // so this writes the element slices directly.
+        w.write_composites(
+            "NAD",
+            &[&[nad_q.as_str()][..], &[""][..], &[""][..], &c080[..]],
+        )
+        .map_err(Error::Parse)?;
+    }
     for (nad_q, nad_id) in &tx.customer_nads {
         // SG12 NAD names a *third* party (the Altlieferant on a 55036, the
         // auslösender Marktpartner on a 55038), so its DE 3055 follows that
@@ -751,12 +805,65 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
         self
     }
 
+    /// Add an `SG12 NAD` party identified by **name**.
+    ///
+    /// `party_qualifier` is DE 3035 — `Z09` „Kunde des LF" is the one the GPKE
+    /// core processes use. `name_parts` fills `C080`'s five interchangeable
+    /// DE 3036 components (Nachname, Vorname, … under
+    /// [`namensformat::PERSON`](crate::utilmd_codes::namensformat::PERSON);
+    /// one line under [`FIRMA`](crate::utilmd_codes::namensformat::FIRMA)) and
+    /// `name_format` is DE 3045, which the AHB marks Muss wherever a `NAD`
+    /// carries a Kundenname — without it the five components cannot be read
+    /// back into a person or a company.
+    pub fn named_party(
+        mut self,
+        party_qualifier: impl Into<String>,
+        name_parts: impl IntoIterator<Item = String>,
+        name_format: impl Into<String>,
+    ) -> Self {
+        self.spec.named_nads.push((
+            party_qualifier.into(),
+            name_parts.into_iter().collect(),
+            name_format.into(),
+        ));
+        self
+    }
+
+    /// Add an `SG12 NAD+Z09` „Kunde des LF".
+    ///
+    /// Muss on a 55010 whose Transaktionsgrundergänzung is `ZW4` / `ZAP`
+    /// (UTILMD AHB Strom Bedingung `[279]`): it is „der Kundenname aus der
+    /// Anmeldung Lieferant neu" (`[572]`), and it is how the LFA tells an
+    /// Einzug from a Wechsel at `E_0624` Prüfschritt 30.
+    pub fn kunde_des_lf(
+        self,
+        name_parts: impl IntoIterator<Item = String>,
+        name_format: impl Into<String>,
+    ) -> Self {
+        self.named_party(
+            crate::utilmd_codes::nad::KUNDE_DES_LF,
+            name_parts,
+            name_format,
+        )
+    }
+
     /// Add an `SG12 NAD+VY` „andere zugehörige Partei".
     ///
     /// The slot the Zuordnungs-Meldungen use: the Altlieferant on PID 55036 /
     /// 44036, the auslösender Marktpartner on 55038 / 44038.
     pub fn beteiligter_marktpartner(self, mp_id: impl Into<String>) -> Self {
         self.customer(crate::utilmd_codes::nad::ZUGEHOERIGE_PARTEI, mp_id)
+    }
+
+    /// Set the `SG4 STS+Z35` „Status der Antwort des dritten Marktbeteiligten".
+    ///
+    /// **Muss on an Ablehnung whose Antwortcode is `A50` or `A57`** — UTILMD
+    /// AHB Strom 2.1/2.2 Bedingungen `[356]` and `[84]`. Those two codes say the
+    /// LFA refused to release the Marktlokation, and GPKE Teil 2 § 2.1.2 Nr. 6
+    /// requires the NB to state *that* refusal's ground alongside its own.
+    pub fn antwort_dritter(mut self, dritter: crate::utilmd_codes::DritterAntwortStatus) -> Self {
+        self.spec.antwort_dritter = Some(dritter);
+        self
     }
 
     /// Add a free-text (FTX) segment inside SG4.

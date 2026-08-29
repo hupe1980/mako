@@ -35,6 +35,103 @@ pub const IFTSTA_WERKTAGE: u32 = 1;
 /// durch" (GPKE Teil 2 § 3.5.1.2 Nr. 5).
 pub const MAX_SPERRVERSUCHE: i32 = 2;
 
+/// Whether the Lieferant gave the NB the lead time GPKE Teil 2 § 3.5.1.2 Nr. 1
+/// requires, and which of the two windows applied.
+///
+/// The Festlegung states **two**, and the wire tells them apart on its own:
+/// `DTM+203` fixes date, time and place — the Festlegung's example is a
+/// Gerichtsvollzieher — so the NB cannot move the visit to fit its own
+/// scheduling and needs twice the room. `DTM+469` names an earliest start the NB
+/// then schedules within. The AHB makes the two mutually exclusive, which is why
+/// `sperr_orders` carries a `CHECK` for it, and why the distinction needs no
+/// extra inbound field.
+///
+/// **Recording, not refusing.** Prozessschritt 2 lists what the NB checks before
+/// it answers — „ob die Marktlokation dem LF zugeordnet ist, ob die
+/// Marktlokation identifiziert werden kann und die Zusicherung der Berechtigung
+/// nach Netznutzungsvertrag vorliegt" — and the Vorlauffrist is not among them.
+/// Refusing on a ground the Festlegung does not publish is the § 20
+/// EnWG-unsafe direction, so a short lead is surfaced to the operator instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VorlaufBefund {
+    /// `true` when the Übertragungstag fell on or before the latest admissible
+    /// one.
+    pub eingehalten: bool,
+    /// The latest ÜT the order could have carried.
+    pub spaetester_ut: Date,
+    /// The catalogue entry that was applied, for the operator-facing reason.
+    pub obligation: &'static mako_fristen::vorlauf::VorlaufObligation,
+}
+
+/// Check a Sperrauftrag against its Vorlauffrist.
+///
+/// `None` when the order names no Sperrtermin at all — an Entsperrauftrag
+/// carries neither `DTM+203` nor `DTM+469`, and § 41f Abs. 7 EnWG makes
+/// restoration „unverzüglich" rather than dated, so there is no anchor to count
+/// back from.
+#[must_use]
+pub fn vorlauffrist_befund(
+    ausfuehrung_am: Option<Date>,
+    fruehestens_am: Option<Date>,
+    uebertragungstag: Date,
+) -> Option<VorlaufBefund> {
+    // `DTM+203` first: a fixed date is the termingebundene case, and the two
+    // are mutually exclusive on the wire.
+    let (key, sperrtermin) = match (ausfuehrung_am, fruehestens_am) {
+        (Some(d), _) => ("gpke.sperrauftrag.termingebunden", d),
+        (None, Some(d)) => ("gpke.sperrauftrag", d),
+        (None, None) => return None,
+    };
+    let obligation = mako_fristen::vorlauf::vorlauf(key)?;
+    let verdict = obligation.shape.check(
+        uebertragungstag,
+        sperrtermin,
+        mako_fristen::HolidayCalendar::BdewMaKo,
+    );
+    Some(VorlaufBefund {
+        eingehalten: verdict.is_ok(),
+        spaetester_ut: mako_fristen::sub_werktage(
+            sperrtermin,
+            match key {
+                "gpke.sperrauftrag.termingebunden" => {
+                    mako_fristen::vorlauf::SPERRAUFTRAG_TERMINGEBUNDEN_VORLAUF_WT
+                }
+                _ => mako_fristen::vorlauf::SPERRAUFTRAG_VORLAUF_WT,
+            },
+            mako_fristen::HolidayCalendar::BdewMaKo,
+        ),
+        obligation,
+    })
+}
+
+/// The earliest Sperrtermin the NB may set when the MSB has given no **generelle
+/// Zustimmung** to Sperrung/Entsperrung by the NB.
+///
+/// GPKE Teil 2 § 3.5.1.2 Nr. 2 puts this on the NB, not on the LF: „Sofern keine
+/// generelle Zustimmung des MSB … vorliegt, ist der Sperrtermin vom NB so
+/// festzulegen, dass dem MSB noch eine fristgerechte Antwort auf Anfrage vor dem
+/// Sperrtermin möglich ist (s. dazu Fristen der SD-Schritte 3 und 4)." Those two
+/// are the Anfrage's 3 WT before the Sperrtermin (Nr. 3) and the MSB's 3 WT to
+/// answer it (Nr. 4), so the earliest admissible date is six Werktage out.
+///
+/// With a generelle Zustimmung on file no Anfrage is sent at all and the NB may
+/// schedule freely.
+#[must_use]
+pub fn fruehester_sperrtermin_ohne_msb_zustimmung(heute: Date) -> Date {
+    mako_fristen::add_werktage(
+        heute,
+        mako_fristen::vorlauf::SPERRUNG_MSB_ANFRAGE_WT + MSB_ANTWORT_WERKTAGE,
+        mako_fristen::HolidayCalendar::BdewMaKo,
+    )
+}
+
+/// „Unverzüglich, jedoch spätester ÜT ist der **3. WT** nach dem ÜT von Nr. 3" —
+/// the MSB's window to answer the Anfrage Sperrung (GPKE Teil 2 § 3.5.1.2 Nr. 4).
+///
+/// Its absence is consent: „Verstreicht die Frist, ohne dass die Antwort auf die
+/// Anfrage beim NB eingeht, gilt dies als Zustimmung."
+pub const MSB_ANTWORT_WERKTAGE: u32 = 3;
+
 /// The date by which the physical act is due, or `None` when the order names no
 /// date at all — an Entsperrauftrag carries neither `DTM+203` nor `DTM+469`, and
 /// § 41f Abs. 7 EnWG makes restoration „unverzüglich" rather than dated.
@@ -209,6 +306,16 @@ pub struct SperrStats {
     pub iftsta_outstanding: i64,
     /// …of which have exhausted the retry budget and need a human.
     pub iftsta_stuck: i64,
+    /// Orders the **Lieferant** sent later than its own Vorlauffrist allowed —
+    /// 6 Werktage before the frühestmöglicher Sperrtermin, or 12 before a
+    /// termingebundener one (GPKE Teil 2 § 3.5.1.2 Nr. 1).
+    ///
+    /// A different question from every other figure here: the others count the
+    /// NB's own windows, this one counts the counterparty's. The NB executes
+    /// them anyway — Prozessschritt 2 publishes no ground to refuse on — so the
+    /// number is what a Lieferantenrahmenvertrag review asks about, not an
+    /// operations backlog.
+    pub vorlauffrist_verletzt: i64,
 }
 
 // ── Create ────────────────────────────────────────────────────────────────────
@@ -227,13 +334,30 @@ pub async fn create_order_pg(
     tenant: &str,
     req: &CreateOrderRequest,
 ) -> anyhow::Result<Option<Uuid>> {
+    let befund = vorlauffrist_befund(
+        req.ausfuehrung_am,
+        req.fruehestens_am,
+        time::OffsetDateTime::now_utc().date(),
+    );
+    if let Some(b) = befund.filter(|b| !b.eingehalten) {
+        tracing::warn!(
+            malo_id = %req.malo_id,
+            lf_mp_id = %req.lf_mp_id,
+            spaetester_ut = %b.spaetester_ut,
+            frist = b.obligation.name,
+            "sperrd: Sperrauftrag arrived after its Vorlauffrist — recorded, not refused \
+             (GPKE Teil 2 § 3.5.1.2 Nr. 2 does not publish it as a ground)",
+        );
+    }
     let row = sqlx::query(
         r"INSERT INTO sperr_orders
               (tenant, malo_id, lf_mp_id, order_type, pruefidentifikator, process_id,
                ausfuehrung_am, fruehestens_am, arbeitszeit,
                treffpunkt_hinweis, treffpunkt_strasse, treffpunkt_plz,
-               treffpunkt_ort, treffpunkt_land, hinweis, ausfuehrung_faellig_am)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+               treffpunkt_ort, treffpunkt_land, hinweis, ausfuehrung_faellig_am,
+               vorlauffrist_eingehalten, vorlauffrist_spaetester_ut)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                  $17, $18)
           ON CONFLICT (tenant, process_id) DO NOTHING
           RETURNING id::TEXT",
     )
@@ -256,6 +380,11 @@ pub async fn create_order_pg(
         req.ausfuehrung_am,
         req.fruehestens_am,
     ))
+    // The Übertragungstag is the day the order reached us — an operator-created
+    // order has no ÜT of its own, and dating it today is the only reading that
+    // does not invent one.
+    .bind(befund.map(|b| b.eingehalten))
+    .bind(befund.map(|b| b.spaetester_ut))
     .fetch_optional(pool)
     .await
     .context("insert sperr_order")?;
@@ -358,7 +487,7 @@ pub enum Reported {
     /// A Sperrversuch was recorded and the order stays `pending` — the
     /// Festlegung allows a second visit, so no IFTSTA goes out yet.
     VersuchNotiert {
-        /// How many of the two allowed attempts have now been made.
+        /// How many of the two allowed attempts have been made.
         sperrversuche: i32,
         /// The Marktlokation, for the announcement.
         malo_id: String,
@@ -787,6 +916,8 @@ pub async fn stats_pg(pool: &PgPool, tenant: &str) -> anyhow::Result<SperrStats>
                     AND ausfuehrung_faellig_am IS NOT NULL
                     AND ausfuehrung_faellig_am < CURRENT_DATE
               )                                                AS frist_ueberschritten,
+              COUNT(*) FILTER (WHERE vorlauffrist_eingehalten = false)
+                                                               AS vorlauffrist_verletzt,
               COUNT(*) FILTER (
                   WHERE status IN ('executed', 'failed')
                     AND iftsta_dispatched_at IS NULL
@@ -822,6 +953,7 @@ pub async fn stats_pg(pool: &PgPool, tenant: &str) -> anyhow::Result<SperrStats>
         overdue_pending: row.try_get("overdue_pending")?,
         iftsta_outstanding: row.try_get("iftsta_outstanding")?,
         iftsta_stuck: row.try_get("iftsta_stuck")?,
+        vorlauffrist_verletzt: row.try_get("vorlauffrist_verletzt")?,
     })
 }
 
@@ -1038,5 +1170,64 @@ mod tests {
                 "ORDER_COLUMNS is missing {field}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod vorlauf_tests {
+    use super::*;
+    use time::Month;
+
+    fn d(y: i32, m: Month, day: u8) -> Date {
+        Date::from_calendar_date(y, m, day).expect("valid date")
+    }
+
+    /// The two windows the Festlegung states, and the fact that the wire tells
+    /// them apart on its own: `DTM+203` is termingebunden, `DTM+469` is not.
+    ///
+    /// Reading both as 6 WT accepts a termingebundener Auftrag six Werktage
+    /// short — one the NB then cannot execute as instructed, because the date,
+    /// time and place are fixed.
+    #[test]
+    fn a_termingebundener_auftrag_needs_twice_the_lead() {
+        // Sperrtermin Monday 2026-11-02.
+        let sperrtermin = d(2026, Month::November, 2);
+        // 6 WT before is Friday 2026-10-23; 12 WT before is Thursday 2026-10-15.
+        let ut = d(2026, Month::October, 20);
+
+        let locker = vorlauffrist_befund(None, Some(sperrtermin), ut).expect("DTM+469");
+        assert!(locker.eingehalten, "6 WT is met on {ut}");
+        assert_eq!(locker.obligation.key, "gpke.sperrauftrag");
+
+        let strikter = vorlauffrist_befund(Some(sperrtermin), None, ut).expect("DTM+203");
+        assert!(!strikter.eingehalten, "12 WT is not met on {ut}");
+        assert_eq!(strikter.obligation.key, "gpke.sperrauftrag.termingebunden");
+        assert!(strikter.spaetester_ut < locker.spaetester_ut);
+    }
+
+    /// An Entsperrauftrag carries neither date, and § 41f Abs. 7 EnWG makes
+    /// restoration „unverzüglich" — there is no anchor to count back from, so
+    /// there is no verdict to record either.
+    #[test]
+    fn an_order_without_a_sperrtermin_has_no_vorlauffrist() {
+        assert!(vorlauffrist_befund(None, None, d(2026, Month::October, 20)).is_none());
+    }
+
+    /// GPKE Teil 2 § 3.5.1.2 Nr. 2 puts a floor on the **NB**: without a
+    /// generelle MSB-Zustimmung the Sperrtermin must leave room for the
+    /// Anfrage (3 WT before it) *and* the MSB's answer (3 WT to give it).
+    #[test]
+    fn the_earliest_sperrtermin_leaves_the_msb_its_window() {
+        // Monday 2026-11-02 + 6 WT = Tuesday 2026-11-10.
+        let heute = d(2026, Month::November, 2);
+        assert_eq!(
+            fruehester_sperrtermin_ohne_msb_zustimmung(heute),
+            d(2026, Month::November, 10)
+        );
+        // …which is exactly the Anfrage window plus the answer window.
+        assert_eq!(
+            mako_fristen::vorlauf::SPERRUNG_MSB_ANFRAGE_WT + MSB_ANTWORT_WERKTAGE,
+            6
+        );
     }
 }

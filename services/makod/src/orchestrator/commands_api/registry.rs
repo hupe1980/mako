@@ -154,6 +154,16 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(55012),
         dispatch: cmd_gpke_beendigung_zuordnung_ablehnen,
     },
+    // ── GPKE Anfrage zur Beendigung der Zuordnung (55010, NB → LFA) ───────────
+    // SD Lieferbeginn Nr. 3, „parallel zu Nr. 2". Without it the NB cannot
+    // reach `E_0623` `A50` at all — it confirms every Lieferantenwechsel
+    // without consulting the incumbent.
+    CommandDescriptor {
+        name: "gpke.beendigung-zuordnung.anfragen",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(55010),
+        dispatch: cmd_gpke_beendigung_zuordnung_anfragen,
+    },
     // ── GPKE Zuordnungs-Meldungen (PIDs 55036/55037/55038) ────────────────────
     // The three **Meldepflichten** around the Lieferbeginn: one-way messages the
     // NB owes to third parties, with no Antwortnachricht. GPKE Teil 2 § 2.1.2
@@ -177,6 +187,15 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         permitted_roles: &[Marktrolle::Nb],
         primary_pid: pid(55038),
         dispatch: cmd_gpke_zuordnung_aufheben,
+    },
+    // SD **Lieferende von NB an LF** Nr. 11 / Nr. 13, not the Lieferbeginn: the
+    // NB opens that process itself and owes the MSB — or, on `ZH1`, the MSBZ —
+    // notice that its own Zuordnung ends.
+    CommandDescriptor {
+        name: "gpke.msb-zuordnung.beenden",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(55611),
+        dispatch: cmd_gpke_msb_zuordnung_beenden,
     },
     // ── GPKE Ersatz-/Grundversorgung (§36/§38 EnWG, PIDs 55013–55015) ─────────
     // The NB assigns a contractless MaLo to the Grundversorger; the E/G

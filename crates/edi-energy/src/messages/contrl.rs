@@ -79,10 +79,8 @@ impl ContrlMessage {
         pruefidentifikator: Option<u32>,
     ) -> Self {
         let (uci, message_responses) = {
-            let borrowed: Vec<edifact_rs::Segment<'_>> =
-                segments.iter().map(|s| s.as_borrowed()).collect();
-            let uci = find_uci(&borrowed);
-            let responses = parse_message_responses(&borrowed);
+            let uci = find_uci(&segments);
+            let responses = parse_message_responses(&segments);
             (uci, responses)
         };
         Self {
@@ -130,7 +128,11 @@ impl EdifactDeserialize for ContrlMessage {
         segments: &[edifact_rs::Segment<'_>],
     ) -> Result<Self, edifact_rs::EdifactError> {
         let (message_ref, assoc_code) = MessageCore::extract_unh_fields(segments)?;
-        let owned: Vec<OwnedSegment> = segments.iter().cloned().map(OwnedSegment::from).collect();
+        let owned: Vec<OwnedSegment> = segments
+            .iter()
+            .cloned()
+            .map(edifact_rs::Segment::into_owned)
+            .collect();
         Ok(Self::from_parts(owned, message_ref, assoc_code, None))
     }
 }
@@ -269,7 +271,7 @@ const VALID_UCI_CODES: &[&str] = &["4", "7", "8"];
 fn contrl_semantic_pack() -> ProfileRulePack {
     ProfileRulePack::new("CONTRL-SEM")
         .for_message_type("CONTRL")
-        .with_stateless_rule_fn(rule_sem_contrl_syntax_code)
+        .with_rule_fn(rule_sem_contrl_syntax_code)
 }
 
 /// `SEM-CONTRL-SYNTAX-CODE-UNKNOWN` — Validate the `UCI` acknowledgement code

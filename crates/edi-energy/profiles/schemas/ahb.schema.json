@@ -336,6 +336,11 @@
           ],
           "description": "M = mandatory in every group occurrence, N = must not appear in any occurrence, O = optional (qualifier_restrictions still enforced when present), C = conditional (use conditional_rules to specify the conditions)."
         },
+        "group_required": {
+          "type": "boolean",
+          "default": false,
+          "description": "Require the segment group itself to occur. `requirement: \"M\"` fires once per group occurrence, so a message omitting the group entirely satisfies it vacuously; this adds a message-level presence check. Set it only where the AHB Bedingung marks the group Muss — turning it on for a conditional group rejects valid messages."
+        },
         "qualifier_restrictions": {
           "$ref": "#/$defs/QualifierMap",
           "description": "Qualifier restrictions applied per group instance. Maps element DE identifier to list of allowed values."

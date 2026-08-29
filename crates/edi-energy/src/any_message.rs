@@ -684,7 +684,7 @@ impl EdiEnergyMessage for AnyMessage {
     fn serialize(&self) -> Result<Vec<u8>, Error> {
         match self {
             AnyMessage::Unknown { segments, .. } => {
-                edifact_rs::segments_to_bytes_owned(segments).map_err(Error::Parse)
+                edifact_rs::segments_to_bytes(segments).map_err(Error::Parse)
             }
             _ => delegate_any!(self, m => m.serialize()),
         }

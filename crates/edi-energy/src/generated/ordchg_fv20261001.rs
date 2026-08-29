@@ -225,12 +225,14 @@ fn rule_nad_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
 
 /// Layer 3 — verify the `RFF` segment group appears at most 9999 times.
 ///
-/// Each occurrence of the trigger segment `RFF` marks the start of
-/// one group instance.  The MIG specifies a maximum of 9999 instances.
+/// Counted over the group tree, so a nested group sharing the `RFF`
+/// trigger is not charged here.  The MIG specifies a maximum of 9999 instances.
 fn rule_group_sg1_rff_max_occurrences(
+    _root: &edifact_rs::SegmentGroupIndexed<'_>,
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
+    // SG1 is not in GROUP_SCHEMA, so the tree cannot count it.
     let count = segments.iter().filter(|s| s.tag == "RFF").count();
     if count > 9_999 {
         issues.push(
@@ -246,12 +248,14 @@ fn rule_group_sg1_rff_max_occurrences(
 
 /// Layer 3 — verify the `NAD` segment group appears at most 99 times.
 ///
-/// Each occurrence of the trigger segment `NAD` marks the start of
-/// one group instance.  The MIG specifies a maximum of 99 instances.
+/// Counted over the group tree, so a nested group sharing the `NAD`
+/// trigger is not charged here.  The MIG specifies a maximum of 99 instances.
 fn rule_group_sg3_nad_max_occurrences(
+    _root: &edifact_rs::SegmentGroupIndexed<'_>,
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
+    // SG3 is not in GROUP_SCHEMA, so the tree cannot count it.
     let count = segments.iter().filter(|s| s.tag == "NAD").count();
     if count > 99 {
         issues.push(
@@ -269,9 +273,11 @@ fn rule_group_sg3_nad_max_occurrences(
 ///
 /// The MIG specifies a minimum of 1 occurrence(s) for this group.
 fn rule_group_sg1_rff_min_occurrences(
+    _root: &edifact_rs::SegmentGroupIndexed<'_>,
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
+    // SG1 is not in GROUP_SCHEMA, so the tree cannot count it.
     let count = segments.iter().filter(|s| s.tag == "RFF").count();
     if count < 1 {
         issues.push(
@@ -289,9 +295,11 @@ fn rule_group_sg1_rff_min_occurrences(
 ///
 /// The MIG specifies a minimum of 1 occurrence(s) for this group.
 fn rule_group_sg3_nad_min_occurrences(
+    _root: &edifact_rs::SegmentGroupIndexed<'_>,
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
+    // SG3 is not in GROUP_SCHEMA, so the tree cannot count it.
     let count = segments.iter().filter(|s| s.tag == "NAD").count();
     if count < 1 {
         issues.push(
@@ -328,14 +336,14 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
         for seg in segs {
             if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {
                 cursor += pos;
-            } else if expected.contains(&seg.tag) {
+            } else if expected.contains(&seg.tag.as_ref()) {
                 issues.push(
                     ValidationIssue::new(
                         ValidationSeverity::Error,
                         "segment appears out of order".to_owned(),
                     )
                     .with_rule_id(rule_id)
-                    .with_segment(seg.tag.to_owned()),
+                    .with_segment(seg.tag.as_ref()),
                 );
             }
             // Unknown tags are passed through — they get caught by the DirectoryValidator.
@@ -359,7 +367,7 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
         for seg in segs {
             // A group trigger seen at or before the cursor opens a new
             // occurrence of that group; rewind to it.
-            if DETAIL_GROUP_TRIGGERS.contains(&seg.tag) {
+            if DETAIL_GROUP_TRIGGERS.contains(&seg.tag.as_ref()) {
                 if let Some(pos) = expected.iter().position(|&t| t == seg.tag) {
                     if pos <= cursor {
                         cursor = pos;
@@ -368,14 +376,14 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
             }
             if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {
                 cursor += pos;
-            } else if expected.contains(&seg.tag) {
+            } else if expected.contains(&seg.tag.as_ref()) {
                 issues.push(
                     ValidationIssue::new(
                         ValidationSeverity::Error,
                         "segment appears out of order".to_owned(),
                     )
                     .with_rule_id(rule_id)
-                    .with_segment(seg.tag.to_owned()),
+                    .with_segment(seg.tag.as_ref()),
                 );
             }
             // Unknown tags are passed through — they get caught by the DirectoryValidator.
@@ -406,18 +414,46 @@ static MIG_ORDCHG_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDCHG-MIG-1.2")
             .for_message_type("ORDCHG")
             .for_release("1.2")
-            .with_stateless_rule_fn(rule_unh_mandatory)
-            .with_stateless_rule_fn(rule_bgm_mandatory)
-            .with_stateless_rule_fn(rule_dtm_mandatory)
-            .with_stateless_rule_fn(rule_uns_mandatory)
-            .with_stateless_rule_fn(rule_unt_mandatory)
-            .with_stateless_rule_fn(rule_rff_mandatory)
-            .with_stateless_rule_fn(rule_nad_mandatory)
-            .with_stateless_rule_fn(rule_group_sg1_rff_max_occurrences)
-            .with_stateless_rule_fn(rule_group_sg3_nad_max_occurrences)
-            .with_stateless_rule_fn(rule_group_sg1_rff_min_occurrences)
-            .with_stateless_rule_fn(rule_group_sg3_nad_min_occurrences)
-            .with_stateless_rule_fn(rule_segment_order),
+            .with_rule_fn(rule_unh_mandatory)
+            .with_rule_fn(rule_bgm_mandatory)
+            .with_rule_fn(rule_dtm_mandatory)
+            .with_rule_fn(rule_uns_mandatory)
+            .with_rule_fn(rule_unt_mandatory)
+            .with_rule_fn(rule_rff_mandatory)
+            .with_rule_fn(rule_nad_mandatory)
+            .with_named_group_rule_fn(
+                "MIG-ORDCHG-MIG-1.2-GROUP-SG1-RFF-CARD-MAX",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg1_rff_max_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_named_group_rule_fn(
+                "MIG-ORDCHG-MIG-1.2-GROUP-SG3-NAD-CARD-MAX",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg3_nad_max_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_named_group_rule_fn(
+                "MIG-ORDCHG-MIG-1.2-GROUP-SG1-RFF-CARD-MIN",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg1_rff_min_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_named_group_rule_fn(
+                "MIG-ORDCHG-MIG-1.2-GROUP-SG3-NAD-CARD-MIN",
+                |g, segs, _ctx, issues| {
+                    if g.definition == "ROOT" {
+                        rule_group_sg3_nad_min_occurrences(g, segs, issues);
+                    }
+                },
+            )
+            .with_rule_fn(rule_segment_order),
     )
 });
 
@@ -521,7 +557,7 @@ static AHB_39000_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDCHG-AHB-1.2-39000")
             .for_message_type("ORDCHG")
             .for_release("1.2")
-            .with_named_stateless_rule_fn("AHB-39000-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-39000-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -531,7 +567,7 @@ static AHB_39000_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-39000-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-39000-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -541,7 +577,7 @@ static AHB_39000_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-39000-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-39000-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -551,7 +587,7 @@ static AHB_39000_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-39000-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-39000-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -561,7 +597,7 @@ static AHB_39000_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_stateless_rule_fn(rule_ahb_39000_rff_cond_0)
+            .with_rule_fn(rule_ahb_39000_rff_cond_0)
             .with_max_issues_per_rule(50),
     )
 });
@@ -575,7 +611,7 @@ static AHB_39001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDCHG-AHB-1.2-39001")
             .for_message_type("ORDCHG")
             .for_release("1.2")
-            .with_named_stateless_rule_fn("AHB-39001-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-39001-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -585,7 +621,7 @@ static AHB_39001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-39001-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-39001-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -595,7 +631,7 @@ static AHB_39001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-39001-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-39001-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -605,7 +641,7 @@ static AHB_39001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-39001-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-39001-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -615,7 +651,7 @@ static AHB_39001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_stateless_rule_fn(rule_ahb_39001_rff_cond_0)
+            .with_rule_fn(rule_ahb_39001_rff_cond_0)
             .with_max_issues_per_rule(50),
     )
 });
@@ -629,7 +665,7 @@ static AHB_39002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
         ProfileRulePack::new("ORDCHG-AHB-1.2-39002")
             .for_message_type("ORDCHG")
             .for_release("1.2")
-            .with_named_stateless_rule_fn("AHB-39002-BGM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-39002-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "BGM",
@@ -639,7 +675,7 @@ static AHB_39002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-39002-DTM-M", |segs, issues| {
+            .with_named_rule_fn("AHB-39002-DTM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "DTM",
@@ -649,7 +685,7 @@ static AHB_39002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-39002-NAD-M", |segs, issues| {
+            .with_named_rule_fn("AHB-39002-NAD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "NAD",
@@ -659,7 +695,7 @@ static AHB_39002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-39002-RFF-M", |segs, issues| {
+            .with_named_rule_fn("AHB-39002-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
@@ -669,7 +705,7 @@ static AHB_39002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_stateless_rule_fn(rule_ahb_39002_rff_cond_0)
+            .with_rule_fn(rule_ahb_39002_rff_cond_0)
             .with_max_issues_per_rule(50),
     )
 });
@@ -702,7 +738,7 @@ pub(crate) fn ahb_rule_pack(pid: Option<Pruefidentifikator>) -> Arc<ProfileRuleP
             None => Arc::clone(&AHB_ALL_PACK_ORDCHG_1_2),
             Some(_unknown) => Arc::new(ProfileRulePack::new("unknown-pid")
                 .for_message_type("ORDCHG")
-                .with_named_stateless_rule_fn("AHB-UNKNOWN-PID", |_segs, issues| {
+                .with_named_rule_fn("AHB-UNKNOWN-PID", |_segs, issues| {
                     issues.push(ValidationIssue::new(
                         ValidationSeverity::Warning,
                         "Pruefidentifikator is not registered for this release — AHB rules were not applied",

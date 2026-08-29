@@ -154,6 +154,11 @@ struct AhbGroupRule {
     tag: String,
     /// `M` = mandatory, `N` = must not appear, `O` = optional, `C` = conditional.
     requirement: String,
+    /// Require the group itself to occur, not merely that `tag` is present
+    /// wherever it does. See the codegen struct of the same name.
+    #[serde(default)]
+    #[allow(dead_code)]
+    group_required: bool,
     /// Qualifier restrictions: element DE identifier → list of allowed values.
     #[serde(default)]
     qualifier_restrictions: BTreeMap<String, Vec<String>>,
@@ -899,6 +904,18 @@ fn check_profile(
         .map(std::string::String::as_str)
         .collect();
 
+    // A profile whose validity has lapsed is frozen: it is kept so messages from
+    // its window still resolve, and BDEW no longer publishes the MIG its code
+    // list would have to be corrected against. Reporting code-list gaps there is
+    // noise that buries the ones still worth fixing.
+    let still_in_force = mig
+        .valid_until
+        .as_deref()
+        .and_then(|d| {
+            time::Date::parse(d, &time::format_description::well_known::Iso8601::DATE).ok()
+        })
+        .is_none_or(|until| until >= time::OffsetDateTime::now_utc().date());
+
     // 7. MIG qualifier_restrictions: all referenced DE IDs should be in codelists
     check_mig_qualifiers(&mig, &codelist_keys, &rel_prefix, warnings);
 
@@ -928,7 +945,7 @@ fn check_profile(
 
         for rule in &pid.segment_rules {
             // Segment tag cross-reference
-            if !mig_tags.contains(rule.tag.as_str()) {
+            if !mig_tags.contains(&*rule.tag) {
                 warnings.push(format!(
                     "{rel_prefix}/ahb.json  PID {}: segment {:?} not defined in mig.json",
                     pid.code, rule.tag
@@ -943,13 +960,46 @@ fn check_profile(
                 ));
             }
 
-            // qualifier_restrictions: DE IDs in codelists
-            for de_id in rule.qualifier_restrictions.keys() {
-                if !codelist_keys.contains(de_id.as_str()) {
+            // qualifier_restrictions: DE IDs in codelists, and the values too.
+            //
+            // Checking only the key lets a rule demand a value the same profile's
+            // code list rejects, which no message can satisfy: the AHB layer
+            // insists on it and the code-list layer refuses it.
+            for (de_id, values) in &rule.qualifier_restrictions {
+                if !still_in_force {
+                    continue;
+                }
+                let Some(known) = codelists.lists.get(de_id.as_str()) else {
                     warnings.push(format!(
                         "{rel_prefix}/ahb.json  PID {}: segment {:?} qualifier_restriction DE {:?} not in codelists.json",
                         pid.code, rule.tag, de_id
                     ));
+                    continue;
+                };
+                report_unknown_codes(
+                    values,
+                    known,
+                    &format!(
+                        "{rel_prefix}/ahb.json  PID {}: segment {:?} qualifier_restriction DE {de_id}",
+                        pid.code, rule.tag
+                    ),
+                    warnings,
+                );
+            }
+            for (de_id, values) in &rule.required_qualifiers {
+                if !still_in_force {
+                    continue;
+                }
+                if let Some(known) = codelists.lists.get(de_id.as_str()) {
+                    report_unknown_codes(
+                        values,
+                        known,
+                        &format!(
+                            "{rel_prefix}/ahb.json  PID {}: segment {:?} required_qualifiers DE {de_id}",
+                            pid.code, rule.tag
+                        ),
+                        warnings,
+                    );
                 }
             }
 
@@ -1007,7 +1057,7 @@ fn check_profile(
             }
 
             //  element_index cross-check — warn when index exceeds segment's element count.
-            if let Some(&elem_count) = mig_element_counts.get(rule.tag.as_str()) {
+            if let Some(&elem_count) = mig_element_counts.get(&*rule.tag) {
                 for fr in &rule.field_rules {
                     if fr.element_index >= elem_count {
                         errors.push(format!(
@@ -1159,7 +1209,7 @@ fn check_profile(
 fn collect_all_tags(mig: &MigProfile) -> BTreeSet<&str> {
     let mut tags = BTreeSet::new();
     for seg in &mig.segments {
-        tags.insert(seg.tag.as_str());
+        tags.insert(&*seg.tag);
     }
     for group in &mig.segment_groups {
         collect_group_tags(group, &mut tags);
@@ -1171,7 +1221,7 @@ fn collect_all_tags(mig: &MigProfile) -> BTreeSet<&str> {
 fn collect_segment_element_counts(mig: &MigProfile) -> BTreeMap<&str, usize> {
     let mut counts = BTreeMap::new();
     for seg in &mig.segments {
-        counts.entry(seg.tag.as_str()).or_insert(seg.elements.len());
+        counts.entry(&*seg.tag).or_insert(seg.elements.len());
     }
     for group in &mig.segment_groups {
         collect_group_element_counts(group, &mut counts);
@@ -1181,7 +1231,7 @@ fn collect_segment_element_counts(mig: &MigProfile) -> BTreeMap<&str, usize> {
 
 fn collect_group_element_counts<'a>(group: &'a MigGroup, counts: &mut BTreeMap<&'a str, usize>) {
     for seg in &group.segments {
-        counts.entry(seg.tag.as_str()).or_insert(seg.elements.len());
+        counts.entry(&*seg.tag).or_insert(seg.elements.len());
     }
     for nested in &group.groups {
         collect_group_element_counts(nested, counts);
@@ -1190,10 +1240,35 @@ fn collect_group_element_counts<'a>(group: &'a MigGroup, counts: &mut BTreeMap<&
 
 fn collect_group_tags<'a>(group: &'a MigGroup, tags: &mut BTreeSet<&'a str>) {
     for seg in &group.segments {
-        tags.insert(seg.tag.as_str());
+        tags.insert(&*seg.tag);
     }
     for nested in &group.groups {
         collect_group_tags(nested, tags);
+    }
+}
+
+/// Warn for each code a rule demands that the profile's own code list omits.
+///
+/// A message cannot satisfy both layers when they disagree, so every hit is
+/// either a code list imported incompletely or an AHB rule naming a value the
+/// document does not define. Which one it is has to be read off the BDEW AHB —
+/// this only says the two disagree.
+fn report_unknown_codes(
+    values: &[String],
+    known: &[String],
+    context: &str,
+    warnings: &mut Vec<String>,
+) {
+    let missing: Vec<&str> = values
+        .iter()
+        .filter(|v| !known.iter().any(|k| k == *v))
+        .map(std::string::String::as_str)
+        .collect();
+    if !missing.is_empty() {
+        warnings.push(format!(
+            "{context} names {:?}, which codelists.json does not define —              no message can satisfy both the AHB rule and the code list",
+            missing
+        ));
     }
 }
 
