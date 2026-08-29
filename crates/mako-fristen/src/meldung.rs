@@ -36,8 +36,9 @@
 //!
 //! Those two run from the NB's **own** initiating message rather than from an
 //! inbound one, and they would need a second entry under the same PID —
-//! [`meldepflicht`] resolves one per Prüfidentifikator, so the catalogue cannot
-//! hold both windows yet. `ROADMAP.md` carries the work.
+//! [`meldepflicht`] resolves one per Prüfidentifikator, so the catalogue holds
+//! the Lieferbeginn window and a caller running one of those two Sequenzdiagramme
+//! resolves its own.
 //!
 //! [`GPKE_LIEFERENDE`] is the same shape and *is* catalogued, because 55611
 //! appears in no other Sequenzdiagramm: it is anchored on
@@ -91,7 +92,11 @@ pub struct Meldepflicht {
     pub sent_by: &'static str,
     /// The Marktrolle that receives it.
     pub sent_to: &'static str,
-    /// The inbound Prüfidentifikatoren whose arrival can open this obligation.
+    /// The Prüfidentifikatoren of the messages that open this obligation.
+    ///
+    /// Usually an arrival; under [`MeldungAnchor::EigeneAnkuendigung`] it is
+    /// this party's own outbound message, which is what opens that
+    /// Sequenzdiagramm.
     ///
     /// More than one because the Lieferbeginn runs the same Sequenzdiagramm for
     /// a verbrauchende Marktlokation, a Tranche and an erzeugende Marktlokation.
@@ -111,8 +116,9 @@ impl Meldepflicht {
     ///
     /// `anchor_at` must be the instant [`Meldepflicht::anchor`] names — the
     /// arrival of the Anmeldung for [`MeldungAnchor::Eingang`], the dispatch of
-    /// the Antwort for [`MeldungAnchor::Antwort`]. Passing the wrong one
-    /// resolves a real window against a fictional start.
+    /// the Antwort for [`MeldungAnchor::Antwort`], the dispatch of this party's
+    /// own initiating message for [`MeldungAnchor::EigeneAnkuendigung`]. Passing
+    /// the wrong one resolves a real window against a fictional start.
     #[must_use]
     pub fn due_at(&self, anchor_at: OffsetDateTime, cal: HolidayCalendar) -> OffsetDateTime {
         self.frist.due_at(anchor_at, cal)

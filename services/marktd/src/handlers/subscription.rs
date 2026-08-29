@@ -182,11 +182,7 @@ where
     Pa: PartnerRepository + Clone,
 {
     if enforcer
-        .check(
-            &claims.principal(),
-            "manage-subscription",
-            &state.tenant_gln,
-        )
+        .check(&claims.principal(), "manage-subscription", &state.tenant)
         .is_err()
     {
         return forbidden();
@@ -231,11 +227,7 @@ where
     Pa: PartnerRepository + Clone,
 {
     if enforcer
-        .check(
-            &claims.principal(),
-            "manage-subscription",
-            &state.tenant_gln,
-        )
+        .check(&claims.principal(), "manage-subscription", &state.tenant)
         .is_err()
     {
         return forbidden();
@@ -265,11 +257,7 @@ where
     Pa: PartnerRepository + Clone,
 {
     if enforcer
-        .check(
-            &claims.principal(),
-            "manage-subscription",
-            &state.tenant_gln,
-        )
+        .check(&claims.principal(), "manage-subscription", &state.tenant)
         .is_err()
     {
         return forbidden();
@@ -302,11 +290,7 @@ where
     Pa: PartnerRepository + Clone,
 {
     if enforcer
-        .check(
-            &claims.principal(),
-            "manage-subscription",
-            &state.tenant_gln,
-        )
+        .check(&claims.principal(), "manage-subscription", &state.tenant)
         .is_err()
     {
         return forbidden();
@@ -344,11 +328,7 @@ where
     Pa: PartnerRepository + Clone,
 {
     if enforcer
-        .check(
-            &claims.principal(),
-            "manage-subscription",
-            &state.tenant_gln,
-        )
+        .check(&claims.principal(), "manage-subscription", &state.tenant)
         .is_err()
     {
         return forbidden();
@@ -376,7 +356,7 @@ where
     }
 
     let ping = MarktEvent::new(
-        &state.tenant_gln,
+        &state.tenant,
         mako_events::markt::SUBSCRIPTION_TEST,
         format!("subscriptions/{}", sub.subscriber_id),
         serde_json::json!({ "message": "ping" }),

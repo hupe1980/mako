@@ -29,7 +29,7 @@ retrievable with `?at=YYYY-MM-DD`, and **every** transition emits
 | Event | PID | Operation | Effect |
 |---|---|---|---|
 | `de.mako.process.initiated` | 55001 / **55077** / 44001 | `announce_lf_next` | Sets `lf_mp_id_next` + `lf_next_lieferbeginn` (who and when). Does **not** change `lieferstatus`. |
-| `de.mako.process.completed` | 55002 / **55078** / 44002 | `confirm_supply` | `lf_mp_id ← lf_mp_id_next`, `lieferbeginn ← lf_next_lieferbeginn`, `lieferstatus = Beliefert`, clears the announcement. |
+| `de.mako.process.completed` | 55002 / **55078** / 44002 | `confirm_supply` | `lf_mp_id ← lf_mp_id_next`, `lieferbeginn ← lf_next_lieferbeginn`, `lieferstatus = Beliefert`, clears the announcement. A `lfa_lieferende` before the Zuordnungsbeginn is **Fall b** → `de.markt.versorgung.gap-detected` for the days between. |
 | `de.mako.process.completed` | 55003 / **55080** / 44003 | `clear_lf_next` | Ablehnung Anmeldung — drops the announced future Lieferant so nothing acts on a switch that will not happen. |
 | `de.mako.process.completed` | 55005 / 44005 | `end_supply` | `lieferstatus = Unbeliefert`, clears `lf_mp_id`, records the contractual `lieferende` from the process, preserves `lf_mp_id_next`; an uncovered interval → `de.markt.versorgung.gap-detected`. |
 | `de.mako.process.completed` | 55013 / 44013 | `begin_eog_supply` | `lieferstatus = Ersatzversorgung`/`Grundversorgung`, `eog_seit` set (the **§ 38 Abs. 4 EnWG** three-month anchor); emits `de.markt.versorgung.eog-begonnen`. |
@@ -59,10 +59,18 @@ with no announcement is a no-op, with no version bump, no history row and no
 
 ### A supply gap is an interval, not an absence
 
-`de.markt.versorgung.gap-detected` fires when the Lieferende leaves an **uncovered
-interval** — including an announced Lieferbeginn later than the day after the Lieferende,
-which § 38 Abs. 1 EnWG treats exactly like an open-ended gap. The event carries `gap_from`
-and `gap_until` (`null` when no successor is announced).
+`de.markt.versorgung.gap-detected` fires on an **uncovered interval**, and two
+routes lead to one:
+
+- a **Lieferende** whose successor starts later than the day after it — which
+  § 38 Abs. 1 EnWG treats exactly like an open-ended gap;
+- a **Bestätigung Anmeldung** in **Fall b**, where the Altlieferant answered the
+  Abmeldeanfrage with its own earlier Lieferendedatum (`E_0624` `A34`) while the
+  confirmation stands at the Zuordnungsbeginn the new supplier asked for.
+
+Neither route's message states both ends — the answer states one and the
+Anmeldung the other — so this projection is where they meet. The event carries
+`gap_from` and `gap_until` (`null` only for an open-ended gap).
 
 ---
 
@@ -75,7 +83,7 @@ and `gap_until` (`null` when no successor is announced).
 | **Database** | PostgreSQL 15+ (sqlx 0.8). Requires the `btree_gist` extension (created by the migration) |
 | **Auth** | OIDC/JWT (RS256 / ES256 / PS256), JWKS background refresh |
 | **Authorization** | Cedar ABAC (`policies/marktd.cedar`) — per-tenant, role-gated, coverage-tested |
-| **API spec** | OpenAPI 3.1 at `/swagger-ui/` and `/api-docs/openapi.json` |
+| **API spec** | OpenAPI 3.1 — Swagger UI at `/api/v1/docs/`, spec at `/api/v1/openapi.json` (the same pair `makod` serves) |
 | **Events** | Outbound CloudEvents 1.0 (`application/cloudevents+json`) + HMAC-SHA256, durable two-phase fan-out |
 | **Typed BO4E API** | `GET` responses are canonical `rubo4e::current` types — `Marktlokation`, `Messlokation`, `Zaehler`, `Geraet`. Every `PUT` validates `_typ` and rejects out-of-schema enum values (422). |
 | **Timestamps** | RFC 3339 throughout (`2026-01-01T00:00:00Z`); wall-clock tariff windows are `HH:MM:SS` |

@@ -47,8 +47,8 @@ const EVENT_GRACE: Duration = Duration::from_secs(3600);
 /// late a breach is recorded: the breach instant is the deadline's, resolved
 /// and journaled when the obligation was registered.
 pub fn spawn(runtime: Arc<Runtime>, every: Duration, shutdown: CancellationToken) {
-    // agentplane 0.11: one `Duration` on the public surface — `sweep` takes
-    // `std::time::Duration` (unsigned), so the conversion shim is gone.
+    // `sweep` takes `std::time::Duration` (unsigned) — one `Duration` on the
+    // public surface, so no conversion shim.
     let grace = EVENT_GRACE;
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(every);

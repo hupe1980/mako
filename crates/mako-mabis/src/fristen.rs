@@ -10,8 +10,9 @@
 //! - **Kap. 9.8.2 Nr. 1** — „Prüfmitteilung BG-SZR (Kategorie B)", Frist **„–"**.
 //!   The NB *may* („kann") answer positively or negatively. Every other
 //!   Prüfmitteilung use case in the document carries the same empty Frist cell.
-//! - **Kap. 13.8.2** — the section the 1-Werktag claim used to cite — defines no
-//!   BKV answer at all. Its two rows are the **BIKO's own** dispatch Fristen
+//! - **Kap. 13.8.2** — the only other section a Prüfmitteilungs-Frist could come
+//!   from — defines no BKV answer at all. Its two rows are the **BIKO's own**
+//!   dispatch Fristen
 //!   (18. WT vorläufig / 42. WT endgültig) and „Abrechnungssummenzeitreihe
 //!   fehlerhaft — im Bedarfsfall", which has no Frist either.
 //!

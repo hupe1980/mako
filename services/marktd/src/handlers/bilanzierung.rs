@@ -27,7 +27,7 @@ use tracing::info;
 
 use mako_service::cedar::CedarEnforcer;
 
-use crate::handlers::{Claims, MdmErrorResponse, TenantGln};
+use crate::handlers::{Claims, MdmErrorResponse, Tenant};
 use crate::pg::PgBilanzierungRepository;
 
 /// Extension alias — concrete type so AFIT dispatches statically.
@@ -60,7 +60,7 @@ pub async fn put_bilanzierung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<BilanzierungRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(malo_id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
@@ -129,7 +129,7 @@ pub async fn get_bilanzierung_at(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<BilanzierungRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(malo_id): Path<String>,
     Query(q): Query<AtQuery>,
 ) -> impl IntoResponse {
@@ -173,7 +173,7 @@ pub async fn get_bilanzierung_history(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<BilanzierungRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(malo_id): Path<String>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-bilanzierung", &tenant) {

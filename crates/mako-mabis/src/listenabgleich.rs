@@ -67,9 +67,27 @@
 //!
 //! ```text
 //! New
-//!  └─ ListeErhalten ─┬─ (validation failed) ─→ ValidationFailed  (terminal)
-//!                    └─ KorrekturGesendet ───→ Abgeglichen       (terminal)
+//!  └─ ListeErhalten ─┬─ (validation failed) ────→ ValidationFailed  (terminal)
+//!                    ├─ KorrekturGesendet ──────→ Abgeglichen       (terminal)
+//!                    └─ GesamtAblehnungGesendet ─→ Abgelehnt        (terminal)
 //! ```
+//!
+//! # Two disjoint refusals, and only one of them carries positions
+//!
+//! Every Clearinglisten-Tree publishes two clusters. A
+//! **Korrekturliste** disputes named Marktlokationen — one entry each — and says
+//! the list was assessed. An **Ablehnung der gesamten Liste** carries *no*
+//! positions and demands a new list: the Abonnement was never ordered, the
+//! version is not admitted, the Zeitraum is implausible, or (`E_0070`) the list
+//! arrived outside the Clearingphase DZÜ.
+//!
+//! They are not interchangeable. Answering an unassessable list with an empty
+//! Korrekturliste states „reconciled, nothing to correct" — the opposite of what
+//! happened — and answering an assessable one with a whole-list refusal throws
+//! away every position the receiver did check. The whole-list Prüfschritte
+//! therefore run **first and to completion**
+//! ([`mako_pruefung::mabis::pruefe_liste`]), and which command the caller sends
+//! is checked against what that walk decides rather than trusted.
 
 use mako_engine::{
     error::WorkflowError,
@@ -235,6 +253,16 @@ pub enum ListenabgleichEvent {
         /// unchanged, which is still an obligatory reply.
         korrekturen: u32,
     },
+    /// The list was refused **entire** — it carried no assessable positions.
+    GesamtAblehnungGesendet {
+        /// Prüfidentifikator of the reply actually sent. The same PID a
+        /// Korrekturliste rides; the cluster is what differs.
+        antwort_pid: Pruefidentifikator,
+        /// The whole-list Antwortcode out of the tree the sender's role names.
+        antwortcode: String,
+        /// The Prüfschritt that refused it, for the audit trail.
+        pruefschritt: u16,
+    },
     /// Inbound message failed AHB validation (terminal).
     ValidationFailed {
         /// Human-readable summary of validation errors.
@@ -247,6 +275,7 @@ impl EventPayload for ListenabgleichEvent {
         match self {
             Self::ListeErhalten { .. } => "MabisListeErhalten",
             Self::KorrekturGesendet { .. } => "MabisKorrekturGesendet",
+            Self::GesamtAblehnungGesendet { .. } => "MabisGesamtAblehnungGesendet",
             Self::ValidationFailed { .. } => "MabisListenabgleichValidationFailed",
         }
     }
@@ -270,6 +299,16 @@ pub enum ListenabgleichState {
         /// Number of corrected positions reported.
         korrekturen: u32,
     },
+    /// The list was refused entire and a new one is owed (terminal).
+    ///
+    /// Distinct from [`Self::Abgeglichen`] with zero corrections, which says the
+    /// opposite: that the list was assessed and agreed with.
+    Abgelehnt {
+        /// Which list was refused.
+        typ: ListenTyp,
+        /// The whole-list Antwortcode sent.
+        antwortcode: String,
+    },
     /// Inbound message failed AHB validation (terminal).
     ValidationFailed {
         /// Validation error summary.
@@ -285,6 +324,7 @@ impl ListenabgleichState {
             Self::New => "New",
             Self::ListeErhalten(_) => "ListeErhalten",
             Self::Abgeglichen { .. } => "Abgeglichen",
+            Self::Abgelehnt { .. } => "Abgelehnt",
             Self::ValidationFailed { .. } => "ValidationFailed",
         }
     }
@@ -325,9 +365,67 @@ pub enum ListenabgleichCommand {
         /// of whatever the sender filed.
         positionen: Vec<Korrekturposition>,
     },
+    /// Refuse the **whole list** and demand a new one.
+    ///
+    /// The cluster that carries no positions: the Abonnement was never ordered,
+    /// the version is not admitted, the Zeitraum is implausible, the MaBiS-ZP
+    /// does not match, or the list arrived outside the Clearingphase DZÜ. Each
+    /// fact is `Option<bool>` because „the caller does not know" is a third
+    /// answer, and the tree escalates on it rather than guessing — a wrong
+    /// guess here refuses a list the receiver could have reconciled.
+    ///
+    /// The walk decides, not the command name: a caller that asks to refuse a
+    /// list whose whole-list Prüfschritte all pass is rejected, because the
+    /// answer it owes is a Korrekturliste.
+    SendGesamtAblehnung {
+        /// The market role that distributed the list (`"NB"`, `"ÜNB"`), which
+        /// selects the tree exactly as it does for a Korrekturliste.
+        sender_rolle: String,
+        /// „Wurde das Abonnement bestellt?"
+        abonnement_bestellt: Option<bool>,
+        /// „Ist der Zeitraum plausibel?"
+        zeitraum_plausibel: Option<bool>,
+        /// „Entspricht der MaBiS-ZP dem angefragten MaBiS-ZP?"
+        mabis_zp_passt: Option<bool>,
+        /// „Ist die Version zugelassen?"
+        version_zugelassen: Option<bool>,
+        /// „Liegt der Eingang innerhalb der Clearingphase DZÜ?" (`E_0070`).
+        innerhalb_clearingphase: Option<bool>,
+    },
 }
 
 impl CommandPayload for ListenabgleichCommand {}
+
+/// Which tree answers this list, and under which Prüfidentifikator.
+///
+/// **The EBD follows from who *sent* the list, not from the answer PID.** 55066
+/// is answered out of `E_0047` when the NB distributed the list and out of
+/// `E_0004` when the ÜNB did, and their codes carry different numbers — so a
+/// sender role the family does not publish is refused rather than defaulted.
+/// Both reply legs resolve it the same way; a second spelling would let the
+/// Korrekturliste and the whole-list refusal answer out of different trees.
+fn answer_shape<'a>(
+    data: &ListenabgleichData,
+    sender_rolle: &str,
+) -> Result<(&'a ListenFamilie, &'static str, Pruefidentifikator), WorkflowError> {
+    let familie = familie_for(data.pruefidentifikator.as_u32()).ok_or_else(|| {
+        WorkflowError::rejected(format!(
+            "no family for recorded list {}",
+            data.pruefidentifikator
+        ))
+    })?;
+    let antwort_pid = Pruefidentifikator::new(familie.antwort).map_err(|e| {
+        WorkflowError::rejected(format!("invalid Antwort PID {}: {e}", familie.antwort))
+    })?;
+    let ebd = familie.antwort_ebd(sender_rolle).ok_or_else(|| {
+        WorkflowError::rejected(format!(
+            "{sender_rolle} verteilt die Liste {} nicht; zulässig: {:?}",
+            familie.liste,
+            familie.sender_rollen().collect::<Vec<_>>()
+        ))
+    })?;
+    Ok((familie, ebd, antwort_pid))
+}
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
@@ -364,6 +462,14 @@ impl Workflow for MabisListenabgleichWorkflow {
                 ListenabgleichState::ListeErhalten(d) => ListenabgleichState::Abgeglichen {
                     typ: d.typ,
                     korrekturen: *korrekturen,
+                },
+                other => other,
+            },
+
+            ListenabgleichEvent::GesamtAblehnungGesendet { antwortcode, .. } => match state {
+                ListenabgleichState::ListeErhalten(d) => ListenabgleichState::Abgelehnt {
+                    typ: d.typ,
+                    antwortcode: antwortcode.clone(),
                 },
                 other => other,
             },
@@ -430,28 +536,7 @@ impl Workflow for MabisListenabgleichWorkflow {
                     )));
                 };
 
-                let familie = familie_for(data.pruefidentifikator.as_u32()).ok_or_else(|| {
-                    WorkflowError::rejected(format!(
-                        "no family for recorded list {}",
-                        data.pruefidentifikator
-                    ))
-                })?;
-
-                let antwort_pid = Pruefidentifikator::new(familie.antwort).map_err(|e| {
-                    WorkflowError::rejected(format!("invalid Antwort PID {}: {e}", familie.antwort))
-                })?;
-
-                // The EBD follows from who *sent* the list, not from the answer
-                // PID — 55066 is answered out of `E_0047` (NB) or `E_0004`
-                // (ÜNB), whose Korrekturgründe carry different code numbers.
-                let ebd = familie.antwort_ebd(&sender_rolle).ok_or_else(|| {
-                    WorkflowError::rejected(format!(
-                        "{sender_rolle} verteilt die Liste {} nicht; \
-                         zulässig: {:?}",
-                        familie.liste,
-                        familie.sender_rollen().collect::<Vec<_>>()
-                    ))
-                })?;
+                let (familie, ebd, antwort_pid) = answer_shape(data, &sender_rolle)?;
 
                 // `SendKorrektur` *is* the Korrekturlisten leg: the caller has
                 // already established that the list is assessable. So resolve
@@ -498,6 +583,82 @@ impl Workflow for MabisListenabgleichWorkflow {
                     deadlines: vec![],
                 })
             }
+
+            ListenabgleichCommand::SendGesamtAblehnung {
+                sender_rolle,
+                abonnement_bestellt,
+                zeitraum_plausibel,
+                mabis_zp_passt,
+                version_zugelassen,
+                innerhalb_clearingphase,
+            } => {
+                let ListenabgleichState::ListeErhalten(data) = state else {
+                    return Err(WorkflowError::rejected(format!(
+                        "SendGesamtAblehnung requires state ListeErhalten, got {}",
+                        state.label()
+                    )));
+                };
+                let (familie, ebd, antwort_pid) = answer_shape(data, &sender_rolle)?;
+
+                // The walk decides. Passing **no** positions is what makes this
+                // a whole-list question: `pruefe_liste` runs the Gesamt-
+                // Prüfschritte to completion before it would look at any.
+                let pruefung = mako_pruefung::mabis::ListenPruefung {
+                    abonnement_bestellt,
+                    zeitraum_plausibel,
+                    mabis_zp_passt,
+                    version_zugelassen,
+                    innerhalb_clearingphase,
+                    positionen: &[],
+                };
+                let antwort = match mako_pruefung::mabis::pruefe_liste(ebd, &pruefung) {
+                    mako_pruefung::mabis::ListenEntscheidung::GesamtAblehnung(a) => *a,
+                    // Every whole-list Prüfschritt passed, so the list *is*
+                    // assessable and what it is owed is a Korrekturliste —
+                    // refusing it entire would discard positions the receiver
+                    // could reconcile.
+                    mako_pruefung::mabis::ListenEntscheidung::Korrekturliste(_) => {
+                        return Err(WorkflowError::rejected(format!(
+                            "{ebd} refuses no whole-list Prüfschritt on these facts — the                              Liste {} is assessable and owes a Korrekturliste",
+                            familie.liste
+                        )));
+                    }
+                    mako_pruefung::mabis::ListenEntscheidung::Eskalation {
+                        grund,
+                        pruefschritt,
+                    } => {
+                        return Err(WorkflowError::rejected(format!(
+                            "{ebd} Prüfschritt {pruefschritt} is unanswered: {grund}"
+                        )));
+                    }
+                };
+
+                let outbox = PendingOutbox::new(
+                    "UTILMD",
+                    data.sender.as_str(),
+                    serde_json::json!({
+                        "pid": familie.antwort,
+                        "ebd": ebd,
+                        // No positions, and the count says so: an
+                        // AblehnungDerGesamtenListe names no Marktlokation.
+                        "korrekturen": 0,
+                        "positionen": [],
+                        "antwortcode": antwort.code,
+                        "bedeutung": antwort.bedeutung,
+                        "billing_period": data.billing_period.as_str(),
+                    }),
+                );
+
+                Ok(WorkflowOutput {
+                    events: vec![ListenabgleichEvent::GesamtAblehnungGesendet {
+                        antwort_pid,
+                        antwortcode: antwort.code.clone(),
+                        pruefschritt: antwort.pruefschritt,
+                    }],
+                    outbox: vec![outbox],
+                    deadlines: vec![],
+                })
+            }
         }
     }
 }
@@ -526,6 +687,19 @@ mod tests {
         }
     }
 
+    /// The whole-list facts, all answered „ja" unless overridden — the shape of
+    /// a list that is assessable.
+    fn ablehnung(rolle: &str) -> ListenabgleichCommand {
+        ListenabgleichCommand::SendGesamtAblehnung {
+            sender_rolle: rolle.to_owned(),
+            abonnement_bestellt: Some(true),
+            zeitraum_plausibel: Some(true),
+            mabis_zp_passt: Some(true),
+            version_zugelassen: Some(true),
+            innerhalb_clearingphase: Some(true),
+        }
+    }
+
     fn receive(pid: u32) -> ListenabgleichCommand {
         ListenabgleichCommand::ReceiveListe {
             pid: Pruefidentifikator::new(pid).expect("valid PID"),
@@ -536,6 +710,26 @@ mod tests {
             validation_passed: true,
             validation_errors: vec![],
         }
+    }
+
+    /// The state after driving `commands` from `New`.
+    fn after(commands: &[ListenabgleichCommand]) -> ListenabgleichState {
+        let mut state = ListenabgleichState::default();
+        for cmd in commands {
+            let out = MabisListenabgleichWorkflow::handle(&state, cmd.clone())
+                .expect("the setup commands must succeed");
+            state = fold_from(state, &out.events);
+        }
+        state
+    }
+
+    fn fold_from(
+        start: ListenabgleichState,
+        events: &[ListenabgleichEvent],
+    ) -> ListenabgleichState {
+        events
+            .iter()
+            .fold(start, MabisListenabgleichWorkflow::apply)
     }
 
     fn fold(events: &[ListenabgleichEvent]) -> ListenabgleichState {
@@ -567,8 +761,8 @@ mod tests {
 
     #[test]
     fn the_lieferantenclearingliste_is_not_record_only() {
-        // It used to sit with the record-only lists; the PID overview gives it
-        // a Prozessschritt-3 Korrekturliste, so an LF owes 55066 back.
+        // The PID overview gives it a Prozessschritt-3 Korrekturliste, so an
+        // LF owes 55066 back — it does not belong with the record-only lists.
         assert!(familie_for(55065).is_some());
         assert!(!crate::clearingliste::CLEARINGLISTE_PIDS.contains(&55065));
     }
@@ -725,5 +919,144 @@ mod tests {
         let out = MabisListenabgleichWorkflow::handle(&ListenabgleichState::New, cmd).unwrap();
         assert!(out.outbox.is_empty());
         assert_eq!(fold(&out.events).label(), "ValidationFailed");
+    }
+
+    // ── The whole-list refusal ────────────────────────────────────────────────
+
+    /// A list nobody ordered is refused **entire**, and the answer carries no
+    /// positions at all.
+    ///
+    /// Answering it with an empty Korrekturliste would say „assessed, nothing to
+    /// correct" — the opposite statement, on a list the receiver never agreed to
+    /// receive. The ÜNB's Lieferantenclearingliste is answered out of `E_0004`,
+    /// which is the tree that asks about the Abonnement.
+    #[test]
+    fn an_unordered_abonnement_refuses_the_whole_list() {
+        let state = after(&[receive(55_065)]);
+        let out = MabisListenabgleichWorkflow::handle(
+            &state,
+            ListenabgleichCommand::SendGesamtAblehnung {
+                sender_rolle: "ÜNB".to_owned(),
+                abonnement_bestellt: Some(false),
+                zeitraum_plausibel: Some(true),
+                mabis_zp_passt: Some(true),
+                version_zugelassen: Some(true),
+                innerhalb_clearingphase: Some(true),
+            },
+        )
+        .expect("an unordered Abonnement refuses the list");
+
+        let payload = &out.outbox[0].payload;
+        assert_eq!(payload["korrekturen"], 0);
+        assert_eq!(payload["positionen"].as_array().map(Vec::len), Some(0));
+        // The code must come out of the whole-list cluster. A Korrekturgrund
+        // code carried on a message with no positions would name a
+        // Marktlokation the message does not contain.
+        let code = payload["antwortcode"]
+            .as_str()
+            .expect("a code was resolved");
+        let entry =
+            mako_pruefung::mabis::lookup(payload["ebd"].as_str().expect("the tree is named"), code)
+                .expect("the tree publishes the code it answered with");
+        assert_eq!(
+            entry.cluster,
+            mako_pruefung::codes::Cluster::AblehnungDerGesamtenListe,
+            "{code} is not a whole-list refusal"
+        );
+
+        let next = out
+            .events
+            .iter()
+            .fold(state.clone(), MabisListenabgleichWorkflow::apply);
+        assert_eq!(next.label(), "Abgelehnt");
+    }
+
+    /// A list every whole-list Prüfschritt passes is **assessable**, and what it
+    /// owes is a Korrekturliste. Refusing it entire would discard every position
+    /// the receiver did check, so the tree refuses the caller instead.
+    #[test]
+    fn an_assessable_list_may_not_be_refused_entire() {
+        let state = after(&[receive(55_065)]);
+        let err = MabisListenabgleichWorkflow::handle(&state, ablehnung("NB"))
+            .expect_err("an assessable list owes a Korrekturliste");
+        assert!(
+            format!("{err}").contains("Korrekturliste"),
+            "the refusal must say what the list is owed instead: {err}"
+        );
+    }
+
+    /// „The caller cannot answer this Prüfschritt" is a third answer, and the
+    /// tree escalates on it rather than guessing — a guess refuses a list the
+    /// receiver could have reconciled.
+    #[test]
+    fn an_unanswered_pruefschritt_escalates_rather_than_refusing() {
+        let state = after(&[receive(55_065)]);
+        let err = MabisListenabgleichWorkflow::handle(
+            &state,
+            ListenabgleichCommand::SendGesamtAblehnung {
+                sender_rolle: "ÜNB".to_owned(),
+                abonnement_bestellt: None,
+                zeitraum_plausibel: Some(true),
+                mabis_zp_passt: Some(true),
+                version_zugelassen: Some(true),
+                innerhalb_clearingphase: Some(true),
+            },
+        )
+        .expect_err("an unanswered Prüfschritt is not a refusal");
+        assert!(
+            format!("{err}").contains("unanswered"),
+            "the caller must be told which question is open: {err}"
+        );
+    }
+
+    /// **A tree only refuses on the questions it asks.** One Prüfidentifikator,
+    /// two trees: `E_0004` (ÜNB) asks about the Abonnement, `E_0047` (NB) asks
+    /// about Zeitraum, MaBiS-ZP and Version. A caller stating „the Abonnement
+    /// was never ordered" on the NB's list is not refusing anything that tree
+    /// publishes, so its list stays assessable — which is the answer, not an
+    /// oversight, and the reason the facts are not collapsed into one flag.
+    #[test]
+    fn a_fact_the_tree_does_not_ask_refuses_nothing() {
+        let state = after(&[receive(55_065)]);
+        let err = MabisListenabgleichWorkflow::handle(
+            &state,
+            ListenabgleichCommand::SendGesamtAblehnung {
+                sender_rolle: "NB".to_owned(),
+                abonnement_bestellt: Some(false),
+                zeitraum_plausibel: Some(true),
+                mabis_zp_passt: Some(true),
+                version_zugelassen: Some(true),
+                innerhalb_clearingphase: Some(true),
+            },
+        )
+        .expect_err("E_0047 asks no Abonnement question");
+        assert!(format!("{err}").contains("Korrekturliste"), "{err}");
+
+        // …and the question that tree *does* ask refuses it.
+        let out = MabisListenabgleichWorkflow::handle(
+            &state,
+            ListenabgleichCommand::SendGesamtAblehnung {
+                sender_rolle: "NB".to_owned(),
+                abonnement_bestellt: None,
+                zeitraum_plausibel: Some(true),
+                mabis_zp_passt: Some(true),
+                version_zugelassen: Some(false),
+                innerhalb_clearingphase: Some(true),
+            },
+        )
+        .expect("an inadmissible version refuses the list");
+        assert_eq!(out.outbox[0].payload["ebd"], "E_0047");
+        assert_eq!(out.outbox[0].payload["korrekturen"], 0);
+    }
+
+    /// The whole-list refusal resolves its tree from the **sender's role**, the
+    /// same way a Korrekturliste does: one Prüfidentifikator, two disjoint code
+    /// spaces, and a role the family does not publish is refused.
+    #[test]
+    fn the_refusal_resolves_its_tree_from_the_sender_role() {
+        let state = after(&[receive(55_065)]);
+        let err = MabisListenabgleichWorkflow::handle(&state, ablehnung("MSB"))
+            .expect_err("an MSB distributes no Clearingliste");
+        assert!(format!("{err}").contains("MSB"), "{err}");
     }
 }

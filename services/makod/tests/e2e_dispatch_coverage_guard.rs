@@ -70,13 +70,12 @@ const SEND_ONLY_PIDS: &[(u32, &str, &str)] = &[
     ),
     // No MaBiS MSCONS PID is send-only any more.
     //
-    // 13003, 13020 and 13023 used to be: a participant that *files* a
-    // Summenzeitreihe also receives one — the BIKO forwards it, and the BKV, NB
-    // and ÜNB each sit on the receiving end of some series in Tabelle 1 — so
-    // filing them as outbound meant every inbound version was dropped without a
-    // trace. 13010–13012 likewise: the LF and the MSB receive the normierte
-    // Profile and may answer with an ORDERS 17211 Reklamation, which is what
-    // `mabis-profile` exists for.
+    // A participant that *files* a Summenzeitreihe also receives one — the
+    // BIKO forwards it, and the BKV, NB and ÜNB each sit on the receiving end
+    // of some series in Tabelle 1 — so filing 13003 / 13020 / 13023 as outbound
+    // would drop every inbound version without a trace. 13010–13012 likewise:
+    // the LF and the MSB receive the normierte Profile and may answer with an
+    // ORDERS 17211 Reklamation, which is what `mabis-profile` exists for.
     // ── GPKE Datenabruf ORDERS Anfragen (→ MSB) ──────────────────────────────
     // mako is the requester; it ingests only the ORDRSP answers. An MSB-side
     // receiver for these does not exist.
@@ -448,9 +447,9 @@ async fn every_registered_pid_reaches_a_dispatch_arm() {
 ///
 /// The denominator counts only PIDs that **could** have a fixture. A PID with
 /// no AHB profile entry cannot: `generate-fixtures` skips it, so there is
-/// nothing to find. Counting those would let the AHB backlog dilute the ratio —
-/// registering a batch of unprofiled PIDs would trip this guard even though not
-/// a single fixture had been lost, which is the opposite of what it watches for.
+/// nothing to find. Counting those would let the AHB backlog dilute the ratio:
+/// registering a batch of unprofiled PIDs would trip this guard with every
+/// fixture still in place, which is the opposite of what it watches for.
 #[tokio::test]
 async fn dispatch_coverage_is_not_silently_shrinking() {
     let platform = edi_energy::Platform::with_all_profiles();

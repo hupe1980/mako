@@ -19,7 +19,7 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::warn;
 
-use super::{Claims, TenantGln};
+use super::{Claims, Tenant};
 
 /// Query parameters for `GET /admin/events`.
 #[derive(Debug, Deserialize)]
@@ -38,7 +38,7 @@ pub struct EventLogQuery {
 pub async fn list_event_log(
     Extension(pool): Extension<PgPool>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Query(q): Query<EventLogQuery>,
 ) -> impl IntoResponse {

@@ -92,9 +92,15 @@ pub fn run(workspace_root: &Path) -> bool {
         // construction, and the taint gate refuses a mutating sink with
         // untrusted arguments — after the human approved it, which is worse
         // than refusing before.
-        let planned = src.lines().any(|l| l.trim() == "kind: planned");
+        let Some((planned, manifest_grants)) = parse_manifest(&src) else {
+            missing.push(format!(
+                "{name}: not loadable as an agentplane manifest — the runtime would refuse it, \
+                 so its grants cannot be checked"
+            ));
+            continue;
+        };
 
-        for grant in parse_grants(&src) {
+        for grant in manifest_grants {
             grants += 1;
             let key = format!("{}/{}", grant.server, grant.tool);
             // agentplane's ToolId refuses `-` in a server component (hyphens
@@ -161,7 +167,51 @@ pub fn run(workspace_root: &Path) -> bool {
     false
 }
 
-/// One `- ref: tool://server/tool` block from a manifest.
+/// The two facts this check reads out of a specialist manifest.
+///
+/// Parsed as YAML rather than scanned line by line, because both facts are
+/// **structural**: `kind` decides whether a mutating grant is dispatchable at
+/// all, and `mutates` / `requires_approval` belong to one grant each. A scanner
+/// reads `kind: planned` wherever it appears — including inside a block-scalar
+/// prompt — and attributes a `mutates:` line to whichever `- ref:` it saw last,
+/// whatever the nesting. Either way a `tool-calling` agent can read as `planned`
+/// and pass with a grant the runtime's taint gate will always refuse, which is
+/// exactly the drift this check exists to catch.
+///
+/// Only the fields the check uses are named; everything else in the manifest is
+/// ignored, so a manifest gaining a field does not break the parse.
+#[derive(serde::Deserialize)]
+struct Manifest {
+    #[serde(default)]
+    spec: Spec,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct Spec {
+    #[serde(default)]
+    execution: Execution,
+    #[serde(default)]
+    tools: Vec<ToolGrant>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct Execution {
+    /// `planned` or `tool-calling`.
+    #[serde(default)]
+    kind: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ToolGrant {
+    #[serde(rename = "ref")]
+    reference: String,
+    #[serde(default)]
+    mutates: bool,
+    #[serde(default)]
+    requires_approval: bool,
+}
+
+/// One `tool://server/tool` grant, resolved.
 struct Grant {
     server: String,
     tool: String,
@@ -169,29 +219,30 @@ struct Grant {
     requires_approval: bool,
 }
 
-fn parse_grants(src: &str) -> Vec<Grant> {
-    let mut out: Vec<Grant> = Vec::new();
-    for line in src.lines() {
-        let trimmed = line.trim_start();
-        if let Some(rest) = trimmed.strip_prefix("- ref: tool://") {
-            let rest = rest.trim();
-            if let Some((server, tool)) = rest.split_once('/') {
-                out.push(Grant {
-                    server: server.to_owned(),
-                    tool: tool.to_owned(),
-                    mutates: false,
-                    requires_approval: false,
-                });
-            }
-        } else if let Some(grant) = out.last_mut() {
-            if let Some(v) = trimmed.strip_prefix("mutates:") {
-                grant.mutates = v.trim() == "true";
-            } else if let Some(v) = trimmed.strip_prefix("requires_approval:") {
-                grant.requires_approval = v.trim() == "true";
-            }
-        }
-    }
-    out
+/// A manifest's execution kind and its tool grants.
+///
+/// A file that does not parse yields `None`: `agentplane` would refuse to load
+/// it, so there is nothing here to check and passing it silently would be the
+/// worse answer.
+fn parse_manifest(src: &str) -> Option<(bool, Vec<Grant>)> {
+    let manifest: Manifest = serde_yaml_ng::from_str(src).ok()?;
+    let planned = manifest.spec.execution.kind == "planned";
+    let grants = manifest
+        .spec
+        .tools
+        .into_iter()
+        .filter_map(|g| {
+            let rest = g.reference.strip_prefix("tool://")?;
+            let (server, tool) = rest.split_once('/')?;
+            Some(Grant {
+                server: server.to_owned(),
+                tool: tool.to_owned(),
+                mutates: g.mutates,
+                requires_approval: g.requires_approval,
+            })
+        })
+        .collect();
+    Some((planned, grants))
 }
 
 /// `server/tool` → whether the server declares it read-only.
@@ -222,32 +273,18 @@ fn mcp_tools(workspace_root: &Path) -> BTreeMap<String, bool> {
     out
 }
 
-/// The documented size of the agent surface, checked against the source.
-///
-/// `README.md`, the landing page and `concepts/MARKET_LANDSCAPE.md` each state
-/// how many services expose an MCP server and how many tools they add up to.
-/// Those are the numbers a reader uses to decide whether the platform is worth
-/// looking at, and nothing regenerates them — the previous figure ("14 of 17")
-/// was wrong by one service and had been for a while, which is what a count with
-/// no guard does.
-///
-/// Checked here rather than in a command of its own because this file already
-/// walks every `#[tool(...)]` in the workspace; a second walker would be a
-/// second definition of "an MCP tool" waiting to disagree with this one.
-/// How many MCP **prompts** the platform publishes, and across how many servers.
+/// How many MCP **prompts** each service publishes.
 ///
 /// A context grant is not a tool grant, so `check-tool-grants` would not
 /// naturally count these — but they are the other half of what a specialist is
-/// given, they are stated in 26 manifest comments and in the README, and nothing
-/// regenerated the figure. It read "fifty of them across thirteen servers" while
-/// the real numbers were 57 and 15, in every one of those places at once.
-fn prompt_count(workspace_root: &Path) -> (usize, usize) {
+/// given, they are stated in 26 manifest comments and across the docs, and
+/// nothing else regenerates the figure.
+fn prompts_per_service(workspace_root: &Path) -> BTreeMap<String, usize> {
+    let mut out = BTreeMap::new();
     let services = workspace_root.join("services");
     let Ok(entries) = std::fs::read_dir(&services) else {
-        return (0, 0);
+        return out;
     };
-    let mut total = 0usize;
-    let mut serving = 0usize;
     for entry in entries.flatten() {
         let mut here = 0usize;
         for tail in ["src/mcp_server.rs", "src/api/mcp_server.rs"] {
@@ -256,11 +293,10 @@ fn prompt_count(workspace_root: &Path) -> (usize, usize) {
             }
         }
         if here > 0 {
-            serving += 1;
-            total += here;
+            out.insert(entry.file_name().to_string_lossy().into_owned(), here);
         }
     }
-    (total, serving)
+    out
 }
 
 /// Every `tool://` grant across the specialist manifests.
@@ -278,10 +314,244 @@ fn grant_count(workspace_root: &Path) -> usize {
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "yaml"))
         .filter_map(|p| std::fs::read_to_string(p).ok())
-        .map(|src| parse_grants(&src).len())
+        .map(|src| parse_manifest(&src).map_or(0, |(_, grants)| grants.len()))
         .sum()
 }
 
+/// How many MCP tools and prompts each individual service exposes, as its own
+/// docs state it.
+///
+/// A service's tool count is the first thing an integrator reads about it, and
+/// it appears in as many as five places per service — the README's service
+/// table, the landing diagram, the service page, its own README and the Copilot
+/// instructions — none of which is generated. The platform total does not catch
+/// these: adding a tool to one service while removing one from another leaves it
+/// unmoved, so every per-service figure can be wrong with the headline right.
+///
+/// One entry per sentence that states a number, spelled as it is written there,
+/// so a mismatch names the file and the phrase. A service whose docs state no
+/// count has no entry and needs none.
+fn per_service_claims(
+    tools: &BTreeMap<String, bool>,
+    prompts: &BTreeMap<String, usize>,
+) -> Vec<(&'static str, String)> {
+    let t = |service: &str| {
+        tools
+            .keys()
+            .filter(|id| id.split('/').next() == Some(service))
+            .count()
+    };
+    let p = |service: &str| prompts.get(service).copied().unwrap_or(0);
+
+    let (accountingd, billingd, edmd, einsd) =
+        (t("accountingd"), t("billingd"), t("edmd"), t("einsd"));
+    let (invoicd, mabis_syncd, makod, marktd) =
+        (t("invoicd"), t("mabis-syncd"), t("makod"), t("marktd"));
+    let (netzbilanzd, obsd, portald, processd) =
+        (t("netzbilanzd"), t("obsd"), t("portald"), t("processd"));
+    let (productd, sperrd, vertragd) = (t("productd"), t("sperrd"), t("vertragd"));
+    let _ = (marktd, processd); // no doc states these two as a number
+
+    let (p_edmd, p_einsd, p_invoicd) = (p("edmd"), p("einsd"), p("invoicd"));
+    let (p_makod, p_netzbilanzd, p_obsd) = (p("makod"), p("netzbilanzd"), p("obsd"));
+    let (p_productd, p_vertragd) = (p("productd"), p("vertragd"));
+
+    vec![
+        // ── README service table ──
+        ("README.md", format!("{invoicd}-tool read-only")),
+        ("README.md", format!("{netzbilanzd}-tool **read-on")),
+        ("README.md", format!("{sperrd}-tool read-only")),
+        ("README.md", format!("{edmd}-tool MCP serve")),
+        ("README.md", format!("**{productd}-tool MCP serve")),
+        ("README.md", format!("{portald}-tool operator")),
+        ("README.md", format!("**{vertragd}-tool MCP serve")),
+        (
+            "README.md",
+            format!("§51 neg-price, {einsd} MCP tools + {p_einsd} prompts"),
+        ),
+        (
+            "README.md",
+            format!("monthly iMSys Abrechnungsinformation); **{billingd} MCP tools**"),
+        ),
+        // ── Landing diagrams ──
+        (
+            "site/content/docs/architecture/_index.md",
+            format!("PEPPOL UBL<br/>{billingd} MCP tools"),
+        ),
+        (
+            "site/content/docs/services/_index.md",
+            format!("OIDC→MaLo · {vertragd} MCP tools"),
+        ),
+        // ── Service index table ──
+        (
+            "site/content/docs/services/_index.md",
+            format!("{netzbilanzd}-tool MCP serve"),
+        ),
+        (
+            "site/content/docs/services/_index.md",
+            format!("{sperrd}-tool MCP serve"),
+        ),
+        (
+            "site/content/docs/services/_index.md",
+            format!("{edmd}-tool MCP serve"),
+        ),
+        (
+            "site/content/docs/services/_index.md",
+            format!("{mabis_syncd}-tool read-only"),
+        ),
+        (
+            "site/content/docs/services/_index.md",
+            format!("{einsd}-tool MCP serve"),
+        ),
+        (
+            "site/content/docs/services/_index.md",
+            format!("{obsd}-tool MCP serve"),
+        ),
+        (
+            "site/content/docs/services/_index.md",
+            format!("{portald}-tool operator"),
+        ),
+        // ── Service pages ──
+        (
+            "site/content/docs/services/makod.md",
+            format!("`makod` ships **{makod} MCP tools**"),
+        ),
+        (
+            "site/content/docs/services/einsd.md",
+            format!("{einsd} MCP tools, eeg-agent."),
+        ),
+        (
+            "site/content/docs/services/einsd.md",
+            format!("**{einsd} tools:**"),
+        ),
+        (
+            "site/content/docs/services/einsd.md",
+            format!("**{p_einsd} prompts:**"),
+        ),
+        (
+            "site/content/docs/services/accountingd.md",
+            format!("`accountingd` exposes **{accountingd} tools** at `/mcp`"),
+        ),
+        (
+            "site/content/docs/services/portald.md",
+            format!("`/mcp` (Streamable HTTP), {portald} read-only tools:"),
+        ),
+        (
+            "site/content/docs/services/productd.md",
+            format!("**{productd} read-only tools** and **{p_productd} prompts**."),
+        ),
+        (
+            "site/content/docs/services/vertragd.md",
+            format!("{vertragd} read-only tools and {p_vertragd} prompts at `/mcp`"),
+        ),
+        // ── Crate/service READMEs ──
+        (
+            "services/accountingd/README.md",
+            format!("| **MCP** | {accountingd} tools at `/mcp`"),
+        ),
+        (
+            "services/edmd/README.md",
+            format!("/mcp` — {edmd} tools + {p_edmd} prompts"),
+        ),
+        (
+            "services/einsd/README.md",
+            format!("## MCP server — `/mcp` ({einsd} tools, {p_einsd} prompts)"),
+        ),
+        (
+            "services/netzbilanzd/README.md",
+            format!(
+                "| **MCP server** | {netzbilanzd} **read-only** tools · {p_netzbilanzd} prompts"
+            ),
+        ),
+        (
+            "services/obsd/README.md",
+            format!("| MCP | {obsd} tools + {p_obsd} prompts at `/mcp`"),
+        ),
+        (
+            "services/portald/README.md",
+            format!("{portald} read-only tools"),
+        ),
+        (
+            "services/productd/README.md",
+            format!("| **MCP** | {productd} tools + {p_productd} prompts at `/mcp` |"),
+        ),
+        (
+            "services/vertragd/README.md",
+            format!("| **MCP** | {vertragd} read-only tools + {p_vertragd} prompts at `/mcp` |"),
+        ),
+        // ── Copilot instructions ──
+        (
+            ".github/copilot-instructions.md",
+            format!("({makod} tools, {p_makod} prompts, malo://"),
+        ),
+        (
+            ".github/copilot-instructions.md",
+            format!("**MCP: {invoicd} tools, {p_invoicd} prompts**"),
+        ),
+        (
+            ".github/copilot-instructions.md",
+            format!("{netzbilanzd}-tool MCP server + {p_netzbilanzd} prompts"),
+        ),
+        (
+            ".github/copilot-instructions.md",
+            format!("{sperrd}-tool **read-on"),
+        ),
+        (
+            ".github/copilot-instructions.md",
+            format!("MCP /mcp ({einsd} tools, {p_einsd} prompts)"),
+        ),
+        (
+            ".github/copilot-instructions.md",
+            format!("**MCP: {productd} tools, {p_productd} prompts**"),
+        ),
+        (
+            ".github/copilot-instructions.md",
+            format!("**{vertragd}-tool MCP server + {p_vertragd} prompts**"),
+        ),
+        (
+            ".github/copilot-instructions.md",
+            format!("({mabis_syncd} tools: `get_submission_st"),
+        ),
+        (
+            ".github/copilot-instructions.md",
+            format!("{portald}-tool MCP serve"),
+        ),
+        (
+            ".github/copilot-instructions.md",
+            format!("{edmd}-tool MCP serve"),
+        ),
+        (
+            ".github/copilot-instructions.md",
+            format!("{obsd}-tool MCP serve"),
+        ),
+        (
+            ".github/copilot-instructions.md",
+            format!("**{billingd} MCP tools** (`validate_tariff"),
+        ),
+        // ── Concept docs ──
+        ("concepts/EDMD.md", format!("MCP server ({edmd} tools)")),
+        (
+            "concepts/EDMD.md",
+            format!("exposes **{edmd} tools** and {p_edmd} prompts"),
+        ),
+        (
+            "concepts/OBSD.md",
+            format!("MCP surface ({obsd} tools, {p_obsd} prompts)"),
+        ),
+    ]
+}
+
+/// The documented size of the agent surface, checked against the source.
+///
+/// `README.md`, the landing page and `concepts/MARKET_LANDSCAPE.md` each state
+/// how many services expose an MCP server and how many tools they add up to.
+/// Those are the numbers a reader uses to decide whether the platform is worth
+/// looking at, and nothing regenerates them — an unguarded count drifts the
+/// moment a service gains or loses a server.
+///
+/// Checked here rather than in a command of its own because this file already
+/// walks every `#[tool(...)]` in the workspace; a second walker would be a
+/// second definition of "an MCP tool" waiting to disagree with this one.
 fn inventory_matches_the_docs(workspace_root: &Path, tools: &BTreeMap<String, bool>) -> bool {
     let services: BTreeSet<&str> = tools.keys().filter_map(|id| id.split('/').next()).collect();
     let total = tools.len();
@@ -291,7 +561,9 @@ fn inventory_matches_the_docs(workspace_root: &Path, tools: &BTreeMap<String, bo
         .unwrap_or(0);
     let agents = specialist_count(workspace_root);
     let grants = grant_count(workspace_root);
-    let (prompts, prompt_servers) = prompt_count(workspace_root);
+    let per_service_prompts = prompts_per_service(workspace_root);
+    let prompts: usize = per_service_prompts.values().sum();
+    let prompt_servers = per_service_prompts.len();
 
     // One phrase per place, spelled as it is written there, so a mismatch names
     // the file and the sentence rather than a number to hunt for. The list is
@@ -301,7 +573,11 @@ fn inventory_matches_the_docs(workspace_root: &Path, tools: &BTreeMap<String, bo
     // **Totals only.** `26 advisory specialists`, `14 specialists` with triage
     // rules and `21 specialists` are real numbers about parts of the set; they
     // move for different reasons and are not covered here.
-    let claims: Vec<(&str, String)> = vec![
+    //
+    // The *per-service* counts are covered, though — see [`per_service_claims`].
+    // A total cannot stand in for them: adding a tool to one service and removing
+    // one from another leaves it unmoved.
+    let mut claims: Vec<(&str, String)> = vec![
         // ── How many MCP tools the platform exposes ──
         (
             "README.md",
@@ -402,6 +678,7 @@ fn inventory_matches_the_docs(workspace_root: &Path, tools: &BTreeMap<String, bo
             format!("**{agents} declarative manifests**"),
         ),
     ];
+    claims.extend(per_service_claims(tools, &per_service_prompts));
 
     let mut stale = Vec::new();
     for (file, expected) in &claims {

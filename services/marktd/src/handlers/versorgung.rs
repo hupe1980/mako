@@ -182,11 +182,7 @@ where
     Vs: VersorgungsStatusRepository + Send + Sync,
 {
     if enforcer
-        .check(
-            &claims.principal(),
-            "read-versorgungsstatus",
-            &state.tenant_gln,
-        )
+        .check(&claims.principal(), "read-versorgungsstatus", &state.tenant)
         .is_err()
     {
         return MdmError::Forbidden {
@@ -219,7 +215,7 @@ where
                 .into_response();
             }
         };
-        return match vs_repo.find_at(&malo_id, &state.tenant_gln, at).await {
+        return match vs_repo.find_at(&malo_id, &state.tenant, at).await {
             Ok(Some(rec)) => {
                 let version = rec.version;
                 let mut resp_headers = HeaderMap::new();
@@ -236,7 +232,7 @@ where
         };
     }
 
-    match vs_repo.find(&malo_id, &state.tenant_gln).await {
+    match vs_repo.find(&malo_id, &state.tenant).await {
         Ok(Some(rec)) => {
             let version = rec.version;
             let mut resp_headers = HeaderMap::new();
@@ -275,11 +271,7 @@ where
     Vs: VersorgungsStatusRepository + Send + Sync,
 {
     if enforcer
-        .check(
-            &claims.principal(),
-            "read-versorgungsstatus",
-            &state.tenant_gln,
-        )
+        .check(&claims.principal(), "read-versorgungsstatus", &state.tenant)
         .is_err()
     {
         return MdmError::Forbidden {
@@ -298,7 +290,7 @@ where
         }
     };
     match vs_repo
-        .find_history(&malo_id, &state.tenant_gln, query.page, query.size)
+        .find_history(&malo_id, &state.tenant, query.page, query.size)
         .await
     {
         Ok(page) => Json(serde_json::json!({
@@ -334,7 +326,7 @@ where
         .check(
             &claims.principal(),
             "write-versorgungsstatus",
-            &state.tenant_gln,
+            &state.tenant,
         )
         .is_err()
     {
@@ -412,7 +404,7 @@ where
             .unwrap_or(None),
         last_process_id: body.last_process_id,
         updated_at: time::OffsetDateTime::now_utc(),
-        tenant: state.tenant_gln.clone(),
+        tenant: state.tenant.clone(),
         version: 0,
     };
     // Persist-before-dispatch: the state change and the de.markt.versorgung.changed
@@ -445,13 +437,13 @@ where
     let sparte: Option<String> =
         sqlx::query_scalar("SELECT sparte FROM malo WHERE malo_id = $1 AND tenant = $2")
             .bind(&malo_id_str)
-            .bind(&state.tenant_gln)
+            .bind(&state.tenant)
             .fetch_optional(&mut *tx)
             .await
             .unwrap_or(None);
 
     let evt = MarktEvent::new(
-        &state.tenant_gln,
+        &state.tenant,
         mako_events::markt::VERSORGUNG_CHANGED,
         malo_id_str.clone(),
         serde_json::json!({

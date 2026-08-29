@@ -341,6 +341,7 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
             &new_supplier_for_obligations,
             Some(&msb),
         ),
+        lfa_lieferende: None,
     };
 
     // Pure handle call to verify outbox without a store.
@@ -526,6 +527,7 @@ async fn bilateral_lieferbeginn_rejection_path() {
     let reject_cmd = SupplierChangeCommand::SendAntwort {
         antwort: nb_antwort(false, Some("MaLo hat laufenden Vertrag")),
         obligations: vec![],
+        lfa_lieferende: None,
     };
 
     // Rejection enqueues UTILMD 55003 (Ablehnung) but no MSCONS/ORDERS.

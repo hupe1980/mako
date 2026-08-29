@@ -375,7 +375,7 @@ pub struct BilanzkreisEintrag {
     /// `malo.bilanzierungsgebiet`. Omit for the fallback row.
     #[serde(default)]
     pub bilanzierungsgebiet: Option<String>,
-    /// EEG-Bilanzkreise (`LOC+237` EIC) authorised for this Bilanzierungsgebiet.
+    /// EEG-Bilanzkreise (EIC) authorised for this Bilanzierungsgebiet.
     #[serde(default)]
     pub eeg: Vec<String>,
     /// KWKG-Bilanzkreise.

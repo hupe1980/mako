@@ -665,8 +665,8 @@ impl As4Sender for BdewAs4Sender {
                     if dispatched == 0 {
                         if unrouted_pids.is_empty() {
                             // Nothing dispatched and nothing even identified: the
-                            // interchange yielded no messages at all. Acknowledging
-                            // here — as this path used to — retires an outbox entry
+                            // interchange yielded no messages at all.
+                            // Acknowledging here would retire an outbox entry
                             // that was never delivered anywhere.
                             return Err(EngineError::Serialization(format!(
                                 "loopback: self-rendered interchange for {message_id_str} \

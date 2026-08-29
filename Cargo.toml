@@ -144,7 +144,7 @@ sepa             = { version = "0.6.0" }
 # Immutable, tamper-evident double-entry ledger kernel (sibling repo). accountingd's
 # storage/accounting base. Domain-neutral by design — the BillingDocument→Entry and
 # SKR mapping live in accountingd, never in the crate.
-doubleentry      = { version = "0.6" }
+doubleentry      = { version = "0.7" }
 
 # Kafka client: pure Rust, MSRV 1.88, zero-unsafe, exactly-once semantics.
 # The one consumer is `edmd` (kafka_ingest), for high-volume metering ingest;

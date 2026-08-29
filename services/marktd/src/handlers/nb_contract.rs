@@ -39,7 +39,7 @@ use utoipa::ToSchema;
 
 use crate::pg::PgNbContractRepository;
 
-use super::{Claims, IntoMdmResponse as _, TenantGln};
+use super::{Claims, IntoMdmResponse as _, Tenant};
 
 /// Extension alias — `PgNbContractRepository` is concrete so AFIT works.
 pub type NbContractRepoExt = Arc<PgNbContractRepository>;
@@ -99,9 +99,6 @@ pub struct NbContractUpsertRequest {
     /// field (e.g. `vertragsart`, `vertragsstatus`) contains an unknown enum value.
     #[serde(default)]
     pub data: Option<serde_json::Value>,
-    /// Tenant ID.  Defaults to the operator primary GLN if absent.
-    #[serde(default)]
-    pub tenant: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -144,10 +141,16 @@ pub struct ByMaloQuery {
 
 // ── Parse helpers ─────────────────────────────────────────────────────────────
 
+/// Build the record from the request.
+///
+/// `tenant` is the **deployment's own** identity, taken from the Axum extension
+/// the Cedar check was made against. It is never read from the body: a request
+/// that could name its own tenant would be authorised against one row scope and
+/// written into another.
 fn parse_req(
     id: String,
     req: NbContractUpsertRequest,
-    tenant_gln: &str,
+    tenant: &str,
 ) -> Result<NbContractRecord, (StatusCode, serde_json::Value)> {
     let date_fmt = format_description!("[year]-[month]-[day]");
 
@@ -171,10 +174,6 @@ fn parse_req(
         })?;
 
     let billing_schedule = BillingSchedule::from_str_or_default(&req.billing_schedule);
-    let tenant = req
-        .tenant
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| tenant_gln.to_owned());
 
     let malo_id = req.malo_id.parse::<MaloId>().map_err(|e| {
         (
@@ -220,7 +219,7 @@ fn parse_req(
         data: canonical_data,
         vertragsart,
         vertragsstatus,
-        tenant,
+        tenant: tenant.to_owned(),
         version: 0,
     })
 }
@@ -233,18 +232,18 @@ pub async fn put_nb_contract(
     Extension(repo): Extension<NbContractRepoExt>,
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
-    Extension(tenant_gln): Extension<TenantGln>,
+    Extension(tenant): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
     Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Path(id): Path<String>,
     Json(req): Json<NbContractUpsertRequest>,
 ) -> impl IntoResponse {
-    if let Err(e) = cedar.check(&claims.principal(), "write-nb-contract", &tenant_gln.0) {
+    if let Err(e) = cedar.check(&claims.principal(), "write-nb-contract", &tenant.0) {
         tracing::warn!(error = %e, "marktd: Cedar denied write-nb-contract");
         return StatusCode::FORBIDDEN.into_response();
     }
 
-    let rec = match parse_req(id.clone(), req, &tenant_gln.0) {
+    let rec = match parse_req(id.clone(), req, &tenant.0) {
         Ok(r) => r,
         Err((status, body)) => return (status, Json(body)).into_response(),
     };
@@ -253,7 +252,6 @@ pub async fn put_nb_contract(
         .vertragsart
         .clone()
         .unwrap_or_else(|| "NETZNUTZUNGSVERTRAG".into());
-    let tenant = rec.tenant.clone();
     let sparte = rec.sparte.to_string();
     let evt_malo_id = rec.malo_id.to_string();
 
@@ -262,14 +260,13 @@ pub async fn put_nb_contract(
             // Emit de.markt.nb-contract.updated so ERP subscribers can rebuild
             // Vertrag caches without polling.
             let evt = MarktEvent::new(
-                &tenant_gln.0,
+                &tenant.0,
                 mako_events::markt::NB_CONTRACT_UPDATED,
                 id,
                 serde_json::json!({
                     "version": version,
                     "vertragsart": vertragsart,
                     "sparte": sparte,
-                    "tenant": tenant,
                 }),
             )
             .with_extensions(mako_markt::cloudevents::EventExtensions {
@@ -296,15 +293,15 @@ pub async fn get_nb_contract(
     Extension(repo): Extension<NbContractRepoExt>,
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
-    Extension(tenant_gln): Extension<TenantGln>,
+    Extension(tenant): Extension<Tenant>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(e) = cedar.check(&claims.principal(), "read-nb-contract", &tenant_gln.0) {
+    if let Err(e) = cedar.check(&claims.principal(), "read-nb-contract", &tenant.0) {
         tracing::warn!(error = %e, "marktd: Cedar denied read-nb-contract");
         return StatusCode::FORBIDDEN.into_response();
     }
 
-    match repo.find(&id).await {
+    match repo.find(&id, &tenant.0).await {
         Ok(Some(r)) => Json(rec_to_response(r)).into_response(),
         Ok(None) => MdmError::NotFound {
             resource_type: "nb_contract",
@@ -320,10 +317,10 @@ pub async fn list_nb_contracts(
     Extension(repo): Extension<NbContractRepoExt>,
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
-    Extension(tenant_gln): Extension<TenantGln>,
+    Extension(tenant): Extension<Tenant>,
     Query(q): Query<ListNbContractsQuery>,
 ) -> impl IntoResponse {
-    if let Err(e) = cedar.check(&claims.principal(), "read-nb-contract", &tenant_gln.0) {
+    if let Err(e) = cedar.check(&claims.principal(), "read-nb-contract", &tenant.0) {
         tracing::warn!(error = %e, "marktd: Cedar denied read-nb-contract");
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -339,7 +336,7 @@ pub async fn list_nb_contracts(
         }
     };
 
-    match repo.list_by_nb(&nb_mp_id, &tenant_gln.0).await {
+    match repo.list_by_nb(&nb_mp_id, &tenant.0).await {
         Ok(recs) => Json(recs.into_iter().map(rec_to_response).collect::<Vec<_>>()).into_response(),
         Err(e) => e.into_response(),
     }
@@ -369,11 +366,11 @@ pub async fn get_nb_contract_by_malo(
     Extension(repo): Extension<NbContractRepoExt>,
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
-    Extension(tenant_gln): Extension<TenantGln>,
+    Extension(tenant): Extension<Tenant>,
     Path(malo_id): Path<String>,
     Query(q): Query<ByMaloQuery>,
 ) -> impl IntoResponse {
-    if let Err(e) = cedar.check(&claims.principal(), "read-nb-contract", &tenant_gln.0) {
+    if let Err(e) = cedar.check(&claims.principal(), "read-nb-contract", &tenant.0) {
         tracing::warn!(error = %e, "marktd: Cedar denied read-nb-contract");
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -393,7 +390,7 @@ pub async fn get_nb_contract_by_malo(
         None => super::malo::today_berlin(),
     };
 
-    match repo.find_active(&malo_id, on, &tenant_gln.0).await {
+    match repo.find_active(&malo_id, on, &tenant.0).await {
         Ok(Some(rec)) => Json(rec_to_response(rec)).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => e.into_response(),

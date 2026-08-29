@@ -425,11 +425,10 @@ pub(crate) async fn handle_command(
 ///
 /// `makod_process_initiated_total{family}` is counted **here**, not in the
 /// callers. There are two doors — `POST /api/v1/commands` and the MCP
-/// `submit_command` tool — and only the REST one used to count, so every
-/// process an MCP client started was invisible and the
-/// initiated-versus-completed dashboard showed completions with no matching
-/// initiations. A counter belongs at the single point the thing it counts
-/// actually happens.
+/// `submit_command` tool — and counting in either one leaves the processes the
+/// other starts invisible, so the initiated-versus-completed dashboard shows
+/// completions with no matching initiations. A counter belongs at the single
+/// point the thing it counts actually happens.
 pub async fn dispatch_command(
     state: &CommandsApiState,
     command: &str,

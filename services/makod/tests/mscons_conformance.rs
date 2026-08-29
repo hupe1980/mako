@@ -13,10 +13,10 @@
 //! ## Coverage
 //!
 //! Every Anwendungsfall is checked on every run, single- and repeated-group
-//! alike. The repeated-group cases used to be `#[ignore]`d because the
-//! generated profile only rewound the cursor on the *outermost* group trigger,
-//! so a second `LIN`/`QTY` cycle read as out of order even when it conformed;
-//! `DETAIL_GROUP_TRIGGERS` now rewinds on any nested trigger.
+//! alike. The repeated-group cases depend on `DETAIL_GROUP_TRIGGERS` rewinding
+//! the cursor on **any** nested group trigger: rewinding only on the outermost
+//! one reads a second `LIN`/`QTY` cycle as out of order even when it
+//! conforms.
 
 use edi_energy::{Platform, Pruefidentifikator, validate_and_check_pid};
 use makod::edifact_renderer::render_to_wire_bytes;

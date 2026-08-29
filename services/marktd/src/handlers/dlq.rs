@@ -27,7 +27,7 @@ use sqlx::{PgPool, Row as _};
 use std::sync::Arc;
 use time::OffsetDateTime;
 
-use super::{Claims, TenantGln};
+use super::{Claims, Tenant};
 
 #[derive(Debug, Serialize)]
 pub struct DlqEntry {
@@ -81,7 +81,7 @@ fn deny_forbidden() -> axum::response::Response {
 pub async fn list_dlq(
     Extension(pool): Extension<PgPool>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Query(q): Query<DlqListQuery>,
 ) -> impl IntoResponse {
@@ -129,7 +129,7 @@ pub async fn list_dlq(
 pub async fn retry_dlq_entry(
     Extension(pool): Extension<PgPool>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path((event_id, subscriber_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
@@ -175,7 +175,7 @@ pub async fn retry_dlq_entry(
 pub async fn delete_dlq_entry(
     Extension(pool): Extension<PgPool>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path((event_id, subscriber_id)): Path<(String, String)>,
 ) -> impl IntoResponse {

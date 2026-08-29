@@ -125,7 +125,7 @@ pub struct MaloRecord {
     /// and their `*_UMSP` transformation levels for Strom; `HD`/`MD`/`ND` for Gas).
     /// `None` when the incoming BO4E payload did not carry the field.
     pub netzebene: Option<String>,
-    /// Bilanzierungsgebiet EIC code (`LOC+237` in UTILMD) extracted from `Marktlokation`.
+    /// Bilanzierungsgebiet EIC code extracted from the BO4E `Marktlokation`.
     /// Used by `processd` NB check 4 as fallback when `malo_grid` is not populated.
     pub bilanzierungsgebiet: Option<String>,
     /// Gas quality extracted from `Marktlokation.standorteigenschaften.gasqualitaet`.
@@ -537,7 +537,7 @@ pub trait MaloRepository: Send + Sync {
 /// grundzuständig / `ZF0` gMSB + MP-ID) plus NNE-Abrechnung info. That belongs
 /// on the dated `melo_msb_zuordnungen` timeline, not a typed-column `COALESCE`
 /// patch, and its GPKE-vs-WiM-MSB-Wechsel semantics make auto-applying it a
-/// deliberate follow-up (roadmap). These fields are retained for robustness /
+/// deliberate follow-up. These fields are retained for robustness /
 /// forward-compatibility but rarely fire in practice.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MeloStammdatenPatch {
@@ -1300,7 +1300,11 @@ pub trait NbContractRepository: Send + Sync {
 
     /// Find a contract by `contract_id`.
     #[must_use]
-    async fn find(&self, contract_id: &str) -> Result<Option<NbContractRecord>, MdmError>;
+    async fn find(
+        &self,
+        contract_id: &str,
+        tenant: &str,
+    ) -> Result<Option<NbContractRecord>, MdmError>;
 
     /// Find the contract active on `date` for `malo_id` within `tenant`.
     ///
@@ -1438,7 +1442,7 @@ pub struct VersorgungsStatusRecord {
     /// string is valid (UUID, slug, etc.).  This is **not** a GLN.
     ///
     /// Not returned in API responses: `marktd` is a single-tenant daemon — every
-    /// SQL query is already scoped by `AppState::tenant_gln`, so the client only
+    /// SQL query is already scoped by `AppState::tenant`, so the client only
     /// ever sees their own data and the value is implicit from the server config.
     #[serde(skip_serializing, default)]
     pub tenant: String,
@@ -1951,7 +1955,7 @@ pub struct TrancheRecord {
     pub tenant: String,
     /// Parent Marktlokation this Tranche belongs to.
     pub malo_id: Option<String>,
-    /// Bilanzierungsgebiet EIC (`LOC+237`).
+    /// Bilanzierungsgebiet EIC.
     pub bilanzierungsgebiet: Option<String>,
     /// Netzebene (`netzebene`).
     pub netzebene: Option<String>,
@@ -2053,8 +2057,13 @@ where
     /// worker drains immediately instead of waiting for its next poll. It is a
     /// hint only — correctness rests on the outbox table, never on this signal.
     pub notify: std::sync::Arc<tokio::sync::Notify>,
-    /// Operator primary GLN (matches `makod.toml` `[[party]] primary = true`).
-    pub tenant_gln: String,
+    /// This deployment's own tenant identifier — the operator's primary market
+    /// code (`makod.toml` `[[party]] primary = true`).
+    ///
+    /// A BDEW- or DVGW-Codenummer, not a GS1 GLN, and validated as neither: it
+    /// is compared against the caller's `mako_tenant` claim and written on
+    /// tenant-scoped rows, never parsed.
+    pub tenant: String,
 }
 
 // ── MaloGridRecord ────────────────────────────────────────────────────────────
@@ -2082,7 +2091,7 @@ pub struct MaloGridRecord {
     pub malo_id: MaloId,
     /// GLN of the Netzbetreiber that owns this MaLo in their grid.
     pub nb_mp_id: String,
-    /// Bilanzierungsgebiet-EIC (`LOC+237` in UTILMD), if known.
+    /// Bilanzierungsgebiet-EIC, if known.
     ///
     /// `None` when the NIS has not yet provided this value.  Check 4 in
     /// `mako-pruefung` is skipped (not failed) when both this and the

@@ -296,6 +296,7 @@ impl MockNb {
             .execute_and_collect(SupplierChangeCommand::SendAntwort {
                 antwort: nb_antwort(accepted, reason.map(str::to_owned).as_deref()),
                 obligations,
+                lfa_lieferende: None,
             })
             .await
             .expect("NB: execute SendAntwort");

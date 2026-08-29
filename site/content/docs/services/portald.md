@@ -102,7 +102,7 @@ All paths are prefixed `/api/v1/portal/{malo_id}`.
 | `GET` | `/dokumente?kind=&limit=` | `outputd` — the **document inbox**: what was issued and sent |
 | `GET` | `/dokumente/{document_id}` | `outputd` — the bytes as issued; opening it records the portal read receipt |
 | `GET` | `/balance` | `accountingd` — open-items balance |
-| `GET` | `/kontoauszug` | `accountingd` — full statement (§ 666 BGB) |
+| `GET` | `/kontoauszug?from=&to=` | `accountingd` — account statement (§ 666 BGB); both bounds together scope it to a period and open it at that period's balance |
 | `GET` | `/vorauszahlung` | `accountingd` — Abschlag schedule (§ 40 Abs. 1 EnWG) |
 | `GET` | `/eeg` | `einsd` — plants + settlements |
 | `GET` | `/versorgung` | `marktd` — supply state |

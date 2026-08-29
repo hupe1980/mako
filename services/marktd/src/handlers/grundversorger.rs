@@ -29,7 +29,7 @@ use tracing::info;
 
 use mako_service::cedar::CedarEnforcer;
 
-use crate::handlers::{Claims, MdmErrorResponse, TenantGln};
+use crate::handlers::{Claims, MdmErrorResponse, Tenant};
 use crate::pg::PgGrundversorgerRepository;
 
 /// Extension alias — concrete type so AFIT dispatches statically.
@@ -85,7 +85,7 @@ pub async fn get_grundversorger(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<GrundversorgerRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(nb_mp_id): Path<String>,
     Query(q): Query<GrundversorgerQuery>,
 ) -> impl IntoResponse {
@@ -126,7 +126,7 @@ pub async fn put_grundversorger(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<GrundversorgerRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(nb_mp_id): Path<String>,
     Json(body): Json<PutGrundversorgerBody>,
 ) -> impl IntoResponse {

@@ -56,8 +56,13 @@ use utoipa_swagger_ui::SwaggerUi;
 )]
 pub struct ApiDoc;
 
-/// Build the Swagger UI router mounted at `/swagger-ui`.
+/// Build the Swagger UI router.
+///
+/// Mounts the same two paths `makod` does — `GET /api/v1/docs/` for the browser
+/// and `GET /api/v1/openapi.json` for a generator. One well-known pair across
+/// the platform is what lets an integrator point a client generator at any
+/// service without looking the path up per daemon.
 #[must_use]
 pub fn swagger_ui() -> SwaggerUi {
-    SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi())
+    SwaggerUi::new("/api/v1/docs").url("/api/v1/openapi.json", ApiDoc::openapi())
 }

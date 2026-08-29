@@ -37,7 +37,7 @@ use uuid::Uuid;
 
 use mako_service::cedar::CedarEnforcer;
 
-use super::{Claims, IntoMdmResponse as _, TenantGln};
+use super::{Claims, IntoMdmResponse as _, Tenant};
 
 /// Deny response for the consent registry.
 ///
@@ -85,7 +85,7 @@ pub async fn grant_einwilligung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
     Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Json(body): Json<GrantBody>,
@@ -155,7 +155,7 @@ pub async fn list_einwilligungen(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Query(q): Query<ListQuery>,
 ) -> impl IntoResponse {
     if enforcer
@@ -180,7 +180,7 @@ pub async fn get_einwilligung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
     if enforcer
@@ -207,7 +207,7 @@ pub async fn revoke_einwilligung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
     Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Extension(makod): Extension<Arc<MakodClient>>,
@@ -281,7 +281,7 @@ pub async fn consent_check(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Query(q): Query<ConsentCheckQuery>,
 ) -> impl IntoResponse {
     if enforcer
@@ -320,7 +320,7 @@ pub async fn put_framework(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path((msb_mp_id, esa_mp_id)): Path<(String, String)>,
     Json(body): Json<FrameworkBody>,
 ) -> impl IntoResponse {
@@ -393,7 +393,7 @@ pub async fn put_esa_preise(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path((msb_mp_id, esa_mp_id)): Path<(String, String)>,
     Json(body): Json<EsaPreiseBody>,
 ) -> impl IntoResponse {
@@ -448,7 +448,7 @@ pub async fn get_esa_preise(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path((msb_mp_id, esa_mp_id)): Path<(String, String)>,
     axum::extract::Query(q): axum::extract::Query<EsaPreiseQuery>,
 ) -> impl IntoResponse {
@@ -506,7 +506,7 @@ pub async fn put_esa_messprodukt_katalog(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(msb_mp_id): Path<String>,
     Json(body): Json<Vec<KatalogEintrag>>,
 ) -> impl IntoResponse {
@@ -563,7 +563,7 @@ pub async fn get_esa_messprodukt_angebot(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path((msb_mp_id, messprodukt)): Path<(String, String)>,
     Query(q): Query<EsaPreiseQuery>,
 ) -> impl IntoResponse {
@@ -623,7 +623,7 @@ pub async fn get_esa_subscription(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(bestellung_ref): Path<String>,
 ) -> impl IntoResponse {
     if enforcer
@@ -659,7 +659,7 @@ pub async fn get_framework(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path((msb_mp_id, esa_mp_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
     if enforcer

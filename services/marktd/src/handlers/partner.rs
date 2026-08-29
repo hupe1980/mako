@@ -71,7 +71,7 @@ where
     Pa: PartnerRepository + Clone,
 {
     if enforcer
-        .check(&claims.principal(), "write-partner", &state.tenant_gln)
+        .check(&claims.principal(), "write-partner", &state.tenant)
         .is_err()
     {
         return MdmError::Forbidden {
@@ -135,7 +135,7 @@ where
     match state.partner_repo.upsert(record).await {
         Ok(version) => {
             let evt = MarktEvent::new(
-                &state.tenant_gln,
+                &state.tenant,
                 mako_events::markt::PARTNER_UPDATED,
                 gln_str,
                 serde_json::json!({ "version": version }),
@@ -157,8 +157,8 @@ where
             // The tenant GLN is the operator's own GLN (typically NB).
             // This is best-effort — dispatch failure is logged but not returned.
             if is_lf {
-                let nb_gln_for_dispatch = state.tenant_gln.clone();
-                let tenant_for_dispatch = state.tenant_gln.clone();
+                let nb_gln_for_dispatch = state.tenant.clone();
+                let tenant_for_dispatch = state.tenant.clone();
                 // Inline instead of spawn — avoids silently swallowed panics.
                 match pricat_repo
                     .find_latest(&nb_gln_for_dispatch, &tenant_for_dispatch)
@@ -217,7 +217,7 @@ where
     Pa: PartnerRepository + Clone,
 {
     if enforcer
-        .check(&claims.principal(), "read-partner", &state.tenant_gln)
+        .check(&claims.principal(), "read-partner", &state.tenant)
         .is_err()
     {
         return MdmError::Forbidden {
@@ -286,7 +286,7 @@ where
     Pa: PartnerRepository + Clone,
 {
     if enforcer
-        .check(&claims.principal(), "read-partner", &state.tenant_gln)
+        .check(&claims.principal(), "read-partner", &state.tenant)
         .is_err()
     {
         return MdmError::Forbidden {
@@ -340,7 +340,7 @@ where
     Pa: PartnerRepository + Clone,
 {
     if enforcer
-        .check(&claims.principal(), "read-partner", &state.tenant_gln)
+        .check(&claims.principal(), "read-partner", &state.tenant)
         .is_err()
     {
         return MdmError::Forbidden {
@@ -393,7 +393,7 @@ where
     Pa: PartnerRepository + Clone,
 {
     if enforcer
-        .check(&claims.principal(), "read-partner", &state.tenant_gln)
+        .check(&claims.principal(), "read-partner", &state.tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();

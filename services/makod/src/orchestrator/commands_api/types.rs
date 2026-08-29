@@ -320,12 +320,11 @@ mod family_tests {
     /// The initiation counter has exactly one call site.
     ///
     /// There are two command doors — `POST /api/v1/commands` and the MCP
-    /// `submit_command` tool — and the counter used to live in the REST
-    /// handler. Every process an MCP client started was therefore uncounted,
-    /// so the initiated-versus-completed dashboard showed completions with no
-    /// matching initiations. It now sits inside `dispatch_command`, which both
-    /// doors go through; a second call site anywhere would either double-count
-    /// or restore the split.
+    /// `submit_command` tool — so a counter in either handler leaves the
+    /// processes the other starts uncounted, and the initiated-versus-completed
+    /// dashboard shows completions with no matching initiations. It sits inside
+    /// `dispatch_command`, which both doors go through; a second call site
+    /// anywhere would either double-count or split it again.
     #[test]
     fn the_initiation_counter_is_emitted_only_from_dispatch_command() {
         const DOORS: &[(&str, &str)] = &[

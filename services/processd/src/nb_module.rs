@@ -21,8 +21,8 @@
 //! going **LFN → LFA**, answered 55017/55018 by the *Altlieferant* under EBD
 //! `E_0614`. Evaluating it here would make an `nb-only` binary answer a
 //! supplier-role message — the § 7 EnWG separation the Cargo features exist for
-//! — with grid-topology checks the LFA has no basis for. `ROADMAP.md` records
-//! what the LFA answer path needs first.
+//! — with grid-topology checks the LFA has no basis for. The answer belongs to
+//! the supplier role and is decided there.
 //!
 //! # Decision pipeline
 //!
@@ -62,7 +62,7 @@ use uuid::Uuid;
 use mako_markt::domain::Sparte;
 use secrecy::SecretString;
 
-use crate::pg::abmeldeanfrage::{AbmeldeanfrageRecord, PgAbmeldeanfrageRepository};
+use crate::pg::abmeldeanfrage::{AbmeldeanfrageRecord, PgAbmeldeanfrageRepository, Waiting};
 use crate::pg::anmeldung::{AnmeldungDecision, AnmeldungDecisionRecord, PgAnmeldungRepository};
 use crate::pg::approval::{ApprovalQueueEntry, PgApprovalQueue};
 
@@ -323,8 +323,8 @@ fn marktlokationsart_of(pid: u32, ergaenzung: Option<&str>) -> Marktlokationsart
 ///
 /// **`bestehende_veraeusserungsform` is deliberately `None` here.** It is the
 /// NB's own EEG-/KWKG-Register, not a wire fact, and `processd` has no reader
-/// for it yet; the engine escalates the Veräußerungsformwechsel question rather
-/// than assuming there was none. `ROADMAP.md` records the seam.
+/// for it; the engine escalates the Veräußerungsformwechsel question rather
+/// than assuming there was none.
 fn erzeugung_of(
     ergaenzung: Option<&str>,
     veraeusserungsform: Option<&str>,
@@ -450,10 +450,12 @@ pub async fn evaluate_and_decide(
 
     // ── Meldepflichten (GPKE Teil 2 § 2.1.2 Nr. 2 / 10) ───────────────────
     //
-    // Kept before `payload` is consumed: the Information über existierende
+    // Built before `payload` is consumed: the Information über existierende
     // Zuordnung must reference the LFN's own Vorgangsnummer, and the
     // Beendigung der Zuordnung names the Zuordnungsende, which is the
-    // Zuordnungsbeginn of this Anmeldung.
+    // Zuordnungsbeginn of this Anmeldung. Both are dispatched from the
+    // Prozessschritt they belong to — Nr. 2 „parallel zu Nr. 3", Nr. 10 after
+    // the Bestätigung — never here.
     let kunde = Kunde {
         name: payload.kunde_name.clone(),
         namensformat: payload.kunde_namensformat.clone(),
@@ -466,13 +468,6 @@ pub async fn evaluate_and_decide(
         tranche: payload.transaktionsgrund_ergaenzung.as_deref() == Some("ZW5"),
         altlieferant: versorgung.as_ref().and_then(|v| v.lf_mp_id.clone()),
     };
-
-    // Prozessschritt 2, and the earliest window of the whole Lieferbeginn:
-    // 07:00 Uhr des 1. WT nach dem ÜT, four hours before the answer to the same
-    // message. It is owed the moment the Anmeldung lands on an
-    // already-assigned Marktlokation — before, and independently of, the
-    // decision — so it is dispatched here rather than beside the Bestätigung.
-    meldung.informieren(makod, &malo_id, process_id).await;
 
     let mut anfrage = payload.into_anfrage();
     // `E_0622` Prüfschritt 400 / 600 („Verändert sich die Veräußerungsform?")
@@ -557,7 +552,7 @@ pub async fn evaluate_and_decide(
         // Geschäftsvorfall 3 answers out of Prüfschritte 500–600, which read a
         // Tranchen-Zuordnung `marktd` does not project — the tree escalates on
         // its own rather than guessing between two Ablehnungen and two
-        // Zustimmungen. See ROADMAP.md.
+        // Zustimmungen.
         mako_pruefung::evaluate_lieferbeginn(&anfrage, None)
     } else {
         vorpruefung
@@ -632,13 +627,9 @@ pub async fn evaluate_and_decide(
                 )
                 .await?;
             } else if config.auto_accept {
-                dispatch(makod, pid, &malo_id, process_id, &result, None).await?;
+                dispatch(makod, pid, &malo_id, process_id, &result, None, None).await?;
                 info!(%process_id, pid, %malo_id, antwortcode = result.antwortcode(),
                       "processd NB: dispatched bestaetigen");
-                // Prozessschritt 10 — „unverzüglich nach dem ÜZ von Nr. 5",
-                // i.e. after the Bestätigung and only after it. On an Ablehnung
-                // the LFA keeps its Zuordnung and nothing is owed.
-                meldung.beenden(makod, &malo_id, process_id).await;
             } else {
                 info!(%process_id, pid, %malo_id, "processd NB: Accept held for operator confirmation (auto_accept = false)");
                 enqueue_for_operator(
@@ -652,7 +643,7 @@ pub async fn evaluate_and_decide(
             }
         }
         NbEntscheidung::Reject(reason) => {
-            dispatch(makod, pid, &malo_id, process_id, &result, None).await?;
+            dispatch(makod, pid, &malo_id, process_id, &result, None, None).await?;
             info!(%process_id, pid, %malo_id, antwortcode = %reason.antwort.antwortcode,
                   "processd NB: dispatched ablehnen");
         }
@@ -677,6 +668,11 @@ pub async fn evaluate_and_decide(
                 lfa_mp_ids: lfa_mp_ids.clone(),
                 pid: pid as i32,
                 anfrage: serde_json::to_value(&anfrage)?,
+                // Frozen here. Phase two runs hours later and states the
+                // Altlieferant and the Zuordnungsende as they were when the
+                // Anmeldung was decided, not as the projection holds them once
+                // the switch has been booked.
+                meldung: serde_json::to_value(&meldung)?,
                 received_at,
                 tenant: config.tenant.clone(),
             };
@@ -685,15 +681,24 @@ pub async fn evaluate_and_decide(
             // finds no waiting row cannot resume the Anmeldung — which would
             // leave it unanswered past its own 11:00 Frist.
             //
-            // `ON CONFLICT DO NOTHING`: a redelivered Anmeldung must not send a
-            // second Anfrage, so a row that is already there ends the handling.
-            if !pending.insert(&waiting).await? {
-                info!(
+            // Only a row whose Anfrage actually reached `makod` ends the
+            // handling. One that never did has no 55010, so no 09:00 window and
+            // no lapse: returning here would leave the Anmeldung waiting on an
+            // answer nobody was ever asked for.
+            match pending.record(&waiting).await? {
+                Waiting::AlreadySent => {
+                    info!(
+                        %process_id, pid, %malo_id,
+                        "processd NB: Anfrage zur Beendigung der Zuordnung already sent — \
+                         redelivered Anmeldung ignored"
+                    );
+                    return Ok(true);
+                }
+                Waiting::Unsent => warn!(
                     %process_id, pid, %malo_id,
-                    "processd NB: Anfrage zur Beendigung der Zuordnung already pending — \
-                     redelivered Anmeldung ignored"
-                );
-                return Ok(true);
+                    "processd NB: a waiting Anmeldung never got its Anfrage out — re-sending"
+                ),
+                Waiting::Recorded => {}
             }
             for lfa in lfa_mp_ids {
                 dispatch_abmeldeanfrage(
@@ -709,6 +714,18 @@ pub async fn evaluate_and_decide(
                 )
                 .await?;
             }
+            // Every Anfrage is out; the LFA's 09:00 window is running and its
+            // lapse will resolve the row. Stamped only now, so a dispatch that
+            // failed above leaves the redelivery something to retry.
+            pending
+                .mark_anfrage_sent(process_id, &config.tenant)
+                .await?;
+            // Prozessschritt 2, „parallel zu Nr. 3" and on the same condition:
+            // an LFA holds the Marktlokation and Prüfschritt 4 of Nr. 1 has
+            // routed here. Its 07:00 window is the earliest of the whole
+            // Lieferbeginn — four hours before the answer to the same message —
+            // so the LFN learns who the LFA is with a Werktag left to act on it.
+            meldung.informieren(makod, &malo_id, process_id).await;
             info!(
                 %process_id, pid, %malo_id, lfa = ?lfa_mp_ids,
                 "processd NB: Anfrage zur Beendigung der Zuordnung sent — the Anmeldung \
@@ -868,6 +885,9 @@ pub async fn resume_after_lfa_antwort(
     };
 
     let mut anfrage: AnmeldungAnfrage = serde_json::from_value(waiting.anfrage.clone())?;
+    // The Meldepflicht facts as of the Anmeldung. Phase one wrote them because
+    // the Zuordnung it is about to end is the one that was in force then.
+    let meldung: MeldepflichtContext = serde_json::from_value(waiting.meldung.clone())?;
     let zustimmung = data
         .get("zustimmung")
         .and_then(serde_json::Value::as_bool)
@@ -884,6 +904,19 @@ pub async fn resume_after_lfa_antwort(
         .get("grund")
         .and_then(|v| v.as_str())
         .map(ToOwned::to_owned);
+
+    // **Fall b** — the LFA released the Marktlokation earlier than asked and
+    // „teilt sein Lieferendedatum in der Antwort mit" (`A34`). That date is what
+    // the Beendigung der Zuordnung has to name, so it is kept beside the answer
+    // rather than only inside it. Only the verbrauchende branch admits it.
+    let lfa_zuordnungsende = (zustimmung
+        && anfrage.marktlokationsart.ist_verbrauchend_oder_ruhend())
+    .then(|| {
+        data.get("zuordnungsende")
+            .and_then(|v| v.as_str())
+            .and_then(parse_civil_date)
+    })
+    .flatten();
 
     // Silence carries no code, which is exactly what `E_0623` Prüfschritt 30
     // „nein" reads: the tree goes straight to 60 and confirms.
@@ -978,16 +1011,36 @@ pub async fn resume_after_lfa_antwort(
     };
 
     match &result {
+        // Prozessschritt 10 (Strom) / 6 (Gas) rides with every one of these
+        // arms: „unverzüglich nach dem ÜZ von Nr. 5", so the LFA is told its
+        // Zuordnung ends exactly when — and only when — the Bestätigung goes
+        // out. A held decision carries the Meldung on the queue entry, so
+        // deferring the answer defers the Meldung with it instead of losing it.
         NbEntscheidung::Accept(_) => {
+            // The ÜT of the Anmeldung, in German local time: the day the Fall-b
+            // „mindestens 1 WT nach dem ÜT" floor counts from.
+            use time_tz::{OffsetDateTimeExt as _, timezones};
+            let uet = waiting
+                .received_at
+                .to_timezone(timezones::db::europe::BERLIN)
+                .date();
+            let zuordnungsende = meldung.zuordnungsende(lfa_zuordnungsende, uet);
+            let beendigung = meldung.beendigung(&malo_id, zuordnungsende);
+            // The Zuordnungsende the LFA actually answered with, when it falls
+            // *before* the Zuordnungsbeginn this answer confirms. Those days are
+            // supplied by nobody, and `marktd` is the only place that holds both
+            // ends of the interval — so the date travels with the Bestätigung.
+            let fall_b = (zuordnungsende < meldung.zuordnungsbeginn).then_some(zuordnungsende);
             if rec.initiator_is_affiliate {
                 warn!(%anmeldung_process_id, pid, %malo_id,
                       "processd NB: § 20 EnWG — affiliate Anmeldung held for operator review");
-                enqueue_for_operator(
+                enqueue_for_operator_with_followup(
                     queue,
                     config,
                     &meta,
                     "§ 20 EnWG affiliate Anmeldung — the LFA released the Marktlokation, but \
                      an affiliate may not take the automatic path a third party does not get",
+                    beendigung,
                 )
                 .await?;
             } else if config.auto_accept {
@@ -998,15 +1051,20 @@ pub async fn resume_after_lfa_antwort(
                     anmeldung_process_id,
                     &result,
                     dritter.as_ref(),
+                    fall_b,
                 )
                 .await?;
+                meldung
+                    .beenden(makod, &malo_id, anmeldung_process_id, zuordnungsende)
+                    .await;
             } else {
-                enqueue_for_operator(
+                enqueue_for_operator_with_followup(
                     queue,
                     config,
                     &meta,
                     "the LFA released the Marktlokation and E_0623 confirms; auto_accept is \
                      off, so the Bestätigung is dispatched on operator approval",
+                    beendigung,
                 )
                 .await?;
             }
@@ -1023,6 +1081,9 @@ pub async fn resume_after_lfa_antwort(
                 anmeldung_process_id,
                 &result,
                 dritter.as_ref(),
+                // An Ablehnung leaves the Altlieferant where it was, so no
+                // interval opens and there is nothing for the projection.
+                None,
             )
             .await?;
         }
@@ -1059,8 +1120,14 @@ pub async fn resume_after_lfa_antwort(
 ///
 /// | Nr. | PID (Strom / Gas) | To | Spätester ÜZ | Sent when |
 /// |---|---|---|---|---|
-/// | 2 | 55036 / 44036 | LFN | 07:00 Uhr des 1. WT / Ablauf des 4. WT | an LFA exists — *before* the decision |
-/// | 10 / 6 | 55037 / 44037 | LFA | 12:00 Uhr des 1. WT / am selben Tag wie die Antwort | after the Bestätigung |
+/// | 2 | 55036 / 44036 | LFN | 07:00 Uhr des 1. WT / Ablauf des 4. WT | with the Anfrage of Nr. 3 („parallel zu Nr. 2") |
+/// | 10 / 6 | 55037 / 44037 | LFA | 12:00 Uhr des 1. WT / am selben Tag wie die Antwort | with the Bestätigung, auto-dispatched or operator-released |
+///
+/// Both ride the Prozessschritt they belong to. Nr. 2 shares its condition with
+/// Nr. 3, so an Anmeldung the Vorprüfung refuses never names the LFA to the
+/// party it refuses; Nr. 10 is „unverzüglich nach dem ÜZ von Nr. 5", so it can
+/// only be sent where the Bestätigung is — which is phase two, because an
+/// assigned Marktlokation never reaches a Zustimmung in phase one.
 ///
 /// Nr. 2 is owed „auch dann …, sofern LFA und LFN identisch sind", so the two
 /// MP-IDs being equal is not a reason to skip it.
@@ -1071,8 +1138,8 @@ pub async fn resume_after_lfa_antwort(
 /// (`lf_mp_id_next`), which `marktd` has already filled with *this* LFN by the
 /// time the decision runs. A distinct LFZ is not representable, and a competing
 /// pending Anmeldung is refused `A06` before it could be. The command
-/// (`gpke.zuordnung.aufheben`) exists for an operator or ERP that can see one;
-/// `ROADMAP.md` carries the projection change.
+/// (`gpke.zuordnung.aufheben`) exists for an operator or ERP that can see one.
+#[derive(serde::Serialize, serde::Deserialize)]
 struct MeldepflichtContext {
     sparte: Sparte,
     /// The LFN — the party that sent the Anmeldung, and the recipient of Nr. 2.
@@ -1145,29 +1212,78 @@ impl MeldepflichtContext {
             .await;
     }
 
-    /// Prozessschritt 10 (Strom) / 6 (Gas) — tell the LFA its Zuordnung ends.
-    async fn beenden(&self, makod: &MakodClient, malo_id: &str, process_id: Uuid) {
-        let Some(altlieferant) = self.altlieferant.as_deref() else {
-            return;
+    /// The Zuordnungsende the LFA is told about in Nr. 10.
+    ///
+    /// „Das Zuordnungsende … ist … der Zuordnungsbeginn der Anmeldung" — except
+    /// in **Fall b**, where the LFA answered `A34` and „teilt sein
+    /// Lieferendedatum in der Antwort mit". That date governs when it lies
+    /// *before* the Zuordnungsbeginn and „mindestens 1 WT nach dem ÜT der
+    /// Anmeldung"; a date failing either test leaves the Zuordnungsbeginn
+    /// standing (GPKE Teil 2 § 2.1.2 Nr. 10).
+    ///
+    /// `uet` is the Übertragungstag of the Anmeldung — the day the 1-Werktag
+    /// floor counts from. Fall b belongs to the verbrauchende branch of
+    /// `E_0623`; an erzeugende Marktlokation settles its Zuordnungsende through
+    /// Geschäftsvorfall 2/3 arithmetic instead, so a stated date is ignored
+    /// there rather than applied to a case the Festlegung does not describe.
+    fn zuordnungsende(&self, lfa_gemeldet: Option<time::Date>, uet: time::Date) -> time::Date {
+        let Some(gemeldet) = lfa_gemeldet else {
+            return self.zuordnungsbeginn;
         };
+        let floor = mako_fristen::add_werktage(uet, 1, mako_fristen::HolidayCalendar::BdewMaKo);
+        if gemeldet < self.zuordnungsbeginn && gemeldet >= floor {
+            gemeldet
+        } else {
+            self.zuordnungsbeginn
+        }
+    }
+
+    /// Prozessschritt 10 (Strom) / 6 (Gas) — the command and body that tell the
+    /// LFA its Zuordnung ends, or `None` where nothing is owed.
+    ///
+    /// Separated from the sending because the Bestätigung it follows may be
+    /// dispatched automatically or held for an operator, and the Meldung has to
+    /// go out either way. The operator path stores this pair on the queue entry
+    /// and dispatches it after the answer.
+    fn beendigung(
+        &self,
+        malo_id: &str,
+        zuordnungsende: time::Date,
+    ) -> Option<(&'static str, serde_json::Value)> {
+        let altlieferant = self.altlieferant.as_deref()?;
         // „Sofern LFA und LFN identisch sind" the Information is still owed
         // (Nr. 2 says so), but there is no assignment to end: the supplier keeps
         // supplying under a new Zuordnungsbeginn.
         if altlieferant == self.lfn_mp_id {
-            return;
+            return None;
         }
         let (_, command) = self.commands();
         let mut payload = serde_json::json!({
             "malo_id":           malo_id,
             "empfaenger_mp_id":  altlieferant,
             "transaktionsgrund": Self::BEENDIGUNG_GRUND,
-            // `SG4 DTM+93` Ende zum. „Das Zuordnungsende … ist … der
-            // Zuordnungsbeginn der Anmeldung" (Nr. 10).
-            "process_date":      self.zuordnungsbeginn.to_string(),
+            // `SG4 DTM+93` Ende zum — the Zuordnungsbeginn der Anmeldung, or
+            // the LFA's own earlier Lieferendedatum in Fall b.
+            "process_date":      zuordnungsende.to_string(),
         });
         if self.sparte != Sparte::Gas && self.tranche {
             payload["tranche"] = serde_json::json!(true);
         }
+        Some((command, payload))
+    }
+
+    /// Send the Beendigung der Zuordnung now — the path an automatically
+    /// dispatched Bestätigung takes.
+    async fn beenden(
+        &self,
+        makod: &MakodClient,
+        malo_id: &str,
+        process_id: Uuid,
+        zuordnungsende: time::Date,
+    ) {
+        let Some((command, payload)) = self.beendigung(malo_id, zuordnungsende) else {
+            return;
+        };
         self.send(makod, command, malo_id, process_id, "beenden", payload)
             .await;
     }
@@ -1240,9 +1356,26 @@ async fn enqueue_for_operator(
     meta: &AnmeldungMeta,
     reason: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    enqueue_for_operator_with_followup(queue, config, meta, reason, None).await
+}
+
+/// Queue a decision that carries a **Meldepflicht** the operator's approval
+/// must discharge with it.
+///
+/// The Meldungen around a Lieferbeginn are owed „unverzüglich nach dem ÜZ" of
+/// the answer they follow. When that answer waits for an operator, so does the
+/// Meldung — and it has to state what was true when the decision was taken, so
+/// the body is frozen here rather than rebuilt at approval time.
+async fn enqueue_for_operator_with_followup(
+    queue: &PgApprovalQueue,
+    config: &NbModuleConfig,
+    meta: &AnmeldungMeta,
+    reason: &str,
+    followup: Option<(&'static str, serde_json::Value)>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let window = mako_fristen::antwort::operator_window(meta.pid, meta.received_at);
     let (accept, reject) = answer_commands(meta.pid);
-    let entry = ApprovalQueueEntry::pending(
+    let mut entry = ApprovalQueueEntry::pending(
         meta.process_id,
         meta.pid as i32,
         Some(meta.malo_id.clone()),
@@ -1254,6 +1387,9 @@ async fn enqueue_for_operator(
         config.tenant.clone(),
     )
     .with_commands(accept, reject, Some("NB"));
+    if let Some((command, payload)) = followup {
+        entry = entry.with_followup(command, payload);
+    }
     queue.enqueue(&entry).await?;
     info!(
         process_id = %meta.process_id,
@@ -1398,6 +1534,12 @@ fn parse_civil_date(raw: &str) -> Option<time::Date> {
     }
 }
 
+/// A date as the `makod` command payloads carry it, `YYYYMMDD`.
+fn civil_date(d: time::Date) -> String {
+    d.format(time::macros::format_description!("[year][month][day]"))
+        .unwrap_or_else(|_| d.to_string())
+}
+
 /// UTILMD TM+EM marker → `mako-pruefung` metering class. SLP is the default: it
 /// is the class with the *widest* retroactive window, so an unknown marker can
 /// never turn an admissible date into an auto-reject.
@@ -1495,7 +1637,7 @@ async fn decide_abmeldung(
                 )
                 .await?;
             } else if config.auto_accept {
-                dispatch(makod, pid, &malo_id, process_id, &result, None).await?;
+                dispatch(makod, pid, &malo_id, process_id, &result, None, None).await?;
                 info!(%process_id, pid, %malo_id, antwortcode = result.antwortcode(),
                       "processd NB: dispatched Bestätigung Abmeldung");
             } else {
@@ -1510,7 +1652,7 @@ async fn decide_abmeldung(
             }
         }
         NbEntscheidung::Reject(reason) => {
-            dispatch(makod, pid, &malo_id, process_id, &result, None).await?;
+            dispatch(makod, pid, &malo_id, process_id, &result, None, None).await?;
             info!(%process_id, pid, %malo_id, antwortcode = %reason.antwort.antwortcode,
                   "processd NB: dispatched Ablehnung Abmeldung");
         }
@@ -1599,6 +1741,7 @@ async fn dispatch(
     process_id: Uuid,
     result: &NbEntscheidung,
     dritter: Option<&DritterMarktbeteiligter>,
+    lfa_lieferende: Option<time::Date>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (accept_cmd, reject_cmd) = answer_commands(pid);
     let (antwort, accept, detail) = match result {
@@ -1637,6 +1780,14 @@ async fn dispatch(
             payload["dritter_referenz_lokation"] = serde_json::json!(referenz);
             payload["dritter_objekt"] = serde_json::json!(d.objekt);
         }
+    }
+    // **Fall b** — the LFA released the Marktlokation before the Zuordnungsbeginn
+    // this answer confirms. Not a segment of the 55002: it rides the completion
+    // payload so `marktd` can see the days between the two dates, which no
+    // supplier covers and § 38 Abs. 1 EnWG attaches to. `YYYYMMDD`, the format
+    // every date on this payload uses.
+    if accept && let Some(ende) = lfa_lieferende {
+        payload["lfa_lieferende"] = serde_json::json!(civil_date(ende));
     }
 
     let cmd = ForwardCommand {
@@ -1781,6 +1932,10 @@ mod tests {
 
     // ── Meldepflichten ────────────────────────────────────────────────────────
 
+    fn date(y: i32, m: time::Month, d: u8) -> time::Date {
+        time::Date::from_calendar_date(y, m, d).expect("valid date")
+    }
+
     fn meldung(sparte: Sparte, altlieferant: Option<&str>) -> MeldepflichtContext {
         MeldepflichtContext {
             sparte,
@@ -1839,6 +1994,14 @@ mod tests {
             ..meldung(Sparte::Strom, None)
         };
         assert_eq!(m.altlieferant.as_deref(), Some(m.lfn_mp_id.as_str()));
+        assert!(m.beendigung("51238696012", m.zuordnungsbeginn).is_none());
+    }
+
+    /// An unassigned Marktlokation has nothing to end either.
+    #[test]
+    fn an_unassigned_marktlokation_owes_no_beendigung() {
+        let m = meldung(Sparte::Strom, None);
+        assert!(m.beendigung("51238696012", m.zuordnungsbeginn).is_none());
     }
 
     /// The Zuordnungsende the LFA is told about is the Zuordnungsbeginn of the
@@ -1846,7 +2009,73 @@ mod tests {
     #[test]
     fn the_beendigung_names_the_anmeldung_s_zuordnungsbeginn() {
         let m = meldung(Sparte::Strom, Some("9900111000002"));
-        assert_eq!(m.zuordnungsbeginn.to_string(), "2026-10-01");
+        let (command, payload) = m
+            .beendigung("51238696012", m.zuordnungsbeginn)
+            .expect("an LFA holds the MaLo");
+        assert_eq!(command, mako_markt::commands::GPKE_ZUORDNUNG_BEENDEN);
+        assert_eq!(payload["process_date"], "2026-10-01");
+        assert_eq!(payload["empfaenger_mp_id"], "9900111000002");
+        assert_eq!(payload["transaktionsgrund"], "ZC8");
+    }
+
+    /// **Fall b** — the LFA answered `A34` with an earlier Lieferendedatum, and
+    /// that is the Zuordnungsende the Beendigung has to name. Telling it the
+    /// Zuordnungsbeginn instead would claim its supply ran days longer than it
+    /// did, and the LFA bills from this date.
+    #[test]
+    fn fall_b_names_the_lfas_own_lieferendedatum() {
+        let m = meldung(Sparte::Strom, Some("9900111000002"));
+        // Anmeldung received Monday 2026-09-07; the LFA releases 2026-09-21,
+        // before the 2026-10-01 Zuordnungsbeginn and well past the 1-WT floor.
+        let uet = date(2026, time::Month::September, 7);
+        let gemeldet = date(2026, time::Month::September, 21);
+        assert_eq!(m.zuordnungsende(Some(gemeldet), uet), gemeldet);
+        let (_, payload) = m
+            .beendigung("51238696012", m.zuordnungsende(Some(gemeldet), uet))
+            .expect("an LFA holds the MaLo");
+        assert_eq!(payload["process_date"], "2026-09-21");
+    }
+
+    /// A date that is not *earlier* than the Zuordnungsbeginn is not Fall b, and
+    /// one inside the „mindestens 1 WT nach dem ÜT" floor is not admissible.
+    /// Both leave the Zuordnungsbeginn standing rather than being refused —
+    /// Nr. 10 states the fallback, so there is nothing to escalate.
+    #[test]
+    fn an_inadmissible_fall_b_date_leaves_the_zuordnungsbeginn_standing() {
+        let m = meldung(Sparte::Strom, Some("9900111000002"));
+        let uet = date(2026, time::Month::September, 7);
+        for stated in [
+            // On the Zuordnungsbeginn — not earlier.
+            date(2026, time::Month::October, 1),
+            // After it.
+            date(2026, time::Month::November, 1),
+            // The ÜT itself: inside the 1-Werktag floor.
+            uet,
+        ] {
+            assert_eq!(
+                m.zuordnungsende(Some(stated), uet),
+                m.zuordnungsbeginn,
+                "{stated}"
+            );
+        }
+        // And silence keeps it too.
+        assert_eq!(m.zuordnungsende(None, uet), m.zuordnungsbeginn);
+    }
+
+    /// Phase two runs hours after phase one, so the facts the Meldung states
+    /// travel through the database with the waiting Anmeldung. A context that
+    /// does not survive the round trip silently drops the Meldung.
+    #[test]
+    fn the_meldepflicht_context_survives_the_wait_for_the_lfa() {
+        let m = meldung(Sparte::Gas, Some("9870111000002"));
+        let stored = serde_json::to_value(&m).expect("serialisable");
+        let back: MeldepflichtContext = serde_json::from_value(stored).expect("round-trips");
+        assert_eq!(back.marktrolle(), "GNB");
+        let (command, payload) = back
+            .beendigung("9870123456789", back.zuordnungsbeginn)
+            .expect("an LFA holds it");
+        assert_eq!(command, mako_markt::commands::GELI_ZUORDNUNG_BEENDEN);
+        assert_eq!(payload["empfaenger_mp_id"], "9870111000002");
     }
 
     /// `SG6 RFF+TN` is Muss on 55036 / 44036 and comes from the LFN's own

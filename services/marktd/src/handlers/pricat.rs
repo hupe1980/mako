@@ -14,7 +14,7 @@ use serde::Serialize;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use super::{Claims, TenantGln};
+use super::{Claims, Tenant};
 
 // ── Type alias ───────────────────────────────────────────────────────────────
 
@@ -96,18 +96,18 @@ pub struct DispatchLogEntry {
 pub async fn get_pricat_history(
     Extension(repo): Extension<PriCatRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(nb_mp_id): Path<String>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-pricat", &tenant_gln)
+        .check(&claims.principal(), "read-pricat", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    match repo.list_versions(&nb_mp_id, &tenant_gln).await {
+    match repo.list_versions(&nb_mp_id, &tenant).await {
         Ok(versions) => {
             let summaries: Vec<PriCatVersionSummary> =
                 versions.iter().map(PriCatVersionSummary::from).collect();
@@ -136,12 +136,12 @@ pub async fn get_pricat_history(
 pub async fn get_dispatch_log(
     Extension(repo): Extension<PriCatRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path((_nb_gln, version_id)): Path<(String, Uuid)>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-pricat", &tenant_gln)
+        .check(&claims.principal(), "read-pricat", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -192,18 +192,18 @@ pub async fn get_dispatch_log(
 pub async fn post_pricat_dispatch(
     Extension(repo): Extension<PriCatRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(nb_mp_id): Path<String>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "dispatch-pricat", &tenant_gln)
+        .check(&claims.principal(), "dispatch-pricat", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    let latest = match repo.find_latest(&nb_mp_id, &tenant_gln).await {
+    let latest = match repo.find_latest(&nb_mp_id, &tenant).await {
         Ok(Some(v)) => v,
         Ok(None) => {
             return (

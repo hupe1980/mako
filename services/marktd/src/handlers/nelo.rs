@@ -45,7 +45,7 @@ use utoipa::{IntoParams, ToSchema};
 use crate::pg::PgNeLoRepository;
 
 use super::{
-    Claims, IfMatch, IntoMdmResponse as _, TenantGln, etag, malformed_if_match, parse_if_match,
+    Claims, IfMatch, IntoMdmResponse as _, Tenant, etag, malformed_if_match, parse_if_match,
 };
 
 /// Extension alias — concrete type so AFIT dispatches statically.
@@ -206,14 +206,14 @@ fn default_size() -> u32 {
 pub async fn put_nelo(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(repo): Extension<NeLoRepoExt>,
     Path(nelo_id): Path<String>,
     headers: HeaderMap,
     Json(body): Json<NeLoUpsertRequest>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-nelo", &tenant_gln)
+        .check(&claims.principal(), "write-nelo", &tenant)
         .is_err()
     {
         return MdmError::Forbidden {
@@ -283,7 +283,7 @@ pub async fn put_nelo(
     };
     let rec = NeLoRecord {
         nelo_id,
-        tenant: tenant_gln,
+        tenant,
         name: None,
         sparte,
         netzebene: None,
@@ -314,12 +314,12 @@ pub async fn put_nelo(
 pub async fn get_nelo(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(repo): Extension<NeLoRepoExt>,
     Path(nelo_id): Path<String>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-nelo", &tenant_gln)
+        .check(&claims.principal(), "read-nelo", &tenant)
         .is_err()
     {
         return MdmError::Forbidden {
@@ -327,7 +327,7 @@ pub async fn get_nelo(
         }
         .into_response();
     }
-    match repo.find(&nelo_id, &tenant_gln).await {
+    match repo.find(&nelo_id, &tenant).await {
         Ok(Some(rec)) => {
             let version = rec.version;
             let mut resp_headers = HeaderMap::new();
@@ -350,12 +350,12 @@ pub async fn get_nelo(
 pub async fn list_nelos(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(repo): Extension<NeLoRepoExt>,
     Query(query): Query<NeLoListQuery>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-nelo", &tenant_gln)
+        .check(&claims.principal(), "read-nelo", &tenant)
         .is_err()
     {
         return MdmError::Forbidden {
@@ -364,11 +364,10 @@ pub async fn list_nelos(
         .into_response();
     }
     let page_result = if let Some(nb_mp_id) = &query.nb_mp_id {
-        repo.list_by_nb(nb_mp_id, &tenant_gln, query.page, query.size)
+        repo.list_by_nb(nb_mp_id, &tenant, query.page, query.size)
             .await
     } else {
-        repo.list_by_tenant(&tenant_gln, query.page, query.size)
-            .await
+        repo.list_by_tenant(&tenant, query.page, query.size).await
     };
     match page_result {
         Ok(page) => Json(NetzlokationListResponse::from(page)).into_response(),

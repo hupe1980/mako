@@ -9,7 +9,7 @@
 //! workers.
 //!
 //! The full endpoint surface is documented in the crate README and in
-//! `site/content/docs/services/marktd.md`; `/swagger-ui/` serves it live.
+//! the published service documentation; `/api/v1/docs/` serves it live.
 #![deny(unsafe_code)]
 
 use std::{sync::Arc, time::Duration};
@@ -28,7 +28,7 @@ use marktd::{
     config::{self, Config},
     fanout::{FanoutConfig, spawn as spawn_fanout},
     handlers::{
-        TenantGln,
+        Tenant,
         bilanzierung::{get_bilanzierung_at, get_bilanzierung_history, put_bilanzierung},
         correlation::{get_correlation, list_correlations},
         device::{
@@ -179,7 +179,7 @@ impl Daemon for Marktd {
             partner_repo: pg::PgPartnerRepository::new(pool.clone()),
             makod_client: Arc::clone(&makod_client),
             notify: Arc::clone(&notify),
-            tenant_gln: tenant.clone(),
+            tenant: tenant.clone(),
         });
 
         spawn_workers(
@@ -226,7 +226,7 @@ impl Daemon for Marktd {
             .layer(Extension(verifier))
             .layer(Extension(InboundWebhookSecret(inbound_secret)))
             .layer(Extension(cedar))
-            .layer(Extension(TenantGln(tenant.clone())))
+            .layer(Extension(Tenant(tenant.clone())))
             .layer(Extension(notify))
             .layer(Extension(makod_client))
             .layer(Extension(http))

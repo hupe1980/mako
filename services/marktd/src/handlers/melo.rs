@@ -143,7 +143,7 @@ where
     Pa: PartnerRepository + Clone,
 {
     if enforcer
-        .check(&claims.principal(), "write-melo", &state.tenant_gln)
+        .check(&claims.principal(), "write-melo", &state.tenant)
         .is_err()
     {
         return MdmError::Forbidden {
@@ -216,7 +216,7 @@ where
             // auto-update and Redispatch 2.0 NetworkConstraintDocument cross-references).
             let melo_id_str = melo_id.to_string();
             let evt = MarktEvent::new(
-                &state.tenant_gln,
+                &state.tenant,
                 mako_events::markt::MELO_UPDATED,
                 melo_id_str,
                 serde_json::json!({ "version": version }),
@@ -276,7 +276,7 @@ where
     Pa: PartnerRepository + Clone,
 {
     if enforcer
-        .check(&claims.principal(), "read-melo", &state.tenant_gln)
+        .check(&claims.principal(), "read-melo", &state.tenant)
         .is_err()
     {
         return MdmError::Forbidden {
@@ -362,7 +362,7 @@ where
     Pa: PartnerRepository + Clone,
 {
     if enforcer
-        .check(&claims.principal(), "read-melo", &state.tenant_gln)
+        .check(&claims.principal(), "read-melo", &state.tenant)
         .is_err()
     {
         return MdmError::Forbidden {

@@ -237,13 +237,12 @@ pub(crate) async fn get_reading_order(
 ///
 /// Records the reading and **files the Zählerstand into the reading store**.
 ///
-/// The second half is the point. A completed Ablesung used to write the register
-/// value onto its own order row and nowhere else, so the one number the whole
-/// order existed to obtain was unreachable from billing: it could not answer
-/// § 40 Abs. 2 Nr. 6 EnWG (the invoice's opening and closing Zählerstand), and it
-/// could not be differenced against the previous year's reading — which for an
-/// **SLP** delivery point, with no interval metering at all, is the entire
-/// billing path (`metering::reading::consumption_between`).
+/// The second half is the point. A register value written onto the order row
+/// and nowhere else is unreachable from billing: it cannot answer § 40 Abs. 2
+/// Nr. 6 EnWG (the invoice's opening and closing Zählerstand), and it cannot be
+/// differenced against the previous year's reading — which for an **SLP**
+/// delivery point, with no interval metering at all, is the entire billing path
+/// (`metering::reading::consumption_between`).
 ///
 /// The order row keeps its copy: it is the record of what this Auftrag returned,
 /// which is a different fact from what the register held at an instant.

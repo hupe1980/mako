@@ -94,12 +94,12 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                     .first()
                     .and_then(|t| t.kunde())
                     .and_then(|k| k.nad.name_format.clone()),
-                // Bilanzierungsgebiet EIC from UTILMD NAD+Z09 / LOC+237.
-                // processd NB check 4 uses this field directly; when None,
-                // it falls back to marktd malo.bilanzierungsgebiet instead.
-                // TODO(L1/N2): call t.bilanzierungsgebiet_eic() once edi-energy
-                // exposes the LOC+237 segment accessor on UtilmdTransaction.
-                bilanzierungsgebiet: None,
+                // `SG10 CCI+Z20` — „Bilanzierungsgebiet, in dem die
+                // Marktlokation liegt" (MIG Strom Nr 00123), the EIC in DE 7037
+                // with no `CAV`. It is what `processd`'s NB check 4 reads; a
+                // message that omits it falls back to marktd's own record for
+                // the Marktlokation.
+                bilanzierungsgebiet: extract_bilanzierungsgebiet(u.segments()),
                 // Bilanzierungsmethode from UTILMD TM+EM segment (L1/N1).
                 // TM qualifier Z01 = SLP, Z02 = RLM, Z04 = IMS.
                 // Extracted from the message-level raw segments: TM segment
@@ -1196,8 +1196,7 @@ pub fn gpke_messwerte_registry() -> AdapterRegistry<GpkeMesswerteLieferungWorkfl
                     })
                     .unwrap_or(""),
             );
-            // The readings, not just the fact that a delivery arrived. They
-            // used to be decoded into `m` and dropped here.
+            // The readings, not just the fact that a delivery arrived.
             let (reads, undated) = super::mscons_intervals(m);
             if undated > 0 {
                 tracing::warn!(
@@ -1992,7 +1991,7 @@ pub fn gpke_eog_registry() -> AdapterRegistry<mako_gpke::GpkeEogWorkflow> {
 /// only. The MaLo attribute patch is built from the `TM` segments the extract
 /// helpers already read (`bilanzierungsmethode`, `fallgruppe`); netzebene /
 /// energierichtung / regelzone extraction awaits the AHB-profile import
-/// (roadmap).
+///.
 #[must_use]
 pub fn gpke_stammdaten_registry() -> AdapterRegistry<mako_gpke::GpkeStammdatenaenderungWorkflow> {
     let mut registry = AdapterRegistry::new();

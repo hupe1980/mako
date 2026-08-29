@@ -21,8 +21,8 @@
 //! number: it reads as authority, so nobody re-checks it. This module therefore
 //! splits the two cases:
 //!
-//! - **[Sourced constants](#sourced)** — a document in `regulatories/` states
-//!   the value, and the doc comment names document, section and wording.
+//! - **[Sourced constants](#sourced)** — a published document states the value,
+//!   and the doc comment names document, section and wording.
 //! - **[`Betreiberfristen`]** — no published source under the current regime.
 //!   The value is configuration, the historical BK6-20-05x figure is offered as
 //!   a documented default, and the type says so.

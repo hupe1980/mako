@@ -633,10 +633,10 @@ impl MpIdRegistry {
     /// is the main way it is called: the AS4 sender asks for the *recipient's*
     /// agency to fill `<eb:To>/<eb:PartyId type=…>` (AS4-Profil §2.3.1.1), and a
     /// counterparty is by definition absent from our own `[[party]]` list.
-    /// Falling back to a fixed `"293"` (BDEW Strom), as this used to, stamped
-    /// every Gas counterparty holding a DVGW `98…` code with the BDEW party
-    /// type. The receiving MSH resolves its P-Mode from those fields, so the
-    /// mismatch is visible to the counterparty, not just internally.
+    /// A fixed `"293"` (BDEW Strom) fallback stamps every Gas counterparty
+    /// holding a DVGW `98…` code with the BDEW party type; the receiving MSH
+    /// resolves its P-Mode from those fields, so the mismatch is visible to the
+    /// counterparty, not just internally.
     #[must_use]
     pub fn agency_for_mp_id(&self, mp_id: &str) -> &str {
         self.mp_id_to_agency
@@ -1103,11 +1103,11 @@ mod tests {
     /// The AS4 sender asks for the *recipient's* agency to fill
     /// `<eb:To>/<eb:PartyId type=…>` (AS4-Profil §2.3.1.1), and a counterparty is
     /// never in our own `[[party]]` list — so this method is called with an
-    /// unknown MP-ID on every outbound message. It used to answer `"293"` (BDEW
-    /// Strom) for all of them, which stamped every Gas counterparty holding a
-    /// DVGW `98…` code with the BDEW party type. The receiving MSH resolves its
-    /// P-Mode from those fields, so the mismatch is the counterparty's problem
-    /// to reject, not an internal detail.
+    /// unknown MP-ID on every outbound message. Answering a fixed `"293"`
+    /// (BDEW Strom) stamps every Gas counterparty holding a DVGW `98…` code with
+    /// the BDEW party type. The receiving MSH resolves its P-Mode from those
+    /// fields, so the mismatch is the counterparty's problem to reject, not an
+    /// internal detail.
     #[test]
     fn a_counterpartys_agency_comes_from_its_own_mp_id() {
         // A Strom-only operator: no Gas party is configured anywhere.

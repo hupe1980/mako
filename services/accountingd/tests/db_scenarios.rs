@@ -3534,3 +3534,95 @@ async fn a_committed_settlement_announces_itself() {
     .unwrap();
     assert_eq!(announced, 1, "and does not announce a second time");
 }
+
+/// A period statement opens at the balance the period started from.
+///
+/// § 666 BGB gives the customer an account of the supplier's dealings, and a
+/// March Kontoauszug that starts at zero tells them their February balance was
+/// nil. The three figures have to close: `eroeffnungssaldo + bewegung =
+/// schlusssaldo`, and the closing figure is the period's, not today's.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_period_statement_opens_at_the_prior_balance() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    pg::upsert_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap();
+
+    let post = async |amount: i64, on: time::Date| {
+        pg::post_entry(
+            &ledger,
+            &pool,
+            TENANT,
+            &malo,
+            "LF1",
+            "RECHNUNG",
+            amount,
+            &uniq("e"),
+            None,
+            None,
+            on,
+            on,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    };
+
+    // 300.00 billed in January and February, 150.00 in March, 90.00 in April.
+    post(10_000, date!(2026 - 01 - 20)).await;
+    post(20_000, date!(2026 - 02 - 10)).await;
+    post(15_000, date!(2026 - 03 - 05)).await;
+    post(9_000, date!(2026 - 04 - 02)).await;
+
+    let march = pg::list_ledger(
+        &ledger,
+        "LF1",
+        &malo,
+        doubleentry::BalanceQuery::between(date!(2026 - 03 - 01), date!(2026 - 03 - 31)),
+        500,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        march.lines.len(),
+        1,
+        "only March's movement belongs on a March statement"
+    );
+    assert_eq!(
+        march.opening_ct, 30_000,
+        "the period opens at January + February"
+    );
+    let bewegung: i64 = march.lines.iter().map(|l| l.signed_ct).sum();
+    assert_eq!(bewegung, 15_000);
+    assert_eq!(
+        march.opening_ct + bewegung,
+        45_000,
+        "the statement closes at the period's balance, not at April's"
+    );
+    // …and the running balance the store reports on the last line is that same
+    // figure, so the page adds up against its own arithmetic.
+    assert_eq!(march.lines[0].running_ct, 45_000);
+
+    // Whole-account: nothing came before, so it opens at zero.
+    let all = pg::list_ledger(&ledger, "LF1", &malo, doubleentry::BalanceQuery::all(), 500)
+        .await
+        .unwrap();
+    assert_eq!(all.opening_ct, 0);
+    assert_eq!(all.lines.len(), 4);
+
+    // A `limit` that cuts the front folds what it dropped into the opening
+    // rather than losing it: the truncated page still adds up.
+    let tail = pg::list_ledger(&ledger, "LF1", &malo, doubleentry::BalanceQuery::all(), 2)
+        .await
+        .unwrap();
+    assert_eq!(tail.lines.len(), 2);
+    assert_eq!(tail.opening_ct, 30_000, "January + February were cut off");
+    let tail_sum: i64 = tail.lines.iter().map(|l| l.signed_ct).sum();
+    assert_eq!(tail.opening_ct + tail_sum, 54_000);
+}

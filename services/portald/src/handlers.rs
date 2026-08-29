@@ -156,13 +156,22 @@ pub async fn get_dashboard(
     .into_response()
 }
 
-// ── Consumption ───────────────────────────────────────────────────────────────
+// ── Shared query shapes ───────────────────────────────────────────────────────
 
+/// An inclusive `from`/`to` date range narrowing a read.
+///
+/// Both bounds are passed upstream only when **both** are present: every
+/// upstream that takes them reads them as a pair, and half a range is not a
+/// period. Absent, the caller gets the whole series or account.
 #[derive(Debug, Deserialize)]
-pub struct LastgangQuery {
+pub struct PeriodQuery {
+    /// Inclusive start, ISO 8601 (`YYYY-MM-DD`).
     pub from: Option<String>,
+    /// Inclusive end, ISO 8601 (`YYYY-MM-DD`).
     pub to: Option<String>,
 }
+
+// ── Consumption ───────────────────────────────────────────────────────────────
 
 /// `GET /api/v1/portal/{malo_id}/lastgang?from=&to=`
 ///
@@ -173,7 +182,7 @@ pub async fn get_lastgang(
     Extension(clients): Clients,
     headers: HeaderMap,
     Path(malo_id): Path<String>,
-    Query(q): Query<LastgangQuery>,
+    Query(q): Query<PeriodQuery>,
 ) -> Response {
     if let Err(resp) = authorize(&cfg, &clients, &headers, &malo_id).await {
         return resp;
@@ -310,22 +319,29 @@ pub async fn get_balance(
     .await
 }
 
-/// `GET /api/v1/portal/{malo_id}/kontoauszug` — full account statement (§ 666 BGB).
+/// `GET /api/v1/portal/{malo_id}/kontoauszug?from=&to=` — account statement
+/// (§ 666 BGB).
+///
+/// Both bounds are passed only when both are present — `accountingd` reads them
+/// as a pair and answers a period statement, opening at the balance the period
+/// started from. Without them the customer gets the whole account.
 pub async fn get_kontoauszug(
     Extension(cfg): Cfg,
     Extension(clients): Clients,
     headers: HeaderMap,
     Path(malo_id): Path<String>,
+    Query(q): Query<PeriodQuery>,
 ) -> Response {
     if let Err(resp) = authorize(&cfg, &clients, &headers, &malo_id).await {
         return resp;
     }
-    proxy_opt(
-        clients.accountingd.as_ref(),
-        &format!("/api/v1/accounts/{malo_id}/kontoauszug"),
-        "accountingd",
-    )
-    .await
+    let path = match (q.from.as_deref(), q.to.as_deref()) {
+        (Some(from), Some(to)) => {
+            format!("/api/v1/accounts/{malo_id}/kontoauszug?from={from}&to={to}")
+        }
+        _ => format!("/api/v1/accounts/{malo_id}/kontoauszug"),
+    };
+    proxy_opt(clients.accountingd.as_ref(), &path, "accountingd").await
 }
 
 /// `GET /api/v1/portal/{malo_id}/vorauszahlung` — Abschlag schedule (§ 40 Abs. 1 EnWG).

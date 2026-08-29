@@ -92,6 +92,15 @@ async fn approval_queue_enqueue_list_approve() {
                 "gpke.nb-lieferende.bestaetigen",
                 "gpke.nb-lieferende.ablehnen",
                 None,
+            )
+            .with_followup(
+                "gpke.zuordnung.beenden",
+                serde_json::json!({
+                    "malo_id": "12345678989",
+                    "empfaenger_mp_id": "9900111000002",
+                    "transaktionsgrund": "ZC8",
+                    "process_date": "2026-10-01",
+                }),
             ),
         )
         .await
@@ -132,6 +141,21 @@ async fn approval_queue_enqueue_list_approve() {
         .expect("a Pending entry is claimable");
     assert!(matches!(claimed.status, QueueStatus::Approved));
     assert!(claimed.decided_at.is_some(), "the claim stamps decided_at");
+    // The Meldepflicht rides the claim. It is dispatched after the answer and
+    // states what was true when the decision was taken, so it has to come back
+    // off the row rather than be rebuilt at approval time.
+    assert_eq!(
+        claimed.followup_command.as_deref(),
+        Some("gpke.zuordnung.beenden")
+    );
+    assert_eq!(
+        claimed
+            .followup_payload
+            .as_ref()
+            .and_then(|p| p.get("process_date"))
+            .and_then(serde_json::Value::as_str),
+        Some("2026-10-01")
+    );
 
     // A second operator cannot claim the same entry — one decision, one command.
     assert!(
@@ -371,5 +395,97 @@ async fn a_closed_neuanlage_case_must_state_its_antwortcode() {
     assert!(
         err.to_string().contains("neuanlage_faelle"),
         "expected the table CHECK, got: {err}"
+    );
+}
+
+// ── The two-phase Anmeldung ───────────────────────────────────────────────────
+
+/// The Meldepflicht facts survive the wait for the LFA.
+///
+/// Phase one writes the Anmeldung's facts and phase two runs hours later, when
+/// the LFA has answered or its 09:00 window has lapsed. The Beendigung der
+/// Zuordnung (55037 / 44037) states the **Altlieferant** and the
+/// **Zuordnungsende** — neither of which is in the serialised `AnmeldungAnfrage`
+/// and both of which the projection has moved on from by then — so they travel
+/// with the waiting row or the Meldung cannot be sent at all.
+#[tokio::test]
+async fn a_waiting_anmeldung_carries_its_meldepflicht_facts() {
+    let (pool, _pg) = pg_pool().await;
+    let repo = processd::pg::abmeldeanfrage::PgAbmeldeanfrageRepository::new(pool);
+    let tenant = "9900357000004";
+    let process_id = Uuid::new_v4();
+
+    let meldung = serde_json::json!({
+        "sparte": "strom",
+        "lfn_mp_id": "9900555000005",
+        "zuordnungsbeginn": "2026-10-01",
+        "vorgangsnummer": "VG-4711",
+        "tranche": false,
+        "altlieferant": "9900111000002",
+    });
+    let rec = processd::pg::abmeldeanfrage::AbmeldeanfrageRecord {
+        anmeldung_process_id: process_id,
+        malo_id: "51238696781".to_owned(),
+        lfn_mp_id: "9900555000005".to_owned(),
+        lfa_mp_ids: vec!["9900111000002".to_owned()],
+        pid: 55001,
+        anfrage: serde_json::json!({ "pid": 55001 }),
+        meldung: meldung.clone(),
+        received_at: time::OffsetDateTime::now_utc(),
+        tenant: tenant.to_owned(),
+    };
+
+    use processd::pg::abmeldeanfrage::Waiting;
+    assert_eq!(
+        repo.record(&rec).await.expect("record"),
+        Waiting::Recorded,
+        "first write lands"
+    );
+    // The row is written before the Anfrage goes out, so a redelivery that
+    // arrives before the dispatch succeeded must send it rather than return —
+    // nothing else ever will: no 55010 means no 09:00 window and no lapse.
+    assert_eq!(
+        repo.record(&rec).await.expect("re-record"),
+        Waiting::Unsent,
+        "a row whose Anfrage never went out is not a duplicate"
+    );
+    repo.mark_anfrage_sent(process_id, tenant)
+        .await
+        .expect("stamp the dispatch");
+    assert_eq!(
+        repo.record(&rec).await.expect("re-record after dispatch"),
+        Waiting::AlreadySent,
+        "a redelivered Anmeldung must not ask the LFA twice"
+    );
+
+    let pending = repo.list_pending(tenant, 10).await.expect("list pending");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        pending[0].meldung, meldung,
+        "the operator view carries it too"
+    );
+
+    let taken = repo
+        .take(process_id, tenant)
+        .await
+        .expect("take")
+        .expect("the row is waiting");
+    assert_eq!(
+        taken.meldung, meldung,
+        "phase two reads back exactly what phase one froze"
+    );
+
+    assert!(
+        repo.take(process_id, tenant)
+            .await
+            .expect("re-take")
+            .is_none(),
+        "the LFA's answer and the 09:00 lapse race; only one may resume"
+    );
+    // …and once the decision is made, a late redelivery is a duplicate, not an
+    // unsent Anfrage: the row is resolved and there is nothing left to send.
+    assert_eq!(
+        repo.record(&rec).await.expect("record after resolve"),
+        Waiting::AlreadySent
     );
 }

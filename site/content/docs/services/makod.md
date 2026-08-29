@@ -770,10 +770,10 @@ RUN cargo build -p makod --release \
 ```
 
 Selecting no role at all is refused at startup rather than silently producing an
-all-roles binary. Each role build registers a strict subset — an LF build carries
-27 workflows over 259 PIDs, an ESA build 10 over 68, against 56 over 422 for the
-default — and the startup log records both counts, so the binary's role scope is
-evidence for a BNetzA audit.
+all-roles binary. Each role build registers a strict subset of the default's
+**63 workflows over 458 Prüfidentifikatoren**, and the startup log records both
+counts for whichever roles were compiled, so the binary's scope is evidence for a
+BNetzA audit.
 
 > **Runtime `--marktrollen` is separate from compile-time feature flags.**
 > Feature flags determine which *code* is compiled; `--marktrollen` determines
@@ -1848,15 +1848,11 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `mabis.abrechnung.einleiten` | `BKV` | MaBiS | 13003 · 13020 · 13023 | Record a version of a Summenzeitreihe; opens the settlement on the first one and resumes it on every later one. Requires `zeitreihe` (the `SG10 CAV` code) and `version` (the Erstellungszeitpunkt) |
 | `mabis.abrechnung.daten-einreichen` | `BKV` | MaBiS | 21000 · 21001 · 21005 | Send a Prüfmitteilung for one version. Requires `antwortcode` — a code published by the Entscheidungsbaum that decides *this* Summenzeitreihe — plus `grund` for anything other than that tree's Zustimmung. **No Frist** — bounded by the § 3.10 clearing window |
 | `mabis.abrechnung.begleichen` | `BKV` or `ÜNB` | MaBiS | — | Close the clearing window. It does **not** set a Datenstatus: that is the BIKO's alone (§ 3.8.3) and arrives as IFTSTA 21003/21004 |
+| `mabis.liste.korrigieren` | `LFN`/`NB`/`ÜNB` | MaBiS | 55066 · 55196 · 55202 · 55224 | Answer a Clearingliste with a **Korrekturliste** — one entry per disputed Marktlokation, `{ malo, grund }`. An empty list is the ordinary „reconciled, nothing to correct" reply and is still sent: silence reads as acceptance of whatever the distributor filed. `sender_rolle` is required — it selects the Entscheidungsbaum, and `E_0047` (NB) and `E_0004` (ÜNB) publish different codes for the same Korrekturgrund |
+| `mabis.liste.ablehnen` | `LFN`/`NB`/`ÜNB` | MaBiS | 55066 · 55196 · 55202 · 55224 | Refuse a Clearingliste **entire** — the disjoint cluster that names no Marktlokation at all. Each whole-list fact (`abonnement_bestellt`, `zeitraum_plausibel`, `mabis_zp_passt`, `version_zugelassen`, `innerhalb_clearingphase`) is tri-state: absent means „cannot answer", which escalates rather than guessing. The tree decides, so a list whose whole-list Prüfschritte all pass is refused here and owed a Korrekturliste instead |
 | `mabis.summenzeitreihe.uebermitteln` | `NB` or `ÜNB` | MaBiS | 13003 | File a Summenzeitreihe for one Bilanzierungsgebiet with the BIKO |
 | `gpke.vollzugsmeldung.empfangen` | `NB`/`LFN`/`LFA` | GPKE | 21024–21033 | Vollzugsmeldung received via REST (manual replay) |
 | `wim.iftsta.empfangen` | `NB`/`MSB` | WiM | 21009–21018 | WiM IFTSTA status received via REST (manual replay) |
-| `wim.gas.anmeldung.bestaetigen` | `NB`/`GNB` | WiM Gas | 44042–44044 / 44051–44053 | GNB accepts GMSB Anmeldung (positive APERAK within 10 WT) |
-| `wim.gas.anmeldung.ablehnen` | `NB`/`GNB` | WiM Gas | 44042–44044 / 44051–44053 | GNB rejects GMSB Anmeldung (negative APERAK within 10 WT) |
-| `wim.gas.kuendigung.bestaetigen` | `NB`/`GNB` | WiM Gas | 44039–44041 | GNB accepts GMSB Kündigung |
-| `wim.gas.kuendigung.ablehnen` | `NB`/`GNB` | WiM Gas | 44039–44041 | GNB rejects GMSB Kündigung |
-| `wim.gas.stornierung.bestaetigen` | `NB`/`GNB` | WiM Gas | 44022–44024 | GNB sends positive APERAK 44023 to LF Stornierung |
-| `wim.gas.stornierung.ablehnen` | `NB`/`GNB` | WiM Gas | 44022–44024 | GNB sends negative APERAK 44024 to LF Stornierung |
 | `mabis.iftsta.empfangen` | `BKV`/`NB`/`ÜNB` | MaBiS | 21002 | Abweisung einer Prüfmitteilung (BIKO → NB/ÜNB); requires `abweisungsgrund`. A rejected Prüfmitteilung is never forwarded, so the check has to be redone (§ 9.8.2 Nr. 2) |
 | `mabis.datenstatus.empfangen` | `BKV`/`NB`/`ÜNB` | MaBiS | 21003 · 21004 | Datenstatus received via REST. **Both** PIDs carry one — 21003 addresses the NB/ÜNB, 21004 the BKV — so which one arrives follows from the role. Accepts the `STS+Z04` codes `A01`/`A02`/`A03`/`A04`/`A06` or their snake_case names |
 
@@ -1944,12 +1940,6 @@ MP-IDs resolved by the engine (sender, receiver) are intentionally absent.
 | `wim.geraetewechsel.aperak` | `melo_id`², optional `positiv` (default `true`), optional `reason` |
 | `wim.gesamtvorgang.melden` | `melo_id`², optional `erfolgreich` (default `true`), **`zuordnungsbeginn`** (YYYYMMDD, required on success) |
 | `wim.zuordnung.bestaetigen` / `.ablehnen` | `melo_id`² |
-| `wim.gas.anmeldung.bestaetigen` | `malo_id` (gas MaLo) |
-| `wim.gas.anmeldung.ablehnen` | `malo_id` (gas MaLo), `reason` (ERC code + text) |
-| `wim.gas.kuendigung.bestaetigen` | `malo_id` (gas MaLo) |
-| `wim.gas.kuendigung.ablehnen` | `malo_id` (gas MaLo), `reason` |
-| `wim.gas.stornierung.bestaetigen` | `vorgang_id` (Vorgangsnummer from PID 44022 IDE+24) |
-| `wim.gas.stornierung.ablehnen` | `vorgang_id`, `reason` |
 | `mabis.abrechnung.einleiten` | `zeitreihe`, `mabis_zp_id`, `bilanzierungsmonat`, `version`, `biko_id`, `absender_mp_id` |
 | `mabis.abrechnung.daten-einreichen` | `version`, `pid`, `antwortcode`, `grund` (required unless the code is the tree's Zustimmung) |
 

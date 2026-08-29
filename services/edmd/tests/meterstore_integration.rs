@@ -2189,12 +2189,12 @@ async fn erasure_removes_virtual_meter_configs_naming_the_subject() {
 /// An Ersatzwert is filed under the register whose gap it fills.
 ///
 /// The request may omit `obis_code`, in which case the substitution picks the
-/// point's dominant energy register — and it used to write the value back with
-/// the *request's* register, i.e. none. An unlabelled reading is the canonical
-/// **total** register (`domain::register`), so on a dual-tariff point that
-/// reports only HT and NT, one such substitute made the whole month's HT/NT
-/// series look like a decomposition of it: every aggregate over the period
-/// collapsed to the substitute alone.
+/// point's dominant energy register — and it must write the value back under
+/// *that* register, not under the request's. An unlabelled reading is the
+/// canonical **total** register (`domain::register`), so on a dual-tariff point
+/// that reports only HT and NT, one unlabelled substitute makes the whole
+/// month's HT/NT series read as a decomposition of it and every aggregate over
+/// the period collapses to the substitute alone.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn a_substitute_is_filed_under_the_register_it_fills() {
@@ -2680,11 +2680,11 @@ async fn a_completed_ablesung_reaches_the_reading_store() {
 
 /// §42c Energy Sharing: the allocation endpoint resolves a community by plant.
 ///
-/// It used to read `rule_json["source_malo_ids"]`, a key a serialised
-/// `AggregationRule` carries under no variant, so the list was always empty and
-/// the endpoint always answered 422 — §42c allocation never worked at all. A GGV
-/// rule is written *per tenant*, so a community is the set of rules sharing a
-/// `plant_melo_id`, and that is what the lookup now matches.
+/// A GGV rule is written *per tenant*, so a community is the set of rules
+/// sharing a `plant_melo_id`, and that is what the lookup matches. Reaching for
+/// `rule_json["source_malo_ids"]` instead — a key a serialised `AggregationRule`
+/// carries under no variant — yields an empty list and a 422 on every
+/// allocation.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn a_sharing_community_is_the_set_of_rules_sharing_a_plant() {
@@ -2742,7 +2742,7 @@ async fn a_sharing_community_is_the_set_of_rules_sharing_a_plant() {
         "the community is exactly the rules naming this plant — not the one on another"
     );
 
-    // And the key the old code looked for is not in the stored rule at all.
+    // And the tempting key is not in the stored rule at all.
     let raw: serde_json::Value = sqlx::query_scalar(
         "SELECT rule_json FROM virtual_meter_configs WHERE virtual_malo_id='VIRT-A' AND tenant=$1",
     )
@@ -2818,7 +2818,7 @@ async fn the_portfolio_aggregate_does_not_double_count_a_dual_tariff_prosumer() 
         }
     };
 
-    // Raw, the way it used to be summed.
+    // The unprojected sum, for contrast.
     let raw: Decimal = rows.iter().map(value_of).sum();
     assert_eq!(
         raw,

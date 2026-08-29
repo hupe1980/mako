@@ -223,9 +223,9 @@ fn a_reading_without_an_offset_is_skipped_rather_than_guessed() {
 /// A conformant third-party 13027 carries the MaLo in `SG6 LOC+172` only.
 ///
 /// MSCONS AHB 3.1g §11.2 gives `SG5 NAD` just DE 3035 = `DP`; the identifier is
-/// `LOC` DE 3225. The adapter used to read `NAD` and worked only because mako's
-/// own renderer happens to fill both — a message from anyone else produced an
-/// empty location, which is the field `edmd` refuses the whole event on.
+/// `LOC` DE 3225. Reading `NAD` works against mako's own renderer, which happens
+/// to fill both, and yields an empty location for a message from anyone else —
+/// which is the field `edmd` refuses the whole event on.
 #[test]
 fn the_malo_is_read_from_loc_not_only_from_nad() {
     // Strip the party id from NAD+DP, leaving LOC+172 as the only carrier.

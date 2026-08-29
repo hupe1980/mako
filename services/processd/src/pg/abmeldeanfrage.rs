@@ -16,18 +16,19 @@ use uuid::Uuid;
 
 /// One `abmeldeanfragen` row as the driver returns it, before it is named.
 ///
-/// Spelled out because both queries select the same six columns and a tuple of
-/// that width is unreadable at the call site.
+/// Spelled out because both queries select the same seven columns and a tuple
+/// of that width is unreadable at the call site.
 type PendingRow = (
     String,
     String,
     Vec<String>,
     i32,
     serde_json::Value,
+    serde_json::Value,
     OffsetDateTime,
 );
 
-/// The same six columns with the primary key in front, for the listing query.
+/// The same seven columns with the primary key in front, for the listing query.
 type KeyedPendingRow = (
     Uuid,
     String,
@@ -35,8 +36,28 @@ type KeyedPendingRow = (
     Vec<String>,
     i32,
     serde_json::Value,
+    serde_json::Value,
     OffsetDateTime,
 );
+
+/// What recording a waiting Anmeldung found.
+///
+/// The row is written **before** the 55010 goes out — an LFA answering within
+/// milliseconds must find something to resume — so the two failure orders are
+/// not symmetric, and a redelivery has to tell them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Waiting {
+    /// Nothing was waiting; the Anfrage has to be sent.
+    Recorded,
+    /// A row was already there and its Anfrage never reached `makod`. Nothing
+    /// registered the LFA's 09:00 window, so nothing will ever resolve this
+    /// Anmeldung: the redelivery has to send the Anfrage after all.
+    Unsent,
+    /// A row was already there and its Anfrage is out (or the decision has
+    /// since been resolved). The redelivery is a duplicate and ends here — a
+    /// second 55010 would ask the LFA twice.
+    AlreadySent,
+}
 
 /// A waiting Anmeldung and the Anfrage that is holding it.
 #[derive(Debug, Clone)]
@@ -53,6 +74,10 @@ pub struct AbmeldeanfrageRecord {
     pub pid: i32,
     /// The serialised `mako_pruefung::AnmeldungAnfrage`.
     pub anfrage: serde_json::Value,
+    /// The serialised Meldepflicht context — what phase two needs to tell the
+    /// LFA its Zuordnung ends (55037 / 44037) once the Anmeldung is confirmed.
+    /// Not derivable from `anfrage`, which names no incumbent.
+    pub meldung: serde_json::Value,
     /// When the Anmeldung arrived — the anchor of its **own** 11:00 window,
     /// which is not the Anfrage's 09:00 one.
     pub received_at: OffsetDateTime,
@@ -73,23 +98,28 @@ impl PgAbmeldeanfrageRepository {
         Self { pool }
     }
 
-    /// Record that an Anmeldung is waiting on the LFA.
+    /// Record that an Anmeldung is waiting on the LFA, and say what was found.
     ///
     /// `ON CONFLICT DO NOTHING` on the primary key: the event fan-out is
-    /// at-least-once, and a redelivered Anmeldung must not restart a decision
-    /// that is already waiting — the Anfrage has gone out and its window is
-    /// running.
+    /// at-least-once, and a redelivered Anmeldung must not ask the LFA twice.
+    /// But „a row exists" is not the same as „the Anfrage went out": the row is
+    /// written first, deliberately, so an answer arriving in milliseconds finds
+    /// something to resume. A dispatch that then fails leaves a row nothing will
+    /// ever resolve — no 55010, so no 09:00 window, so no lapse — and the
+    /// Anmeldung silently misses its own 11:00 Frist.
     ///
-    /// Returns `true` when a row was written.
+    /// [`Waiting`] separates the two, and only [`Waiting::AlreadySent`] ends the
+    /// handling. Stamp a successful dispatch with
+    /// [`mark_anfrage_sent`](Self::mark_anfrage_sent).
     ///
     /// # Errors
     ///
     /// Propagates any `sqlx` failure.
-    pub async fn insert(&self, rec: &AbmeldeanfrageRecord) -> Result<bool, sqlx::Error> {
+    pub async fn record(&self, rec: &AbmeldeanfrageRecord) -> Result<Waiting, sqlx::Error> {
         let res = sqlx::query(
             "INSERT INTO abmeldeanfragen \
-             (anmeldung_process_id, tenant, malo_id, lfn_mp_id, lfa_mp_ids, pid, anfrage, received_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             (anmeldung_process_id, tenant, malo_id, lfn_mp_id, lfa_mp_ids, pid, anfrage, meldung, received_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
              ON CONFLICT (anmeldung_process_id, tenant) DO NOTHING",
         )
         .bind(rec.anmeldung_process_id)
@@ -99,10 +129,55 @@ impl PgAbmeldeanfrageRepository {
         .bind(&rec.lfa_mp_ids)
         .bind(rec.pid)
         .bind(&rec.anfrage)
+        .bind(&rec.meldung)
         .bind(rec.received_at)
         .execute(&self.pool)
         .await?;
-        Ok(res.rows_affected() > 0)
+        if res.rows_affected() > 0 {
+            return Ok(Waiting::Recorded);
+        }
+        // A row was already there. Whether the redelivery has work to do turns
+        // on whether its Anfrage ever reached `makod`. A row that has since been
+        // resolved answers `None` and is `AlreadySent`: the decision is made.
+        let sent: Option<(Option<OffsetDateTime>,)> = sqlx::query_as(
+            "SELECT anfrage_gesendet_at FROM abmeldeanfragen \
+                 WHERE anmeldung_process_id = $1 AND tenant = $2 AND resolved_at IS NULL",
+        )
+        .bind(rec.anmeldung_process_id)
+        .bind(&rec.tenant)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(match sent {
+            Some((None,)) => Waiting::Unsent,
+            _ => Waiting::AlreadySent,
+        })
+    }
+
+    /// Stamp the moment the 55010 reached `makod`.
+    ///
+    /// Called once every Anfrage of the Vorgang has been accepted — with several
+    /// LFA at Geschäftsvorfall 3, a partial dispatch is an unsent Anfrage, and
+    /// re-sending the accepted ones replays their idempotency key rather than
+    /// asking twice.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any `sqlx` failure.
+    pub async fn mark_anfrage_sent(
+        &self,
+        anmeldung_process_id: Uuid,
+        tenant: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE abmeldeanfragen SET anfrage_gesendet_at = now() \
+                 WHERE anmeldung_process_id = $1 AND tenant = $2 \
+                   AND anfrage_gesendet_at IS NULL",
+        )
+        .bind(anmeldung_process_id)
+        .bind(tenant)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     /// Take the waiting decision for `anmeldung_process_id`, marking it resolved.
@@ -123,22 +198,25 @@ impl PgAbmeldeanfrageRepository {
         let row: Option<PendingRow> = sqlx::query_as(
             "UPDATE abmeldeanfragen SET resolved_at = now() \
                  WHERE anmeldung_process_id = $1 AND tenant = $2 AND resolved_at IS NULL \
-                 RETURNING malo_id, lfn_mp_id, lfa_mp_ids, pid, anfrage, received_at",
+                 RETURNING malo_id, lfn_mp_id, lfa_mp_ids, pid, anfrage, meldung, received_at",
         )
         .bind(anmeldung_process_id)
         .bind(tenant)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(
-            |(malo_id, lfn_mp_id, lfa_mp_ids, pid, anfrage, received_at)| AbmeldeanfrageRecord {
-                anmeldung_process_id,
-                malo_id,
-                lfn_mp_id,
-                lfa_mp_ids,
-                pid,
-                anfrage,
-                received_at,
-                tenant: tenant.to_owned(),
+            |(malo_id, lfn_mp_id, lfa_mp_ids, pid, anfrage, meldung, received_at)| {
+                AbmeldeanfrageRecord {
+                    anmeldung_process_id,
+                    malo_id,
+                    lfn_mp_id,
+                    lfa_mp_ids,
+                    pid,
+                    anfrage,
+                    meldung,
+                    received_at,
+                    tenant: tenant.to_owned(),
+                }
             },
         ))
     }
@@ -159,7 +237,7 @@ impl PgAbmeldeanfrageRepository {
     ) -> Result<Vec<AbmeldeanfrageRecord>, sqlx::Error> {
         let rows: Vec<KeyedPendingRow> = sqlx::query_as(
             "SELECT anmeldung_process_id, malo_id, lfn_mp_id, lfa_mp_ids, pid, anfrage, \
-                 received_at FROM abmeldeanfragen \
+                 meldung, received_at FROM abmeldeanfragen \
                  WHERE tenant = $1 AND resolved_at IS NULL \
                  ORDER BY received_at DESC LIMIT $2",
         )
@@ -170,7 +248,7 @@ impl PgAbmeldeanfrageRepository {
         Ok(rows
             .into_iter()
             .map(
-                |(id, malo_id, lfn_mp_id, lfa_mp_ids, pid, anfrage, received_at)| {
+                |(id, malo_id, lfn_mp_id, lfa_mp_ids, pid, anfrage, meldung, received_at)| {
                     AbmeldeanfrageRecord {
                         anmeldung_process_id: id,
                         malo_id,
@@ -178,6 +256,7 @@ impl PgAbmeldeanfrageRepository {
                         lfa_mp_ids,
                         pid,
                         anfrage,
+                        meldung,
                         received_at,
                         tenant: tenant.to_owned(),
                     }

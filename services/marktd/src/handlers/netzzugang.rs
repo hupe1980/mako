@@ -29,7 +29,7 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use super::{Claims, IntoMdmResponse as _, TenantGln};
+use super::{Claims, IntoMdmResponse as _, Tenant};
 
 /// Injected `Arc<PgNetzzugangRepository>`.
 pub type NetzzugangRepoExt = Arc<crate::pg::PgNetzzugangRepository>;
@@ -78,7 +78,7 @@ pub async fn upsert_antrag(
     claims: Claims,
     Extension(repo): Extension<NetzzugangRepoExt>,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
     Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Json(mut rec): Json<NetzzugangAntrag>,
@@ -148,7 +148,7 @@ pub async fn list_antraege(
     claims: Claims,
     Extension(repo): Extension<NetzzugangRepoExt>,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Query(q): Query<ListQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-netzzugang", &tenant) {
@@ -180,7 +180,7 @@ pub async fn get_antrag(
     claims: Claims,
     Extension(repo): Extension<NetzzugangRepoExt>,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-netzzugang", &tenant) {
@@ -231,7 +231,7 @@ pub async fn set_antrag_status(
     claims: Claims,
     Extension(repo): Extension<NetzzugangRepoExt>,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
     Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Path(id): Path<Uuid>,

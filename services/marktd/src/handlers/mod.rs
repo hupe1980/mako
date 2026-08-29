@@ -84,15 +84,19 @@ impl IntoMdmResponse for MdmError {
     }
 }
 
-// ── TenantGln Extension ───────────────────────────────────────────────────────
+// ── Tenant Extension ──────────────────────────────────────────────────────────
 
-/// The instance's primary tenant GLN, injected as an Axum `Extension`.
+/// This deployment's own tenant identifier, injected as an Axum `Extension`.
 ///
-/// Set once at startup from `[markt] tenant`.
-/// Used by handlers that don't have direct access to `AppState` (e.g. `preisblatt`)
-/// as the `resource_tenant` argument to [`mako_service::cedar::CedarEnforcer::check`].
+/// Set once at startup from `[markt] tenant`. It is an opaque operator identity
+/// — typically a BDEW- or DVGW-Codenummer, which is not a GS1 GLN and is not
+/// validated as one — so it is compared, never parsed.
+///
+/// Used by handlers that do not have direct access to `AppState` (e.g.
+/// `preisblatt`) as the `resource_tenant` argument to
+/// [`mako_service::cedar::CedarEnforcer::check`].
 #[derive(Debug, Clone)]
-pub struct TenantGln(pub String);
+pub struct Tenant(pub String);
 
 // ── If-Match / ETag helpers ───────────────────────────────────────────────────
 

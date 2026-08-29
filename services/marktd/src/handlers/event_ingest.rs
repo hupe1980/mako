@@ -150,7 +150,7 @@ where
 
     let marktrole = marktrole_from_workflow(event.makoworkflow.as_deref());
     let markt_event = MarktEvent::new(
-        &state.tenant_gln,
+        &state.tenant,
         event.ce_type,
         event.subject.unwrap_or_else(|| event.id.clone()),
         event.data,
@@ -203,7 +203,7 @@ where
     // so it commits with the idempotency marker or not at all.
     if let Err(e) = derive_msb_zuordnung(
         &mut tx,
-        &state.tenant_gln,
+        &state.tenant,
         &ce_type_for_vs,
         pid_for_vs,
         &data_for_vs,
@@ -220,7 +220,7 @@ where
 
     let derived = match derive_supply_state(
         &mut tx,
-        &state.tenant_gln,
+        &state.tenant,
         &ce_type_for_vs,
         pid_for_vs,
         &data_for_vs,
@@ -319,7 +319,7 @@ where
             {
                 // Look up the Zähler associated with this MeLo.
                 match device_repo
-                    .list_zaehler_by_melo(&melo_str, &state.tenant_gln)
+                    .list_zaehler_by_melo(&melo_str, &state.tenant)
                     .await
                 {
                     Ok(zaehler_list) => {
@@ -328,7 +328,7 @@ where
                             upsert_zaehlzeitregister_from_zaehlwerke(
                                 &zaehzeit_repo,
                                 &zaehler_id,
-                                &state.tenant_gln,
+                                &state.tenant,
                                 &zaehlwerke,
                             )
                             .await;
@@ -391,7 +391,7 @@ const ZUORDNUNG_ERFOLG_PID: u32 = 21_012;
 /// `makod` redelivers.
 pub async fn derive_msb_zuordnung(
     conn: &mut sqlx::PgConnection,
-    tenant_gln: &str,
+    tenant: &str,
     ce_type: &str,
     pid: Option<u32>,
     data: &serde_json::Value,
@@ -445,7 +445,7 @@ pub async fn derive_msb_zuordnung(
     }
 
     debug!(%melo_id, %msb_mp_id, %valid_from, "event_ingest: applying WiM MSB-Zuordnung");
-    crate::pg::PgMeloMsbRepository::assign_msb_tx(conn, tenant_gln, melo_id, msb_mp_id, valid_from)
+    crate::pg::PgMeloMsbRepository::assign_msb_tx(conn, tenant, melo_id, msb_mp_id, valid_from)
         .await
 }
 
@@ -458,6 +458,47 @@ const ANMELDUNG_BESTAETIGT_PIDS: &[u32] = &[55_002, 55_078, 44_002];
 /// Outbound answers that reject one — 55003 for 55001, **55080** for 55077
 /// (55079 is unassigned), 44003 for 44001.
 const ANMELDUNG_ABGELEHNT_PIDS: &[u32] = &[55_003, 55_080, 44_003];
+
+/// The § 38 Abs. 1 EnWG gap announcement: an interval of supply this
+/// Marktlokation has no contract for.
+///
+/// One builder for both routes to it — a Lieferende with no successor covering
+/// the days after it, and a Fall-b Anmeldung whose Altlieferant released earlier
+/// than the Zuordnungsbeginn. They are the same fact about the same interval,
+/// and `processd`'s EoG case log keys on the event rather than on how it arose.
+///
+/// `gap_until` is `None` only for an open-ended gap — no successor announced at
+/// all. A Fall-b gap always closes, at the Zuordnungsbeginn the Bestätigung
+/// confirms.
+fn gap_detected(
+    tenant: &str,
+    malo_str: &str,
+    nb_mp_id: &str,
+    pid: u32,
+    sparte: &str,
+    gap_from: time::Date,
+    gap_until: Option<time::Date>,
+) -> MarktEvent {
+    MarktEvent::new(
+        tenant,
+        mako_events::markt::VERSORGUNG_GAP_DETECTED,
+        malo_str.to_owned(),
+        serde_json::json!({
+            "malo_id":   malo_str,
+            "nb_mp_id":  nb_mp_id,
+            "pid":       pid,
+            "sparte":    sparte,
+            "gap_from":  gap_from.to_string(),
+            "gap_until": gap_until.map(|d| d.to_string()),
+        }),
+    )
+    .with_extensions(EventExtensions {
+        marktmaloid: Some(malo_str.to_owned()),
+        makopid: Some(pid),
+        marktsparte: Some(sparte.to_owned()),
+        ..Default::default()
+    })
+}
 
 /// Apply the supply-state transition an inbound makod CloudEvent implies, on the
 /// caller's transaction.
@@ -477,7 +518,7 @@ const ANMELDUNG_ABGELEHNT_PIDS: &[u32] = &[55_003, 55_080, 44_003];
 /// Any DB failure; the caller must roll the ingest transaction back.
 pub async fn derive_supply_state(
     conn: &mut sqlx::PgConnection,
-    tenant_gln: &str,
+    tenant: &str,
     ce_type: &str,
     pid: Option<u32>,
     data: &serde_json::Value,
@@ -499,7 +540,7 @@ pub async fn derive_supply_state(
         .get("nb_mp_id")
         .or_else(|| data.get("grid_operator"))
         .and_then(|v| v.as_str())
-        .map_or_else(|| tenant_gln.to_owned(), str::to_owned);
+        .map_or_else(|| tenant.to_owned(), str::to_owned);
     // The Sparte is carried by the PID itself: GPKE Strom processes are 55xxx,
     // the GeLi Gas twins 44xxx. Subscribers filter on it and processd keys its
     // EoG case log on it, so it goes on every event this function emits.
@@ -520,7 +561,7 @@ pub async fn derive_supply_state(
             transitioned = Vs::announce_lf_next_tx(
                 conn,
                 &malo_id,
-                tenant_gln,
+                tenant,
                 lf_mp_id_next,
                 lf_next_lieferbeginn,
                 &nb_mp_id,
@@ -548,7 +589,38 @@ pub async fn derive_supply_state(
             .await?;
     } else if is_completed && ANMELDUNG_BESTAETIGT_PIDS.contains(&pid) {
         // Bestätigung Anmeldung — promote the announced LF to active.
-        transitioned = Vs::confirm_supply_tx(conn, &malo_id, tenant_gln, process_id).await?;
+        transitioned = Vs::confirm_supply_tx(conn, &malo_id, tenant, process_id).await?;
+
+        // **Fall b** — the Altlieferant answered the Abmeldeanfrage with its own,
+        // *earlier* Lieferendedatum (`E_0624` `A34`). The confirmation stands at
+        // the Zuordnungsbeginn the LFN asked for, so the days in between are
+        // supplied by nobody — the same uncovered interval a Lieferende leaves,
+        // reached by a different route, and § 38 Abs. 1 EnWG attaches to it the
+        // same way. This is the only place that can see it: the LFA's answer
+        // states one end and the Anmeldung the other, and no single message
+        // carries both.
+        let fall_b = data
+            .get("lfa_lieferende")
+            .and_then(|v| v.as_str())
+            .and_then(parse_civil_date);
+        let zuordnungsbeginn = data
+            .get("process_date")
+            .and_then(|v| v.as_str())
+            .and_then(parse_civil_date);
+        if let (Some(ende), Some(beginn)) = (fall_b, zuordnungsbeginn)
+            && let Some(gap_from) = ende.next_day()
+            && gap_from < beginn
+        {
+            events.push(gap_detected(
+                tenant,
+                malo_str,
+                &nb_mp_id,
+                pid,
+                sparte,
+                gap_from,
+                Some(beginn),
+            ));
+        }
     } else if is_completed && matches!(pid, 55005 | 44005) {
         // Bestätigung Lieferende — active LF removed; the pending transition is
         // preserved. The Lieferende is the *contractual* end date carried by the
@@ -558,10 +630,7 @@ pub async fn derive_supply_state(
             .get("process_date")
             .and_then(|v| v.as_str())
             .and_then(parse_civil_date);
-        Vs::end_supply_tx(
-            conn, &malo_id, tenant_gln, &nb_mp_id, lieferende, process_id,
-        )
-        .await?;
+        Vs::end_supply_tx(conn, &malo_id, tenant, &nb_mp_id, lieferende, process_id).await?;
         transitioned = true;
 
         let row: Option<(
@@ -575,7 +644,7 @@ pub async fn derive_supply_state(
                   WHERE malo_id = $1 AND tenant = $2",
         )
         .bind(&malo_id)
-        .bind(tenant_gln)
+        .bind(tenant)
         .fetch_optional(&mut *conn)
         .await
         .map_err(|e| mako_markt::error::MdmError::Internal(e.to_string()))?;
@@ -599,29 +668,15 @@ pub async fn derive_supply_state(
         });
 
         if let Some((gap_from, gap_until, row_nb_mp_id)) = gap {
-            events.push(
-                MarktEvent::new(
-                    tenant_gln,
-                    mako_events::markt::VERSORGUNG_GAP_DETECTED,
-                    malo_str.to_owned(),
-                    serde_json::json!({
-                        "malo_id":   malo_str,
-                        "nb_mp_id":  row_nb_mp_id,
-                        "pid":       pid,
-                        "sparte":    sparte,
-                        // The uncovered interval. `gap_until` is null for an
-                        // open-ended gap (no successor announced at all).
-                        "gap_from":  gap_from.to_string(),
-                        "gap_until": gap_until.map(|d| d.to_string()),
-                    }),
-                )
-                .with_extensions(EventExtensions {
-                    marktmaloid: Some(malo_str.to_owned()),
-                    makopid: Some(pid),
-                    marktsparte: Some(sparte.to_owned()),
-                    ..Default::default()
-                }),
-            );
+            events.push(gap_detected(
+                tenant,
+                malo_str,
+                &row_nb_mp_id,
+                pid,
+                sparte,
+                gap_from,
+                gap_until,
+            ));
         }
     } else if is_completed && matches!(pid, 55013 | 44013) {
         // Anmeldung/Zuordnung EOG completed — the E/G is now the supplier of
@@ -673,7 +728,7 @@ pub async fn derive_supply_state(
                 r"SELECT default_bilanzkreis FROM grundversorger
                   WHERE tenant = $1 AND nb_mp_id = $2 AND sparte = $3",
             )
-            .bind(tenant_gln)
+            .bind(tenant)
             .bind(&nb_mp_id)
             .bind(sparte)
             .fetch_optional(&mut *conn)
@@ -683,14 +738,14 @@ pub async fn derive_supply_state(
         };
 
         Vs::begin_eog_supply_tx(
-            conn, &malo_id, tenant_gln, gv, &nb_mp_id, status, eog_seit, process_id,
+            conn, &malo_id, tenant, gv, &nb_mp_id, status, eog_seit, process_id,
         )
         .await?;
 
         transitioned = true;
         events.push(
             MarktEvent::new(
-                tenant_gln,
+                tenant,
                 mako_events::markt::VERSORGUNG_EOG_BEGONNEN,
                 malo_str.to_owned(),
                 serde_json::json!({
@@ -716,11 +771,11 @@ pub async fn derive_supply_state(
         // Ablehnung Anmeldung: reset the announced future Lieferant so no
         // consumer acts on a switch that will not happen — and so the next
         // supplier's Anmeldung is not rejected against a stale announcement.
-        transitioned = Vs::clear_lf_next_tx(conn, &malo_id, tenant_gln, process_id).await?;
+        transitioned = Vs::clear_lf_next_tx(conn, &malo_id, tenant, process_id).await?;
     }
 
     if transitioned {
-        events.push(versorgung_changed(conn, tenant_gln, &malo_id, malo_str, sparte, pid).await?);
+        events.push(versorgung_changed(conn, tenant, &malo_id, malo_str, sparte, pid).await?);
     }
 
     Ok(events)
@@ -745,7 +800,7 @@ const fn sparte_of_pid(pid: u32) -> &'static str {
 /// state that actually resulted.
 async fn versorgung_changed(
     conn: &mut sqlx::PgConnection,
-    tenant_gln: &str,
+    tenant: &str,
     malo_id: &mako_markt::domain::MaloId,
     malo_str: &str,
     sparte: &str,
@@ -768,7 +823,7 @@ async fn versorgung_changed(
           WHERE malo_id = $1 AND tenant = $2",
     )
     .bind(malo_id)
-    .bind(tenant_gln)
+    .bind(tenant)
     .fetch_optional(&mut *conn)
     .await
     .map_err(|e| mako_markt::error::MdmError::Internal(e.to_string()))?;
@@ -802,7 +857,7 @@ async fn versorgung_changed(
     );
 
     Ok(MarktEvent::new(
-        tenant_gln,
+        tenant,
         mako_events::markt::VERSORGUNG_CHANGED,
         malo_str.to_owned(),
         data,
@@ -1109,7 +1164,7 @@ async fn apply_object_stammdaten<Ma, Me, Su, Ci, Pa>(
     let notify: &tokio::sync::Notify = &state.notify;
     let emit = |ce_type: &'static str, is_malo: bool| {
         let evt = MarktEvent::new(
-            &state.tenant_gln,
+            &state.tenant,
             ce_type,
             object_id.to_owned(),
             serde_json::json!({
@@ -1178,7 +1233,7 @@ async fn apply_object_stammdaten<Ma, Me, Su, Ci, Pa>(
                 && let Some(valid_from) = aenderungsdatum.and_then(parse_civil_date)
             {
                 match melo_msb_repo
-                    .assign_msb(&state.tenant_gln, object_id, msb, valid_from)
+                    .assign_msb(&state.tenant, object_id, msb, valid_from)
                     .await
                 {
                     Ok(()) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false).await,
@@ -1214,7 +1269,7 @@ async fn apply_object_stammdaten<Ma, Me, Su, Ci, Pa>(
                 return;
             }
             match nelo_repo
-                .patch_stammdaten(object_id, &state.tenant_gln, &patch)
+                .patch_stammdaten(object_id, &state.tenant, &patch)
                 .await
             {
                 Ok(true) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false).await,
@@ -1236,7 +1291,7 @@ async fn apply_object_stammdaten<Ma, Me, Su, Ci, Pa>(
                 return;
             }
             match tranche_repo
-                .patch_stammdaten(object_id, &state.tenant_gln, &patch)
+                .patch_stammdaten(object_id, &state.tenant, &patch)
                 .await
             {
                 Ok(true) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false).await,
@@ -1258,7 +1313,7 @@ async fn apply_object_stammdaten<Ma, Me, Su, Ci, Pa>(
                 return;
             }
             match tr_repo
-                .patch_stammdaten(object_id, &state.tenant_gln, &patch)
+                .patch_stammdaten(object_id, &state.tenant, &patch)
                 .await
             {
                 Ok(true) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false).await,
@@ -1280,7 +1335,7 @@ async fn apply_object_stammdaten<Ma, Me, Su, Ci, Pa>(
                 return;
             };
             match sr_repo
-                .replace_sr_konfigurationsprodukte(object_id, &state.tenant_gln, kp)
+                .replace_sr_konfigurationsprodukte(object_id, &state.tenant, kp)
                 .await
             {
                 Ok(true) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false).await,
@@ -1297,7 +1352,7 @@ async fn apply_object_stammdaten<Ma, Me, Su, Ci, Pa>(
         }
         // MeLo standorteigenschaften deep attributes still travel in
         // characteristic groups whose per-attribute mapping is gated on the
-        // §14a UTILMD AHB (roadmap). Acknowledged without a typed apply.
+        // §14a UTILMD AHB. Acknowledged without a typed apply.
         other => debug!(
             objekt = other,
             object_id,

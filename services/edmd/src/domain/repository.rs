@@ -49,8 +49,8 @@ pub trait TimeSeriesRepository: Send + Sync + 'static {
     /// `bilanziert_kwh` is the profile-allocated quantity the balancing side
     /// booked, and it is a **parameter** because edmd cannot know it: it is a
     /// commercial figure in the supplier's system, not a measurement. edmd
-    /// supplies the measured half. Deriving both from the same measured total —
-    /// as this used to — makes the delta structurally zero.
+    /// supplies the measured half. Deriving both from the same measured total
+    /// would make the delta structurally zero.
     ///
     /// `tenant` is mandatory; the read is scoped by it in the store query.
     ///

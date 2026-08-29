@@ -323,9 +323,9 @@ fn the_record_signer_and_the_claim_signer_are_one_identity() {
 /// the process that wrote it — and the projection that turns a sealed record
 /// into `de.agent.decision.made` destructured it away behind `..`, so a receiver
 /// got `outcome: "failed"` and nothing else: the exact state the field was added
-/// to end, one layer further out. agentplane 0.22 carries it, and destructures
-/// every field of the seal so the next field added has to ask deliver-or-not at
-/// the build.
+/// to end, one layer further out. The projection destructures every field of
+/// the seal, so the next field added has to answer deliver-or-not at the
+/// build.
 ///
 /// It is asserted here rather than trusted because the failure mode is silence:
 /// a delivery with no `reason` is a well-formed CloudEvent that verifies, parses

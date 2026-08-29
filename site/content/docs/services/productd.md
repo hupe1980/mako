@@ -539,7 +539,7 @@ Content-Type: application/json
 ## MCP tools
 
 `productd` ships a built-in MCP server at `/mcp` (Streamable HTTP 2025-11-25) with
-**14 read-only tools** and **3 prompts**.
+**13 read-only tools** and **3 prompts**.
 
 | Tool | Description |
 |---|---|

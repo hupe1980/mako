@@ -408,11 +408,12 @@ pub enum SupplierChangeCommand {
         document_date: String,
         /// Process-specific date (e.g. Lieferbeginn-Datum, DTM 163), `YYYYMMDD`.
         process_date: String,
-        /// Bilanzierungsgebiet EIC code extracted from the UTILMD (NAD+Z09 / LOC+237).
+        /// Bilanzierungsgebiet EIC, from the UTILMD `SG10 CCI+Z20` — „Bilanzierungsgebiet,
+        /// in dem die Marktlokation liegt" (MIG Strom Nr 00123). The value is DE 7037
+        /// itself and the characteristic has no `CAV`.
         ///
         /// Used by `processd` NB check 4 (bilanzierungsgebiet consistency).
-        /// The adapter in `makod/src/adapters.rs` should populate this when the
-        /// UTILMD carries a `LOC+237` segment; `None` when absent (rare in practice).
+        /// `None` when the message does not state it.
         ///
         /// Propagated verbatim into the `ProcessInitiated` outbox message so that
         /// `processd` can use it directly without a `marktd` fallback round-trip.
@@ -533,6 +534,21 @@ pub enum SupplierChangeCommand {
         ///
         /// Ignored when the answer is an Ablehnung.
         obligations: Vec<PendingOutbox>,
+        /// **Fall b** — the Zuordnungsende the Altlieferant answered with, when
+        /// it is *earlier* than the Zuordnungsbeginn this Bestätigung confirms
+        /// (`E_0624` `A34`, „teilt sein Lieferendedatum in der Antwort mit"),
+        /// `YYYYMMDD`.
+        ///
+        /// Not a segment of the 55002: it is a fact about the days between the
+        /// two dates, which no supplier covers. § 38 Abs. 1 EnWG attaches to
+        /// that interval, so it rides the completion payload to the supply
+        /// projection the same way `eog_art` does — the projection is the only
+        /// place that can see the interval, because it holds both ends.
+        ///
+        /// `None` on every other answer, which is the ordinary case: the LFA
+        /// releases the Marktlokation exactly at the Zuordnungsbeginn and there
+        /// is no gap.
+        lfa_lieferende: Option<String>,
     },
     /// Mark the supply relationship as active after all checks pass.
     Activate,
@@ -876,7 +892,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                                 "grid_operator":         receiver.as_str(),
                                 "process_date":          process_date,
                                 // bilanzierungsgebiet is consumed by processd NB check 4.
-                                // Populated by makod adapter from UTILMD LOC+237/NAD+Z09.
+                                // Populated by the makod adapter from `CCI+Z20`.
                                 "bilanzierungsgebiet":   bilanzierungsgebiet,
                                 // bilanzierungsmethode and fallgruppe are consumed by
                                 // marktd to update malo columns (L1/N1).
@@ -959,6 +975,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
             SupplierChangeCommand::SendAntwort {
                 antwort,
                 obligations,
+                lfa_lieferende,
             } => {
                 let accepted = antwort.zustimmung;
                 let data = match state {
@@ -981,24 +998,30 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 // (55002/55003/55005/55006/55078/55080).
                 let mut outbox: Vec<PendingOutbox> = vec![];
                 if let Some(rpid) = response_pid {
+                    let mut payload = serde_json::json!({
+                        "pid":          rpid.as_u32(),
+                        "sender":       data.grid_operator.as_str(),
+                        "receiver":     data.new_supplier.as_str(),
+                        "malo":         data.location_id.as_str(),
+                        "process_date": data.process_date,
+                        // `SG4 STS+E01++<code>:<ebd>` — Muss on every
+                        // Antwortnachricht. Without it the renderer emits a
+                        // well-formed UTILMD that states no Grund at all.
+                        "antwort_code": antwort.antwort_code,
+                        "antwort_ebd":  antwort.ebd,
+                        // `FTX+ACB` — the Erläuterung the catch-all codes
+                        // require and every Ablehnung benefits from.
+                        "bemerkung":    antwort.bemerkung,
+                    });
+                    // Fall b, and only on a Bestätigung: an Ablehnung leaves the
+                    // Altlieferant where it was, so no interval opens.
+                    if accepted && let Some(ende) = lfa_lieferende.as_deref() {
+                        payload["lfa_lieferende"] = serde_json::json!(ende);
+                    }
                     outbox.push(PendingOutbox::new(
                         "UTILMD",
                         data.new_supplier.as_str(),
-                        serde_json::json!({
-                            "pid":          rpid.as_u32(),
-                            "sender":       data.grid_operator.as_str(),
-                            "receiver":     data.new_supplier.as_str(),
-                            "malo":         data.location_id.as_str(),
-                            "process_date": data.process_date,
-                            // `SG4 STS+E01++<code>:<ebd>` — Muss on every
-                            // Antwortnachricht. Without it the renderer emits a
-                            // well-formed UTILMD that states no Grund at all.
-                            "antwort_code": antwort.antwort_code,
-                            "antwort_ebd":  antwort.ebd,
-                            // `FTX+ACB` — the Erläuterung the catch-all codes
-                            // require and every Ablehnung benefits from.
-                            "bemerkung":    antwort.bemerkung,
-                        }),
+                        payload,
                     ));
                 }
                 // Co-persist caller-provided post-acceptance obligations

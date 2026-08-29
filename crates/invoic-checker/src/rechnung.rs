@@ -802,8 +802,8 @@ mod tests {
     /// where they do they must read the **same** tolerance — otherwise tuning
     /// one knob makes mako record a Dispute while sending a Zahlungsavis.
     ///
-    /// This is a regression guard: the Summen-level Prüfschritte used to read
-    /// `arithmetic_tolerance_ppm` here and `total_tolerance_ppm` in the engine.
+    /// The knob is `total_tolerance_ppm` on both sides; the Summen-level
+    /// Prüfschritte must not reach for `arithmetic_tolerance_ppm` instead.
     #[test]
     fn the_summen_checks_read_the_same_tolerance_as_the_plausibility_engine() {
         // A brutto off by ~1.5 % against netto + steuer — outside the 1 %

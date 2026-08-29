@@ -39,8 +39,8 @@ use doubleentry::seal::{SealChain, SealedBalanceOutcome};
 use doubleentry::storage::postgres::PostgresStore;
 use doubleentry::storage::{Cursor, EntryBatch, LedgerStore, PostingCursor, StatementPage};
 use doubleentry::{
-    AccountRegistry, Amount, BalanceKey, ConsistencyProof, Currency, Entry, EntryId, Hash,
-    IdempotencyKey, InclusionProof, Label, Layer, OpenItem, Seal, TreeHead,
+    AccountRegistry, Amount, BalanceKey, BalanceQuery, ConsistencyProof, Currency, Entry, EntryId,
+    Hash, IdempotencyKey, InclusionProof, Label, Layer, OpenItem, Seal, TreeHead,
 };
 
 /// EUR at 2-dp minor units (cents) — accountingd's only currency.
@@ -626,7 +626,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
         };
         let balance = self
             .store
-            .balance(key, None)
+            .balance(key, BalanceQuery::all())
             .await
             .map_err(|e| anyhow::anyhow!("read balance: {e}"))?;
         Ok(balance
@@ -692,7 +692,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
         loop {
             let page = self
                 .store
-                .statement(key, cursor)
+                .statement(key, BalanceQuery::all(), cursor)
                 .await
                 .map_err(|e| anyhow::anyhow!("statement: {e}"))?;
             for line in &page.lines {
@@ -893,7 +893,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
     pub async fn trial_balance(&self) -> anyhow::Result<Vec<TrialBalanceLine>> {
         let tb = self
             .store
-            .trial_balance(None)
+            .trial_balance(BalanceQuery::all())
             .await
             .map_err(|e| anyhow::anyhow!("trial balance: {e}"))?;
         let mut agg: std::collections::BTreeMap<String, (i64, i64)> =
@@ -941,6 +941,12 @@ impl<S: LedgerStore<P>> Ledger<S> {
 
     /// A page of the customer's statement (movements + running balance).
     ///
+    /// `query` narrows the window. A date-scoped one carries the period's
+    /// **opening balance** on the page, so a March statement opens at
+    /// February's closing figure rather than at zero — which is what a
+    /// Kontokorrentauszug has to show. `BalanceQuery::all()` opens at zero,
+    /// correctly: there is nothing before the first posting.
+    ///
     /// # Errors
     ///
     /// Propagates storage errors.
@@ -948,10 +954,12 @@ impl<S: LedgerStore<P>> Ledger<S> {
         &self,
         lf_mp_id: &str,
         malo_id: &str,
+        query: BalanceQuery<'_>,
         cursor: PostingCursor,
     ) -> anyhow::Result<StatementPage<P>> {
         let Some(account) = self.resolve(lf_mp_id, malo_id)? else {
             return Ok(StatementPage {
+                opening: doubleentry::Balance::ZERO,
                 lines: Vec::new(),
                 next: None,
             });
@@ -962,14 +970,17 @@ impl<S: LedgerStore<P>> Ledger<S> {
             layer: Layer::Settled,
         };
         self.store
-            .statement(key, cursor)
+            .statement(key, query, cursor)
             .await
             .map_err(|e| anyhow::anyhow!("statement: {e}"))
     }
 
     /// True when the customer has any **debit** (charge) booked on or before
-    /// `cutoff` — the "debt aged past the dunning grace period" signal. Scans the
-    /// statement oldest-first with early exit.
+    /// `cutoff` — the "debt aged past the dunning grace period" signal.
+    ///
+    /// The cutoff is the query's, not a per-line test: the store narrows by
+    /// booking date, so a backdated entry appended today is inside the window it
+    /// belongs to rather than at the end of the log.
     ///
     /// # Errors
     ///
@@ -993,13 +1004,11 @@ impl<S: LedgerStore<P>> Ledger<S> {
         loop {
             let page = self
                 .store
-                .statement(key, cursor)
+                .statement(key, BalanceQuery::through(cutoff), cursor)
                 .await
                 .map_err(|e| anyhow::anyhow!("statement: {e}"))?;
-            for line in &page.lines {
-                if line.direction == Direction::Debit && line.booking_date <= cutoff {
-                    return Ok(true);
-                }
+            if page.lines.iter().any(|l| l.direction == Direction::Debit) {
+                return Ok(true);
             }
             match page.next {
                 Some(next) => cursor = next,
@@ -1034,17 +1043,23 @@ impl<S: LedgerStore<P>> Ledger<S> {
             currency: Currency::EUR,
             layer: Layer::Settled,
         };
+        // The year is the query's, not a per-line filter: the store narrows by
+        // booking date, so an entry appended today but booked into last December
+        // lands in the year it belongs to.
+        let (from, to) = (
+            Date::from_calendar_date(year, time::Month::January, 1)
+                .map_err(|e| anyhow::anyhow!("year {year}: {e}"))?,
+            Date::from_calendar_date(year, time::Month::December, 31)
+                .map_err(|e| anyhow::anyhow!("year {year}: {e}"))?,
+        );
         let mut cursor = PostingCursor::start();
         loop {
             let page = self
                 .store
-                .statement(key, cursor)
+                .statement(key, BalanceQuery::between(from, to), cursor)
                 .await
                 .map_err(|e| anyhow::anyhow!("statement: {e}"))?;
             for line in &page.lines {
-                if line.booking_date.year() != year {
-                    continue;
-                }
                 let signed = match line.direction {
                     Direction::Debit => line.amount.to_minor(),
                     Direction::Credit => -line.amount.to_minor(),

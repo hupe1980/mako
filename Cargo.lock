@@ -150,9 +150,9 @@ dependencies = [
 
 [[package]]
 name = "agentplane"
-version = "0.22.0"
+version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "790b803962682d8b408585c0f9a902329d7c1e092dd637340dab0a7c3ddb8b4f"
+checksum = "ddec42de89fd13fdf985d950b033fbf9a1db3e57d1d315d180de8803d2351043"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -829,6 +829,7 @@ checksum = "a767267da9e2c2e189b2f9df8b5657e850ecf5352644734ba130d4a57095cf1b"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
+ "aws-sdk-signin",
  "aws-sdk-sso",
  "aws-sdk-ssooidc",
  "aws-sdk-sts",
@@ -840,15 +841,20 @@ dependencies = [
  "aws-smithy-schema",
  "aws-smithy-types",
  "aws-types",
+ "base64-simd",
  "bytes",
  "fastrand",
  "hex",
  "http 1.5.0",
+ "p256",
+ "rand 0.8.8",
  "sha1 0.10.7",
+ "sha2 0.10.9",
  "time",
  "tokio",
  "tracing",
  "url",
+ "uuid",
  "zeroize",
 ]
 
@@ -938,6 +944,32 @@ dependencies = [
  "http 0.2.12",
  "http 1.5.0",
  "http-body-util",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sdk-signin"
+version = "1.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bfe75648eaee4b012e13ccbd50d88df640c9fb566310d083513af9fad3befb6"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.5.0",
  "regex-lite",
  "tracing",
 ]
@@ -3677,9 +3709,9 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
 name = "doubleentry"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1311489a62440f9ae60c9ce922309aa05b00f1da4ca8aa31b87c6364a4a572f0"
+checksum = "4c9d8b8aa59d617705b1d34f378bd7b809f99b3ff2162187b056f3ab8be15d61"
 dependencies = [
  "blake3",
  "serde",
@@ -13867,6 +13899,7 @@ dependencies = [
  "rubo4e",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "time",
  "zip",
 ]

@@ -49,7 +49,7 @@ where
     Pa: PartnerRepository + Clone,
 {
     if enforcer
-        .check(&claims.principal(), "read-correlation", &state.tenant_gln)
+        .check(&claims.principal(), "read-correlation", &state.tenant)
         .is_err()
     {
         return MdmError::Forbidden {
@@ -83,7 +83,7 @@ where
     Pa: PartnerRepository + Clone,
 {
     if enforcer
-        .check(&claims.principal(), "read-correlation", &state.tenant_gln)
+        .check(&claims.principal(), "read-correlation", &state.tenant)
         .is_err()
     {
         return MdmError::Forbidden {

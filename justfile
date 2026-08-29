@@ -226,13 +226,17 @@ smoke-roles:
     set -euo pipefail
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
+    # The binary is wherever cargo put it. Hard-coding `./target` breaks under
+    # `CARGO_TARGET_DIR`, which is the isolation a run worth reporting uses —
+    # rust-analyzer writes to the default directory while this runs.
+    out="${CARGO_TARGET_DIR:-target}/debug/makod"
     for pair in "role-lf:LF" "role-nb:NB" "role-msb:MSB"; do
         feat="${pair%%:*}"; role="${pair##*:}"
         echo "==> $feat (party role $role)"
         cargo build -p makod --no-default-features --features "$feat"
         printf '[[party]]\nmp_id = "9900001000001"\nroles = ["%s"]\nprimary = true\n' \
             "$role" > "$tmp/makod.toml"
-        ./target/debug/makod --config "$tmp/makod.toml" --allow-volatile \
+        "$out" --config "$tmp/makod.toml" --allow-volatile \
             --http-addr 127.0.0.1:18080 --auth-key smoke=0123456789abcdef \
             --allow-no-as4-signing --check
     done

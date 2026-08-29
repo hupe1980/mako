@@ -328,9 +328,18 @@ The worklist itself is agentplane's operator surface, mounted at
 | `POST /runs/{run}/cancel` | Stop it, with a reason on the record |
 | `POST /events` | This message arrived; wake whoever wanted it |
 
-Three properties are worth stating because each is a control rather than a
+Four properties are worth stating because each is a control rather than a
 convenience:
 
+- **An approval may carry edited arguments, and they are the call.** A reviewer
+  answering „approved, with these values" has their `amendment` dispatched in
+  place of what the model proposed — labelled trusted, attributed to
+  `task:agent.approve_call`, and put through every gate the original faced: the
+  tool's schema at the decision, menus, ceilings and field rules at dispatch. An
+  approval *without* an amendment releases nothing, so a field that demands a
+  trusted author still refuses a waved-through value. What it cannot prevent is a
+  reviewer being talked into typing an attacker's value; the journal's actor
+  attribution is the accountability for that.
 - **Who is acting comes from the token, never from the body.** The wire types
   carry no actor field, so an approval cannot be forged by the thing being
   approved. Four-eyes is enforced in the task store: whoever proposed an action

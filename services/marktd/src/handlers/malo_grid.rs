@@ -25,7 +25,7 @@ use tracing::info;
 
 use mako_service::cedar::CedarEnforcer;
 
-use crate::handlers::{Claims, MdmErrorResponse, TenantGln};
+use crate::handlers::{Claims, MdmErrorResponse, Tenant};
 use crate::pg::PgMaloGridRepository;
 
 /// Extension alias — concrete type so AFIT dispatches statically.
@@ -81,7 +81,7 @@ pub async fn get_malo_grid(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<MaloGridRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(malo_id_str): Path<String>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-malo-grid", &tenant) {
@@ -122,7 +122,7 @@ pub async fn put_malo_grid(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<MaloGridRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(malo_id_str): Path<String>,
     Json(body): Json<PutMaloGridBody>,
 ) -> impl IntoResponse {

@@ -224,6 +224,24 @@ pub const INVOIC_SONSTIGE_LEISTUNG_ANNEHMEN: &str = "invoic.sonstige-leistung.an
 /// Dispute one.
 pub const INVOIC_SONSTIGE_LEISTUNG_ABLEHNEN: &str = "invoic.sonstige-leistung.ablehnen";
 
+// ── MaBiS Clearingverfahren ───────────────────────────────────────────────────
+
+/// Answer a `MaBiS` Clearingliste with a **Korrekturliste** — one entry per
+/// disputed `Marktlokation`, and an empty list when nothing was found.
+///
+/// The reply is obligatory either way: silence reads as acceptance of whatever
+/// the distributor filed, so „reconciled, nothing to correct" is a message and
+/// not an omission (BK6-24-174 Anlage 3, Clearingverfahren).
+pub const MABIS_LISTE_KORRIGIEREN: &str = "mabis.liste.korrigieren";
+/// Refuse a `MaBiS` Clearingliste **entire** and demand a new one.
+///
+/// The second, disjoint cluster every Clearinglisten-Tree publishes: it names no
+/// `Marktlokation` at all — the Abonnement was never ordered, the version is not
+/// admitted, the Zeitraum is implausible, or the list arrived outside the
+/// Clearingphase DZÜ. Answering such a list with an empty Korrekturliste would
+/// state the opposite of what happened.
+pub const MABIS_LISTE_ABLEHNEN: &str = "mabis.liste.ablehnen";
+
 pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     GPKE_LIEFERBEGINN_ANMELDEN,
     GPKE_EOG_ANMELDEN,
@@ -284,4 +302,6 @@ pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     INVOIC_STORNORECHNUNG_ABLEHNEN,
     INVOIC_SONSTIGE_LEISTUNG_ANNEHMEN,
     INVOIC_SONSTIGE_LEISTUNG_ABLEHNEN,
+    MABIS_LISTE_KORRIGIEREN,
+    MABIS_LISTE_ABLEHNEN,
 ];

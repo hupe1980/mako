@@ -25,8 +25,8 @@ their connected asset operators (ANB), effective 2021-10-01. Suppliers (LF) and
 metering operators (MSB) are out of scope.
 
 **BK6-23-241 (Beschluss 07.05.2026) consolidated it.** Its Anlage „Bilanzieller
-Ausgleich von Redispatch-Maßnahmen (BilAReM)" replaces the three decisions this
-crate used to cite:
+Ausgleich von Redispatch-Maßnahmen (BilAReM)" is the basis this crate cites, and
+it repeals the earlier decisions:
 
 | Repealed | By | With effect from |
 |---|---|---|
@@ -133,7 +133,7 @@ Prüfidentifikatoren 4.0* (01.04.2026) — every row whose Prozessbeschreibung i
 There is **no ORDRSP in this family**: the ANB answers ORDERS 17209 with MSCONS
 13022 (Prozessschritt 2).
 
-### Seven PIDs this crate used to claim and does not own
+### Seven neighbouring PIDs this crate does not own
 
 | PID | Belongs to |
 |----:|------------|
@@ -146,9 +146,9 @@ There is **no ORDRSP in this family**: the ANB answers ORDERS 17209 with MSCONS
 | 19301 / 19302 | Herkunftsnachweisregister (NB ↔ RB HKN-R), `S_0092` / `S_0093` |
 
 13020 and 13023 are MaBiS Summenzeitreihen with a full Prüfmitteilung/
-Datenstatus cycle; routing them here gave them no settlement stream to live in,
-so the obligation they carry had nowhere to be recorded. 19301/19302 belong to a
-different market exchange entirely.
+Datenstatus cycle, so routing them here would leave them no settlement stream to
+live in and the obligation they carry nowhere to be recorded. 19301/19302 belong
+to a different market exchange entirely.
 
 ## Routing
 

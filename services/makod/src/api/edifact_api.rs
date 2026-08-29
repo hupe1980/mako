@@ -1038,14 +1038,13 @@ UNH+1+UTILMD:D:11A:UN:S2.1'BGM+E01+55001+9'DTM+137:20260804:102'\
     ///
     /// # Why this is a test
     ///
-    /// The metric is documented as carrying `message_type` and `release`. Its
-    /// only emitter used to be the AS4 parse-error branch, with both labels
-    /// hard-coded to `("edifact", "parse_error")` — so it reported a message
-    /// type that does not exist, never reported a release, and never counted a
-    /// single AHB validation failure. Moving it into the adapters would have
-    /// counted adapter invocations instead of messages, and reported nothing
-    /// for the 30 registries that never validate. One emitter, at the
-    /// boundary, is the only shape that counts each inbound message once.
+    /// The metric carries `message_type` and `release`, and only the boundary
+    /// knows both. Emitting it from the AS4 parse-error branch would hard-code
+    /// the pair and count no AHB validation failure at all; emitting it from
+    /// the adapters would count adapter invocations rather than messages, and
+    /// report nothing for the 30 registries that never validate. One emitter,
+    /// at the boundary, is the only shape that counts each inbound message
+    /// once.
     #[test]
     fn the_conformance_counter_has_one_emitter() {
         const SOURCES: &[(&str, &str)] = &[

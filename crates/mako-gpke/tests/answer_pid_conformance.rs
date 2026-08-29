@@ -42,6 +42,7 @@ fn response_pid(anfrage: u32, accepted: bool) -> Option<u32> {
         SupplierChangeCommand::SendAntwort {
             antwort: nb_antwort(accepted),
             obligations: vec![],
+            lfa_lieferende: None,
         },
     )
     .ok()?;

@@ -40,7 +40,7 @@ use std::sync::Arc;
 
 use mako_service::cedar::CedarEnforcer;
 
-use super::{Claims, TenantGln};
+use super::{Claims, Tenant};
 
 /// Deny response for the §42 EnWG Energiemix authority.
 fn forbidden(action: &'static str) -> axum::response::Response {
@@ -106,7 +106,7 @@ pub async fn put_nb_energiemix(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(nb_mp_id): Path<String>,
     Json(req): Json<PutNbEnergiemixRequest>,
 ) -> impl IntoResponse {
@@ -212,7 +212,7 @@ pub async fn get_nb_energiemix(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(nb_mp_id): Path<String>,
     Query(q): Query<NbEnergiemixQuery>,
 ) -> impl IntoResponse {
@@ -299,7 +299,7 @@ pub async fn get_nb_energiemix_history(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(nb_mp_id): Path<String>,
 ) -> impl IntoResponse {
     if enforcer

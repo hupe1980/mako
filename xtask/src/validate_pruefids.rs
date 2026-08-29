@@ -446,11 +446,11 @@ fn collect_orphaned_in_dir(
 
 /// Verify that every MSCONS PID `mako-redispatch` routes is one `edmd` stores.
 ///
-/// The two constants used to be required to be *equal*, which was right while
-/// the redispatch workflow claimed the whole Ausfallarbeit band. It no longer
-/// does — 13020 and 13023 are MaBiS Summenzeitreihen and 13026 belongs to the
-/// EEG-Überführungszeitreihen family — so equality would now force one of the
-/// two lists to be wrong. They answer different questions:
+/// **Containment, not equality.** The redispatch workflow does not claim the
+/// whole Ausfallarbeit band — 13020 and 13023 are MaBiS Summenzeitreihen and
+/// 13026 belongs to the EEG-Überführungszeitreihen family — so demanding the two
+/// constants be equal would force one of the two lists to be wrong. They answer
+/// different questions:
 ///
 /// * `mako-redispatch::aktivierung::MSCONS_PIDS` — which PIDs route to the
 ///   Redispatch **workflow**.

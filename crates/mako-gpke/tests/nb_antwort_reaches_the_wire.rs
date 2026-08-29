@@ -27,6 +27,15 @@ fn answer(
     anfrage_pid: u32,
     antwort: LfAntwort,
 ) -> mako_engine::workflow::WorkflowOutput<mako_gpke::SupplierChangeEvent> {
+    answer_with(anfrage_pid, antwort, None)
+}
+
+/// The same, with the Fall-b Zuordnungsende the Altlieferant answered with.
+fn answer_with(
+    anfrage_pid: u32,
+    antwort: LfAntwort,
+    lfa_lieferende: Option<&str>,
+) -> mako_engine::workflow::WorkflowOutput<mako_gpke::SupplierChangeEvent> {
     let receive = SupplierChangeCommand::ReceiveUtilmd {
         pid: pid(anfrage_pid),
         sender: MarktpartnerCode::new(LF),
@@ -59,6 +68,7 @@ fn answer(
         SupplierChangeCommand::SendAntwort {
             antwort,
             obligations: vec![],
+            lfa_lieferende: lfa_lieferende.map(ToOwned::to_owned),
         },
     )
     .expect("answer accepted")
@@ -142,4 +152,49 @@ fn every_code_used_here_is_published_by_its_tree() {
     // …and the Strom codes are not Gas codes.
     assert!(mako_pruefung::codes::lookup("E_3005", "A07").is_none());
     assert!(mako_pruefung::codes::lookup("E_3019", "A11").is_none());
+}
+
+// ── Fall b: the interval the Bestätigung leaves behind ────────────────────────
+
+/// **Fall b travels with the Bestätigung.** `E_0624` `A34` lets the LFA release
+/// the Marktlokation *before* the Zuordnungsbeginn the NB then confirms, and the
+/// days in between are supplied by nobody — § 38 Abs. 1 EnWG. No single message
+/// states both ends, so the LFA's date rides the completion payload to the
+/// supply projection, which holds the other.
+#[test]
+fn a_bestaetigung_carries_the_altlieferants_own_lieferende() {
+    let out = answer_with(
+        55001,
+        LfAntwort::zustimmung("A51", "E_0623"),
+        Some("20260815"),
+    );
+    let payload = utilmd(&out);
+    assert_eq!(payload["pid"], 55002);
+    // The Zuordnungsbeginn stands where the LFN asked for it …
+    assert_eq!(payload["process_date"], "20260901");
+    // … and the earlier release is stated beside it, not instead of it.
+    assert_eq!(payload["lfa_lieferende"], "20260815");
+}
+
+/// The ordinary answer states none: the LFA releases exactly at the
+/// Zuordnungsbeginn and there is no interval to report.
+#[test]
+fn an_ordinary_bestaetigung_states_no_lieferende() {
+    let out = answer(55001, LfAntwort::zustimmung("A51", "E_0623"));
+    assert!(utilmd(&out).get("lfa_lieferende").is_none());
+}
+
+/// An **Ablehnung** leaves the Altlieferant exactly where it was, so no interval
+/// opens — carrying the date there would open a § 38 case for days that are
+/// still supplied.
+#[test]
+fn an_ablehnung_never_reports_a_gap() {
+    let out = answer_with(
+        55001,
+        LfAntwort::ablehnung("A07", "E_0622"),
+        Some("20260815"),
+    );
+    let payload = utilmd(&out);
+    assert_eq!(payload["pid"], 55003);
+    assert!(payload.get("lfa_lieferende").is_none());
 }

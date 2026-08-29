@@ -115,7 +115,7 @@ name    = "chacha20"
 version = "0.9"
 reason  = "agentplane's keyring AEAD (chacha20poly1305 0.10, its latest release) pins chacha20 0.9; our rand 0.10 (mako-engine, lopdf) uses 0.10. Not unifiable from here — resolve when chacha20poly1305 bumps."
 
-# ── agentplane 0.7 crypto chain ───────────────────────────────────────────────
+# ── agentplane crypto chain ───────────────────────────────────────────────────
 # agentplane's `signing` feature uses the ed25519-dalek 3 line for journal record
 # attestation; our JWT verification (jsonwebtoken 11, via mako-service) still
 # pulls the 2 line. Both are maintained and the two chains never exchange types —
@@ -124,7 +124,7 @@ reason  = "agentplane's keyring AEAD (chacha20poly1305 0.10, its latest release)
 [[bans.skip]]
 name    = "ed25519-dalek"
 version = "2.2"
-reason  = "jsonwebtoken 11 (JWT verification) pins ed25519-dalek 2; agentplane 0.6 signing uses 3."
+reason  = "jsonwebtoken 11 (JWT verification) pins ed25519-dalek 2; agentplane signing uses 3."
 
 [[bans.skip]]
 name    = "ed25519"
@@ -141,7 +141,7 @@ name    = "signature"
 version = "2.2"
 reason  = "Transitive of ed25519-dalek 2 — see the ed25519-dalek skip."
 
-# ── agentplane 0.6 Postgres backend ───────────────────────────────────────────
+# ── agentplane Postgres backend ───────────────────────────────────────────────
 [[bans.skip]]
 name    = "whoami"
 version = "1.6"

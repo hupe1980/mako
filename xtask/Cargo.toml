@@ -16,3 +16,7 @@ quick-xml   = { version = "0.40", features = ["serialize"] }
 # The identifier guard validates EIC codes with the same implementation the
 # services use, so the check can never disagree with the validator that matters.
 rubo4e      = { workspace = true }
+# The specialist manifests are YAML, and this check reads two facts out of them
+# that decide whether a mutating grant is dispatchable at all. The same parser
+# `agentplane` itself uses, so a manifest this accepts is one the runtime loads.
+serde_yaml_ng = "0.10"

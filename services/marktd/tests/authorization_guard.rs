@@ -191,3 +191,51 @@ fn no_handler_extracts_claims_as_a_request_extension() {
          request to them returns 500: {offenders:?} — take `claims: Claims` instead"
     );
 }
+
+/// A request may not name its own tenant.
+///
+/// The tenant is this deployment's identity: it is what Cedar checks the
+/// caller's `mako_tenant` claim against, and what scopes every row the handler
+/// writes and reads. A `tenant` field on a deserialised request type lets the
+/// two come apart — the request is authorised against the deployment's tenant
+/// and the row lands under whatever the body says — and nothing fails, because
+/// both halves did what they were told.
+///
+/// It reads as a convenience, so it is caught structurally rather than by
+/// review: the `Tenant` extension is the only source, and a handler that wants
+/// a different scope wants a different Cedar action.
+#[test]
+fn no_request_type_carries_a_tenant_field() {
+    let mut offenders = Vec::new();
+    for (module, src) in handler_sources() {
+        // Walk `pub struct N { … }` blocks, keeping the attributes above each.
+        let mut rest = src.as_str();
+        while let Some(idx) = rest.find("pub struct ") {
+            let head_start = rest[..idx].rfind("\n\n").map_or(0, |p| p + 2);
+            let attrs = &rest[head_start..idx];
+            rest = &rest[idx + "pub struct ".len()..];
+            let Some(open) = rest.find('{') else { break };
+            let name = rest[..open].trim().to_owned();
+            let Some(close) = rest.find('}') else { break };
+            let body = &rest[open..close];
+            rest = &rest[close..];
+            // Only types the framework builds *from the request* matter; a
+            // response naming the tenant it read is a fact, not an input.
+            if !attrs.contains("Deserialize") {
+                continue;
+            }
+            if body
+                .lines()
+                .any(|l| l.trim_start().starts_with("pub tenant"))
+            {
+                offenders.push(format!("{module}: {name}"));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "these request types deserialise a `tenant` the caller supplies, which overrides the \
+         one Cedar authorised: {offenders:?} — take it from the `Tenant` extension"
+    );
+}

@@ -178,11 +178,12 @@ pub async fn get_ledger(
         &ledger,
         lf_mp_id,
         &malo_id,
+        doubleentry::BalanceQuery::all(),
         q.limit.unwrap_or(100).min(1000),
     )
     .await
     {
-        Ok(rows) => Json(rows).into_response(),
+        Ok(window) => Json(window).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -195,30 +196,78 @@ pub async fn get_kontoauszug(
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
-    Query(q): Query<AccountQuery>,
+    Query(q): Query<KontoauszugQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
         return forbidden(&e);
     }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
+    // `from`/`to` narrow the statement to a period. Both are needed for a
+    // period: a bare `to` is the cumulative position through that date, which is
+    // a balance rather than a Kontoauszug, and a bare `from` has no closing
+    // date to open the *next* one at.
+    let unprocessable = |msg: String| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response()
+    };
+    let (from, to) = match (
+        parse_iso_date("from", q.from.as_deref()),
+        parse_iso_date("to", q.to.as_deref()),
+    ) {
+        (Ok(from), Ok(to)) => (from, to),
+        (Err(e), _) | (_, Err(e)) => return unprocessable(e),
+    };
+    let period = match (from, to) {
+        (None, None) => None,
+        (Some(from), Some(to)) if from > to => {
+            return unprocessable("from must not be after to".to_owned());
+        }
+        (Some(from), Some(to)) => Some((from, to)),
+        _ => return unprocessable("from and to must be given together".to_owned()),
+    };
     let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
-    let entries = match list_ledger(&ledger, lf_mp_id, &malo_id, 500).await {
+    let query = period.map_or_else(doubleentry::BalanceQuery::all, |(from, to)| {
+        doubleentry::BalanceQuery::between(from, to)
+    });
+    let window = match list_ledger(&ledger, lf_mp_id, &malo_id, query, 500).await {
         Ok(e) => e,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
+    // Eröffnungs- und Schlusssaldo: the two figures that make the page add up.
+    // The closing figure is the opening plus everything on it, not the account's
+    // current balance — a statement for last March must not close at today's.
+    let bewegung_ct: i64 = window.lines.iter().map(|l| l.signed_ct).sum();
     Json(serde_json::json!({
         "malo_id": malo_id,
         "lf_mp_id": lf_mp_id,
+        "from": period.map(|(from, _)| from.to_string()),
+        "to": period.map(|(_, to)| to.to_string()),
+        "eroeffnungssaldo_ct": window.opening_ct,
+        "bewegung_ct": bewegung_ct,
+        "schlusssaldo_ct": window.opening_ct + bewegung_ct,
         "balance_ct": account.balance_ct,
         "abschlag_ct": account.abschlag_ct,
         "generated_at": OffsetDateTime::now_utc().to_string(),
-        "entries": entries,
+        "entries": window.lines,
     }))
     .into_response()
+}
+
+/// Parse an optional ISO 8601 date, naming the field on failure.
+fn parse_iso_date(field: &str, raw: Option<&str>) -> Result<Option<time::Date>, String> {
+    let Some(raw) = raw.filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    time::Date::parse(raw, &time::format_description::well_known::Iso8601::DATE)
+        .map(Some)
+        .map_err(|_| format!("{field} must be an ISO 8601 date (YYYY-MM-DD)"))
 }
 
 #[derive(Debug, Deserialize)]
@@ -378,6 +427,16 @@ pub async fn put_abschlag(
 #[derive(Debug, Deserialize)]
 pub struct AccountQuery {
     pub lf_mp_id: Option<String>,
+}
+
+/// Query for `GET /api/v1/accounts/{malo_id}/kontoauszug`.
+#[derive(Debug, Deserialize)]
+pub struct KontoauszugQuery {
+    pub lf_mp_id: Option<String>,
+    /// Inclusive start of the statement period (ISO 8601 date).
+    pub from: Option<String>,
+    /// Inclusive end of the statement period (ISO 8601 date).
+    pub to: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4283,29 +4342,21 @@ pub async fn get_consistency_proof(
         return forbidden(&e);
     }
     match ledger.prove_append_only(q.since).await {
-        Ok((proof, then, now)) => {
-            let verified = proof.verify(&then, &now);
-            // Every log extends the empty tree, so a proof taken at size 0
-            // verifies against any root of the right size — correct mathematics
-            // and a trap, because `verified: true` from a check that examined
-            // nothing is indistinguishable from a real verification. Say so
-            // rather than let an auditor read reassurance into it.
-            let vacuous = proof.is_vacuous();
-            Json(serde_json::json!({
-                "archived_size": then.size,
-                "archived_root": then.root.to_string(),
-                "current_size": now.size,
-                "current_root": now.root.to_string(),
-                "verified": verified,
-                "vacuous": vacuous,
-                "vacuous_note": vacuous.then_some(
-                    "the archived head was the empty log; every log extends it, \
-                     so this proof examined nothing"
-                ),
-                "proof": serde_json::to_value(&proof).unwrap_or(serde_json::Value::Null),
-            }))
-            .into_response()
-        }
+        Ok((proof, then, now)) => Json(serde_json::json!({
+            "archived_size": then.size,
+            "archived_root": then.root.to_string(),
+            "current_size": now.size,
+            "current_root": now.root.to_string(),
+            "verified": proof.verify(&then, &now),
+            "proof": serde_json::to_value(&proof).unwrap_or(serde_json::Value::Null),
+        }))
+        .into_response(),
+        // `since=0` lands here. Every log extends the empty tree, so a proof
+        // from it verifies against any root of the right size — correct
+        // mathematics and a trap, because `verified: true` from a check that
+        // examined nothing is indistinguishable from a real verification. The
+        // ledger refuses to build one; an auditor gets the refusal, not
+        // reassurance.
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": e.to_string() })),

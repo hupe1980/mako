@@ -175,8 +175,8 @@ pub(super) async fn dispatch_wim_iftsta(
 ///
 /// **Both Datenstatus PIDs are accepted**, and which one applies follows from
 /// the participant's role: the BIKO sends 21003 to an NB or ÜNB and 21004 to a
-/// BKV. Forcing the PID to 21004 — as this handler used to — silently relabels
-/// every Datenstatus an NB receives.
+/// BKV. Forcing the PID to 21004 would silently relabel every Datenstatus an NB
+/// receives.
 ///
 /// 21000, 21001 and 21005 are refused: they are this participant's **own
 /// outbound** Prüfmitteilungen, so accepting one as an arrival would record a

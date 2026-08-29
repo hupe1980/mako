@@ -1440,8 +1440,8 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             Vec::with_capacity(records.len());
         for rec in records {
             // 1. Immutable audit row — the original value is carried by the
-            //    correction request itself. § 147 Abs. 1 AO / GoBD: the record of
-            //    what a billed figure used to be is a Buchungsbeleg and must stay
+            //    correction request itself. § 147 Abs. 1 AO / GoBD: the record
+            //    of the superseded figure is a Buchungsbeleg and must stay
             //    unveränderbar (§ 146 Abs. 4 AO).
             let source_str = match rec.source {
                 CorrectionSource::MsconsUpdate => "MSCONS_UPDATE",

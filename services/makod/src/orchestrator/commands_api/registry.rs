@@ -949,6 +949,23 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(13003),
         dispatch: cmd_mabis_abrechnung_begleichen,
     },
+    // ── MaBiS Clearingverfahren — the two reply legs of a Clearingliste ───────
+    //
+    // Both answer the same Prüfidentifikator; the cluster is what differs, and
+    // which one is owed follows from the whole-list Prüfschritte rather than
+    // from the caller's choice of command.
+    CommandDescriptor {
+        name: "mabis.liste.korrigieren",
+        permitted_roles: &[Marktrolle::Lfn, Marktrolle::Nb, Marktrolle::Uenb],
+        primary_pid: None,
+        dispatch: cmd_mabis_liste_korrigieren,
+    },
+    CommandDescriptor {
+        name: "mabis.liste.ablehnen",
+        permitted_roles: &[Marktrolle::Lfn, Marktrolle::Nb, Marktrolle::Uenb],
+        primary_pid: None,
+        dispatch: cmd_mabis_liste_ablehnen,
+    },
     // ── IFTSTA status messages (REST replay / manual override) ────────────────
     CommandDescriptor {
         name: "gpke.vollzugsmeldung.empfangen",
@@ -1096,6 +1113,57 @@ mod tests {
             missing.is_empty(),
             "these commands are registered but absent from the \"Command registry\" table \
              in site/content/docs/services/makod.md: {missing:?}"
+        );
+    }
+
+    /// …and the table must list no command the registry does not have.
+    ///
+    /// The other direction, and the one that outlives a deletion: a command
+    /// removed from the registry leaves its documentation behind, and an
+    /// integrator following the table gets a 422 from a name the reference
+    /// still describes with roles, PIDs and a payload. Six `wim.gas.*` rows
+    /// survived the WiM Strom/Gas unification that way.
+    ///
+    /// Scoped to the table rows (`| \`name\` |`) so prose may still discuss a
+    /// command family, and to the prefixes that name a `makod` command so the
+    /// scan does not pick up agent procedures or MCP server keys.
+    #[test]
+    fn the_service_reference_names_no_command_the_registry_lacks() {
+        let doc = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../site/content/docs/services/makod.md"
+        ))
+        .expect("site/content/docs/services/makod.md");
+        const FAMILIES: &[&str] = &[
+            "gpke.",
+            "geli.",
+            "wim.",
+            "mabis.",
+            "gabi.",
+            "invoic.",
+            "redispatch.",
+        ];
+        let mut ghosts: Vec<String> = Vec::new();
+        for line in doc.lines() {
+            let trimmed = line.trim_start();
+            let Some(rest) = trimmed.strip_prefix("| `") else {
+                continue;
+            };
+            let Some(end) = rest.find('`') else { continue };
+            let name = &rest[..end];
+            if !FAMILIES.iter().any(|f| name.starts_with(f)) {
+                continue;
+            }
+            if !COMMAND_REGISTRY.iter().any(|d| d.name == name) {
+                ghosts.push(name.to_owned());
+            }
+        }
+        ghosts.sort_unstable();
+        ghosts.dedup();
+        assert!(
+            ghosts.is_empty(),
+            "the command table in site/content/docs/services/makod.md documents commands \
+             `makod` does not register, so a caller following it gets a 422: {ghosts:?}"
         );
     }
 

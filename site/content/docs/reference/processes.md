@@ -105,7 +105,7 @@ Quick reference across all process families. Each row is a top-level domain.
 | **MaBiS Clearingliste** | ⚡ | `mako-mabis` `mabis-clearingliste` | UTILMD 55065/55069/55070 | — | BK6-24-174 |
 | **MaBiS-ZP Lifecycle** | ⚡ | `mako-mabis` `mabis-zp-lifecycle` | UTILMD 55062–55064, 55071/55072, 55197–55200, 55203–55214 | — | BK6-24-174 |
 | **MaBiS Anforderungen** | ⚡ | `mako-mabis` `mabis-anforderung` | ORDERS 17201–17208 | — | BK6-24-174 |
-| **MaBiS Listenabgleich** | ⚡ | `mako-mabis` `mabis-listenabgleich` | UTILMD 55195/55196, 55201/55202, 55223/55224 | — | BK6-24-174 |
+| **MaBiS Listenabgleich** | ⚡ | `mako-mabis` `mabis-listenabgleich` | UTILMD 55065/55066, 55195/55196, 55201/55202, 55223/55224 | — | BK6-24-174 |
 | **GeLi Gas Lieferantenwechsel** | 🔥 | `mako-geli-gas` `geli-gas-supplier-change` | UTILMD G 44001–44021 | 10 WT | BK7-24-01-009 |
 | **GeLi Gas Lieferbeginn (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-lf-anmeldung` | UTILMD G 44001 (out) · 44002/44003 (in) | 10 WT | BK7-24-01-009 |
 | **GeLi Gas Stornierung (GNB-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-stornierung` | UTILMD G 44022 (Nb-only inbound) | 10 WT | BK7-24-01-009 |
@@ -262,8 +262,12 @@ by the Ablauf des 4. WT nach Eingang, the other two „am selben Tag wie die
 Antwort" and only on a confirmation.
 
 `processd` issues the Information and the Beendigung as part of the Anmeldung
-decision — the Information *before* the answer, because its 07:00 window closes
-four hours before the 11:00 Bestätigung of the same message. The Aufhebung is an
+decision. The Information goes out with the Anfrage of Nr. 3 — the two share a
+condition — so it reaches the LFN well inside its 07:00 window, which closes
+four hours before the 11:00 Bestätigung of the same message, and an Anmeldung
+the Vorprüfung refuses never names the LFA to the party it refuses. The
+Beendigung rides the Bestätigung, whether that is dispatched automatically or
+released by an operator. The Aufhebung is an
 operator command: it addresses a supplier whose future Zuordnung the Anmeldung
 displaces, and the supply projection holds one future supplier per
 Marktlokation, which the incoming Anmeldung has already claimed.

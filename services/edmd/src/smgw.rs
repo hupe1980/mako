@@ -257,10 +257,9 @@ pub fn check_session_compliance(
 ) -> Vec<ComplianceIssue> {
     // One evaluation instant for the whole check, supplied by the caller. The
     // certificate rules work on the date, the communication-fault rule on the
-    // instant, and they must agree: reading the clock again inside the function
-    // — as the fault branch used to — made the result depend on when it was
-    // called rather than on what it was asked about, and left that branch
-    // untestable.
+    // instant, and they must agree: a second clock read inside the function
+    // would make the result depend on when it was called rather than on what it
+    // was asked about, and leave that branch untestable.
     let today = now.date();
     let mut issues = Vec::new();
 

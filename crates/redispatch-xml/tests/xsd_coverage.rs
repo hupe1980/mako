@@ -65,13 +65,12 @@ const NOT_MODELLED: &[(&str, &str)] = &[
     (
         "CR_Objekt",
         "Cluster objects — the clusternder NB's own Stammdaten. mako holds the ANB \
-         and BKV sides; tracked in ROADMAP",
+         and BKV sides",
     ),
     (
         "SG_Objekt",
         "Steuergruppen — SR that share one Steuersignal (BilAReM Kap. 1). Same \
-         role boundary as CR_Objekt: mako holds the ANB and BKV sides; tracked \
-         in ROADMAP",
+         role boundary as CR_Objekt: mako holds the ANB and BKV sides",
     ),
     (
         "CR_Objekt_Referenz",

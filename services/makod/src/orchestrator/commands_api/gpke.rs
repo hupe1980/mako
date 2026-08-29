@@ -905,6 +905,17 @@ pub(super) async fn dispatch_supplier_change_antwort(
         )));
     }
 
+    // **Fall b** — the Zuordnungsende the LFA answered the Abmeldeanfrage with,
+    // when it falls before the Zuordnungsbeginn this Bestätigung confirms. It is
+    // not a segment of the 55002; it rides the completion payload so the supply
+    // projection can see the uncovered interval (§ 38 Abs. 1 EnWG). Absent on
+    // every ordinary answer.
+    let lfa_lieferende = payload
+        .get("lfa_lieferende")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned);
+
     dispatch_to_process::<GpkeSupplierChangeWorkflow, _>(
         state,
         malo_id.as_str(),
@@ -912,6 +923,7 @@ pub(super) async fn dispatch_supplier_change_antwort(
         move || SupplierChangeCommand::SendAntwort {
             antwort,
             obligations: vec![],
+            lfa_lieferende,
         },
     )
     .await

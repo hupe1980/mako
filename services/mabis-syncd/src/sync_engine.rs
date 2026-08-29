@@ -751,11 +751,9 @@ impl SyncEngine {
         }
     }
 
-    // The BO4E `Zeitraum` re-assembler and the `Messwertstatus` reverse-mapping
-    // that used to live here are gone with the `/lastgang` parse. `/energy`
-    // carries RFC 3339 instants and the stored `QualityFlag` vocabulary
-    // directly, so neither the date/offset recombination nor a lossy inverse of
-    // edmd's own BO4E mapping has to be maintained on this side.
+    // `/energy` carries RFC 3339 instants and the stored `QualityFlag`
+    // vocabulary directly, so this side needs neither a BO4E `Zeitraum`
+    // re-assembler nor a lossy inverse of edmd's own `Messwertstatus` mapping.
 
     /// Fetch a MaLo's quarter-hourly **Bezug** series from edmd.
     ///

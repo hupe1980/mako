@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use time::Date;
 use tracing::warn;
 
-use super::{Claims, TenantGln};
+use super::{Claims, Tenant};
 use crate::pg::mmma_preise::{PgMmmPreisStromRepository, PgMmmaPreisGasRepository};
 
 pub type MmmaGasRepoExt = Arc<PgMmmaPreisGasRepository>;
@@ -97,13 +97,13 @@ fn default_source_manual() -> String {
 pub async fn put_mmma_gas(
     Extension(repo): Extension<MmmaGasRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(path): Path<YearMonthPath>,
     Json(req): Json<MmmaGasUpsertRequest>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-mmma-preis", &tenant_gln)
+        .check(&claims.principal(), "write-mmma-preis", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -131,12 +131,12 @@ pub async fn put_mmma_gas(
 pub async fn get_mmma_gas(
     Extension(repo): Extension<MmmaGasRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(path): Path<YearMonthPath>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-mmma-preis", &tenant_gln)
+        .check(&claims.principal(), "read-mmma-preis", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -182,12 +182,12 @@ fn default_limit() -> i64 {
 pub async fn list_mmma_gas(
     Extension(repo): Extension<MmmaGasRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Query(q): Query<ListQuery>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-mmma-preis", &tenant_gln)
+        .check(&claims.principal(), "read-mmma-preis", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -242,13 +242,13 @@ pub struct MmmStromUpsertRequest {
 pub async fn put_mmm_strom(
     Extension(repo): Extension<MmmStromRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(path): Path<YearMonthPath>,
     Json(req): Json<MmmStromUpsertRequest>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-mmma-preis", &tenant_gln)
+        .check(&claims.principal(), "write-mmma-preis", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -270,12 +270,12 @@ pub async fn put_mmm_strom(
 pub async fn get_mmm_strom(
     Extension(repo): Extension<MmmStromRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(path): Path<YearMonthPath>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-mmma-preis", &tenant_gln)
+        .check(&claims.principal(), "read-mmma-preis", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -344,7 +344,7 @@ pub async fn post_import_trigger(
     Extension(strom_repo): Extension<MmmStromRepoExt>,
     Extension(import_cfg): Extension<MmmaImportCfgExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
     Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Extension(http): Extension<reqwest::Client>,
@@ -352,7 +352,7 @@ pub async fn post_import_trigger(
     Query(q): Query<ImportTriggerQuery>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-mmma-preis", &tenant_gln)
+        .check(&claims.principal(), "write-mmma-preis", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -370,7 +370,7 @@ pub async fn post_import_trigger(
         &import_cfg.strom_url,
         &gas_repo,
         &strom_repo,
-        &tenant_gln,
+        &tenant,
         &crate::mmma_worker::EventSink {
             pool: &pool,
             notify: &notify,

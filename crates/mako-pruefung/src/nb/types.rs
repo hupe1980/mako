@@ -212,9 +212,10 @@ pub struct AnmeldungAnfrage {
     ///
     /// Must equal the operator's own GLN; otherwise the event is misdirected.
     pub grid_operator_gln: String,
-    /// Bilanzierungsgebiet-EIC provided in the UTILMD message (`LOC+237`).
+    /// Bilanzierungsgebiet-EIC as the UTILMD states it, in `SG10 CCI+Z20`.
     ///
-    /// `None` when not present in the EDIFACT message (optional in some process variants).
+    /// `None` when the message does not carry it; check 4 then falls back to
+    /// the Netzbetreiber's own record for the Marktlokation.
     pub bilanzierungsgebiet: Option<String>,
     /// Requested Lieferbeginn date.
     pub process_date: Date,
@@ -438,7 +439,7 @@ pub struct MaloGridRecord {
     pub malo_id: String,
     /// GLN of the Netzbetreiber that owns this MaLo.
     pub nb_mp_id: String,
-    /// Bilanzierungsgebiet-EIC (`LOC+237` in UTILMD).
+    /// Bilanzierungsgebiet-EIC, as the Netzbetreiber holds it.
     ///
     /// `None` means the Bilanzierungsgebiet is unknown — check 4 is skipped
     /// (treated as passing) when both this field and the UTILMD value are `None`.

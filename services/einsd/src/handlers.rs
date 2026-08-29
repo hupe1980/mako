@@ -34,13 +34,12 @@ use crate::{
 ///
 /// # Why not `/billing-period`
 ///
-/// It used to read `arbeitsmenge_kwh` off
-/// `GET /api/v1/billing-period/{malo_id}` — and that field is the **Bezug**, the
-/// grid draw, projected onto the consumption registers (edmd's
-/// `domain::register`). An Erzeugungs-MaLo reports only `1-0:2.8.x`, so the
-/// consumption projection over it is empty and the figure came back as **0 kWh**:
-/// every auto-settled EEG month paid on nothing, and the batch dry-run counted
-/// the plant as "has data" because `Some(0)` is not `None`.
+/// `GET /api/v1/billing-period/{malo_id}` answers `arbeitsmenge_kwh`, which is
+/// the **Bezug** — the grid draw, projected onto the consumption registers
+/// (edmd's `domain::register`). An Erzeugungs-MaLo reports only `1-0:2.8.x`, so
+/// that projection is empty over it and the field reads **0 kWh** rather than
+/// absent: a settlement on it pays nothing, and a dry-run counts the plant as
+/// „has data" because `Some(0)` is not `None`.
 ///
 /// The direction has to be stated, and only `/energy` lets it be.
 ///

@@ -670,10 +670,8 @@ pub fn sequence_type_of(stored: &str) -> SequenceType {
 ///
 /// ## Execution date
 ///
-/// `execution_date` is always set explicitly. The crate's own default became
-/// "today" in 0.6 (it had been an unexplained five days out, borrowed from
-/// pain.008's pre-notification floor), and a payment date is not something to
-/// inherit from a library default.
+/// `execution_date` is always set explicitly: a payment date is not something to
+/// inherit from a library default, whatever that default happens to be.
 ///
 /// # Errors
 ///

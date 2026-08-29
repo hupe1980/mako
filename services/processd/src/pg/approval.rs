@@ -54,6 +54,20 @@ pub struct ApprovalQueueEntry {
     pub reject_command: Option<String>,
     /// Marktrolle forwarded on the dispatched command.
     pub marktrolle: Option<String>,
+    /// A **Meldepflicht** the approved answer carries with it: a second `makod`
+    /// command, dispatched only after the market answer itself went out.
+    ///
+    /// A Meldepflicht is a message a Festlegung obliges the operator to send
+    /// with no answer expected back, and several of them are owed „unverzüglich
+    /// nach dem ÜZ" of an answer an operator may hold. Storing it beside the
+    /// answer is what keeps the two together when the decision is deferred.
+    /// `None` means the approval sends one message.
+    pub followup_command: Option<String>,
+    /// The body of [`Self::followup_command`]. Built at enqueue time, because
+    /// the facts the Meldung states — the Altlieferant, the Zuordnungsende —
+    /// are the ones that were true when the decision was taken, not the ones
+    /// the projection holds when an operator gets to it.
+    pub followup_payload: Option<serde_json::Value>,
     pub expires_at: OffsetDateTime,
     pub created_at: OffsetDateTime,
     pub decided_at: Option<OffsetDateTime>,
@@ -84,6 +98,8 @@ impl ApprovalQueueEntry {
             approve_command: None,
             reject_command: None,
             marktrolle: None,
+            followup_command: None,
+            followup_payload: None,
             expires_at,
             created_at: OffsetDateTime::now_utc(),
             decided_at: None,
@@ -97,6 +113,19 @@ impl ApprovalQueueEntry {
         self.approve_command = Some(approve.to_owned());
         self.reject_command = Some(reject.to_owned());
         self.marktrolle = marktrolle.map(ToOwned::to_owned);
+        self
+    }
+
+    /// Attach a Meldepflicht to the approval: a second command, dispatched
+    /// after the market answer and only if that answer reached `makod`.
+    ///
+    /// Ordering is the point. The Meldungen that hang off an answer are owed
+    /// „unverzüglich nach dem ÜZ" of it, so sending one for an answer that
+    /// never went out states an outcome the market did not see.
+    #[must_use]
+    pub fn with_followup(mut self, command: &str, payload: serde_json::Value) -> Self {
+        self.followup_command = Some(command.to_owned());
+        self.followup_payload = Some(payload);
         self
     }
 
@@ -118,8 +147,8 @@ impl ApprovalQueueEntry {
 
 /// Every column `map_entry` reads.
 const ENTRY_COLUMNS: &str = "id, process_id, pid, malo_id, reason, status, approve_command, \
-                             reject_command, marktrolle, expires_at, created_at, decided_at, \
-                             decided_by, tenant";
+                             reject_command, marktrolle, followup_command, followup_payload, \
+                             expires_at, created_at, decided_at, decided_by, tenant";
 
 fn map_entry(row: &PgRow) -> Result<ApprovalQueueEntry, sqlx::Error> {
     let status_str: String = row.try_get("status")?;
@@ -139,6 +168,8 @@ fn map_entry(row: &PgRow) -> Result<ApprovalQueueEntry, sqlx::Error> {
         approve_command: row.try_get("approve_command")?,
         reject_command: row.try_get("reject_command")?,
         marktrolle: row.try_get("marktrolle")?,
+        followup_command: row.try_get("followup_command")?,
+        followup_payload: row.try_get("followup_payload")?,
         expires_at: row.try_get("expires_at")?,
         created_at: row.try_get("created_at")?,
         decided_at: row.try_get("decided_at")?,
@@ -159,11 +190,12 @@ impl PgApprovalQueue {
 
     pub async fn enqueue(&self, entry: &ApprovalQueueEntry) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO approval_queue (id, process_id, pid, malo_id, reason, status, approve_command, reject_command, marktrolle, expires_at, created_at, tenant) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (process_id, tenant) DO NOTHING",
+            "INSERT INTO approval_queue (id, process_id, pid, malo_id, reason, status, approve_command, reject_command, marktrolle, followup_command, followup_payload, expires_at, created_at, tenant) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (process_id, tenant) DO NOTHING",
         )
         .bind(entry.id).bind(entry.process_id).bind(entry.pid).bind(&entry.malo_id)
         .bind(&entry.reason).bind(entry.status.to_string())
         .bind(&entry.approve_command).bind(&entry.reject_command).bind(&entry.marktrolle)
+        .bind(&entry.followup_command).bind(&entry.followup_payload)
         .bind(entry.expires_at).bind(entry.created_at).bind(&entry.tenant)
         .execute(&self.pool).await?;
         Ok(())

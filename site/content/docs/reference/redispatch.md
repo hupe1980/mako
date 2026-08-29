@@ -215,8 +215,8 @@ PID overview puts them under a different Prozessbeschreibung:
 
 13020 and 13023 are MaBiS Summenzeitreihen carrying a full Prüfmitteilung/
 Datenstatus cycle (IFTSTA 21000, 21002–21005); routing them to an activation
-workflow gave them no settlement stream to live in, so the obligation they carry
-had nowhere to be recorded.
+workflow would leave them no settlement stream to live in and the obligation they
+carry nowhere to be recorded.
 
 ---
 

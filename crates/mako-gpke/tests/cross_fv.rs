@@ -268,6 +268,7 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
     nb.execute(SupplierChangeCommand::SendAntwort {
         antwort: nb_antwort(true, None),
         obligations,
+        lfa_lieferende: None,
     })
     .await
     .expect("NB SendAntwort must succeed");
@@ -458,6 +459,7 @@ async fn cross_fv_s2_2_response_accepted_on_s2_1_process() {
     nb.execute(SupplierChangeCommand::SendAntwort {
         antwort: nb_antwort(true, None),
         obligations,
+        lfa_lieferende: None,
     })
     .await
     .expect("NB SendAntwort must succeed");

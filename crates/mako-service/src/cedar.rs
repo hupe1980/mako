@@ -80,7 +80,7 @@ pub enum CedarError {
 /// Build this from the handler's `Claims` extractor:
 /// ```rust,ignore
 /// let principal = claims.principal();
-/// enforcer.check(&principal, "read-malo", &state.tenant_gln)?;
+/// enforcer.check(&principal, "read-malo", &state.tenant)?;
 /// ```
 #[derive(Debug, Clone)]
 pub struct CedarPrincipal {

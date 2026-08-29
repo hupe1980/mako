@@ -1149,3 +1149,134 @@ async fn a_zuordnung_for_an_unknown_melo_is_skipped_not_retried_forever() {
     .expect("an unknown MeLo is logged, not an error");
     tx.commit().await.expect("the transaction is still usable");
 }
+
+// ── Fall b: the interval a Bestätigung can leave behind ───────────────────────
+
+/// **Fall b opens a § 38 gap the Bestätigung itself announces.**
+///
+/// `E_0624` `A34` lets the Altlieferant release the Marktlokation *earlier* than
+/// the Zuordnungsbeginn the NB then confirms. Neither message states both dates:
+/// the LFA's answer states one end and the Anmeldung the other, and this
+/// projection is the only place that holds them together. The days in between
+/// are supplied by nobody, which is the same fact a Lieferende with no successor
+/// produces — so it must reach `processd`'s EoG case log through the same event.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn fall_b_announces_the_uncovered_interval() {
+    use marktd::handlers::event_ingest::derive_supply_state;
+
+    let Some((pool, _pg)) = test_pool("fall_b_gap").await else {
+        return;
+    };
+    let m = malo();
+    let mut tx = pool.begin().await.expect("begin");
+
+    derive_supply_state(
+        &mut tx,
+        TENANT,
+        mako_events::mako::PROCESS_INITIATED,
+        Some(55_001),
+        &serde_json::json!({
+            "malo_id":       m.to_string(),
+            "new_supplier":  "9911111111111",
+            "grid_operator": "9900000000001",
+            "process_date":  "2026-10-01",
+        }),
+        Some(uuid::Uuid::new_v4()),
+    )
+    .await
+    .expect("55001 announce");
+
+    // The LFA answered `A34` with 15.09.2026; the NB confirms 01.10.2026.
+    let evts = derive_supply_state(
+        &mut tx,
+        TENANT,
+        mako_events::mako::PROCESS_COMPLETED,
+        Some(55_002),
+        &serde_json::json!({
+            "malo_id":        m.to_string(),
+            "grid_operator":  "9900000000001",
+            "process_date":   "20261001",
+            "lfa_lieferende": "20260915",
+        }),
+        Some(uuid::Uuid::new_v4()),
+    )
+    .await
+    .expect("55002 confirm");
+    tx.commit().await.expect("commit");
+
+    let gap = evts
+        .iter()
+        .find(|e| e.ce_type == mako_events::markt::VERSORGUNG_GAP_DETECTED)
+        .expect("a Fall-b confirmation must announce the interval it leaves");
+    // Half-open at both ends the way the Lieferende route reports it: the first
+    // unsupplied day, and the day supply resumes.
+    assert_eq!(gap.data["gap_from"], "2026-09-16");
+    assert_eq!(gap.data["gap_until"], "2026-10-01");
+    assert_eq!(gap.data["malo_id"], m.to_string());
+
+    // …and the switch itself still happened.
+    let vs = marktd::pg::PgVersorgungsStatusRepository::new(pool.clone());
+    let after = vs.find(&m, TENANT).await.expect("find").expect("row");
+    assert_eq!(after.lf_mp_id.as_deref(), Some("9911111111111"));
+}
+
+/// An ordinary confirmation announces no gap: the LFA released exactly at the
+/// Zuordnungsbeginn, so there is no uncovered day to open a § 38 case for.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_ordinary_confirmation_announces_no_gap() {
+    use marktd::handlers::event_ingest::derive_supply_state;
+
+    let Some((pool, _pg)) = test_pool("no_fall_b_gap").await else {
+        return;
+    };
+    let m = malo();
+    let mut tx = pool.begin().await.expect("begin");
+
+    derive_supply_state(
+        &mut tx,
+        TENANT,
+        mako_events::mako::PROCESS_INITIATED,
+        Some(55_001),
+        &serde_json::json!({
+            "malo_id":       m.to_string(),
+            "new_supplier":  "9911111111111",
+            "grid_operator": "9900000000001",
+            "process_date":  "2026-10-01",
+        }),
+        Some(uuid::Uuid::new_v4()),
+    )
+    .await
+    .expect("55001 announce");
+
+    for payload in [
+        // No Fall-b date at all.
+        serde_json::json!({ "malo_id": m.to_string(), "process_date": "20261001" }),
+        // A release on the day before the Zuordnungsbeginn covers every day:
+        // the first unsupplied day would be the Zuordnungsbeginn itself.
+        serde_json::json!({
+            "malo_id":        m.to_string(),
+            "process_date":   "20261001",
+            "lfa_lieferende": "20260930",
+        }),
+    ] {
+        let evts = derive_supply_state(
+            &mut tx,
+            TENANT,
+            mako_events::mako::PROCESS_COMPLETED,
+            Some(55_002),
+            &payload,
+            Some(uuid::Uuid::new_v4()),
+        )
+        .await
+        .expect("55002 confirm");
+        assert!(
+            !evts
+                .iter()
+                .any(|e| e.ce_type == mako_events::markt::VERSORGUNG_GAP_DETECTED),
+            "no interval is uncovered, so nothing may be announced: {payload}"
+        );
+    }
+    tx.commit().await.expect("commit");
+}

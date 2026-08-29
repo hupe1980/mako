@@ -199,8 +199,8 @@ Stufe is 3.
 | `POST` | `/webhook` | Ingest CloudEvents (billingd, einsd, invoicd) — HMAC-verified |
 | `GET/PUT` | `/api/v1/accounts/{malo_id}` | Account CRUD (IBAN, Abschlag, billing_day) — OIDC required for PUT |
 | `GET` | `/api/v1/accounts/{malo_id}/balance` | Current balance in ct; status: overdue/credit/settled |
-| `GET` | `/api/v1/accounts/{malo_id}/ledger` | Paged ledger entries |
-| `GET` | `/api/v1/accounts/{malo_id}/kontoauszug` | Account statement (portald-consumable) |
+| `GET` | `/api/v1/accounts/{malo_id}/ledger` | Ledger movements, newest first, with the `opening_ct` the window starts from |
+| `GET` | `/api/v1/accounts/{malo_id}/kontoauszug` | Account statement (portald-consumable); `?from=&to=` scopes it to a period and returns `eroeffnungssaldo_ct` / `bewegung_ct` / `schlusssaldo_ct` |
 | `GET` | `/api/v1/accounts/{malo_id}/open-items` | **Offene Posten** — authoritative unpaid/partial invoices (after recorded clearings) |
 | `POST` | `/api/v1/accounts/{malo_id}/clear` | Record a FIFO Zahlungszuordnung (open credits → oldest open debits) |
 | `POST` | `/api/v1/clearings/{clearing_id}/reset` | Release a mis-assigned Zahlungszuordnung |
@@ -716,7 +716,9 @@ curl "http://accountingd:9380/api/v1/periods/2026-01/balance-proof?malo_id=…&l
 # 3. Has the journal only been appended to since I last looked?
 curl "http://accountingd:9380/api/v1/entries/consistency-proof?since=41234"
 # → { archived_size, archived_root, current_size, current_root,
-#     verified: true, vacuous: false, proof: {…} }
+#     verified: true, proof: {…} }
+#   `since=0` is refused: every log extends the empty tree, so such a proof
+#   verifies against any root of the right size and examines nothing.
 ```
 
 All three are `O(log n)` and verifiable **without access to this service**.

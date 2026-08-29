@@ -57,7 +57,7 @@ graph TB
     end
 
     subgraph b2c ["Contract & Customer (LF)"]
-        vertragd[":9780 vertragd<br/>Kunden B2C+B2B · Rahmenverträge<br/>OIDC→MaLo · 16 MCP tools"]
+        vertragd[":9780 vertragd<br/>Kunden B2C+B2B · Rahmenverträge<br/>OIDC→MaLo · 17 MCP tools"]
         portald[":9480 portald<br/>customer portal read-model<br/>§41 self-service"]
     end
 

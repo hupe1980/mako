@@ -3,17 +3,16 @@
 //! Covers the full write→store→read cycle using `InMemoryEventStore` — no
 //! SlateDB required.
 //!
-//! # What this file is guarding against
+//! # The two invariants
 //!
-//! The workflow used to model a settlement as a single request/response with a
-//! **1-Werktag Prüfmitteilung deadline**. Both halves were wrong:
-//!
-//! - BK6-24-174 Anlage 3 Kap. 9.8.2 Nr. 1 gives the Prüfmitteilung an empty
-//!   Frist cell — the receiving party „kann" answer. Kap. 13.8.2, the section
-//!   the deadline used to cite, defines no answer at all; its Fristen are the
-//!   **BIKO's own** dispatch dates (18. WT / 42. WT).
-//! - A settlement carries a *sequence* of versions (Kap. 3.8.2), so a one-shot
-//!   state machine cannot represent the Clearingphase at all.
+//! - **A Prüfmitteilung has no answer Frist.** BK6-24-174 Anlage 3 Kap. 9.8.2
+//!   Nr. 1 leaves its Frist cell empty — the receiving party „kann" answer —
+//!   and Kap. 13.8.2 states only the **BIKO's own** dispatch dates (18. WT /
+//!   42. WT). Registering a countdown on the arrival would breach a window the
+//!   Festlegung does not open.
+//! - **A settlement carries a *sequence* of versions** (Kap. 3.8.2), so a
+//!   one-shot request/response state machine cannot represent the Clearingphase
+//!   at all.
 //!
 //! # State machine under test
 //!

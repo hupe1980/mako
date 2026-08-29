@@ -252,4 +252,30 @@ fn the_landing_page_figures_match_the_registered_engine() {
         "site/templates/index.html advertises {LANDING_PAGE_WORKFLOWS} MaKo workflows, \
          the engine registers {workflows} — update the page"
     );
+
+    // The landing page is not the only place that states the pair. Two prose
+    // sentences restate it to explain what a role-scoped build is a subset
+    // *of*, and a sentence naming a number nothing checks goes stale on its own.
+    // `concepts/` is not in git, so a checkout without it is normal and only a
+    // file that exists and disagrees is a finding.
+    for (doc, sentence) in [
+        (
+            "../../site/content/docs/services/makod.md",
+            format!("**{workflows} workflows over {pids} Prüfidentifikatoren**"),
+        ),
+        (
+            "../../concepts/AGENTD.md",
+            format!("**{workflows} workflows and {pids} PIDs**"),
+        ),
+    ] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(doc);
+        let Ok(src) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        assert!(
+            src.contains(&sentence),
+            "{doc} no longer states the engine's own figures — it must contain \
+             {sentence:?}"
+        );
+    }
 }

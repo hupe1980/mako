@@ -256,6 +256,7 @@ fn send_antwort_lieferbeginn_accepted_emits_mscons_13015_outbox() {
         SupplierChangeCommand::SendAntwort {
             antwort: nb_antwort(true, None),
             obligations,
+            lfa_lieferende: None,
         },
     )
     .expect("SendAntwort must succeed in ValidationPassed");
@@ -316,6 +317,7 @@ fn send_antwort_lieferbeginn_with_msb_emits_orders_17134_outbox() {
         SupplierChangeCommand::SendAntwort {
             antwort: nb_antwort(true, None),
             obligations,
+            lfa_lieferende: None,
         },
     )
     .expect("SendAntwort must succeed");
@@ -377,6 +379,7 @@ fn send_antwort_abmeldung_accepted_no_cross_domain_outbox() {
         SupplierChangeCommand::SendAntwort {
             antwort: nb_antwort(true, None),
             obligations,
+            lfa_lieferende: None,
         },
     )
     .expect("SendAntwort must succeed for Abmeldung");

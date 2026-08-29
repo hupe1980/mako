@@ -107,7 +107,7 @@ fn no_declared_gap_is_actually_routed() {
     assert!(
         stale.is_empty(),
         "these PIDs are declared missing but the router registers them — delete \
-         their NOT_YET_SENDABLE entries and update ROADMAP.md: {stale:?}"
+         their NOT_YET_SENDABLE entries: {stale:?}"
     );
 }
 

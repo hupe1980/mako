@@ -20,10 +20,10 @@
 //! the MCP `validate_timeseries` tool and the § 60 Abs. 2 substitute path all go
 //! through it, because a validator that answers differently depending on which
 //! surface asked is worse than one that does not exist: it is consulted exactly
-//! when nobody is checking. Each of those three used to carry its own
-//! `ValidationConfig::default()` — electricity thresholds, an assumed 900 s
-//! grid — and so disagreed with the ingest door about whether a perfectly
-//! ordinary hourly gas delivery was clean.
+//! when nobody is checking. A per-surface `ValidationConfig::default()` —
+//! electricity thresholds, an assumed 900 s grid — would have each of the three
+//! disagree with the ingest door about whether a perfectly ordinary hourly gas
+//! delivery is clean.
 //!
 //! ## The rule set is `metering`'s, not a fixed V01–V10
 //!
@@ -184,8 +184,8 @@ pub struct RegisterFinding {
 /// The rule configuration a series of this commodity and cadence should be
 /// judged against.
 ///
-/// Two things were wrong with running `ValidationConfig::default()` over every
-/// batch, as this used to:
+/// Two things make `ValidationConfig::default()` the wrong judge of an
+/// arbitrary batch:
 ///
 /// - **The default is electricity.** It allows four consecutive zeros before V05
 ///   calls the meter stuck. A gas heating profile is near zero for a summer
@@ -340,9 +340,9 @@ pub fn findings_with_coverage(
 /// ## An annotation names the interval, not the batch
 ///
 /// A row carries **its own** findings. Copying the whole batch's issue list onto
-/// every implicated row — as this used to — makes a downstream § 60 Abs. 2 MsbG
-/// substitution decision reread the same month-wide list on each of 2 976
-/// intervals and learn nothing about the one in front of it. The batch-level
+/// every implicated row would make a downstream § 60 Abs. 2 MsbG substitution
+/// decision reread the same month-wide list on each of 2 976 intervals and learn
+/// nothing about the one in front of it. The batch-level
 /// counts stay, because "how bad is this delivery" is a real question too; they
 /// are just not the same question.
 fn validate_and_annotate(batch: &mut [MeterRead], ctx: IngestContext<'_>) -> BatchValidation {

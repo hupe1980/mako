@@ -520,10 +520,10 @@ primary = true
 /// signer, itself, and rejects every message from every partner. The daemon
 /// starts, binds :4080, reports healthy, and receives nothing.
 ///
-/// That used to be an `error!` log line above a successful boot, which is the
-/// shape an operator discovers when a counterparty escalates a missed Frist. It
-/// is a startup refusal now, with `--allow-no-as4-trust-anchor` as the explicit
-/// loopback-test opt-out — the same shape as `--allow-unencrypted-as4`.
+/// An `error!` line above a successful boot is the shape an operator discovers
+/// when a counterparty escalates a missed Frist, so this is a startup refusal —
+/// with `--allow-no-as4-trust-anchor` as the explicit loopback-test opt-out,
+/// the same shape as `--allow-unencrypted-as4`.
 #[test]
 fn check_rejects_an_as4_listener_without_a_trust_anchor() {
     let dir = tempfile::tempdir().expect("tempdir");

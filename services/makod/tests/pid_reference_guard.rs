@@ -27,7 +27,7 @@ use mako_engine::pid_router::PidRouter;
 /// does not register.
 ///
 /// Two distinct reasons, and the difference matters — the first group is
-/// correct as-is, the second is a real gap tracked in the roadmap:
+/// correct as-is, the second is a real gap:
 ///
 /// * **Outbound-only.** mako *generates* the PID as a response; it never arrives
 ///   inbound, so there is nothing to route.

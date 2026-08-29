@@ -622,7 +622,7 @@ impl EdifactIngestDispatcher {
         // message is silently dropped. That is always a coverage bug, so make it
         // LOUD (distinct from expected orphans like `process_not_found` /
         // `no_correlation_key`, which stay quiet). This is the runtime safety net for the
-        // registered-but-not-dispatched class; see the PID-coverage guard in ROADMAP.
+        // registered-but-not-dispatched class.
         if let Ok(o) = &outcome
             && let Some((workflow_name, reason)) = o.coverage_gap()
         {
@@ -1353,11 +1353,12 @@ pub fn extract_malo_from_invoic(msg: &AnyMessage) -> String {
 /// operator_window` marks it `is_regulatory: false` and carries a `source`
 /// saying so, which this logs at `warn` the moment it is used.
 ///
-/// Every call site used to pass its own `fallback` — twelve copies of
-/// `add_hours(received, 24)`, the very number [`GPKE_IS_NOT_TWENTY_FOUR_HOURS`]
-/// exists to refute. Registering a PID without adding its row to the table then
-/// silently produced a fabricated 24-hour regulatory deadline. There is now one
-/// convention, in one place, and it announces itself.
+/// The convention lives here rather than at the call sites. A per-call-site
+/// `fallback` invites a copy of `add_hours(received, 24)` — the very number
+/// [`GPKE_IS_NOT_TWENTY_FOUR_HOURS`] exists to refute — so registering a PID
+/// without adding its row to the table would silently produce a fabricated
+/// 24-hour regulatory deadline. One convention, in one place, announcing
+/// itself.
 ///
 /// [`GPKE_IS_NOT_TWENTY_FOUR_HOURS`]: mako_fristen::antwort::GPKE_IS_NOT_TWENTY_FOUR_HOURS
 pub(crate) fn antwort_due_at(pid: u32, received: OffsetDateTime) -> OffsetDateTime {

@@ -27,6 +27,14 @@ CREATE TABLE approval_queue (
     approve_command TEXT,
     reject_command  TEXT,
     marktrolle      TEXT,
+    -- A Meldepflicht the approved answer carries with it: a message the
+    -- Festlegung obliges the operator to send „unverzüglich nach dem ÜZ" of an
+    -- answer an operator may hold for hours. Dispatched only after the answer
+    -- itself reached makod, so it never states an outcome the market did not
+    -- see. Its body is frozen at enqueue time, because the facts it states are
+    -- the ones that were true when the decision was taken.
+    followup_command TEXT,
+    followup_payload JSONB,
     expires_at  TIMESTAMPTZ NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     decided_at  TIMESTAMPTZ,
@@ -103,9 +111,21 @@ CREATE TABLE abmeldeanfragen (
     pid                    INTEGER     NOT NULL,
     -- The replayable `AnmeldungAnfrage`; phase two adds only the LFA's answer.
     anfrage                JSONB       NOT NULL,
+    -- What phase two needs to discharge the Meldepflicht zur Beendigung der
+    -- Zuordnung (55037 / 44037, Nr. 10 resp. Nr. 6): the Altlieferant, the
+    -- Zuordnungsende and the Sparte, as of the Anmeldung. Not derivable from
+    -- `anfrage`, which carries neither the incumbent nor the
+    -- Transaktionsgrundergänzung that says the object is a Tranche.
+    meldung                JSONB       NOT NULL,
     -- When the Anmeldung arrived, so the operator queue can size the *answer*
     -- window (11:00) rather than the Anfrage's (09:00).
     received_at            TIMESTAMPTZ NOT NULL,
+    -- When the 55010 actually reached makod. The row is written *before* the
+    -- Anfrage goes out, so this is what tells a redelivered Anmeldung apart from
+    -- a genuine duplicate: NULL means the Anfrage never went out, nothing
+    -- registered the LFA's 09:00 window, and nobody will ever resolve this row —
+    -- so the redelivery must send it rather than return.
+    anfrage_gesendet_at    TIMESTAMPTZ,
     created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
     -- Set when phase two ran, so a redelivered answer is a no-op rather than a
     -- second Bestätigung. Silence and an answer both resolve it.

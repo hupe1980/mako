@@ -891,6 +891,40 @@ mod rest {
         }
 
         tracing::info!(%id, process_id = %entry.process_id, command, "processd: queue entry {verb}d — command dispatched");
+
+        // A **Meldepflicht** the approved answer carries with it — a message
+        // owed „unverzüglich nach dem ÜZ" of that answer, with no answer of its
+        // own. It rides only the approval, and only after the answer reached
+        // makod: a Meldung stating an outcome the market never saw is worse
+        // than a late one. A failure is logged, not returned — the answer is
+        // already out, and reporting the approval as failed would invite an
+        // operator to send it twice.
+        if approve && let Some(followup) = entry.followup_command.as_deref() {
+            let cmd = mako_markt::makod_client::ForwardCommand {
+                marktrolle: entry.marktrolle.clone(),
+                command: followup.to_owned(),
+                malo_id: entry.malo_id.clone(),
+                melo_id: None,
+                payload: entry
+                    .followup_payload
+                    .clone()
+                    .unwrap_or_else(|| serde_json::json!({})),
+            };
+            match state
+                .makod
+                .post_command(&format!("processd-queue-followup-{id}"), &cmd)
+                .await
+            {
+                Ok(_) => tracing::info!(
+                    %id, process_id = %entry.process_id, followup,
+                    "processd: Meldepflicht dispatched with the approved answer"
+                ),
+                Err(e) => tracing::warn!(
+                    %id, process_id = %entry.process_id, followup, error = %e,
+                    "processd: Meldepflicht dispatch failed — the answer is already out"
+                ),
+            }
+        }
         StatusCode::NO_CONTENT.into_response()
     }
 

@@ -908,9 +908,9 @@ pub struct BillingPeriodQuery {
 /// Brennwert and Zustandszahl are only meaningful together with the period they
 /// apply to: the gas grid operator publishes an Abrechnungsbrennwert per supply
 /// area per month, and `kWh = m³ × Hs × Z` uses the one in force for the
-/// consumption month. Storing the pair without its period — as the PID 13007
-/// handler used to, by patching `meter_billing_periods` alone — leaves no record
-/// of *which* month's value was applied.
+/// consumption month. Storing the pair without its period — by patching
+/// `meter_billing_periods` alone — leaves no record of *which* month's value was
+/// applied.
 ///
 /// Source: MSCONS AHB Gas; Allgemeine Festlegungen §6; § 25 Nr. 4 MessEV /
 /// DVGW G 685.

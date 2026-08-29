@@ -28,7 +28,7 @@ use crate::pg::{
     PgDeviceRepository, PgSteuerbareRessourceRepository, PgTechnischeRessourceRepository,
 };
 
-use super::{Claims, TenantGln};
+use super::{Claims, Tenant};
 
 // ── Extension types ───────────────────────────────────────────────────────────
 
@@ -149,30 +149,24 @@ fn default_bo4e_version() -> String {
     mako_markt::bo4e::schema_version()
 }
 
-/// Query params for list endpoints.
-#[derive(Debug, Deserialize)]
-pub struct TenantQuery {
-    pub tenant: Option<String>,
-}
-
 // ── SteuerbareRessource handlers (B4b) ───────────────────────────────────────
 
 /// `GET /api/v1/steuerbare-ressourcen/{sr_id}`
 pub async fn get_steuerbare_ressource(
     Extension(repo): Extension<SrRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(sr_id): Path<String>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-sr", &tenant_gln)
+        .check(&claims.principal(), "read-sr", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    match repo.find_sr(&sr_id, &tenant_gln).await {
+    match repo.find_sr(&sr_id, &tenant).await {
         Ok(Some(rec)) => Json(serde_json::to_value(rec).unwrap_or_default()).into_response(),
         Ok(None) => (
             StatusCode::NOT_FOUND,
@@ -187,13 +181,13 @@ pub async fn get_steuerbare_ressource(
 pub async fn put_steuerbare_ressource(
     Extension(repo): Extension<SrRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(sr_id): Path<String>,
     Json(req): Json<UpsertSrRequest>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-sr", &tenant_gln)
+        .check(&claims.principal(), "write-sr", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -232,7 +226,7 @@ pub async fn put_steuerbare_ressource(
     match repo
         .upsert_sr(
             &sr_id,
-            &tenant_gln,
+            &tenant,
             req.malo_id.as_deref(),
             req.melo_id.as_deref(),
             data,
@@ -270,20 +264,20 @@ pub async fn put_steuerbare_ressource(
 pub async fn get_konfigurationsprodukte(
     Extension(repo): Extension<SrRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(sr_id): Path<String>,
 ) -> impl IntoResponse {
     use rubo4e::current::Konfigurationsprodukt;
 
     if enforcer
-        .check(&claims.principal(), "read-sr", &tenant_gln)
+        .check(&claims.principal(), "read-sr", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    match repo.find_sr(&sr_id, &tenant_gln).await {
+    match repo.find_sr(&sr_id, &tenant).await {
         Ok(Some(rec)) => {
             let raw = rec
                 .konfigurationsprodukte
@@ -349,7 +343,7 @@ pub async fn get_konfigurationsprodukte(
 pub async fn put_konfigurationsprodukte(
     Extension(repo): Extension<SrRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
     Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     claims: Claims,
@@ -360,7 +354,7 @@ pub async fn put_konfigurationsprodukte(
     use rubo4e::current::Konfigurationsprodukt;
 
     if enforcer
-        .check(&claims.principal(), "write-sr", &tenant_gln)
+        .check(&claims.principal(), "write-sr", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -429,13 +423,13 @@ pub async fn put_konfigurationsprodukte(
 
     let canonical = serde_json::Value::Array(validated);
     match repo
-        .replace_sr_konfigurationsprodukte(&sr_id, &tenant_gln, canonical.clone())
+        .replace_sr_konfigurationsprodukte(&sr_id, &tenant, canonical.clone())
         .await
     {
         Ok(true) => {
             // Emit CloudEvent so ERP subscribers and processd see the update.
             let evt = MarktEvent::new(
-                &tenant_gln,
+                &tenant,
                 mako_events::markt::SR_KONFIGURATIONSPRODUKT_UPDATED,
                 sr_id.clone(),
                 serde_json::json!({
@@ -472,7 +466,7 @@ pub async fn put_konfigurationsprodukte(
 pub async fn delete_konfigurationsprodukt(
     Extension(repo): Extension<SrRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
     Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     claims: Claims,
@@ -481,13 +475,13 @@ pub async fn delete_konfigurationsprodukt(
     use mako_markt::cloudevents::MarktEvent;
 
     if enforcer
-        .check(&claims.principal(), "write-sr", &tenant_gln)
+        .check(&claims.principal(), "write-sr", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    let rec = match repo.find_sr(&sr_id, &tenant_gln).await {
+    let rec = match repo.find_sr(&sr_id, &tenant).await {
         Ok(Some(r)) => r,
         Ok(None) => {
             return (
@@ -517,12 +511,12 @@ pub async fn delete_konfigurationsprodukt(
     let new_list = serde_json::Value::Array(filtered);
 
     match repo
-        .replace_sr_konfigurationsprodukte(&sr_id, &tenant_gln, new_list.clone())
+        .replace_sr_konfigurationsprodukte(&sr_id, &tenant, new_list.clone())
         .await
     {
         Ok(_) => {
             let evt = MarktEvent::new(
-                &tenant_gln,
+                &tenant,
                 mako_events::markt::SR_KONFIGURATIONSPRODUKT_UPDATED,
                 sr_id.clone(),
                 serde_json::json!({
@@ -545,18 +539,18 @@ pub async fn delete_konfigurationsprodukt(
 pub async fn list_zaehler(
     Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(melo_id): Path<String>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-device", &tenant_gln)
+        .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    match repo.list_zaehler_by_melo(&melo_id, &tenant_gln).await {
+    match repo.list_zaehler_by_melo(&melo_id, &tenant).await {
         Ok(records) => {
             let responses: Vec<ZaehlerResponse> = records
                 .into_iter()
@@ -591,13 +585,13 @@ pub async fn list_zaehler(
 pub async fn put_zaehler(
     Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(zaehler_id): Path<String>,
     Json(req): Json<UpsertZaehlerRequest>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-device", &tenant_gln)
+        .check(&claims.principal(), "write-device", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -612,7 +606,7 @@ pub async fn put_zaehler(
     match repo
         .upsert_zaehler(
             &zaehler_id,
-            &tenant_gln,
+            &tenant,
             &req.melo_id,
             &zaehler,
             &req.bo4e_version,
@@ -638,18 +632,18 @@ pub async fn put_zaehler(
 pub async fn get_zaehlwerke(
     Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(zaehler_id): Path<String>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-device", &tenant_gln)
+        .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    let zaehler = match repo.find_zaehler(&zaehler_id, &tenant_gln).await {
+    let zaehler = match repo.find_zaehler(&zaehler_id, &tenant).await {
         Ok(Some(z)) => z,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -685,18 +679,18 @@ pub async fn get_zaehlwerke(
 pub async fn list_geraete(
     Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(zaehler_id): Path<String>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-device", &tenant_gln)
+        .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    match repo.list_geraete_by_zaehler(&zaehler_id, &tenant_gln).await {
+    match repo.list_geraete_by_zaehler(&zaehler_id, &tenant).await {
         Ok(records) => {
             let responses: Vec<GeraetResponse> = records
                 .into_iter()
@@ -731,13 +725,13 @@ pub async fn list_geraete(
 pub async fn put_geraet(
     Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(geraet_id): Path<String>,
     Json(req): Json<UpsertGeraetRequest>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-device", &tenant_gln)
+        .check(&claims.principal(), "write-device", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -752,7 +746,7 @@ pub async fn put_geraet(
     match repo
         .upsert_geraet(
             &geraet_id,
-            &tenant_gln,
+            &tenant,
             &req.zaehler_id,
             &geraet,
             &req.bo4e_version,
@@ -820,18 +814,18 @@ pub struct KonfigurationenEntry {
 pub async fn get_geraet(
     Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path((_zaehler_id, geraet_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-device", &tenant_gln)
+        .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    match repo.find_geraet(&geraet_id, &tenant_gln).await {
+    match repo.find_geraet(&geraet_id, &tenant).await {
         Ok(Some(r)) => {
             let geraet = match serde_json::from_value::<Geraet>(r.data.clone()) {
                 Ok(g) => g,
@@ -881,18 +875,18 @@ pub async fn get_geraet(
 pub async fn get_geraet_konfigurationen(
     Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path((_zaehler_id, geraet_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-device", &tenant_gln)
+        .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    match repo.find_geraet(&geraet_id, &tenant_gln).await {
+    match repo.find_geraet(&geraet_id, &tenant).await {
         Ok(Some(r)) => Json(r.konfigurationen).into_response(),
         Ok(None) => (
             StatusCode::NOT_FOUND,
@@ -931,7 +925,7 @@ pub async fn get_geraet_konfigurationen(
 pub async fn put_geraet_konfigurationen(
     Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
     Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     claims: Claims,
@@ -941,7 +935,7 @@ pub async fn put_geraet_konfigurationen(
     use mako_markt::cloudevents::MarktEvent;
 
     if enforcer
-        .check(&claims.principal(), "write-device", &tenant_gln)
+        .check(&claims.principal(), "write-device", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -974,14 +968,14 @@ pub async fn put_geraet_konfigurationen(
 
     let count = konfigurationen.len();
     match repo
-        .upsert_geraet_konfigurationen(&geraet_id, &tenant_gln, konfigurationen)
+        .upsert_geraet_konfigurationen(&geraet_id, &tenant, konfigurationen)
         .await
     {
         Ok(true) => {
             // Emit CloudEvent so edmd cert-expiry worker + processd §14a handler
             // receive configuration updates without polling.
             let evt = MarktEvent::new(
-                &tenant_gln,
+                &tenant,
                 mako_events::markt::GERAET_KONFIGURATION_UPDATED,
                 geraet_id.clone(),
                 serde_json::json!({
@@ -1046,13 +1040,13 @@ fn bo4e_wire<T: serde::Serialize>(x: Option<&T>) -> Option<String> {
 pub async fn put_technische_ressource(
     Extension(repo): Extension<TrRepoExt>,
     claims: Claims,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(tr_id): Path<String>,
     Json(req): Json<UpsertTrRequest>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-device", &tenant_gln)
+        .check(&claims.principal(), "write-device", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -1086,7 +1080,7 @@ pub async fn put_technische_ressource(
     match repo
         .upsert_tr(
             &tr_id,
-            &tenant_gln,
+            &tenant,
             malo_id.as_deref(),
             melo_id.as_deref(),
             nutzung.as_deref(),
@@ -1117,18 +1111,18 @@ pub async fn put_technische_ressource(
 pub async fn get_technische_ressource(
     Extension(repo): Extension<TrRepoExt>,
     claims: Claims,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(tr_id): Path<String>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-device", &tenant_gln)
+        .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    match repo.find_tr(&tr_id, &tenant_gln).await {
+    match repo.find_tr(&tr_id, &tenant).await {
         Ok(Some(record)) => Json(record).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -1149,18 +1143,18 @@ pub async fn get_technische_ressource(
 pub async fn list_technische_ressourcen_by_malo(
     Extension(repo): Extension<TrRepoExt>,
     claims: Claims,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(malo_id): Path<String>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-device", &tenant_gln)
+        .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    match repo.list_tr_by_malo(&malo_id, &tenant_gln).await {
+    match repo.list_tr_by_malo(&malo_id, &tenant).await {
         Ok(records) => Json(records).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -1181,19 +1175,19 @@ use mako_markt::repository::{ZaehlzeitRegisterRecord, ZaehlzeitRepository, Zaehl
 pub async fn put_zaehler_register(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(zaehler_id): Path<String>,
     Json(mut rec): Json<ZaehlzeitRegisterRecord>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-device", &tenant_gln)
+        .check(&claims.principal(), "write-device", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
     rec.zaehler_id = zaehler_id;
-    rec.tenant = tenant_gln;
+    rec.tenant = tenant;
     if rec.id == uuid::Uuid::nil() {
         rec.id = uuid::Uuid::new_v4();
     }
@@ -1210,20 +1204,17 @@ pub async fn put_zaehler_register(
 pub async fn list_zaehler_register(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(zaehler_id): Path<String>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-device", &tenant_gln)
+        .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
-    match repo
-        .list_registers_by_zaehler(&zaehler_id, &tenant_gln)
-        .await
-    {
+    match repo.list_registers_by_zaehler(&zaehler_id, &tenant).await {
         Ok(rows) => Json(rows).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -1236,13 +1227,13 @@ pub async fn list_zaehler_register(
 pub async fn put_zaehler_saison(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(register_id): Path<uuid::Uuid>,
     Json(mut rec): Json<ZaehlzeitSaisonRecord>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-device", &tenant_gln)
+        .check(&claims.principal(), "write-device", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -1264,20 +1255,17 @@ pub async fn put_zaehler_saison(
 pub async fn list_zaehler_saisons(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(register_id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-device", &tenant_gln)
+        .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
-    match repo
-        .list_saisons_by_register(register_id, &tenant_gln)
-        .await
-    {
+    match repo.list_saisons_by_register(register_id, &tenant).await {
         Ok(rows) => Json(rows).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -1335,7 +1323,7 @@ pub async fn list_zaehler_saisons(
 pub async fn get_zaehlzeitdefinitionen(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(zaehler_id): Path<String>,
     axum::extract::Query(q): axum::extract::Query<ZaehlzeitdefinitionQuery>,
@@ -1344,17 +1332,14 @@ pub async fn get_zaehlzeitdefinitionen(
     use std::collections::BTreeMap;
 
     if enforcer
-        .check(&claims.principal(), "read-device", &tenant_gln)
+        .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
     // ── 1. Fetch all registers for this Zähler ────────────────────────────────
-    let registers = match repo
-        .list_registers_by_zaehler(&zaehler_id, &tenant_gln)
-        .await
-    {
+    let registers = match repo.list_registers_by_zaehler(&zaehler_id, &tenant).await {
         Ok(r) => r,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
@@ -1388,7 +1373,7 @@ pub async fn get_zaehlzeitdefinitionen(
     let mut switch_map: BTreeMap<SaisonKey, Vec<(String, String)>> = BTreeMap::new();
 
     for reg in &registers {
-        let saisons = match repo.list_saisons_by_register(reg.id, &tenant_gln).await {
+        let saisons = match repo.list_saisons_by_register(reg.id, &tenant).await {
             Ok(s) => s,
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         };
@@ -1520,13 +1505,13 @@ fn wochentage_key_to_wiederholungstyp(key: &str) -> rubo4e::current::Wiederholun
 pub async fn get_tariff_zone(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
     claims: Claims,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(zaehler_id): Path<String>,
     axum::extract::Query(q): axum::extract::Query<TariffZoneQuery>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-device", &tenant_gln)
+        .check(&claims.principal(), "read-device", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -1551,7 +1536,7 @@ pub async fn get_tariff_zone(
     };
 
     match repo
-        .resolve_tariff_zone(&zaehler_id, &tenant_gln, local_dt)
+        .resolve_tariff_zone(&zaehler_id, &tenant, local_dt)
         .await
     {
         Ok(Some(zone)) => Json(serde_json::json!({
@@ -1685,14 +1670,14 @@ fn parse_bilanzierungsmethode(raw: &str) -> Option<metering::Bilanzierungsmethod
 pub async fn get_sharing_eligibility(
     Extension(pool): Extension<sqlx::PgPool>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(melo_id): Path<String>,
 ) -> impl IntoResponse {
     use metering::sharing::{Capability, MeteringCapabilityInput, assess_capability};
 
     if enforcer
-        .check(&claims.principal(), "read-sharing-eligibility", &tenant_gln)
+        .check(&claims.principal(), "read-sharing-eligibility", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -1717,7 +1702,7 @@ pub async fn get_sharing_eligibility(
            LIMIT 1",
     )
     .bind(&melo_id)
-    .bind(&tenant_gln)
+    .bind(&tenant)
     .fetch_optional(&pool)
     .await;
 

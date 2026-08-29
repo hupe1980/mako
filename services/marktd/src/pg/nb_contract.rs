@@ -83,11 +83,16 @@ impl NbContractRepository for PgNbContractRepository {
         Ok(new_version)
     }
 
-    async fn find(&self, contract_id: &str) -> Result<Option<NbContractRecord>, MdmError> {
+    async fn find(
+        &self,
+        contract_id: &str,
+        tenant: &str,
+    ) -> Result<Option<NbContractRecord>, MdmError> {
         let row: Option<PgRow> = sqlx::query(&format!(
-            "SELECT {SELECT_COLS} FROM nb_contracts WHERE contract_id = $1"
+            "SELECT {SELECT_COLS} FROM nb_contracts WHERE contract_id = $1 AND tenant = $2"
         ))
         .bind(contract_id)
+        .bind(tenant)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;

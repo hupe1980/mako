@@ -28,7 +28,7 @@ use utoipa::{IntoParams, ToSchema};
 use crate::pg::PgTrancheRepository;
 
 use super::{
-    Claims, IfMatch, IntoMdmResponse as _, TenantGln, etag, malformed_if_match, parse_if_match,
+    Claims, IfMatch, IntoMdmResponse as _, Tenant, etag, malformed_if_match, parse_if_match,
 };
 
 /// Extension alias — concrete type so AFIT dispatches statically.
@@ -41,7 +41,7 @@ pub struct TrancheUpsertRequest {
     /// Parent Marktlokation this Tranche belongs to.
     #[serde(default)]
     pub malo_id: Option<String>,
-    /// Bilanzierungsgebiet EIC (`LOC+237`).
+    /// Bilanzierungsgebiet EIC.
     #[serde(default)]
     pub bilanzierungsgebiet: Option<String>,
     /// Netzebene.
@@ -133,14 +133,14 @@ fn default_size() -> u32 {
 pub async fn put_tranche(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(repo): Extension<TrancheRepoExt>,
     Path(tranche_id): Path<String>,
     headers: HeaderMap,
     Json(body): Json<TrancheUpsertRequest>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-tranche", &tenant_gln)
+        .check(&claims.principal(), "write-tranche", &tenant)
         .is_err()
     {
         return MdmError::Forbidden {
@@ -158,7 +158,7 @@ pub async fn put_tranche(
     };
     let rec = TrancheRecord {
         tranche_id,
-        tenant: tenant_gln,
+        tenant,
         malo_id: body.malo_id,
         bilanzierungsgebiet: body.bilanzierungsgebiet,
         netzebene: body.netzebene,
@@ -183,12 +183,12 @@ pub async fn put_tranche(
 pub async fn get_tranche(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(repo): Extension<TrancheRepoExt>,
     Path(tranche_id): Path<String>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-tranche", &tenant_gln)
+        .check(&claims.principal(), "read-tranche", &tenant)
         .is_err()
     {
         return MdmError::Forbidden {
@@ -196,7 +196,7 @@ pub async fn get_tranche(
         }
         .into_response();
     }
-    match repo.find(&tranche_id, &tenant_gln).await {
+    match repo.find(&tranche_id, &tenant).await {
         Ok(Some(rec)) => {
             let version = rec.version;
             let mut resp_headers = HeaderMap::new();
@@ -217,12 +217,12 @@ pub async fn get_tranche(
 pub async fn list_tranchen(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(repo): Extension<TrancheRepoExt>,
     Query(query): Query<TrancheListQuery>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-tranche", &tenant_gln)
+        .check(&claims.principal(), "read-tranche", &tenant)
         .is_err()
     {
         return MdmError::Forbidden {
@@ -238,7 +238,7 @@ pub async fn list_tranchen(
             .into_response();
     };
     match repo
-        .list_by_malo(malo_id, &tenant_gln, query.page, query.size)
+        .list_by_malo(malo_id, &tenant, query.page, query.size)
         .await
     {
         Ok(page) => Json(TrancheListResponse::from(page)).into_response(),

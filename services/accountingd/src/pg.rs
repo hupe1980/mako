@@ -1177,20 +1177,52 @@ pub struct LedgerLine {
     pub booking_date: Date,
 }
 
-/// The customer's recent Kontokorrent movements (newest first), from the ledger.
+/// A window onto the Kontokorrent: the movements, plus the balance they start
+/// from.
+///
+/// A list of movements without its opening balance is not an account statement —
+/// it cannot be added up to anything, and a customer reading a March
+/// Kontoauszug that starts at zero is being told their February balance was
+/// nil. `opening_ct + Σ signed_ct` is the last line's `running_ct`, which is
+/// the arithmetic the page has to survive.
+#[derive(Debug, Serialize)]
+pub struct LedgerWindow {
+    /// The signed balance the account carried into this window, in minor units.
+    ///
+    /// Two things folded together: what was booked before the query's period,
+    /// and what the `limit` cut off the front of it.
+    pub opening_ct: i64,
+    /// The movements, newest first.
+    pub lines: Vec<LedgerLine>,
+}
+
+/// The customer's Kontokorrent movements over `query`, newest first, with the
+/// balance the window opens at.
+///
+/// `limit` caps the *tail* — the newest `limit` movements — and whatever it
+/// drops is folded into `opening_ct` rather than lost, so a truncated page
+/// still adds up.
 pub async fn list_ledger(
     ledger: &PgLedger,
     lf_mp_id: &str,
     malo_id: &str,
+    query: doubleentry::BalanceQuery<'_>,
     limit: i64,
-) -> anyhow::Result<Vec<LedgerLine>> {
+) -> anyhow::Result<LedgerWindow> {
     use doubleentry::Direction;
     use doubleentry::storage::PostingCursor;
     let cap = usize::try_from(limit.max(1)).unwrap_or(usize::MAX);
     let mut window: std::collections::VecDeque<LedgerLine> = std::collections::VecDeque::new();
     let mut cursor = PostingCursor::start();
+    // The first page's `opening` is the period's; later pages' include the lines
+    // already returned, so only the first one is the figure to start from.
+    let mut opening_ct: Option<i64> = None;
+    let mut dropped_ct = 0_i64;
     loop {
-        let page = ledger.statement(lf_mp_id, malo_id, cursor).await?;
+        let page = ledger.statement(lf_mp_id, malo_id, query, cursor).await?;
+        if opening_ct.is_none() {
+            opening_ct = Some(page.opening.signed_net().map(|a| a.to_minor()).unwrap_or(0));
+        }
         for line in &page.lines {
             let (side, signed): (&'static str, i64) = match line.direction {
                 Direction::Debit => ("D", line.amount.to_minor()),
@@ -1205,8 +1237,10 @@ pub async fn list_ledger(
                 running_ct: line.running.signed_net().map(|a| a.to_minor()).unwrap_or(0),
                 booking_date: line.booking_date,
             });
-            if window.len() > cap {
-                window.pop_front();
+            if window.len() > cap
+                && let Some(dropped) = window.pop_front()
+            {
+                dropped_ct += dropped.signed_ct;
             }
         }
         match page.next {
@@ -1216,7 +1250,10 @@ pub async fn list_ledger(
     }
     let mut lines: Vec<LedgerLine> = window.into_iter().collect();
     lines.reverse(); // newest first
-    Ok(lines)
+    Ok(LedgerWindow {
+        opening_ct: opening_ct.unwrap_or(0) + dropped_ct,
+        lines,
+    })
 }
 
 // ── SEPA mandates ─────────────────────────────────────────────────────────────

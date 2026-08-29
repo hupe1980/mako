@@ -56,7 +56,7 @@ graph LR
     BNetzA --> strom
     BNetzA --> gas
 
-    BK6_24 -->|"mako-gpke<br/>mako-wim<br/>mako-mabis"| GPKE_impl["363 PIDs covered<br/>(100%)"]
+    BK6_24 -->|"mako-gpke<br/>mako-wim<br/>mako-mabis"| GPKE_impl["GPKE Teil 1–4<br/>WiM Strom · MaBiS"]
     BK7_24 -->|"mako-geli-gas<br/>mako-wim"| GAS_impl["GeLi Gas 3.0<br/>WiM Gas"]
     BK7_14 -->|"mako-gabi-gas<br/>dvgw-edi"| DVGW_impl["8 DVGW messages<br/>GaBi Gas 2.1"]
     ENW41 -->|"vertragd"| LF_impl["B2C/B2B contracts<br/>GDPR Art. 15/17/20"]
@@ -109,5 +109,7 @@ graph LR
 > started under an older format version continues under those rules until it
 > completes — no data migration required.
 >
-> **PID coverage.** `cargo xtask validate-pruefids` verifies all 363 Prüfidentifikatoren
-> in the workspace are correctly registered. CI enforces 100% coverage.
+> **PID coverage.** `cargo xtask validate-pruefids` checks that every
+> Prüfidentifikator the workspace registers has an `.edi` fixture behind it and
+> that no fixture is orphaned. CI runs it with `--strict --min-coverage 100`, so
+> the floor is full coverage and the command prints the count it reached.

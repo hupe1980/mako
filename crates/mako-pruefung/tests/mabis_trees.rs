@@ -479,9 +479,8 @@ fn a_marktlokation_without_a_lieferant_is_answered_not_delivered() {
         MabisEntscheidung::Schweigen
     );
 }
-/// The Zustimmung codes quoted in the READMEs and in
-/// `concepts/MABIS_REDISPATCH.md`. They differ per tree, so a doc that names
-/// one is a claim about the catalogue and is pinned here.
+/// The Zustimmung codes the documentation quotes. They differ per tree, so a
+/// doc that names one is a claim about the catalogue and is pinned here.
 #[test]
 fn documented_zustimmung_codes_match_the_catalogue() {
     for (ebd, expect) in [

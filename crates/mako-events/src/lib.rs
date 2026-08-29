@@ -24,7 +24,7 @@
 //!   Stammdatenänderung carrying its patch).
 //! - Statuses worth grepping for are flagged in doc comments:
 //!   - `⚠ phantom:` — subscribed (usually by `agentd`), but no emitter
-//!     exists yet; the emitter is tracked in the roadmap.
+//!     exists yet.
 //!   - `orphan emit:` — emitted, but the workspace audit found no
 //!     subscriber.
 //!
@@ -356,10 +356,10 @@ pub mod tarif {
     /// B2B Angebot accepted — vertragd auto-creates the Rahmenvertrag.
     pub const ANGEBOT_ANGENOMMEN: &str = "de.tarif.angebot.angenommen";
     /// ⚠ phantom: subscribed by agentd (`productd-agent`), no emitter yet
-    /// (tracked in ROADMAP). B2B quote expired.
+    ///. B2B quote expired.
     pub const ANGEBOT_ABGELAUFEN: &str = "de.tarif.angebot.abgelaufen";
     /// ⚠ phantom: subscribed by agentd (`productd-agent`), no emitter yet
-    /// (tracked in ROADMAP). EPEX D-1 prices not imported by 18:00 CET.
+    ///. EPEX D-1 prices not imported by 18:00 CET.
     pub const EPEX_MISSING: &str = "de.tarif.epex.missing";
 }
 
@@ -436,23 +436,23 @@ pub mod agent {
 ///
 /// ⚠ The remaining ten are phantom: subscribed by agentd (`gabi-gas-agent`
 /// globs `de.gabi.imbalance.*`, `de.gabi.nomination.*`), but no service emits
-/// them yet (ROADMAP).
+/// them.
 pub mod gabi {
-    /// ⚠ phantom: no emitter yet (tracked in ROADMAP).
+    /// ⚠ phantom: no emitter yet.
     pub const MEASUREMENT_RECEIVED: &str = "de.gabi.measurement.received";
-    /// ⚠ phantom: no emitter yet (tracked in ROADMAP).
+    /// ⚠ phantom: no emitter yet.
     pub const ALLOCATION_COMPLETED: &str = "de.gabi.allocation.completed";
-    /// ⚠ phantom: no emitter yet (tracked in ROADMAP).
+    /// ⚠ phantom: no emitter yet.
     pub const NOMINATION_CREATED: &str = "de.gabi.nomination.created";
-    /// ⚠ phantom: no emitter yet (tracked in ROADMAP).
+    /// ⚠ phantom: no emitter yet.
     pub const NOMINATION_CONFIRMED: &str = "de.gabi.nomination.confirmed";
-    /// ⚠ phantom: no emitter yet (tracked in ROADMAP).
+    /// ⚠ phantom: no emitter yet.
     pub const IMBALANCE_CALCULATED: &str = "de.gabi.imbalance.calculated";
-    /// ⚠ phantom: no emitter yet (tracked in ROADMAP).
+    /// ⚠ phantom: no emitter yet.
     pub const CORRECTION_CREATED: &str = "de.gabi.correction.created";
-    /// ⚠ phantom: no emitter yet (tracked in ROADMAP).
+    /// ⚠ phantom: no emitter yet.
     pub const INVOIC_MMM_RECEIVED: &str = "de.gabi.invoic.mmm.received";
-    /// ⚠ phantom: no emitter yet (tracked in ROADMAP).
+    /// ⚠ phantom: no emitter yet.
     pub const INVOIC_KAPAZITAET_RECEIVED: &str = "de.gabi.invoic.kapazitaet.received";
     /// The KoV §6.4 final-allocation window closed with no binding final
     /// ALOCAT on file, so the gas day's imbalance cannot be settled.
@@ -463,9 +463,9 @@ pub mod gabi {
     /// `synthetic_pid`. The operator's action is to open a Clearingfall with
     /// the FNB/MGV.
     pub const ALOCAT_MISSING: &str = "de.gabi.alocat.missing";
-    /// ⚠ phantom: no emitter yet (tracked in ROADMAP).
+    /// ⚠ phantom: no emitter yet.
     pub const GAS_QUALITY_VIOLATION: &str = "de.gabi.quality.violation";
-    /// ⚠ phantom: no emitter yet (tracked in ROADMAP).
+    /// ⚠ phantom: no emitter yet.
     pub const FINAL_ALOCAT_DEADLINE: &str = "de.gabi.alocat.final.deadline";
 }
 
@@ -817,11 +817,9 @@ mod tests {
     /// them would lose a distinction the ERP relies on.
     /// A constant nothing references must say so.
     ///
-    /// `⚠ phantom:` marks a type the catalog declares but no service emits. The
-    /// marker only helps if it is true, and prose rots: the roadmap entry that
-    /// tracked this drifted to "six constants, none has a subscriber" when the
-    /// real figures were eleven unused and a subscriber that does exist
-    /// (`gabi-gas-agent` globs `de.gabi.imbalance.*` and `de.gabi.nomination.*`).
+    /// `⚠ phantom:` marks a type the catalog declares but no service emits. A
+    /// marker only helps if it is true, and prose about which constants those
+    /// are rots faster than the constants do.
     ///
     /// So the annotation is checked rather than trusted: any constant not named
     /// anywhere outside this crate must carry the marker. The reverse does not
@@ -886,9 +884,9 @@ mod tests {
                 continue;
             };
             // Walk back over *this* constant's own doc block only. A fixed
-            // lookback window would span into the previous entry's comment —
-            // and in `gabi` every neighbour carries the marker, so the check
-            // passed for a constant whose marker had been deleted.
+            // lookback window spans into the previous entry's comment, and in
+            // `gabi` every neighbour carries the marker — so a constant whose
+            // own marker is missing would still read as marked.
             let mut phantom = false;
             for prev in lines[..i].iter().rev() {
                 let t = prev.trim();

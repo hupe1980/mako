@@ -505,11 +505,11 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                             // Deliberately *not* counted as a validation failure.
                             // `makod_validation_failed_total` carries a message type
                             // and a release, and a message that did not parse has
-                            // neither — it used to be counted under the fixed labels
-                            // `("edifact", "parse_error")`, which made the metric
-                            // report a message type that does not exist and hid that
-                            // AHB failures were never counted at all. The dead letter
-                            // below is the record, and it alerts as
+                            // neither. Counting it under fixed labels such as
+                            // `("edifact", "parse_error")` would make the metric
+                            // report a message type that does not exist and bury
+                            // the AHB failures it is for. The dead letter below is
+                            // the record, and it alerts as
                             // `makod_dead_letter_recorded_total{reason="processing_error"}`.
                             //
                             // § 147 AO / GoBD: a message that fails to parse inside an

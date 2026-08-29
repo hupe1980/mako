@@ -4,7 +4,7 @@
 //! | Tool | Description |
 //! |---|---|
 //! | `get_balance` | Current open-items balance for a customer MaLo |
-//! | `list_ledger` | Ledger entries (debit/credit) for a MaLo |
+//! | `list_ledger` | Ledger movements (debit/credit) for a MaLo, with the opening balance the window starts from |
 //! | `list_dunning` | Active dunning cases |
 //! | `list_overdue` | All accounts with overdue invoices |
 //! | `list_sepa_collections` | SEPA collections and their lifecycle (SUBMITTED → SETTLED/REJECTED/RETURNED/REVERSED) |
@@ -207,7 +207,7 @@ impl AccountingdMcpHandler {
     }
 
     #[tool(
-        description = "List ledger entries (RECHNUNG, ZAHLUNG, GUTSCHRIFT, ABSCHLAG, etc.) for a MaLo. Returns entries ordered by booking_date descending.",
+        description = "List ledger movements (RECHNUNG, ZAHLUNG, GUTSCHRIFT, ABSCHLAG, etc.) for a MaLo, newest first, with the `opening_ct` the window starts from — `opening_ct` plus the movements is the newest line's `running_ct`, so a page truncated by `limit` still adds up.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_ledger(
@@ -236,11 +236,12 @@ impl AccountingdMcpHandler {
             &self.state.ledger,
             &acct.lf_mp_id,
             &acct.malo_id,
+            doubleentry::BalanceQuery::all(),
             p.limit.unwrap_or(50),
         )
         .await
         {
-            Ok(entries) => ContentBlock::json(serde_json::to_value(entries).unwrap_or_default())
+            Ok(window) => ContentBlock::json(serde_json::to_value(window).unwrap_or_default())
                 .map(|b| CallToolResult::success(vec![b]))
                 .map_err(|e| McpError::internal_error(e.message, None)),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),

@@ -210,7 +210,7 @@ where
     Pa: PartnerRepository + Clone,
 {
     if enforcer
-        .check(&claims.principal(), "write-malo", &state.tenant_gln)
+        .check(&claims.principal(), "write-malo", &state.tenant)
         .is_err()
     {
         return MdmError::Forbidden {
@@ -271,7 +271,7 @@ where
             .max_by_key(|z| z.valid_from)
             .map(|z| z.rollencodenummer.clone())
     };
-    let nb_mp_id = current_role("NB", "GNB").unwrap_or_else(|| state.tenant_gln.clone());
+    let nb_mp_id = current_role("NB", "GNB").unwrap_or_else(|| state.tenant.clone());
     let msb_mp_id = current_role("MSB", "GMSB");
     // Read off the typed BO, not its JSON: the previous string lookups asked
     // for `netzgebietsnummer` / `netzgebiet`, neither of which is a BO4E field
@@ -310,7 +310,7 @@ where
 
     // Emit de.markt.malo.updated so ERP subscribers and obsd get notified.
     let evt = MarktEvent::new(
-        &state.tenant_gln,
+        &state.tenant,
         mako_events::markt::MALO_UPDATED,
         malo_id_str.clone(),
         serde_json::json!({ "version": version }),
@@ -341,7 +341,7 @@ where
         malo_id: malo_id_str.clone(),
         nb_mp_id,
         msb_mp_id,
-        sender_market_partner_id: state.tenant_gln.clone(),
+        sender_market_partner_id: state.tenant.clone(),
         bilanzierungsgebiet,
         netzgebiet,
         sparte: sparte_str,
@@ -396,7 +396,7 @@ where
     Pa: PartnerRepository + Clone,
 {
     if enforcer
-        .check(&claims.principal(), "read-malo", &state.tenant_gln)
+        .check(&claims.principal(), "read-malo", &state.tenant)
         .is_err()
     {
         return MdmError::Forbidden {
@@ -477,7 +477,7 @@ where
     Pa: PartnerRepository + Clone,
 {
     if enforcer
-        .check(&claims.principal(), "read-malo", &state.tenant_gln)
+        .check(&claims.principal(), "read-malo", &state.tenant)
         .is_err()
     {
         return MdmError::Forbidden {
@@ -606,7 +606,7 @@ where
     Pa: PartnerRepository + Clone,
 {
     if enforcer
-        .check(&claims.principal(), "read-malo", &state.tenant_gln)
+        .check(&claims.principal(), "read-malo", &state.tenant)
         .is_err()
     {
         return MdmError::Forbidden {

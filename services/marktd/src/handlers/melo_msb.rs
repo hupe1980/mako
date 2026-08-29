@@ -27,7 +27,7 @@ use tracing::info;
 
 use mako_service::cedar::CedarEnforcer;
 
-use crate::handlers::{Claims, MdmErrorResponse, TenantGln};
+use crate::handlers::{Claims, MdmErrorResponse, Tenant};
 use crate::pg::PgMeloMsbRepository;
 
 /// Extension alias — concrete type so AFIT dispatches statically.
@@ -56,7 +56,7 @@ pub async fn get_melo_msb_at(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<MeloMsbRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(melo_id): Path<String>,
     Query(q): Query<MsbAtQuery>,
 ) -> impl IntoResponse {
@@ -105,7 +105,7 @@ pub async fn get_melo_msb_history(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<MeloMsbRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(melo_id): Path<String>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-melo-msb", &tenant) {
@@ -128,7 +128,7 @@ pub async fn put_melo_msb(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<MeloMsbRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(melo_id): Path<String>,
     Json(body): Json<PutMeloMsbBody>,
 ) -> impl IntoResponse {

@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::pg::PgLokationszuordnungRepository;
 
-use super::{Claims, TenantGln};
+use super::{Claims, Tenant};
 
 pub type LzRepoExt = Arc<PgLokationszuordnungRepository>;
 
@@ -73,20 +73,20 @@ pub struct GraphQuery {
 pub async fn get_malo_lokationen(
     Extension(repo): Extension<LzRepoExt>,
     claims: Claims,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(malo_id): Path<String>,
     Query(q): Query<GraphQuery>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-lokationszuordnung", &tenant_gln)
+        .check(&claims.principal(), "read-lokationszuordnung", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
     let at_date = q.at.as_deref().and_then(parse_date);
-    match repo.find_graph(&tenant_gln, &malo_id, at_date).await {
+    match repo.find_graph(&tenant, &malo_id, at_date).await {
         Ok(edges) => Json(edges).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -115,20 +115,20 @@ pub struct BuendelResponse {
 pub async fn get_malo_buendel(
     Extension(repo): Extension<LzRepoExt>,
     claims: Claims,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(malo_id): Path<String>,
     Query(q): Query<GraphQuery>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-lokationszuordnung", &tenant_gln)
+        .check(&claims.principal(), "read-lokationszuordnung", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
     let at_date = q.at.as_deref().and_then(parse_date);
-    match repo.load_buendel(&tenant_gln, &malo_id, at_date).await {
+    match repo.load_buendel(&tenant, &malo_id, at_date).await {
         Ok(buendel) => {
             let (valid, validation_error) = match buendel.validate() {
                 Ok(()) => (true, None),
@@ -152,20 +152,20 @@ pub async fn get_malo_buendel(
 pub async fn get_melo_lokationen(
     Extension(repo): Extension<LzRepoExt>,
     claims: Claims,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(melo_id): Path<String>,
     Query(q): Query<GraphQuery>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-lokationszuordnung", &tenant_gln)
+        .check(&claims.principal(), "read-lokationszuordnung", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
     let at_date = q.at.as_deref().and_then(parse_date);
-    match repo.find_graph(&tenant_gln, &melo_id, at_date).await {
+    match repo.find_graph(&tenant, &melo_id, at_date).await {
         Ok(edges) => Json(edges).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -177,12 +177,12 @@ pub async fn get_melo_lokationen(
 pub async fn put_lokationszuordnung(
     Extension(repo): Extension<LzRepoExt>,
     claims: Claims,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Json(req): Json<UpsertEdgeRequest>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-lokationszuordnung", &tenant_gln)
+        .check(&claims.principal(), "write-lokationszuordnung", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -193,7 +193,7 @@ pub async fn put_lokationszuordnung(
 
     match repo
         .upsert_edge(
-            &tenant_gln,
+            &tenant,
             &req.von_id,
             req.von_typ,
             &req.nach_id,
@@ -215,18 +215,18 @@ pub async fn put_lokationszuordnung(
 pub async fn delete_lokationszuordnung(
     Extension(repo): Extension<LzRepoExt>,
     claims: Claims,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path((von_id, nach_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-lokationszuordnung", &tenant_gln)
+        .check(&claims.principal(), "write-lokationszuordnung", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    match repo.delete_edge(&tenant_gln, &von_id, &nach_id).await {
+    match repo.delete_edge(&tenant, &von_id, &nach_id).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),

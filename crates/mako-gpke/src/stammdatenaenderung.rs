@@ -48,7 +48,7 @@
 //! Bilanzierungsgebiet, Energierichtung, …); the §14a-specific SR/TR columns
 //! (`steuerkanal`, `ist_fernschaltbar`, Konfigurationsprodukte) travel in
 //! specialized characteristic groups whose extraction is gated on the §14a
-//! UTILMD AHB (roadmap), so those objects are acknowledged without a typed
+//! UTILMD AHB, so those objects are acknowledged without a typed
 //! apply.
 //!
 //! Frist: Rückmeldung „unverzüglich, spätester ÜT = **2. Werktag** nach dem

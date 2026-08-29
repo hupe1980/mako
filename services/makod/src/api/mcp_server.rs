@@ -1330,16 +1330,13 @@ impl MakodMcpHandler {
                  **Step 2 — Check the deadline:**\n\
                  Inspect `deadlines` in the get_process response.\n\
                  The `response-*` deadline must not be in the past. If it is, call `list_overdue_deadlines` to see the full picture.\n\n\
-                 **Step 3a — Accept (positive APERAK, PID 44043 or similar):**\n\
+                 **Step 3 — Answer.** WiM Strom and Gas run on one engine, so the \
+                 answer is the Sparte-neutral MSB-Wechsel command; the Gas tree is \
+                 selected from the inbound PID, not from the command name.\n\
                  Call `submit_command` with:\n\
-                 - command: \"wim.gas.anmeldung.bestaetigen\"\n\
+                 - command: \"wim.geraetewechsel.bestaetigen\" or \".ablehnen\"\n\
                  - marktrolle: \"NB\" (or \"GNB\")\n\
-                 - payload: {\"malo_id\": \"<gas MaLo>\"}\n\n\
-                 **Step 3b — Reject (negative APERAK):**\n\
-                 Call `submit_command` with:\n\
-                 - command: \"wim.gas.anmeldung.ablehnen\"\n\
-                 - marktrolle: \"NB\"\n\
-                 - payload: {\"malo_id\": \"<gas MaLo>\", \"reason\": \"<ERC code + reason>\"}\n\n\
+                 - payload: {\"melo_id\": \"<Messlokation>\", \"antwortcode\": \"<G_00xx code>\"}\n\n\
                  **Valid ERC codes:** A02 (Bilanzierungsgebiet mismatch), A05 (unknown GMSB), A97 (invalid date), A99 (Mindestvorlauffrist not met).\n\n\
                  **Note:** `processd` auto-STP handles this automatically when configured. Manual dispatch is only needed for escalated cases.",
             ),
@@ -1740,14 +1737,10 @@ fn next_steps_hint(command: &str) -> &'static str {
             "MSB-Wechsel order sent. The counterparty has 5 Werktage to respond with a \
              Bestätigung/Ablehnung (BK6-24-174)."
         }
-        "wim.gas.anmeldung.bestaetigen" | "wim.gas.anmeldung.ablehnen" => {
-            "WiM Gas Anmeldung APERAK dispatched. Die fachliche Antwort des NB ist innerhalb von 5 Werktagen fällig (AWH WiM Gas 2.0)."
-        }
-        "wim.gas.kuendigung.bestaetigen" | "wim.gas.kuendigung.ablehnen" => {
-            "WiM Gas Kündigung APERAK dispatched. Die fachliche Antwort des MSBA ist innerhalb von 3 Werktagen fällig (AWH WiM Gas 2.0)."
-        }
-        "wim.gas.stornierung.bestaetigen" | "wim.gas.stornierung.ablehnen" => {
-            "WiM Gas Stornierung APERAK dispatched (PID 44023 or 44024). Process closes (BK7-24-01-009)."
+        "wim.geraetewechsel.bestaetigen" | "wim.geraetewechsel.ablehnen" => {
+            "MSB-Wechsel answer dispatched. The window is the inbound PID's, not the \
+             command's: 3 WT for a Kündigung, 5 for an Anmeldung, 7 for a Weiterverpflichtung, \
+             1 for the gMSB's Ersteinbau answer — and the Gas twins run the same clocks."
         }
         "mabis.abrechnung.einleiten" | "mabis.abrechnung.daten-einreichen" => {
             "A Prüfmitteilung has no Frist (BK6-24-174 Anlage 3 Kap. 9.8.2 Nr. 1 — the \

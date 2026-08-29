@@ -28,7 +28,7 @@ use crate::pg::{
     PgPreisblattMessungRepository, PgPreisblattRepository, PgPriCatRepository,
 };
 
-use super::{Claims, TenantGln};
+use super::{Claims, Tenant};
 
 // ── Type alias ────────────────────────────────────────────────────────────────
 
@@ -132,13 +132,13 @@ pub struct PreisblattResponse {
 pub async fn get_preisblatt(
     Extension(repo): Extension<PreisblattRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(nb_mp_id): Path<String>,
     Query(query): Query<PreisblattQuery>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-preisblatt", &tenant_gln)
+        .check(&claims.principal(), "read-preisblatt", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -209,7 +209,7 @@ pub async fn get_preisblatt(
 #[allow(clippy::too_many_arguments)]
 pub async fn put_preisblatt(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
     Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     claims: Claims,
@@ -217,7 +217,7 @@ pub async fn put_preisblatt(
     Json(req): Json<PreisblattUpsertRequest>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-preisblatt", &tenant_gln)
+        .check(&claims.principal(), "write-preisblatt", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -330,7 +330,7 @@ pub async fn put_preisblatt(
     let version_id = match PgPriCatRepository::upsert_version_tx(
         &mut tx,
         &nb_mp_id,
-        &tenant_gln,
+        &tenant,
         valid_from,
         valid_to,
         &data,
@@ -346,7 +346,7 @@ pub async fn put_preisblatt(
     // Emit de.markt.pricat.published so ERP webhook subscribers, the obsd
     // observability daemon and the PRICAT dispatch worker are notified.
     let evt = MarktEvent::new(
-        &tenant_gln,
+        &tenant,
         mako_events::markt::PRICAT_PUBLISHED,
         nb_mp_id.clone(),
         serde_json::json!({
@@ -468,13 +468,13 @@ fn is_zero(n: &u32) -> bool {
 pub async fn get_preisblatt_messung(
     Extension(repo): Extension<PreisblattMessungRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(msb_mp_id): Path<String>,
     Query(query): Query<PreisblattQuery>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-preisblatt", &tenant_gln)
+        .check(&claims.principal(), "read-preisblatt", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -567,13 +567,13 @@ pub struct PreisblattMessungUpsertRequest {
 pub async fn put_preisblatt_messung(
     Extension(repo): Extension<PreisblattMessungRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(msb_mp_id): Path<String>,
     Json(req): Json<PreisblattMessungUpsertRequest>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-preisblatt", &tenant_gln)
+        .check(&claims.principal(), "write-preisblatt", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -722,13 +722,13 @@ pub struct PreisblattKaResponse {
 pub async fn get_preisblatt_ka(
     Extension(repo): Extension<PreisblattKaRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(nb_mp_id): Path<String>,
     Query(query): Query<PreisblattKaQuery>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-preisblatt", &tenant_gln)
+        .check(&claims.principal(), "read-preisblatt", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -788,13 +788,13 @@ fn default_sparte() -> String {
 pub async fn put_preisblatt_ka(
     Extension(repo): Extension<PreisblattKaRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(nb_mp_id): Path<String>,
     Json(req): Json<PreisblattKaUpsertRequest>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-preisblatt", &tenant_gln)
+        .check(&claims.principal(), "write-preisblatt", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -839,13 +839,13 @@ pub struct PreisblattDlUpsertRequest {
 pub async fn get_preisblatt_dienstleistung(
     Extension(repo): Extension<PreisblattDlRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(msb_mp_id): Path<String>,
     Query(query): Query<PreisblattQuery>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-preisblatt", &tenant_gln)
+        .check(&claims.principal(), "read-preisblatt", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -874,13 +874,13 @@ pub async fn get_preisblatt_dienstleistung(
 pub async fn put_preisblatt_dienstleistung(
     Extension(repo): Extension<PreisblattDlRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(msb_mp_id): Path<String>,
     Json(req): Json<PreisblattDlUpsertRequest>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-preisblatt", &tenant_gln)
+        .check(&claims.principal(), "write-preisblatt", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -922,13 +922,13 @@ pub struct PreisblattHwUpsertRequest {
 pub async fn get_preisblatt_hardware(
     Extension(repo): Extension<PreisblattHwRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(msb_mp_id): Path<String>,
     Query(query): Query<PreisblattQuery>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-preisblatt", &tenant_gln)
+        .check(&claims.principal(), "read-preisblatt", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -954,13 +954,13 @@ pub async fn get_preisblatt_hardware(
 pub async fn put_preisblatt_hardware(
     Extension(repo): Extension<PreisblattHwRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     claims: Claims,
     Path(msb_mp_id): Path<String>,
     Json(req): Json<PreisblattHwUpsertRequest>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-preisblatt", &tenant_gln)
+        .check(&claims.principal(), "write-preisblatt", &tenant)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();

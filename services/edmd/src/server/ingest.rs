@@ -1337,9 +1337,9 @@ pub async fn post_bulk_reads(
     .execute(state.repo.pool())
     .await;
 
-    // A bulk import used to answer 201 and stay silent whatever the V-rule pass
-    // found, so an operator uploading a month of corrected readings got the same
-    // "created" for a clean file and for one carrying billing-blocking intervals.
+    // The V-rule verdict has to reach the operator: a bare 201 would report a
+    // month of corrected readings the same way whether the file is clean or
+    // carries billing-blocking intervals.
     let alert = crate::server::quality_alert::QualityAlert {
         malo_id: &malo_id,
         door: "bulk-import",

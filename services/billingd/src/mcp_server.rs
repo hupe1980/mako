@@ -689,10 +689,10 @@ before billing.",
                         "einzelpreis": pos["einzelpreis"],
                         "gesamtpreis": pos["gesamtpreis"],
                         // Every per-position fact BO4E does not model rides in
-                        // `zusatzAttribute` under the `mako:` namespace. These
-                        // used to be read as bare `_additional` keys
-                        // (`rechtlicheGrundlage`, `kategorie`), which is the
-                        // collision the namespace exists to prevent.
+                        // `zusatzAttribute` under the `mako:` namespace. Bare
+                        // `_additional` keys (`rechtlicheGrundlage`,
+                        // `kategorie`) are the counterparty's slot, and reading
+                        // one here is the collision the namespace prevents.
                         "rechtsgrundlage": mako_attr(pos, "mako:rechtliche_grundlage"),
                         "kategorie": mako_attr(pos, "mako:positionskategorie"),
                         "positionstyp": mako_attr(pos, "mako:positionstyp"),

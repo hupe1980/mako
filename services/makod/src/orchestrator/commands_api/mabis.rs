@@ -5,6 +5,8 @@
 
 use super::*;
 
+use mako_mabis::{ListenabgleichCommand, MabisListenabgleichWorkflow};
+
 pub(super) fn cmd_mabis_abrechnung_einleiten<'a>(
     s: &'a CommandsApiState,
     p: &'a serde_json::Value,
@@ -477,6 +479,179 @@ pub(super) async fn dispatch_mabis_billing_begleichen(
         &business_key,
         "mabis-billing",
         move || BillingCommand::CloseClearing { lauf },
+    )
+    .await
+}
+
+// ── MaBiS Listenabgleich — the two reply legs ─────────────────────────────────
+
+pub(super) fn cmd_mabis_liste_korrigieren<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_mabis_liste_korrigieren(s, p))
+}
+
+pub(super) fn cmd_mabis_liste_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_mabis_liste_ablehnen(s, p))
+}
+
+/// The business key a Clearingliste's process runs under — the Marktlokation the
+/// ingest spawned it with, so a reply reaches the list it answers.
+fn liste_business_key(payload: &serde_json::Value) -> Result<String, DispatchError> {
+    payload
+        .get("malo_id")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| DispatchError::InvalidPayload("\"malo_id\" is required".to_owned()))
+}
+
+/// Which Marktrolle distributed the list, which is what selects the tree.
+///
+/// 55066 is answered out of `E_0047` when the NB sent the list and out of
+/// `E_0004` when the ÜNB did — one PID, two disjoint code spaces — so this is
+/// required rather than defaulted. A default would answer half the lists out of
+/// the wrong tree with codes the counterparty's Codeliste does not contain.
+fn liste_sender_rolle(payload: &serde_json::Value) -> Result<String, DispatchError> {
+    payload
+        .get("sender_rolle")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "\"sender_rolle\" is required — it selects the Entscheidungsbaum (NB or ÜNB), \
+                 and the two publish different codes for the same Korrekturgrund"
+                    .to_owned(),
+            )
+        })
+}
+
+/// Dispatch `mabis.liste.korrigieren` — the **Korrekturliste** leg of a MaBiS
+/// Clearingliste (BK6-24-174 Anlage 3, Clearingverfahren).
+///
+/// # Payload fields
+///
+/// | Field | Required | Description |
+/// |-------|----------|-------------|
+/// | `malo_id` | Yes | the business key the list's process runs under |
+/// | `sender_rolle` | Yes | `"NB"` or `"ÜNB"` — selects the Entscheidungsbaum |
+/// | `positionen` | No | disputed positions; **absent means none**, which is still a reply |
+///
+/// Each position is `{ "malo": "…", "grund": "ergaenzt" \| "falsche_zuordnung" \|
+/// "entfallen" \| "daten_fehlerhaft" \| "malo_unbekannt" }`.
+///
+/// An **empty** list is the ordinary „reconciled, nothing to correct" answer and
+/// is dispatched, not refused: silence would read as acceptance of whatever the
+/// distributor filed, which is the same statement with none of the evidence.
+pub(super) async fn dispatch_mabis_liste_korrigieren(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    use mako_pruefung::mabis::{Korrekturgrund, Korrekturposition};
+
+    let business_key = liste_business_key(payload)?;
+    let sender_rolle = liste_sender_rolle(payload)?;
+
+    let mut positionen: Vec<Korrekturposition> = Vec::new();
+    for entry in payload
+        .get("positionen")
+        .and_then(|v| v.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        let malo = entry
+            .get("malo")
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| {
+                DispatchError::InvalidPayload("every Position needs a \"malo\"".to_owned())
+            })?;
+        let grund = match entry.get("grund").and_then(|v| v.as_str()) {
+            Some("ergaenzt") => Korrekturgrund::Ergaenzt,
+            Some("falsche_zuordnung") => Korrekturgrund::FalscheZuordnung,
+            Some("entfallen") => Korrekturgrund::Entfallen,
+            Some("daten_fehlerhaft") => Korrekturgrund::DatenFehlerhaft,
+            Some("malo_unbekannt") => Korrekturgrund::MaloUnbekannt,
+            other => {
+                return Err(DispatchError::InvalidPayload(format!(
+                    "unknown Korrekturgrund {other:?}; valid: ergaenzt, falsche_zuordnung, \
+                     entfallen, daten_fehlerhaft, malo_unbekannt"
+                )));
+            }
+        };
+        positionen.push(Korrekturposition {
+            malo: malo.to_owned(),
+            grund,
+        });
+    }
+
+    dispatch_to_process::<MabisListenabgleichWorkflow, _>(
+        state,
+        &business_key,
+        "mabis-listenabgleich",
+        move || ListenabgleichCommand::SendKorrektur {
+            sender_rolle,
+            positionen,
+        },
+    )
+    .await
+}
+
+/// Dispatch `mabis.liste.ablehnen` — refuse the **whole list** and demand a new
+/// one (`Cluster::AblehnungDerGesamtenListe`).
+///
+/// # Payload fields
+///
+/// | Field | Required | Description |
+/// |-------|----------|-------------|
+/// | `malo_id` | Yes | the business key the list's process runs under |
+/// | `sender_rolle` | Yes | `"NB"` or `"ÜNB"` — selects the Entscheidungsbaum |
+/// | `abonnement_bestellt` | No | „Wurde das Abonnement bestellt?" |
+/// | `zeitraum_plausibel` | No | „Ist der Zeitraum plausibel?" |
+/// | `mabis_zp_passt` | No | „Entspricht der MaBiS-ZP dem angefragten?" |
+/// | `version_zugelassen` | No | „Ist die Version zugelassen?" |
+/// | `innerhalb_clearingphase` | No | „Eingang innerhalb der Clearingphase DZÜ?" (`E_0070`) |
+///
+/// Each fact is a **tri-state**: `true` passes the Prüfschritt, `false` refuses
+/// the list on it, and *absent* means the caller cannot answer it — which the
+/// tree escalates rather than guessing, because a guess here refuses a list the
+/// receiver could have reconciled. The tree also decides: a request to refuse a
+/// list whose whole-list Prüfschritte all pass is rejected, since what that list
+/// is owed is a Korrekturliste.
+pub(super) async fn dispatch_mabis_liste_ablehnen(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    let business_key = liste_business_key(payload)?;
+    let sender_rolle = liste_sender_rolle(payload)?;
+    let fact = |name: &str| payload.get(name).and_then(serde_json::Value::as_bool);
+
+    let (abonnement_bestellt, zeitraum_plausibel) =
+        (fact("abonnement_bestellt"), fact("zeitraum_plausibel"));
+    let (mabis_zp_passt, version_zugelassen) = (fact("mabis_zp_passt"), fact("version_zugelassen"));
+    let innerhalb_clearingphase = fact("innerhalb_clearingphase");
+
+    dispatch_to_process::<MabisListenabgleichWorkflow, _>(
+        state,
+        &business_key,
+        "mabis-listenabgleich",
+        move || ListenabgleichCommand::SendGesamtAblehnung {
+            sender_rolle,
+            abonnement_bestellt,
+            zeitraum_plausibel,
+            mabis_zp_passt,
+            version_zugelassen,
+            innerhalb_clearingphase,
+        },
     )
     .await
 }

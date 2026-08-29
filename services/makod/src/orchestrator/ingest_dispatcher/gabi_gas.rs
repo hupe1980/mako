@@ -162,7 +162,7 @@ impl EdifactIngestDispatcher {
                 // the match and accepts nothing; only a Bestätigung decides the
                 // nomination. Recorded here and left to the workflow untouched,
                 // so the nomination stays open for it. The matching obligations
-                // themselves are a process question — see ROADMAP.
+                // themselves are a process question.
                 if matches!(
                     msg.document,
                     dvgw_edi::DvgwDocument::MatchingBenachrichtigung

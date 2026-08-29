@@ -340,8 +340,10 @@ Every consuming Marktlokation must be assigned to a Bilanzkreis at all times
 (GPKE Teil 2 Kap. 2.3). The EoG module closes supply gaps automatically:
 
 ```
-de.markt.versorgung.gap-detected           (marktd: 55005/44005 completed,
-  │                                         no announced successor)
+de.markt.versorgung.gap-detected           (marktd: an interval no supplier
+  │                                         covers — a Lieferende the successor
+  │                                         does not follow on, or a Fall-b
+  │                                         Bestätigung 55002/55078/44002)
   ├─ record case in eog_activations         (idempotent per MaLo)
   ├─ [eog.auto_activate] GET /api/v1/grundversorger/{nb_mp_id}?sparte=…
   │    └─ found → Strom: gpke.eog.anmelden → UTILMD 55013;
@@ -358,7 +360,7 @@ The case lifecycle — the states exposed by `GET /api/v1/eog?status=…`:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> detected: gap-detected (55005/44005, no successor)
+    [*] --> detected: gap-detected (uncovered interval)
     detected --> detected: Grundversorger missing (operator provisions §36 Abs. 2)
     detected --> angemeldet: eog.anmelden → UTILMD 55013 / G 44013
     angemeldet --> active: E/G Bestätigung 55014 (eog-begonnen)

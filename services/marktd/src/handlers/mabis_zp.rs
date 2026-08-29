@@ -35,7 +35,7 @@ use tracing::info;
 
 use mako_service::cedar::CedarEnforcer;
 
-use crate::handlers::{Claims, MdmErrorResponse, TenantGln};
+use crate::handlers::{Claims, MdmErrorResponse, Tenant};
 use crate::pg::PgMabisZpRepository;
 
 /// Extension alias — concrete type so AFIT dispatches statically.
@@ -83,7 +83,7 @@ pub async fn get_mabis_zp(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<MabisZpRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(eic): Path<String>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-mabis-zp", &tenant) {
@@ -116,7 +116,7 @@ pub async fn list_mabis_zp(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<MabisZpRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-mabis-zp", &tenant) {
         return (
@@ -144,7 +144,7 @@ pub async fn put_mabis_zp(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<MabisZpRepoExt>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(eic): Path<String>,
     Json(body): Json<PutMabisZpBody>,
 ) -> impl IntoResponse {

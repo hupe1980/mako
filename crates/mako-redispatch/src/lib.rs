@@ -22,8 +22,8 @@
 //! # Regulatory basis
 //!
 //! **BK6-23-241 (Beschluss 07.05.2026) consolidated Redispatch 2.0.** Its
-//! Anlage „Bilanzieller Ausgleich von Redispatch-Maßnahmen (`BilAReM`)" replaces
-//! the three decisions this crate used to cite:
+//! Anlage „Bilanzieller Ausgleich von Redispatch-Maßnahmen (`BilAReM`)" is the
+//! basis this crate cites, and it repeals the three earlier decisions:
 //!
 //! | Repealed | By | With effect from |
 //! |---|---|---|
@@ -323,8 +323,8 @@ mod tests {
     #[test]
     fn mscons_pids_are_correct() {
         // PID 4.0, rows whose Prozessbeschreibung is "Kommunikationsprozesse
-        // Redispatch". 13020/13023 are MaBiS and 13026 is the EEG-Überführungs-
-        // zeitreihen family; all three used to be claimed here.
+        // Redispatch". 13020/13023 belong to MaBiS and 13026 to the
+        // EEG-Überführungszeitreihen family, so none of the three is one.
         assert_eq!(aktivierung::MSCONS_PIDS, &[13_021, 13_022]);
     }
 

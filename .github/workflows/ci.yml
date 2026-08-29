@@ -24,6 +24,12 @@ env:
   # variables, so this starts a fresh cache rather than mixing artefacts.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  # Incremental compilation is a dev-loop optimisation and a one-shot job
+  # recompiles from scratch anyway, so its artefacts are pure disk cost. They
+  # are also the *largest* single share: an isolated `just ci` target directory
+  # measured 126 GB, of which `debug/incremental` was 75 GB — the feature
+  # permutations `clippy-roles` and `test-features` build each keep their own.
+  CARGO_INCREMENTAL: 0
 
 jobs:
   # ── Lockfile freshness ──────────────────────────────────────────────────────

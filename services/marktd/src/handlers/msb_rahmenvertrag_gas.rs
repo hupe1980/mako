@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::pg::msb_rahmenvertrag_gas::{MsbRahmenvertragGas, MsbRvGasStatus};
 
-use super::{Claims, IntoMdmResponse as _, TenantGln};
+use super::{Claims, IntoMdmResponse as _, Tenant};
 
 /// Injected `Arc<PgMsbRahmenvertragGasRepository>`.
 pub type MsbRvGasRepoExt = Arc<crate::pg::PgMsbRahmenvertragGasRepository>;
@@ -65,7 +65,7 @@ pub async fn upsert_msb_rv_gas(
     claims: Claims,
     Extension(repo): Extension<MsbRvGasRepoExt>,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Extension(pool): Extension<sqlx::PgPool>,
     Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Json(mut rec): Json<MsbRahmenvertragGas>,
@@ -157,7 +157,7 @@ pub async fn list_msb_rv_gas(
     claims: Claims,
     Extension(repo): Extension<MsbRvGasRepoExt>,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Query(q): Query<ListQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-msb-rv-gas", &tenant) {
@@ -186,7 +186,7 @@ pub async fn get_msb_rv_gas(
     claims: Claims,
     Extension(repo): Extension<MsbRvGasRepoExt>,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
-    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "read-msb-rv-gas", &tenant) {

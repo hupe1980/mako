@@ -1783,7 +1783,7 @@ pub fn wim_rechnungsabwicklung_registry()
                 // wrong guess passes the workflow's code check and records the
                 // wrong reason. The refusal is recorded verbatim instead and an
                 // operator resolves the tree — until the Herkunft is carried on
-                // the process from the REQOTE/QUOTES leg (see ROADMAP).
+                // the process from the REQOTE/QUOTES leg.
                 AnyMessage::Iftsta(i) => Ok(RechnungsabwicklungCommand::ReceiveAngebotAblehnung {
                     sender: MarktpartnerCode::new(
                         i.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),

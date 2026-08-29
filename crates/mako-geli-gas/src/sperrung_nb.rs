@@ -35,9 +35,8 @@
 //!   Prüfidentifikatoren, so [`mako_fristen::antwort`] resolves them from one
 //!   row each — 1 Werktag for the Auftrag, 3 for the Anfrage Sperrung — sourced
 //!   from BK6-24-174 GPKE Teil 2 § 3.5, the only text on hand that quantifies
-//!   them. `regulatories/` does not yet carry the Gas AWH; if it turns out to
-//!   publish different numbers, the row must be split by Sparte rather than
-//!   this module inventing one.
+//!   them. Should the Gas AWH publish different numbers, the row is split by
+//!   Sparte rather than this module inventing one.
 //!
 //! - **APERAK**: Gas knows only the Verarbeitbarkeitsfehlermeldung — nächster
 //!   Werktag 12:00 Uhr for a Folgeprozess, 3 Werktage for an Initialprozess
