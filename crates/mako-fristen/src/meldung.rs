@@ -22,9 +22,28 @@
 //! 55036 / 44036 is what tells the new supplier **who the old supplier is** —
 //! „Hierbei teilt der NB dem LFN insbesondere die Identität des LFA … mit".
 //!
-//! This is a **catalogue**, not an implementation: mako sends none of the six,
-//! and `services/makod/tests/meldepflicht_coverage.rs` pins that gap. No
-//! deadline is registered for a message that cannot be rendered.
+//! # These windows belong to the Lieferbeginn, not to the PID
+//!
+//! The same Prüfidentifikator recurs in other Sequenzdiagramme with a
+//! *different* window, so a caller must key on the process it is running and
+//! not on the message it is about to send. The Anwendungsübersicht der
+//! Prüfidentifikatoren 4.0 lists, beside the six rows above:
+//!
+//! | PID | Sequenzdiagramm | Nr. | Spätester ÜZ |
+//! |---|---|---|---|
+//! | 55037 | Fall 2 / 3 / 4: LF-Zuordnung bei EEG-/KWKG-Anlagen | 8 | **17:00 Uhr am ÜT** von Nr. 1 |
+//! | 55038 | Lieferende von NB an LF | 8 | **07:00 Uhr** des 1. WT nach dem ÜT von Nr. 1 |
+//! | 55611 | Lieferende von NB an LF | 11 / 13 | 07:00 Uhr des 1. WT nach dem ÜT von Nr. 1 |
+//!
+//! Those three run from the NB's **own** initiating message rather than from an
+//! inbound one, which is why they are not entries here: [`MeldungAnchor`] names
+//! an instant a receiver can resolve, and there is no arrival to resolve
+//! against. `ROADMAP.md` carries the work.
+//!
+//! `services/makod/tests/meldepflicht_coverage.rs` pins the catalogue against
+//! what the PID router actually handles, so a new entry here is either routed
+//! or declared missing with a reason. No deadline is registered for a message
+//! that cannot be rendered.
 //!
 //! # Anchors
 //!

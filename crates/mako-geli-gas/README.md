@@ -66,9 +66,26 @@ state without knowing whether an Abmeldeanfrage went out.
 | 44037 | Informationsmeldung zur Beendigung der Zuordnung | LFA | am selben Tag wie die Antwort |
 | 44038 | Informationsmeldung zur Aufhebung einer zuk. Zuordnung | LFZ | am selben Tag wie die Antwort |
 
-**None of the three is implemented** — `edi-energy` carries no UTILMD Gas AHB
-rules for them. Catalogued in `mako_fristen::meldung`; the gap is pinned by
-`services/makod/tests/meldepflicht_coverage.rs`.
+`geli-gas-zuordnungsmeldung` renders all three; `processd` issues 44036 and
+44037 as part of the Anmeldung decision (`geli.zuordnung.informieren` /
+`.beenden`) and 44038 is a command. The catalogue in `mako_fristen::meldung` is
+cross-checked against the PID router by
+`services/makod/tests/meldepflicht_coverage.rs` — the guard has to be a test,
+because nothing waits for these and no timeout can fire.
+
+**Two anchors, not one.** 44036 counts from the Eingang der Anmeldung like its
+Strom twin; 44037 and 44038 are „am selben Tag wie in Prozessschritt 5, wenn die
+Anmeldung bestätigt wurde" — anchored on the GNB's own Antwort, and owed only on
+a confirmation. Resolving them against the Eingang gives a different day
+whenever the GNB uses more than a few hours of its four Werktage.
+
+**Where the wire differs from Strom.** All three are `BGM+E44`
+Informationsmeldung (not `E01`/`E02`); every Lokation is `SG5 LOC+172`
+Meldepunkt (not `Z16`/`Z21`); the Gründe are narrower — `ZC8` alone on the
+Beendigung, no `ZG5` on the Aufhebung, so the Gas Aufhebung *always* names an
+auslösenden Marktpartner in `SG12 NAD+VY`; and `SG4 DTM+159` Bilanzierungsende
+is Soll on 44037/44038 „wenn eine Bilanzierung stattfindet", a slot Strom has
+no counterpart for.
 
 ### The Sperrprozesse are not in GeLi Gas at all
 

@@ -85,11 +85,12 @@ pub enum AgencyCode {
 }
 
 impl AgencyCode {
-    /// Default agency code for new outbound EDI@Energy messages.
+    /// Fallback agency for a party whose identifier says nothing about its
+    /// issuing office.
     ///
-    /// `293` is the correct default for all standard German market
-    /// participants. Use [`AgencyCode::Etso`] only for parties identified by an
-    /// EIC code.
+    /// Prefer [`AgencyCode::for_mp_id`]: the issuing office is a property of the
+    /// MP-ID, and defaulting a Gas party to `293` names a code list the Gas AHB
+    /// does not define.
     pub const DEFAULT: Self = Self::Bdew;
 
     /// Return the wire-format string for the DE 3055 component.
@@ -100,6 +101,43 @@ impl AgencyCode {
             Self::Gs1 => "9",
             Self::Etso => "305",
             Self::Dvgw => "332",
+        }
+    }
+
+    /// The DE 3055 agency for a market-participant identifier.
+    ///
+    /// The **issuing office is a property of the MP-ID, not of the message**:
+    /// BDEW issues 13-digit codes beginning `99` for Strom, DVGW issues `98`
+    /// codes for Gas, and everything else 13 characters long is a GS1 GLN. This
+    /// is the DE 3055 twin of the UNB DE 0007 rule
+    /// ([`unb_qualifier`](crate::builders::unb_qualifier), `500`/`502`/`14`), and
+    /// the two must agree: an interchange whose UNB says DVGW while its NAD says
+    /// BDEW names two different issuing offices for one party.
+    ///
+    /// UTILMD AHB Gas G1.1/G1.2 admits only `9` and `332` on a party NAD — a
+    /// Gas message carrying `293` states a code list the Anwendungsfall does not
+    /// define. (The single exception, PID 44060 „Antwort auf die
+    /// Geschäftsdatenanfrage", also admits `293` because the MSB it answers may
+    /// be a Strom party; that is a wider set, so deriving from the MP-ID stays
+    /// inside it.)
+    ///
+    /// A 16-character EIC resolves to [`AgencyCode::Bdew`], matching
+    /// `unb_qualifier`'s `500`: BDEW is the German EIC issuing office.
+    ///
+    /// ```rust
+    /// use edi_energy::AgencyCode;
+    ///
+    /// assert_eq!(AgencyCode::for_mp_id("9900123456789"), AgencyCode::Bdew); // BDEW Strom
+    /// assert_eq!(AgencyCode::for_mp_id("9870123456789"), AgencyCode::Dvgw); // DVGW Gas
+    /// assert_eq!(AgencyCode::for_mp_id("4012345000023"), AgencyCode::Gs1);  // GS1 GLN
+    /// ```
+    #[must_use]
+    pub fn for_mp_id(mp_id: &str) -> Self {
+        match mp_id.len() {
+            13 if mp_id.starts_with("99") => Self::Bdew,
+            13 if mp_id.starts_with("98") => Self::Dvgw,
+            13 => Self::Gs1,
+            _ => Self::Bdew,
         }
     }
 
@@ -139,6 +177,23 @@ mod tests {
     fn bdew_is_default() {
         assert_eq!(AgencyCode::default(), AgencyCode::Bdew);
         assert_eq!(AgencyCode::DEFAULT.as_str(), "293");
+    }
+
+    /// The NAD DE 3055 agency and the UNB DE 0007 qualifier name the same
+    /// issuing office. A message whose envelope says DVGW and whose NAD says
+    /// BDEW is internally inconsistent, and the Gas AHB does not define `293`
+    /// on a party NAD at all.
+    #[test]
+    fn nad_agency_agrees_with_the_unb_qualifier() {
+        for (mp_id, agency, unb) in [
+            ("9900123456789", "293", "500"),
+            ("9870123456789", "332", "502"),
+            ("4012345000023", "9", "14"),
+            ("10XDE-EON-NETZ-C", "293", "500"),
+        ] {
+            assert_eq!(AgencyCode::for_mp_id(mp_id).as_str(), agency, "{mp_id}");
+            assert_eq!(crate::builders::unb_qualifier(mp_id), unb, "{mp_id}");
+        }
     }
 
     #[test]

@@ -37,7 +37,14 @@ struct UtilmdTransactionSpec {
     /// `SG10 CCI` — Merkmale addressed by Klassentyp (DE 7059) with their value
     /// in DE 7037.
     merkmale: Vec<(String, String)>,
-    customer_nad: Option<(String, String)>,
+    /// `SG12 NAD` — the *beteiligte Marktpartner* a Vorgang names beside
+    /// sender and receiver, `(DE 3035 qualifier, MP-ID)`.
+    ///
+    /// A list, not one entry: UTILMD AHB Strom 2.1/2.2 Bedingung [518] on PID
+    /// 55036 reads „Es sind **alle** Altlieferanten anzugeben, an die eine
+    /// Abmeldeanfrage gesendet wird" — Geschäftsvorfall 3 splits a Marktlokation
+    /// across several Tranchen and so across several LFA.
+    customer_nads: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -46,8 +53,8 @@ struct UtilmdBuilderInner {
     pruefidentifikator: Option<Pruefidentifikator>,
     sender_id: Option<String>,
     receiver_id: Option<String>,
-    sender_agency: AgencyCode,
-    receiver_agency: AgencyCode,
+    sender_agency: Option<AgencyCode>,
+    receiver_agency: Option<AgencyCode>,
     message_ref: String,
     document_code: String,
     document_date: Option<String>,
@@ -97,8 +104,8 @@ impl UtilmdBuilder<Unset, Unset> {
                 pruefidentifikator: None,
                 sender_id: None,
                 receiver_id: None,
-                sender_agency: AgencyCode::Bdew,
-                receiver_agency: AgencyCode::Bdew,
+                sender_agency: None,
+                receiver_agency: None,
                 message_ref: "1".to_owned(),
                 document_code: "E01".to_owned(),
                 document_date: None,
@@ -131,18 +138,21 @@ impl<S, R> UtilmdBuilder<S, R> {
 
     /// Override the agency code for the sender's party identifier.
     ///
-    /// Default: [`AgencyCode::Bdew`] (`"293"`). Use [`AgencyCode::Etso`] (`"305"`)
-    /// for TSO/ÜNB parties that carry a 16-char EIC code.
+    /// Leave unset and the agency is derived from the MP-ID itself —
+    /// [`AgencyCode::for_mp_id`]: `99…` → BDEW `293`, `98…` → DVGW `332`, any
+    /// other 13-digit code → GS1 `9`. Override only for a party whose
+    /// registered code list differs from what its number implies.
     pub fn sender_agency(mut self, agency: crate::AgencyCode) -> Self {
-        self.inner.sender_agency = agency;
+        self.inner.sender_agency = Some(agency);
         self
     }
 
     /// Override the agency code for the receiver's party identifier.
     ///
-    /// Default: [`AgencyCode::Bdew`] (`"293"`).
+    /// Derived from the MP-ID when unset — see
+    /// [`sender_agency`](Self::sender_agency).
     pub fn receiver_agency(mut self, agency: crate::AgencyCode) -> Self {
-        self.inner.receiver_agency = agency;
+        self.inner.receiver_agency = Some(agency);
         self
     }
 
@@ -425,8 +435,16 @@ fn emit_sg4<W: std::io::Write>(
         emit_seg!(w, "CCI", klassentyp, "", wert);
     }
     emit_sg8_produktpakete(w, tx)?;
-    if let Some((nad_q, nad_id)) = &tx.customer_nad {
-        emit_comp!(w, "NAD", [nad_q], [nad_id, "", "293"]);
+    for (nad_q, nad_id) in &tx.customer_nads {
+        // SG12 NAD names a *third* party (the Altlieferant on a 55036, the
+        // auslösender Marktpartner on a 55038), so its DE 3055 follows that
+        // party's own MP-ID — not the sender's and not a fixed `293`.
+        emit_comp!(
+            w,
+            "NAD",
+            [nad_q],
+            [nad_id, "", super::agency_for(None, nad_id)]
+        );
     }
     Ok(())
 }
@@ -467,7 +485,7 @@ impl<S, R> UtilmdBuilder<S, R> {
                 w,
                 "NAD",
                 ["MS"],
-                [id, "", self.inner.sender_agency.as_str()]
+                [id, "", super::agency_for(self.inner.sender_agency, id)]
             );
         }
         if let Some(id) = &self.inner.receiver_id {
@@ -475,7 +493,7 @@ impl<S, R> UtilmdBuilder<S, R> {
                 w,
                 "NAD",
                 ["MR"],
-                [id, "", self.inner.receiver_agency.as_str()]
+                [id, "", super::agency_for(self.inner.receiver_agency, id)]
             );
         }
         for tx in &self.inner.transactions {
@@ -718,10 +736,27 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
         self
     }
 
-    /// Set the SG12/NAD customer segment.
+    /// Add an `SG12 NAD` beteiligter Marktpartner.
+    ///
+    /// `party_qualifier` is DE 3035 — `Z09` „Kunde des LF", `VY` „andere
+    /// zugehörige Partei". The DE 3055 code list is derived from `id`, because
+    /// the party named here is a *third* one whose issuing office need not match
+    /// the sender's.
+    ///
+    /// Repeatable: PID 55036 names every Altlieferant an Abmeldeanfrage went to.
     pub fn customer(mut self, party_qualifier: impl Into<String>, id: impl Into<String>) -> Self {
-        self.spec.customer_nad = Some((party_qualifier.into(), id.into()));
+        self.spec
+            .customer_nads
+            .push((party_qualifier.into(), id.into()));
         self
+    }
+
+    /// Add an `SG12 NAD+VY` „andere zugehörige Partei".
+    ///
+    /// The slot the Zuordnungs-Meldungen use: the Altlieferant on PID 55036 /
+    /// 44036, the auslösender Marktpartner on 55038 / 44038.
+    pub fn beteiligter_marktpartner(self, mp_id: impl Into<String>) -> Self {
+        self.customer(crate::utilmd_codes::nad::ZUGEHOERIGE_PARTEI, mp_id)
     }
 
     /// Add a free-text (FTX) segment inside SG4.

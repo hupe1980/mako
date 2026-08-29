@@ -648,6 +648,211 @@ mod tests {
         );
     }
 
+    /// **Three things a Gas UTILMD does not carry.** Every one of them used to
+    /// ride out on every Gas message mako sent, and each is a segment or a code
+    /// the receiving AHB does not define for the Anwendungsfall:
+    ///
+    /// | Wrong | Right | Fundstelle |
+    /// |---|---|---|
+    /// | `NAD…::293` BDEW | `::332` DVGW | UTILMD AHB Gas Kap. 5, `SG2 NAD` DE 3055 |
+    /// | `LOC+Z16` Marktlokation | `LOC+172` Meldepunkt | `SG5 LOC` DE 3227 — `172` in all 31 Anwendungsfälle |
+    /// | `STS+7++E03+ZW4` | `STS+7++E03` | `ZW3`/`ZW4`/`ZW5`/`ZAP` appear nowhere in the Gas AHB |
+    ///
+    /// The `293` also contradicted the `502` the same interchange already
+    /// declared in UNB DE 0007 — one message naming two issuing offices for the
+    /// same party.
+    #[test]
+    fn a_gas_utilmd_uses_the_gas_code_lists() {
+        let msg = fake_msg(
+            "UTILMD",
+            "9870987654325",
+            serde_json::json!({
+                "pid": 44001_u32,
+                "sender": "9870123456789",
+                "receiver": "9870987654325",
+                "malo": "51238696012",
+                "process_date": "20261101",
+                "transaktionsgrund": "E03",
+            }),
+        );
+        let wire =
+            render_to_wire_bytes(&msg, &test_registry("9870123456789")).expect("44001 renders");
+        let text = String::from_utf8_lossy(&wire.bytes);
+        assert!(text.contains("NAD+MS+9870123456789::332"), "{text}");
+        assert!(text.contains("NAD+MR+9870987654325::332"), "{text}");
+        assert!(!text.contains("::293"), "no BDEW code list on Gas: {text}");
+        assert!(text.contains("LOC+172+51238696012"), "{text}");
+        assert!(!text.contains("LOC+Z16"), "Gas names a Meldepunkt: {text}");
+        assert!(text.contains("STS+7++E03'"), "{text}");
+        assert!(
+            !text.contains("ZW4"),
+            "the Transaktionsgrundergänzung is Strom-only: {text}"
+        );
+    }
+
+    /// The three Zuordnungs-Meldungen, as the AHB tables define them.
+    ///
+    /// Every assertion here is a column of UTILMD AHB Strom 2.1/2.2 Kap. 8.11
+    /// or Gas 1.1/1.2 Kap. 5.8, and each is a way the message would otherwise
+    /// have been wrong: 55036 is an `E01` Anmeldung carrying **no** SG4 date at
+    /// all, 55037 an `E02` naming a `DTM+93` Vertragsende, 55038 an `E02`
+    /// naming the originally confirmed `DTM+92` Vertragsbeginn — and every Gas
+    /// twin is `E44` at a `LOC+172` Meldepunkt.
+    #[test]
+    fn the_zuordnungsmeldungen_render_as_their_ahb_columns() {
+        // Rendered *and* validated: the six PIDs now carry AHB rules, so a
+        // message mako emits is checked against the same profile a counterparty
+        // would check it against.
+        let render = |payload: serde_json::Value, own: &str| {
+            let pid = payload["pid"].as_u64().expect("pid");
+            let msg = fake_msg("UTILMD", "9900987654321", payload);
+            let rendered = render_to_wire_bytes(&msg, &test_registry(own)).expect("renders");
+            let wire = String::from_utf8_lossy(&rendered.bytes).into_owned();
+            edi_energy::EdiEnergyMessage::validate(
+                &edi_energy::parse(wire.as_bytes()).expect("parse"),
+            )
+            .expect("validate")
+            .into_error_result()
+            .unwrap_or_else(|e| panic!("PID {pid} must be AHB-conformant: {e:#?}\n{wire}"));
+            wire
+        };
+
+        // 55036 — Information über existierende Zuordnung (NB → LFN).
+        let info = render(
+            serde_json::json!({
+                "pid": 55_036_u32,
+                "sender": "9900123456789",
+                "receiver": "9900987654321",
+                "malo": "51238696012",
+                "document_code": "E01",
+                "transaktionsgrund": "Z26",
+                "lokationstyp": "Z16",
+                "referenz_vorgangsnummer": "VG-4711",
+                "beteiligte_marktpartner": ["9900555000005", "9900111000002"],
+            }),
+            "9900123456789",
+        );
+        assert!(info.contains("BGM+E01+55036"), "{info}");
+        assert!(
+            !info.contains("DTM+92") && !info.contains("DTM+93"),
+            "55036 has no SG4 date column at all: {info}"
+        );
+        assert!(info.contains("STS+7++Z26"), "{info}");
+        assert!(info.contains("LOC+Z16+51238696012"), "{info}");
+        // `SG6 RFF+TN` — Muss on 55036, and the only thing tying it to the
+        // Anmeldung it refers to.
+        assert!(info.contains("RFF+TN:VG-4711"), "{info}");
+        // Bedingung [518]: *all* Altlieferanten, so SG12 repeats.
+        assert_eq!(info.matches("NAD+VY+").count(), 2, "{info}");
+
+        // 55037 — Beendigung der Zuordnung (NB → LFA).
+        let beendigung = render(
+            serde_json::json!({
+                "pid": 55_037_u32,
+                "sender": "9900123456789",
+                "receiver": "9900987654321",
+                "malo": "51238696012",
+                "document_code": "E02",
+                "transaktionsgrund": "ZC8",
+                "process_date": "20261101",
+                "lokationstyp": "Z16",
+            }),
+            "9900123456789",
+        );
+        assert!(beendigung.contains("BGM+E02+55037"), "{beendigung}");
+        assert!(beendigung.contains("DTM+93:"), "Ende zum: {beendigung}");
+        assert!(beendigung.contains("STS+7++ZC8"), "{beendigung}");
+        assert!(
+            !beendigung.contains("NAD+VY"),
+            "55037 names no third party: {beendigung}"
+        );
+
+        // 55038 — Aufhebung einer zukünftigen Zuordnung (NB → LFZ). `DTM+92`,
+        // „ursprünglich vom NB bestätigtes Beginndatum" (Bedingung [507]).
+        let aufhebung = render(
+            serde_json::json!({
+                "pid": 55_038_u32,
+                "sender": "9900123456789",
+                "receiver": "9900987654321",
+                "malo": "51238696012",
+                "document_code": "E02",
+                "transaktionsgrund": "ZH0",
+                "process_date": "20261201",
+                "lokationstyp": "Z21",
+                "beteiligte_marktpartner": ["9900555000005"],
+            }),
+            "9900123456789",
+        );
+        assert!(aufhebung.contains("BGM+E02+55038"), "{aufhebung}");
+        assert!(aufhebung.contains("DTM+92:"), "Beginn zum: {aufhebung}");
+        assert!(aufhebung.contains("LOC+Z21+"), "Tranche: {aufhebung}");
+        assert!(aufhebung.contains("NAD+VY+9900555000005"), "{aufhebung}");
+
+        // 44036 — the Gas twin: `E44` Informationsmeldung at a Meldepunkt,
+        // with the DVGW code list throughout.
+        let gas = render(
+            serde_json::json!({
+                "pid": 44_036_u32,
+                "sender": "9870123456789",
+                "receiver": "9871234567897",
+                "malo": "51238696012",
+                "document_code": "E44",
+                "transaktionsgrund": "Z26",
+                "lokationstyp": "172",
+                "referenz_vorgangsnummer": "VG-99",
+                "beteiligte_marktpartner": ["9871234567897"],
+            }),
+            "9870123456789",
+        );
+        assert!(gas.contains("BGM+E44+44036"), "{gas}");
+        assert!(gas.contains("LOC+172+51238696012"), "{gas}");
+        assert!(gas.contains("NAD+VY+9871234567897::332"), "{gas}");
+        assert!(!gas.contains("::293"), "{gas}");
+        assert!(!gas.contains("ZW4"), "Gas defines no Ergänzung: {gas}");
+
+        // 44037 — the Gas Beendigung additionally carries `DTM+159`
+        // Bilanzierungsende, Soll „wenn eine Bilanzierung stattfindet" ([29]).
+        let gas_ende = render(
+            serde_json::json!({
+                "pid": 44_037_u32,
+                "sender": "9870123456789",
+                "receiver": "9871234567897",
+                "malo": "51238696012",
+                "document_code": "E44",
+                "transaktionsgrund": "ZC8",
+                "process_date": "20261101",
+                "bilanzierungsende": "20261101",
+                "lokationstyp": "172",
+            }),
+            "9870123456789",
+        );
+        assert!(gas_ende.contains("DTM+93:"), "{gas_ende}");
+        assert!(gas_ende.contains("DTM+159:"), "{gas_ende}");
+    }
+
+    /// Strom keeps its own three, so the Gas fix is not a global one.
+    #[test]
+    fn a_strom_utilmd_keeps_the_strom_code_lists() {
+        let msg = fake_msg(
+            "UTILMD",
+            "9900987654321",
+            serde_json::json!({
+                "pid": 55001_u32,
+                "sender": "9900123456789",
+                "receiver": "9900987654321",
+                "malo": "51238696012",
+                "process_date": "20261101",
+                "transaktionsgrund": "E03",
+            }),
+        );
+        let wire =
+            render_to_wire_bytes(&msg, &test_registry("9900123456789")).expect("55001 renders");
+        let text = String::from_utf8_lossy(&wire.bytes);
+        assert!(text.contains("NAD+MS+9900123456789::293"), "{text}");
+        assert!(text.contains("LOC+Z16+51238696012"), "{text}");
+        assert!(text.contains("STS+7++E03+ZW4"), "{text}");
+    }
+
     /// The LF's own Anmeldung needs the same package — that is what tells the NB
     /// which balancing circle to book the Marktlokation into.
     #[test]

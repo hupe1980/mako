@@ -35,6 +35,14 @@ pub const IDE_LISTE: &str = "Z01";
 
 /// `SG5 LOC` DE 3227 — the Lokationstyp qualifiers (MIG Zähler 0330).
 pub mod loc {
+    /// `LOC+172` — **Meldepunkt**, the one Lokationsqualifier UTILMD Gas uses.
+    ///
+    /// UTILMD AHB Gas G1.1/G1.2 names `172` in every `SG5 LOC` it defines and
+    /// `Z16`/`Z17` in none: where Strom distinguishes the object by qualifier,
+    /// Gas distinguishes it by the **format of DE 3225** — Bedingung `[950]`
+    /// Marktlokations-ID, `[951]` Zählpunktbezeichnung. Sending `Z16` on a Gas
+    /// UTILMD states a qualifier the receiving AHB does not define.
+    pub const MELDEPUNKT: &str = "172";
     /// `LOC+Z15` — MaBiS-Zählpunkt.
     pub const MABIS_ZAEHLPUNKT: &str = "Z15";
     /// `LOC+Z16` — Marktlokation.
@@ -137,6 +145,24 @@ pub mod transaktionsgrund {
     pub const EOG_ZUORDNUNGSERMAECHTIGUNG: &str = "ZC7";
     /// `ZC8` — Beendigung der Zuordnung.
     pub const BEENDIGUNG_ZUORDNUNG: &str = "ZC8";
+    /// `ZD9` — Beendigung wegen Rückzuordnungsmeldung.
+    pub const BEENDIGUNG_RUECKZUORDNUNG: &str = "ZD9";
+    /// `ZG5` — Aufhebung einer zukünftigen Zuordnung aufgrund § 38 EEG 2014
+    /// bzw. § 21b Abs. 1 Nr. 2 EEG 2017.
+    ///
+    /// The one Aufhebungsgrund that names **no** beteiligter Marktpartner: the
+    /// SG12 NAD is Muss on a 55038 only „wenn `ZG5` nicht vorhanden"
+    /// (UTILMD AHB Strom 2.1/2.2 Bedingung `[206]`).
+    pub const AUFHEBUNG_EEG38: &str = "ZG5";
+    /// `ZG6` — Beendigung der Zuordnung aufgrund EEG 2014 § 38.
+    pub const BEENDIGUNG_EEG38: &str = "ZG6";
+    /// `ZG9` — Aufhebung einer zukünftigen Zuordnung wegen Auszug des Kunden.
+    pub const AUFHEBUNG_AUSZUG: &str = "ZG9";
+    /// `ZH0` — Aufhebung einer zukünftigen Zuordnung wegen Anmeldung eines
+    /// anderen Lieferanten zu einem früheren Termin.
+    pub const AUFHEBUNG_FRUEHERE_ANMELDUNG: &str = "ZH0";
+    /// `ZH1` — Aufhebung einer zukünftigen Zuordnung wegen Stilllegung.
+    pub const AUFHEBUNG_STILLLEGUNG: &str = "ZH1";
 }
 
 /// `SG4 STS+7` DE 9013 (element 3) — Transaktionsgrundergänzung.

@@ -56,6 +56,20 @@ pub const GPKE_BEENDIGUNG_ZUORDNUNG_BESTAETIGEN: &str = "gpke.beendigung-zuordnu
 /// LFA: reject an NB `Anfrage zur Beendigung der Zuordnung` (UTILMD 55012).
 pub const GPKE_BEENDIGUNG_ZUORDNUNG_ABLEHNEN: &str = "gpke.beendigung-zuordnung.ablehnen";
 
+/// NB → LFN: UTILMD 55036 „Information über existierende Zuordnung".
+///
+/// One of the three **Meldepflichten** around the Lieferbeginn — messages the
+/// Festlegung obliges the NB to send with no answer expected back. GPKE Teil 2
+/// § 2.1.2 SD Lieferbeginn Nr. 2: owed whenever the Marktlokation is already
+/// assigned at the Zuordnungsbeginn, „auch dann …, sofern LFA und LFN identisch
+/// sind", and it is what tells the LFN **die Identität des LFA**.
+pub const GPKE_ZUORDNUNG_INFORMIEREN: &str = "gpke.zuordnung.informieren";
+/// NB → LFA: UTILMD 55037 „Beendigung der Zuordnung" (SD Lieferbeginn Nr. 10).
+pub const GPKE_ZUORDNUNG_BEENDEN: &str = "gpke.zuordnung.beenden";
+/// NB → LFZ: UTILMD 55038 „Aufhebung einer zukünftigen Zuordnung"
+/// (SD Lieferbeginn Nr. 13).
+pub const GPKE_ZUORDNUNG_AUFHEBEN: &str = "gpke.zuordnung.aufheben";
+
 // ── GeLi Gas ──────────────────────────────────────────────────────────────────
 
 /// LF: initiate a gas Lieferbeginn Anmeldung (UTILMD 44001).
@@ -129,6 +143,15 @@ pub const GELI_NB_LIEFERENDE_ABLEHNEN: &str = "geli.nb-lieferende.ablehnen";
 pub const GELI_BEENDIGUNG_ZUORDNUNG_BESTAETIGEN: &str = "geli.beendigung-zuordnung.bestaetigen";
 /// UTILMD G 44012 — the LFA refuses an Abmeldeanfrage des NB (`E_3020`).
 pub const GELI_BEENDIGUNG_ZUORDNUNG_ABLEHNEN: &str = "geli.beendigung-zuordnung.ablehnen";
+/// NB → LFN: UTILMD G 44036 „Informationsmeldung über existierende Zuordnung"
+/// (AWH `GeLi` Gas V1.2 Kap. 2.5.2 Nr. 2).
+pub const GELI_ZUORDNUNG_INFORMIEREN: &str = "geli.zuordnung.informieren";
+/// NB → LFA: UTILMD G 44037 „Informationsmeldung zur Beendigung der Zuordnung"
+/// (Kap. 2.5.2 Nr. 6, „am selben Tag wie in Prozessschritt 5").
+pub const GELI_ZUORDNUNG_BEENDEN: &str = "geli.zuordnung.beenden";
+/// NB → LFZ: UTILMD G 44038 „Informationsmeldung zur Aufhebung einer zuk.
+/// Zuordnung" (Kap. 2.5.2 Nr. 7).
+pub const GELI_ZUORDNUNG_AUFHEBEN: &str = "geli.zuordnung.aufheben";
 /// UTILMD G 44017 — the LFA agrees to a Gas Kündigung (`E_3001`).
 pub const GELI_KUENDIGUNG_BESTAETIGEN: &str = "geli.kuendigung.bestaetigen";
 /// UTILMD G 44018 — the LFA refuses a Gas Kündigung (`E_3001`).
@@ -195,6 +218,9 @@ pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     GPKE_NB_LIEFERENDE_ABLEHNEN,
     GPKE_BEENDIGUNG_ZUORDNUNG_BESTAETIGEN,
     GPKE_BEENDIGUNG_ZUORDNUNG_ABLEHNEN,
+    GPKE_ZUORDNUNG_INFORMIEREN,
+    GPKE_ZUORDNUNG_BEENDEN,
+    GPKE_ZUORDNUNG_AUFHEBEN,
     GPKE_ZUORDNUNG_LF_BESTAETIGEN,
     GPKE_ZUORDNUNG_LF_ABLEHNEN,
     GPKE_KUENDIGUNG_BESTAETIGEN,
@@ -203,6 +229,9 @@ pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     GELI_NB_LIEFERENDE_ABLEHNEN,
     GELI_BEENDIGUNG_ZUORDNUNG_BESTAETIGEN,
     GELI_BEENDIGUNG_ZUORDNUNG_ABLEHNEN,
+    GELI_ZUORDNUNG_INFORMIEREN,
+    GELI_ZUORDNUNG_BEENDEN,
+    GELI_ZUORDNUNG_AUFHEBEN,
     GELI_KUENDIGUNG_BESTAETIGEN,
     GELI_KUENDIGUNG_ABLEHNEN,
     GELI_EOG_BESTAETIGEN,

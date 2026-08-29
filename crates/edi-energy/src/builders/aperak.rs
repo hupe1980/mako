@@ -14,8 +14,8 @@ struct AperakBuilderInner {
     release: Release,
     sender_id: Option<String>,
     receiver_id: Option<String>,
-    sender_agency: AgencyCode,
-    receiver_agency: AgencyCode,
+    sender_agency: Option<AgencyCode>,
+    receiver_agency: Option<AgencyCode>,
     message_ref: String,
     document_code: String,
     document_id: Option<String>,
@@ -48,8 +48,8 @@ impl AperakBuilder<Unset, Unset> {
                 release,
                 sender_id: None,
                 receiver_id: None,
-                sender_agency: AgencyCode::Bdew,
-                receiver_agency: AgencyCode::Bdew,
+                sender_agency: None,
+                receiver_agency: None,
                 message_ref: "1".to_owned(),
                 document_code: "1000".to_owned(),
                 document_id: None,
@@ -131,18 +131,21 @@ impl<S, R> AperakBuilder<S, R> {
 
     /// Override the agency code for the sender's party identifier.
     ///
-    /// Default: [`AgencyCode::Bdew`] (`"293"`). Use [`AgencyCode::Etso`] (`"305"`)
-    /// for TSO/ÜNB parties that carry a 16-char EIC code.
+    /// Leave unset and the agency is derived from the MP-ID itself —
+    /// [`AgencyCode::for_mp_id`]: `99…` → BDEW `293`, `98…` → DVGW `332`, any
+    /// other 13-digit code → GS1 `9`. Override only for a party whose
+    /// registered code list differs from what its number implies.
     pub fn sender_agency(mut self, agency: crate::AgencyCode) -> Self {
-        self.inner.sender_agency = agency;
+        self.inner.sender_agency = Some(agency);
         self
     }
 
     /// Override the agency code for the receiver's party identifier.
     ///
-    /// Default: [`AgencyCode::Bdew`] (`"293"`).
+    /// Derived from the MP-ID when unset — see
+    /// [`sender_agency`](Self::sender_agency).
     pub fn receiver_agency(mut self, agency: crate::AgencyCode) -> Self {
-        self.inner.receiver_agency = agency;
+        self.inner.receiver_agency = Some(agency);
         self
     }
 
@@ -225,7 +228,7 @@ impl<S, R> AperakBuilder<S, R> {
                 w,
                 "NAD",
                 ["MS"],
-                [id, "", self.inner.sender_agency.as_str()]
+                [id, "", super::agency_for(self.inner.sender_agency, id)]
             );
         }
         if let Some(id) = &self.inner.receiver_id {
@@ -233,7 +236,7 @@ impl<S, R> AperakBuilder<S, R> {
                 w,
                 "NAD",
                 ["MR"],
-                [id, "", self.inner.receiver_agency.as_str()]
+                [id, "", super::agency_for(self.inner.receiver_agency, id)]
             );
         }
         if let Some(r) = &self.inner.acw_ref {

@@ -16,6 +16,12 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Lokationstyp {
+    /// Meldepunkt — `LOC+172`.
+    ///
+    /// The Gas qualifier. UTILMD AHB Gas G1.1/G1.2 uses it for every Lokation
+    /// and distinguishes Marktlokation from Messlokation by the *format* of
+    /// DE 3225 rather than by the qualifier, so this one variant covers both.
+    Meldepunkt,
     /// MaBiS-Zählpunkt — `LOC+Z15`.
     MabisZaehlpunkt,
     /// Marktlokation (`MaLo`) — `LOC+Z16`.
@@ -56,6 +62,7 @@ impl Lokationstyp {
     pub fn qualifier_code(self) -> &'static str {
         use crate::utilmd_codes::loc;
         match self {
+            Self::Meldepunkt => loc::MELDEPUNKT,
             Self::MabisZaehlpunkt => loc::MABIS_ZAEHLPUNKT,
             Self::Marktlokation => loc::MARKTLOKATION,
             Self::Messlokation => loc::MESSLOKATION,
@@ -75,12 +82,14 @@ impl Lokationstyp {
     /// use edi_energy::Lokationstyp;
     ///
     /// assert_eq!(Lokationstyp::from_qualifier_code("Z16"), Some(Lokationstyp::Marktlokation));
+    /// assert_eq!(Lokationstyp::from_qualifier_code("172"), Some(Lokationstyp::Meldepunkt));
     /// assert_eq!(Lokationstyp::from_qualifier_code("Z99"), None);
     /// ```
     #[must_use]
     pub fn from_qualifier_code(code: &str) -> Option<Self> {
         use crate::utilmd_codes::loc;
         match code {
+            loc::MELDEPUNKT => Some(Self::Meldepunkt),
             loc::MABIS_ZAEHLPUNKT => Some(Self::MabisZaehlpunkt),
             loc::MARKTLOKATION => Some(Self::Marktlokation),
             loc::MESSLOKATION => Some(Self::Messlokation),

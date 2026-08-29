@@ -207,6 +207,25 @@ macro_rules! emit_comp {
 // The macros reach the sibling builder modules through textual scope — they
 // are defined above the `mod` declarations, so no re-export is needed.
 
+/// Resolve the DE 3055 agency for a party NAD.
+///
+/// The issuing office follows the **MP-ID**, not the message type or a builder
+/// default: BDEW (`293`) for a 13-digit `99…` Strom code, DVGW (`332`) for a
+/// `98…` Gas code, GS1 (`9`) for any other GLN. An explicit
+/// `sender_agency`/`receiver_agency` override still wins, for the rare party
+/// whose registered code list differs from what its number implies.
+///
+/// Hard-coding `293` here — as this used to — put a BDEW code list on every
+/// Gas message, which UTILMD AHB Gas G1.1/G1.2 does not define on a party NAD,
+/// and contradicted the DVGW `502` the same interchange already declared in
+/// UNB DE 0007.
+#[cfg(any_message)]
+pub(crate) fn agency_for(explicit: Option<crate::AgencyCode>, mp_id: &str) -> &'static str {
+    explicit
+        .unwrap_or_else(|| crate::AgencyCode::for_mp_id(mp_id))
+        .as_str()
+}
+
 // ── Sub-modules ───────────────────────────────────────────────────────────────
 
 // The UNB/UNZ envelope is message-type agnostic — every message type needs it,

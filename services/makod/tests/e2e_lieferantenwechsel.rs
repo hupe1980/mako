@@ -361,6 +361,7 @@ impl MockNb {
                     transaktionsgrund: None,
                     transaktionsgrund_ergaenzung: None,
                     veraeusserungsform: None,
+                    vorgangsnummer: None,
                     validation_passed: true,
                     validation_errors: vec![],
                 }

@@ -211,7 +211,11 @@ pub fn geli_gas_registry() -> AdapterRegistry<GeliGasSupplierChangeWorkflow> {
                 malo_id: MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
+                        // UTILMD Gas names every Lokation in `SG5 LOC+172`
+                        // Meldepunkt, not in the Strom `Z16`/`Z17` pair —
+                        // reading only those left `malo_id` empty on every
+                        // message a real Gas counterparty sends.
+                        .and_then(|t| t.lokation())
                         .unwrap_or(""),
                 ),
                 document_date: u
@@ -244,6 +248,78 @@ pub fn geli_gas_registry() -> AdapterRegistry<GeliGasSupplierChangeWorkflow> {
                 // `extract_gasqualitaet`. Always `None` until an AHB defines one.
                 gasqualitaet: extract_gasqualitaet(u.segments()).map(str::to_owned),
             })
+        },
+    ));
+    registry
+}
+
+// ── GeLi Gas Informationsmeldungen (PIDs 44036–44038) ────────────────────────
+
+/// Build an [`AdapterRegistry`] for
+/// [`mako_geli_gas::GeliGasZuordnungsmeldungWorkflow`].
+///
+/// Adapts an inbound UTILMD 44036 / 44037 / 44038 (NB → LFN/LFA/LFZ) to
+/// [`mako_geli_gas::zuordnungsmeldung::ZuordnungsmeldungCommand::Empfangen`].
+///
+/// „Eine Informationsmeldung ist eine Nachricht, für die keine Antwort
+/// vorgesehen ist" (UTILMD AHB Gas Kap. 5.8), so nothing here derives a
+/// response PID or a business deadline — only the `SG4 STS+7` Grund, which is
+/// the whole content of the message.
+#[must_use]
+pub fn geli_gas_zuordnungsmeldung_registry()
+-> AdapterRegistry<mako_geli_gas::GeliGasZuordnungsmeldungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GeLi Gas Informationsmeldung adapter".into(),
+                )
+            })?;
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GeLi Gas Informationsmeldung adapter: expected UTILMD message".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GeLi Gas Informationsmeldung adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
+
+            Ok(
+                mako_geli_gas::zuordnungsmeldung::ZuordnungsmeldungCommand::Empfangen {
+                    pid,
+                    sender: MarktpartnerCode::new(
+                        u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                    ),
+                    receiver: MarktpartnerCode::new(
+                        u.receiver()
+                            .and_then(|n| n.party_id.as_deref())
+                            .unwrap_or(""),
+                    ),
+                    location_id: MaLo::new(
+                        u.transactions()
+                            .first()
+                            .and_then(|t| t.lokation())
+                            .unwrap_or(""),
+                    ),
+                    transaktionsgrund: u
+                        .transactions()
+                        .first()
+                        .and_then(|t| t.transaktionsgrund())
+                        .map(|g| g.grund)
+                        .unwrap_or_default(),
+                    message_ref: MessageRef::new(msg.message_ref()),
+                    validation_passed,
+                    validation_errors,
+                },
+            )
         },
     ));
     registry
@@ -877,11 +953,9 @@ pub fn geli_gas_stammdaten_registry()
                     .unwrap_or(""),
             );
             let first_tx = u.transactions().first();
-            let location_id = MaLo::new(
-                first_tx
-                    .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
-                    .unwrap_or(""),
-            );
+            // `SG5 LOC+172` Meldepunkt — the Gas qualifier; see the
+            // Lieferantenwechsel adapter above.
+            let location_id = MaLo::new(first_tx.and_then(|t| t.lokation()).unwrap_or(""));
             let aenderungsdatum = first_tx
                 .and_then(|t| t.dtm.iter().find(|d| d.is_period_start()))
                 .and_then(|d| d.value_str())

@@ -40,6 +40,7 @@ fn answer(
         transaktionsgrund: Some("E03".to_owned()),
         transaktionsgrund_ergaenzung: Some("ZW4".to_owned()),
         veraeusserungsform: None,
+        vorgangsnummer: None,
         message_ref: MessageRef::new("ANM-001"),
         received_at: time::OffsetDateTime::now_utc(),
         validation_passed: true,

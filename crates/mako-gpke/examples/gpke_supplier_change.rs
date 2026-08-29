@@ -198,6 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             transaktionsgrund: None,
             transaktionsgrund_ergaenzung: None,
             veraeusserungsform: None,
+            vorgangsnummer: None,
             fallgruppe: None,
         })
         .await?;
@@ -384,6 +385,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             transaktionsgrund: None,
             transaktionsgrund_ergaenzung: None,
             veraeusserungsform: None,
+            vorgangsnummer: None,
             fallgruppe: None,
         })
         .await

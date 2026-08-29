@@ -243,8 +243,11 @@ fn the_landing_page_figures_match_the_registered_engine() {
     // fell by five when the SCHEDL/IMBNOT/TRANOT/DELORD/DELRES placeholders were
     // dropped — `dvgw-edi` parses none of those formats, so their synthetic
     // 900xx codes counted messages the daemon could never receive.
-    const LANDING_PAGE_PIDS: usize = 449;
-    const LANDING_PAGE_WORKFLOWS: usize = 61;
+    // Rose by six when the Zuordnungs-Meldungen shipped: 55036/55037/55038 and
+    // their Gas twins 44036/44037/44038 — Meldepflichten the NB owes around a
+    // Lieferbeginn, previously catalogued but unroutable.
+    const LANDING_PAGE_PIDS: usize = 455;
+    const LANDING_PAGE_WORKFLOWS: usize = 63;
 
     assert_eq!(
         pids, LANDING_PAGE_PIDS,

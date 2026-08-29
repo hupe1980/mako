@@ -154,6 +154,30 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(55012),
         dispatch: cmd_gpke_beendigung_zuordnung_ablehnen,
     },
+    // ── GPKE Zuordnungs-Meldungen (PIDs 55036/55037/55038) ────────────────────
+    // The three **Meldepflichten** around the Lieferbeginn: one-way messages the
+    // NB owes to third parties, with no Antwortnachricht. GPKE Teil 2 § 2.1.2
+    // SD Lieferbeginn Nr. 2 / 10 / 13 — 07:00 and twice 12:00 Uhr des 1. WT nach
+    // dem ÜT der Anmeldung. `processd` issues them; whether they are owed at all
+    // turns on the Versorgungsstatus, which only it can see.
+    CommandDescriptor {
+        name: "gpke.zuordnung.informieren",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(55036),
+        dispatch: cmd_gpke_zuordnung_informieren,
+    },
+    CommandDescriptor {
+        name: "gpke.zuordnung.beenden",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(55037),
+        dispatch: cmd_gpke_zuordnung_beenden,
+    },
+    CommandDescriptor {
+        name: "gpke.zuordnung.aufheben",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(55038),
+        dispatch: cmd_gpke_zuordnung_aufheben,
+    },
     // ── GPKE Ersatz-/Grundversorgung (§36/§38 EnWG, PIDs 55013–55015) ─────────
     // The NB assigns a contractless MaLo to the Grundversorger; the E/G
     // answers with Bestätigung (stating Ersatz- vs. Grundversorgung + BK)
@@ -450,6 +474,29 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(17103),
         dispatch: cmd_geli_gas_datenabruf_anfragen,
+    },
+    // ── GeLi Gas Informationsmeldungen (PIDs 44036/44037/44038) ───────────────
+    // AWH GeLi Gas V1.2 Kap. 2.5.2 SD Lieferbeginn Nr. 2 / 6 / 7. „Eine
+    // Informationsmeldung ist eine Nachricht, für die keine Antwort vorgesehen
+    // ist" — Nr. 2 counts from the Eingang der Anmeldung, Nr. 6 and 7 from the
+    // GNB's own Antwort and only on a confirmation.
+    CommandDescriptor {
+        name: "geli.zuordnung.informieren",
+        permitted_roles: &[Marktrolle::Gnb],
+        primary_pid: pid(44036),
+        dispatch: cmd_geli_zuordnung_informieren,
+    },
+    CommandDescriptor {
+        name: "geli.zuordnung.beenden",
+        permitted_roles: &[Marktrolle::Gnb],
+        primary_pid: pid(44037),
+        dispatch: cmd_geli_zuordnung_beenden,
+    },
+    CommandDescriptor {
+        name: "geli.zuordnung.aufheben",
+        permitted_roles: &[Marktrolle::Gnb],
+        primary_pid: pid(44038),
+        dispatch: cmd_geli_zuordnung_aufheben,
     },
     // ── GeLi Gas Ersatz-/Grundversorgung (GNB registers MaLo into E/G) ────────
     // GNB-initiator role: sends UTILMD G 44013 (EoG Anmeldung) to the E/G LF.

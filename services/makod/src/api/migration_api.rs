@@ -854,6 +854,17 @@ const NO_MIGRATION_NEEDED: &[(&str, &str)] = &[
         "records inbound MSCONS Messdaten and completes",
     ),
     (
+        "gpke-zuordnungsmeldung",
+        "a Zuordnungs-Meldung is a Meldepflicht: one command, one event, done. \
+         There is no Antwortnachricht, so no process is ever left in flight for \
+         an annual release to repoint",
+    ),
+    (
+        "geli-gas-zuordnungsmeldung",
+        "the Gas twin of gpke-zuordnungsmeldung — the AHB says it in as many \
+         words: „eine Nachricht, für die keine Antwort vorgesehen ist\"",
+    ),
+    (
         "gpke-messwerte",
         "records inbound MSCONS Messwerte and completes",
     ),

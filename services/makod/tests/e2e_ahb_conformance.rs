@@ -259,6 +259,7 @@ async fn ahb_55001_lieferbeginn_validates_and_dispatches() {
         transaktionsgrund: None, // not present in minimal fixture
         transaktionsgrund_ergaenzung: None,
         veraeusserungsform: None,
+        vorgangsnummer: None,
         message_ref: cmd_ref,
         received_at: time::OffsetDateTime::now_utc(),
         bilanzierungsgebiet: None,

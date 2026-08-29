@@ -162,6 +162,12 @@ pub struct AnmeldungPayload {
     pub veraeusserungsform: Option<String>,
     /// Bilanzierungsmethode from UTILMD TM+EM (`SLP` | `RLM` | `IMS`).
     pub bilanzierungsmethode: Option<String>,
+    /// `SG4 IDE+24` DE 7402 — the LFN's Vorgangsnummer for this Anmeldung.
+    ///
+    /// Echoed in `SG6 RFF+TN` on the 55036 / 44036 Information über
+    /// existierende Zuordnung, where the AHB marks it Muss. Without it the LFN
+    /// receives a Meldung it cannot tie to the Anmeldung it just sent.
+    pub vorgangsnummer: Option<String>,
 }
 
 impl AnmeldungPayload {
@@ -203,6 +209,10 @@ impl AnmeldungPayload {
             .get("bilanzierungsmethode")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
+        let vorgangsnummer = data
+            .get("vorgangsnummer")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
 
         let date_str = data.get("process_date")?.as_str()?;
         let process_date = if date_str.len() == 8 {
@@ -225,6 +235,7 @@ impl AnmeldungPayload {
             transaktionsgrund_ergaenzung,
             veraeusserungsform,
             bilanzierungsmethode,
+            vorgangsnummer,
         })
     }
 
@@ -410,6 +421,28 @@ pub async fn evaluate_and_decide(
         false
     };
 
+    // ── Meldepflichten (GPKE Teil 2 § 2.1.2 Nr. 2 / 10) ───────────────────
+    //
+    // Kept before `payload` is consumed: the Information über existierende
+    // Zuordnung must reference the LFN's own Vorgangsnummer, and the
+    // Beendigung der Zuordnung names the Zuordnungsende, which is the
+    // Zuordnungsbeginn of this Anmeldung.
+    let meldung = MeldepflichtContext {
+        sparte: sparte_of(pid),
+        lfn_mp_id: lf_mp_id.clone(),
+        zuordnungsbeginn: payload.process_date,
+        vorgangsnummer: payload.vorgangsnummer.clone(),
+        tranche: payload.transaktionsgrund_ergaenzung.as_deref() == Some("ZW5"),
+        altlieferant: versorgung.as_ref().and_then(|v| v.lf_mp_id.clone()),
+    };
+
+    // Prozessschritt 2, and the earliest window of the whole Lieferbeginn:
+    // 07:00 Uhr des 1. WT nach dem ÜT, four hours before the answer to the same
+    // message. It is owed the moment the Anmeldung lands on an
+    // already-assigned Marktlokation — before, and independently of, the
+    // decision — so it is dispatched here rather than beside the Bestätigung.
+    meldung.informieren(makod, &malo_id, process_id).await;
+
     let mut anfrage = payload.into_anfrage();
     // `E_0622` Prüfschritt 400 / 600 („Verändert sich die Veräußerungsform?")
     // needs the form in force at the Zuordnungsbeginn. That is the NB's own
@@ -540,6 +573,10 @@ pub async fn evaluate_and_decide(
                 dispatch(makod, pid, &malo_id, process_id, &result).await?;
                 info!(%process_id, pid, %malo_id, antwortcode = result.antwortcode(),
                       "processd NB: dispatched bestaetigen");
+                // Prozessschritt 10 — „unverzüglich nach dem ÜZ von Nr. 5",
+                // i.e. after the Bestätigung and only after it. On an Ablehnung
+                // the LFA keeps its Zuordnung and nothing is owed.
+                meldung.beenden(makod, &malo_id, process_id).await;
             } else {
                 info!(%process_id, pid, %malo_id, "processd NB: Accept held for operator confirmation (auto_accept = false)");
                 enqueue_for_operator(
@@ -564,6 +601,180 @@ pub async fn evaluate_and_decide(
     }
 
     Ok(true)
+}
+
+// ── Meldepflichten around the Lieferbeginn ────────────────────────────────────
+
+/// What the NB needs to discharge the two Meldepflichten a Lieferbeginn carries.
+///
+/// A **Meldepflicht** is a message the Festlegung obliges the NB to send with no
+/// answer expected back, so nothing times out when one is missed — it surfaces
+/// later as a supplier holding a stale view of who serves the Marktlokation.
+/// Both are conditional on the same fact, and it is one only `marktd` holds:
+/// GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 1 Prüfschritt 4 routes to
+/// Prozessschritt 2 „Ist die Marktlokation bzw. Tranche zum Zuordnungsbeginn
+/// einem LF zugeordnet" and straight to Nr. 5 otherwise.
+///
+/// | Nr. | PID (Strom / Gas) | To | Spätester ÜZ | Sent when |
+/// |---|---|---|---|---|
+/// | 2 | 55036 / 44036 | LFN | 07:00 Uhr des 1. WT / Ablauf des 4. WT | an LFA exists — *before* the decision |
+/// | 10 / 6 | 55037 / 44037 | LFA | 12:00 Uhr des 1. WT / am selben Tag wie die Antwort | after the Bestätigung |
+///
+/// Nr. 2 is owed „auch dann …, sofern LFA und LFN identisch sind", so the two
+/// MP-IDs being equal is not a reason to skip it.
+///
+/// **The third, 55038 / 44038 „Aufhebung einer zukünftigen Zuordnung", is not
+/// derived here.** It addresses an LFZ whose future Zuordnung the new Anmeldung
+/// displaces, and `VersorgungsStatusRecord` has one future-supplier slot
+/// (`lf_mp_id_next`), which `marktd` has already filled with *this* LFN by the
+/// time the decision runs. A distinct LFZ is not representable, and a competing
+/// pending Anmeldung is refused `A06` before it could be. The command
+/// (`gpke.zuordnung.aufheben`) exists for an operator or ERP that can see one;
+/// `ROADMAP.md` carries the projection change.
+struct MeldepflichtContext {
+    sparte: Sparte,
+    /// The LFN — the party that sent the Anmeldung, and the recipient of Nr. 2.
+    lfn_mp_id: String,
+    /// The Zuordnungsbeginn of this Anmeldung, which is also the Zuordnungsende
+    /// the LFA is told about in Nr. 10.
+    zuordnungsbeginn: time::Date,
+    /// `SG6 RFF+TN` on Nr. 2 — the LFN's own `SG4 IDE+24`.
+    vorgangsnummer: Option<String>,
+    /// `SG5 LOC+Z21` instead of `LOC+Z16` (Strom only; Gas names a Meldepunkt).
+    tranche: bool,
+    /// The incumbent supplier at the Zuordnungsbeginn, from `marktd`. `None`
+    /// means the Marktlokation is unassigned and neither Meldung is owed.
+    altlieferant: Option<String>,
+}
+
+impl MeldepflichtContext {
+    /// The `makod` command names for this Sparte.
+    const fn commands(&self) -> (&'static str, &'static str) {
+        match self.sparte {
+            Sparte::Gas => (
+                mako_markt::commands::GELI_ZUORDNUNG_INFORMIEREN,
+                mako_markt::commands::GELI_ZUORDNUNG_BEENDEN,
+            ),
+            _ => (
+                mako_markt::commands::GPKE_ZUORDNUNG_INFORMIEREN,
+                mako_markt::commands::GPKE_ZUORDNUNG_BEENDEN,
+            ),
+        }
+    }
+
+    /// The asserted Marktrolle. `makod` checks it against the deployment's
+    /// licensed roles, so a Gas Meldung must assert `GNB` and not `NB`.
+    const fn marktrolle(&self) -> &'static str {
+        match self.sparte {
+            Sparte::Gas => "GNB",
+            _ => "NB",
+        }
+    }
+
+    /// `SG4 STS+7` DE 9013 `Z26` — the only Grund either AHB admits on the
+    /// Information über existierende Zuordnung.
+    const INFO_GRUND: &'static str = "Z26";
+    /// `SG4 STS+7` DE 9013 `ZC8` — Beendigung der Zuordnung. The Strom AHB also
+    /// admits `ZD9` (Rückzuordnungsmeldung) and `ZG6` (EEG 2014 § 38); neither
+    /// arises from a Lieferbeginn.
+    const BEENDIGUNG_GRUND: &'static str = "ZC8";
+
+    /// Prozessschritt 2 — tell the LFN who the LFA is.
+    async fn informieren(&self, makod: &MakodClient, malo_id: &str, process_id: Uuid) {
+        let Some(altlieferant) = self.altlieferant.as_deref() else {
+            return;
+        };
+        let (command, _) = self.commands();
+        let mut payload = serde_json::json!({
+            "malo_id":                 malo_id,
+            "empfaenger_mp_id":        self.lfn_mp_id,
+            "transaktionsgrund":       Self::INFO_GRUND,
+            // „Hierbei teilt der NB dem LFN insbesondere die Identität des LFA
+            // … mit" — the whole point of the message, in `SG12 NAD+VY`.
+            "beteiligte_marktpartner": [altlieferant],
+        });
+        if self.sparte != Sparte::Gas && self.tranche {
+            payload["tranche"] = serde_json::json!(true);
+        }
+        if let Some(vorgang) = self.vorgangsnummer.as_deref() {
+            payload["referenz_vorgangsnummer"] = serde_json::json!(vorgang);
+        }
+        self.send(makod, command, malo_id, process_id, "informieren", payload)
+            .await;
+    }
+
+    /// Prozessschritt 10 (Strom) / 6 (Gas) — tell the LFA its Zuordnung ends.
+    async fn beenden(&self, makod: &MakodClient, malo_id: &str, process_id: Uuid) {
+        let Some(altlieferant) = self.altlieferant.as_deref() else {
+            return;
+        };
+        // „Sofern LFA und LFN identisch sind" the Information is still owed
+        // (Nr. 2 says so), but there is no assignment to end: the supplier keeps
+        // supplying under a new Zuordnungsbeginn.
+        if altlieferant == self.lfn_mp_id {
+            return;
+        }
+        let (_, command) = self.commands();
+        let mut payload = serde_json::json!({
+            "malo_id":           malo_id,
+            "empfaenger_mp_id":  altlieferant,
+            "transaktionsgrund": Self::BEENDIGUNG_GRUND,
+            // `SG4 DTM+93` Ende zum. „Das Zuordnungsende … ist … der
+            // Zuordnungsbeginn der Anmeldung" (Nr. 10).
+            "process_date":      self.zuordnungsbeginn.to_string(),
+        });
+        if self.sparte != Sparte::Gas && self.tranche {
+            payload["tranche"] = serde_json::json!(true);
+        }
+        self.send(makod, command, malo_id, process_id, "beenden", payload)
+            .await;
+    }
+
+    /// Post one Meldung to `makod`.
+    ///
+    /// A failure is logged, never propagated. The Meldepflicht is a side
+    /// obligation of the Anmeldung decision, and failing the decision because a
+    /// notification could not be queued would trade a missing Meldung for a
+    /// missed **Antwortfrist** — the one the counterparty is actually waiting
+    /// on, and the one § 20 EnWG is audited against.
+    ///
+    /// # Redelivery
+    ///
+    /// The event fan-out is at-least-once and AS4 ReceptionAwareness redelivers,
+    /// so this runs more than once for one market process. The
+    /// `Idempotency-Key` is keyed on the **process id**, which is stable across
+    /// redeliveries, so `makod` replays the original `202` instead of sending a
+    /// second Meldung. A redelivery whose payload differs — the Versorgungsstatus
+    /// has moved on, so `beteiligte_marktpartner` now names the LFN as its own
+    /// Altlieferant — is refused as a key conflict rather than sent, which is
+    /// the outcome that matters: the second message is the wrong one.
+    async fn send(
+        &self,
+        makod: &MakodClient,
+        command: &str,
+        malo_id: &str,
+        process_id: Uuid,
+        step: &'static str,
+        payload: serde_json::Value,
+    ) {
+        let cmd = ForwardCommand {
+            marktrolle: Some(self.marktrolle().to_owned()),
+            command: command.to_owned(),
+            malo_id: Some(malo_id.to_owned()),
+            melo_id: None,
+            payload,
+        };
+        match makod
+            .post_command(&format!("processd-nb-{step}-{process_id}"), &cmd)
+            .await
+        {
+            Ok(_) => info!(%process_id, %malo_id, command, "processd NB: Meldepflicht dispatched"),
+            Err(e) => warn!(
+                %e, %process_id, %malo_id, command,
+                "processd NB: Meldepflicht dispatch failed — the Antwort is unaffected",
+            ),
+        }
+    }
 }
 
 /// The trigger PID, process and MaLo an escalated Anmeldung is queued under.
@@ -970,6 +1181,95 @@ async fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Meldepflichten ────────────────────────────────────────────────────────
+
+    fn meldung(sparte: Sparte, altlieferant: Option<&str>) -> MeldepflichtContext {
+        MeldepflichtContext {
+            sparte,
+            lfn_mp_id: "9900555000005".to_owned(),
+            zuordnungsbeginn: time::Date::from_calendar_date(2026, time::Month::October, 1)
+                .expect("valid date"),
+            vorgangsnummer: Some("VG-4711".to_owned()),
+            tranche: false,
+            altlieferant: altlieferant.map(ToOwned::to_owned),
+        }
+    }
+
+    /// A Gas Meldung must assert `GNB`. `makod` checks the asserted Marktrolle
+    /// against the deployment's licensed roles, so asserting `NB` on a Gas
+    /// command is refused in a Gas-only deployment — and accepted in a
+    /// dual-Sparte one, where it would then be sent by the wrong party.
+    #[test]
+    fn each_sparte_asserts_its_own_marktrolle_and_commands() {
+        let strom = meldung(Sparte::Strom, Some("9900111000002"));
+        assert_eq!(strom.marktrolle(), "NB");
+        assert_eq!(
+            strom.commands(),
+            (
+                mako_markt::commands::GPKE_ZUORDNUNG_INFORMIEREN,
+                mako_markt::commands::GPKE_ZUORDNUNG_BEENDEN,
+            )
+        );
+
+        let gas = meldung(Sparte::Gas, Some("9870111000002"));
+        assert_eq!(gas.marktrolle(), "GNB");
+        assert_eq!(
+            gas.commands(),
+            (
+                mako_markt::commands::GELI_ZUORDNUNG_INFORMIEREN,
+                mako_markt::commands::GELI_ZUORDNUNG_BEENDEN,
+            )
+        );
+    }
+
+    /// GPKE Teil 2 § 2.1.2 Nr. 1 Prüfschritt 4: an unassigned Marktlokation
+    /// goes straight to Prozessschritt 5. Neither Meldung is owed, and sending
+    /// one would name an Altlieferant that does not exist.
+    #[test]
+    fn an_unassigned_marktlokation_owes_no_meldung() {
+        let m = meldung(Sparte::Strom, None);
+        assert!(m.altlieferant.is_none());
+    }
+
+    /// „Die Information ist auch dann zu versenden, sofern LFA und LFN identisch
+    /// sind" (Nr. 2) — but there is no assignment to *end* in that case, so the
+    /// Beendigung is not owed. The two conditions are deliberately different.
+    #[test]
+    fn an_identical_lfa_still_gets_the_information_but_no_beendigung() {
+        let m = MeldepflichtContext {
+            altlieferant: Some("9900555000005".to_owned()),
+            ..meldung(Sparte::Strom, None)
+        };
+        assert_eq!(m.altlieferant.as_deref(), Some(m.lfn_mp_id.as_str()));
+    }
+
+    /// The Zuordnungsende the LFA is told about is the Zuordnungsbeginn of the
+    /// Anmeldung, and `SG4 DTM+93` takes a civil date.
+    #[test]
+    fn the_beendigung_names_the_anmeldung_s_zuordnungsbeginn() {
+        let m = meldung(Sparte::Strom, Some("9900111000002"));
+        assert_eq!(m.zuordnungsbeginn.to_string(), "2026-10-01");
+    }
+
+    /// `SG6 RFF+TN` is Muss on 55036 / 44036 and comes from the LFN's own
+    /// `SG4 IDE+24`, which the CloudEvent has to carry for that to be possible.
+    #[test]
+    fn the_anmeldung_payload_carries_the_vorgangsnummer() {
+        let event = serde_json::json!({
+            "makopid": 55001,
+            "subject": "550e8400-e29b-41d4-a716-446655440000",
+            "data": {
+                "malo_id": "51238696012",
+                "new_supplier": "9900555000005",
+                "grid_operator": "9900000000001",
+                "process_date": "20261001",
+                "vorgangsnummer": "VG-4711"
+            }
+        });
+        let payload = AnmeldungPayload::parse(&event).expect("should parse");
+        assert_eq!(payload.vorgangsnummer.as_deref(), Some("VG-4711"));
+    }
 
     // ── AnmeldungPayload parsing ───────────────────────────────────────────────
 

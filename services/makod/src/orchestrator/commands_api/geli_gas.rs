@@ -1026,3 +1026,89 @@ async fn answer_gas_supplier_change(
     )
     .await
 }
+
+// ── GeLi Gas Informationsmeldungen (44036 / 44037 / 44038) ────────────────────
+
+pub(super) fn cmd_geli_zuordnung_informieren<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_geli_zuordnungsmeldung(
+        s,
+        p,
+        mako_geli_gas::zuordnungsmeldung::Zuordnungsmeldung::Information,
+    ))
+}
+
+pub(super) fn cmd_geli_zuordnung_beenden<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_geli_zuordnungsmeldung(
+        s,
+        p,
+        mako_geli_gas::zuordnungsmeldung::Zuordnungsmeldung::Beendigung,
+    ))
+}
+
+pub(super) fn cmd_geli_zuordnung_aufheben<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_geli_zuordnungsmeldung(
+        s,
+        p,
+        mako_geli_gas::zuordnungsmeldung::Zuordnungsmeldung::Aufhebung,
+    ))
+}
+
+/// Dispatch one of the GNB's three Informationsmeldungen.
+///
+/// The Gas twin of `dispatch_gpke_zuordnungsmeldung`, with two payload
+/// differences: there is no `tranche` flag — every Gas Vorgang names a
+/// `SG5 LOC+172` Meldepunkt — and `bilanzierungsende` rides `SG4 DTM+159`,
+/// Soll on 44037/44038 „wenn eine Bilanzierung stattfindet" (Bedingung `[29]`).
+async fn dispatch_geli_zuordnungsmeldung(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+    meldung: mako_geli_gas::zuordnungsmeldung::Zuordnungsmeldung,
+) -> Result<DispatchOutcome, DispatchError> {
+    let malo_id = extract_malo_id(payload)?;
+    let receiver = require_payload_str(payload, "empfaenger_mp_id")?;
+    let transaktionsgrund = require_payload_str(payload, "transaktionsgrund")?;
+
+    let domain_cmd = mako_geli_gas::zuordnungsmeldung::ZuordnungsmeldungCommand::Senden {
+        meldung,
+        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        receiver: MarktpartnerCode::new(receiver),
+        location_id: malo_id.clone(),
+        transaktionsgrund,
+        process_date: payload
+            .get("process_date")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned),
+        bilanzierungsende: payload
+            .get("bilanzierungsende")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned),
+        beteiligte: beteiligte_marktpartner(payload),
+        referenz_vorgangsnummer: payload
+            .get("referenz_vorgangsnummer")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned),
+    };
+
+    spawn_meldung_process::<mako_geli_gas::GeliGasZuordnungsmeldungWorkflow>(
+        state,
+        mako_geli_gas::GAS_ZUORDNUNGSMELDUNG_WORKFLOW_NAME,
+        &malo_id,
+        domain_cmd,
+    )
+    .await
+}

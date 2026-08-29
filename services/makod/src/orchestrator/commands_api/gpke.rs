@@ -1483,3 +1483,106 @@ pub(super) async fn dispatch_gpke_eog_antwort(
     )
     .await
 }
+
+// ── GPKE Zuordnungs-Meldungen (55036 / 55037 / 55038) ─────────────────────────
+
+pub(super) fn cmd_gpke_zuordnung_informieren<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_gpke_zuordnungsmeldung(
+        s,
+        p,
+        mako_gpke::Zuordnungsmeldung::Information,
+    ))
+}
+
+pub(super) fn cmd_gpke_zuordnung_beenden<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_gpke_zuordnungsmeldung(
+        s,
+        p,
+        mako_gpke::Zuordnungsmeldung::Beendigung,
+    ))
+}
+
+pub(super) fn cmd_gpke_zuordnung_aufheben<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_gpke_zuordnungsmeldung(
+        s,
+        p,
+        mako_gpke::Zuordnungsmeldung::Aufhebung,
+    ))
+}
+
+/// Dispatch one of the NB's three Zuordnungs-Meldungen.
+///
+/// Called by the `processd` NB module while it decides an Anmeldung: 55036 the
+/// moment the Anmeldung arrives on an already-assigned Marktlokation, 55037 and
+/// 55038 once the Zuordnung has been confirmed. The condition is the
+/// Versorgungsstatus, which lives in `marktd` — this end only renders and
+/// records.
+///
+/// ## Payload fields
+///
+/// | Field | Type | Notes |
+/// |---|---|---|
+/// | `malo_id` | string | Marktlokations-ID, or the MaLo-ID of the Tranche |
+/// | `empfaenger_mp_id` | string | LFN (55036), LFA (55037), LFZ (55038) |
+/// | `transaktionsgrund` | string | `SG4 STS+7` DE 9013 — the Grund the AHB admits for this PID |
+/// | `process_date` | string | Muss on 55037/55038, **refused** on 55036 |
+/// | `tranche` | bool (opt.) | `SG5 LOC+Z21` instead of `LOC+Z16` |
+/// | `beteiligte_marktpartner` | \[string] | `SG12 NAD+VY` — every Altlieferant (55036) or the auslösende Partei (55038) |
+/// | `referenz_vorgangsnummer` | string | `SG6 RFF+TN`, Muss on 55036 |
+///
+/// **No deadline is registered.** A Meldepflicht has no Antwortnachricht, so a
+/// deadline here could only ever fire; the window it carries is a *dispatch*
+/// window, and it has already closed by the time this command runs.
+async fn dispatch_gpke_zuordnungsmeldung(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+    meldung: mako_gpke::Zuordnungsmeldung,
+) -> Result<DispatchOutcome, DispatchError> {
+    let malo_id = extract_malo_id(payload)?;
+    let receiver = require_payload_str(payload, "empfaenger_mp_id")?;
+    let transaktionsgrund = require_payload_str(payload, "transaktionsgrund")?;
+
+    let domain_cmd = mako_gpke::ZuordnungsmeldungCommand::Senden {
+        meldung,
+        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        receiver: MarktpartnerCode::new(receiver),
+        location_id: malo_id.clone(),
+        tranche: payload
+            .get("tranche")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        transaktionsgrund,
+        process_date: payload
+            .get("process_date")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned),
+        beteiligte: beteiligte_marktpartner(payload),
+        referenz_vorgangsnummer: payload
+            .get("referenz_vorgangsnummer")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned),
+    };
+
+    spawn_meldung_process::<mako_gpke::GpkeZuordnungsmeldungWorkflow>(
+        state,
+        mako_gpke::ZUORDNUNGSMELDUNG_WORKFLOW_NAME,
+        &malo_id,
+        domain_cmd,
+    )
+    .await
+}

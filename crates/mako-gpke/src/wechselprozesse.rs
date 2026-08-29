@@ -450,6 +450,15 @@ pub enum SupplierChangeCommand {
         /// Vorlauffrist from; the other (the *bestehende* Veräußerungsform) is
         /// the NB's own register.
         veraeusserungsform: Option<String>,
+        /// `SG4 IDE+24` DE 7402 — the sender's **Vorgangsnummer** for this
+        /// Anmeldung.
+        ///
+        /// Carried through because the NB's own Meldepflicht needs it: UTILMD
+        /// AHB Strom Kap. 8.11 marks `SG6 RFF+TN` „Referenz Vorgangsnummer (aus
+        /// Anfragenachricht)" **Muss** on PID 55036, and that reference is the
+        /// only thing tying the Information über existierende Zuordnung to the
+        /// Anmeldung that triggered it.
+        vorgangsnummer: Option<String>,
         /// EDIFACT message reference.
         message_ref: MessageRef,
         /// UTC timestamp at which the inbound UTILMD was received at the transport layer.
@@ -781,6 +790,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 transaktionsgrund,
                 transaktionsgrund_ergaenzung,
                 veraeusserungsform,
+                vorgangsnummer,
                 message_ref,
                 received_at,
                 validation_passed,
@@ -862,6 +872,9 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                                 // Vorlauffristen.
                                 "transaktionsgrund_ergaenzung": transaktionsgrund_ergaenzung,
                                 "veraeusserungsform":    veraeusserungsform,
+                                // `SG4 IDE+24` DE 7402 — what `SG6 RFF+TN` on
+                                // the NB's 55036 Meldepflicht must echo.
+                                "vorgangsnummer":        vorgangsnummer,
                             }),
                         )
                         // Caused by ValidationPassed (index 1), not Initiated (index 0),

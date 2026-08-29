@@ -205,9 +205,11 @@ Tuesday-11:00 Frist as healthy until Tuesday night.
 | 10 | Beendigung der Zuordnung | **55037** | NB → LFA | **12:00 Uhr des 1. WT** |
 | 13 | Aufhebung einer zukünftigen Zuordnung | **55038** | NB → LFZ | **12:00 Uhr des 1. WT** |
 
-Nr. 2, 10 and 13 are **Meldepflichten** — one-way notifications with no answer,
-and **mako implements none of them**; see
-[the Meldepflicht gap](#meldepflichten-obligations-with-no-answer) below.
+Nr. 2, 10 and 13 are **Meldepflichten** — one-way notifications with no answer;
+see [Meldepflichten](#meldepflichten-obligations-with-no-answer) below. Nr. 2
+and Nr. 3 share a condition: both fire only when the Marktlokation is already
+assigned at the Zuordnungsbeginn (Nr. 1 Prüfschritt 4), and Nr. 3 is „parallel zu
+Nr. 2" for that reason.
 
 **Vorlauffristen (BK6-24-174 GPKE Teil 2, SD Lieferbeginn Nr. 1):**
 
@@ -237,10 +239,21 @@ a stale view of who supplies the Marktlokation.
 | 55037 | Beendigung der Zuordnung | LFA | Zuordnungsende und Grund |
 | 55038 | Aufhebung einer zukünftigen Zuordnung | LFZ | dass eine künftige Zuordnung entfällt |
 
-The Gas twins are 44036 / 44037 / 44038. **None of the six is implemented** —
-`edi-energy` carries no UTILMD AHB rules for them. Fundstellen in
-`mako_fristen::meldung`; the gap is pinned by
-`services/makod/tests/meldepflicht_coverage.rs`.
+The Gas twins are 44036 / 44037 / 44038, on their own windows: the Information
+by the Ablauf des 4. WT nach Eingang, the other two „am selben Tag wie die
+Antwort" and only on a confirmation.
+
+`processd` issues the Information and the Beendigung as part of the Anmeldung
+decision — the Information *before* the answer, because its 07:00 window closes
+four hours before the 11:00 Bestätigung of the same message. The Aufhebung is a
+command an operator or ERP issues: it addresses a supplier whose future
+Zuordnung the Anmeldung displaces, and mako's supply projection holds one future
+supplier per Marktlokation, which the incoming Anmeldung has already claimed.
+
+Because nothing waits for a Meldepflicht, no alert can cover it. The guard is a
+test: `mako_fristen::meldung` catalogues what is owed and by when, and
+`services/makod/tests/meldepflicht_coverage.rs` cross-checks the catalogue
+against the PID router on every CI run.
 
 **Ersatz-/Grundversorgung (EoG, §36/§38 EnWG):** When a MaLo draws energy
 without an assignable supply contract (after Lieferende without successor,

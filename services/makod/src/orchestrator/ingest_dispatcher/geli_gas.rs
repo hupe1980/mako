@@ -145,6 +145,35 @@ impl EdifactIngestDispatcher {
                     reason: "pid_not_in_spawn_table",
                 }),
             },
+            // ── GeLi Gas Informationsmeldungen (44036–44038) ─────────────────
+            // NB → LFN/LFA/LFZ, AWH GeLi Gas V1.2 Kap. 2.5.2 Nr. 2 / 6 / 7.
+            //
+            // **No deadline at all.** There is no Antwortnachricht to be late
+            // with, and Gas APERAK is silence-means-acceptance — only a
+            // Verarbeitbarkeitsfehler goes back, which the workflow enqueues
+            // itself. The Frist these carry belongs to the *sending* GNB.
+            "geli-gas-zuordnungsmeldung" => {
+                if mako_geli_gas::GAS_ZUORDNUNGSMELDUNG_PIDS.contains(&pid) {
+                    let cmd = adapters::geli_gas_zuordnungsmeldung_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // See the Strom twin: an always-`false` occupancy verdict,
+                    // because three Meldungen ride one MaLo per Lieferbeginn.
+                    self.spawn_or_resume_guarded::<mako_geli_gas::GeliGasZuordnungsmeldungWorkflow>(
+                        malo_id.as_str(),
+                        "geli-gas-zuordnungsmeldung",
+                        cmd,
+                        &fv,
+                        &[],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "geli-gas-zuordnungsmeldung",
+                        reason: "pid_not_in_spawn_table",
+                    })
+                }
+            }
             // ── GeLi Gas Stammdatenänderung (44109–44182) ─────────────────────
             // Änderung PIDs spawn a Berechtigter process; Antwort PIDs resume a
             // change we initiated. The workflow registers the APERAK + 10-WT

@@ -27,6 +27,10 @@ use super::*;
 /// | `antwort_codeliste` | no   | `STS+E01` DE 1131, the **Codeliste** the code comes from (`E_0622`, `S_0090`, `G_0051`, …) |
 /// | `bemerkung`     | no       | `FTX+ACB` free text (mandatory alongside a catch-all Ablehnungscode) |
 /// | `bilanzkreis`   | on 55001/55014/55608, 44001 | Strom: `SG8 SEQ+Z79` Produktpaket · Gas: `SG10 CCI+Z19` — its own slot, never `bemerkung` |
+/// | `document_code` | no       | `BGM` DE 1001, when the Anwendungsfall fixes one other than `E01` |
+/// | `lokationstyp`  | no       | `SG5 LOC` DE 3227 — `Z21` Tranche, Gas `172` Meldepunkt; defaults to the PID's own object |
+/// | `beteiligte_marktpartner` | on 55036/55038, 44036/44038 | `SG12 NAD+VY` — every Altlieferant, or the auslösender Marktpartner |
+/// | `bilanzierungsende` | Gas 44037/44038 | second `SG4 DTM+159`, Soll „wenn eine Bilanzierung stattfindet" |
 ///
 /// \* Exactly one of `malo` / `melo` is required, depending on the PID range.
 ///
@@ -67,7 +71,18 @@ pub(super) fn render_utilmd(
     let location_id_key = if names_messlokation { "melo" } else { "malo" };
     let location_id = require_str(p, mt, location_id_key)?;
 
-    let process_date = require_str(p, mt, "process_date")?;
+    // `SG4 DTM` is not universal. UTILMD AHB Strom Kap. 8.11 / Gas Kap. 5.8
+    // leave both the „Beginn zum" and „Ende zum" columns empty for the
+    // Information über existierende Zuordnung (55036 / 44036): it names the LFA
+    // and the Vorgang it refers to, and no date of its own. Emitting one there
+    // is an unlisted segment, so the field is required everywhere else and
+    // refused here.
+    let carries_process_date = utilmd_carries_sg4_date(pid);
+    let process_date = if carries_process_date {
+        Some(require_str(p, mt, "process_date")?)
+    } else {
+        None
+    };
 
     let doc_date_owned = p
         .get("document_date")
@@ -96,7 +111,7 @@ pub(super) fn render_utilmd(
     })?;
 
     let dtm_qualifier = utilmd_dtm_qualifier(pid);
-    let process_date_yyyymmdd = normalise_date(process_date);
+    let process_date_yyyymmdd = process_date.map(normalise_date);
 
     // `SG4 SG6 RFF+Z13` carries the Prüfidentifikator and the builder emits it
     // per Vorgang from `pruefidentifikator` — DE 1154 is `R n5`, so nothing but
@@ -106,6 +121,14 @@ pub(super) fn render_utilmd(
         .receiver(receiver)
         .pruefidentifikator(edifact_pid)
         .message_ref(message_ref.clone());
+
+    // `BGM` DE 1001. `E01` „Anmeldungen" is the default and the right code for
+    // most Anwendungsfälle; the ones that end or cancel an assignment are `E02`
+    // Abmeldungen, and every Gas Informationsmeldung is `E44`. The workflow that
+    // knows its own Anwendungsfall supplies it.
+    if let Some(code) = p.get("document_code").and_then(|v| v.as_str()) {
+        builder = builder.document_code(code);
+    }
 
     if let Some(dd) = doc_date_owned.as_deref() {
         builder = builder.document_date(dd);
@@ -119,9 +142,25 @@ pub(super) fn render_utilmd(
         .and_then(|v| v.as_str())
         .unwrap_or(message_ref.as_str());
 
-    let mut tx = builder
-        .transaction(vorgangsnummer)
-        .date(dtm_qualifier, &process_date_yyyymmdd);
+    let mut tx = builder.transaction(vorgangsnummer);
+    if let Some(date) = process_date_yyyymmdd.as_deref() {
+        tx = tx.date(dtm_qualifier, date);
+    }
+
+    // `SG4 DTM+159` Bilanzierungsende — Soll on the Gas Informationsmeldungen
+    // 44037/44038 „wenn eine Bilanzierung stattfindet" (UTILMD AHB Gas Kap. 5.8
+    // Bedingung [29]). A second SG4 date beside the process date, not a
+    // replacement for it.
+    if let Some(bilanzierungsende) = p
+        .get("bilanzierungsende")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        tx = tx.date(
+            edi_energy::utilmd_codes::dtm::BILANZIERUNGSENDE,
+            normalise_date(bilanzierungsende),
+        );
+    }
 
     // `SG4 SG6 RFF+TN` — „Referenz Vorgangsnummer (aus Anfragenachricht)",
     // Muss on every Antwortnachricht (UTILMD AHB Strom 2.2 / Gas 1.2). The
@@ -145,8 +184,13 @@ pub(super) fn render_utilmd(
     // (UTILMD AHB Strom 2.2 Kap. 10, Gas 1.2 Kap. 6). Defaulting `ZW4` onto a
     // Messlokations-Vorgang states „verbrauchende Marktlokation" in an element
     // the Anwendungsfall does not define.
+    //
+    // **GeLi Gas has no Ergänzung either.** `ZW3`/`ZW4`/`ZW5`/`ZAP` appear
+    // nowhere in UTILMD AHB Gas G1.1/G1.2 — every Gas Anwendungsfall lists a
+    // single `SG4 STS 9013` row. Defaulting `ZW4` onto a Gas Vorgang writes a
+    // code the receiving AHB does not define into an element it does not use.
     if let Some(grund) = p.get("transaktionsgrund").and_then(|v| v.as_str()) {
-        let t = if names_messlokation {
+        let t = if names_messlokation || track == ReleaseTrack::Gas {
             Transaktionsgrund::bare(grund)
         } else {
             let erg = p
@@ -206,13 +250,61 @@ pub(super) fn render_utilmd(
         };
     }
 
-    let tx = if names_messlokation {
-        tx.messlokation(location_id)
-    } else {
-        tx.marktlokation(location_id)
+    // `SG12 NAD+VY` — the beteiligte Marktpartner a Vorgang names beside sender
+    // and receiver: every Altlieferant on a 55036/44036 (Bedingung [518]), the
+    // auslösender Marktpartner on a 55038/44038 ([579]/[571]).
+    if let Some(parties) = p.get("beteiligte_marktpartner").and_then(|v| v.as_array()) {
+        for party in parties.iter().filter_map(|v| v.as_str()) {
+            tx = tx.beteiligter_marktpartner(party);
+        }
+    }
+
+    // `SG5 LOC` DE 3227. The qualifier is a property of the *object* the Vorgang
+    // is about, which the PID alone does not always fix: a GPKE Vorgang may name
+    // a Tranche (`Z21`) instead of a Marktlokation, and every Gas Vorgang names
+    // a Meldepunkt (`172`). Both still carry a MaLo-ID in DE 3225.
+    //
+    // On the **Gas** track the qualifier is `172` Meldepunkt for every
+    // Anwendungsfall — UTILMD AHB Gas G1.1/G1.2 defines `Z16` and `Z17`
+    // nowhere, and tells a Marktlokation from a Messlokation by the format of
+    // DE 3225 instead (`[950]` Marktlokations-ID, `[951]`
+    // Zählpunktbezeichnung). Sending the Strom qualifier there is a segment the
+    // receiver's own profile rejects, which is why this follows the track and
+    // not the caller.
+    let tx = match p.get("lokationstyp").and_then(|v| v.as_str()) {
+        Some(qualifier) if !qualifier.is_empty() => tx.location(
+            edi_energy::Lokationstyp::from_qualifier_code(qualifier).ok_or_else(|| {
+                RenderError::MissingField {
+                    message_type: mt.into(),
+                    field: format!("lokationstyp {qualifier:?} is not a LOC DE 3227 qualifier")
+                        .into(),
+                }
+            })?,
+            location_id,
+        ),
+        _ if track == ReleaseTrack::Gas => {
+            tx.location(edi_energy::Lokationstyp::Meldepunkt, location_id)
+        }
+        _ if names_messlokation => tx.messlokation(location_id),
+        _ => tx.marktlokation(location_id),
     };
 
     finish_interchange(tx.done().serialize(), sender, receiver, msg)
+}
+
+/// Whether this PID's Anwendungsfall carries an `SG4 DTM` process date at all.
+///
+/// Almost every UTILMD Vorgang does, so this answers `true` by default and
+/// names the exceptions. The Information über existierende Zuordnung
+/// (55036 Strom, 44036 Gas) is one: UTILMD AHB Strom Kap. 8.11 and Gas Kap. 5.8
+/// leave both its „Beginn zum" and „Ende zum" columns empty. It states who the
+/// Altlieferant is and which Anmeldung it refers to — `SG12 NAD+VY` and
+/// `SG6 RFF+TN` — and no date of its own.
+///
+/// Rendering one anyway emits a segment the receiving AHB does not define for
+/// the Anwendungsfall, which is a rejection the sender cannot see coming.
+pub(super) const fn utilmd_carries_sg4_date(pid: u32) -> bool {
+    !matches!(pid, 55_036 | 44_036)
 }
 
 /// The `SG4 DTM` DE 2005 qualifier for the process date of a given PID.
@@ -230,6 +322,15 @@ pub(super) fn render_utilmd(
 pub(super) fn utilmd_dtm_qualifier(pid: u32) -> &'static str {
     use edi_energy::utilmd_codes::dtm;
     match pid {
+        // ── Zuordnungs-Meldungen (GPKE Teil 2 § 2.1.2 Nr. 2 / 10 / 13) ────
+        //
+        // Three adjacent PIDs, three different SG4 date columns. 55036 / 44036
+        // has none at all ([`utilmd_carries_sg4_date`]); the Beendigung names a
+        // Vertragsende and the Aufhebung the *originally confirmed*
+        // Vertragsbeginn (Bedingung [507]) — the two are not interchangeable,
+        // and the default below would have given both `92`.
+        55_037 | 44_037 => dtm::ENDE_ZUM,
+        55_038 | 44_038 => dtm::BEGINN_ZUM,
         // Lieferbeginn: Anmeldung and its Bestätigung/Ablehnung.
         55_001..=55_003 | 55_013..=55_015 | 55_077 | 55_078 | 55_080 => dtm::BEGINN_ZUM,
         44_001..=44_003 | 44_013..=44_015 => dtm::BEGINN_ZUM,

@@ -256,6 +256,15 @@ deadline_dispatch! {
         "mabis-profile",
         // MMMA delegates delivery to gpke-allokationsliste.
         "gabi-gas-mmma",
+        // The Zuordnungs-Meldungen (55036/55037/55038, 44036/44037/44038) are
+        // Meldepflichten: no Antwortnachricht exists, so nothing on the
+        // receiving side can be late. The Frist they carry is the *sender's*,
+        // and it has already closed by the time the process is created — on the
+        // NB side by the command that dispatched the message, on the LF side by
+        // the arrival. The APERAK is enqueued in the same write as the event,
+        // so a timer for it could only fire on a discharged obligation.
+        mako_gpke::ZUORDNUNGSMELDUNG_WORKFLOW_NAME,
+        mako_geli_gas::GAS_ZUORDNUNGSMELDUNG_WORKFLOW_NAME,
         // Registered by an EngineModule but carrying no deadline of their own.
         mako_geli_gas::GAS_MSCONS_WORKFLOW_NAME,
         mako_gpke::messwerte::WORKFLOW_NAME,

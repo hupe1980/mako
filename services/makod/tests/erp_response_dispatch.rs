@@ -90,6 +90,7 @@ async fn spawn_supplier_change(
             transaktionsgrund: None,
             transaktionsgrund_ergaenzung: None,
             veraeusserungsform: None,
+            vorgangsnummer: None,
             message_ref: mako_engine::types::MessageRef::new("MSG-001"),
             received_at: time::OffsetDateTime::now_utc(),
             bilanzierungsgebiet: None,

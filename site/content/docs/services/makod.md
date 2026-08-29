@@ -738,8 +738,8 @@ irrelevant for a particular operator — reducing binary size and attack surface
 |---|---|
 | `role-lf-strom` | `mako-gpke` (LF side): `gpke-lf-anmeldung`, `gpke-lf-abmeldung`, `gpke-beendigung-zuordnung`, `gpke-ankuendigung-zuordnung-lf`, `gpke-abrechnung`, `gpke-messwerte`, `gpke-allokationsliste`, `gpke-datenabruf`, `gpke-anfrage-bestellung`, `gpke-utilts` |
 | `role-lf-gas` | `mako-geli-gas` (LF side): `geli-gas-stornierung-lf`, `geli-gas-sperrung-lf`, `geli-gas-mscons` |
-| `role-nb-strom` | `mako-gpke` (NB side): `gpke-supplier-change`, `gpke-sperrung`, `gpke-konfiguration`, `gpke-konfiguration-aenderung`, `gpke-neuanlage`, `gpke-partin`, `mako-wim` (NB side); `mako-mabis`: `mabis-billing`, `mabis-zp-lifecycle`, `mabis-listenabgleich`, `mabis-clearingliste`, `mabis-anforderung`, `mabis-profile`; `mako-redispatch`: `redispatch-stammdaten`, `redispatch-aktivierung`, `redispatch-verfuegbarkeit`, `redispatch-netzengpass`, `redispatch-kaskade`, `redispatch-planungsdaten`, `redispatch-statusanfrage`, `redispatch-kostenblatt` (Redispatch 2.0 is gated to NB Strom / ÜNB — LF and MSB deployments are out of scope per BK6-20-059/060/061) |
-| `role-nb-gas` | `mako-geli-gas` (GNB side): `geli-gas-supplier-change`, `geli-gas-sperrung-nb`, `geli-gas-stornierung`, `geli-gas-datenabruf`, `geli-gas-partin`, `geli-gas-sperrprozesse-invoic` |
+| `role-nb-strom` | `mako-gpke` (NB side): `gpke-supplier-change`, `gpke-zuordnungsmeldung`, `gpke-sperrung`, `gpke-konfiguration`, `gpke-konfiguration-aenderung`, `gpke-neuanlage`, `gpke-partin`, `mako-wim` (NB side); `mako-mabis`: `mabis-billing`, `mabis-zp-lifecycle`, `mabis-listenabgleich`, `mabis-clearingliste`, `mabis-anforderung`, `mabis-profile`; `mako-redispatch`: `redispatch-stammdaten`, `redispatch-aktivierung`, `redispatch-verfuegbarkeit`, `redispatch-netzengpass`, `redispatch-kaskade`, `redispatch-planungsdaten`, `redispatch-statusanfrage`, `redispatch-kostenblatt` (Redispatch 2.0 is gated to NB Strom / ÜNB — LF and MSB deployments are out of scope per BK6-20-059/060/061) |
+| `role-nb-gas` | `mako-geli-gas` (GNB side): `geli-gas-supplier-change`, `geli-gas-zuordnungsmeldung`, `geli-gas-sperrung-nb`, `geli-gas-stornierung`, `geli-gas-datenabruf`, `geli-gas-partin`, `geli-gas-sperrprozesse-invoic` |
 | `role-msb-strom` | `mako-wim`: `wim-device-change`, `wim-ersteinbau`, `wim-geraeteubernahme`, `wim-stammdaten`, `wim-preisanfrage`, `wim-rechnungsabwicklung`, `wim-preisliste`, `wim-invoic`, `wim-insrpt`, `wim-wertebestellung`, `wim-technik-aenderung`, `esa-wertebestellung` |
 | `role-msb-gas` | `mako-wim`: the WiM workflows on the Gas Prüfidentifikatoren |
 
@@ -1814,6 +1814,12 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `gpke.lieferende.anmelden` | `LF` | GPKE | 55004 | Old supplier registers supply end (Abmeldung/Lieferende LF → NB) |
 | `gpke.lieferende.bestaetigen` | `NB` | GPKE | 55005/55006 | DSO accepts/rejects supply end |
 | `gpke.kuendigung.anmelden` | `LF` | GPKE | 55016 | LFN terminates the old supply contract (Kündigung LFN → LFA; 55017 is the Bestätigung) |
+| `gpke.zuordnung.informieren` | `NB` | GPKE | 55036 | Tells the LFN **die Identität des LFA** when the MaLo is already assigned (SD Lieferbeginn Nr. 2, 07:00 Uhr des 1. WT nach dem ÜT) |
+| `gpke.zuordnung.beenden` | `NB` | GPKE | 55037 | Ends the LFA's Zuordnung, naming the Grund and the Zuordnungsende (Nr. 10, 12:00 Uhr des 1. WT) |
+| `gpke.zuordnung.aufheben` | `NB` | GPKE | 55038 | Cancels a future LFZ Zuordnung (Nr. 13, 12:00 Uhr des 1. WT) |
+| `geli.zuordnung.informieren` | `GNB` | GeLi Gas | 44036 | Gas twin — Ablauf des 4. WT nach Eingang der Anmeldung |
+| `geli.zuordnung.beenden` | `GNB` | GeLi Gas | 44037 | Gas twin — am selben Tag wie die Antwort, nur bei Bestätigung |
+| `geli.zuordnung.aufheben` | `GNB` | GeLi Gas | 44038 | Gas twin — am selben Tag wie die Antwort |
 | `gpke.eog.anmelden` | `NB` | GPKE | 55013 | NB assigns a contractless MaLo to the Grundversorger (§36/§38 EnWG gap closure) |
 | `geli.eog.anmelden` | `GNB` | GeLi Gas | 44013 | Gas twin of `gpke.eog.anmelden` — GNB registers a contractless Gas-MaLo into E/G |
 | `gpke.eog.bestaetigen` | `LF` | GPKE | 55014 | E/G confirms the EoG Zuordnung (Versorgungsart + Bilanzkreis, `SG8 SEQ+Z79`) |
@@ -2013,6 +2019,7 @@ never be the reason a long conversation stalls.
 | 55016 | spawn by MaLo | `gpke-kuendigung` — `ReceiveKuendigung` (its own workflow: `gpke-supplier-change` shares the MaLo key with the NB's Anmeldung) |
 | 55003–55006, 55017, 55018 | resume by MaLo | `gpke-lf-anmeldung` — `ReceiveAntwort` |
 | 44001–44021 | spawn by MaLo | `geli-gas-supplier-change` — `ReceiveUtilmd` |
+| 55036–55038 · 44036–44038 | spawn per Meldung | `gpke-zuordnungsmeldung` / `geli-gas-zuordnungsmeldung` — `Empfangen`. Never *resumed*: three Meldungen ride one MaLo per Lieferbeginn, so each spawns its own process |
 
 The table is **illustrative, not exhaustive** — further combined-role pairs
 (e.g. the `wim-rechnungsabwicklung` ORDERS 17005/17006 and ORDRSP 19009/19010

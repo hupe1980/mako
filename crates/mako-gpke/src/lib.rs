@@ -214,6 +214,7 @@ pub mod stammdatenaenderung;
 pub mod stornierung;
 pub mod utilts;
 pub mod wechselprozesse;
+pub mod zuordnungsmeldung;
 
 pub use abrechnung::{
     ABRECHNUNG_WINDOW_LABEL, GPKE_COMDIS_ABLEHNUNG_PID, GPKE_INVOIC_PIDS, GPKE_REMADV_PIDS,
@@ -338,6 +339,11 @@ pub use wechselprozesse::{
     SupplierChangeProjection, SupplierChangeRecord, SupplierChangeState, UTILMD_ANFRAGE_PIDS,
     UTILMD_PIDS, WORKFLOW_NAME as SUPPLIER_CHANGE_WORKFLOW_NAME,
 };
+pub use zuordnungsmeldung::{
+    AUFHEBUNG_PID, BEENDIGUNG_PID, GpkeZuordnungsmeldungWorkflow, INFORMATION_PID,
+    MELDUNG_WINDOW_LABEL, WORKFLOW_NAME as ZUORDNUNGSMELDUNG_WORKFLOW_NAME, ZUORDNUNGSMELDUNG_PIDS,
+    Zuordnungsmeldung, ZuordnungsmeldungCommand, ZuordnungsmeldungEvent, ZuordnungsmeldungState,
+};
 
 // ── EngineModule ──────────────────────────────────────────────────────────────
 
@@ -426,6 +432,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             datenabruf::WORKFLOW_NAME,
             allokationsliste::WORKFLOW_NAME,
             abrechnungsdaten::WORKFLOW_NAME,
+            zuordnungsmeldung::WORKFLOW_NAME,
         ]
     }
 
@@ -450,6 +457,16 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         // LF-role makod receives PID 55007 and responds with 55008/55009.
         for &pid in LF_ABMELDUNG_PIDS {
             router.register(pid, "gpke-lf-abmeldung");
+        }
+
+        // PIDs 55036/55037/55038 (Zuordnungs-Meldungen, NB→LFN/LFA/LFZ) — GPKE
+        // Teil 2 § 2.1.2 SD Lieferbeginn Nr. 2 / 10 / 13. One-way: the NB sends
+        // them by command, and a supplier-role deployment records the inbound
+        // ones. Registering them is what stops an inbound Meldung from being
+        // dead-lettered as `MessageStatus::UnknownPid` — there is no
+        // Antwortnachricht for the counterparty to miss instead.
+        for &pid in zuordnungsmeldung::ZUORDNUNGSMELDUNG_PIDS {
+            router.register(pid, zuordnungsmeldung::WORKFLOW_NAME);
         }
 
         // PID 55010 (Anfrage zur Beendigung der Zuordnung, NB→LFA) — GPKE Teil 2.

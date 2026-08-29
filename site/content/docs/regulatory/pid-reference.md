@@ -147,16 +147,21 @@ An inbound message carrying one of the last group is dead-lettered as
 `makod_dead_letter_recorded_total{reason="unknown_pid:N"}`. It is observable, not
 silent, but it is not handled.
 
-### Meldepflichten — the gap that is *not* observable
+### Meldepflichten — obligations nothing waits for
 
-Six PIDs below carry a workflow of `—` for a different reason: **55036 / 55037 /
-55038** (Strom) and **44036 / 44037 / 44038** (Gas) are one-way notifications the
-NB owes around a Lieferbeginn, with no Bestätigung. Outbound, a missing one
-produces no timeout and no dead letter, because nobody is waiting for a reply.
+Six PIDs are a category of their own: **55036 / 55037 / 55038** (Strom) and
+**44036 / 44037 / 44038** (Gas) are one-way notifications the NB owes around a
+Lieferbeginn, with no Bestätigung in either direction. That is what makes them
+easy to omit — a missing one produces no timeout and no dead letter, because
+nobody is waiting for a reply, and it surfaces months later as a supplier
+holding a stale view of who serves the Marktlokation.
 
-`edi-energy` carries no UTILMD AHB rules for any of the six. Their windows and
-Fundstellen are catalogued in `mako_fristen::meldung`, and
-`services/makod/tests/meldepflicht_coverage.rs` pins the gap.
+They route to `gpke-zuordnungsmeldung` and `geli-gas-zuordnungsmeldung`. Because
+no ordinary alert can cover them, the guard is a test:
+`mako_fristen::meldung` catalogues the windows and Fundstellen, and
+`services/makod/tests/meldepflicht_coverage.rs` cross-checks the catalogue
+against the `PidRouter`, so an obligation added to one without the other fails
+the build.
 
 The split is enforced: `pid_reference_guard` cross-checks this table against the
 `PidRouter` on every CI run, so a row added here without a matching registration
@@ -203,9 +208,9 @@ section on this page.
 | 55023 | Bestätigung Anfrage Stornierung | GPKE Teil 4 | Empf. → Sender | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-stornierung` |
 | 55024 | Ablehnung Anfrage Stornierung | GPKE Teil 4 | Empf. → Sender | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-stornierung` |
 | 55035 | Antwort auf GDA verb. MaLo | GPKE Teil 4 | NB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
-| 55036 | Existierende Zuordnung | GPKE Teil 2 | NB → LFN | — | ✅ | — | ✅ | ✅ | — |
-| 55037 | Beendigung der Zuordnung | GPKE Teil 2 | NB → LFA | — | ✅ | — | ✅ | ✅ | — |
-| 55038 | Aufhebung einer zuk. Zuordnung | GPKE Teil 2 | NB → LFZ | — | ✅ | — | ✅ | ✅ | — |
+| 55036 | Existierende Zuordnung | GPKE Teil 2 | NB → LFN | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-zuordnungsmeldung` |
+| 55037 | Beendigung der Zuordnung | GPKE Teil 2 | NB → LFA | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-zuordnungsmeldung` |
+| 55038 | Aufhebung einer zuk. Zuordnung | GPKE Teil 2 | NB → LFZ | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-zuordnungsmeldung` |
 | 55039 | Kündigung MSB | WiM Strom Teil 1 | MSBN → MSBA | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 55040 | Bestätigung Kündigung MSB | WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 55041 | Ablehnung Kündigung MSB | WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
@@ -410,9 +415,9 @@ section on this page.
 | 44023 | Bestätigung Anfrage Stornierung | WiM Gas / GeLi Gas 2.0 | Empf. → Sender | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-stornierung` |
 | 44024 | Ablehnung Anfrage Stornierung | WiM Gas / GeLi Gas 2.0 | Empf. → Sender | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-stornierung` |
 | 44035 | Antwort auf die Geschäftsdatenanfrage | GeLi Gas 2.0 | NB → LF | 17101 | — | ✅ | ✅ | ✅ | — |
-| 44036 | Informationsmeldung über existierende Zuordnung | GeLi Gas 2.0 | NB → LFN | — | — | ✅ | ✅ | ✅ | — |
-| 44037 | Informationsmeldung zur Beendigung der Zuordnung | GeLi Gas 2.0 | NB → LFA | — | — | ✅ | ✅ | ✅ | — |
-| 44038 | Informationsmeldung zur Aufhebung einer zuk. Zuordnung | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | — |
+| 44036 | Informationsmeldung über existierende Zuordnung | GeLi Gas 2.0 | NB → LFN | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-zuordnungsmeldung` |
+| 44037 | Informationsmeldung zur Beendigung der Zuordnung | GeLi Gas 2.0 | NB → LFA | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-zuordnungsmeldung` |
+| 44038 | Informationsmeldung zur Aufhebung einer zuk. Zuordnung | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-zuordnungsmeldung` |
 | 44039 | Kündigung MSB | WiM Gas | MSBN → MSBA | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 44040 | Bestätigung Kündigung MSB | WiM Gas | MSBA → MSBN | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 44041 | Ablehnung Kündigung MSB | WiM Gas | MSBA → MSBN | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |

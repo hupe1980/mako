@@ -160,6 +160,49 @@ impl UtilmdTransaction {
         self.location(crate::Lokationstyp::Messlokation)
     }
 
+    /// `SG5 LOC+Z21` — the MaLo-ID of a **Tranche**.
+    ///
+    /// A Tranche is addressed by a Marktlokations-ID (UTILMD AHB Strom
+    /// Bedingung `[950]`), so this differs from [`marktlokation`](Self::marktlokation)
+    /// only in the qualifier — and the qualifier is the sole thing that says
+    /// which object a Geschäftsvorfall 2/3 Vorgang is about.
+    #[must_use]
+    pub fn tranche(&self) -> Option<&str> {
+        self.location(crate::Lokationstyp::Tranche)
+    }
+
+    /// The Lokations-ID a Vorgang names, whichever qualifier carries it.
+    ///
+    /// Reading a UTILMD is not symmetric with writing one. A sender must pick
+    /// the qualifier its own AHB fixes — `172` on Gas, `Z16`/`Z21`/`Z17` on
+    /// Strom — but a receiver has to cope with what actually arrives, and a
+    /// counterparty that picks the wrong one still names a real Lokation. This
+    /// tries the Gas Meldepunkt first, then the three Strom qualifiers, so one
+    /// accessor serves both tracks.
+    ///
+    /// Use the qualifier-specific accessors where the *kind* of object matters
+    /// — telling a Tranche from a Marktlokation decides which `E_0622` branch
+    /// answers.
+    #[must_use]
+    pub fn lokation(&self) -> Option<&str> {
+        self.meldepunkt()
+            .or_else(|| self.marktlokation())
+            .or_else(|| self.tranche())
+            .or_else(|| self.messlokation())
+    }
+
+    /// `SG5 LOC+172` — the **Meldepunkt**, the one Lokationsqualifier UTILMD Gas
+    /// uses.
+    ///
+    /// UTILMD AHB Gas G1.1/G1.2 names `172` in every `SG5 LOC` and distinguishes
+    /// Marktlokation from Messlokation by the format of DE 3225 rather than by
+    /// the qualifier, so a Gas reader asks for this and not for
+    /// [`marktlokation`](Self::marktlokation).
+    #[must_use]
+    pub fn meldepunkt(&self) -> Option<&str> {
+        self.location(crate::Lokationstyp::Meldepunkt)
+    }
+
     /// The **Bilanzkreis** this Vorgang registers the Lokation into.
     ///
     /// Two shapes, one per Festlegung, and a receiver has to accept whichever

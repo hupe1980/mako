@@ -50,9 +50,24 @@ missing one produces no timeout and no alert:
 | 55037 | Beendigung der Zuordnung | LFA | 12:00 Uhr des 1. WT nach dem ÜT |
 | 55038 | Aufhebung einer zukünftigen Zuordnung | LFZ | 12:00 Uhr des 1. WT nach dem ÜT |
 
-**None of the three is implemented** — `edi-energy` carries no UTILMD AHB rules
-for them. They are catalogued with their Fundstellen in `mako_fristen::meldung`
-and the gap is pinned by `services/makod/tests/meldepflicht_coverage.rs`.
+`gpke-zuordnungsmeldung` renders all three. Whether one is *owed* is a
+Versorgungsstatus question — GPKE Teil 2 § 2.1.2 Nr. 1 Prüfschritt 4 sends the
+NB to Prozessschritt 2 only „Ist die Marktlokation bzw. Tranche zum
+Zuordnungsbeginn einem LF zugeordnet" — so `processd` decides and issues
+`gpke.zuordnung.informieren` / `.beenden` / `.aufheben`.
+
+Because nothing waits for them, the guard is a test rather than an alert:
+`mako_fristen::meldung` catalogues the windows and Fundstellen and
+`services/makod/tests/meldepflicht_coverage.rs` cross-checks it against the PID
+router.
+
+Three wire facts the AHB fixes per PID, and the workflow refuses a message that
+gets them wrong: 55036 is `BGM+E01` and carries **no** `SG4` date at all, while
+55037 (`E02`) names a `DTM+93` Vertragsende and 55038 (`E02`) the originally
+confirmed `DTM+92` Vertragsbeginn; the Gründe are disjoint (`Z26` · `ZC8`/`ZD9`/
+`ZG6` · `ZG5`/`ZG9`/`ZH0`/`ZH1`); and `SG12 NAD+VY` names **every** Altlieferant
+on a 55036 (Bedingung `[518]`, because Geschäftsvorfall 3 splits a Marktlokation
+across Tranchen).
 
 ## PID Inventory
 

@@ -293,6 +293,91 @@ fn extract_malo_id(payload: &serde_json::Value) -> Result<MaLo, DispatchError> {
         .map_err(|e| DispatchError::InvalidPayload(format!("invalid malo_id {s:?}: {e}")))
 }
 
+/// Require a non-empty string field from an ERP JSON payload.
+///
+/// The 422 names the field, because a command refused for a missing key is
+/// otherwise indistinguishable from one refused for a wrong value.
+fn require_payload_str(
+    payload: &serde_json::Value,
+    field: &'static str,
+) -> Result<String, DispatchError> {
+    payload
+        .get(field)
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(format!("payload must contain a non-empty {field:?}"))
+        })
+}
+
+/// `SG12 NAD+VY` — the beteiligte Marktpartner a Zuordnungs-Meldung names.
+///
+/// A list because UTILMD AHB Strom Bedingung `[518]` says „Es sind **alle**
+/// Altlieferanten anzugeben, an die eine Abmeldeanfrage gesendet wird": a
+/// Geschäftsvorfall-3 Marktlokation is split across Tranchen and so across
+/// several LFA. A bare string is accepted as a one-element list, which is the
+/// shape every other case takes.
+fn beteiligte_marktpartner(payload: &serde_json::Value) -> Vec<MarktpartnerCode> {
+    match payload.get("beteiligte_marktpartner") {
+        Some(serde_json::Value::Array(items)) => items
+            .iter()
+            .filter_map(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(MarktpartnerCode::new)
+            .collect(),
+        Some(serde_json::Value::String(one)) if !one.is_empty() => {
+            vec![MarktpartnerCode::new(one.clone())]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Spawn a one-message Meldepflicht process and register it under its MaLo.
+///
+/// No duplicate guard and no deadline. A Meldepflicht has no Antwortnachricht,
+/// so nothing resumes the process and nothing can be late on it; and three of
+/// them are owed on the same Marktlokation around one Lieferbeginn, so refusing
+/// the second as a duplicate would drop an obligation the Festlegung states.
+async fn spawn_meldung_process<W>(
+    state: &CommandsApiState,
+    workflow_name: &'static str,
+    malo_id: &MaLo,
+    command: W::Command,
+) -> Result<DispatchOutcome, DispatchError>
+where
+    W: mako_engine::workflow::Workflow,
+    Arc<mako_engine::store_slatedb::SlateDbStore>: mako_engine::event_store::AtomicAppend,
+{
+    let workflow_id = WorkflowId::new(workflow_name, latest_format_version());
+    let process =
+        mako_engine::process::Process::<W, Arc<mako_engine::store_slatedb::SlateDbStore>>::new(
+            Arc::clone(&state.store),
+            state.tenant_id,
+            workflow_id,
+        );
+    let process_id = process.process_id();
+    let identity = process.identity();
+    process.execute_and_enqueue(command).await?;
+
+    if let Err(e) = state
+        .store
+        .as_process_registry()
+        .register_correlated(state.tenant_id, malo_id.as_str(), process_id, identity)
+        .await
+    {
+        tracing::warn!(
+            %process_id,
+            malo_id = %malo_id,
+            workflow_name,
+            error = %e,
+            "Meldepflicht: business-key registration failed (non-fatal — nothing resumes \
+             a one-way Meldung)",
+        );
+    }
+    Ok(DispatchOutcome::Spawned { process_id })
+}
+
 /// Extract and validate a `melo_id` field from an ERP JSON payload.
 ///
 /// Returns a 422-ready [`DispatchError::InvalidPayload`] when:

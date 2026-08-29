@@ -135,6 +135,7 @@ pub mod sperrung_lf;
 pub mod sperrung_nb;
 pub mod stammdatenaenderung;
 pub mod stornierung;
+pub mod zuordnungsmeldung;
 
 pub use stammdatenaenderung::{
     ANFRAGE_PIDS as GAS_STAMMDATEN_ANFRAGE_PIDS, GasAntwort, GasStammdatenCommand,
@@ -206,6 +207,13 @@ pub use stornierung::{
 };
 
 pub use gas_quality::normalize_gasqualitaet;
+pub use zuordnungsmeldung::{
+    AUFHEBUNG_PID as GAS_AUFHEBUNG_PID, BEENDIGUNG_PID as GAS_BEENDIGUNG_PID,
+    GeliGasZuordnungsmeldungWorkflow, INFORMATION_PID as GAS_INFORMATION_PID,
+    MELDUNG_WINDOW_LABEL as GAS_MELDUNG_WINDOW_LABEL,
+    WORKFLOW_NAME as GAS_ZUORDNUNGSMELDUNG_WORKFLOW_NAME,
+    ZUORDNUNGSMELDUNG_PIDS as GAS_ZUORDNUNGSMELDUNG_PIDS,
+};
 
 // ── EngineModule ──────────────────────────────────────────────────────────────
 
@@ -258,6 +266,7 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
             // PID 31011 — Rechnung sonstige Leistung / AWH Sperrprozesse Gas (VNB → LFN/LFA).
             // GeLi Gas (BK7-24-01-009) billing for disconnection services; NOT GaBi Gas.
             invoic::WORKFLOW_NAME,
+            zuordnungsmeldung::WORKFLOW_NAME,
         ]
     }
 
@@ -269,6 +278,15 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         }
         // PIDs 44022–44024: role-conditional — NOT registered here.
         // See register_pids_with_roles() for the Nb-role guard.
+
+        // PIDs 44036/44037/44038 (Informationsmeldungen, NB→LFN/LFA/LFZ) —
+        // AWH GeLi Gas V1.2 Kap. 2.5.2 SD Lieferbeginn Nr. 2 / 6 / 7. One-way:
+        // „eine Nachricht, für die keine Antwort vorgesehen ist" (UTILMD AHB Gas
+        // Kap. 5.8), so nothing but this registration keeps an inbound one out
+        // of the dead-letter queue.
+        for &pid in zuordnungsmeldung::ZUORDNUNGSMELDUNG_PIDS {
+            router.register(pid, zuordnungsmeldung::WORKFLOW_NAME);
+        }
 
         // Gas MSCONS data delivery PIDs (NB/MSB → LF, GeLi Gas Teil 2).
         //

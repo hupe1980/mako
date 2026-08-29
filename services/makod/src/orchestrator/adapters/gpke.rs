@@ -55,7 +55,7 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                 location_id: MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
+                        .and_then(|t| t.lokation())
                         .unwrap_or(""),
                 ),
                 document_date: u
@@ -72,6 +72,14 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                     .and_then(|d| d.value_str())
                     .unwrap_or("")
                     .to_owned(),
+                // `SG4 IDE+24` DE 7402 — echoed in `SG6 RFF+TN` on the NB's
+                // 55036 Information über existierende Zuordnung, where the AHB
+                // marks it Muss.
+                vorgangsnummer: u
+                    .transactions()
+                    .first()
+                    .and_then(|t| t.vorgangsnummer())
+                    .map(ToOwned::to_owned),
                 // Bilanzierungsgebiet EIC from UTILMD NAD+Z09 / LOC+237.
                 // processd NB check 4 uses this field directly; when None,
                 // it falls back to marktd malo.bilanzierungsgebiet instead.
@@ -536,7 +544,7 @@ pub fn gpke_neuanlage_registry() -> AdapterRegistry<GpkeNeuanlageWorkflow> {
                 location_id: MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
+                        .and_then(|t| t.lokation())
                         .unwrap_or(""),
                 ),
                 document_date: u
@@ -630,7 +638,7 @@ pub fn gpke_abrechnungsdaten_registry() -> AdapterRegistry<GpkeAbrechnungsdatenW
                 location_id: MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
+                        .and_then(|t| t.lokation())
                         .unwrap_or(""),
                 ),
                 document_date: u
@@ -726,7 +734,7 @@ pub fn gpke_lf_abmeldung_registry() -> AdapterRegistry<GpkeLfAbmeldungWorkflow> 
                 location_id: MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
+                        .and_then(|t| t.lokation())
                         .unwrap_or(""),
                 ),
                 document_date: u
@@ -801,7 +809,7 @@ pub fn gpke_beendigung_zuordnung_registry() -> AdapterRegistry<GpkeBeendigungZuo
                 location_id: MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
+                        .and_then(|t| t.lokation())
                         .unwrap_or(""),
                 ),
                 document_date: u
@@ -821,6 +829,77 @@ pub fn gpke_beendigung_zuordnung_registry() -> AdapterRegistry<GpkeBeendigungZuo
                     .to_owned(),
                 message_ref: MessageRef::new(msg.message_ref()),
                 vorgang: Box::new(super::lf_vorgangsdaten(u)),
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+/// Build an [`AdapterRegistry`] for [`mako_gpke::GpkeZuordnungsmeldungWorkflow`].
+///
+/// Adapts an inbound UTILMD 55036 / 55037 / 55038 (NB → LFN/LFA/LFZ) to
+/// [`mako_gpke::ZuordnungsmeldungCommand::Empfangen`].
+///
+/// A Zuordnungs-Meldung has **no Antwortnachricht**, so nothing here derives a
+/// response PID or a business deadline. What the adapter does have to carry is
+/// the `SG4 STS+7` Grund: it is the whole content of a 55037/55038 — which of
+/// `ZC8`/`ZD9`/`ZG6` ended the Zuordnung, which of `ZG5`/`ZG9`/`ZH0`/`ZH1`
+/// cancelled it — and a supplier that drops it learns only that something
+/// happened.
+#[must_use]
+pub fn gpke_zuordnungsmeldung_registry() -> AdapterRegistry<mako_gpke::GpkeZuordnungsmeldungWorkflow>
+{
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GPKE Zuordnungsmeldung adapter".into(),
+                )
+            })?;
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE Zuordnungsmeldung adapter: expected UTILMD message".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE Zuordnungsmeldung adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
+
+            Ok(mako_gpke::ZuordnungsmeldungCommand::Empfangen {
+                pid,
+                sender: MarktpartnerCode::new(
+                    u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                receiver: MarktpartnerCode::new(
+                    u.receiver()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                // `SG5 LOC+Z16` Marktlokation or `LOC+Z21` Tranche — both carry
+                // a MaLo-ID, so one accessor covers the pair.
+                location_id: MaLo::new(
+                    u.transactions()
+                        .first()
+                        .and_then(|t| t.lokation())
+                        .unwrap_or(""),
+                ),
+                transaktionsgrund: u
+                    .transactions()
+                    .first()
+                    .and_then(|t| t.transaktionsgrund())
+                    .map(|g| g.grund)
+                    .unwrap_or_default(),
+                message_ref: MessageRef::new(msg.message_ref()),
                 validation_passed,
                 validation_errors,
             })
@@ -872,7 +951,7 @@ pub fn gpke_kuendigung_registry() -> AdapterRegistry<mako_gpke::GpkeKuendigungWo
                 location_id: MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
+                        .and_then(|t| t.lokation())
                         .unwrap_or(""),
                 ),
                 document_date: u
@@ -973,7 +1052,7 @@ pub fn gpke_ankuendigung_zuordnung_lf_registry()
                 location_id: MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
+                        .and_then(|t| t.lokation())
                         .unwrap_or(""),
                 ),
                 document_date: u
@@ -1818,11 +1897,7 @@ pub fn gpke_eog_registry() -> AdapterRegistry<mako_gpke::GpkeEogWorkflow> {
                     .unwrap_or(""),
             );
             let first_tx = u.transactions().first();
-            let location_id = MaLo::new(
-                first_tx
-                    .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
-                    .unwrap_or(""),
-            );
+            let location_id = MaLo::new(first_tx.and_then(|t| t.lokation()).unwrap_or(""));
 
             match pid.as_u32() {
                 55013 => {
@@ -1937,11 +2012,7 @@ pub fn gpke_stammdaten_registry() -> AdapterRegistry<mako_gpke::GpkeStammdatenae
                     .unwrap_or(""),
             );
             let first_tx = u.transactions().first();
-            let location_id = MaLo::new(
-                first_tx
-                    .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
-                    .unwrap_or(""),
-            );
+            let location_id = MaLo::new(first_tx.and_then(|t| t.lokation()).unwrap_or(""));
             let aenderungsdatum = first_tx
                 .and_then(|t| t.dtm.iter().find(|d| d.is_period_start()))
                 .and_then(|d| d.value_str())

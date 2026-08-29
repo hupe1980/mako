@@ -238,6 +238,47 @@ impl EdifactIngestDispatcher {
                     reason: "pid_not_in_spawn_table",
                 }),
             },
+            // PIDs 55036/55037/55038 (Zuordnungs-Meldungen, NB → LFN/LFA/LFZ)
+            // — GPKE Teil 2 § 2.1.2 SD Lieferbeginn Nr. 2 / 10 / 13.
+            //
+            // **No business deadline is registered.** There is no
+            // Antwortnachricht, so nothing can be late on the receiving side;
+            // the Frist these carry is the *sender's*, and it lives on the
+            // NB-side process. Registering one here would fire on every
+            // Meldung mako ever receives.
+            "gpke-zuordnungsmeldung" => {
+                if mako_gpke::ZUORDNUNGSMELDUNG_PIDS.contains(&pid) {
+                    let cmd = adapters::gpke_zuordnungsmeldung_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // **No deadline at all**, not even the APERAK one. The
+                    // Anerkennung is enqueued in the same transactional write
+                    // as the event, so a 45-minute timer could only ever fire
+                    // on an obligation already discharged — the defect
+                    // `deadline_labels.rs` exists to prevent. A delivery
+                    // failure surfaces through the outbox worker's own retry
+                    // and dead-letter path instead.
+                    //
+                    // Guarded with an always-`false` occupancy verdict: three
+                    // Meldungen are owed on one MaLo around a single
+                    // Lieferbeginn, so the second must spawn its own process
+                    // rather than resume the first — which would refuse it as
+                    // an invalid state transition and drop the message.
+                    self.spawn_or_resume_guarded::<mako_gpke::GpkeZuordnungsmeldungWorkflow>(
+                        malo_id.as_str(),
+                        "gpke-zuordnungsmeldung",
+                        cmd,
+                        &fv,
+                        &[],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "gpke-zuordnungsmeldung",
+                        reason: "pid_not_in_spawn_table",
+                    })
+                }
+            }
             // PID 55016 (Kündigung, LFN → LFA) — GPKE Teil 2 § 1.2. Its own
             // workflow rather than `gpke-supplier-change`: both are keyed by
             // Marktlokation, and an integrated NB+LF deployment runs the NB's

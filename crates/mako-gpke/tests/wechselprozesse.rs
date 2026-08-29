@@ -172,6 +172,7 @@ async fn end_to_end_lieferbeginn_strom_pipeline() {
         transaktionsgrund: None,
         transaktionsgrund_ergaenzung: None,
         veraeusserungsform: None,
+        vorgangsnummer: None,
         fallgruppe: None,
     };
 
@@ -286,6 +287,7 @@ async fn wrong_pid_returns_workflow_error() {
             transaktionsgrund: None,
             transaktionsgrund_ergaenzung: None,
             veraeusserungsform: None,
+            vorgangsnummer: None,
             fallgruppe: None,
         })
         .await;

@@ -114,6 +114,12 @@ pub enum Anchor {
     Inkrafttreten,
     /// The day the Messlokation is planned to be re-equipped.
     Umstellungszeitpunkt,
+    /// The **frühestmöglicher Sperrtermin** the Lieferant names in its
+    /// Sperrauftrag, or — once the NB has confirmed the order — the Sperrtermin
+    /// the NB set. Both are the same slot on the wire (`DTM+469` an earliest
+    /// start, `DTM+203` a fixed date), and every Sperrung Vorlauffrist counts
+    /// back from it.
+    Sperrtermin,
     /// The day the invoiced service ended — the Beendigung der temporären
     /// Fortführung, the Überlassung der Einrichtung, the Ende des
     /// Abrechnungszeitraums or the Versand der Zusatz-/Kontrollablesung.
@@ -135,6 +141,7 @@ impl Anchor {
             Self::Zahlungsziel => "Zahlungsziel",
             Self::Inkrafttreten => "Inkrafttreten",
             Self::Umstellungszeitpunkt => "Umstellungszeitpunkt",
+            Self::Sperrtermin => "Sperrtermin",
             Self::Leistungsende => "Leistungsende",
         }
     }
@@ -413,6 +420,44 @@ pub const MITTEILUNG_ESA_RECHNUNG_KORREKT_WT: u32 = 2;
 /// date the invoice may carry in `DTM+265`, and the answer window is then
 /// measured against that date.
 pub const ZAHLUNGSZIEL_MINDEST_WT: u32 = 10;
+
+// ── Sperrung / Entsperrung (GPKE Teil 2 § 3.5) ───────────────────────────────
+//
+// Three windows that all count **backwards from the Sperrtermin**, which is why
+// they live here and not in `antwort`: none of them is measured against an
+// arrival, and reading any of them as „n Werktage nach Eingang" gives an answer
+// that is wrong by the whole lead time.
+//
+// They also compose. Prozessschritt 2 obliges the NB to set the Sperrtermin so
+// that Nr. 3 and Nr. 4 still fit — „Sofern keine generelle Zustimmung des MSB
+// … vorliegt, ist der Sperrtermin vom NB so festzulegen, dass dem MSB noch eine
+// fristgerechte Antwort auf Anfrage vor dem Sperrtermin möglich ist" — so the
+// earliest admissible Sperrtermin without a standing MSB-Zustimmung is
+// [`SPERRUNG_MSB_ANFRAGE_WT`] Werktage out, and the MSB's own answer window
+// (3 WT, `antwort`) has to close inside it.
+
+/// Mindestvorlaufzeit of an **untermingebundener** Sperrauftrag, in Werktagen
+/// before the frühestmöglicher Sperrtermin (GPKE Teil 2 § 3.5.1.2 Nr. 1).
+pub const SPERRAUFTRAG_VORLAUF_WT: u32 = 6;
+
+/// Mindestvorlaufzeit of a **termingebundener** Sperrauftrag, in Werktagen
+/// before the Sperrtermin (GPKE Teil 2 § 3.5.1.2 Nr. 1).
+///
+/// Twice the ordinary lead and then some: a termingebundener Auftrag fixes
+/// date, time and place — the Festlegung's example is a Gerichtsvollzieher — so
+/// the NB cannot move it to fit its own scheduling, and the LF has to give it
+/// room instead. Treating both cases as 6 WT accepts an order the NB then
+/// cannot execute as instructed.
+pub const SPERRAUFTRAG_TERMINGEBUNDEN_VORLAUF_WT: u32 = 12;
+
+/// Latest ÜT of the NB's **Anfrage Sperrung** to the MSB (ORDERS 17116), in
+/// Werktagen before the Sperrtermin (GPKE Teil 2 § 3.5.1.2 Nr. 3).
+///
+/// Owed only „sofern keine generelle Zustimmung des MSB zur
+/// Sperrung/Entsperrung durch den NB erteilt wurde". Not to be confused with
+/// the MSB's *answer* window, which is 3 WT **after** the ÜT of this message
+/// (`antwort`) — the two numbers are equal and measured from opposite ends.
+pub const SPERRUNG_MSB_ANFRAGE_WT: u32 = 3;
 
 // ── GeLi Gas — An-/Abmeldung ─────────────────────────────────────────────────
 //
@@ -783,6 +828,40 @@ pub const WIM: &[VorlaufObligation] = &[
         source: "WiM Strom Teil 1 Kap. 6.2 Nr. 3 — spätester ÜT ist der 2. WT vor dem \
                  Zahlungsziel in der Rechnung",
     },
+    VorlaufObligation {
+        key: "gpke.sperrauftrag",
+        pid: Some(17_115),
+        pid_gas: None,
+        name: "Sperrauftrag (nicht termingebunden)",
+        anchor: Anchor::Sperrtermin,
+        shape: VorlaufShape::LatestWerktageBefore(SPERRAUFTRAG_VORLAUF_WT),
+        source: "BK6-24-174 GPKE Teil 2 § 3.5.1.2 SD Unterbrechung der Anschlussnutzung \
+                 Nr. 1 — „Auftrag ist nicht termingebunden: Unverzüglich, jedoch spätester \
+                 ÜT ist der 6. WT vor dem frühestmöglichen Sperrtermin\"",
+    },
+    VorlaufObligation {
+        key: "gpke.sperrauftrag.termingebunden",
+        pid: Some(17_115),
+        pid_gas: None,
+        name: "Sperrauftrag (termingebunden)",
+        anchor: Anchor::Sperrtermin,
+        shape: VorlaufShape::LatestWerktageBefore(SPERRAUFTRAG_TERMINGEBUNDEN_VORLAUF_WT),
+        source: "BK6-24-174 GPKE Teil 2 § 3.5.1.2 Nr. 1 — „Auftrag ist termingebunden \
+                 (z.B. der Gerichtsvollzieher gibt den Sperrtermin (Datum, Uhrzeit, Ort) \
+                 vor): … spätester ÜT ist der 12. WT vor dem Sperrtermin\"",
+    },
+    VorlaufObligation {
+        key: "gpke.sperrung.anfrage-msb",
+        pid: Some(17_116),
+        pid_gas: None,
+        name: "Anfrage Sperrung an den MSB",
+        anchor: Anchor::Sperrtermin,
+        shape: VorlaufShape::LatestWerktageBefore(SPERRUNG_MSB_ANFRAGE_WT),
+        source: "BK6-24-174 GPKE Teil 2 § 3.5.1.2 Nr. 3 — „Unverzüglich, jedoch spätester \
+                 ÜT ist der 3. WT vor dem Sperrtermin\"; owed nur „sofern keine generelle \
+                 Zustimmung des MSB … erteilt wurde\". Nr. 2 obliges the NB to set the \
+                 Sperrtermin so that this and the MSB\u{2019}s 3-WT answer still fit.",
+    },
 ];
 
 /// Look up a Vorlauffrist by its slug.
@@ -1060,9 +1139,11 @@ mod tests {
         keys.dedup();
         assert_eq!(keys.len(), before, "duplicate Vorlauffrist key");
         for o in WIM {
+            // WiM and the AWH cite chapters; GPKE Teil 2 cites paragraphs.
+            // Requiring „Kap." alone rejected a correctly-sourced GPKE entry.
             assert!(
-                o.source.contains("Kap."),
-                "{} cites no chapter: {}",
+                o.source.contains("Kap.") || o.source.contains('§'),
+                "{} cites neither a Kapitel nor a §: {}",
                 o.key,
                 o.source
             );
