@@ -9,6 +9,21 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
+  # A hosted runner has ~14 GB free, and a debug build of this workspace with
+  # every feature no longer fits: the test job died on
+  # `couldn't create a temp dir: No space left on device`, and the linker
+  # failures beside it are the same cause — `rust-lld` mmaps its output, so a
+  # write to a full disk arrives as SIGBUS rather than ENOSPC.
+  #
+  # `line-tables-only` keeps file and line in panics and backtraces — all CI
+  # needs from a failing test — and drops the rest of the DWARF. Measured at
+  # ~16% of the target directory on macOS, where debuginfo lives in split `.o`
+  # files; on Linux it is embedded and the share is larger. Set per-profile via
+  # the environment rather than in `Cargo.toml`, so a local debugger session
+  # still gets complete debuginfo. `Swatinem/rust-cache` keys on `CARGO_*`
+  # variables, so this starts a fresh cache rather than mixing artefacts.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 jobs:
   # ── Lockfile freshness ──────────────────────────────────────────────────────
@@ -58,6 +73,12 @@ jobs:
           python-version: "3.11"
       - name: Install protoc
         run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
+      - name: Reclaim runner disk
+        run: |
+          df -h /
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
+                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          df -h /
       # -D warnings: clippy lints are hard errors. RUSTFLAGS='-D warnings' (from
       # the top-level env) already promotes compiler warnings to errors; the
       # '-- -D warnings' suffix promotes clippy lints to errors as well.
@@ -117,6 +138,15 @@ jobs:
           python-version: "3.11"
       - name: Install protoc
         run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
+      # This is the job that ran out of disk. The runner ships ~25 GB of
+      # toolchains none of this build uses; dropping them buys back more than
+      # the whole target directory needs.
+      - name: Reclaim runner disk
+        run: |
+          df -h /
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
+                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          df -h /
       # Exclude edi-energy (covered by the feature-matrix job above) and the
       # binary daemon (makod) which requires runtime-only feature flags.
       - run: cargo test --workspace --all-features --exclude edi-energy --exclude makod
@@ -133,6 +163,12 @@ jobs:
       # enabled transitively via the production dep on mako-engine. The
       # `testing` feature of mako-engine is available via dev-dependencies
       # so integration tests can use InMemory stores.
+      - name: Reclaim runner disk
+        run: |
+          df -h /
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/lib/android \
+                      /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          df -h /
       - name: cargo test makod
         run: cargo test -p makod --all-targets
 
