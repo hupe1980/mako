@@ -63,8 +63,8 @@ const ORDERS_17001_BYTES: &[u8] = b"\
 UNB+UNOC:3+9900357000004:14+4012345000023:14+250115:0800+WIM-GT-001'\
 UNH+MSG-001+ORDERS:D:09B:UN:1.4b'\
 BGM+Z55+00017001+9'\
-DTM+137:20250115:102'\
-DTM+76:20250301:102'\
+DTM+137:202501150800?+00:303'\
+DTM+76:202503010000?+00:303'\
 RFF+Z13:DEV-001'\
 NAD+MS+9900357000004::293'\
 NAD+MR+4012345000023::293'\
@@ -130,7 +130,9 @@ impl MockMsba {
                 assert_eq!(device_id.as_str(), DEVICE_ID, "Gerätenummer from RFF");
                 assert_eq!(
                     termin.as_deref(),
-                    Some("20250301"),
+                    // DE 2379 `303` — `CCYYMMDDHHMMZZZ`, the format every
+                    // EDI@Energy MIG gives its dates.
+                    Some("202503010000+00"),
                     "the Übernahmezeitpunkt rides DTM+76, not the document date",
                 );
                 assert_eq!(

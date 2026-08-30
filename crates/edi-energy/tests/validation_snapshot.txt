@@ -1,6 +1,6 @@
 # Validation verdict per fixture: <path>\t<severity>\t<rule id>.
 # Regenerate with BLESS_VALIDATION_SNAPSHOT=1; read the diff before committing.
-# 391 fixtures, 1088 lines.
+# 391 fixtures, 1199 lines.
 aperak/invalid/missing_acw_ref.edi	error	AHB-29001-ERC-M
 aperak/invalid/missing_acw_ref.edi	error	AHB-29001-RFF-M
 aperak/invalid/missing_acw_ref.edi	error	MIG-APERAK-MIG-2.1i-GROUP-SG2-RFF-CARD-MIN
@@ -15,41 +15,141 @@ contrl/invalid/missing_uci.edi	error	MIG-UCI-REQ
 contrl/invalid/missing_uci.edi	warning	AHB-SKIP-NO-PID
 contrl/valid/accepted.edi	warning	AHB-SKIP-NO-PID
 contrl/valid/rejected.edi	warning	AHB-SKIP-NO-PID
-iftsta/gen/pid_21000.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21000_2_1.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21001.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21002.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21003.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21004.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21005.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21007.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21009.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21010.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21011.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21012.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21013.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21015.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21018.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21024.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21025.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21026.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21027.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21028.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21029.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21030.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21031.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21032.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21033.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21035.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21036.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21037.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21038.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21039.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21040.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21043.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21044.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21045.gen.edi	VALIDATE-ERROR
-iftsta/gen/pid_21047.gen.edi	VALIDATE-ERROR
+iftsta/gen/pid_21000.gen.edi	error	AHB-21000-EQD-M
+iftsta/gen/pid_21000.gen.edi	error	AHB-21000-LOC-M
+iftsta/gen/pid_21000.gen.edi	error	AHB-21000-STS-M
+iftsta/gen/pid_21000_2_1.gen.edi	error	AHB-21000-EQD-M
+iftsta/gen/pid_21000_2_1.gen.edi	error	AHB-21000-LOC-M
+iftsta/gen/pid_21000_2_1.gen.edi	error	AHB-21000-STS-M
+iftsta/gen/pid_21001.gen.edi	error	AHB-21001-EQD-M
+iftsta/gen/pid_21001.gen.edi	error	AHB-21001-LOC-M
+iftsta/gen/pid_21001.gen.edi	error	AHB-21001-STS-M
+iftsta/gen/pid_21002.gen.edi	error	AHB-21002-EQD-M
+iftsta/gen/pid_21002.gen.edi	error	AHB-21002-LOC-M
+iftsta/gen/pid_21002.gen.edi	error	AHB-21002-STS-M
+iftsta/gen/pid_21003.gen.edi	error	AHB-21003-EQD-M
+iftsta/gen/pid_21003.gen.edi	error	AHB-21003-LOC-M
+iftsta/gen/pid_21003.gen.edi	error	AHB-21003-STS-M
+iftsta/gen/pid_21004.gen.edi	error	AHB-21004-EQD-M
+iftsta/gen/pid_21004.gen.edi	error	AHB-21004-LOC-M
+iftsta/gen/pid_21004.gen.edi	error	AHB-21004-STS-M
+iftsta/gen/pid_21005.gen.edi	error	AHB-21005-EQD-M
+iftsta/gen/pid_21005.gen.edi	error	AHB-21005-LOC-M
+iftsta/gen/pid_21005.gen.edi	error	AHB-21005-STS-M
+iftsta/gen/pid_21007.gen.edi	error	AHB-21007-CNI-M
+iftsta/gen/pid_21007.gen.edi	error	AHB-21007-LOC-M
+iftsta/gen/pid_21007.gen.edi	error	AHB-21007-STS-M
+iftsta/gen/pid_21009.gen.edi	error	AHB-21009-CNI-M
+iftsta/gen/pid_21009.gen.edi	error	AHB-21009-LOC-M
+iftsta/gen/pid_21009.gen.edi	error	AHB-21009-STS-M
+iftsta/gen/pid_21010.gen.edi	error	AHB-21010-CNI-M
+iftsta/gen/pid_21010.gen.edi	error	AHB-21010-LOC-M
+iftsta/gen/pid_21010.gen.edi	error	AHB-21010-STS-M
+iftsta/gen/pid_21011.gen.edi	error	AHB-21011-CNI-M
+iftsta/gen/pid_21011.gen.edi	error	AHB-21011-LOC-M
+iftsta/gen/pid_21011.gen.edi	error	AHB-21011-STS-M
+iftsta/gen/pid_21012.gen.edi	error	AHB-21012-CNI-M
+iftsta/gen/pid_21012.gen.edi	error	AHB-21012-LOC-M
+iftsta/gen/pid_21012.gen.edi	error	AHB-21012-STS-M
+iftsta/gen/pid_21013.gen.edi	error	AHB-21013-CNI-M
+iftsta/gen/pid_21013.gen.edi	error	AHB-21013-LOC-M
+iftsta/gen/pid_21013.gen.edi	error	AHB-21013-STS-M
+iftsta/gen/pid_21015.gen.edi	error	AHB-21015-CNI-M
+iftsta/gen/pid_21015.gen.edi	error	AHB-21015-COM-M
+iftsta/gen/pid_21015.gen.edi	error	AHB-21015-CTA-M
+iftsta/gen/pid_21015.gen.edi	error	AHB-21015-LOC-M
+iftsta/gen/pid_21015.gen.edi	error	AHB-21015-STS-M
+iftsta/gen/pid_21018.gen.edi	error	AHB-21018-CNI-M
+iftsta/gen/pid_21018.gen.edi	error	AHB-21018-LOC-M
+iftsta/gen/pid_21018.gen.edi	error	AHB-21018-STS-M
+iftsta/gen/pid_21024.gen.edi	error	AHB-21024-CNI-M
+iftsta/gen/pid_21024.gen.edi	error	AHB-21024-COM-M
+iftsta/gen/pid_21024.gen.edi	error	AHB-21024-CTA-M
+iftsta/gen/pid_21024.gen.edi	error	AHB-21024-LOC-M
+iftsta/gen/pid_21024.gen.edi	error	AHB-21024-STS-M
+iftsta/gen/pid_21025.gen.edi	error	AHB-21025-CNI-M
+iftsta/gen/pid_21025.gen.edi	error	AHB-21025-COM-M
+iftsta/gen/pid_21025.gen.edi	error	AHB-21025-CTA-M
+iftsta/gen/pid_21025.gen.edi	error	AHB-21025-FTX-M
+iftsta/gen/pid_21025.gen.edi	error	AHB-21025-GID-M
+iftsta/gen/pid_21025.gen.edi	error	AHB-21025-LOC-M
+iftsta/gen/pid_21025.gen.edi	error	AHB-21025-STS-M
+iftsta/gen/pid_21026.gen.edi	error	AHB-21026-CNI-M
+iftsta/gen/pid_21026.gen.edi	error	AHB-21026-COM-M
+iftsta/gen/pid_21026.gen.edi	error	AHB-21026-CTA-M
+iftsta/gen/pid_21026.gen.edi	error	AHB-21026-LOC-M
+iftsta/gen/pid_21026.gen.edi	error	AHB-21026-STS-M
+iftsta/gen/pid_21027.gen.edi	error	AHB-21027-CNI-M
+iftsta/gen/pid_21027.gen.edi	error	AHB-21027-COM-M
+iftsta/gen/pid_21027.gen.edi	error	AHB-21027-CTA-M
+iftsta/gen/pid_21027.gen.edi	error	AHB-21027-FTX-M
+iftsta/gen/pid_21027.gen.edi	error	AHB-21027-GID-M
+iftsta/gen/pid_21027.gen.edi	error	AHB-21027-LOC-M
+iftsta/gen/pid_21027.gen.edi	error	AHB-21027-STS-M
+iftsta/gen/pid_21028.gen.edi	error	AHB-21028-CNI-M
+iftsta/gen/pid_21028.gen.edi	error	AHB-21028-LOC-M
+iftsta/gen/pid_21028.gen.edi	error	AHB-21028-STS-M
+iftsta/gen/pid_21029.gen.edi	error	AHB-21029-CNI-M
+iftsta/gen/pid_21029.gen.edi	error	AHB-21029-LOC-M
+iftsta/gen/pid_21029.gen.edi	error	AHB-21029-STS-M
+iftsta/gen/pid_21030.gen.edi	error	AHB-21030-CNI-M
+iftsta/gen/pid_21030.gen.edi	error	AHB-21030-LOC-M
+iftsta/gen/pid_21030.gen.edi	error	AHB-21030-STS-M
+iftsta/gen/pid_21031.gen.edi	error	AHB-21031-CNI-M
+iftsta/gen/pid_21031.gen.edi	error	AHB-21031-LOC-M
+iftsta/gen/pid_21031.gen.edi	error	AHB-21031-STS-M
+iftsta/gen/pid_21032.gen.edi	error	AHB-21032-CNI-M
+iftsta/gen/pid_21032.gen.edi	error	AHB-21032-FTX-M
+iftsta/gen/pid_21032.gen.edi	error	AHB-21032-GID-M
+iftsta/gen/pid_21032.gen.edi	error	AHB-21032-STS-M
+iftsta/gen/pid_21033.gen.edi	error	AHB-21033-CNI-M
+iftsta/gen/pid_21033.gen.edi	error	AHB-21033-FTX-M
+iftsta/gen/pid_21033.gen.edi	error	AHB-21033-GID-M
+iftsta/gen/pid_21033.gen.edi	error	AHB-21033-STS-M
+iftsta/gen/pid_21035.gen.edi	error	AHB-21035-CNI-M
+iftsta/gen/pid_21035.gen.edi	error	AHB-21035-EFI-M
+iftsta/gen/pid_21035.gen.edi	error	AHB-21035-QTY-M
+iftsta/gen/pid_21035.gen.edi	error	AHB-21035-STS-M
+iftsta/gen/pid_21036.gen.edi	error	AHB-21036-CNI-M
+iftsta/gen/pid_21036.gen.edi	error	AHB-21036-LOC-M
+iftsta/gen/pid_21036.gen.edi	error	AHB-21036-STS-M
+iftsta/gen/pid_21037.gen.edi	error	AHB-21037-CNI-M
+iftsta/gen/pid_21037.gen.edi	error	AHB-21037-COM-M
+iftsta/gen/pid_21037.gen.edi	error	AHB-21037-CTA-M
+iftsta/gen/pid_21037.gen.edi	error	AHB-21037-FTX-M
+iftsta/gen/pid_21037.gen.edi	error	AHB-21037-GID-M
+iftsta/gen/pid_21037.gen.edi	error	AHB-21037-STS-M
+iftsta/gen/pid_21038.gen.edi	error	AHB-21038-CNI-M
+iftsta/gen/pid_21038.gen.edi	error	AHB-21038-COM-M
+iftsta/gen/pid_21038.gen.edi	error	AHB-21038-CTA-M
+iftsta/gen/pid_21038.gen.edi	error	AHB-21038-FTX-M
+iftsta/gen/pid_21038.gen.edi	error	AHB-21038-GID-M
+iftsta/gen/pid_21038.gen.edi	error	AHB-21038-STS-M
+iftsta/gen/pid_21039.gen.edi	error	AHB-21039-CNI-M
+iftsta/gen/pid_21039.gen.edi	error	AHB-21039-FTX-M
+iftsta/gen/pid_21039.gen.edi	error	AHB-21039-GID-M
+iftsta/gen/pid_21039.gen.edi	error	AHB-21039-LOC-M
+iftsta/gen/pid_21039.gen.edi	error	AHB-21039-STS-M
+iftsta/gen/pid_21040.gen.edi	error	AHB-21040-CNI-M
+iftsta/gen/pid_21040.gen.edi	error	AHB-21040-LOC-M
+iftsta/gen/pid_21040.gen.edi	error	AHB-21040-STS-M
+iftsta/gen/pid_21043.gen.edi	error	AHB-21043-CNI-M
+iftsta/gen/pid_21043.gen.edi	error	AHB-21043-FTX-M
+iftsta/gen/pid_21043.gen.edi	error	AHB-21043-GID-M
+iftsta/gen/pid_21043.gen.edi	error	AHB-21043-STS-M
+iftsta/gen/pid_21044.gen.edi	error	AHB-21044-CNI-M
+iftsta/gen/pid_21044.gen.edi	error	AHB-21044-STS-M
+iftsta/gen/pid_21045.gen.edi	error	AHB-21045-CNI-M
+iftsta/gen/pid_21045.gen.edi	error	AHB-21045-EFI-M
+iftsta/gen/pid_21045.gen.edi	error	AHB-21045-FTX-M
+iftsta/gen/pid_21045.gen.edi	error	AHB-21045-GID-M
+iftsta/gen/pid_21045.gen.edi	error	AHB-21045-LOC-M
+iftsta/gen/pid_21045.gen.edi	error	AHB-21045-QTY-M
+iftsta/gen/pid_21045.gen.edi	error	AHB-21045-STS-M
+iftsta/gen/pid_21047.gen.edi	error	AHB-21047-CNI-M
+iftsta/gen/pid_21047.gen.edi	error	AHB-21047-FTX-M
+iftsta/gen/pid_21047.gen.edi	error	AHB-21047-GID-M
+iftsta/gen/pid_21047.gen.edi	error	AHB-21047-STS-M
 iftsta/valid/pid_21042.edi	clean
 insrpt/gen/pid_23003.gen.edi	error	AHB-23003-DOC-M
 insrpt/gen/pid_23003.gen.edi	error	AHB-23003-LIN-M
@@ -306,29 +406,40 @@ invoic/gen/pid_31011.gen.edi	error	MIG-PYT-REQ
 invoic/gen/pid_31011.gen.edi	error	MIG-TAX-REQ
 invoic/gen/pid_31011.gen.edi	error	MIG-UNS-REQ
 invoic/valid/pid_31001.edi	clean
-mscons/gen/pid_13005.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13006.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13007.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13008.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13009.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13010.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13011.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13012.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13013.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13014.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13015.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13016.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13017.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13018.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13019.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13020.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13021.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13022.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13023.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13025.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13026.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13027.gen.edi	VALIDATE-ERROR
-mscons/gen/pid_13028.gen.edi	VALIDATE-ERROR
+mscons/gen/pid_13005.gen.edi	error	AHB-13005-BGM-1001-Q
+mscons/gen/pid_13005.gen.edi	error	AHB-13005-LOC-3227-Q
+mscons/gen/pid_13006.gen.edi	error	AHB-13006-BGM-1225-V
+mscons/gen/pid_13006.gen.edi	error	AHB-13006-RFF-1153-V
+mscons/gen/pid_13007.gen.edi	error	AHB-13007-BGM-1001-Q
+mscons/gen/pid_13008.gen.edi	clean
+mscons/gen/pid_13009.gen.edi	clean
+mscons/gen/pid_13010.gen.edi	error	AHB-13010-BGM-1001-Q
+mscons/gen/pid_13010.gen.edi	error	AHB-13010-LOC-3227-Q
+mscons/gen/pid_13011.gen.edi	error	AHB-13011-BGM-1001-Q
+mscons/gen/pid_13011.gen.edi	error	AHB-13011-LOC-3227-Q
+mscons/gen/pid_13012.gen.edi	error	AHB-13012-BGM-1001-Q
+mscons/gen/pid_13012.gen.edi	error	AHB-13012-LOC-3227-Q
+mscons/gen/pid_13013.gen.edi	error	AHB-13013-BGM-1001-Q
+mscons/gen/pid_13014.gen.edi	error	AHB-13014-BGM-1001-Q
+mscons/gen/pid_13015.gen.edi	clean
+mscons/gen/pid_13016.gen.edi	clean
+mscons/gen/pid_13017.gen.edi	error	AHB-13017-LIN-M
+mscons/gen/pid_13017.gen.edi	error	AHB-13017-PIA-M
+mscons/gen/pid_13018.gen.edi	clean
+mscons/gen/pid_13019.gen.edi	clean
+mscons/gen/pid_13020.gen.edi	error	AHB-13020-BGM-1001-Q
+mscons/gen/pid_13021.gen.edi	error	AHB-13021-BGM-1001-Q
+mscons/gen/pid_13022.gen.edi	error	AHB-13022-BGM-1001-Q
+mscons/gen/pid_13023.gen.edi	clean
+mscons/gen/pid_13025.gen.edi	clean
+mscons/gen/pid_13026.gen.edi	error	AHB-13026-BGM-1001-Q
+mscons/gen/pid_13026.gen.edi	error	AHB-13026-LOC-3227-Q
+mscons/gen/pid_13027.gen.edi	error	AHB-13027-BGM-1001-Q
+mscons/gen/pid_13027.gen.edi	error	AHB-13027-LIN-M
+mscons/gen/pid_13027.gen.edi	error	AHB-13027-PIA-M
+mscons/gen/pid_13027.gen.edi	error	AHB-13027-RFF-1153-RQ
+mscons/gen/pid_13028.gen.edi	error	AHB-13028-BGM-1001-Q
+mscons/gen/pid_13028.gen.edi	error	AHB-13028-QTY-6063-V
 mscons/invalid/bad_melo.edi	error	SEM-MSCONS-LOCATION-FORMAT
 mscons/invalid/bad_melo.edi	warning	<no-rule-id>
 mscons/invalid/inverted_period.edi	error	AHB-13003-DTM-2005-RQ

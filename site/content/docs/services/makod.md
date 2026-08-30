@@ -2448,8 +2448,8 @@ orchestrator probes from, and a throttled probe reads as a dead container.
 | `/health` | alias of `/health/ready` | as above | — |
 
 ```
-HTTP 200 {"status":"ok","instance_id":"makod-0-1","version":"0.17.0"}
-HTTP 503 {"status":"degraded","instance_id":"makod-0-1","version":"0.17.0",
+HTTP 200 {"status":"ok","instance_id":"makod-0-1","version":"0.18.0"}
+HTTP 503 {"status":"degraded","instance_id":"makod-0-1","version":"0.18.0",
           "reason":"worker_stale:deadline-scheduler"}
 ```
 

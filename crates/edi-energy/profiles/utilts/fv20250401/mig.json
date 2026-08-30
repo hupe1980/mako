@@ -5,6 +5,41 @@
   "valid_from": "2025-04-01",
   "pid_source": "rff_z13",
   "ordering_hint": [],
+  "dtm_formats": {
+    "137": [
+      "303"
+    ],
+    "157": [
+      "303"
+    ],
+    "293": [
+      "304"
+    ],
+    "Z25": [
+      "303"
+    ],
+    "Z26": [
+      "303"
+    ],
+    "Z33": [
+      "303",
+      "401"
+    ],
+    "Z34": [
+      "303"
+    ],
+    "Z35": [
+      "303"
+    ],
+    "Z44": [
+      "303",
+      "401"
+    ],
+    "Z45": [
+      "303",
+      "401"
+    ]
+  },
   "segments": [
     {
       "tag": "UNH",
@@ -480,7 +515,7 @@
     }
   ],
   "valid_until": "2026-09-30",
-  "ahb_revision": "1.1e",
+  "ahb_revision": "1.0",
   "source_document": "UTILTS MIG 1.1e, Publikationsdatum 01.10.2024",
   "publikationsdatum": "2024-10-01"
 }

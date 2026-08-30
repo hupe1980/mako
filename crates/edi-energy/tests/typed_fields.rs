@@ -33,7 +33,7 @@ use edi_energy::{AnyMessage, EdiEnergyMessage, EdifactDeserialize, Platform};
 const UTILMD_TYPED: &[u8] = b"\
 UNH+MSG001+UTILMD:D:11A:UN:5.5.3a'\
 BGM+E01+11001+9'\
-DTM+137:20230615:102'\
+DTM+137:202306150000?+00:303'\
 DTM+163:20230701:102'\
 NAD+MS+9900987654321::293'\
 NAD+MR+9900123456789::293'\
@@ -61,8 +61,11 @@ fn utilmd_dtm_fields_extracted() {
     };
     assert_eq!(u.dtm().len(), 2, "should extract 2 DTM segments");
     assert_eq!(u.dtm()[0].qualifier, "137");
-    assert_eq!(u.dtm()[0].value.as_deref(), Some("20230615"));
-    assert_eq!(u.dtm()[0].format.as_deref(), Some("102"));
+    assert_eq!(u.dtm()[0].value.as_deref(), Some("202306150000+00"));
+    // DE 2379 `303` (CCYYMMDDHHMMZZZ) — the format every EDI@Energy MIG gives
+    // the Dokumentendatum. `?+00` on the wire; the release character is gone by
+    // the time the typed field is read.
+    assert_eq!(u.dtm()[0].format.as_deref(), Some("303"));
     assert_eq!(u.dtm()[1].qualifier, "163");
 }
 
@@ -118,7 +121,7 @@ fn utilmd_deserialize_from_segments() {
 const MSCONS_TYPED: &[u8] = b"\
 UNH+MSG002+MSCONS:D:04B:UN:2.4c'\
 BGM+7+13003+9'\
-DTM+137:20230701:102'\
+DTM+137:202307010000?+00:303'\
 NAD+MS+9900111222333::293'\
 NAD+MR+9900444555666::293'\
 UNT+5+MSG002'";
@@ -166,7 +169,7 @@ fn mscons_round_trip_serialize() {
 const APERAK_TYPED: &[u8] = b"\
 UNH+MSG003+APERAK:D:07B:UN:2.0a'\
 BGM+1000++9'\
-DTM+137:20230801:102'\
+DTM+137:202308010000?+00:303'\
 NAD+MS+9900777888999::293'\
 NAD+MR+9900333444555::293'\
 RFF+ACW:REF-APER-001'\
@@ -641,7 +644,7 @@ fn bgm_pruefidentifikator_from_document_id() {
 const INVOIC_TYPED: &[u8] = b"\
 UNH+INV001+INVOIC:D:07A:UN:2.8e'\
 BGM+380+00031001+9'\
-DTM+137:20240101:102'\
+DTM+137:202401010000?+00:303'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
 UNT+6+INV001'";
@@ -696,7 +699,7 @@ fn invoic_round_trip_serialize() {
 const REMADV_TYPED: &[u8] = b"\
 UNH+REM001+REMADV:D:07A:UN:2.9e'\
 BGM+481+00033001+9'\
-DTM+137:20240201:102'\
+DTM+137:202402010000?+00:303'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
 UNT+6+REM001'";
@@ -746,7 +749,7 @@ fn remadv_round_trip_serialize() {
 const ORDERS_TYPED: &[u8] = b"\
 UNH+ORD001+ORDERS:D:07A:UN:1.4b'\
 BGM+105+00036001+9'\
-DTM+137:20240301:102'\
+DTM+137:202403010000?+00:303'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
 UNT+6+ORD001'";
@@ -796,7 +799,7 @@ fn orders_round_trip_serialize() {
 const IFTSTA_TYPED: &[u8] = b"\
 UNH+IFT001+IFTSTA:D:95B:UN:2.0g'\
 BGM+77+00044001+9'\
-DTM+137:20240401:102'\
+DTM+137:202404010000?+00:303'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
 UNT+6+IFT001'";
@@ -846,7 +849,7 @@ fn iftsta_round_trip_serialize() {
 const INSRPT_TYPED: &[u8] = b"\
 UNH+INS001+INSRPT:D:96A:UN:1.1a'\
 BGM+17+00023001+9'\
-DTM+137:20240501:102'\
+DTM+137:202405010000?+00:303'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
 UNT+6+INS001'";
@@ -892,7 +895,7 @@ fn insrpt_round_trip_serialize() {
 const REQOTE_TYPED: &[u8] = b"\
 UNH+REQ001+REQOTE:D:07A:UN:1.3c'\
 BGM+68+00035004+9'\
-DTM+137:20240601:102'\
+DTM+137:202406010000?+00:303'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
 UNT+6+REQ001'";
@@ -938,7 +941,7 @@ fn reqote_round_trip_serialize() {
 const PARTIN_TYPED: &[u8] = b"\
 UNH+PAR001+PARTIN:D:96A:UN:1.0f'\
 BGM+35+00037007+9'\
-DTM+137:20240701:102'\
+DTM+137:202407010000?+00:303'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
 UNT+6+PAR001'";

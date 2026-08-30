@@ -94,8 +94,19 @@ pub fn run(
     collect_covered_pids(Path::new(&fixtures_dir), &mut covered_pids);
     collect_covered_pids(Path::new(&examples_dir), &mut covered_pids);
 
+    // Coverage by a *curated* fixture is a different claim from coverage by a
+    // synthetic one, and reporting a single number conflated them. A `gen/`
+    // fixture is a presence witness: it carries the PID and nothing else the
+    // AHB asks for, so it validates with errors by construction. Only a
+    // `valid/` fixture is asserted clean by the conformance suite, and only it
+    // evidences that mako can actually read the Anwendungsfall.
+    let mut curated_pids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    collect_curated_pids(Path::new(&fixtures_dir), &mut curated_pids);
+    collect_curated_pids(Path::new(&examples_dir), &mut curated_pids);
+
     let mut missing_count: usize = 0;
     let mut covered_count: usize = 0;
+    let mut curated_count: usize = 0;
     let filter_lower = message_type_filter.map(str::to_lowercase);
 
     // Track per-PID results for optional JSON output.
@@ -111,11 +122,20 @@ pub fn run(
         }
         for &pid in pid_list {
             if covered_pids.contains(&pid) {
-                println!("COVERED   {message_type:<8}  {pid}");
+                let curated = curated_pids.contains(&pid);
+                if curated {
+                    curated_count += 1;
+                    println!("COVERED   {message_type:<8}  {pid}");
+                } else {
+                    println!("WITNESS   {message_type:<8}  {pid}  — synthetic fixture only");
+                }
                 covered_count += 1;
                 if json_output {
-                    json_covered
-                        .push(serde_json::json!({ "pid": pid, "message_type": message_type }));
+                    json_covered.push(serde_json::json!({
+                        "pid": pid,
+                        "message_type": message_type,
+                        "curated": curated,
+                    }));
                 }
             } else {
                 println!("MISSING   {message_type:<8}  {pid}  — no .edi fixture BGM segment found");
@@ -133,8 +153,19 @@ pub fn run(
         .checked_mul(100)
         .and_then(|n| n.checked_div(total))
         .unwrap_or(100) as u32;
+    let curated_pct = curated_count
+        .checked_mul(100)
+        .and_then(|n| n.checked_div(total))
+        .unwrap_or(100) as u32;
     eprintln!();
     eprintln!("coverage: {covered_count}/{total} Pruefidentifikatoren covered ({coverage_pct}%)");
+    eprintln!(
+        "  of which curated (conformance-asserted): {curated_count}/{total} ({curated_pct}%)"
+    );
+    eprintln!(
+        "  synthetic witnesses only:                {}/{total}",
+        covered_count - curated_count
+    );
 
     // Reverse check: every PID appearing in fixture BGM segments must be declared
     // in an AHB profile.  This catches stale or mislabelled fixtures.
@@ -304,66 +335,100 @@ fn collect_pids(profiles_dir: &str) -> BTreeMap<String, Vec<u32>> {
     map
 }
 
-/// Recursively collect the text content of every `*.rs` and `*.edi` file under
-/// `tests_dir`.  This lets fixtures stored as `.edi` files count as coverage
-/// evidence — a BGM line such as `BGM+380+00031001+9'` satisfies the zero-padded
-/// PID check just as well as an inline byte literal in a Rust test.
-/// Walk every `.edi` file under `dir` recursively and insert every PID found
-/// in BGM segment field 2 (DE 1004, first component) or in `RFF+Z13:<pid>`
-/// into `covered`.
+/// PIDs evidenced by a **curated** fixture — one the conformance suite asserts
+/// clean, as opposed to a `gen/` presence witness.
+///
+/// The split matters because the two support different claims. `gen/` fixtures
+/// are generated to carry a PID and nothing else the AHB demands, so they
+/// validate with errors by construction; counting them the same way let
+/// coverage read as 100 % while a third of it was untested shape.
+fn collect_curated_pids(dir: &Path, covered: &mut std::collections::HashSet<u32>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if path.file_name().is_some_and(|n| n == "gen") {
+                continue;
+            }
+            collect_curated_pids(&path, covered);
+        } else {
+            collect_covered_pids_from_file(&path, covered);
+        }
+    }
+}
+
+/// Every PID evidenced by an `.edi` fixture under `dir`, recursively.
 ///
 /// This is the authoritative coverage signal: only actual EDI fixture content
-/// counts as evidence, not source comments or string literals in `.rs` files.
+/// counts as evidence, not source comments or string literals in `.rs` files —
+/// a numeric constant that happens to look like a Prüfidentifikator is not a
+/// test of anything.
+///
+/// Counts `gen/` witnesses alongside curated fixtures; see
+/// [`collect_curated_pids`] for the narrower claim.
 fn collect_covered_pids(dir: &Path, covered: &mut std::collections::HashSet<u32>) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(d) => d,
-        Err(_) => return,
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
             collect_covered_pids(&path, covered);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("edi")
-            && let Ok(content) = std::fs::read_to_string(&path)
-        {
-            for line in content.lines() {
-                let trimmed = line.trim_start();
-                // BgmDe1004 types: PID is BGM DE 1004 (field index 2).
-                if trimmed.starts_with("BGM") {
-                    let fields: Vec<&str> = trimmed.splitn(4, '+').collect();
-                    if fields.len() >= 3 {
-                        let pid_str = fields[2]
-                            .split(':')
-                            .next()
-                            .unwrap_or("")
-                            .trim_end_matches('\'')
-                            .trim();
-                        if let Ok(pid) = pid_str.parse::<u32>()
-                            && (10_000..=99_999).contains(&pid)
-                        {
-                            covered.insert(pid);
-                        }
-                    }
+        } else {
+            collect_covered_pids_from_file(&path, covered);
+        }
+    }
+}
+
+/// Scrape the Prüfidentifikatoren one `.edi` file declares.
+///
+/// Two locations, per `pid_source`: `BGM` DE 1004 for most message types, and
+/// `RFF+Z13` for COMDIS / PRICAT / UTILTS.
+fn collect_covered_pids_from_file(path: &Path, covered: &mut std::collections::HashSet<u32>) {
+    if path.extension().and_then(|e| e.to_str()) != Some("edi") {
+        return;
+    }
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return;
+    };
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        // BgmDe1004 types: PID is BGM DE 1004 (field index 2).
+        if trimmed.starts_with("BGM") {
+            let fields: Vec<&str> = trimmed.splitn(4, '+').collect();
+            if fields.len() >= 3 {
+                let pid_str = fields[2]
+                    .split(':')
+                    .next()
+                    .unwrap_or("")
+                    .trim_end_matches('\'')
+                    .trim();
+                if let Ok(pid) = pid_str.parse::<u32>()
+                    && (10_000..=99_999).contains(&pid)
+                {
+                    covered.insert(pid);
                 }
-                // RffZ13 types (COMDIS, PRICAT, UTILTS): PID is in RFF+Z13:<pid>
-                if trimmed.starts_with("RFF") {
-                    let fields: Vec<&str> = trimmed.splitn(3, '+').collect();
-                    if fields.len() >= 2 {
-                        let composite = fields[1].trim_end_matches('\'');
-                        let parts: Vec<&str> = composite.splitn(2, ':').collect();
-                        if parts.len() == 2 && parts[0] == "Z13" {
-                            let pid_str = parts[1]
-                                .split(':')
-                                .next()
-                                .unwrap_or("")
-                                .trim_end_matches('\'')
-                                .trim();
-                            if let Ok(pid) = pid_str.parse::<u32>()
-                                && (10_000..=99_999).contains(&pid)
-                            {
-                                covered.insert(pid);
-                            }
-                        }
+            }
+        }
+        // RffZ13 types (COMDIS, PRICAT, UTILTS): PID is in RFF+Z13:<pid>
+        if trimmed.starts_with("RFF") {
+            let fields: Vec<&str> = trimmed.splitn(3, '+').collect();
+            if fields.len() >= 2 {
+                let composite = fields[1].trim_end_matches('\'');
+                let parts: Vec<&str> = composite.splitn(2, ':').collect();
+                if parts.len() == 2 && parts[0] == "Z13" {
+                    let pid_str = parts[1]
+                        .split(':')
+                        .next()
+                        .unwrap_or("")
+                        .trim_end_matches('\'')
+                        .trim();
+                    if let Ok(pid) = pid_str.parse::<u32>()
+                        && (10_000..=99_999).contains(&pid)
+                    {
+                        covered.insert(pid);
                     }
                 }
             }

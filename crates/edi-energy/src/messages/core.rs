@@ -236,6 +236,13 @@ impl MessageCore {
                         .with_rule_id("AHB-SKIP-NO-PID".to_owned()),
                     );
                 }
+                // The `303` value shape. Which code a qualifier takes is
+                // per-profile (`mig.json` `dtm_formats` → `MIG-DTM-2379`);
+                // whether the value matches the code it claims is the same
+                // check for every message type, so it lives here.
+                for issue in dtm_303_value_issues(&message_segments) {
+                    ctx = ctx.with_static_issue(issue);
+                }
                 ctx = ctx.with_profile_pack_arc(mig_pack);
                 if let Some(ahb_pack) = ahb_pack_opt {
                     ctx = ctx.with_profile_pack_arc(ahb_pack);
@@ -390,4 +397,52 @@ impl MessageCore {
         }
         Ok(())
     }
+}
+
+/// `SEM-DTM-VALUE` — a `DTM` claiming DE 2379 `303` must carry
+/// `CCYYMMDDHHMMZZZ`.
+///
+/// Companion to `MIG-DTM-2379`, which checks the code. `DTM+137:20260701:303`
+/// names the right code and carries the wrong value; a receiver reading a zoned
+/// timestamp out of eight characters gets a different instant.
+#[cfg(any_message)]
+fn dtm_303_value_issues(segments: &[OwnedSegment]) -> Vec<edifact_rs::ValidationIssue> {
+    let mut out = Vec::new();
+    for seg in segments.iter().filter(|s| &*s.tag == "DTM") {
+        if seg.component_str(0, 2) != Some("303") {
+            continue;
+        }
+        let value = seg.component_str(0, 1).unwrap_or_default();
+        if is_ccyymmddhhmmzzz(value) {
+            continue;
+        }
+        let qualifier = seg.component_str(0, 0).unwrap_or("?");
+        out.push(
+            edifact_rs::ValidationIssue::new(
+                edifact_rs::ValidationSeverity::Error,
+                format!(
+                    "segment DTM DE 2380 (element 0, component 1): \
+                     `DTM+{qualifier}` declares DE 2379 format '303' but carries \
+                     '{value}', which is not CCYYMMDDHHMMZZZ — 12 digits plus a \
+                     signed 2-digit zone, as in DTM+137:202610011200?+00:303'"
+                ),
+            )
+            .with_rule_id("SEM-DTM-VALUE".to_owned())
+            .with_segment("DTM".to_owned()),
+        );
+    }
+    out
+}
+
+/// Whether `value` has the `CCYYMMDDHHMMZZZ` shape DE 2379 code `303` defines.
+///
+/// The zone is written `?+00` on the wire; the parser has already resolved the
+/// release character, so 15 characters arrive here.
+#[cfg(any_message)]
+fn is_ccyymmddhhmmzzz(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 15
+        && bytes[..12].iter().all(u8::is_ascii_digit)
+        && matches!(bytes[12], b'+' | b'-')
+        && bytes[13..].iter().all(u8::is_ascii_digit)
 }

@@ -3,6 +3,93 @@
   "message_type": "UTILMD",
   "release": "S1.2",
   "valid_from": "2025-06-06",
+  "dtm_formats": {
+    "137": [
+      "303"
+    ],
+    "154": [
+      "102"
+    ],
+    "155": [
+      "303"
+    ],
+    "157": [
+      "303",
+      "610"
+    ],
+    "158": [
+      "303"
+    ],
+    "159": [
+      "303"
+    ],
+    "163": [
+      "303"
+    ],
+    "164": [
+      "303"
+    ],
+    "206": [
+      "303"
+    ],
+    "294": [
+      "303"
+    ],
+    "471": [
+      "303"
+    ],
+    "752": [
+      "104",
+      "106"
+    ],
+    "76": [
+      "303"
+    ],
+    "92": [
+      "303"
+    ],
+    "93": [
+      "303"
+    ],
+    "Z05": [
+      "303"
+    ],
+    "Z07": [
+      "303"
+    ],
+    "Z08": [
+      "303"
+    ],
+    "Z09": [
+      "602"
+    ],
+    "Z10": [
+      "106",
+      "303"
+    ],
+    "Z15": [
+      "303"
+    ],
+    "Z16": [
+      "303"
+    ],
+    "Z20": [
+      "802"
+    ],
+    "Z21": [
+      "104",
+      "106"
+    ],
+    "Z22": [
+      "802"
+    ],
+    "Z25": [
+      "303"
+    ],
+    "Z26": [
+      "303"
+    ]
+  },
   "segments": [
     {
       "tag": "UNH",
@@ -554,6 +641,7 @@
     }
   ],
   "valid_until": "2025-09-30",
-  "ahb_revision": "S1.2",
-  "source_document": "UTILMD MIG S1.2 — LFW24 MpBNr2 (BK6-22-024 transitional release, effective 2025-06-06): MPES Einspeisung PIDs transferred to GPKE. Derived from UTILMD MIG S2.1 konsolidierte Lesefassung (message structure unchanged); PID set extended per BK6-22-024 Anlage 4."
+  "ahb_revision": "2.1",
+  "source_document": "UTILMD MIG S1.2 — LFW24 MpBNr2 (BK6-22-024 transitional release, effective 2025-06-06): MPES Einspeisung PIDs transferred to GPKE. Derived from UTILMD MIG S2.1 konsolidierte Lesefassung (message structure unchanged); PID set extended per BK6-22-024 Anlage 4.",
+  "archived": true
 }

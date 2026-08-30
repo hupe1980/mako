@@ -4,6 +4,39 @@
   "release": "1.3b",
   "valid_from": "2025-10-01",
   "ordering_hint": [],
+  "dtm_formats": {
+    "137": [
+      "303"
+    ],
+    "203": [
+      "303"
+    ],
+    "273": [
+      "802",
+      "803",
+      "804"
+    ],
+    "279": [
+      "802",
+      "803",
+      "804"
+    ],
+    "469": [
+      "303"
+    ],
+    "472": [
+      "303"
+    ],
+    "76": [
+      "303"
+    ],
+    "94": [
+      "602"
+    ],
+    "Z04": [
+      "602"
+    ]
+  },
   "segments": [
     {
       "tag": "UNH",
@@ -691,7 +724,7 @@
     }
   ],
   "valid_until": "2026-09-30",
-  "ahb_revision": "1.3b",
+  "ahb_revision": "1.1",
   "source_document": "QUOTES MIG 1.3b, Publikationsdatum 01.04.2025",
   "pid_source": "rff_z13",
   "publikationsdatum": "2025-04-01"

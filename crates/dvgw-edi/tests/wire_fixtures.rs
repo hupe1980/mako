@@ -574,7 +574,7 @@ fn sniff_separates_dvgw_from_bdew_by_the_document_code() {
     // A BDEW ORDRSP — the same UNH carrier an ALOCAT uses, so anything keying on
     // `UNH` would claim this one too.
     let bdew_ordrsp = b"UNB+UNOC:3+A:500+B:500+260804:1045+REF1'\
-UNH+1+ORDRSP:D:07B:UN:1.1c'BGM+231+19110'DTM+137:20260804:102'\
+UNH+1+ORDRSP:D:07B:UN:1.1c'BGM+231+19110'DTM+137:202608041045?+00:303'\
 NAD+MS+A::293'NAD+MR+B::293'UNT+6+1'UNZ+1+REF1'";
     assert_eq!(
         dvgw_edi::sniff(bdew_ordrsp),

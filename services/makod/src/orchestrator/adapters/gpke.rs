@@ -68,8 +68,11 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                 process_date: u
                     .transactions()
                     .first()
-                    .and_then(|t| t.dtm.iter().find(|d| d.is_period_start()))
-                    .and_then(|d| d.value_str())
+                    // `SG4 DTM+92` „Beginn zum" — the Lieferbeginn. UTILMD AHB
+                    // Strom 2.1 names only `92` and `157 (Änderung zum)` in SG4;
+                    // `163` is an MSCONS qualifier. Reading the wrong one yields
+                    // an empty `process_date`, which `processd` cannot decide on.
+                    .and_then(|t| t.date(edi_energy::utilmd_codes::dtm::BEGINN_ZUM))
                     .unwrap_or("")
                     .to_owned(),
                 // `SG4 IDE+24` DE 7402 — echoed in `SG6 RFF+TN` on the NB's
@@ -2026,9 +2029,11 @@ pub fn gpke_stammdaten_registry() -> AdapterRegistry<mako_gpke::GpkeStammdatenae
             );
             let first_tx = u.transactions().first();
             let location_id = MaLo::new(first_tx.and_then(|t| t.lokation()).unwrap_or(""));
+            // `SG4 DTM+157` „Änderung zum" — the Stammdatenänderung's own date,
+            // and what makod's renderer writes for this PID family. `163` is an
+            // MSCONS qualifier and appears in no UTILMD Anwendungsfall.
             let aenderungsdatum = first_tx
-                .and_then(|t| t.dtm.iter().find(|d| d.is_period_start()))
-                .and_then(|d| d.value_str())
+                .and_then(|t| t.date(edi_energy::utilmd_codes::dtm::AENDERUNG_ZUM))
                 .unwrap_or("")
                 .to_owned();
 

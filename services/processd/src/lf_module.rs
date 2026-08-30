@@ -551,17 +551,9 @@ impl LfAnfragePayload {
     }
 }
 
-/// Accept both `YYYYMMDD` (EDIFACT) and `YYYY-MM-DD` (JSON) dates.
+/// Every date shape a process payload carries — see [`crate::wire_date`].
 fn parse_date(s: &str) -> Option<Date> {
-    if s.len() == 8 {
-        Date::parse(s, time::macros::format_description!("[year][month][day]")).ok()
-    } else {
-        Date::parse(
-            &s[..s.len().min(10)],
-            time::macros::format_description!("[year]-[month]-[day]"),
-        )
-        .ok()
-    }
+    crate::wire_date::parse(s)
 }
 
 // ── Fact gathering ────────────────────────────────────────────────────────────

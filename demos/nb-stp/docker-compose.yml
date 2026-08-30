@@ -18,7 +18,7 @@
 #   marktd    → fan-out process.initiated to processd     (subscription)
 #   processd  → validates against marktd master data      (MaLo + preisblatt + contracts)
 #   processd  → POST gpke.lieferbeginn.bestaetigen to makod  (NB auto-accept)
-#   makod     → enqueues UTILMD 55002 in outbox           (Bestätigung Lieferbeginn)
+#   makod     → enqueues UTILMD 55002 in outbox           (Bestätigung Anmeldung)
 #   outbox    → delivers UTILMD 55002 to webhook          (ERP receives confirmation)
 #
 # Build images first:
@@ -89,7 +89,11 @@ services:
       MARKTD_CONFIG:                  /etc/marktd/marktd.toml
       MARKTD_DATABASE__URL:           postgres://demo:demo-secret@postgres/marktd
       MARKTD_MAKOD__API_KEY:          demo-secret-change-me
-      MARKTD_WEBHOOK__INBOUND_SECRET: ""  # no HMAC in demo — accepts all events from makod
+      # Must equal makod's MAKOD_ERP_WEBHOOK_SECRET below: marktd verifies the
+      # HMAC on every inbound CloudEvent. An empty value here does NOT mean
+      # "no HMAC" — it means "verify with an empty key", which no signature
+      # matches, and marktd answers 401 for the whole fan-out.
+      MARKTD_WEBHOOK__INBOUND_SECRET: demo-makod-webhook-secret
     # distroless has no shell — use service_started dependency instead of healthcheck
     healthcheck:
       disable: true

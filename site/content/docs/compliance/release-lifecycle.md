@@ -385,7 +385,7 @@ The code generator (`xtask/src/codegen.rs`) reads the AHB JSON profiles and emit
 |---|---|---|
 | Codegen drift | `cargo xtask codegen --check` | Prevents unreviewed profile changes |
 | Profile JSON validity | `cargo xtask validate-profiles` | Catches schema violations |
-| PID fixture coverage | `cargo xtask validate-pruefids` | Ensures every PID has a test |
+| PID fixture coverage | `cargo xtask validate-pruefids` | Every PID has a fixture; reports curated vs synthetic separately |
 | Semver check | `cargo semver-checks` | Prevents accidental API breaks |
 
 ### Annual maintenance

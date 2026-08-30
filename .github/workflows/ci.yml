@@ -197,6 +197,42 @@ jobs:
       - run: cargo test -p energy-api ${{ matrix.features }}
 
 
+  # ── Regulatory mirror ───────────────────────────────────────────────────────
+  #
+  # Offline: the PDFs are not in the repository (400 MB of third-party
+  # copyright), but `regulatories/bdew-mako/manifest.json` is, so CI can still
+  # check that every profile cites a source document the mirror records.
+  # Untracked, the `validate-profiles` citation guard finds no mirror and
+  # silently passes.
+  regulatories:
+    name: Regulatory mirror (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask sync-regulatories --offline
+
+
+  # ── Examples ────────────────────────────────────────────────────────────────
+  #
+  # `cargo check --all-targets` compiles the examples but never runs them, which
+  # is how three of six rotted: `05_validate` — the one demonstrating a *valid*
+  # message — shipped a fixture missing a mandatory segment group and exited
+  # non-zero, and two workflow examples drove their state machine into a
+  # transition the domain refuses. An example is copied by whoever reads it, so
+  # the gate is a real run.
+  examples:
+    name: Examples (run, not just compile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v2
+      - run: just examples
+
+
   # ── Documentation ───────────────────────────────────────────────────────────
   doc:
     name: Documentation

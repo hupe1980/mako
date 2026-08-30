@@ -172,52 +172,7 @@ impl MakodClient {
         let url = format!("{}/admin/malo/{malo_id}", self.base_url);
         debug!(malo_id, "pushing MaLo to makod admin cache");
 
-        // Build the camelCase nested structure that makod's UpsertRequest expects:
-        //   { "result": { "dataMarketLocation": { ... } }, "source": "mdm-sync" }
-        //
-        // MarktpartnerId::to_i64() is infallible in rubo4e v0.3 — no .unwrap_or(0)
-        // fallback that could silently produce a wrong GLN (0 is not a valid GLN).
-        let mut nb_operators = Vec::new();
-        if !record.nb_mp_id.is_empty() {
-            let nb_i64 = record
-                .nb_mp_id
-                .parse::<rubo4e::identifiers::MarktpartnerId>()
-                .map(|id| id.to_i64())
-                .unwrap_or(0);
-            nb_operators.push(serde_json::json!({
-                "marketPartnerId": nb_i64,
-                "executionTimeFrom": "2000-01-01T00:00:00Z"
-            }));
-        }
-        let mut mpo = Vec::new();
-        if let Some(msb) = &record.msb_mp_id
-            && !msb.is_empty()
-        {
-            let msb_i64 = msb
-                .parse::<rubo4e::identifiers::MarktpartnerId>()
-                .map(|id| id.to_i64())
-                .unwrap_or(0);
-            mpo.push(serde_json::json!({
-                "marketPartnerId": msb_i64,
-                "executionTimeFrom": "2000-01-01T00:00:00Z"
-            }));
-        }
-
-        let body = serde_json::json!({
-            "result": {
-                "dataMarketLocation": {
-                    "maloId": record.malo_id,
-                    "energyDirection": "consumption",
-                    "measurementTechnologyClassification": "conventionalMeasuringSystem",
-                    "optionalChangeForecastBasis": "notPossible",
-                    "dataMarketLocationProperties": [],
-                    "dataMarketLocationNetworkOperators": nb_operators,
-                    "dataMarketLocationTransmissionSystemOperators": [],
-                    "dataMarketLocationMeasuringPointOperators": mpo
-                }
-            },
-            "source": "mdm-sync"
-        });
+        let body = upsert_body(record);
 
         let resp = self
             .client
@@ -516,5 +471,134 @@ mod conflict_tests {
         };
         assert_eq!(err.status_u16(), 409);
         assert_eq!(err.error_code(), "makod_conflict");
+    }
+}
+
+/// The `PUT /admin/malo/{id}` body makod's `UpsertRequest { result, source }`
+/// deserialises.
+///
+/// Separated from [`MakodClient::put_malo`] so the cross-service wire contract
+/// can be asserted without a server. The push is deliberately non-fatal, so a
+/// shape makod rejects shows up only as a WARN while the record itself saves —
+/// which is why the shape is pinned by a test rather than by the caller.
+fn upsert_body(record: &MaloIdentResultPositive) -> serde_json::Value {
+    // Build the camelCase nested structure that makod's UpsertRequest expects:
+    //   { "result": { "dataMarketLocation": { ... } }, "source": "mdm-sync" }
+    //
+    // `marketPartnerId` deserialises as `rubo4e::identifiers::MarktpartnerId`,
+    // which reads a **string**: a number answers `invalid type: integer ...
+    // expected a 13-digit Marktpartner-ID`. It is a 13-character identifier
+    // whose leading digits are significant, not a quantity.
+    let operator = |mp_id: &str| -> Option<serde_json::Value> {
+        // A malformed ID is skipped rather than defaulted: `0` is not a valid
+        // GLN, and pushing it would attribute the Marktlokation to a
+        // Marktpartner that does not exist.
+        let id: rubo4e::identifiers::MarktpartnerId = mp_id
+            .parse()
+            .map_err(|e| {
+                warn!(mp_id, error = %e, "makod push: skipping unparseable Marktpartner-ID");
+            })
+            .ok()?;
+        Some(serde_json::json!({
+            "marketPartnerId": id.to_string(),
+            "executionTimeFrom": "2000-01-01T00:00:00Z"
+        }))
+    };
+
+    let mut nb_operators = Vec::new();
+    if !record.nb_mp_id.is_empty() {
+        nb_operators.extend(operator(&record.nb_mp_id));
+    }
+    let mut mpo = Vec::new();
+    if let Some(msb) = &record.msb_mp_id
+        && !msb.is_empty()
+    {
+        mpo.extend(operator(msb));
+    }
+
+    serde_json::json!({
+        "result": {
+            "dataMarketLocation": {
+                "maloId": record.malo_id,
+                "energyDirection": "consumption",
+                "measurementTechnologyClassification": "conventionalMeasuringSystem",
+                "optionalChangeForecastBasis": "notPossible",
+                "dataMarketLocationProperties": [],
+                "dataMarketLocationNetworkOperators": nb_operators,
+                "dataMarketLocationTransmissionSystemOperators": [],
+                "dataMarketLocationMeasuringPointOperators": mpo
+            }
+        },
+        "source": "mdm-sync"
+    })
+}
+
+#[cfg(test)]
+mod upsert_body_tests {
+    use super::{MaloIdentResultPositive, upsert_body};
+
+    fn record() -> MaloIdentResultPositive {
+        MaloIdentResultPositive {
+            malo_id: "51238696012".to_owned(),
+            nb_mp_id: "9900357000004".to_owned(),
+            msb_mp_id: Some("4012345000023".to_owned()),
+            sender_market_partner_id: "9900357000004".to_owned(),
+            bilanzierungsgebiet: None,
+            netzgebiet: None,
+            sparte: "STROM".to_owned(),
+        }
+    }
+
+    /// The body marktd sends must deserialise into the type makod reads.
+    ///
+    /// The push is non-fatal, so a mismatch never surfaces as a failed request —
+    /// makod's MaLo cache simply stays empty. Only this assertion catches it.
+    #[test]
+    fn the_body_deserialises_into_makods_own_type() {
+        let body = upsert_body(&record());
+        let dml = &body["result"]["dataMarketLocation"];
+        let parsed: energy_api::models::electricity::DataMarketLocation =
+            serde_json::from_value(dml.clone())
+                .expect("makod must be able to read what marktd sends");
+
+        assert_eq!(
+            parsed.data_market_location_network_operators[0]
+                .market_partner_id
+                .to_string(),
+            "9900357000004"
+        );
+        assert_eq!(
+            parsed
+                .data_market_location_measuring_point_operators
+                .as_ref()
+                .expect("the MSB operator list is present")[0]
+                .market_partner_id
+                .to_string(),
+            "4012345000023"
+        );
+    }
+
+    /// A Marktpartner-ID is a 13-character identifier, not a number.
+    #[test]
+    fn market_partner_ids_go_out_as_strings() {
+        let body = upsert_body(&record());
+        let nb = &body["result"]["dataMarketLocation"]["dataMarketLocationNetworkOperators"][0]["marketPartnerId"];
+        assert!(
+            nb.is_string(),
+            "marketPartnerId must be a string, got {nb:?}"
+        );
+    }
+
+    /// An unparseable ID is dropped, never defaulted to `0`.
+    ///
+    /// `0` is not a valid GLN, and emitting it would attribute the
+    /// Marktlokation to a Marktpartner that does not exist.
+    #[test]
+    fn an_unparseable_market_partner_id_is_omitted() {
+        let mut r = record();
+        r.nb_mp_id = "not-a-gln".to_owned();
+        let body = upsert_body(&r);
+        let ops = &body["result"]["dataMarketLocation"]["dataMarketLocationNetworkOperators"];
+        assert_eq!(ops.as_array().map(Vec::len), Some(0), "got {ops:?}");
     }
 }

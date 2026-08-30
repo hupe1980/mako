@@ -83,6 +83,8 @@ pub mod mcp_server;
 pub mod metrics;
 pub mod pg;
 pub mod server;
+/// One parser for every date shape a process payload carries.
+pub mod wire_date;
 
 #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
 pub mod einsd_client;

@@ -341,7 +341,7 @@ impl Profile for ContrlFv20251001Profile {
         Some(::time::macros::date!(2025 - 12 - 31))
     }
     fn ahb_revision(&self) -> Option<&'static str> {
-        Some("2.0b")
+        Some("1.0")
     }
     fn source_document(&self) -> Option<&'static str> {
         Some("CONTRL MIG 2.0b, Publikationsdatum 01.04.2025")

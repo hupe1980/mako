@@ -27,7 +27,7 @@ const ANMELDUNG: &str = "\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+230101:0000+1'\
 UNH+1+UTILMD:D:11A:UN:S2.1'\
 BGM+E01:::+00055001::+9'\
-DTM+137:20230101:102'\
+DTM+137:202301010000?+00:303'\
 RFF+Z13:REF001'\
 NAD+MS+4012345000023::293'\
 IDE+24+VORGANG-0001'\
@@ -87,4 +87,46 @@ fn a_technische_ressource_is_not_a_bilanzierungsgebiet() {
         panic!("expected ReceiveUtilmd");
     };
     assert_eq!(bilanzierungsgebiet, None);
+}
+
+// ── The Lieferbeginn ─────────────────────────────────────────────────────────
+
+/// The Anmeldung's `SG4 DTM+92` „Beginn zum" reaches the command.
+///
+/// An empty `process_date` is not a validation error anywhere: `processd`'s
+/// `AnmeldungPayload::parse` returns `None`, and the caller reads that as "not
+/// addressed to this module". The Anmeldung is then never evaluated, silently.
+///
+/// The `e2e_lieferbeginn` suite cannot catch it — it submits through the REST
+/// command API, where the ERP supplies `process_date` directly.
+#[test]
+fn the_anmeldung_carries_its_lieferbeginn() {
+    let cmd = adapt("DTM+92:202610010000?+00:303'");
+    let SupplierChangeCommand::ReceiveUtilmd { process_date, .. } = cmd else {
+        panic!("expected ReceiveUtilmd");
+    };
+    assert_eq!(
+        process_date, "202610010000+00",
+        "the Lieferbeginn must survive the adapter — an empty process_date is \
+         silently dropped by processd's NB module"
+    );
+}
+
+/// `163` is not a UTILMD SG4 date, and reading one must not produce a
+/// Lieferbeginn.
+///
+/// The assertion is the inverse of the one above: it fails if somebody
+/// reinstates `is_period_start()`, which would make both this and the previous
+/// test pass only by accident of the fixture.
+#[test]
+fn a_processing_start_date_is_not_a_lieferbeginn() {
+    let cmd = adapt("DTM+163:202610010000?+00:303'");
+    let SupplierChangeCommand::ReceiveUtilmd { process_date, .. } = cmd else {
+        panic!("expected ReceiveUtilmd");
+    };
+    assert_eq!(
+        process_date, "",
+        "DE 2005 `163` is an MSCONS qualifier; no UTILMD Anwendungsfall states \
+         the Lieferbeginn with it"
+    );
 }

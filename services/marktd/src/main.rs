@@ -143,6 +143,21 @@ impl Daemon for Marktd {
             .map(config::resolve_env)
             .transpose()
             .context("resolve webhook.inbound_secret")?;
+        // `None` means "accept unsigned events", a posture
+        // `allow_insecure_no_auth` has to admit by name. An *empty* secret is
+        // neither posture: verification stays on, keyed with nothing, so every
+        // signature fails and the sender sees 401 on every event.
+        if inbound_secret
+            .as_deref()
+            .is_some_and(|s| s.trim().is_empty())
+        {
+            anyhow::bail!(
+                "webhook.inbound_secret is set but empty. Leave it unset to accept \
+                 unsigned events (together with allow_insecure_no_auth), or give it \
+                 the same shared secret the sender signs with — an empty key \
+                 verifies nothing and rejects every inbound event with 401."
+            );
+        }
 
         let verifier = mako_service::oidc::OidcConfig::build_verifier(
             cfg.oidc.as_ref(),

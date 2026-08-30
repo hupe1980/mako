@@ -12,6 +12,11 @@
     "UNS",
     "UNT"
   ],
+  "dtm_formats": {
+    "137": [
+      "303"
+    ]
+  },
   "segments": [
     {
       "tag": "UNH",
@@ -169,7 +174,7 @@
       "groups": []
     }
   ],
-  "ahb_revision": "1.2",
+  "ahb_revision": "1.1",
   "source_document": "ORDCHG MIG 1.2, Publikationsdatum 01.04.2026",
   "pid_source": "rff_z13",
   "publikationsdatum": "2026-04-01"

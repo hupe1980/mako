@@ -15,7 +15,7 @@
 #   6.   makod processes UTILMD 55001 → pushes process.initiated to marktd
 #   6b.  marktd fans out to processd (webhook subscription)
 #   6c.  processd validates (MaLo ✓, preisblatt ✓) → dispatches bestaetigen
-#   7.   makod dispatches UTILMD 55002 (Bestätigung Lieferbeginn)
+#   7.   makod dispatches UTILMD 55002 (Bestätigung Anmeldung)
 #   8.   webhook receives UTILMD 55002 ✓
 #   m1-m5. marktd smoke tests (health, MaLo, preisblatt, correlations)
 #   n1-n7. netzbilanzd smoke tests (health, NNE draft, list, Sparte filter,
@@ -50,18 +50,33 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # workflow key collisions so the test is idempotent across re-runs on a live stack.
 _SMOKE_EPOCH=$(date +%s)
 SMOKE_RUN_ID=$(printf '%08x' "$_SMOKE_EPOCH")
-# 11-digit MaLo ID derived from epoch with BDEW alternating-weight check digit.
-# Algorithm: weights [2,1,…], products≥10 reduced by 9, check=(10−(Σ%10))%10.
-_BDEW_BASE="$(printf '%010d' "$(( _SMOKE_EPOCH % 10000000000 ))")"
-_BDEW_WTS=(2 1 2 1 2 1 2 1 2 1)
+# 11-digit MaLo ID derived from the epoch, with the BDEW check digit.
+#
+# BDEW Anwendungshilfe („Lok- und Waggon-Kennzeichnungsverfahren"):
+#
+#   sum   = Σ digits at odd positions (1,3,5,7,9)
+#         + Σ digits at even positions (2,4,6,8,10) × 2
+#   check = (10 − sum mod 10) mod 10
+#
+# This is NOT Luhn: there is no "reduce a product ≥ 10 by 9" step, and the
+# doubled positions are the even ones. The two agree often enough to look
+# interchangeable — 51238696012 validates under both — and disagree often
+# enough that Luhn mints IDs `marktd` rejects with `invalid checksum`.
+#
+# The first digit is the Codevergabestelle and is never 0, so the epoch is
+# padded into positions 2..10 behind a leading 1.
+_BDEW_BASE="1$(printf '%09d' "$(( _SMOKE_EPOCH % 1000000000 ))")"
 _BDEW_SUM=0
 for (( _i=0; _i<10; _i++ )); do
-    _p=$(( ${_BDEW_BASE:_i:1} * ${_BDEW_WTS[_i]} ))
-    (( _p >= 10 )) && (( _p -= 9 ))
-    (( _BDEW_SUM += _p ))
+    # _i is 0-based, so an even _i is an odd position (weight 1).
+    if (( _i % 2 == 0 )); then
+        (( _BDEW_SUM += ${_BDEW_BASE:_i:1} ))
+    else
+        (( _BDEW_SUM += ${_BDEW_BASE:_i:1} * 2 ))
+    fi
 done
 SMOKE_MALO_ID="${_BDEW_BASE}$(( (10 - _BDEW_SUM % 10) % 10 ))"
-unset _BDEW_BASE _BDEW_WTS _BDEW_SUM _p _i
+unset _BDEW_BASE _BDEW_SUM _i
 EDI_TMP=$(mktemp --suffix=.edi 2>/dev/null || mktemp)
 trap 'rm -f "$EDI_TMP"' EXIT
 
@@ -337,7 +352,7 @@ pass "GET /admin/partners → $COUNT partner(s) registered"
 # marktd's ingest endpoint and the Wechselprozess auto-responder fires:
 #   • Rules 0–6 all pass (MaLo present, NB matches, no active LF, preisblatt valid)
 #   • auto_accept=true → dispatches gpke.lieferbeginn.bestaetigen automatically
-#   • makod receives bestaetigen → enqueues UTILMD 55002 (Bestätigung Lieferbeginn)
+#   • makod receives bestaetigen → enqueues UTILMD 55002 (Bestätigung Anmeldung)
 
 info "[5/9] POST UTILMD 55001 (Lieferbeginn Strom — LFN→NB Anmeldung)"
 # Patch fixture with per-run unique identifiers to avoid deduplication on re-runs.
@@ -435,7 +450,13 @@ else
         echo "      Checking if processd NB auto-responder dispatched bestaetigen …"
         AUTO_UTILMD='[]'
         AUTO_COUNT=0
-        for _i in 1 2 3 4 5 6 7 8 9 10; do
+        # 30 s, not 10. The auto-responder path is what this demo is *about*,
+        # and the chain behind it is three network hops plus a makod outbox
+        # tick: marktd fan-out → processd → `mako-pruefung` → makod command →
+        # outbox → webhook. Ten seconds was inside that budget often enough to
+        # look deliberate, so a slow-but-correct run silently took the manual
+        # fallback at step 7 and the demo's headline claim went unverified.
+        for _i in $(seq 1 30); do
             sleep 1
             ALL=$(curl -sS "$WEBHOOK_URL/events" 2>/dev/null || echo '[]')
             AUTO_UTILMD=$(printf '%s' "$ALL" | jq '[.[] | select(.body.type == "de.mako.edifact.outbound" and .body.makomessagetype == "UTILMD")]' 2>/dev/null || echo '[]')
@@ -541,7 +562,7 @@ else
         [[ "$UCOUNT" -gt 0 ]] && break
     done
     if [[ "$UCOUNT" -gt 0 ]]; then
-        pass "UTILMD 55002 Bestätigung Lieferbeginn delivered to LFN:"
+        pass "UTILMD 55002 Bestätigung Anmeldung delivered to LFN:"
         echo
         printf '%s' "$UTILMD_EVENTS" | jq '.[] | .body | {type, subject, makomessagetype, makorecipient, edifact: .data.edifact}'
         echo
@@ -551,7 +572,7 @@ else
         if [[ -n "${MARKTD_URL:-}" && "$AUTO_COUNT" -gt 0 ]]; then
             pass "UTILMD 55002 was already verified in step 6c (auto-responder path)"
         else
-            fail "No UTILMD 55002 after 12 s — expected Bestätigung Lieferbeginn"
+            fail "No UTILMD 55002 after 12 s — expected Bestätigung Anmeldung"
         fi
     fi
 fi

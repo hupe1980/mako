@@ -95,9 +95,6 @@ struct TypeMeta {
     /// types; UTILMD differs because Strom and Gas name the Marktlokation with
     /// different `LOC` qualifiers.
     extra: fn(Sparte) -> &'static [&'static str],
-    /// Segment count inside the message (UNH … UNT inclusive).
-    /// Used for the UNT control count.  `0` means computed dynamically.
-    seg_count_base: u32,
 }
 
 fn bgm_8digit(prefix: &str, pid: u32, suffix: &str) -> String {
@@ -164,88 +161,74 @@ fn type_meta(msg_type: &str) -> Option<TypeMeta> {
             unh_prefix: "APERAK:D:07B:UN",
             bgm: |pid, _| bgm_8digit("312+", pid, "+9"),
             extra: |_| &[],
-            seg_count_base: 7,
         }),
         "comdis" => Some(TypeMeta {
             unh_prefix: "COMDIS:D:17A:UN",
             // ABL prefix used in practice; RFF+Z13 carries the pure PID for coverage.
             bgm: |pid, _| bgm_alphanum("739+ABL", pid, "001", ""),
             extra: |_| &[],
-            seg_count_base: 7,
         }),
         "iftsta" => Some(TypeMeta {
             unh_prefix: "IFTSTA:D:18A:UN",
             bgm: |pid, _| bgm_8digit("Z03+", pid, ""),
             extra: |_| &[],
-            seg_count_base: 6,
         }),
         "insrpt" => Some(TypeMeta {
             unh_prefix: "INSRPT:D:96A:UN",
             bgm: |pid, _| bgm_8digit("4+", pid, ""),
             extra: |_| &[],
-            seg_count_base: 7,
         }),
         "invoic" => Some(TypeMeta {
             unh_prefix: "INVOIC:D:06A:UN",
             bgm: |pid, _| bgm_8digit("380+", pid, ""),
             extra: |_| &[],
-            seg_count_base: 7,
         }),
         "mscons" => Some(TypeMeta {
             unh_prefix: "MSCONS:D:04B:UN",
             bgm: |pid, _| format!("BGM+7:::+{pid:08}::+9'"),
             // MSCONS names the Messlokation with `LOC+172` in both Sparten.
             extra: |_| &["UNS+D'", "LOC+172+51238696781'", "QTY+220:1500.000:KWH'"],
-            seg_count_base: 10,
         }),
         "ordchg" => Some(TypeMeta {
             unh_prefix: "ORDCHG:D:20B:UN",
             bgm: |pid, _| bgm_8digit("Z51+", pid, ""),
             extra: |_| &[],
-            seg_count_base: 7,
         }),
         "orders" => Some(TypeMeta {
             unh_prefix: "ORDERS:D:09B:UN",
             bgm: |pid, _| bgm_8digit("Z55+", pid, "+9"),
             extra: |_| &[],
-            seg_count_base: 7,
         }),
         "ordrsp" => Some(TypeMeta {
             unh_prefix: "ORDRSP:D:10A:UN",
             bgm: |pid, _| bgm_8digit("7+", pid, ""),
             extra: |_| &[],
-            seg_count_base: 7,
         }),
         "partin" => Some(TypeMeta {
             unh_prefix: "PARTIN:D:20B:UN",
             bgm: |pid, _| bgm_8digit("35+", pid, ""),
             extra: |_| &[],
-            seg_count_base: 7,
         }),
         "pricat" => Some(TypeMeta {
             unh_prefix: "PRICAT:D:20B:UN",
             // PRIC prefix used in practice; RFF+Z13 carries the pure PID.
             bgm: |pid, _| bgm_alphanum("Z32+PRIC", pid, "001", ""),
             extra: |_| &[],
-            seg_count_base: 7,
         }),
         "quotes" => Some(TypeMeta {
             unh_prefix: "QUOTES:D:10A:UN",
             bgm: |pid, _| bgm_8digit("310+", pid, ""),
             extra: |_| &[],
-            seg_count_base: 7,
         }),
         "remadv" => Some(TypeMeta {
             unh_prefix: "REMADV:D:05A:UN",
             bgm: |pid, _| bgm_8digit("239+", pid, ""),
             extra: |_| &[],
-            seg_count_base: 7,
         }),
         "reqote" => Some(TypeMeta {
             unh_prefix: "REQOTE:D:10A:UN",
             bgm: |pid, _| bgm_8digit("311+", pid, ""),
             extra: |_| &[],
-            seg_count_base: 7,
         }),
         "utilmd" => Some(TypeMeta {
             unh_prefix: "UTILMD:D:11A:UN",
@@ -259,14 +242,12 @@ fn type_meta(msg_type: &str) -> Option<TypeMeta> {
                 Sparte::Gas => &["IDE+24+VORGANG-0001'", "LOC+172+51238696781'"],
             },
             // UNH, BGM, DTM, RFF, NAD, NAD and UNT — `extra` is added on top.
-            seg_count_base: 7,
         }),
         "utilts" => Some(TypeMeta {
             unh_prefix: "UTILTS:D:18A:UN",
             // UTILTS prefix in practice; RFF+Z13 carries the pure PID.
             bgm: |pid, _| bgm_alphanum("Z36+UTILTS", pid, "001", ""),
             extra: |_| &[],
-            seg_count_base: 7,
         }),
         _ => None,
     }
@@ -278,7 +259,6 @@ fn render_fixture(meta: &TypeMeta, pid: u32, release: &str, de1001: Option<&str>
     let bgm_line = (meta.bgm)(pid, de1001);
     let sparte = Sparte::from_release(release);
     let extra = (meta.extra)(sparte);
-    let seg_count = meta.seg_count_base + extra.len() as u32;
 
     // The two parties are issued by different registers, so they do not share a
     // DE 3055: the sender is a GS1 GLN, the receiver a BDEW-Codenummer.
@@ -289,7 +269,7 @@ fn render_fixture(meta: &TypeMeta, pid: u32, release: &str, de1001: Option<&str>
         format!("UNB+UNOC:3+{sender}:14+{receiver}:14+230101:0000+1'"),
         format!("UNH+1+{}:{}'", meta.unh_prefix, release),
         bgm_line,
-        "DTM+137:20230101:102'".to_string(),
+        "DTM+137:202301010000?+00:303'".to_string(),
         format!("RFF+Z13:{pid}'"),
         format!("NAD+MS+{sender}::{}'", agency_for(sender)),
         format!("NAD+MR+{receiver}::{}'", agency_for(receiver)),
@@ -297,6 +277,11 @@ fn render_fixture(meta: &TypeMeta, pid: u32, release: &str, de1001: Option<&str>
     for extra in extra {
         lines.push(extra.to_string());
     }
+    // UNT DE 0074 counts the segments of the message, UNH and UNT included;
+    // `lines` currently holds UNB plus the message body, so the two cancel.
+    // Derived rather than declared — a count kept apart from the thing it
+    // counts drifts, and a wrong one is refused by the receiver.
+    let seg_count = lines.len(); // − UNB + UNT = same number
     lines.push(format!("UNT+{seg_count}+1'"));
     lines.push("UNZ+1+1'".to_string());
     lines.join("\n") + "\n"

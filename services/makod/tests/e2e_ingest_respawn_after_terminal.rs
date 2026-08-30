@@ -37,7 +37,7 @@ fn orders_17115(control_ref: &str) -> String {
         "UNB+UNOC:3+{LF_MP_ID}:14+{NB_MP_ID}:14+250115:0800+{control_ref}'\
 UNH+{control_ref}+ORDERS:D:09B:UN:1.4b'\
 BGM+Z55+00017115+9'\
-DTM+137:20250115:102'\
+DTM+137:202501150800?+00:303'\
 RFF+Z13:{control_ref}'\
 NAD+MS+{LF_MP_ID}::293'\
 NAD+MR+{NB_MP_ID}::293'\

@@ -24,7 +24,7 @@ const IMPOSTOR: &str = "9900111000002";
 fn interchange(unb_sender: &str, nad_sender: &str) -> Vec<u8> {
     format!(
         "UNB+UNOC:3+{unb_sender}:500+{RECEIVER}:500+260804:1045+REF1'\
-UNH+MSG1+REQOTE:D:10A:UN:1.3c'BGM+311+35003'DTM+137:20260804:102'\
+UNH+MSG1+REQOTE:D:10A:UN:1.3c'BGM+311+35003'DTM+137:202608041045?+00:303'\
 RFF+Z13:35003'NAD+MS+{nad_sender}::293'NAD+MR+{RECEIVER}::293'\
 UNT+7+MSG1'UNZ+1+REF1'"
     )
@@ -73,7 +73,7 @@ fn a_sender_claiming_another_party_in_nad_is_rejected() {
 fn a_receiver_mismatch_is_rejected_too() {
     let wire = format!(
         "UNB+UNOC:3+{SENDER}:500+{RECEIVER}:500+260804:1045+REF1'\
-UNH+MSG1+REQOTE:D:10A:UN:1.3c'BGM+311+35003'DTM+137:20260804:102'\
+UNH+MSG1+REQOTE:D:10A:UN:1.3c'BGM+311+35003'DTM+137:202608041045?+00:303'\
 RFF+Z13:35003'NAD+MS+{SENDER}::293'NAD+MR+{IMPOSTOR}::293'\
 UNT+7+MSG1'UNZ+1+REF1'"
     )
@@ -97,7 +97,7 @@ UNT+7+MSG1'UNZ+1+REF1'"
 fn a_message_without_a_sender_nad_is_not_a_mismatch() {
     let wire = format!(
         "UNB+UNOC:3+{SENDER}:500+{RECEIVER}:500+260804:1045+REF1'\
-UNH+MSG1+REQOTE:D:10A:UN:1.3c'BGM+311+35003'DTM+137:20260804:102'\
+UNH+MSG1+REQOTE:D:10A:UN:1.3c'BGM+311+35003'DTM+137:202608041045?+00:303'\
 RFF+Z13:35003'NAD+MR+{RECEIVER}::293'\
 UNT+6+MSG1'UNZ+1+REF1'"
     )
@@ -132,7 +132,7 @@ fn the_unb_qualifier_is_read_from_the_right_component() {
 fn a_gln_sender_keeps_its_own_qualifier() {
     let wire = format!(
         "UNB+UNOC:3+4012345000023:14+{RECEIVER}:500+260804:1045+REF1'\
-UNH+MSG1+REQOTE:D:10A:UN:1.3c'BGM+311+35003'DTM+137:20260804:102'\
+UNH+MSG1+REQOTE:D:10A:UN:1.3c'BGM+311+35003'DTM+137:202608041045?+00:303'\
 RFF+Z13:35003'NAD+MS+4012345000023::9'NAD+MR+{RECEIVER}::293'\
 UNT+7+MSG1'UNZ+1+REF1'"
     )

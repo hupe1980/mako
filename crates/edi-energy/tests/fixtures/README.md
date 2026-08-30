@@ -10,7 +10,34 @@ fixtures/
   <message_type>/
     valid/       — must parse + validate without errors
     invalid/     — must parse; validation must produce errors matching .expected.json
+    gen/         — synthetic PID witnesses (`cargo xtask generate-fixtures`)
 ```
+
+### What each directory asserts
+
+| Directory | Asserted by | Claim |
+|---|---|---|
+| `valid/` | `conformance.rs` | mako reads this Anwendungsfall and finds nothing wrong |
+| `invalid/` | `conformance.rs` + `.expected.json` | mako refuses it, for the stated reason |
+| `gen/` | nothing about content | the Prüfidentifikator appears somewhere in the corpus |
+
+A `gen/` fixture carries the PID and the segments every message has, not the
+ones the AHB marks Muss for that Prüfidentifikator, so it validates with errors
+by construction. `validate-pruefids` therefore reports two coverage numbers:
+total, and the curated subset the conformance suite asserts clean. The second is
+the one that means mako reads the Anwendungsfall.
+
+## Corpus-wide invariants
+
+`validation_snapshot.txt` records each fixture's verdict and fails when one
+moves. Two things it cannot express are asserted separately:
+
+- **`validation_snapshot.rs::every_fixture_parses_and_is_judged`** — no fixture
+  may fail to parse or to validate. Such a fixture never reaches the rule
+  layers, so an unchanging failure is an unchanging verdict and the snapshot
+  stays green.
+- **`demo_fixtures.rs`** — the fixtures under `demos/` are outside this corpus
+  and are validated there instead.
 
 ## Fixture Naming Convention
 

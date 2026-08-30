@@ -54,6 +54,21 @@ struct MigProfile {
     /// `"rff_z13"`: extracted from the first top-level RFF segment with qualifier Z13.
     #[serde(default)]
     pid_source: PidSourceJson,
+    /// DE 2005 date qualifier → the DE 2379 format codes the MIG admits for it.
+    ///
+    /// Read off the MIG segment-layout tables, where each `DTM` block fixes
+    /// DE 2005 and DE 2379 together (`2005 … 137 Dokumentendatum` /
+    /// `2379 … 303 CCYYMMDDHHMMZZZ`). The format code decides whether a
+    /// receiver reads a zoned timestamp or a bare date, and nothing else in the
+    /// profiles constrains it — DE 2379 has no `codelists.json` table, which is
+    /// how every fixture in the corpus carried `DTM+137:…:102`, a shape no MIG
+    /// defines.
+    ///
+    /// A qualifier maps to a **set** because a few are genuinely
+    /// context-dependent: UTILMD `DTM+157` is `610` (`CCYYMM`) on a
+    /// Clearingliste and `303` as „Änderung zum". Empty means unconstrained.
+    #[serde(default)]
+    dtm_formats: std::collections::BTreeMap<String, Vec<String>>,
     /// The **Anwendungszeitpunkt**: first date on which this profile is
     /// normatively valid. ISO 8601, e.g. `"2025-10-01"`.
     ///
@@ -2375,6 +2390,9 @@ fn emit_mig_rule_pack(
         writeln!(out, "            .with_rule_fn({fn_name})").unwrap();
     }
     writeln!(out, "            .with_rule_fn(rule_segment_order)").unwrap();
+    if !mig.dtm_formats.is_empty() {
+        writeln!(out, "            .with_rule_fn(rule_dtm_format)").unwrap();
+    }
     writeln!(out, "        )").unwrap();
     writeln!(out, "    }});").unwrap();
     writeln!(out).unwrap();
@@ -3023,6 +3041,7 @@ fn emit_segment_order_rule_fn(out: &mut String, mig: &MigProfile, pack_name: &st
         "    /// it only checks that tag positions are non-decreasing w.r.t. the expected order."
     )
     .unwrap();
+    emit_dtm_format_rule(out, mig);
     writeln!(out, "    fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {{").unwrap();
 
     if has_uns_split {
@@ -5231,15 +5250,31 @@ fn emit_mod_rs(profiles: &[ProfileData]) -> String {
         writeln!(out, "    None").unwrap();
     } else {
         writeln!(out, "    match (message_type, release) {{").unwrap();
+        // Group by feature: a message type with several archived releases gives
+        // every one of them the same gate, and separate arms with identical
+        // bodies are a `clippy::match_same_arms` error. Merging the patterns is
+        // also what the arm means — "any of these releases is behind that
+        // feature".
+        let mut by_feature: std::collections::BTreeMap<String, Vec<&str>> =
+            std::collections::BTreeMap::new();
         for p in &archived {
-            let archive_feature = archive_feature_name(&p.message_type);
-            let mt_str = &p.message_type; // already uppercase
-            let release_str = &p.release;
-            writeln!(
-                out,
-                "        ({mt_str:?}, {release_str:?}) => Some({archive_feature:?}),"
-            )
-            .unwrap();
+            by_feature
+                .entry(archive_feature_name(&p.message_type))
+                .or_default()
+                .push(&p.release);
+        }
+        for (archive_feature, releases) in &by_feature {
+            let mt_str = archived
+                .iter()
+                .find(|p| archive_feature_name(&p.message_type) == *archive_feature)
+                .map(|p| p.message_type.clone())
+                .unwrap_or_default();
+            let patterns = releases
+                .iter()
+                .map(|r| format!("({mt_str:?}, {r:?})"))
+                .collect::<Vec<_>>()
+                .join(" | ");
+            writeln!(out, "        {patterns} => Some({archive_feature:?}),").unwrap();
         }
         writeln!(out, "        _ => None,").unwrap();
         writeln!(out, "    }}").unwrap();
@@ -5367,6 +5402,88 @@ fn title_case(code: &str) -> String {
     }
 }
 
+/// Emit `rule_dtm_format` — DE 2379 must be one of the codes the MIG pairs with
+/// this `DTM`'s DE 2005 qualifier.
+///
+/// The one date element every EDI@Energy message carries had no validation at
+/// all: DE 2379 has no `codelists.json` table, and the AHB constrains DE 2005
+/// only. So `DTM+137:20260701:102` — an eight-digit date in a format no MIG
+/// defines, where every MIG fixes `303 CCYYMMDDHHMMZZZ` — was `clean` in all
+/// 386 corpus fixtures and in the demo, while every builder emitted `303`.
+///
+/// The check is skipped for a qualifier the table does not name, so a profile
+/// whose `dtm_formats` is partial stays usable and never false-positives.
+fn emit_dtm_format_rule(out: &mut String, mig: &MigProfile) {
+    if mig.dtm_formats.is_empty() {
+        return;
+    }
+    writeln!(
+        out,
+        "    /// DE 2005 qualifier → the DE 2379 format codes the MIG admits.\n\
+         \x20   ///\n\
+         \x20   /// Sorted, so the lookup is a binary search."
+    )
+    .unwrap();
+    writeln!(out, "    static DTM_FORMATS: &[(&str, &[&str])] = &[").unwrap();
+    for (qual, formats) in &mig.dtm_formats {
+        let mut fs = formats.clone();
+        fs.sort();
+        fs.dedup();
+        let rendered = fs
+            .iter()
+            .map(|f| format!("{f:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(out, "        ({qual:?}, &[{rendered}]),").unwrap();
+    }
+    writeln!(out, "    ];").unwrap();
+    writeln!(out).unwrap();
+    writeln!(
+        out,
+        r#"    /// `MIG-DTM-2379` — the DTM's format code must be one the MIG pairs
+    /// with its qualifier.
+    fn rule_dtm_format(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {{
+        for seg in segments.iter().filter(|s| s.tag == "DTM") {{
+            let Some(qualifier) = seg.component_str(0, 0) else {{
+                continue;
+            }};
+            let Ok(idx) = DTM_FORMATS.binary_search_by_key(&qualifier, |(q, _)| q) else {{
+                // A qualifier the MIG table does not name is left to the DE 2005
+                // code list; constraining its format here would be inventing a rule.
+                continue;
+            }};
+            let allowed = DTM_FORMATS[idx].1;
+            let actual = seg.component_str(0, 2);
+            if actual.is_some_and(|f| allowed.contains(&f)) {{
+                continue;
+            }}
+            issues.push(
+                ValidationIssue::new(
+                    ValidationSeverity::Error,
+                    format!(
+                        "segment DTM DE 2379 (element 0, component 2): \
+                         qualifier '{{qualifier}}' takes format {{}}, not {{}}",
+                        allowed
+                            .iter()
+                            .map(|f| format!("'{{f}}'"))
+                            .collect::<Vec<_>>()
+                            .join(" or "),
+                        actual.map_or_else(
+                            || "nothing".to_owned(),
+                            |f| format!("'{{f}}'")
+                        ),
+                    ),
+                )
+                .with_rule_id("MIG-DTM-2379")
+                .with_segment("DTM".to_owned()),
+            );
+        }}
+    }}"#
+    )
+    .unwrap();
+    writeln!(out).unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5477,6 +5594,7 @@ mod tests {
     #[test]
     fn mig_segment_sequence_uses_ordering_hint() {
         let mig = MigProfile {
+            dtm_formats: std::collections::BTreeMap::new(),
             schema_version: 1,
             message_type: "MSCONS".into(),
             release: "2.4c".into(),
@@ -5500,6 +5618,7 @@ mod tests {
     #[test]
     fn mig_segment_sequence_auto_derives_with_unt() {
         let mig = MigProfile {
+            dtm_formats: std::collections::BTreeMap::new(),
             schema_version: 1,
             message_type: "APERAK".into(),
             release: "2.1i".into(),
@@ -5578,6 +5697,7 @@ mod tests {
             }
         }
         let mig = MigProfile {
+            dtm_formats: std::collections::BTreeMap::new(),
             schema_version: 1,
             message_type: "UTILMD".into(),
             release: "S2.2".into(),
@@ -5652,6 +5772,7 @@ mod tests {
             }
         }
         let mig = MigProfile {
+            dtm_formats: std::collections::BTreeMap::new(),
             schema_version: 1,
             message_type: "UTILMD".into(),
             release: "S2.2".into(),

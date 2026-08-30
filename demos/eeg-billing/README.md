@@ -69,11 +69,8 @@ docker build --target edmd-runtime    -t edmd:dev    .
 docker build --target einsd-runtime   -t einsd:dev   .
 ```
 
-Or build all three in parallel with `docker buildx bake`:
-
-```bash
-docker buildx bake marktd edmd einsd
-```
+> Not `docker buildx bake` — that file is the CI push path (`push-by-digest`),
+> so it fails on the default docker driver and never loads a local `:dev` tag.
 
 ## Run the demo
 
@@ -114,7 +111,7 @@ All EEG billing smoke tests passed.
 | `http://localhost:9180/api/v1/anlagen/TR0000000001` | Plant registration details |
 | `http://localhost:9180/api/v1/anlagen/TR0000000001/settlements?year=2026&month=6` | Settlement receipt |
 | `http://localhost:8380/api/v1/billing-period/17835382008?from=2026-06-01&to=2026-07-01` | edmd billing period aggregate |
-| `http://localhost:9180/mcp` | einsd MCP server (18 tools) |
+| `http://localhost:9180/mcp` | einsd MCP server (19 tools) |
 | `http://localhost:8380/mcp` | edmd MCP server (15 tools) |
 | `http://localhost:8000/events` | ERP webhook event log |
 

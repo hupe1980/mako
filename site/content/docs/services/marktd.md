@@ -490,11 +490,11 @@ inside the JSON payload.
 ```json
 {
   "data": {
-    "bo_typ": "PREISBLATT_NETZNUTZUNG",
+    "_typ": "PREISBLATT_NETZNUTZUNG",
     "bezeichnung": "Netznutzungspreise 2025 — 9900357000004",
     "gueltigkeit": { "startdatum": "2025-10-01", "enddatum": "2026-09-30" },
     "marktteilnehmer": {
-      "bo_typ": "MARKTTEILNEHMER",
+      "_typ": "MARKTTEILNEHMER",
       "marktrolle": "NB",
       "rollencodenummer": "9900357000004",
       "rollencodetyp": "BDEW"
@@ -509,7 +509,7 @@ inside the JSON payload.
 
 ```json
 {
-  "data":         { "bo_typ": "PREISBLATT_NETZNUTZUNG", ... },
+  "data":         { "_typ": "PREISBLATT_NETZNUTZUNG", ... },
   "source":       "api",
   "bo4e_version": "202607.1.0",
   "updated_at":   "2025-10-01T08:15:00Z",
@@ -642,23 +642,36 @@ partner payload as `rubo4e::current::Geschaeftspartner`.
 
 ### Schema validation on PUT
 
-The `PUT /api/v1/partners/{mp_id}` handler:
-1. Auto-injects `"_typ": "GESCHAEFTSPARTNER"` when absent.
-2. Rejects 422 when `_typ` is wrong.
-3. Validates all enum fields (`marktrolle`, `rollencodetyp`, `marktteilnehmerstatus`, `adresse`) via `rubo4e::current::Geschaeftspartner`.
-4. Re-serialises to canonical BO4E camelCase before storage.
+The record has two halves, validated differently:
+
+| Part | Validation |
+|---|---|
+| `marktrolle`, `rollencodetyp`, `sparte` — top-level record fields | Typed enums; `422` when serde's lenient decode falls through to `Unknown` (a typo, or the legacy EDIFACT `LFG` — BO4E models a gas supplier as `LF` + `rollencodetyp: DVGW`) |
+| `channels` — the BO4E payload | Decoded as `rubo4e::current::Geschaeftspartner`: `_typ` injected when absent, `422` when it names another type, every declared enum checked, re-serialised to canonical camelCase before storage |
+
+> `marktrolle`, `rollencodetyp` and `marktteilnehmerstatus` are **`Marktteilnehmer`**
+> fields — BO4E does not define them on `Geschaeftspartner`. Putting them inside
+> `channels` does not fail: the decode absorbs them as extension fields, stores
+> them unvalidated and reads them back as nothing. The role fields belong at the
+> top level, where they are typed.
 
 ```bash
-# Register a trading partner (LF, validated as Geschaeftspartner)
+# Register a trading partner (LF). The role fields are top-level; `channels`
+# carries the Geschaeftspartner.
 curl -s -X PUT "http://marktd:8180/api/v1/partners/9904234560001" \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
+    "display_name": "Muster Energieversorgung GmbH",
+    "marktrolle":    "LF",
+    "rollencodetyp": "BDEW",
+    "sparte":        "STROM",
+    "makoadresse":   ["https://as4.muster-ev.de/as4/in"],
     "channels": {
-      "marktrolle": "LF",
-      "rollencodetyp": "BDEW",
-      "marktteilnehmerstatus": "AKTIV",
+      "_typ": "GESCHAEFTSPARTNER",
+      "anrede": "FRAU",
       "adresse": {
+        "_typ": "ADRESSE",
         "strasse": "Musterstraße",
         "hausnummer": "1",
         "postleitzahl": "10115",
@@ -683,10 +696,8 @@ field containing the typed `rubo4e::current::Geschaeftspartner` payload:
   "makoadresse": ["https://as4.muster-ev.de/as4/in"],
   "geschaeftspartner": {
     "_typ": "GESCHAEFTSPARTNER",
-    "marktrolle": "LF",
-    "rollencodetyp": "BDEW",
-    "marktteilnehmerstatus": "AKTIV",
-    "adresse": { "strasse": "Musterstraße", "hausnummer": "1", ... }
+    "anrede": "FRAU",
+    "adresse": { "_typ": "ADRESSE", "strasse": "Musterstraße", "hausnummer": "1", ... }
   },
   "version": 3,
   "updated_at": "2026-07-11T09:15:00Z"
@@ -1419,7 +1430,7 @@ curl -s -X PUT "http://marktd:8180/api/v1/preisblaetter-messung/9900012345678" \
   -H "Content-Type: application/json" \
   -d '{
     "data": {
-      "bo_typ": "PREISBLATT_MESSUNG",
+      "_typ": "PREISBLATT_MESSUNG",
       "bezeichnung": "Messentgelte 2026",
       "gueltigkeit": { "startdatum": "2026-10-01", "enddatum": "2027-09-30" },
       "preispositionen": [],

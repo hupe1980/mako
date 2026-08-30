@@ -113,3 +113,9 @@ graph LR
 > Prüfidentifikator the workspace registers has an `.edi` fixture behind it and
 > that no fixture is orphaned. CI runs it with `--strict --min-coverage 100`, so
 > the floor is full coverage and the command prints the count it reached.
+>
+> Coverage is reported twice: total, and the curated subset. A synthetic `gen/`
+> fixture carries the Prüfidentifikator and nothing else the AHB marks Muss, so
+> it evidences that the PID is registered — only a curated `valid/` fixture,
+> asserted clean by the conformance suite, evidences that mako reads the
+> Anwendungsfall.

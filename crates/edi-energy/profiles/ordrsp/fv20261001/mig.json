@@ -20,6 +20,26 @@
     "MOA",
     "UNT"
   ],
+  "dtm_formats": {
+    "137": [
+      "303"
+    ],
+    "203": [
+      "303"
+    ],
+    "292": [
+      "303"
+    ],
+    "469": [
+      "303"
+    ],
+    "472": [
+      "303"
+    ],
+    "Z02": [
+      "303"
+    ]
+  },
   "segments": [
     {
       "tag": "UNH",
@@ -365,7 +385,7 @@
       "groups": []
     }
   ],
-  "ahb_revision": "1.4c",
+  "ahb_revision": "1.1b",
   "source_document": "ORDRSP MIG 1.4c, Publikationsdatum 01.04.2026",
   "pid_source": "rff_z13",
   "publikationsdatum": "2026-04-01"

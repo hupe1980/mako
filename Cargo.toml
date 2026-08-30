@@ -49,7 +49,7 @@ members = [
 exclude = ["fuzz"]
 
 [workspace.package]
-version     = "0.17.0"
+version     = "0.18.0"
 authors     = ["hupe1980"]
 edition     = "2024"
 license     = "MIT OR Apache-2.0"
@@ -107,38 +107,38 @@ figment-file-provider-adapter = { version = "0.1", package = "figment_file_provi
 schemars                  = { version = "1.2.1" }
 
 # ── Internal workspace crates (path + version so domain crates can be published) ─
-edi-energy       = { path = "crates/edi-energy",  version = "0.17" }
-mako-engine      = { path = "crates/mako-engine",      version = "0.17" }
-mako-markt       = { path = "crates/mako-markt",       version = "0.17" }
-mako-events      = { path = "crates/mako-events",      version = "0.17" }
-grid-billing     = { path = "crates/grid-billing",     version = "0.17" }
-eeg-billing      = { path = "crates/eeg-billing",      version = "0.17" }
-mako-obs         = { path = "crates/mako-obs",         version = "0.17" }
-mako-wim         = { path = "crates/mako-wim",         version = "0.17" }
-mako-gpke        = { path = "crates/mako-gpke",        version = "0.17" }
+edi-energy       = { path = "crates/edi-energy",  version = "0.18" }
+mako-engine      = { path = "crates/mako-engine",      version = "0.18" }
+mako-markt       = { path = "crates/mako-markt",       version = "0.18" }
+mako-events      = { path = "crates/mako-events",      version = "0.18" }
+grid-billing     = { path = "crates/grid-billing",     version = "0.18" }
+eeg-billing      = { path = "crates/eeg-billing",      version = "0.18" }
+mako-obs         = { path = "crates/mako-obs",         version = "0.18" }
+mako-wim         = { path = "crates/mako-wim",         version = "0.18" }
+mako-gpke        = { path = "crates/mako-gpke",        version = "0.18" }
 # The INVOIC settle/dispute state machine, shared by every billing family.
 # GPKE, WiM, GaBi Gas and GeLi Gas register a family against it rather than
 # re-implementing the process — four copies had already drifted apart.
-mako-invoic      = { path = "crates/mako-invoic",      version = "0.17" }
-mako-geli-gas    = { path = "crates/mako-geli-gas",    version = "0.17" }
+mako-invoic      = { path = "crates/mako-invoic",      version = "0.18" }
+mako-geli-gas    = { path = "crates/mako-geli-gas",    version = "0.18" }
 # Every Frist in one leaf crate: BDEW Werktage, the MaKo holiday calendar, and
 # the per-Prüfidentifikator Antwortfrist tables. `mako-engine` re-exports it as
 # `mako_engine::fristen`, so existing call sites are unchanged.
-mako-fristen     = { path = "crates/mako-fristen",     version = "0.17" }
+mako-fristen     = { path = "crates/mako-fristen",     version = "0.18" }
 # AS4/ebMS3 stack behind the BDEW MaKo profile. Declared once here because
 # mako-as4 and makod both depend on it: independent declarations drift onto two
 # versions in one build.
 asx-rs           = { version = "0.13" }
-mako-service     = { path = "crates/mako-service",     version = "0.17" }
-mako-plugin      = { path = "crates/mako-plugin",      version = "0.17" }
-invoic-checker   = { path = "crates/invoic-checker",   version = "0.17" }
+mako-service     = { path = "crates/mako-service",     version = "0.18" }
+mako-plugin      = { path = "crates/mako-plugin",      version = "0.18" }
+invoic-checker   = { path = "crates/invoic-checker",   version = "0.18" }
 # `default-features = false` on purpose: the crate's defaults are *every*
 # Marktrolle's Entscheidungsbäume. A member that inherits this dependency names
 # the roles it actually checks (`features = ["role-msb"]`), so the feature graph
 # says which trees a build carries instead of every build carrying all of them.
-mako-pruefung      = { path = "crates/mako-pruefung",      version = "0.17", default-features = false }
-energy-billing   = { path = "crates/energy-billing",   version = "0.17" }
-dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.17" }
+mako-pruefung      = { path = "crates/mako-pruefung",      version = "0.18", default-features = false }
+energy-billing   = { path = "crates/energy-billing",   version = "0.18" }
+dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.18" }
 metering         = { version = "0.19" }
 sepa             = { version = "0.6.0" }
 # Immutable, tamper-evident double-entry ledger kernel (sibling repo). accountingd's

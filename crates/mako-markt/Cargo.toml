@@ -45,3 +45,8 @@ rust_decimal = { workspace = true }
 [dev-dependencies]
 tokio      = { version = "1", features = ["full"] }
 serde_json = { workspace = true }
+# The MaLo push crosses a service boundary: marktd builds the body, makod
+# deserialises it into `energy_api`'s `DataMarketLocation`. Asserting the shape
+# against the real type is the only way the two stay in step — a hand-written
+# expectation would have agreed with the broken integer form.
+energy-api = { path = "../energy-api" }

@@ -77,10 +77,10 @@ echo "════ Pre-load: seed master data into marktd ════"
 echo
 
 info "[P1] PUT MaLo ${MALO_ID} into marktd (Einspeiser)"
-HTTP=$(curl -sf -w '\n%{http_code}' -X PUT "${MARKTD_URL}/api/v1/malos/${MALO_ID}" \
+HTTP=$(curl -s -w '\n%{http_code}' -X PUT "${MARKTD_URL}/api/v1/malos/${MALO_ID}" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer demo-secret-change-me" \
-    -d @fixtures/malo.json 2>/dev/null || echo -e "\n000")
+    -d @fixtures/malo.json 2>/dev/null || printf "\n000")
 CODE=$(echo "$HTTP" | tail -1)
 if [[ "$CODE" == "200" || "$CODE" == "201" ]]; then
     pass "PUT /api/v1/malos/${MALO_ID} → ${CODE}"
@@ -96,12 +96,12 @@ echo
 
 info "[1/6] Register EEG plant ${TR_ID} (9.8 kWp solar rooftop, EEG 2023)"
 PLANT=$(cat fixtures/anlage.json)
-HTTP=$(curl -sf -w '\n%{http_code}' -X PUT "${EINSD_URL}/api/v1/anlagen/${TR_ID}" \
+HTTP=$(curl -s -w '\n%{http_code}' -X PUT "${EINSD_URL}/api/v1/anlagen/${TR_ID}" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer demo-secret-change-me" \
-    -d "$PLANT" 2>/dev/null || echo -e "\n000")
+    -d "$PLANT" 2>/dev/null || printf "\n000")
 CODE=$(echo "$HTTP" | tail -1)
-BODY=$(echo "$HTTP" | head -1)
+BODY=$(echo "$HTTP" | sed '$d')
 if [[ "$CODE" == "200" || "$CODE" == "201" || "$CODE" == "204" ]]; then
     pass "PUT /api/v1/anlagen/${TR_ID} → ${CODE} (plant registered)"
 else
@@ -109,10 +109,10 @@ else
 fi
 
 info "[2/6] GET plant (verify registration)"
-HTTP=$(curl -sf -w '\n%{http_code}' "${EINSD_URL}/api/v1/anlagen/${TR_ID}" \
-    -H "Authorization: Bearer demo-secret-change-me" 2>/dev/null || echo -e "\n000")
+HTTP=$(curl -s -w '\n%{http_code}' "${EINSD_URL}/api/v1/anlagen/${TR_ID}" \
+    -H "Authorization: Bearer demo-secret-change-me" 2>/dev/null || printf "\n000")
 CODE=$(echo "$HTTP" | tail -1)
-BODY=$(echo "$HTTP" | head -1)
+BODY=$(echo "$HTTP" | sed '$d')
 ANLAGE_STATUS=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','?'))" 2>/dev/null || echo "?")
 VERGUETUNG=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('verguetungssatz_ct','?'))" 2>/dev/null || echo "?")
 if [[ "$CODE" == "200" && "$ANLAGE_STATUS" == "aktiv" ]]; then
@@ -142,12 +142,12 @@ for i in $(seq 0 95); do
 done
 READS="${READS}]"
 
-HTTP=$(curl -sf -w '\n%{http_code}' -X POST "${EDMD_URL}/api/v1/meter-reads/rlm/${MALO_ID}" \
+HTTP=$(curl -s -w '\n%{http_code}' -X POST "${EDMD_URL}/api/v1/meter-reads/rlm/${MALO_ID}" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer demo-secret-change-me" \
-    -d "{\"intervals\":${READS},\"sparte\":\"STROM\",\"source\":\"DIRECT_PUSH\"}" 2>/dev/null || echo -e "\n000")
+    -d "{\"intervals\":${READS},\"sparte\":\"STROM\",\"source\":\"DIRECT_PUSH\"}" 2>/dev/null || printf "\n000")
 CODE=$(echo "$HTTP" | tail -1)
-BODY=$(echo "$HTTP" | head -1)
+BODY=$(echo "$HTTP" | sed '$d')
 STORED=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('intervals_accepted',d.get('stored_count',0)))" 2>/dev/null || echo "?")
 if [[ "$CODE" == "200" || "$CODE" == "201" ]]; then
     pass "POST /api/v1/meter-reads/rlm/${MALO_ID} → ${CODE}  stored=${STORED} intervals"
@@ -170,10 +170,10 @@ for day in $(seq 2 30); do
 done
 DAILY_READS="${DAILY_READS}]"
 
-HTTP=$(curl -sf -w '\n%{http_code}' -X POST "${EDMD_URL}/api/v1/meter-reads/rlm/${MALO_ID}" \
+HTTP=$(curl -s -w '\n%{http_code}' -X POST "${EDMD_URL}/api/v1/meter-reads/rlm/${MALO_ID}" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer demo-secret-change-me" \
-    -d "{\"intervals\":${DAILY_READS},\"sparte\":\"STROM\",\"source\":\"DIRECT_PUSH\"}" 2>/dev/null || echo -e "\n000")
+    -d "{\"intervals\":${DAILY_READS},\"sparte\":\"STROM\",\"source\":\"DIRECT_PUSH\"}" 2>/dev/null || printf "\n000")
 CODE=$(echo "$HTTP" | tail -1)
 if [[ "$CODE" == "200" || "$CODE" == "201" ]]; then
     pass "POST /api/v1/meter-reads/rlm/${MALO_ID} → ${CODE}  (29 daily buckets, 2784 kWh)"
@@ -182,11 +182,11 @@ else
 fi
 
 info "[3c/6] Verify billing period in edmd (expect ~2880 kWh for June)"
-HTTP=$(curl -sf -w '\n%{http_code}' \
+HTTP=$(curl -s -w '\n%{http_code}' \
     "${EDMD_URL}/api/v1/billing-period/${MALO_ID}?from=2026-06-01&to=2026-07-01" \
-    -H "Authorization: Bearer demo-secret-change-me" 2>/dev/null || echo -e "\n000")
+    -H "Authorization: Bearer demo-secret-change-me" 2>/dev/null || printf "\n000")
 CODE=$(echo "$HTTP" | tail -1)
-BODY=$(echo "$HTTP" | head -1)
+BODY=$(echo "$HTTP" | sed '$d')
 ARBEIT=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('arbeitsmenge_kwh','?'))" 2>/dev/null || echo "?")
 if [[ "$CODE" == "200" ]]; then
     pass "GET /api/v1/billing-period/${MALO_ID} → arbeitsmenge_kwh=${ARBEIT}"
@@ -198,13 +198,13 @@ fi
 
 echo
 info "[4/6] Trigger EEG settlement for ${BILLING_YEAR}-0${BILLING_MONTH} (einsd auto-fetches Einspeisemenge from edmd)"
-HTTP=$(curl -sf -w '\n%{http_code}' -X POST \
+HTTP=$(curl -s -w '\n%{http_code}' -X POST \
     "${EINSD_URL}/api/v1/anlagen/${TR_ID}/settle/${BILLING_YEAR}/${BILLING_MONTH}" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer demo-secret-change-me" \
-    -d "{}" 2>/dev/null || echo -e "\n000")
+    -d "{}" 2>/dev/null || printf "\n000")
 CODE=$(echo "$HTTP" | tail -1)
-BODY=$(echo "$HTTP" | head -1)
+BODY=$(echo "$HTTP" | sed '$d')
 SETTLE_EUR=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('settlement_eur','?'))" 2>/dev/null || echo "?")
 SETTLE_KWH=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('einspeisemenge_kwh','?'))" 2>/dev/null || echo "?")
 SETTLE_STATUS=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','?'))" 2>/dev/null || echo "?")
@@ -261,11 +261,11 @@ fi
 # ── Verify settlement receipt ─────────────────────────────────────────────────
 
 info "[6/6] Verify settlement receipt in einsd"
-HTTP=$(curl -sf -w '\n%{http_code}' \
+HTTP=$(curl -s -w '\n%{http_code}' \
     "${EINSD_URL}/api/v1/anlagen/${TR_ID}/settlements?year=${BILLING_YEAR}&month=${BILLING_MONTH}" \
-    -H "Authorization: Bearer demo-secret-change-me" 2>/dev/null || echo -e "\n000")
+    -H "Authorization: Bearer demo-secret-change-me" 2>/dev/null || printf "\n000")
 CODE=$(echo "$HTTP" | tail -1)
-BODY=$(echo "$HTTP" | head -1)
+BODY=$(echo "$HTTP" | sed '$d')
 if [[ "$CODE" == "200" ]]; then
     RECEIPT_EUR=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d[0] if isinstance(d,list) else d; print(r.get('settlement_eur','?'))" 2>/dev/null || echo "?")
     RECEIPT_STATUS=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d[0] if isinstance(d,list) else d; print(r.get('status','?'))" 2>/dev/null || echo "?")

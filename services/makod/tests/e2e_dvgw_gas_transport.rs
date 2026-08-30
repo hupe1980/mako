@@ -332,7 +332,7 @@ fn the_two_families_are_separated_by_the_document_code() {
     // A BDEW ORDRSP on the same carrier.
     let bdew = format!(
         "UNB+UNOC:3+{NB_MP}:500+{MGV_MP}:500+260804:1045+REF1'\
-UNH+1+ORDRSP:D:07B:UN:1.1c'BGM+231+19110'DTM+137:20260804:102'\
+UNH+1+ORDRSP:D:07B:UN:1.1c'BGM+231+19110'DTM+137:202608041045?+00:303'\
 NAD+MS+{NB_MP}::293'NAD+MR+{MGV_MP}::293'UNT+6+1'UNZ+1+REF1'"
     );
     assert!(
@@ -592,19 +592,19 @@ fn a_bdew_interchange_is_not_claimed_by_the_dvgw_path() {
         // ORDERS — NOMINT's carrier.
         format!(
             "UNB+UNOC:3+{NB_MP}:500+{MGV_MP}:500+260804:1045+R1'\
-UNH+1+ORDERS:D:01B:UN:1.1b'BGM+Z01+17115+9'DTM+137:20260804:102'\
+UNH+1+ORDERS:D:01B:UN:1.1b'BGM+Z01+17115+9'DTM+137:202608041045?+00:303'\
 NAD+MS+{NB_MP}::293'NAD+MR+{MGV_MP}::293'UNT+6+1'UNZ+1+R1'"
         ),
         // ORDRSP — ALOCAT's and NOMRES's carrier.
         format!(
             "UNB+UNOC:3+{NB_MP}:500+{MGV_MP}:500+260804:1045+R2'\
-UNH+1+ORDRSP:D:07B:UN:1.1c'BGM+231+19110'DTM+137:20260804:102'\
+UNH+1+ORDRSP:D:07B:UN:1.1c'BGM+231+19110'DTM+137:202608041045?+00:303'\
 NAD+MS+{NB_MP}::293'NAD+MR+{MGV_MP}::293'UNT+6+1'UNZ+1+R2'"
         ),
         // UTILMD — no overlap at all.
         format!(
             "UNB+UNOC:3+{NB_MP}:500+{MGV_MP}:500+260804:1045+R3'\
-UNH+1+UTILMD:D:11A:UN:S2.1'BGM+E01+55001+9'DTM+137:20260804:102'\
+UNH+1+UTILMD:D:11A:UN:S2.1'BGM+E01+55001+9'DTM+137:202608041045?+00:303'\
 NAD+MS+{NB_MP}::293'NAD+MR+{MGV_MP}::293'UNT+6+1'UNZ+1+R3'"
         ),
     ] {
@@ -645,7 +645,7 @@ async fn a_bdew_interchange_produces_no_dvgw_report() {
     let state = ingest_state().await;
     let bdew = format!(
         "UNB+UNOC:3+{NB_MP}:500+{MGV_MP}:500+260804:1045+R9'\
-UNH+1+ORDRSP:D:07B:UN:1.1c'BGM+231+19110'DTM+137:20260804:102'\
+UNH+1+ORDRSP:D:07B:UN:1.1c'BGM+231+19110'DTM+137:202608041045?+00:303'\
 NAD+MS+{NB_MP}::293'NAD+MR+{MGV_MP}::293'UNT+6+1'UNZ+1+R9'"
     );
     assert!(

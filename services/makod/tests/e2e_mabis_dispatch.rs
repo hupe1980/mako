@@ -58,7 +58,7 @@ fn utilmd_mit_serie(pid: u32, serie: Option<(&str, &str)>) -> String {
         "UNB+UNOC:3+{SENDER_MP}:14+{OWN_MP}:14+230101:0000+1'\
 UNH+1+UTILMD:D:11A:UN:S2.1'\
 BGM+E01:::+000{pid}::+9'\
-DTM+137:20230101:102'\
+DTM+137:202301010000?+00:303'\
 RFF+Z13:REF001'\
 NAD+MS+{SENDER_MP}::293'\
 NAD+MR+{OWN_MP}::293'\
@@ -78,7 +78,7 @@ fn orders(pid: u32, function: &str) -> String {
         "UNB+UNOC:3+{SENDER_MP}:14+{OWN_MP}:14+230101:0000+1'\
 UNH+1+ORDERS:D:01B:UN:1.1b'\
 BGM+Z01+000{pid}+{function}'\
-DTM+137:20230101:102'\
+DTM+137:202301010000?+00:303'\
 RFF+ON:REF001'\
 NAD+MS+{SENDER_MP}::293'\
 NAD+MR+{OWN_MP}::293'\

@@ -840,9 +840,10 @@ mod reqote_roundtrip {
 // ── REMADV round-trip ─────────────────────────────────────────────────────────
 
 /// REMADV has one active fv-dated profile:
-/// - fv20260401 (AHB 1.0b, MIG 2.9f) → wire release "2.9f" (valid from 2026-04-01)
+/// - fv20260401 (AHB 1.0a, MIG 2.9e) → wire release "2.9e" (valid from 2026-04-01,
+///   open-ended — BDEW published no October 2026 REMADV release)
 #[cfg(feature = "remadv")]
-const REMADV_RELEASES: &[&str] = &["2.9f"];
+const REMADV_RELEASES: &[&str] = &["2.9e"];
 
 #[cfg(feature = "remadv")]
 mod remadv_roundtrip {
@@ -881,10 +882,10 @@ mod remadv_roundtrip {
         }
     }
 
-    /// The fv20260401 profile correctly parses REMADV messages with wire "2.9f".
+    /// The fv20260401 profile correctly parses REMADV messages with wire "2.9e".
     #[test]
     fn remadv_fv20260401_parses_wire_2_9f() {
-        let bytes = RemadvBuilder::new(Release::new("2.9f"))
+        let bytes = RemadvBuilder::new(Release::new("2.9e"))
             .sender("4012345000023")
             .receiver("9900357000004")
             .document_id("REMADV29E001")
@@ -894,7 +895,7 @@ mod remadv_roundtrip {
         let AnyMessage::Remadv(m) = Platform::with_all_profiles().parse(&bytes).unwrap() else {
             panic!("expected Remadv");
         };
-        assert_eq!(m.assoc_code(), "2.9f");
+        assert_eq!(m.assoc_code(), "2.9e");
         assert!(m.sender().is_some());
         assert!(m.receiver().is_some());
     }

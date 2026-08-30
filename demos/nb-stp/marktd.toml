@@ -30,5 +30,9 @@ api_key   = ""
 
 [webhook]
 inbound_path   = "/api/v1/events"
-# inbound_secret intentionally absent in demo — accepts all events without HMAC verification.
-# In production, set to match makod's ERP webhook_secret.
+# inbound_secret is injected via MARKTD_WEBHOOK__INBOUND_SECRET and must equal
+# makod's ERP webhook_secret — the demo exercises the signed path, as production
+# does. Leaving it out here (rather than setting it to "") is deliberate: an
+# empty value does not disable HMAC, it verifies with an empty key, and marktd
+# then answers 401 to every event. Startup refuses an empty secret for that
+# reason.

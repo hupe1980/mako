@@ -10,7 +10,7 @@
 //! - Filtering findings by severity and rule-id
 //! - Using `filter_by_rule_prefix` for AHB-section scoping
 //! - Using `into_result()` to turn the report into a `Result`
-//! - Constructing a message that triggers a deliberate warning
+//! - Reporting on a message with deliberate defects
 //!
 //! ## Run
 //!
@@ -26,14 +26,41 @@ const VALID_UTILMD: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+240115:0800+INTER-V-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:S2.1'\
 BGM+E01:::+00055001::+9'\
-DTM+137:20240115:102'\
+DTM+137:202401150800?+00:303'\
 RFF+Z13:REF-2024-001'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
-IDE+24+VORGANG-0001'
-LOC+Z16+51238696781'
-UNT+9+MSG-001'\
+IDE+24+VORGANG-0001'\
+DTM+92:202402010000?+00:303'\
+LOC+Z16+51238696781'\
+SEQ+Z79+1'\
+PIA+5+9991000002082:Z11'\
+CCI+Z66'\
+CAV+ZV4:::11XBK-EEG-----1'\
+SEQ+ZH0+1'\
+CCI+Z65+++Z01'\
+UNT+16+MSG-001'\
 UNZ+1+INTER-V-001'";
+
+/// The same Anmeldung with three deliberate defects, so the report API below has
+/// something to filter and render:
+///
+/// - `IDE+Z19` — `Z19` is not an IDE qualifier; the AHB admits only `24`.
+/// - `DTM+137:…:102` — the Dokumentendatum's DE 2379 format code. Every
+///   EDI@Energy MIG fixes it to `303` (`CCYYMMDDHHMMZZZ`).
+/// - no `SG8` — the Anmeldung must name the Bilanzkreis in a Produktpaket.
+const INVALID_UTILMD: &[u8] = b"\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+240115:0800+INTER-I-001'\
+UNH+MSG-002+UTILMD:D:11A:UN:S2.1'\
+BGM+E01:::+00055001::+9'\
+DTM+137:20240115:102'\
+RFF+Z13:REF-2024-002'\
+NAD+MS+4012345000023::293'\
+NAD+MR+9900357000004::293'\
+IDE+Z19+VORGANG-0002'\
+LOC+Z16+51238696781'\
+UNT+9+MSG-002'\
+UNZ+1+INTER-I-001'";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Valid UTILMD ===\n");
@@ -90,7 +117,7 @@ fn check_valid() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn demo_report_api() -> Result<(), Box<dyn std::error::Error>> {
-    let msg = Platform::with_all_profiles().parse(VALID_UTILMD)?;
+    let msg = Platform::with_all_profiles().parse(INVALID_UTILMD)?;
     let report = msg.validate()?;
 
     // Total issue count across all severities
@@ -114,11 +141,12 @@ fn demo_report_api() -> Result<(), Box<dyn std::error::Error>> {
         println!("  [{label}] seg={seg} rule={rule}: {}", issue.message);
     }
 
-    // Filter by rule-id prefix (e.g. "BGM" rules only)
-    let bgm_report = report.filter_by_rule_prefix("BGM");
+    // Filter by rule-id prefix — "AHB" scopes the report to the
+    // Anwendungshandbuch layer, dropping the MIG and semantic findings.
+    let ahb_report = report.filter_by_rule_prefix("AHB");
     println!(
-        "\nBGM-prefixed rules: {} issue(s)",
-        bgm_report.total_issues()
+        "\nAHB-prefixed rules: {} issue(s)",
+        ahb_report.total_issues()
     );
 
     // Deterministic text rendering for snapshots / logging

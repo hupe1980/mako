@@ -24,6 +24,40 @@
     "STS",
     "UNT"
   ],
+  "dtm_formats": {
+    "137": [
+      "303"
+    ],
+    "157": [
+      "610"
+    ],
+    "163": [
+      "303"
+    ],
+    "164": [
+      "303"
+    ],
+    "293": [
+      "304"
+    ],
+    "306": [
+      "102",
+      "610"
+    ],
+    "492": [
+      "610"
+    ],
+    "60": [
+      "303"
+    ],
+    "7": [
+      "303"
+    ],
+    "9": [
+      "102",
+      "303"
+    ]
+  },
   "segments": [
     {
       "tag": "UNH",
@@ -428,7 +462,7 @@
     }
   ],
   "valid_until": "2025-09-30",
-  "ahb_revision": "2.4c",
+  "ahb_revision": "3.1c",
   "source_document": "MSCONS MIG 2.4c, Stand 01.04.2024 — archived. CCI/COM/CTA are optional with no AHB constraint in release 2.4; <75% AHB segment coverage is structurally expected for this version.",
   "pid_source": "rff_z13"
 }

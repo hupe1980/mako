@@ -4,6 +4,14 @@
   "release": "2.2",
   "valid_from": "2026-10-01",
   "ordering_hint": [],
+  "dtm_formats": {
+    "137": [
+      "303"
+    ],
+    "171": [
+      "303"
+    ]
+  },
   "segments": [
     {
       "tag": "UNH",
@@ -269,7 +277,7 @@
       ]
     }
   ],
-  "ahb_revision": "2.2",
+  "ahb_revision": "1.1",
   "source_document": "APERAK MIG 2.2, Publikationsdatum 01.04.2026",
   "publikationsdatum": "2026-04-01"
 }

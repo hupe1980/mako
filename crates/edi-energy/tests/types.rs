@@ -1324,13 +1324,14 @@ fn process_context_selects_active_remadv_release() {
         .expect("profile must be returned");
     assert_eq!(profile.valid_from(), Some(date!(2026 - 04 - 01)));
 
-    // Far future — fv20261001 (wire: 2.9f) is the latest published REMADV profile.
+    // Far future — fv20260401 (wire: 2.9e) is the latest published REMADV profile;
+    // BDEW published no October 2026 REMADV release, so 2.9e runs open-ended.
     let future = ProcessContext::for_date(date!(2030 - 07 - 01));
     let future_profile = future
         .active_profile(MessageType::Remadv)
         .expect("some REMADV profile must be active");
-    assert_eq!(future_profile.valid_from(), Some(date!(2026 - 10 - 01)));
-    assert_eq!(future_profile.release().as_str(), "2.9f");
+    assert_eq!(future_profile.valid_from(), Some(date!(2026 - 04 - 01)));
+    assert_eq!(future_profile.release().as_str(), "2.9e");
 }
 
 // ── ORDCHG profile tests ──────────────────────────────────────────────────────

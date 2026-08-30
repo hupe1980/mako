@@ -71,11 +71,14 @@ docker build --target marktd-runtime   -t marktd:dev    .
 docker build --target processd-runtime -t processd:dev  .
 ```
 
-Or in parallel with `docker buildx bake`:
+Or with the `just` recipe, which is the same three builds:
 
 ```bash
-docker buildx bake makod marktd processd
+just build-demo
 ```
+
+> Not `docker buildx bake` — that file is the CI push path (`push-by-digest`),
+> so it fails on the default docker driver and never loads a local `:dev` tag.
 
 > The `processd-runtime` target compiles with `--features integrated`
 > (NB `mako-pruefung` + LF answer automation in one binary).
@@ -126,25 +129,49 @@ Expected output:
 ✓ marktd is ready
 ✓ PUT /api/v1/preisblaetter/9900357000004 → 204 (FV2026 preisblatt stored)
 ✓ PUT /api/v1/partners/4012345000023 → 200 (partner ready for mako-pruefung)
-✓ PUT /api/v1/malos/17841584119 → 201  (version=1, makod cache push triggered)
-✓ PUT /api/v1/malos/17841584119/grid → 204  (grid record ready for mako-pruefung)
+✓ PUT /api/v1/malos/<malo> → 201  (version=1, makod cache push triggered)
+✓ PUT /api/v1/malos/<malo>/grid → 204  (grid record ready for mako-pruefung)
 ✓ PUT /api/v1/subscriptions/smoke-test-sub → 200
 ✓ GET /health → ok  (instance: ...)
 ✓ PUT /admin/partners/4012345000023 → 200
 ✓ POST /edifact → HTTP 200  accepted=1  rejected=0  status=routed  pid=55001
 ✓ APERAK BGM+312 (Anerkennungsmeldung) delivered to LFN — automatic (no ERP action)
-✓ ProcessInitiated delivered via marktd fan-out (source: urn:markt:tenant:9900357000004)
+✓ ProcessInitiated delivered via marktd fan-out (source: urn:mako:marktd:tenant:9900357000004)
 ✓ processd NB auto-responder dispatched bestaetigen → UTILMD 55002 already arrived
-✓ POST /api/v1/commands → HTTP 409 (auto-responder already accepted — idempotency confirmed)
-✓ UTILMD 55002 Bestätigung Anmeldung delivered to LFN
+✓ processd decision → Accept (mako-pruefung: all 6 checks passed)
+✓ POST /api/v1/commands → HTTP 422 (duplicate bestaetigen correctly rejected — AntwortGesendet guard confirmed)
+✓ UTILMD 55002 was already verified in step 6c (auto-responder path)
 ✓ Operator-override protection confirmed (source=api; api > mako enforced by SQL)
 All smoke tests passed.
   Wechselprozess auto-responder: ENABLED
   Flow: UTILMD 55001 → makod → marktd ingest → validate → bestaetigen → UTILMD 55002
 ```
 
-The `HTTP 409` at the manual dispatch step is the **idempotency proof**: `processd`
-already dispatched `bestaetigen` automatically — the manual ERP call arrives too late.
+The `HTTP 422` at the manual dispatch step is the **state-machine proof**, not
+idempotency: `processd` already advanced the process to `AntwortGesendet`, so the
+later manual ERP command is refused as out of order.
+
+The 55002 that goes back to the LFN (message reference, timestamp and MaLo
+vary per run):
+
+```
+UNB+UNOC:3+9900357000004:500+4012345000023:14+260830:0904+E8D66066D8E24B'
+UNH+5c9a7b9b2c084e+UTILMD:D:11A:UN:S2.1'
+BGM+E01+55002+9'
+DTM+137:202608300904?+00:303'
+NAD+MS+9900357000004::293'
+NAD+MR+4012345000023::9'
+IDE+24+5c9a7b9b2c084e'
+DTM+92:202610010000?+00:303'   ← the Lieferbeginn, echoed from the Anmeldung
+STS+E01++A51'                  ← E_0623 „Zustimmung (Prüfschritt 60)"
+LOC+Z16+17880806920'
+RFF+Z13:55002'
+UNT+11+5c9a7b9b2c084e'
+UNZ+1+E8D66066D8E24B'
+```
+
+`A51` is resolved from `E_0623`, not fixed: an Anmeldung that fails a check
+comes back as a 55003 Ablehnung carrying the code for the step that refused it.
 
 ## Service URLs
 
@@ -169,6 +196,36 @@ already dispatched `bestaetigen` automatically — the manual ERP call arrives t
 | `fixtures/partner-lf.json` | Trading partner record for LFN GLN `4012345000023` |
 | `fixtures/preisblatt-nb.json` | `PreisblattNetznutzung` for NB `9900357000004` (FV2026-10-01) |
 | `fixtures/malo-nb.json` | `MARKTLOKATION` for NB `9900357000004` (demo MaLo) |
+
+### What the 55001 carries
+
+`smoke.sh` substitutes its own MaLo for `51238696012`; everything else goes on
+the wire as written. Segment by segment:
+
+```
+UNB+UNOC:3+4012345000023:14+9900357000004:14+260701:0800+DEMO-2026-001'
+UNH+MSG-001+UTILMD:D:11A:UN:S2.1'      ← S2.1 is the release in force until 2026-10-01
+BGM+E01:::+00055001::+9'               ← E01 Anmeldung, Prüfidentifikator 55001
+DTM+137:202607010800?+00:303'          ← Dokumentendatum, DE 2379 = 303 CCYYMMDDHHMMZZZ
+RFF+Z13:REF-2026-001'
+NAD+MS+4012345000023::293'             ← sender must equal the UNB sender
+NAD+MR+9900357000004::293'
+IDE+24+VORGANG-0001'                   ← DE 7402 is the Vorgangsnummer, not the MaLo
+DTM+92:202610010000?+00:303'           ← „Beginn zum" — the Lieferbeginn
+LOC+Z16+51238696012'                   ← the Marktlokation lives here
+SEQ+Z79+1'                             ← SG8 Produktpaket (Muss on an Anmeldung)
+PIA+5+9991000002082:Z11'               ← Produkt-Code „Bilanzkreis"
+CCI+Z66'
+CAV+ZV4:::11XBK-EEG-----1'             ← the Bilanzkreis EIC itself
+SEQ+ZH0+1'
+CCI+Z65+++Z01'
+UNT+16+MSG-001'
+UNZ+1+DEMO-2026-001'
+```
+
+`SG8` is Muss on an Anmeldung (UTILMD AHB Strom §5.3): without a Bilanzkreis the
+NB cannot assign the LF to the Marktlokation. `crates/edi-energy/tests/demo_fixtures.rs`
+validates this file against the AHB on every `cargo test`.
 
 ## Demo configuration
 
@@ -267,4 +324,4 @@ docker compose down -v    # wipe all data (full reset)
 
 Authentication is disabled in this demo — suitable for local development only.
 See the [production guide](https://hupe1980.github.io/mako/docs/guide/getting-started/) for OIDC setup, and
-[the services guide](https://hupe1980.github.io/mako/docs/services/) for the full 16-service platform.
+[the services guide](https://hupe1980.github.io/mako/docs/services/) for the full 17-service platform.

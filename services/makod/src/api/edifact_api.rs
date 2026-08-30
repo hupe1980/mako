@@ -977,7 +977,7 @@ mod classify_tests {
     fn utilmd(nad: &str) -> AnyMessage {
         let wire = format!(
             "UNB+UNOC:3+{LF}:500+{NB}:500+260804:1045+R1'\
-UNH+1+UTILMD:D:11A:UN:S2.1'BGM+E01+55001+9'DTM+137:20260804:102'\
+UNH+1+UTILMD:D:11A:UN:S2.1'BGM+E01+55001+9'DTM+137:202608041045?+00:303'\
 {nad}UNT+6+1'UNZ+1+R1'"
         );
         edi_energy::parse(wire.as_bytes()).expect("the fixture parses")

@@ -146,7 +146,7 @@ flowchart TD
     cfg --> pool["connect tuned pool<br/>DatabaseConfig::connect(url, NAME)<br/>sets application_name"]
     pool --> migrate["D::migrate<br/>sqlx::migrate! + outbox::ensure_schema"]
     migrate --> build["D::build(cfg, ctx)<br/>domain Router + spawn workers on ctx.shutdown"]
-    build --> infra["mount infra routes<br/>/health/live · /health/ready · /metrics"]
+    build --> infra["mount infra routes<br/>/health · /health/live · /health/ready · /metrics"]
     infra --> serve["serve with graceful drain<br/>SIGINT / SIGTERM"]
     serve -.->|readiness| ready["/health/ready = bounded SELECT 1 + D::ready"]
 ```

@@ -19,9 +19,25 @@ once per message type that moves.
   ```
   cargo build -p xtask
   ```
-- You need the new BDEW PDF specification files from
-  **[bdew-mako.de](https://www.bdew-mako.de/market_communication/documents)**
-  (German).  Download the MIG and AHB PDFs for each message type that changed.
+- The BDEW PDFs live in `regulatories/bdew-mako/`, mirrored by
+  `cargo xtask sync-regulatories` (Step 0).
+
+---
+
+## Step 0 — See what changed upstream
+
+```bash
+cargo xtask sync-regulatories
+```
+
+Reports every document in force that `regulatories/bdew-mako/` does not hold —
+a new Formatversion appears as a block of MIG/AHB entries sharing a
+`valid_from`. Add `--download` to fetch them; `--offline` checks the mirror
+against its manifest without the network.
+
+> A corrected document keeps its version number, so only the manifest's content
+> hash can tell you a local copy is stale. Such a file is reported as *changed
+> since it was mirrored*.
 
 ---
 
@@ -89,9 +105,38 @@ Open the draft files alongside the BDEW PDF specification and review each entry:
    Pay special attention to changed `requirement` codes (`M`/`S`/`C`/`N`/`O`/`X`)
    and conditional rule operators (`I`/`V`/`E`/`X`/`U`/`O`/`G`/`Z`).
 3. **`codelists.json`** — Verify code additions/removals against the AHB annex.
+4. **`mig.json` → `dtm_formats`** — DE 2005 qualifier → the DE 2379 format codes
+   the MIG admits. `validate-profiles` refuses a profile that carries `DTM` and
+   declares none, because DE 2379 has no code list and would otherwise go
+   unchecked.
+
+   Read it off the MIG segment-layout tables — each `DTM` block fixes both, in
+   the BDEW code column:
+
+   ```text
+    2005  …Funktion, Qualifier  M an..3  M an..3   137 Dokumentendatum
+    2379  …Format, Code         C an..3  R an..3   303 CCYYMMDDHHMMZZZ
+   ```
+
+   A qualifier can admit several formats, written as **continuation rows** whose
+   left half still carries the element label — read the whole block, not the
+   first row:
+
+   ```text
+    2379  Datums- oder Uhrzeit- oder   C an..3  R an..3   802 Monat
+          Zeitspannen-Format, Code                        803 Woche
+                                                          804 Tag
+   ```
+
+   Reading only the first row makes a conformant `DTM+273:14:804` a validation
+   error — the failure direction that rejects good messages.
 
 The extractor embeds `"_WARNING"` fields in draft output.  Remove all `_WARNING`
 fields before promoting.
+
+> `extract-pdf` does not populate `dtm_formats` — its `lopdf` text extraction
+> does not preserve the column layout the continuation rows depend on. Extract
+> it with `pdftotext -layout` and review against the PDF.
 
 **Typical review time:**
 - Minor update (codelists only): 30 minutes

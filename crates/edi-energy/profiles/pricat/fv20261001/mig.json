@@ -5,6 +5,20 @@
   "valid_from": "2026-10-01",
   "pid_source": "rff_z13",
   "ordering_hint": [],
+  "dtm_formats": {
+    "137": [
+      "303"
+    ],
+    "157": [
+      "303"
+    ],
+    "163": [
+      "303"
+    ],
+    "492": [
+      "610"
+    ]
+  },
   "segments": [
     {
       "tag": "UNH",

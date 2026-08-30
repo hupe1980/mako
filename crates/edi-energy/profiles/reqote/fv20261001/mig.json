@@ -5,6 +5,23 @@
   "valid_from": "2026-10-01",
   "supersedes_directory": "fv20251001",
   "ordering_hint": [],
+  "dtm_formats": {
+    "137": [
+      "303"
+    ],
+    "203": [
+      "303"
+    ],
+    "469": [
+      "303"
+    ],
+    "472": [
+      "303"
+    ],
+    "76": [
+      "303"
+    ]
+  },
   "segments": [
     {
       "tag": "UNH",
@@ -420,7 +437,7 @@
       ]
     }
   ],
-  "ahb_revision": "1.3c",
+  "ahb_revision": "1.2",
   "source_document": "REQOTE MIG 1.3c, Publikationsdatum 01.04.2026",
   "pid_source": "rff_z13",
   "publikationsdatum": "2026-04-01"

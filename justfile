@@ -241,7 +241,43 @@ smoke-roles:
             --allow-no-as4-signing --check
     done
 
-ci: check test test-features check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-wire-timestamps check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci validate-release-codes lint-makotest test-makotest
+# Check the regulatory mirror against its committed manifest — no network.
+#
+# The PDFs behind every profile are not in the repository, but the manifest is,
+# so this verifies that each recorded document is present and its bytes
+# unchanged. `cargo xtask sync-regulatories` (no flag) reconciles against the
+# live BDEW catalogue instead, and `--download` fetches what is missing.
+regulatories:
+    cargo xtask sync-regulatories --offline
+
+# Run every shipped example to completion.
+#
+# `cargo check --all-targets` compiles examples but never runs them, which is
+# how three of six rotted unnoticed: two drove their workflow into a state the
+# domain refuses, and the one demonstrating a *valid* message shipped a fixture
+# missing a mandatory segment group. An example that exits non-zero is a broken
+# promise to whoever pastes it, so the gate is a real run.
+#
+# The list comes from `cargo metadata`, not from this file: a hand-kept list is
+# a list a new example is forgotten from, and an ungated example is the thing
+# being fixed here.
+examples:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    fail=0
+    while read -r crate ex; do
+        if cargo run -q -p "$crate" --all-features --example "$ex" >/dev/null 2>&1; then
+            echo "  ok   $crate/$ex"
+        else
+            echo "  FAIL $crate/$ex"
+            cargo run -q -p "$crate" --all-features --example "$ex" 2>&1 | tail -20 | sed 's/^/       /'
+            fail=1
+        fi
+    done < <(cargo metadata --no-deps --format-version 1 | \
+        python3 -c "import json,sys; m=json.load(sys.stdin); [print(p['name'], t['name']) for p in m['packages'] for t in p['targets'] if 'example' in t['kind']]" | sort)
+    exit $fail
+
+ci: check test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-wire-timestamps check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci validate-release-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the

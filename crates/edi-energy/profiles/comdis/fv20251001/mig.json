@@ -5,6 +5,11 @@
   "valid_from": "2025-10-01",
   "pid_source": "rff_z13",
   "ordering_hint": [],
+  "dtm_formats": {
+    "137": [
+      "303"
+    ]
+  },
   "segments": [
     {
       "tag": "UNH",
@@ -296,5 +301,6 @@
   ],
   "valid_until": "2026-03-31",
   "ahb_revision": "1.0g",
-  "source_document": "COMDIS MIG 1.0g, Stand 01.10.2025"
+  "source_document": "COMDIS MIG 1.0g, Stand 01.10.2025",
+  "archived": true
 }

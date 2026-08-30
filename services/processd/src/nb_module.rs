@@ -181,6 +181,19 @@ pub struct AnmeldungPayload {
 }
 
 impl AnmeldungPayload {
+    /// Whether the event names a Prüfidentifikator this module answers.
+    ///
+    /// Separate from [`Self::parse`] so a parse failure on a PID we own can be
+    /// told apart from an event addressed to another module — without the
+    /// split, both look like `None` and the first is dropped without a trace.
+    pub fn is_anmeldung_pid(event: &serde_json::Value) -> bool {
+        event
+            .get("makopid")
+            .and_then(serde_json::Value::as_u64)
+            .or_else(|| event["data"].get("pid").and_then(serde_json::Value::as_u64))
+            .is_some_and(|pid| u32::try_from(pid).is_ok_and(|pid| ANMELDUNG_PIDS.contains(&pid)))
+    }
+
     /// Parse from the `data` field of a `de.mako.process.initiated` CloudEvent.
     pub fn parse(event: &serde_json::Value) -> Option<Self> {
         let data = &event["data"];
@@ -233,13 +246,8 @@ impl AnmeldungPayload {
             .map(ToOwned::to_owned);
 
         let date_str = data.get("process_date")?.as_str()?;
-        let process_date = if date_str.len() == 8 {
-            let fmt = time::macros::format_description!("[year][month][day]");
-            time::Date::parse(date_str, &fmt).ok()?
-        } else {
-            let fmt = time::macros::format_description!("[year]-[month]-[day]");
-            time::Date::parse(date_str, &fmt).ok()?
-        };
+        // Includes the `CCYYMMDDHHMM±ZZ` shape an EDIFACT `SG4 DTM` arrives in.
+        let process_date = crate::wire_date::parse(date_str)?;
 
         Some(Self {
             pid,
@@ -374,7 +382,23 @@ pub async fn evaluate_and_decide(
     }
 
     // ── 1. Parse payload ──────────────────────────────────────────────────
+    //
+    // `None` means one of two things: the event is not an Anmeldung (fine —
+    // fall through to the LF module), or it is one on a PID we own and a field
+    // the decision needs is missing. The second is an upstream defect and must
+    // be visible, so the two are told apart rather than both falling through.
     let Some(payload) = AnmeldungPayload::parse(event) else {
+        if AnmeldungPayload::is_anmeldung_pid(event) {
+            warn!(
+                pid = ?event.get("makopid"),
+                subject = ?event.get("subject"),
+                malo_id = ?event["data"].get("malo_id"),
+                process_date = ?event["data"].get("process_date"),
+                "processd NB: Anmeldung on a handled PID could not be parsed — \
+                 a field the E_0622 walk needs is missing or malformed, so the \
+                 Anmeldung is NOT being evaluated"
+            );
+        }
         return Ok(false);
     };
 
@@ -1521,17 +1545,9 @@ impl AbmeldungPayload {
     }
 }
 
-/// `YYYYMMDD` or `YYYY-MM-DD`, the two shapes the `makod` adapters emit.
+/// Every date shape a process payload carries — see [`crate::wire_date`].
 fn parse_civil_date(raw: &str) -> Option<time::Date> {
-    if raw.len() == 8 {
-        time::Date::parse(raw, time::macros::format_description!("[year][month][day]")).ok()
-    } else {
-        time::Date::parse(
-            raw,
-            time::macros::format_description!("[year]-[month]-[day]"),
-        )
-        .ok()
-    }
+    crate::wire_date::parse(raw)
 }
 
 /// A date as the `makod` command payloads carry it, `YYYYMMDD`.
@@ -1810,6 +1826,53 @@ async fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Payload parsing: "not mine" vs "mine but unusable" ───────────────────
+
+    fn initiated(pid: u64, process_date: &str) -> serde_json::Value {
+        serde_json::json!({
+            "type": "de.mako.process.initiated",
+            "makopid": pid,
+            "subject": "f0d3004b-34bf-4a95-a981-80891bb9bbdf",
+            "data": {
+                "pid": pid,
+                "malo_id": "51238696781",
+                "new_supplier": "4012345000023",
+                "grid_operator": "9900357000004",
+                "process_date": process_date,
+            }
+        })
+    }
+
+    /// A complete Anmeldung parses.
+    #[test]
+    fn a_complete_anmeldung_parses() {
+        assert!(AnmeldungPayload::parse(&initiated(55_001, "20261001")).is_some());
+    }
+
+    /// An Anmeldung whose Lieferbeginn is missing does not parse — and must
+    /// still be recognisable as *ours*, so the drop is logged rather than
+    /// mistaken for an event addressed elsewhere.
+    #[test]
+    fn an_anmeldung_missing_its_lieferbeginn_is_still_recognised_as_ours() {
+        let event = initiated(55_001, "");
+        assert!(
+            AnmeldungPayload::parse(&event).is_none(),
+            "an unparseable Lieferbeginn cannot yield a decision payload"
+        );
+        assert!(
+            AnmeldungPayload::is_anmeldung_pid(&event),
+            "…but the PID is one this module answers, so the drop must be logged"
+        );
+    }
+
+    /// An event for another module is not ours, and stays silent.
+    #[test]
+    fn another_modules_pid_is_not_ours() {
+        assert!(!AnmeldungPayload::is_anmeldung_pid(&initiated(
+            55_007, "20261001"
+        )));
+    }
 
     // ── The two-phase Anmeldung (SD Lieferbeginn Nr. 1 Prüfschritt 4) ────────
 

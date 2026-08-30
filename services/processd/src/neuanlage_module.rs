@@ -399,17 +399,9 @@ impl NeuanlagePayload {
     }
 }
 
-/// `YYYYMMDD` or `YYYY-MM-DD`, the two shapes the `makod` adapters emit.
+/// Every date shape a process payload carries — see [`crate::wire_date`].
 fn parse_civil_date(raw: &str) -> Option<Date> {
-    if raw.len() == 8 {
-        Date::parse(raw, time::macros::format_description!("[year][month][day]")).ok()
-    } else {
-        Date::parse(
-            raw,
-            time::macros::format_description!("[year]-[month]-[day]"),
-        )
-        .ok()
-    }
+    crate::wire_date::parse(raw)
 }
 
 #[cfg(test)]

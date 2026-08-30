@@ -46,13 +46,20 @@ const UTILMD_LIEFERBEGINN: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+240115:0800+INTER-2024-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:S2.1'\
 BGM+E01:::+00055001::+9'\
-DTM+137:20240115:102'\
+DTM+137:202401150800?+00:303'\
 RFF+Z13:REF-2024-001'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
 IDE+24+VORGANG-0001'\
+DTM+92:202402010000?+00:303'\
 LOC+Z16+51238696781'\
-UNT+9+MSG-001'\
+SEQ+Z79+1'\
+PIA+5+9991000002082:Z11'\
+CCI+Z66'\
+CAV+ZV4:::11XBK-EEG-----1'\
+SEQ+ZH0+1'\
+CCI+Z65+++Z01'\
+UNT+16+MSG-001'\
 UNZ+1+INTER-2024-001'";
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -115,10 +122,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .and_then(|n| n.party_id.as_deref())
                         .unwrap_or_default(),
                 ),
+                // `IDE` DE 7402 is the Vorgangsnummer; the Marktlokation is
+                // `SG5 LOC+Z16`, which `marktlokation()` reads by qualifier.
                 MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|tx| tx.ide.object_id.as_deref())
+                        .and_then(|tx| tx.marktlokation())
                         .unwrap_or_default(),
                 ),
                 u.dtm()
@@ -155,7 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ✓ PID          : {pid}  (Lieferbeginn Strom)");
     println!("  ✓ Sender       : {sender}  (new supplier)");
     println!("  ✓ Receiver     : {receiver}  (grid operator)");
-    println!("  ✓ Location     : {location}  (Messlokation Z19)");
+    println!("  ✓ Marktlokation: {location}  (SG5 LOC+Z16)");
     println!(
         "  ✓ Validation   : {} ({} issues)",
         if validation_passed {

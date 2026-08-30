@@ -57,6 +57,10 @@ struct MigProfile {
     // Added in  explicit valid_from date matching directory name.
     #[serde(default)]
     valid_from: Option<String>,
+    /// DE 2005 date qualifier → the DE 2379 format codes the MIG admits.
+    /// See the field of the same name in `codegen.rs` for why it is a set.
+    #[serde(default)]
+    dtm_formats: std::collections::BTreeMap<String, Vec<String>>,
     segments: Vec<MigSegment>,
     segment_groups: Vec<MigGroup>,
 }
@@ -291,6 +295,9 @@ impl Schemas {
 
 /// Run profile validation from `workspace_root`. Returns `true` if all checks pass.
 pub fn run(workspace_root: &str) -> bool {
+    // Which BDEW documents the mirror actually holds, so a profile can be held
+    // to citing one that exists. Empty until `sync-regulatories` has run.
+    let mirrored = crate::sync_regulatories::load_manifest(Path::new(workspace_root));
     let profiles_dir = PathBuf::from(workspace_root)
         .join("crates")
         .join("edi-energy")
@@ -343,6 +350,7 @@ pub fn run(workspace_root: &str) -> bool {
                 &dir_name,
                 &release,
                 schemas.as_ref(),
+                &mirrored,
                 &mut errors,
                 &mut warnings,
             );
@@ -698,6 +706,10 @@ fn check_profile(
     expected_type: &str,
     expected_release: &str,
     schemas: Option<&Schemas>,
+    // Mirrored BDEW documents, file name → catalogue title. Empty when the
+    // mirror has no manifest yet, which turns the citation check off rather
+    // than failing every profile.
+    mirrored: &std::collections::BTreeMap<String, String>,
     errors: &mut Vec<String>,
     warnings: &mut Vec<String>,
 ) -> Option<(String, Option<String>)> {
@@ -772,6 +784,67 @@ fn check_profile(
             return None;
         }
     };
+
+    // The MIG release and the AHB revision must each name a document in
+    // `regulatories/bdew-mako/`. They are independent version lines — APERAK
+    // MIG 2.1i goes with AHB 1.0, MSCONS MIG 2.4c with AHB 3.1g — so citing the
+    // MIG release as `ahb_revision` names a document that does not exist, and
+    // sends the next reviewer to the wrong text.
+    let sparte = if rel_prefix.ends_with("_gas") {
+        Some("Gas")
+    } else if mig.message_type.eq_ignore_ascii_case("UTILMD") {
+        Some("Strom")
+    } else {
+        None
+    };
+    let cites = |kind: &str, version: &str| -> bool {
+        let want = sparte.map_or_else(
+            || format!("{} {kind} {version}", mig.message_type),
+            |sp| format!("{} {kind} {sp} {version}", mig.message_type),
+        );
+        mirrored.values().any(|title| title.trim() == want)
+    };
+    if !mirrored.is_empty() {
+        for (kind, version) in [
+            ("MIG", mig.release.clone()),
+            ("AHB", mig.ahb_revision.clone().unwrap_or_default()),
+        ] {
+            if version.is_empty() || cites(kind, &version) {
+                continue;
+            }
+            let msg = format!(
+                "{rel_prefix}/mig.json  cites {kind} {version}, which is not in \
+                 regulatories/bdew-mako. The MIG and AHB version lines are \
+                 independent — check the {kind} document, not the other one. \
+                 `cargo xtask sync-regulatories --download` fetches what is missing."
+            );
+            if mig.archived {
+                warnings.push(msg);
+            } else {
+                errors.push(msg);
+            }
+        }
+    }
+
+    // A profile carrying `DTM` must say which DE 2379 format codes each of its
+    // qualifiers admits. Nothing else constrains the format — DE 2379 has no
+    // `codelists.json` table — so without `dtm_formats` a `DTM+137:20260701:102`
+    // validates clean, a shape no EDI@Energy MIG defines.
+    //
+    // CONTRL is the one exception: a service-message envelope with no `DTM`.
+    let carries_dtm = mig.segments.iter().any(|seg| seg.tag == "DTM")
+        || mig
+            .segment_groups
+            .iter()
+            .any(|g| g.segments.iter().any(|seg| seg.tag == "DTM"));
+    if carries_dtm && mig.dtm_formats.is_empty() {
+        errors.push(format!(
+            "{rel_prefix}/mig.json  carries DTM but declares no `dtm_formats` — \
+             DE 2379 would be unvalidated. Read the qualifier/format pairs off \
+             the MIG segment-layout tables (each DTM block fixes DE 2005 and \
+             DE 2379 together, with extra formats on continuation rows)."
+        ));
+    }
 
     // 3. Field consistency: release field must be consistent across all three files.
     // For FV-date directories (`fv<YYYYMMDD>`), the folder name encodes the valid_from

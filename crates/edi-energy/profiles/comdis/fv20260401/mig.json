@@ -6,6 +6,11 @@
   "supersedes_directory": "fv20251001",
   "pid_source": "rff_z13",
   "ordering_hint": [],
+  "dtm_formats": {
+    "137": [
+      "303"
+    ]
+  },
   "segments": [
     {
       "tag": "UNH",
@@ -295,7 +300,7 @@
       ]
     }
   ],
-  "ahb_revision": "1.0g",
+  "ahb_revision": "1.0h",
   "source_document": "COMDIS MIG 1.0g, Publikationsdatum 01.10.2025",
   "publikationsdatum": "2025-10-01"
 }

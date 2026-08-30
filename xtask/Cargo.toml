@@ -20,3 +20,16 @@ rubo4e      = { workspace = true }
 # that decide whether a mutating grant is dispatchable at all. The same parser
 # `agentplane` itself uses, so a manifest this accepts is one the runtime loads.
 serde_yaml_ng = "0.10"
+
+# `sync-regulatories` mirrors the BDEW document API. `blocking` because xtask is
+# a synchronous CLI and an async runtime here would buy nothing; `rustls` to
+# match the workspace and avoid a system OpenSSL.
+# `gzip` is not an optimisation here: the BDEW server returns a compressed
+# body while advertising the *uncompressed* `Content-Length`, so a client
+# that does not negotiate and decode gzip sees a short read and reports
+# "error decoding response body" on the larger PDFs.
+reqwest       = { version = "0.13", default-features = false, features = ["json", "rustls", "blocking", "gzip"] }
+# Content hashes in the mirror manifest: BDEW republishes a document under the
+# same version when it corrects it, so the version alone cannot say whether the
+# local copy is current.
+sha2          = "0.10"

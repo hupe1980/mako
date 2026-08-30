@@ -1,7 +1,13 @@
-# docker-bake.hcl — builds all six mako service images from one build graph.
+# docker-bake.hcl — builds all 17 mako service images from one build graph.
 #
-# Usage (local):
-#   VERSION=dev docker buildx bake
+# This file is the **CI** build path: `_base` fixes `push-by-digest`, so every
+# target pushes to `$REGISTRY` and none of them loads an image into the local
+# daemon. `docker buildx bake <target>` therefore fails on the default docker
+# driver with "push-by-digest is currently not implemented" — it is not the
+# command to reach for locally.
+#
+# For a local image the demos can run, use `just build-demo`, which tags
+# `makod:dev` / `marktd:dev` / `processd:dev` the way the compose files expect.
 #
 # CI (per-platform, native runner):
 #   docker buildx bake \
@@ -10,8 +16,8 @@
 #     --metadata-file /tmp/bake-meta.json \
 #     --push
 #
-# The `_base` target is inherited by all six service targets.
-# BuildKit executes the shared `builder` stage once and fans out to six runtime stages.
+# The `_base` target is inherited by all 17 service targets.
+# BuildKit executes the shared `builder` stage once and fans out to 17 runtime stages.
 
 variable "REGISTRY" {
   default = "ghcr.io/hupe1980"
@@ -29,7 +35,7 @@ variable "OCI_CREATED" {
   default = "unknown"
 }
 
-# Build all 16 images
+# Build all 17 images
 group "default" {
   targets = [
     "makod", "marktd", "processd", "invoicd", "edmd", "obsd",

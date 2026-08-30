@@ -226,8 +226,11 @@ pub fn geli_gas_registry() -> AdapterRegistry<GeliGasSupplierChangeWorkflow> {
                 process_date: u
                     .transactions()
                     .first()
-                    .and_then(|t| t.dtm.iter().find(|d| d.is_period_start()))
-                    .and_then(|d| d.value_str())
+                    // `SG4 DTM+92` „Beginn zum" — the Lieferbeginn. UTILMD AHB
+                    // Strom 2.1 names only `92` and `157 (Änderung zum)` in SG4;
+                    // `163` is an MSCONS qualifier. Reading the wrong one yields
+                    // an empty `process_date`, which `processd` cannot decide on.
+                    .and_then(|t| t.date(edi_energy::utilmd_codes::dtm::BEGINN_ZUM))
                     .unwrap_or("")
                     .to_owned(),
                 message_ref: MessageRef::new(msg.message_ref()),
@@ -954,9 +957,11 @@ pub fn geli_gas_stammdaten_registry()
             // `SG5 LOC+172` Meldepunkt — the Gas qualifier; see the
             // Lieferantenwechsel adapter above.
             let location_id = MaLo::new(first_tx.and_then(|t| t.lokation()).unwrap_or(""));
+            // `SG4 DTM+157` „Änderung zum" — the Stammdatenänderung's own date,
+            // and what makod's renderer writes for this PID family. `163` is an
+            // MSCONS qualifier and appears in no UTILMD Anwendungsfall.
             let aenderungsdatum = first_tx
-                .and_then(|t| t.dtm.iter().find(|d| d.is_period_start()))
-                .and_then(|d| d.value_str())
+                .and_then(|t| t.date(edi_energy::utilmd_codes::dtm::AENDERUNG_ZUM))
                 .unwrap_or("")
                 .to_owned();
 

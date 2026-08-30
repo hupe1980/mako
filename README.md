@@ -153,7 +153,7 @@ flowchart LR
 | 🔒 **Security by default** | DoS limits (max 10 MB, 10 000 segments), log-injection sanitisation, fuzz-tested with 1 373+ corpus entries |
 | 🛠️ **Fluent message builders** | Type-state builder API with compile-time mandatory field enforcement |
 | 🔁 **Round-trip serialisation** | Parse → validate → serialize with byte-exact EDIFACT output |
-| 🧪 **Code-generated profiles** | 40 profiles across 17 types, regenerated annually via `cargo xtask codegen` |
+| 🧪 **Code-generated profiles** | 39 profiles across 17 types, regenerated annually via `cargo xtask codegen` |
 
 ### DVGW gas transport layer (`dvgw-edi`)
 
@@ -742,6 +742,11 @@ cargo xtask codegen --check
 
 # Compute a diff between two annual releases
 cargo xtask release-diff --from utilmd/fv20251001 --to utilmd/fv20261001
+
+# Mirror the BDEW document set every profile is read from
+cargo xtask sync-regulatories            # report the diff against bdew-mako.de
+cargo xtask sync-regulatories --download # fetch what is in force and missing
+cargo xtask sync-regulatories --offline  # verify the mirror, no network
 
 # Run fuzz target (requires nightly + cargo-fuzz)
 cargo +nightly fuzz run fuzz_parse_validate

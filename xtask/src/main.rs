@@ -14,6 +14,7 @@ Commands:
   bump-version        Bump workspace version in root Cargo.toml (usage: bump-version X.Y.Z)
   codegen             Generate Rust profile code from EDI@Energy specifications
   validate-profiles   Validate all committed profiles for consistency errors
+  sync-regulatories   Mirror and audit the BDEW document set behind the profiles
   validate-extraction Measure how well extract-pdf drafts reproduce the curated profiles
   validate-pruefids   Check that every AHB Pruefidentifikator has a test fixture
   validate-release-codes  Verify that every profile's release code appears in a UNH 0057 fixture
@@ -145,6 +146,7 @@ mod generate_fixtures;
 mod import_codelists;
 mod import_xml_profiles;
 mod release_diff;
+mod sync_regulatories;
 mod validate_extraction;
 mod validate_profiles;
 mod validate_pruefids;
@@ -164,6 +166,7 @@ fn main() {
         Some("check-bo4e-discriminants") => check_bo4e_discriminants(),
         Some("check-bo4e-examples") => check_bo4e_examples(),
         Some("check-malo-ids") => check_malo_ids(),
+        Some("sync-regulatories") => sync_regulatories(),
         Some("check-wire-timestamps") => check_wire_timestamps(),
         Some("check-answer-commands") => check_answer_commands(),
         Some("check-tool-grants") => check_tool_grants(),
@@ -435,6 +438,14 @@ fn codegen() {
     let (workspace_root, _) = workspace_info();
     let args: Vec<String> = std::env::args().skip(2).collect();
     codegen::run(&workspace_root, &args);
+}
+
+fn sync_regulatories() {
+    let (workspace_root, _) = workspace_info();
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    if !sync_regulatories::run(std::path::Path::new(&workspace_root), &args) {
+        std::process::exit(1);
+    }
 }
 
 fn validate_profiles() {

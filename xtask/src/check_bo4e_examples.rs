@@ -66,12 +66,24 @@ pub fn run(workspace_root: &Path) -> bool {
                 let Some(start) = block.find('{') else {
                     continue;
                 };
-                let Ok(value) = serde_json::from_str::<serde_json::Value>(&block[start..]) else {
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(&elide(&block[start..]))
+                else {
                     continue;
                 };
                 for object in objects_with_typ(&value) {
                     checked += 1;
                     check_one(&rel, &object, &mut findings);
+                }
+                // A misspelt discriminant carries no `_typ`, so the walk
+                // above never sees the block and nothing checks it. Worse than
+                // a stray field: without `_typ` the decode produces a document
+                // of no type and every typed field reads back `None`.
+                for path in objects_with_misspelt_typ(&value) {
+                    findings.push(format!(
+                        "{rel}: object at `{path}` names its BO4E type as \
+                         `bo_typ`/`boTyp`; the discriminant is `_typ`, without \
+                         which every typed field decodes to `None`"
+                    ));
                 }
             }
         }
@@ -179,6 +191,91 @@ fn objects_with_typ(root: &serde_json::Value) -> Vec<serde_json::Value> {
             _ => {}
         }
     }
+    out
+}
+
+/// Replace the `...` a documented example uses for brevity with real JSON.
+///
+/// A block written `"preispositionen": [ ... ]` is not JSON, so the guard used
+/// to skip it whole — and with it every sibling field in the same object. Nine
+/// A block written with an ellipsis is invisible to the guard otherwise, and a
+/// misspelt discriminant inside one is checked by nothing at all.
+///
+/// The elided value itself cannot be checked — that is the point of eliding it
+/// — but its *siblings* can, and they are where the near-miss field names are.
+fn elide(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut chars = src.char_indices().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+    while let Some((i, c)) = chars.next() {
+        if in_string {
+            out.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_string = true;
+                out.push(c);
+            }
+            // `...` and the single-character ellipsis both stand for "more of
+            // the same"; `null` is the shortest value that keeps the JSON well
+            // formed wherever they appear — as an array element, an object
+            // value, or a lone member.
+            '.' if src[i..].starts_with("...") => {
+                chars.next();
+                chars.next();
+                out.push_str("null");
+            }
+            '\u{2026}' => out.push_str("null"),
+            _ => out.push(c),
+        }
+    }
+    // A bare `null` standing in for "more members" is not a legal object member;
+    // drop it along with the comma that joins it to its neighbour.
+    out.replace(", null }", " }")
+        .replace(",null}", "}")
+        .replace("{ null }", "{}")
+        .replace("{null}", "{}")
+}
+
+/// Paths of objects that name a BO4E type under the wrong key.
+///
+/// Only near-misses of the discriminant itself count: an object carrying
+/// `bo_typ` or `boTyp` and no `_typ` meant to be a BO4E document and is not one.
+fn objects_with_misspelt_typ(root: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![(String::from("$"), root.clone())];
+    while let Some((path, cur)) = stack.pop() {
+        match &cur {
+            serde_json::Value::Object(o) => {
+                if !o.contains_key("_typ")
+                    && o.keys().any(|k| {
+                        k.eq_ignore_ascii_case("bo_typ") || k.eq_ignore_ascii_case("boTyp")
+                    })
+                {
+                    out.push(path.clone());
+                }
+                for (k, v) in o {
+                    stack.push((format!("{path}.{k}"), v.clone()));
+                }
+            }
+            serde_json::Value::Array(a) => {
+                for (i, v) in a.iter().enumerate() {
+                    stack.push((format!("{path}[{i}]"), v.clone()));
+                }
+            }
+            _ => {}
+        }
+    }
+    out.sort();
     out
 }
 

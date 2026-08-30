@@ -189,3 +189,39 @@ fn the_corpus_verdict_has_not_moved() {
             .join("\n  "),
     );
 }
+
+/// Every fixture must at least *parse* and reach the rule layers.
+///
+/// `PARSE-ERROR` and `VALIDATE-ERROR` are not verdicts about a message's
+/// content — they mean the entry never got as far as being judged, typically a
+/// malformed envelope such as a `UNT` DE 0074 count that does not match the
+/// segments carried. A receiver answers that with a CONTRL rejection, while
+/// `validate-pruefids` still counts the fixture as PID coverage.
+///
+/// The snapshot cannot catch it: an unchanging failure is an unchanged verdict.
+#[test]
+fn every_fixture_parses_and_is_judged() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let mut paths = Vec::new();
+    collect_fixtures(&root, &mut paths);
+    paths.sort();
+    assert!(
+        !paths.is_empty(),
+        "no fixtures found under {}",
+        root.display()
+    );
+
+    let unjudged: Vec<String> = paths
+        .iter()
+        .flat_map(|p| verdict(p, &root))
+        .filter(|line| line.ends_with("PARSE-ERROR") || line.ends_with("VALIDATE-ERROR"))
+        .collect();
+
+    assert!(
+        unjudged.is_empty(),
+        "{} fixture(s) never reached the rule layers — the envelope or the \
+         syntax is malformed, so nothing about their content is being checked:\n  {}",
+        unjudged.len(),
+        unjudged.join("\n  ")
+    );
+}

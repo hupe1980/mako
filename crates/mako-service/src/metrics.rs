@@ -149,6 +149,7 @@ mod tests {
     #[test]
     fn normalise_keeps_short_paths() {
         assert_eq!(normalise_path("/health/live"), "/health/live");
+        assert_eq!(normalise_path("/health"), "/health");
         assert_eq!(normalise_path("/api/v1/malos"), "/api/v1/malos");
     }
 

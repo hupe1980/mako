@@ -1820,7 +1820,7 @@ mod faelligkeitsdatum_tests {
             "UNB+UNOC:3+4012345000023:14+9900357000004:14+260101:0000+1'\
              UNH+1+INVOIC:D:06A:UN:2.8e'\
              BGM+457+00031004'\
-             DTM+137:20260101:102'{dtm_segments}\
+             DTM+137:202601010000?+00:303'{dtm_segments}\
              NAD+MS+4012345000023::293'\
              NAD+MR+9900357000004::293'\
              UNT+7+1'UNZ+1+1'"

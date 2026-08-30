@@ -742,6 +742,61 @@ fn rule_group_sg52_tax_min_occurrences(
 ///
 /// The rule does NOT require every tag to be present (that is Layer 3's job);
 /// it only checks that tag positions are non-decreasing w.r.t. the expected order.
+/// DE 2005 qualifier → the DE 2379 format codes the MIG admits.
+///
+/// Sorted, so the lookup is a binary search.
+static DTM_FORMATS: &[(&str, &[&str])] = &[
+    ("137", &["303"]),
+    ("155", &["303"]),
+    ("156", &["303"]),
+    ("171", &["303"]),
+    ("203", &["102", "303"]),
+    ("265", &["303"]),
+    ("3", &["303"]),
+    ("9", &["303"]),
+    ("Z11", &["303"]),
+    ("Z12", &["303"]),
+    ("Z42", &["303"]),
+    ("Z43", &["303"]),
+];
+
+/// `MIG-DTM-2379` — the DTM's format code must be one the MIG pairs
+/// with its qualifier.
+fn rule_dtm_format(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
+    for seg in segments.iter().filter(|s| s.tag == "DTM") {
+        let Some(qualifier) = seg.component_str(0, 0) else {
+            continue;
+        };
+        let Ok(idx) = DTM_FORMATS.binary_search_by_key(&qualifier, |(q, _)| q) else {
+            // A qualifier the MIG table does not name is left to the DE 2005
+            // code list; constraining its format here would be inventing a rule.
+            continue;
+        };
+        let allowed = DTM_FORMATS[idx].1;
+        let actual = seg.component_str(0, 2);
+        if actual.is_some_and(|f| allowed.contains(&f)) {
+            continue;
+        }
+        issues.push(
+            ValidationIssue::new(
+                ValidationSeverity::Error,
+                format!(
+                    "segment DTM DE 2379 (element 0, component 2): \
+                         qualifier '{qualifier}' takes format {}, not {}",
+                    allowed
+                        .iter()
+                        .map(|f| format!("'{f}'"))
+                        .collect::<Vec<_>>()
+                        .join(" or "),
+                    actual.map_or_else(|| "nothing".to_owned(), |f| format!("'{f}'")),
+                ),
+            )
+            .with_rule_id("MIG-DTM-2379")
+            .with_segment("DTM".to_owned()),
+        );
+    }
+}
+
 fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
     /// Per-group expected segment order derived from the MIG.
     ///
@@ -932,7 +987,8 @@ static MIG_INVOIC_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     }
                 },
             )
-            .with_rule_fn(rule_segment_order),
+            .with_rule_fn(rule_segment_order)
+            .with_rule_fn(rule_dtm_format),
     )
 });
 
@@ -2773,7 +2829,7 @@ impl Profile for InvoicFv20261001Profile {
         None
     }
     fn ahb_revision(&self) -> Option<&'static str> {
-        Some("2.8e")
+        Some("1.0b")
     }
     fn source_document(&self) -> Option<&'static str> {
         Some("INVOIC MIG 2.8e, Publikationsdatum 01.04.2026")

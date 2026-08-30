@@ -341,7 +341,7 @@ impl Profile for ContrlFv20260101Profile {
         None
     }
     fn ahb_revision(&self) -> Option<&'static str> {
-        Some("2.0b")
+        Some("1.0")
     }
     fn source_document(&self) -> Option<&'static str> {
         Some("CONTRL MIG 2.0b, Stand 01.01.2026")

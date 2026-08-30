@@ -39,9 +39,9 @@ flowchart LR
 |---|---|
 | **1 — Schema** | Mandatory segments and data elements are present; repetition limits respected |
 | **2 — Code lists** | Data element values are members of the permitted code list |
-| **3 — MIG** | Message structure rules from the Marktkommunikation Implementation Guide (segment order, group nesting, cardinality) |
+| **3 — MIG** | Message structure rules from the Marktkommunikation Implementation Guide (segment order, group nesting, cardinality, `DTM` date formats) |
 | **4 — AHB** | Pruefidentifikator-specific rules from the Anwendungshandbuch: mandatory/conditional/forbidden field presence |
-| **5 — Semantic** | Cross-field business rules (date coherence, reference completeness, syntax acknowledgement validity) |
+| **5 — Semantic** | Cross-field business rules (date coherence, reference completeness, syntax acknowledgement validity, date-value shape) |
 
 ### Before the layers — the envelope
 
@@ -50,8 +50,12 @@ because a message that fails them has no coherent identity to validate:
 
 | Check | Rule |
 |---|---|
-| Interchange control reference | `UNZ` DE 0036 must equal `UNB` DE 0020 (EDIFACT syntax) |
+| Interchange control reference | `UNZ` DE 0062 must equal `UNB` DE 0020 (EDIFACT syntax) |
+| Declared counts | `UNT` DE 0074 = segments in the message (`UNH` and `UNT` included); `UNZ` DE 0036 = messages in the interchange — ISO 9735-1 Annex C.3.4 |
 | **Interchange party identity** | The `NAD+MS` / `NAD+MR` MP-IDs must equal `UNB` DE 0004 / DE 0010 — **Allgemeine Festlegungen V6.1d §2.13** |
+
+A wrong count is refused here, before any rule runs — the same answer a
+receiver gives it, a CONTRL rejection.
 
 > "Die im UNB- und NAD-Segment für den Absender / Empfänger verwendeten MP-ID
 > sind identisch." — §2.13
@@ -62,6 +66,39 @@ for consent gates, partner lookup and role resolution; tolerating a mismatch
 would let an authenticated partner attribute a message to a different market
 participant. A party absent from either side is not a mismatch — whether the
 omission is legal is an AHB (layer 4) question.
+
+### Date formats — DE 2379
+
+Membership in a code list is not the whole story for a `DTM`. Each MIG segment
+layout fixes DE 2005 (the qualifier) **and** DE 2379 (the format) together:
+
+```
+2005  Datums- oder Uhrzeit-Funktion, Qualifier   M an..3   137 Dokumenten-/Nachrichtendatum
+2379  Datums- oder Uhrzeit-Format, Code          R an..3   303 CCYYMMDDHHMMZZZ
+```
+
+so `DTM+137` is `303` in every EDI@Energy MIG, written on the wire as
+`DTM+137:202610011200?+00:303'` — the `?` is the release character escaping the
+zone's `+`.
+
+DE 2379 has no code list of its own, so the admissible formats live per
+qualifier in each profile's `mig.json`:
+
+```json
+"dtm_formats": {
+  "137": ["303"],
+  "154": ["102"],
+  "157": ["303", "610"],
+  "Z10": ["106"]
+}
+```
+
+A qualifier maps to a **set** because a few are context-dependent — UTILMD
+`DTM+157` is `610` (`CCYYMM`) on a Clearingliste and `303` as „Änderung zum".
+A qualifier the table does not name is not constrained.
+
+`MIG-DTM-2379` checks the code; `SEM-DTM-VALUE` checks that a value declaring
+`303` really carries `CCYYMMDDHHMMZZZ`.
 
 ---
 

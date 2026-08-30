@@ -3,7 +3,6 @@
   "message_type": "REMADV",
   "release": "2.9e",
   "valid_from": "2026-04-01",
-  "valid_until": "2026-09-30",
   "ordering_hint": [
     "UNH",
     "BGM",
@@ -27,6 +26,11 @@
     "MOA",
     "UNT"
   ],
+  "dtm_formats": {
+    "137": [
+      "303"
+    ]
+  },
   "segments": [
     {
       "tag": "UNH",
@@ -577,7 +581,7 @@
       ]
     }
   ],
-  "ahb_revision": "2.9e",
-  "source_document": "REMADV MIG 2.9e, Publikationsdatum 01.10.2025",
+  "ahb_revision": "1.0a",
+  "source_document": "REMADV MIG 2.9e (valid from 2026-04-01, open-ended) / REMADV AHB 1.0a",
   "publikationsdatum": "2025-10-01"
 }

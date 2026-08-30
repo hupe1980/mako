@@ -20,6 +20,35 @@
     "UNS",
     "UNT"
   ],
+  "dtm_formats": {
+    "137": [
+      "303"
+    ],
+    "163": [
+      "303"
+    ],
+    "164": [
+      "303"
+    ],
+    "203": [
+      "303"
+    ],
+    "273": [
+      "610"
+    ],
+    "469": [
+      "303"
+    ],
+    "472": [
+      "303"
+    ],
+    "7": [
+      "303"
+    ],
+    "Z02": [
+      "303"
+    ]
+  },
   "segments": [
     {
       "tag": "UNH",
@@ -525,7 +554,7 @@
     }
   ],
   "valid_until": "2026-09-30",
-  "ahb_revision": "1.4b",
+  "ahb_revision": "1.1a",
   "source_document": "ORDERS MIG 1.4b, Publikationsdatum 01.10.2025",
   "pid_source": "rff_z13",
   "publikationsdatum": "2025-10-01"

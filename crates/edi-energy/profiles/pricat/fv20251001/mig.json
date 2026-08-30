@@ -5,6 +5,20 @@
   "valid_from": "2025-10-01",
   "pid_source": "rff_z13",
   "ordering_hint": [],
+  "dtm_formats": {
+    "137": [
+      "303"
+    ],
+    "157": [
+      "303"
+    ],
+    "163": [
+      "303"
+    ],
+    "492": [
+      "610"
+    ]
+  },
   "segments": [
     {
       "tag": "UNH",
@@ -397,7 +411,7 @@
     }
   ],
   "valid_until": "2026-09-30",
-  "ahb_revision": "2.0e",
+  "ahb_revision": "2.0f",
   "source_document": "PRICAT MIG 2.0e, Publikationsdatum 01.04.2025",
   "publikationsdatum": "2025-04-01"
 }

@@ -1,6 +1,6 @@
 // @generated — do not edit by hand; run `cargo xtask codegen` to regenerate
 //
-// Generated profiles: 40
+// Generated profiles: 39
 #![allow(clippy::used_underscore_binding)]
 
 pub(super) mod ahb_helpers;
@@ -9,7 +9,9 @@ pub(super) mod ahb_helpers;
 mod aperak_fv20251001;
 #[cfg(feature = "aperak")]
 mod aperak_fv20261001;
-#[cfg(feature = "comdis")]
+// Archived profile — excluded from the default build.
+// Enable the `comdis-archive` or `archive` Cargo feature to include.
+#[cfg(any(feature = "comdis-archive", feature = "archive"))]
 mod comdis_fv20251001;
 #[cfg(feature = "comdis")]
 mod comdis_fv20260401;
@@ -67,17 +69,21 @@ mod quotes_fv20251001;
 mod quotes_fv20261001;
 #[cfg(feature = "remadv")]
 mod remadv_fv20260401;
-#[cfg(feature = "remadv")]
-mod remadv_fv20261001;
 #[cfg(feature = "reqote")]
 mod reqote_fv20251001;
 #[cfg(feature = "reqote")]
 mod reqote_fv20261001;
-#[cfg(feature = "utilmd")]
+// Archived profile — excluded from the default build.
+// Enable the `utilmd-archive` or `archive` Cargo feature to include.
+#[cfg(any(feature = "utilmd-archive", feature = "archive"))]
 mod utilmd_fv20241001;
-#[cfg(feature = "utilmd")]
+// Archived profile — excluded from the default build.
+// Enable the `utilmd-archive` or `archive` Cargo feature to include.
+#[cfg(any(feature = "utilmd-archive", feature = "archive"))]
 mod utilmd_fv20241001_gas;
-#[cfg(feature = "utilmd")]
+// Archived profile — excluded from the default build.
+// Enable the `utilmd-archive` or `archive` Cargo feature to include.
+#[cfg(any(feature = "utilmd-archive", feature = "archive"))]
 mod utilmd_fv20250606;
 #[cfg(feature = "utilmd")]
 mod utilmd_fv20251001;
@@ -100,7 +106,7 @@ pub(crate) fn register_profiles(_profiles: &mut Vec<&'static dyn Profile>) {
     _profiles.push(&aperak_fv20251001::PROFILE);
     #[cfg(feature = "aperak")]
     _profiles.push(&aperak_fv20261001::PROFILE);
-    #[cfg(feature = "comdis")]
+    #[cfg(any(feature = "comdis-archive", feature = "archive"))]
     _profiles.push(&comdis_fv20251001::PROFILE);
     #[cfg(feature = "comdis")]
     _profiles.push(&comdis_fv20260401::PROFILE);
@@ -152,17 +158,15 @@ pub(crate) fn register_profiles(_profiles: &mut Vec<&'static dyn Profile>) {
     _profiles.push(&quotes_fv20261001::PROFILE);
     #[cfg(feature = "remadv")]
     _profiles.push(&remadv_fv20260401::PROFILE);
-    #[cfg(feature = "remadv")]
-    _profiles.push(&remadv_fv20261001::PROFILE);
     #[cfg(feature = "reqote")]
     _profiles.push(&reqote_fv20251001::PROFILE);
     #[cfg(feature = "reqote")]
     _profiles.push(&reqote_fv20261001::PROFILE);
-    #[cfg(feature = "utilmd")]
+    #[cfg(any(feature = "utilmd-archive", feature = "archive"))]
     _profiles.push(&utilmd_fv20241001::PROFILE);
-    #[cfg(feature = "utilmd")]
+    #[cfg(any(feature = "utilmd-archive", feature = "archive"))]
     _profiles.push(&utilmd_fv20241001_gas::PROFILE);
-    #[cfg(feature = "utilmd")]
+    #[cfg(any(feature = "utilmd-archive", feature = "archive"))]
     _profiles.push(&utilmd_fv20250606::PROFILE);
     #[cfg(feature = "utilmd")]
     _profiles.push(&utilmd_fv20251001::PROFILE);
@@ -187,7 +191,7 @@ pub(crate) const CURRENT_CODEGEN_SCHEMA_VERSION: u32 = 1;
 const _: () = assert!(aperak_fv20251001::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
 #[cfg(feature = "aperak")]
 const _: () = assert!(aperak_fv20261001::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
-#[cfg(feature = "comdis")]
+#[cfg(any(feature = "comdis-archive", feature = "archive"))]
 const _: () = assert!(comdis_fv20251001::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
 #[cfg(feature = "comdis")]
 const _: () = assert!(comdis_fv20260401::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
@@ -239,18 +243,16 @@ const _: () = assert!(quotes_fv20251001::CODEGEN_SCHEMA_VERSION == CURRENT_CODEG
 const _: () = assert!(quotes_fv20261001::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
 #[cfg(feature = "remadv")]
 const _: () = assert!(remadv_fv20260401::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
-#[cfg(feature = "remadv")]
-const _: () = assert!(remadv_fv20261001::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
 #[cfg(feature = "reqote")]
 const _: () = assert!(reqote_fv20251001::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
 #[cfg(feature = "reqote")]
 const _: () = assert!(reqote_fv20261001::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
-#[cfg(feature = "utilmd")]
+#[cfg(any(feature = "utilmd-archive", feature = "archive"))]
 const _: () = assert!(utilmd_fv20241001::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
-#[cfg(feature = "utilmd")]
+#[cfg(any(feature = "utilmd-archive", feature = "archive"))]
 const _: () =
     assert!(utilmd_fv20241001_gas::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
-#[cfg(feature = "utilmd")]
+#[cfg(any(feature = "utilmd-archive", feature = "archive"))]
 const _: () = assert!(utilmd_fv20250606::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
 #[cfg(feature = "utilmd")]
 const _: () = assert!(utilmd_fv20251001::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
@@ -286,6 +288,7 @@ pub mod releases {
         feature = "aperak",
         feature = "archive",
         feature = "comdis",
+        feature = "comdis-archive",
         feature = "contrl",
         feature = "contrl-archive",
         feature = "iftsta",
@@ -303,6 +306,7 @@ pub mod releases {
         feature = "remadv",
         feature = "reqote",
         feature = "utilmd",
+        feature = "utilmd-archive",
         feature = "utilts"
     ))]
     use crate::Release;
@@ -310,6 +314,7 @@ pub mod releases {
         feature = "aperak",
         feature = "archive",
         feature = "comdis",
+        feature = "comdis-archive",
         feature = "contrl",
         feature = "contrl-archive",
         feature = "iftsta",
@@ -327,6 +332,7 @@ pub mod releases {
         feature = "remadv",
         feature = "reqote",
         feature = "utilmd",
+        feature = "utilmd-archive",
         feature = "utilts"
     ))]
     use std::sync::LazyLock;
@@ -346,7 +352,8 @@ pub mod releases {
     }
 
     /// Release `1.0g` — valid from profile directory `fv20251001`.
-    #[cfg(feature = "comdis")]
+    /// This profile is archived. Enable `comdis-archive` or `archive` to use it.
+    #[cfg(any(feature = "comdis-archive", feature = "archive"))]
     pub fn comdis_fv20251001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("1.0g"));
         &R
@@ -530,13 +537,6 @@ pub mod releases {
         &R
     }
 
-    /// Release `2.9f` — valid from profile directory `fv20261001`.
-    #[cfg(feature = "remadv")]
-    pub fn remadv_fv20261001() -> &'static Release {
-        static R: LazyLock<Release> = LazyLock::new(|| Release::new("2.9f"));
-        &R
-    }
-
     /// Release `1.3c` — valid from profile directory `fv20251001`.
     #[cfg(feature = "reqote")]
     pub fn reqote_fv20251001() -> &'static Release {
@@ -552,21 +552,24 @@ pub mod releases {
     }
 
     /// Release `S1.1a` — valid from profile directory `fv20241001`.
-    #[cfg(feature = "utilmd")]
+    /// This profile is archived. Enable `utilmd-archive` or `archive` to use it.
+    #[cfg(any(feature = "utilmd-archive", feature = "archive"))]
     pub fn utilmd_fv20241001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("S1.1a"));
         &R
     }
 
     /// Release `G1.0a` — valid from profile directory `fv20241001_gas`.
-    #[cfg(feature = "utilmd")]
+    /// This profile is archived. Enable `utilmd-archive` or `archive` to use it.
+    #[cfg(any(feature = "utilmd-archive", feature = "archive"))]
     pub fn utilmd_fv20241001_gas() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("G1.0a"));
         &R
     }
 
     /// Release `S1.2` — valid from profile directory `fv20250606`.
-    #[cfg(feature = "utilmd")]
+    /// This profile is archived. Enable `utilmd-archive` or `archive` to use it.
+    #[cfg(any(feature = "utilmd-archive", feature = "archive"))]
     pub fn utilmd_fv20250606() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("S1.2"));
         &R
@@ -619,9 +622,11 @@ pub mod releases {
 /// `(message_type, release)` pair, or `None` if not an archived profile.
 pub(crate) fn archived_profile_feature(message_type: &str, release: &str) -> Option<&'static str> {
     match (message_type, release) {
+        ("COMDIS", "1.0g") => Some("comdis-archive"),
         ("CONTRL", "2.0b") => Some("contrl-archive"),
         ("INSRPT", "1.1a") => Some("insrpt-archive"),
         ("MSCONS", "2.4c") => Some("mscons-archive"),
+        ("UTILMD", "S1.1a") | ("UTILMD", "G1.0a") | ("UTILMD", "S1.2") => Some("utilmd-archive"),
         _ => None,
     }
 }

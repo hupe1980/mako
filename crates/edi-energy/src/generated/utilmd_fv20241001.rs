@@ -438,6 +438,76 @@ fn rule_group_sg4_ide_min_occurrences(
 ///
 /// The rule does NOT require every tag to be present (that is Layer 3's job);
 /// it only checks that tag positions are non-decreasing w.r.t. the expected order.
+/// DE 2005 qualifier → the DE 2379 format codes the MIG admits.
+///
+/// Sorted, so the lookup is a binary search.
+static DTM_FORMATS: &[(&str, &[&str])] = &[
+    ("137", &["303"]),
+    ("154", &["102"]),
+    ("155", &["303"]),
+    ("157", &["303", "610"]),
+    ("158", &["303"]),
+    ("159", &["303"]),
+    ("163", &["303"]),
+    ("164", &["303"]),
+    ("206", &["303"]),
+    ("294", &["303"]),
+    ("471", &["303"]),
+    ("752", &["104", "106"]),
+    ("76", &["303"]),
+    ("92", &["303"]),
+    ("93", &["303"]),
+    ("Z05", &["303"]),
+    ("Z07", &["303"]),
+    ("Z08", &["303"]),
+    ("Z09", &["602"]),
+    ("Z10", &["106", "303"]),
+    ("Z15", &["303"]),
+    ("Z16", &["303"]),
+    ("Z20", &["802"]),
+    ("Z21", &["104", "106"]),
+    ("Z22", &["802"]),
+    ("Z25", &["303"]),
+    ("Z26", &["303"]),
+];
+
+/// `MIG-DTM-2379` — the DTM's format code must be one the MIG pairs
+/// with its qualifier.
+fn rule_dtm_format(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
+    for seg in segments.iter().filter(|s| s.tag == "DTM") {
+        let Some(qualifier) = seg.component_str(0, 0) else {
+            continue;
+        };
+        let Ok(idx) = DTM_FORMATS.binary_search_by_key(&qualifier, |(q, _)| q) else {
+            // A qualifier the MIG table does not name is left to the DE 2005
+            // code list; constraining its format here would be inventing a rule.
+            continue;
+        };
+        let allowed = DTM_FORMATS[idx].1;
+        let actual = seg.component_str(0, 2);
+        if actual.is_some_and(|f| allowed.contains(&f)) {
+            continue;
+        }
+        issues.push(
+            ValidationIssue::new(
+                ValidationSeverity::Error,
+                format!(
+                    "segment DTM DE 2379 (element 0, component 2): \
+                         qualifier '{qualifier}' takes format {}, not {}",
+                    allowed
+                        .iter()
+                        .map(|f| format!("'{f}'"))
+                        .collect::<Vec<_>>()
+                        .join(" or "),
+                    actual.map_or_else(|| "nothing".to_owned(), |f| format!("'{f}'")),
+                ),
+            )
+            .with_rule_id("MIG-DTM-2379")
+            .with_segment("DTM".to_owned()),
+        );
+    }
+}
+
 fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
     /// Per-group expected segment order derived from the MIG.
     ///
@@ -553,7 +623,8 @@ static MIG_UTILMD_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     }
                 },
             )
-            .with_rule_fn(rule_segment_order),
+            .with_rule_fn(rule_segment_order)
+            .with_rule_fn(rule_dtm_format),
     )
 });
 
@@ -1416,7 +1487,7 @@ impl Profile for UtilmdFv20241001Profile {
         Some(::time::macros::date!(2025 - 06 - 05))
     }
     fn ahb_revision(&self) -> Option<&'static str> {
-        Some("S2.1")
+        Some("1.2a")
     }
     fn source_document(&self) -> Option<&'static str> {
         Some("UTILMD MIG S2.1, Stand 01.10.2024")

@@ -6,8 +6,16 @@
 //!
 //! ## Key difference from GPKE
 //!
-//! WiM uses a **5-Werktage** APERAK deadline, not the GPKE 24h wall-clock
-//! window. The deadline is calculated via `fristen::add_werktage(5, BdewMaKo)`.
+//! WiM runs **two clocks on one inbound order**, and the example arms both:
+//!
+//! - the technical APERAK acknowledgement — **45 minutes** for a Strom UTILMD
+//!   received on a Werktag (`fristen::aperak_strom_due_at`), and
+//! - the **business Antwortfrist** — 3 / 5 / 7 / 1 Werktage per PID
+//!   (`antwort_frist_werktage`), answered with a UTILMD on the answer PID.
+//!
+//! Sending the APERAK does not discharge the Antwortfrist. `Complete` refuses
+//! to run from `AperakSent` for exactly that reason: an acknowledged order
+//! whose business answer never went out is the failure the split makes visible.
 //!
 //! ## Architecture boundary demonstrated
 //!
@@ -65,7 +73,7 @@ const UTILMD_GERAETEWECHSEL: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+WIM-2025-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:S2.1'\
 BGM+E01:::+00055042::+9'\
-DTM+137:20250115:102'\
+DTM+137:202501150800?+00:303'\
 RFF+Z13:WIM-REF-001'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
@@ -106,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // ── Step 1: Parse + validate EDIFACT — transport boundary ─────────────────
-    println!("[1/6] Parsing EDIFACT bytes with edi-energy...");
+    println!("[1/7] Parsing EDIFACT bytes with edi-energy...");
 
     let msg = Platform::with_all_profiles().parse(UTILMD_GERAETEWECHSEL)?;
     let msg_type = msg
@@ -182,7 +190,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Step 2: Inbox deduplication ───────────────────────────────────────────
     println!();
-    println!("[2/6] Inbox deduplication...");
+    println!("[2/7] Inbox deduplication...");
 
     let key = inbox_key(sender.as_str(), msg_ref.as_str()).map_err(|e| anyhow::anyhow!(e))?;
     if !inbox.accept(&key).await? {
@@ -193,7 +201,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Step 3: ReceiveUtilmd — domain command (pure, no I/O) ────────────────
     println!();
-    println!("[3/6] Dispatching ReceiveUtilmd...");
+    println!("[3/7] Dispatching ReceiveUtilmd...");
 
     let envs = process
         .execute(DeviceChangeCommand::ReceiveUtilmd {
@@ -246,6 +254,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &aperak_deadline_id.to_string()[..8]
     );
 
+    // ── Business Antwortfrist (WiM Teil 1, per PID) ──────────────────────────
+    //
+    // The second clock. 55042 „Anmeldung MSB" answers in 5 Werktagen; the
+    // number is read off the PID rather than assumed, because the four WiM
+    // MSB-Wechsel chapters give 3 / 5 / 7 / 1 WT.
+    let antwort_wt = mako_wim::antwort_frist_werktage(pid.as_u32())
+        .expect("55042 is a WiM MSB-Wechsel Prüfidentifikator");
+    let antwort_due_at =
+        fristen::deadline_at_werktage(received_at, antwort_wt, fristen::HolidayCalendar::BdewMaKo);
+    let antwort_deadline = Deadline::new(
+        process.stream_id().clone(),
+        process.process_id(),
+        process.tenant_id(),
+        process.workflow_id().clone(),
+        mako_wim::GERAETEWECHSEL_ANTWORT_FRIST_WINDOW_LABEL,
+        antwort_due_at,
+    );
+    let antwort_deadline_id = antwort_deadline.deadline_id();
+    ctx.deadline_store().register(&antwort_deadline).await?;
+    println!(
+        "  [deadline] Antwortfrist registered ({antwort_wt} WT — due {antwort_due_at}, id: {}…)",
+        &antwort_deadline_id.to_string()[..8]
+    );
+
     ctx.registry()
         .register(
             process.tenant_id(),
@@ -260,7 +292,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Step 4: DispatchAperak ────────────────────────────────────────────────
     println!();
-    println!("[4/6] Dispatching positive APERAK (same conversation as UTILMD)...");
+    println!("[4/7] Dispatching positive APERAK (same conversation as UTILMD)...");
 
     let aperak_ctx = CommandContext::new(
         envs[0].tenant_id,
@@ -312,11 +344,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "  [outbox] APERAK queued ({} pending)",
         ctx.outbox_store().len().await?
     );
-    println!("  [deadline] 5-Werktage window cancelled (APERAK dispatched in time)");
+    println!("  [deadline] 45-Minuten APERAK window cancelled (acknowledged in time)");
+    println!("  [deadline] Antwortfrist still armed — the APERAK is not the answer");
 
-    // ── Step 5: Complete ──────────────────────────────────────────────────────
+    // ── Step 5: DispatchAntwort — the business Bestätigung ───────────────────
+    //
+    // UTILMD 55043 „Bestätigung Anmeldung MSB" carrying `SG4 STS+E01` with a
+    // code from this PID's Entscheidungsbaum — `E_0201` „Anmeldung
+    // Messstellenbetrieb prüfen", where `E15` is the Zustimmung ohne
+    // Korrekturen. This — not the APERAK — is what the Festlegung means by
+    // „Antwort", and it is what closes the Antwortfrist.
     println!();
-    println!("[5/6] Completing device change (meter swap confirmed)...");
+    println!("[5/7] Dispatching the business Antwort (UTILMD 55043 Bestätigung)...");
+
+    let antwort_envs = process
+        .execute(DeviceChangeCommand::DispatchAntwort {
+            bestaetigt: true,
+            antwort_code: "E15".to_owned(),
+            bemerkung: None,
+            abweichender_termin: None,
+        })
+        .await?;
+    for env in &antwort_envs {
+        println!("  ✓ {} (seq {})", env.event_type, env.sequence_number);
+    }
+    ctx.deadline_store().cancel(antwort_deadline_id).await?;
+    println!("  [deadline] Antwortfrist cancelled (Bestätigung sent in time)");
+
+    // ── Step 6: Complete ──────────────────────────────────────────────────────
+    println!();
+    println!("[6/7] Completing device change (meter swap confirmed)...");
 
     let complete_envs = process
         .execute(DeviceChangeCommand::Complete {
@@ -337,7 +394,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Step 6: State + projections ───────────────────────────────────────────
     println!();
-    println!("[6/6] Inspecting typed process state...");
+    println!("[7/7] Inspecting typed process state...");
 
     let state = process.state_with_snapshot(ctx.snapshot_store()).await?;
     println!("  Status              : {}", state.status_str());
