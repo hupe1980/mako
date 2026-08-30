@@ -59,6 +59,11 @@ jobs:
           fi
           echo "tag v$tag matches workspace version $workspace"
 
+      # The publish job runs one `cargo publish` per crate, so their order is the
+      # contract: cargo resolves each dependency against crates.io, not the tree.
+      - name: Publish order resolves on crates.io
+        run: cargo xtask check-publish-order
+
       - name: Format check
         run: cargo fmt --all -- --check
 
@@ -276,6 +281,16 @@ jobs:
           echo "$out"
           if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
 
+      # mako-pruefung depends on mako-markt and mako-fristen, and invoic-checker
+      # depends on mako-pruefung — so it sits between them.
+      - name: Publish mako-pruefung
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          out=$(cargo publish -p mako-pruefung 2>&1) && rc=0 || rc=$?
+          echo "$out"
+          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+
       - name: Publish invoic-checker
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -290,15 +305,6 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           out=$(cargo publish -p mako-obs 2>&1) && rc=0 || rc=$?
-          echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
-
-      # mako-pruefung depends on mako-markt and mako-fristen — publish after them.
-      - name: Publish mako-pruefung
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          out=$(cargo publish -p mako-pruefung 2>&1) && rc=0 || rc=$?
           echo "$out"
           if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
 

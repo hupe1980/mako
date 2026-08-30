@@ -24,6 +24,7 @@ Commands:
   check-release-coverage  Fail when no profile covers the current (or --date) date
   check-prompt-tools  Refuse a procedure step naming a tool the agent cannot reach
   check-routes        Refuse axum 0.7 `/:param` route literals, which panic at startup
+  check-publish-order Refuse a crates.io publish order that precedes its own dependencies
   check-bo4e-attributes Refuse a ZusatzAttribut that is not `mako:`-namespaced and registered
   check-bo4e-discriminants  Refuse a hand-written BO4E `_typ` — the discriminant is the type's
   check-bo4e-examples  Refuse a documented BO4E example using a field BO4E does not define
@@ -132,6 +133,7 @@ mod check_bo4e_discriminants;
 mod check_bo4e_examples;
 mod check_malo_ids;
 mod check_prompt_tools;
+mod check_publish_order;
 mod check_release_coverage;
 mod check_routes;
 mod check_tool_grants;
@@ -157,6 +159,7 @@ fn main() {
         Some("check-release-coverage") => check_release_coverage::check_release_coverage(),
         Some("check-prompt-tools") => check_prompt_tools(),
         Some("check-routes") => check_routes(),
+        Some("check-publish-order") => check_publish_order::check_publish_order(),
         Some("check-bo4e-attributes") => check_bo4e_attributes(),
         Some("check-bo4e-discriminants") => check_bo4e_discriminants(),
         Some("check-bo4e-examples") => check_bo4e_examples(),

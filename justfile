@@ -241,7 +241,7 @@ smoke-roles:
             --allow-no-as4-signing --check
     done
 
-ci: check test test-features check-publishable clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-wire-timestamps check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci validate-release-codes lint-makotest test-makotest
+ci: check test test-features check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-wire-timestamps check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci validate-release-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -484,6 +484,13 @@ check-prompt-tools:
 # router is built — i.e. at startup — so nothing in the test suite catches them.
 check-routes:
     cargo xtask check-routes
+
+# `cargo publish` resolves workspace dependencies against crates.io, not the
+# working tree, so a crate published before one it depends on fails outright.
+# `check-publishable` sorts the list before compiling it, which leaves the order
+# — the whole contract of the release job — unchecked.
+check-publish-order:
+    cargo xtask check-publish-order
 
 # Every agentd tool grant must name a real MCP tool and agree with that server's
 # own `read_only_hint`. A read declared mutating stops for a human on every call;
