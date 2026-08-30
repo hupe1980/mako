@@ -804,6 +804,15 @@ fn check_profile(
         );
         mirrored.values().any(|title| title.trim() == want)
     };
+    let today = {
+        let now = time::OffsetDateTime::now_utc().date();
+        format!(
+            "{:04}-{:02}-{:02}",
+            now.year(),
+            u8::from(now.month()),
+            now.day()
+        )
+    };
     if !mirrored.is_empty() {
         for (kind, version) in [
             ("MIG", mig.release.clone()),
@@ -818,7 +827,14 @@ fn check_profile(
                  independent — check the {kind} document, not the other one. \
                  `cargo xtask sync-regulatories --download` fetches what is missing."
             );
-            if mig.archived {
+            // A Formatversion that has passed legitimately cites a document
+            // BDEW no longer publishes — the catalogue drops superseded
+            // versions. Only a profile still in force must have its source.
+            let superseded = mig
+                .valid_until
+                .as_deref()
+                .is_some_and(|until| until < today.as_str());
+            if superseded || mig.archived {
                 warnings.push(msg);
             } else {
                 errors.push(msg);

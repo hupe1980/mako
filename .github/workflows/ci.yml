@@ -199,11 +199,12 @@ jobs:
 
   # ── Regulatory mirror ───────────────────────────────────────────────────────
   #
-  # Offline: the PDFs are not in the repository (400 MB of third-party
-  # copyright), but `regulatories/bdew-mako/manifest.json` is, so CI can still
-  # check that every profile cites a source document the mirror records.
-  # Untracked, the `validate-profiles` citation guard finds no mirror and
-  # silently passes.
+  # The PDFs are not in the repository (400 MB of third-party copyright), but
+  # `regulatories/bdew-mako/manifest.json` is. Offline this checks the manifest
+  # parses and that no *present* file has drifted from its recorded hash;
+  # absence is the normal state here. The manifest is also what the
+  # `validate-profiles` citation guard reads — untracked, that guard would find
+  # no mirror and silently pass.
   regulatories:
     name: Regulatory mirror (offline)
     runs-on: ubuntu-latest

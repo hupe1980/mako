@@ -34,7 +34,10 @@ mirror, fetches whatever is in force and missing, and rewrites the manifest.
 | `--offline` | Check the mirror against the committed manifest; **no network** |
 | `--json` | Emit the reconciliation as JSON |
 
-CI runs `--offline`, which needs neither the network nor the PDFs.
+CI runs `--offline`, which needs neither the network nor the PDFs: a recorded
+document that is simply absent is reported, not failed — a fresh clone has the
+manifest and none of the files. Only a file that is *present and changed* fails,
+meaning the bytes a profile was read from have moved.
 
 > **Why a content hash and not a version number.** BDEW reissues a corrected
 > document under an unchanged version, so the version alone cannot say whether

@@ -642,6 +642,5 @@
   ],
   "valid_until": "2025-09-30",
   "ahb_revision": "2.1",
-  "source_document": "UTILMD MIG S1.2 — LFW24 MpBNr2 (BK6-22-024 transitional release, effective 2025-06-06): MPES Einspeisung PIDs transferred to GPKE. Derived from UTILMD MIG S2.1 konsolidierte Lesefassung (message structure unchanged); PID set extended per BK6-22-024 Anlage 4.",
-  "archived": true
+  "source_document": "UTILMD MIG S1.2 — LFW24 MpBNr2 (BK6-22-024 transitional release, effective 2025-06-06): MPES Einspeisung PIDs transferred to GPKE. Derived from UTILMD MIG S2.1 konsolidierte Lesefassung (message structure unchanged); PID set extended per BK6-22-024 Anlage 4."
 }

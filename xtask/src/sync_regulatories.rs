@@ -17,7 +17,7 @@
 //! |---|---|
 //! | (default) | Fetch the index, reconcile against the mirror, print a report |
 //! | `--download` | Additionally fetch every document the mirror is missing |
-//! | `--offline` | Reconcile against the committed manifest only; no network |
+//! | `--offline` | Check the manifest against what is on disk; no network |
 //! | `--json` | Emit the reconciliation as JSON |
 //!
 //! ## Why a manifest
@@ -28,7 +28,9 @@
 //! `fileId`, the validity window and the SHA-256 of its bytes.
 //!
 //! The manifest is tracked while the PDFs are not, so `--offline` — what CI
-//! runs — checks the mirror without the network or the 400 MB.
+//! runs — needs neither the network nor the 400 MB. There, a recorded document
+//! that is simply absent is reported rather than failed; only one that is
+//! present and no longer matches its hash is an error.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -282,8 +284,12 @@ struct Reconciliation {
     missing: Vec<String>,
     /// Local files whose bytes no longer match the manifest.
     drifted: Vec<String>,
-    /// Manifest entries whose file is gone.
-    vanished: Vec<String>,
+    /// Manifest entries with no file on disk.
+    ///
+    /// Not a defect: `regulatories/` is gitignored, so a fresh clone and every
+    /// CI runner have the manifest and none of the PDFs. Only a file that is
+    /// *present and changed* means the bytes a profile was read from moved.
+    absent: Vec<String>,
     /// Local files the manifest does not describe.
     ///
     /// Not an error: the mirror holds hand-added sources (BNetzA Festlegungen,
@@ -410,7 +416,7 @@ pub fn run(workspace_root: &Path, args: &[String]) -> bool {
     for (name, entry) in &manifest.files {
         let path = mirror.join(name);
         if !path.is_file() {
-            rec.vanished.push(name.clone());
+            rec.absent.push(name.clone());
             continue;
         }
         match sha256_of(&path) {
@@ -609,19 +615,25 @@ fn report(rec: &Reconciliation, manifest: &Manifest, json_out: bool, offline: bo
     );
 
     let mut ok = true;
-    // Drift and vanishing are always errors: a profile was read from bytes that
-    // are no longer the bytes on disk.
-    for (label, list) in [
-        ("changed since it was mirrored", &rec.drifted),
-        ("recorded but gone", &rec.vanished),
-    ] {
-        if !list.is_empty() {
-            ok = false;
-            eprintln!("\n{} file(s) {label}:", list.len());
-            for f in list {
-                eprintln!("  {f}");
-            }
+    // Drift is the error: the bytes a profile was read from are not the bytes
+    // on disk any more. Absence is not — see `Reconciliation::absent`.
+    if !rec.drifted.is_empty() {
+        ok = false;
+        eprintln!(
+            "\n{} file(s) changed since they were mirrored:",
+            rec.drifted.len()
+        );
+        for f in &rec.drifted {
+            eprintln!("  {f}");
         }
+    }
+    if !rec.absent.is_empty() {
+        println!(
+            "\n{} of {} recorded document(s) are not on disk — \
+             `cargo xtask sync-regulatories --download` fetches them",
+            rec.absent.len(),
+            manifest.files.len()
+        );
     }
     if !rec.missing.is_empty() {
         ok = false;

@@ -49,6 +49,7 @@ fn every_demo_edifact_fixture_validates() {
     );
 
     let mut failures = Vec::new();
+    let mut checked = 0_usize;
     for path in &files {
         let rel = path
             .strip_prefix(&root)
@@ -58,11 +59,16 @@ fn every_demo_edifact_fixture_validates() {
         let raw = std::fs::read(path).expect("fixture is readable");
         let msg = match Platform::with_all_profiles().parse(&raw) {
             Ok(m) => m,
+            // The crate is built per message type, and CI exercises each
+            // feature on its own. A fixture whose type is not compiled in is
+            // out of scope for this build, not a defect in the fixture.
+            Err(edi_energy::Error::FeatureNotEnabled { .. }) => continue,
             Err(e) => {
                 failures.push(format!("{rel}: parse failed: {e}"));
                 continue;
             }
         };
+        checked += 1;
         match msg.validate() {
             Err(e) => failures.push(format!("{rel}: validation could not run: {e}")),
             Ok(report) => {
@@ -83,4 +89,9 @@ fn every_demo_edifact_fixture_validates() {
         failures.len(),
         failures.join("\n  ")
     );
+    // Under `--all-features` every fixture is in scope, so a corpus that
+    // validated nothing means the walk stopped finding files.
+    #[cfg(feature = "utilmd")]
+    assert!(checked > 0, "no demo fixture was validated");
+    let _ = checked;
 }
