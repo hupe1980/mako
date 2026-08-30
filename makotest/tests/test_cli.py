@@ -80,8 +80,20 @@ class TestFrist:
     def test_a_published_frist_is_reported_with_its_fundstelle(self, capsys):
         code, out = run(capsys, "frist", "55001")
         assert code == 0
-        assert "11:00 on the 1. Werktag" in out
+        assert "11:00 on the 1. WT" in out
         assert "BK6-24-174" in out
+
+    def test_a_same_day_window_is_not_reported_as_the_next_werktag(self, capsys):
+        """„15:00 Uhr am ÜT" and „15:00 Uhr des 1. WT" share a clock time.
+
+        Rendering the window from the clock time alone puts the Ersatz-/
+        Grundversorgung Frist a full day late, and contradicts the due instant
+        printed beside it.
+        """
+        code, out = run(capsys, "frist", "55013", "--received", "2026-03-02T09:00:00Z")
+        assert code == 0
+        assert "15:00 on the ÜT" in out
+        assert "due 2026-03-02T15:00:00+01:00" in out
 
     def test_a_received_instant_resolves_the_deadline(self, capsys):
         code, payload = run_json(

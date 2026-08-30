@@ -1,14 +1,18 @@
-"""Answer Fristen — three shapes, one table, and no default.
+"""Answer Fristen — four shapes, one table, and no default.
 
 `add_werktage` answers "which date". These answer "which moment", and the moment
 is the obligation.
 
 The trap this module exists to close: "a Werktage Frist expires at 17:00
 Europe/Berlin" is true of the WiM MSB-Wechsel windows and of nothing else. A
-GPKE answer window is a **clock time on the first Werktag after the
-Übertragungstag** and a GeLi Gas window runs to the **end** of the n-th Werktag.
-Sizing all three the same is wrong in both directions, and the loose direction
-reports a lapsed Frist as still running.
+GPKE answer window is a **clock time on the n-th Werktag after the
+Übertragungstag** — or, for the Ersatz-/Grundversorgung and the LF-Zuordnung,
+that clock time **on the ÜT itself** — and a GeLi Gas window runs to the **end**
+of the n-th Werktag. Sizing any of them the same is wrong in both directions,
+and the loose direction reports a lapsed Frist as still running.
+
+The two GPKE shapes share a clock time and land a day apart, so the Werktag
+count is what separates them.
 """
 
 import pytest
@@ -182,6 +186,20 @@ class TestAssertions:
     def test_assert_deadline_is_takes_the_pid_and_finds_the_shape(self):
         assert_deadline_is(antwort_deadline(55001, MONDAY), received=MONDAY, pid=55001)
         assert_deadline_is(antwort_deadline(44001, MONDAY), received=MONDAY, pid=44001)
+
+    def test_the_same_instant_in_another_offset_is_the_same_deadline(self):
+        """A Frist carries the Berlin offset; a platform commonly reports UTC.
+
+        `…T10:00:00Z` and `…T11:00:00+01:00` are one moment, and failing the
+        first would report a correct deadline as a defect — while a string
+        comparison would also *pass* a wrong instant that happens to render
+        identically, which is the same bug in the loose direction.
+        """
+        assert_deadline_is(
+            "2026-03-03T10:00:00Z", received=MONDAY, pid=55001
+        )  # 11:00+01:00
+        with pytest.raises(AssertionError):
+            assert_deadline_is("2026-03-03T11:00:00Z", received=MONDAY, pid=55001)
 
     def test_asserting_a_gpke_deadline_with_werktage_arithmetic_fails(self):
         """The whole reason `pid=` exists."""

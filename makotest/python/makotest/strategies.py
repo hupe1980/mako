@@ -35,6 +35,9 @@ except ImportError as exc:  # pragma: no cover - dependency guard
     ) from exc
 
 from ._native import (
+    antwort_codes as _antwort_codes,
+)
+from ._native import (
     antwort_obligations,
     berlin_mtu_count,
     bilanzierungsgebiet_from_prefix,
@@ -42,6 +45,7 @@ from ._native import (
     malo_from_base,
     message_types_of,
     mp_id_from_base,
+    pid_carrying_message_types,
     resource_id_from_base,
 )
 from ._native import (
@@ -52,6 +56,7 @@ if TYPE_CHECKING:
     from hypothesis.strategies import SearchStrategy
 
 __all__ = [
+    "antwort_codes",
     "antwort_pids",
     "bilanzierungsgebiete",
     "bilanzkreise",
@@ -209,18 +214,19 @@ def pruefidentifikatoren(
     vacuously — `is_valid` is `True` having checked nothing — so generating one
     would produce a test that cannot fail.
 
-    `message_type` restricts to one EDIFACT type (e.g. `"UTILMD"`). `sparte`
-    restricts UTILMD to `"STROM"` (55xxx) or `"GAS"` (44xxx). `on` (ISO 8601)
-    restricts to the profile **active on that date**, which is narrower and
-    usually what you want: a PID retired at the last Formatumstellung is still
-    known to the registry through its old profile, but a message carrying it
-    today validates vacuously anyway.
+    `message_type` restricts to one EDIFACT type (e.g. `"UTILMD"`). Without it
+    the pool spans **every** type the BDEW assigns Prüfidentifikatoren to, asked
+    of the binding rather than listed here: a hand-kept subset would quietly
+    stop a property from ever drawing an IFTSTA or a QUOTES PID while the
+    docstring still claimed it covered what the build validates.
+
+    `sparte` restricts UTILMD to `"STROM"` (55xxx) or `"GAS"` (44xxx). `on`
+    (ISO 8601) restricts to the profile **active on that date**, which is
+    narrower and usually what you want: a PID retired at the last
+    Formatumstellung is still known to the registry through its old profile, but
+    a message carrying it today validates vacuously anyway.
     """
-    types = (
-        [message_type]
-        if message_type is not None
-        else ["UTILMD", "MSCONS", "ORDERS", "ORDRSP", "INVOIC", "REMADV", "APERAK"]
-    )
+    types = [message_type] if message_type is not None else pid_carrying_message_types()
     pool: list[int] = []
     for mt in types:
         pool.extend(_pruefidentifikatoren(mt, on, sparte))
@@ -239,6 +245,34 @@ def pruefidentifikatoren(
         raise ValueError(
             f"no Prüfidentifikatoren with AHB rules for message_type="
             f"{message_type!r}, sparte={sparte!r}, on={on!r} — nothing to draw from"
+        )
+    return st.sampled_from(sorted(set(pool)))
+
+
+def antwort_codes(*, ebd: str, accepted: bool | None = None) -> SearchStrategy[str]:
+    """Antwortcodes an Entscheidungsbaum really publishes.
+
+    Every root-to-leaf path through an EBD ends at one of these, so the tree's
+    Codeliste *is* the outcome space a platform has to handle — which makes
+    "which answers should be tested" a derivable question rather than a
+    judgement call. An invented code exercises nothing: no conformant
+    counterparty sends one.
+
+    `accepted` narrows to the Zustimmungs- or Ablehnungs-Cluster. Codes off the
+    agreement axis (`E_0595` states whether a Stammdatenänderung follows) are
+    excluded whenever `accepted` is given, because neither answer describes
+    them.
+    """
+    pool = [
+        c.code
+        for c in _antwort_codes(ebd)
+        if accepted is None or c.ist_zustimmung is accepted
+    ]
+    if not pool:
+        raise ValueError(
+            f"{ebd} publishes no Antwortcode with accepted={accepted!r} — "
+            f"nothing to draw from. E_0622, for one, is the Vorprüfung and "
+            f"publishes refusals only."
         )
     return st.sampled_from(sorted(set(pool)))
 

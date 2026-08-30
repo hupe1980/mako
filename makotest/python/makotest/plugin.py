@@ -24,7 +24,7 @@ from ._native import (
     next_werktag,
     release_for,
 )
-from .generators import EpexGenerator
+from .generators import EpexGenerator, LastgangGenerator
 from .simulators import BikoSim, ImsysSim, MarktpartnerSim
 
 __all__ = [
@@ -32,6 +32,7 @@ __all__ = [
     "epex",
     "frozen_clock",
     "imsys_sim",
+    "lastgang",
     "mako_endpoint",
     "makotest_on",
     "makotest_seed",
@@ -213,6 +214,18 @@ def epex(makotest_seed: int) -> EpexGenerator:
     return EpexGenerator(seed=makotest_seed)
 
 
+@pytest.fixture
+def lastgang(makotest_seed: int) -> LastgangGenerator:
+    """A seeded consumption / feed-in curve generator.
+
+    Synthetic shapes, not Standardlastprofile: this build carries no BDEW
+    coefficient tables, and a generator naming itself `H0` while inventing them
+    would make every settlement asserted against it look authoritative and be
+    wrong.
+    """
+    return LastgangGenerator(seed=makotest_seed)
+
+
 class FrozenClock:
     """A clock the test moves deliberately, in Europe/Berlin.
 
@@ -301,9 +314,10 @@ def frozen_clock(makotest_on: str) -> FrozenClock:
 def nb_sim(makotest_on: str) -> MarktpartnerSim:
     """A Netzbetreiber counterparty with no answers bound.
 
-    Unconfigured means silent, which is the safe default: a test that forgets to
-    bind an answer exercises the Frist path rather than silently passing on a
-    response it never asked for.
+    Unconfigured, it acknowledges and sends no business answer — the safe
+    default: a test that forgets to bind one exercises the Frist path rather
+    than silently passing on a response it never asked for. Total silence, the
+    acknowledgement included, is `.timeout()`.
     """
     return MarktpartnerSim(mp_id=NB_ID, rolle="NB", reference_date=makotest_on)
 

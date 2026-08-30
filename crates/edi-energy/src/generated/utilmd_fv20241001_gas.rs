@@ -653,17 +653,6 @@ static AHB_44001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
                 }
             })
-
-            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="Z35" is present in SG4 // [84] Wenn STS+E01++Z35 (Ablehnung Abmeldeanfrage) vorhanden, ist FTX Pflicht
-            .with_scoped_group_rule_fn("SG4", "AHB-44001-SG4-FTX-I1", |group, segs, _ctx, issues| {
-                let __gs_start = issues.len();
-                if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "Z35")) && !segs.iter().any(|s| s.tag == "FTX") {
-                    issues.push(ValidationIssue::new(ValidationSeverity::Error, "in SG4: conditional segment FTX is missing for Pruefidentifikator 44001 (I: when STS DE[0]=\"E01\"+DE[2]=\"Z35\" is present in SG4)".to_owned()).with_rule_id("AHB-44001-SG4-FTX-I1").with_segment("FTX".to_owned()));
-                }
-                for __gi in &mut issues[__gs_start..] {
-                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
-                }
-            })
             .with_max_issues_per_rule(50)
         )
 });
@@ -733,17 +722,6 @@ static AHB_44002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
                 }
             })
-
-            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="Z35" is present in SG4 // [84] Wenn STS+E01++Z35 (Ablehnung Abmeldeanfrage) vorhanden, ist FTX Pflicht
-            .with_scoped_group_rule_fn("SG4", "AHB-44002-SG4-FTX-I1", |group, segs, _ctx, issues| {
-                let __gs_start = issues.len();
-                if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "Z35")) && !segs.iter().any(|s| s.tag == "FTX") {
-                    issues.push(ValidationIssue::new(ValidationSeverity::Error, "in SG4: conditional segment FTX is missing for Pruefidentifikator 44002 (I: when STS DE[0]=\"E01\"+DE[2]=\"Z35\" is present in SG4)".to_owned()).with_rule_id("AHB-44002-SG4-FTX-I1").with_segment("FTX".to_owned()));
-                }
-                for __gi in &mut issues[__gs_start..] {
-                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
-                }
-            })
             .with_max_issues_per_rule(50)
         )
 });
@@ -808,17 +786,6 @@ static AHB_44003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 let __gs_start = issues.len();
                 if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "E14")) && !segs.iter().any(|s| s.tag == "FTX") {
                     issues.push(ValidationIssue::new(ValidationSeverity::Error, "in SG4: conditional segment FTX is missing for Pruefidentifikator 44003 (I: when STS DE[0]=\"E01\"+DE[2]=\"E14\" is present in SG4)".to_owned()).with_rule_id("AHB-44003-SG4-FTX-I0").with_segment("FTX".to_owned()));
-                }
-                for __gi in &mut issues[__gs_start..] {
-                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
-                }
-            })
-
-            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="Z35" is present in SG4 // [84] Wenn STS+E01++Z35 (Ablehnung Abmeldeanfrage) vorhanden, ist FTX Pflicht
-            .with_scoped_group_rule_fn("SG4", "AHB-44003-SG4-FTX-I1", |group, segs, _ctx, issues| {
-                let __gs_start = issues.len();
-                if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "Z35")) && !segs.iter().any(|s| s.tag == "FTX") {
-                    issues.push(ValidationIssue::new(ValidationSeverity::Error, "in SG4: conditional segment FTX is missing for Pruefidentifikator 44003 (I: when STS DE[0]=\"E01\"+DE[2]=\"Z35\" is present in SG4)".to_owned()).with_rule_id("AHB-44003-SG4-FTX-I1").with_segment("FTX".to_owned()));
                 }
                 for __gi in &mut issues[__gs_start..] {
                     __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));

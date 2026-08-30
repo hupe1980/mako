@@ -65,11 +65,15 @@ pub fn event_types_matching(pattern: &str) -> Vec<String> {
     out
 }
 
-/// The nine CloudEvents 1.0 core attribute names.
+/// The eight CloudEvents 1.0 **context attributes**, plus `data`.
 ///
-/// An extension attribute must not collide with one: the platform serialises
-/// extensions flat alongside the core attributes, and a collision emits the key
-/// twice, which every receiver rejects as a duplicate field.
+/// `data` is the event payload rather than a context attribute — §3 defines
+/// four required context attributes (`id`, `source`, `specversion`, `type`) and
+/// four optional ones (`datacontenttype`, `dataschema`, `subject`, `time`). It
+/// is listed here because an extension attribute must not collide with any of
+/// these *names*: the JSON format serialises extensions flat beside them, and a
+/// collision emits the key twice, which every receiver rejects as a duplicate
+/// field. `data` collides exactly as a context attribute would.
 #[pyfunction]
 pub fn cloudevent_core_attributes() -> Vec<String> {
     [
@@ -90,10 +94,11 @@ pub fn cloudevent_core_attributes() -> Vec<String> {
 
 /// Every member name the CloudEvents **JSON format** allows besides extensions.
 ///
-/// The nine context attributes plus `data_base64`, which the JSON format defines
-/// as the carrier for binary payloads. `data_base64` is not a context attribute
-/// and its underscore makes it an illegal *extension* name, so an envelope check
-/// that only knew the core nine would reject a conformant binary event.
+/// The eight context attributes, `data`, and `data_base64` — which the JSON
+/// format defines as the carrier for binary payloads. `data_base64` is not a
+/// context attribute and its underscore makes it an illegal *extension* name, so
+/// an envelope check that knew only the other members would reject a conformant
+/// binary event.
 ///
 /// §3.1 also makes `data` and `data_base64` mutually exclusive: an event
 /// carrying both has two payloads and no rule for which one wins.
@@ -107,8 +112,8 @@ pub fn cloudevent_json_members() -> Vec<String> {
 /// `True` when `key` is a legal CloudEvents extension attribute name.
 ///
 /// §3.3 restricts an extension name to lowercase letters and digits, and it
-/// must not be one of the core attributes. A `traceparent` passes; a
-/// `makoPid`, a `mako-pid` or an `id` does not.
+/// must not collide with a context attribute or with `data`. A `traceparent`
+/// passes; a `makoPid`, a `mako-pid` or an `id` does not.
 #[pyfunction]
 pub fn is_valid_extension_key(key: &str) -> bool {
     !key.is_empty()
@@ -181,10 +186,10 @@ mod tests {
     }
 
     /// `data_base64` is a JSON-format member, not a context attribute and not a
-    /// legal extension name — an envelope check that knew only the core nine
-    /// would reject a conformant binary event.
+    /// legal extension name — an envelope check that knew only the eight
+    /// context attributes and `data` would reject a conformant binary event.
     #[test]
-    fn the_json_format_carries_one_member_beyond_the_core_nine() {
+    fn the_json_format_carries_one_member_beyond_the_context_attributes() {
         let members = cloudevent_json_members();
         assert!(members.contains(&"data_base64".to_owned()));
         assert!(!is_valid_extension_key("data_base64"));

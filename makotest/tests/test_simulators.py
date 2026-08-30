@@ -7,13 +7,14 @@ acknowledgement, the misrouted submission, the dead control path, and silence.
 
 import pytest
 
-from conftest import MELO, ON, utilmd_interchange
+from conftest import BILANZKREIS, MELO, ON, utilmd_interchange
 from makotest import (
     BikoSim,
     ImsysSim,
     Klaerfall,
     MarktpartnerSim,
     UtilmdTransaction,
+    antwort_obligation,
     assert_edifact_valid,
     assert_frist_met,
     build_interchange,
@@ -64,10 +65,69 @@ class TestMarktpartnerSim:
         assert reply.ack_positive
 
     def test_the_ablehnung_uses_the_ahb_answer_pid(self, nb, anmeldung):
-        nb.on(55001).ablehnung(erc="A06")
+        nb.on(55001).ablehnung(antwort_code="A06", process_dates=[("Z07", "20260501")])
         reply = nb.receive(anmeldung)
         assert reply.pid == 55003
-        assert reply.erc == "A06"
+        assert reply.antwort_code == "A06"
+        assert_edifact_valid(reply.business, on=ON)
+
+    def test_an_antwortcode_brings_its_conditional_segments_with_it(self, nb, anmeldung):
+        """A code makes other segments conditional-Muss, and the AHB checks them.
+
+        `A06` („Andere Anmeldung in Bearbeitung") obliges a `SG4 DTM+Z07` on the
+        55003 carrying it. Writing the code without the date is an incomplete
+        Ablehnung, and it is the AHB layer — not this toolkit — that says so.
+        """
+        nb.on(55001).ablehnung(antwort_code="A06")
+        reply = nb.receive(anmeldung)
+        report = validate_edifact(reply.business, ON)
+        assert not report.is_valid
+        assert [f.rule_id for f in report.errors] == ["AHB-55003-SG4-DTM-I0"]
+
+    def test_a_code_the_bdew_wants_explained_is_refused_bare(self, nb):
+        """Some codes are incomplete without an `FTX+ACB` Erläuterung."""
+        with pytest.raises(ValueError, match="requires a written Erläuterung"):
+            nb.on(55001).ablehnung(antwort_code="A05")
+
+    def test_the_ablehnung_states_its_antwortcode_on_the_wire(self, nb, anmeldung):
+        """`SG4 STS+E01` is AHB-Muss on every Antwortnachricht.
+
+        DE 9013 carries the code and DE 1131 the Codeliste it came from, both
+        resolved from the tree the answer-Frist table names for the request — an
+        Ablehnung without them is an answer no conformant counterparty accepts.
+        """
+        nb.on(55001).ablehnung(antwort_code="A06", process_dates=[("Z07", "20260501")])
+        reply = nb.receive(anmeldung)
+        assert b"STS+E01++A06:E_0622" in reply.business
+
+    def test_a_code_the_tree_does_not_publish_is_refused_at_binding(self, nb):
+        """A code means nothing outside its tree, so the binding is where it fails.
+
+        `ValueError`, not `AssertionError`: it is the test that named a code the
+        Entscheidungsbaum has no leaf for, not the platform that misbehaved.
+        """
+        with pytest.raises(ValueError, match="does not publish Antwortcode"):
+            nb.on(55001).ablehnung(antwort_code="A99")
+
+    def test_a_code_from_the_wrong_cluster_cannot_ride_the_answer_pid(self, nb):
+        """Whether a code agrees is a property of the code, not of the message.
+
+        `E_0622` is the Vorprüfung and publishes refusals only, so none of its
+        codes can travel on the Bestätigungs-PID.
+        """
+        with pytest.raises(ValueError, match="cannot ride the Bestätigung"):
+            nb.on(55001).bestaetigung(antwort_code="A06")
+
+    def test_a_confirmation_names_the_tree_that_publishes_agreements(self, nb, anmeldung):
+        """A GPKE Anmeldung is decided by two trees in sequence.
+
+        The answer-Frist table names the Vorprüfung `E_0622`; the agreement
+        codes live in `E_0623`, which decides the Lieferbeginn.
+        """
+        nb.on(55001).bestaetigung(antwort_code="A51", ebd="E_0623")
+        reply = nb.receive(anmeldung)
+        assert reply.pid == 55002
+        assert b"STS+E01++A51:E_0623" in reply.business
         assert_edifact_valid(reply.business, on=ON)
 
     def test_timeout_answers_nothing_at_all(self, nb, anmeldung):
@@ -191,6 +251,7 @@ class TestMultiMessageInterchange:
                             locations=[("melo", MELO)],
                             dates=[("92", "20260501")],
                             references=[("Z13", str(pid))],
+                            bilanzkreis=BILANZKREIS,
                         )
                     ],
                 )
@@ -209,11 +270,29 @@ class TestMultiMessageInterchange:
 
     def test_the_single_message_accessors_refuse_to_speak_for_two(self, nb):
         nb.on(55001).bestaetigung()
-        nb.on(55004).ablehnung(erc="A06")
+        nb.on(55004).ablehnung(antwort_code="A06", process_dates=[("Z07", "20260501")])
         reply = nb.receive(self.two_vorgaenge())
         with pytest.raises(ValueError, match=r"read `pids`"):
             _ = reply.pid
-        assert reply.ercs == (None, "A06")
+        assert reply.antwort_codes == (None, "A06")
+
+    def test_each_vorgang_carries_its_own_deadline(self, nb):
+        """The window is a property of the request, so two Vorgänge owe two.
+
+        A 55001 is due at 11:00 on the 1. WT and a 55004 on its own clock; one
+        instant for the interchange would be wrong for one of them.
+        """
+        nb.on(55001).bestaetigung()
+        nb.on(55004).bestaetigung()
+        reply = nb.receive(self.two_vorgaenge(), received_at="2026-03-02T09:00:00Z")
+
+        assert len(reply.due_ats) == 2
+        assert reply.due_ats[0] != reply.due_ats[1]
+        assert reply.due_ats[0] == antwort_obligation(55001).due_at(
+            "2026-03-02T09:00:00Z"
+        )
+        with pytest.raises(ValueError, match=r"read `due_ats`"):
+            _ = reply.due_at
 
     def test_an_unbound_second_message_leaves_the_first_answered(self, nb):
         nb.on(55001).bestaetigung()
@@ -263,14 +342,74 @@ class TestAcknowledgementChoice:
         assert reply.business is None, "a strict partner does not answer what it refused"
 
     def test_a_lenient_partner_can_be_made_to_answer_anyway(self):
-        """Some counterparties do. A platform has to survive it."""
+        """Some counterparties do process a message they should have refused.
+
+        A platform has to survive being answered on a request that never should
+        have been accepted, so the lax partner acknowledges and answers rather
+        than falling silent — silence is `.timeout()`, and it is a different
+        scenario testing a different path.
+        """
         lenient = MarktpartnerSim(
             mp_id=NB_ID, rolle="NB", reference_date=ON, strict=False
         )
-        assert not lenient.receive(utilmd_interchange(melo="NOTAMELO"))
+        lenient.on(55001).bestaetigung()
+        reply = lenient.receive(utilmd_interchange(melo="NOTAMELO"))
+
+        assert reply, "a lax partner answers rather than going quiet"
+        assert reply.ack_kind == "CONTRL" and reply.ack_positive
+        assert reply.pid == 55002
+        # The request was still invalid, and the exchange log says so.
+        assert not lenient.exchanges[-1].request_valid
 
 
 class TestBikoSim:
+    def test_every_submitted_series_is_settled_and_acknowledged(self):
+        """An interchange carries several Summenzeitreihen, each its own settlement.
+
+        `RFF+ACW` names one UNH, so one APERAK could only ever speak for one of
+        them — settling the first and dropping the rest is how an unsettled
+        series ships as a green run.
+        """
+        message = build_mscons(
+            13003,
+            NB_ID,
+            BIKO_ID,
+            MELO,
+            [("220", "1234.567", "KWH")],
+            on=ON,
+            message_ref="2",
+        )
+        wire = build_interchange(
+            sender=NB_ID,
+            receiver=BIKO_ID,
+            dar="MABIS-2",
+            messages=[
+                build_mscons(
+                    13003,
+                    NB_ID,
+                    BIKO_ID,
+                    MELO,
+                    [("220", "1234.567", "KWH")],
+                    on=ON,
+                    message_ref="1",
+                ),
+                message,
+            ],
+            on=ON,
+        )
+        biko = BikoSim(mp_id=BIKO_ID, reference_date=ON)
+        reply = biko.receive(wire)
+
+        assert len(biko.submissions) == 2, "both series are settled"
+        assert len(validate_edifact(reply.ack, ON).messages) == 2, "one APERAK each"
+        assert reply.ack_positive
+
+    def test_one_rejected_series_makes_the_whole_acknowledgement_negative(self):
+        biko = BikoSim(mp_id=BIKO_ID, reference_date=ON, accept_by_default=False)
+        reply = biko.receive(mscons_interchange())
+        assert not reply.ack_positive
+        assert reply.erc == "Z10"
+
     def test_a_conformant_summenzeitreihe_is_accepted(self):
         biko = BikoSim(mp_id=BIKO_ID, reference_date=ON)
         reply = biko.receive(mscons_interchange(), bilanzkreis="11XBK-------1")

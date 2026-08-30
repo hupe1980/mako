@@ -414,10 +414,16 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
     const EXPECTED_DETAIL_ORDER: &[&str] = &[
         "NAD", "LOC", "DTM", "CCI", "LIN", "PIA", "QTY", "DTM", "STS", "UNT",
     ];
-    /// Tags that trigger a repeatable segment group in the detail section.
+    /// Tags that trigger a repeatable segment group, in either section.
     const DETAIL_GROUP_TRIGGERS: &[&str] = &["RFF", "NAD", "CTA", "LOC", "LIN", "QTY"];
 
-    /// Strict order check for the header section (no group repetition expected).
+    /// Order check for the header section, aware of repeating groups.
+    ///
+    /// A group may repeat on either side of `UNS`. REMADV puts its whole
+    /// Rückmeldung there — `SG5 DOC` holding `SG7 AJT` and `SG10 DLI`, the
+    /// latter up to 9999 times, one per refused Rechnungsposition (MIG 2.9e
+    /// segment 0410). A flat cursor here rejects the second `DLI`, which is
+    /// every itemized rejection there is.
     fn check_header_section(
         segs: &[edifact_rs::Segment<'_>],
         expected: &[&str],
@@ -426,6 +432,15 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
     ) {
         let mut cursor: usize = 0;
         for seg in segs {
+            // A group trigger seen at or before the cursor opens a new
+            // occurrence of that group; rewind to it.
+            if DETAIL_GROUP_TRIGGERS.contains(&seg.tag.as_ref()) {
+                if let Some(pos) = expected.iter().position(|&t| t == seg.tag) {
+                    if pos <= cursor {
+                        cursor = pos;
+                    }
+                }
+            }
             if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {
                 cursor += pos;
             } else if expected.contains(&seg.tag.as_ref()) {
@@ -447,8 +462,8 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
     /// Any tag that triggers a segment group may legitimately step the cursor
     /// *backwards*: the group is repeating. MSCONS SG10 is `QTY + DTM + STS`
     /// inside SG9, so the second reading of a line item returns from DTM to
-    /// QTY. Resetting only on the *outermost* trigger — the previous behaviour —
-    /// rejected every multi-interval MSCONS, which is every Lastgang there is.
+    /// QTY. Every trigger resets, not only the outermost one: a multi-interval
+    /// MSCONS — which is every Lastgang there is — repeats the inner group.
     fn check_detail_section(
         segs: &[edifact_rs::Segment<'_>],
         expected: &[&str],

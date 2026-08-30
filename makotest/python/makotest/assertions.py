@@ -21,6 +21,7 @@ like a system defect.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -29,6 +30,8 @@ from typing import Any
 from ._native import (
     ValidationReport,
     ablehnung_pid,
+    antwort_code,
+    antwort_codes,
     antwort_obligation,
     bestaetigung_pid,
     bo4e_schema_version,
@@ -44,6 +47,7 @@ from ._native import (
 
 __all__ = [
     "assert_answer_pid",
+    "assert_antwort_code",
     "assert_bo4e_generation_matches",
     "assert_cloudevent",
     "assert_deadline_is",
@@ -155,6 +159,51 @@ def assert_answer_pid(actual: int, *, anfrage: int, accepted: bool) -> None:
         )
 
 
+def assert_antwort_code(actual: str, *, ebd: str, accepted: bool | None = None) -> None:
+    """Assert an answer states an Antwortcode its Entscheidungsbaum publishes.
+
+    The answer PID says a counterparty refused; the Antwortcode in `SG4 STS+E01`
+    says *why*, and it is only meaningful inside the tree that publishes it —
+    `A02` is „Vorlauffrist nicht eingehalten" in `E_0607` and „Marktlokation
+    nimmt nicht an der Marktkommunikation teil" in `E_0622`. `ebd` names the
+    tree, and a code that tree has no leaf for is a defect however plausible it
+    looks.
+
+    `accepted` additionally pins the code's **Cluster** — whether the BDEW
+    classes it as a Zustimmung or an Ablehnung. That is a property of the code,
+    not of the message carrying it, so this catches an answer that refuses on a
+    Bestätigungs-PID. Leave it `None` to check membership only.
+
+    Raises `ValueError` when `accepted` is asked of a tree off the agreement
+    axis: `E_0595` states whether a Stammdatenänderung follows, and neither of
+    its clusters is a Zustimmung, so reading one as a refusal would invert the
+    answer.
+    """
+    __tracebackhide__ = True
+    resolved = antwort_code(ebd, actual)
+    if resolved is None:
+        published = ", ".join(c.code for c in antwort_codes(ebd))
+        raise AssertionError(
+            f"{actual!r} is not an Antwortcode {ebd} publishes. A code means "
+            f"nothing outside its tree, and this one has no leaf here. "
+            f"{ebd} publishes: {published}."
+        )
+    if accepted is None:
+        return
+    if resolved.ist_zustimmung is None:
+        raise ValueError(
+            f"{ebd} is off the agreement axis — its clusters state whether data "
+            f"follows, not whether the request was granted, so {actual!r} is "
+            f"neither an acceptance nor a refusal. Drop accepted=."
+        )
+    if resolved.ist_zustimmung != accepted:
+        wanted = "Zustimmung" if accepted else "Ablehnung"
+        raise AssertionError(
+            f"{ebd} classes {actual!r} as {resolved.cluster}, not a {wanted}: "
+            f"„{resolved.bedeutung}"
+        )
+
+
 # ── Fristen ───────────────────────────────────────────────────────────────────
 
 
@@ -175,8 +224,14 @@ def assert_deadline_is(
     Both `actual` and `received` are RFC 3339. Write it this way rather than
     comparing dates: a day-granular comparison passes on a deadline that is
     hours wrong, and no single shape fits every family — GPKE answers are due at
-    a **clock time on the first Werktag after the Übertragungstag**, GeLi Gas at
-    the **end of the n-th Werktag**, WiM at **17:00 on the n-th**.
+    a **clock time on the n-th Werktag after the Übertragungstag** or on the
+    **ÜT itself**, GeLi Gas at the **end of the n-th Werktag**, WiM at **17:00 on
+    the n-th**.
+
+    The comparison is over **instants**, not over the strings. A Frist carries
+    the Europe/Berlin offset and a platform commonly reports it in UTC:
+    `"…T10:00:00Z"` and `"…T11:00:00+01:00"` are the same moment, and failing
+    one of them would report a correct deadline as a defect.
     """
     __tracebackhide__ = True
     if (pid is None) == (werktage is None):
@@ -201,7 +256,7 @@ def assert_deadline_is(
         expected = deadline_at_werktage(received, werktage)
         basis = f"{werktage} Werktage to the 17:00 Europe/Berlin cut-off"
 
-    if actual != expected:
+    if _instant(actual) != _instant(expected):
         raise AssertionError(
             f"deadline mismatch\n"
             f"  received: {received}\n"
@@ -258,21 +313,32 @@ def assert_cloudevent(
 
     * the `type` is in the platform's **catalog** — a typo or a retired name
       would otherwise pass forever as "the platform never emitted this";
-    * the envelope satisfies CloudEvents 1.0 (required attributes,
-      `specversion`, an RFC 3339 `time`);
-    * extension keys satisfy §3.3 — a key colliding with a core attribute
-      serialises twice and every receiver rejects the event. `data_base64` is
-      the one JSON-format member that is neither a core attribute nor a legal
-      extension name, and it is accepted; carrying it *and* `data` is not.
+    * the envelope satisfies CloudEvents 1.0 (the four required context
+      attributes, `specversion == "1.0"`, an RFC 3339 `time`);
+    * extension keys satisfy §3.3 — a key colliding with a context attribute or
+      with `data` serialises twice and every receiver rejects the event.
+      `data_base64` is the one JSON-format member that is neither a context
+      attribute nor a legal extension name, and it is accepted; carrying it
+      *and* `data` is not.
+
+    `time` is **optional** in CloudEvents 1.0 but demanded here: an event stream
+    a platform asks a market partner to reconcile against a Frist has to say
+    when the event happened, and an absent `time` is a defect this toolkit
+    exists to name rather than a conformance question.
     """
     __tracebackhide__ = True
-    missing = [
-        a for a in ("specversion", "id", "source", "type", "time") if a not in event
-    ]
+    missing = [a for a in ("specversion", "id", "source", "type") if a not in event]
     if missing:
         raise AssertionError(
             f"not a CloudEvent: required attribute(s) {missing} absent. Got keys "
             f"{sorted(event)}."
+        )
+    if "time" not in event:
+        raise AssertionError(
+            "the event carries no `time`. CloudEvents 1.0 makes it optional, but "
+            "an event that cannot be placed on the clock cannot be reconciled "
+            "against a Frist, which is what this stream is asserted against. "
+            f"Got keys {sorted(event)}."
         )
     if event["specversion"] != "1.0":
         raise AssertionError(
@@ -425,13 +491,18 @@ def assert_invoice_reconciles(
     is worse than no assertion. `tolerance_eur` defaults to one cent — each
     total is independently rounded, so two of them can legitimately differ by the
     rounding of the last place. Pass `"0"` to demand exact agreement.
+
+    An invoice that states none of the four identities raises `ValueError`: with
+    nothing to reconcile there is nothing this assertion can fail on, and a
+    silent pass over an empty or misspelled mapping is the vacuous assertion
+    this toolkit exists to prevent.
     """
     __tracebackhide__ = True
     tolerance = Decimal(tolerance_eur)
     positions = invoice.get("rechnungspositionen") or []
 
     checks: list[tuple[str, Decimal, Decimal, str]] = []
-    if positions or "gesamtnetto" in invoice:
+    if positions and "gesamtnetto" in invoice:
         checks.append(
             (
                 "Σ teilsummeNetto = gesamtnetto",
@@ -440,7 +511,7 @@ def assert_invoice_reconciles(
                 f"across {len(positions)} position(s)",
             )
         )
-    if "gesamtsteuer" in invoice and positions:
+    if positions and "gesamtsteuer" in invoice:
         checks.append(
             (
                 "Σ teilsummeSteuer.steuerwert = gesamtsteuer",
@@ -474,6 +545,15 @@ def assert_invoice_reconciles(
                 _money(invoice.get("zuZahlen")),
                 "",
             )
+        )
+
+    if not checks:
+        raise ValueError(
+            "this Rechnung states none of the four identities, so there is "
+            "nothing to reconcile and this assertion could not have failed. "
+            "A position sum needs `rechnungspositionen` alongside `gesamtnetto` "
+            "or `gesamtsteuer`; the totals need `gesamtbrutto` alongside "
+            f"`gesamtnetto` or `zuZahlen`. Got keys {sorted(invoice)}."
         )
 
     failures = [
@@ -510,12 +590,27 @@ def assert_bo4e_generation_matches(platform_generation: str) -> None:
 
 def _same_generation(actual: str, expected: str) -> bool:
     """Compare the generation only — `v202607.0.0` and `202607` are the same."""
-    return _generation(actual) == _generation(expected)
+    resolved = _generation(actual)
+    return resolved is not None and resolved == _generation(expected)
 
 
-def _generation(value: str) -> str:
-    digits = "".join(c for c in value if c.isdigit())
-    return digits[:6]
+def _generation(value: str) -> str | None:
+    """The `YYYYMM` generation inside a BO4E version string, or `None`.
+
+    A generation is a six-digit year-month, and it is the only part that has to
+    match: `202607.1.0`, `v202607.0.0` and `BO4E-202607` all name the same one.
+    Collapsing every digit in the string and taking the first six gets that
+    wrong the moment anything numeric precedes it — `BO4E-202607` would read as
+    `420260` — and the failure is a *mismatch* report on a version that matched.
+
+    Returns `None` when nothing in the string looks like a generation, which is
+    a different answer from a generation that disagrees.
+    """
+    for match in re.finditer(r"(?<!\d)(\d{6})(?!\d)", value):
+        year, month = int(match.group(1)[:4]), int(match.group(1)[4:])
+        if 2000 <= year <= 2099 and 1 <= month <= 12:
+            return match.group(1)
+    return None
 
 
 def _instant(value: str) -> datetime:

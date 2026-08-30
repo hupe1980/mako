@@ -124,6 +124,10 @@ async fn loopback_round_trip_spawns_process() {
             "receiver": OWN_NB,
             "malo": malo,
             "process_date": "2026-03-01",
+            // `SG8 SEQ+Z79` is Muss on 55001 (UTILMD AHB Strom 2.1 §5.3): the NB
+            // cannot assign the Marktlokation without a Bilanzkreis, so a command
+            // that omits it renders a message the pre-send gate dead-letters.
+            "bilanzkreis": "11XBK-EEG-----1",
         }),
     );
 

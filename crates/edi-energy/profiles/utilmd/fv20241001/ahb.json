@@ -185,6 +185,13 @@
             }
           ],
           "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+        },
+        {
+          "group_id": "SG8",
+          "tag": "SEQ",
+          "requirement": "M",
+          "_description": "SG8 SEQ+Z79 „Bestandteil eines Produktpakets“ Muss — UTILMD AHB Strom 2.1 §5.3: „Der LF muss in diesen Anwendungsfällen Produkte … angeben … Als wesentliches Produkt ist an der Stelle der Bilanzkreis zu nennen, da ohne die Angabe eines für den LF gültigen Bilanzkreises der NB den LF der Marktlokation bzw. Tranche nicht zuordnen kann.“ Segment 00082 is Muss in the Anmeldung column. The qualifier is deliberately not restricted here: the restriction would apply to every SEQ in SG8, and the group also carries SEQ+ZH0 „Priorisierung erforderliches Produktpaket“.",
+          "group_required": true
         }
       ]
     },

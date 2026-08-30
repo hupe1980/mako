@@ -7045,6 +7045,7 @@ dependencies = [
  "edi-energy",
  "mako-events",
  "mako-fristen",
+ "mako-pruefung",
  "pyo3",
  "rubo4e",
  "time",

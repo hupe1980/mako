@@ -9,6 +9,10 @@ It refuses anything not addressed to a Bilanzkoordinator. A simulator that
 accepted a UTILMD as a Summenzeitreihe would agree to something no real
 counterparty does, and every assertion downstream of that acceptance would be
 meaningless.
+
+An interchange carries several Summenzeitreihen, each its own settlement, and
+each is assessed and acknowledged separately: `RFF+ACW` names one UNH, so one
+APERAK could only ever speak for one of them.
 """
 
 from __future__ import annotations
@@ -17,7 +21,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from .._native import build_aperak_for, build_interchange, validate_edifact
-from .marktpartner import Reply
+from .marktpartner import Reply, _wire_text
 
 __all__ = ["MABIS_SUMMENZEITREIHE_PIDS", "BikoSim", "Klaerfall", "Submission"]
 
@@ -135,10 +139,22 @@ class BikoSim:
                 "the interchange carries no message — there is nothing to "
                 "acknowledge and nothing to settle"
             )
-        message = report.messages[0]
+        sender = report.envelope.sender_id if report.envelope else self.mp_id
+
+        # One APERAK per message: `RFF+ACW` names a single UNH, so a single
+        # acknowledgement could only ever speak for one Summenzeitreihe — and an
+        # interchange routinely carries several, each its own settlement.
+        acknowledgements = [
+            self._assess(message, report, bilanzkreis) for message in report.messages
+        ]
+        return self._aperak(raw, sender, acknowledgements)
+
+    def _assess(
+        self, message, report, bilanzkreis: str | None
+    ) -> tuple[str | None, str | None]:
+        """Settle one submitted message and return its `(ERC, text)`."""
         pid = message.pruefidentifikator
         checked = message.rules_applied
-        sender = report.envelope.sender_id if report.envelope else self.mp_id
 
         refusal = self._misroute_reason(message)
         if refusal is not None:
@@ -146,20 +162,18 @@ class BikoSim:
                 Submission(
                     pid,
                     bilanzkreis,
-                    report.is_valid,
+                    message.is_valid,
                     False,
                     checked=checked,
                     refused=refusal,
                 )
             )
-            return self._aperak(raw, sender, erc="Z18", text=refusal)
+            return "Z18", _wire_text(refusal)
 
-        if not report.is_valid:
-            first = next(iter(report.errors), None)
+        if not message.is_valid or not report.is_valid:
+            first = next(iter(message.errors), None) or next(iter(report.errors), None)
             self._log(Submission(pid, bilanzkreis, False, False, checked=checked))
-            return self._aperak(
-                raw, sender, erc="Z10", text=(first.message[:70] if first else "invalid")
-            )
+            return "Z10", (_wire_text(first.message) if first else "invalid")
 
         klaerfall = self._klaerfall_for(bilanzkreis)
         accepted = klaerfall is None
@@ -167,13 +181,8 @@ class BikoSim:
             Submission(pid, bilanzkreis, True, accepted, klaerfall, checked=checked)
         )
         if accepted:
-            return self._aperak(raw, sender, erc=None, text=None)
-        return self._aperak(
-            raw,
-            sender,
-            erc=klaerfall.erc,
-            text=f"{klaerfall.grund}: {klaerfall.detail}"[:70],
-        )
+            return None, None
+        return klaerfall.erc, _wire_text(f"{klaerfall.grund}: {klaerfall.detail}")
 
     def _misroute_reason(self, message) -> str | None:
         if message.message_type != "MSCONS":
@@ -191,7 +200,9 @@ class BikoSim:
             return Klaerfall("zeitreihe_unvollstaendig", detail="default reject")
         return None
 
-    def _aperak(self, raw: bytes, to: str, *, erc: str | None, text: str | None) -> Reply:
+    def _aperak(
+        self, raw: bytes, to: str, outcomes: list[tuple[str | None, str | None]]
+    ) -> Reply:
         # UNB DE0020 identifies the interchange to the receiver. A partner that
         # reused one would be sending a duplicate every conformant receiver is
         # entitled to discard — so it is a counter, not a constant, and a counter
@@ -204,15 +215,22 @@ class BikoSim:
             on=self.reference_date,
             messages=[
                 build_aperak_for(
-                    raw, on=self.reference_date, error_code=erc, error_text=text
+                    raw,
+                    on=self.reference_date,
+                    error_code=erc,
+                    error_text=text,
+                    message_ref=str(index + 1),
+                    message_index=index,
                 )
+                for index, (erc, text) in enumerate(outcomes)
             ],
         )
         return Reply(
             ack=wire,
             ack_kind="APERAK",
-            ack_positive=erc is None,
-            ercs=(erc,) if erc is not None else (),
+            # The interchange is accepted only when every series in it was.
+            ack_positive=all(erc is None for erc, _ in outcomes),
+            ercs=tuple(erc for erc, _ in outcomes),
         )
 
     def _log(self, submission: Submission) -> None:

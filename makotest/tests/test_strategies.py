@@ -151,6 +151,23 @@ class TestPruefidentifikatoren:
     def test_the_unrestricted_pool_spans_message_types(self, pid):
         assert message_types_of(pid) != []
 
+    def test_the_unrestricted_pool_covers_every_pid_carrying_type(self):
+        """A hand-kept subset would silently never draw an IFTSTA or QUOTES PID.
+
+        The docstring promises "PIDs the compiled profile set actually
+        validates", so the default has to be asked of the build rather than
+        listed — a property drawing from two thirds of the catalogue while
+        claiming all of it is the vacuous-coverage failure in another shape.
+        """
+        from makotest import pid_carrying_message_types
+
+        covered = {
+            mt
+            for pid in pruefidentifikatoren().__dict__["elements"]
+            for mt in message_types_of(pid)
+        }
+        assert covered == set(pid_carrying_message_types())
+
     @given(pid=antwort_pids())
     @_settings
     def test_every_antwort_pid_has_a_published_window(self, pid):

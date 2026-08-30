@@ -18,6 +18,18 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 mako-events  = { workspace = true }
 mako-fristen = { workspace = true }
+# The Antwortcode catalogue for every prüfende Rolle: a test toolkit resolves a
+# code for any process the platform under test runs, not only the roles that
+# platform is deployed as.
+#
+# `role-nb` is deliberately absent. Only `mako_pruefung::codes` is bound — the
+# Codelisten, which are not role-gated — and `role-nb` is the one feature that
+# pulls `mako-markt`, and with it `tokio` into a wheel that never runs async.
+# The NB trees (`E_0622`, `E_0607`, `E_0623`) are in the catalogue either way;
+# `codelisten_do_not_depend_on_the_role_features` pins that.
+mako-pruefung = { workspace = true, features = [
+    "role-lf", "role-msb", "role-esa", "role-mabis",
+] }
 edi-energy   = { workspace = true, features = [
     "utilmd", "mscons", "aperak", "contrl", "invoic", "remadv", "orders",
     "iftsta", "insrpt", "reqote", "partin", "ordchg", "ordrsp", "quotes",

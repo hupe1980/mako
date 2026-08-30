@@ -222,6 +222,45 @@ pub fn pruefidentifikatoren(
     Ok(out)
 }
 
+/// Every EDIFACT message type the BDEW assigns Prüfidentifikatoren to, sorted.
+///
+/// Derived from the band table rather than hand-listed, so a strategy drawing
+/// "any PID this build validates" cannot quietly cover a subset: a type added
+/// upstream reaches the enumeration as soon as it has a band, and
+/// `every_pid_carrying_message_type_has_a_band` fails until it does.
+///
+/// CONTRL is absent — it is a technical acknowledgement the AHB assigns no
+/// Prüfidentifikator at all.
+#[pyfunction]
+pub fn pid_carrying_message_types() -> Vec<String> {
+    const TYPES: &[MessageType] = &[
+        MessageType::Aperak,
+        MessageType::Comdis,
+        MessageType::Iftsta,
+        MessageType::Insrpt,
+        MessageType::Invoic,
+        MessageType::Mscons,
+        MessageType::Ordchg,
+        MessageType::Orders,
+        MessageType::Ordrsp,
+        MessageType::Partin,
+        MessageType::Pricat,
+        MessageType::Quotes,
+        MessageType::Remadv,
+        MessageType::Reqote,
+        MessageType::Utilmd,
+        MessageType::Utilts,
+    ];
+    let mut out: Vec<String> = TYPES
+        .iter()
+        .filter(|mt| !pid_bands(**mt).is_empty())
+        .map(|mt| mt.as_str().to_owned())
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 /// Every EDIFACT message type whose compiled profiles declare `pid`.
 ///
 /// A list, because a Prüfidentifikator does **not** identify one message type:
@@ -321,6 +360,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pruefidentifikatoren, m)?)?;
     m.add_function(wrap_pyfunction!(pid_has_ahb_rules, m)?)?;
     m.add_function(wrap_pyfunction!(message_types_of, m)?)?;
+    m.add_function(wrap_pyfunction!(pid_carrying_message_types, m)?)?;
     m.add_function(wrap_pyfunction!(answer_pids, m)?)?;
     m.add_function(wrap_pyfunction!(bestaetigung_pid, m)?)?;
     m.add_function(wrap_pyfunction!(ablehnung_pid, m)?)?;
@@ -360,6 +400,31 @@ mod tests {
                 !pid_bands(mt).is_empty(),
                 "{} carries Prüfidentifikatoren but has no band declared",
                 mt.as_str()
+            );
+        }
+    }
+
+    /// The enumeration and the band table must not drift apart: a strategy
+    /// defaulting to this list would otherwise draw from a silent subset.
+    #[test]
+    fn every_enumerated_type_has_a_band_and_carries_pids() {
+        let types = pid_carrying_message_types();
+        assert!(types.len() >= 15, "got {types:?}");
+        assert_eq!(types, {
+            let mut sorted = types.clone();
+            sorted.sort_unstable();
+            sorted
+        });
+        assert!(
+            !types.iter().any(|t| t == "CONTRL"),
+            "CONTRL carries no PID"
+        );
+        for name in &types {
+            let mt = message_type_from_str(name).expect("enumerated types parse");
+            assert!(!pid_bands(mt).is_empty(), "{name} has no band");
+            assert!(
+                !pruefidentifikatoren(name, None, None).unwrap().is_empty(),
+                "{name} is enumerated but validates no PID"
             );
         }
     }

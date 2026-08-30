@@ -20,9 +20,11 @@
 //! | [`identifiers`] | `rubo4e::identifiers` — MaLo, MeLo, MP-ID, EIC, §8.2 resource IDs |
 //! | [`fristen`] | `mako-fristen` — Werktag calendar, ack clocks, the answer-Frist table |
 //! | [`pids`] | `edi-energy` registry — PID introspection, releases, the AHB answer pairs |
-//! | [`edifact`] | `edi-energy` — build UTILMD/MSCONS/APERAK/CONTRL, validate an interchange |
+//! | [`antwortcodes`] | `mako-pruefung` — the Entscheidungsbaum Codelisten a counterparty may answer with |
+//! | [`edifact`] | `edi-energy` — build UTILMD/MSCONS/REMADV/ORDERS/ORDRSP/IFTSTA/QUOTES/APERAK/CONTRL, validate an interchange |
 //! | [`events`] | `mako-events` — the CloudEvents type catalog and its glob matcher |
 
+pub mod antwortcodes;
 pub mod edifact;
 pub mod events;
 pub mod fristen;
@@ -56,6 +58,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     events::register(m)?;
     fristen::register(m)?;
     pids::register(m)?;
+    antwortcodes::register(m)?;
     edifact::register(m)?;
     Ok(())
 }

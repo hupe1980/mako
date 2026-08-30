@@ -88,6 +88,18 @@ class TestEnvelope:
         with pytest.raises(AssertionError, match="required attribute"):
             assert_cloudevent(broken)
 
+    def test_an_event_without_a_time_is_refused(self):
+        """CloudEvents 1.0 makes `time` optional; this toolkit does not.
+
+        An event that cannot be placed on the clock cannot be reconciled against
+        a Frist, which is what the stream is asserted against — so it is named
+        as the defect it is rather than passed as conformant.
+        """
+        undated = event("de.mako.process.completed")
+        del undated["time"]
+        with pytest.raises(AssertionError, match="carries no `time`"):
+            assert_cloudevent(undated)
+
     def test_a_wrong_specversion_is_refused(self):
         with pytest.raises(AssertionError, match="specversion"):
             assert_cloudevent(event("de.mako.process.completed", specversion="0.3"))

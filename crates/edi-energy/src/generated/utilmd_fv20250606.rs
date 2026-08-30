@@ -570,11 +570,18 @@ static GROUP_SCHEMA: &[GroupDef] = &[
     GroupDef {
         name: "SG4",
         trigger: "IDE",
-        children: &[GroupDef {
-            name: "SG6",
-            trigger: "RFF",
-            children: &[],
-        }],
+        children: &[
+            GroupDef {
+                name: "SG6",
+                trigger: "RFF",
+                children: &[],
+            },
+            GroupDef {
+                name: "SG8",
+                trigger: "SEQ",
+                children: &[],
+            },
+        ],
     },
 ];
 #[allow(unused_imports)]
@@ -677,6 +684,17 @@ static AHB_55001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 }
                 for __gi in &mut issues[__gs_start..] {
                     __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG8", "SEQ", "AHB-55001-SG8-SEQ-M")
+            .with_named_group_rule_fn("AHB-55001-SG8-PRESENT", |group, _segs, _ctx, issues| {
+                if group.definition == "ROOT" && group.find("SG8").next().is_none() {
+                    issues.push(
+                        ValidationIssue::new(ValidationSeverity::Error, "mandatory segment group SG8 is missing for Pruefidentifikator 55001".to_owned())
+                            .with_rule_id("AHB-55001-SG8-PRESENT")
+                            .with_segment("SEQ")
+                            .with_context_entry("pid", "55001"),
+                    );
                 }
             })
             .with_max_issues_per_rule(50)

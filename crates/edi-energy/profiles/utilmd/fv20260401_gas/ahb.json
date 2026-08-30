@@ -143,19 +143,6 @@
               ],
               "then_requirement": "M",
               "_description": "[48] Wenn STS+E01++E14 (Status: Ablehnung Sonstiges) vorhanden, ist FTX Pflicht"
-            },
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "E01",
-              "when_additional_elements": [
-                {
-                  "element_index": 2,
-                  "value": "Z35"
-                }
-              ],
-              "then_requirement": "M",
-              "_description": "[84] Wenn STS+E01++Z35 (Ablehnung Abmeldeanfrage) vorhanden, ist FTX Pflicht"
             }
           ],
           "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
@@ -301,19 +288,6 @@
               ],
               "then_requirement": "M",
               "_description": "[48] Wenn STS+E01++E14 (Status: Ablehnung Sonstiges) vorhanden, ist FTX Pflicht"
-            },
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "E01",
-              "when_additional_elements": [
-                {
-                  "element_index": 2,
-                  "value": "Z35"
-                }
-              ],
-              "then_requirement": "M",
-              "_description": "[84] Wenn STS+E01++Z35 (Ablehnung Abmeldeanfrage) vorhanden, ist FTX Pflicht"
             }
           ],
           "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
@@ -459,19 +433,6 @@
               ],
               "then_requirement": "M",
               "_description": "[48] Wenn STS+E01++E14 (Status: Ablehnung Sonstiges) vorhanden, ist FTX Pflicht"
-            },
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "E01",
-              "when_additional_elements": [
-                {
-                  "element_index": 2,
-                  "value": "Z35"
-                }
-              ],
-              "then_requirement": "M",
-              "_description": "[84] Wenn STS+E01++Z35 (Ablehnung Abmeldeanfrage) vorhanden, ist FTX Pflicht"
             }
           ],
           "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"

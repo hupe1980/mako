@@ -772,6 +772,17 @@ static AHB_55001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
                 }
             })
+            .require_segment_in_group("SG8", "SEQ", "AHB-55001-SG8-SEQ-M")
+            .with_named_group_rule_fn("AHB-55001-SG8-PRESENT", |group, _segs, _ctx, issues| {
+                if group.definition == "ROOT" && group.find("SG8").next().is_none() {
+                    issues.push(
+                        ValidationIssue::new(ValidationSeverity::Error, "mandatory segment group SG8 is missing for Pruefidentifikator 55001".to_owned())
+                            .with_rule_id("AHB-55001-SG8-PRESENT")
+                            .with_segment("SEQ")
+                            .with_context_entry("pid", "55001"),
+                    );
+                }
+            })
             .with_max_issues_per_rule(50)
         )
 });
@@ -1747,6 +1758,17 @@ static AHB_55014_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_qualifier(segs, "RFF", "AHB-55014-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "55014", issues);
                 for __gi in &mut issues[__gs_start..] {
                     __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG8", "SEQ", "AHB-55014-SG8-SEQ-M")
+            .with_named_group_rule_fn("AHB-55014-SG8-PRESENT", |group, _segs, _ctx, issues| {
+                if group.definition == "ROOT" && group.find("SG8").next().is_none() {
+                    issues.push(
+                        ValidationIssue::new(ValidationSeverity::Error, "mandatory segment group SG8 is missing for Pruefidentifikator 55014".to_owned())
+                            .with_rule_id("AHB-55014-SG8-PRESENT")
+                            .with_segment("SEQ")
+                            .with_context_entry("pid", "55014"),
+                    );
                 }
             })
             .with_max_issues_per_rule(50)
@@ -3801,6 +3823,17 @@ static AHB_55600_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
                 }
             })
+            .require_segment_in_group("SG8", "SEQ", "AHB-55600-SG8-SEQ-M")
+            .with_named_group_rule_fn("AHB-55600-SG8-PRESENT", |group, _segs, _ctx, issues| {
+                if group.definition == "ROOT" && group.find("SG8").next().is_none() {
+                    issues.push(
+                        ValidationIssue::new(ValidationSeverity::Error, "mandatory segment group SG8 is missing for Pruefidentifikator 55600".to_owned())
+                            .with_rule_id("AHB-55600-SG8-PRESENT")
+                            .with_segment("SEQ")
+                            .with_context_entry("pid", "55600"),
+                    );
+                }
+            })
             .with_max_issues_per_rule(50)
         )
 });
@@ -3857,6 +3890,17 @@ static AHB_55601_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_qualifier(segs, "RFF", "AHB-55601-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "55601", issues);
                 for __gi in &mut issues[__gs_start..] {
                     __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG8", "SEQ", "AHB-55601-SG8-SEQ-M")
+            .with_named_group_rule_fn("AHB-55601-SG8-PRESENT", |group, _segs, _ctx, issues| {
+                if group.definition == "ROOT" && group.find("SG8").next().is_none() {
+                    issues.push(
+                        ValidationIssue::new(ValidationSeverity::Error, "mandatory segment group SG8 is missing for Pruefidentifikator 55601".to_owned())
+                            .with_rule_id("AHB-55601-SG8-PRESENT")
+                            .with_segment("SEQ")
+                            .with_context_entry("pid", "55601"),
+                    );
                 }
             })
             .with_max_issues_per_rule(50)
@@ -4035,6 +4079,17 @@ static AHB_55608_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_qualifier(segs, "RFF", "AHB-55608-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "55608", issues);
                 for __gi in &mut issues[__gs_start..] {
                     __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG8", "SEQ", "AHB-55608-SG8-SEQ-M")
+            .with_named_group_rule_fn("AHB-55608-SG8-PRESENT", |group, _segs, _ctx, issues| {
+                if group.definition == "ROOT" && group.find("SG8").next().is_none() {
+                    issues.push(
+                        ValidationIssue::new(ValidationSeverity::Error, "mandatory segment group SG8 is missing for Pruefidentifikator 55608".to_owned())
+                            .with_rule_id("AHB-55608-SG8-PRESENT")
+                            .with_segment("SEQ")
+                            .with_context_entry("pid", "55608"),
+                    );
                 }
             })
             .with_max_issues_per_rule(50)

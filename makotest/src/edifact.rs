@@ -20,7 +20,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
 use edi_energy::builders::{
-    AperakBuilder, ContrlBuilder, InterchangeBuilder, MsconsBuilder, UtilmdBuilder,
+    AperakBuilder, ContrlBuilder, InterchangeBuilder, MsconsBuilder, RemadvBuilder, UtilmdBuilder,
 };
 use edi_energy::utilmd_codes::{AntwortStatus, Transaktionsgrund};
 use edi_energy::{EdiEnergyMessage, Lokationstyp, MessageType, Platform, Pruefidentifikator};
@@ -111,6 +111,141 @@ impl Finding {
     }
 }
 
+// ── Vorgänge ──────────────────────────────────────────────────────────────────
+
+/// One SG4 Vorgang as it stands **on the wire**, read back off a parsed message.
+///
+/// The counterpart to [`UtilmdTransaction`], which describes a Vorgang being
+/// built. Reading one back is what lets a test assert on the content of an
+/// answer — that the Vorgangsnummer was echoed, that the Marktlokation
+/// travelled, which Antwortcode the counterparty stated — without matching
+/// against raw bytes, where `LOC+Z16` and `LOC+Z17` differ by one character and
+/// a substring check passes on the wrong one.
+#[pyclass(get_all, frozen, skip_from_py_object)]
+#[derive(Clone)]
+pub struct Vorgang {
+    /// `IDE+24` DE 7402 — the sender's own reference for this Vorgang.
+    pub vorgangsnummer: Option<String>,
+    /// `(DE 3227 qualifier, id)` for every `SG5 LOC`, in wire order.
+    pub locations: Vec<(String, String)>,
+    /// `(DE 2005 qualifier, DE 2380 value)` for every `SG4 DTM`, **as written**.
+    ///
+    /// The value is not the `YYYYMMDD` a builder takes: UTILMD SG4 dates are
+    /// DE 2379 format `303`, so the wire carries `CCYYMMDDHHMMZZZ` —
+    /// `"202605010000+00"` for 1 May 2026. Ask `iso_date()` for the calendar
+    /// day; this stays raw because a zone-less `303` is malformed and a
+    /// normalised view would hide that.
+    pub dates: Vec<(String, String)>,
+    /// `(DE 1153 qualifier, DE 1154 value)` for every `SG6 RFF`.
+    pub references: Vec<(String, String)>,
+    /// `SG4 STS+7` DE 9013 element 2 — the Transaktionsgrund.
+    pub transaktionsgrund: Option<String>,
+    /// `SG4 STS+E01` DE 9013 — the Antwortcode, on an Antwortnachricht.
+    pub antwort_code: Option<String>,
+    /// `SG4 STS+E01` DE 1131 — the Codeliste the code is drawn from. This is
+    /// the EBD number only for the GPKE and GeLi Gas trees; every WiM answer
+    /// names an `S_xxxx` / `G_xxxx` list instead.
+    pub antwort_codeliste: Option<String>,
+}
+
+#[pymethods]
+impl Vorgang {
+    /// The id of the first `SG5 LOC` of that Lokationstyp, or `None`.
+    ///
+    /// Takes the same names as the builder — `"malo"`, `"melo"`, `"nelo"`, … —
+    /// or a raw DE 3227 code. A Vorgang names several Lokationen and they are
+    /// not interchangeable, so asking by type is the only safe read.
+    fn location(&self, lokationstyp: &str) -> PyResult<Option<String>> {
+        let want = lokationstyp_from_str(lokationstyp)?.qualifier_code();
+        Ok(self
+            .locations
+            .iter()
+            .find(|(q, _)| q == want)
+            .map(|(_, id)| id.clone()))
+    }
+
+    /// The raw DE 2380 value of the first `SG4 DTM` with that qualifier.
+    ///
+    /// Format `303`, so `"202605010000+00"` rather than `"20260501"`. Use this
+    /// to assert what is really on the wire, and `iso_date()` to assert which
+    /// day the Vorgang names.
+    fn date(&self, qualifier: &str) -> Option<String> {
+        self.dates
+            .iter()
+            .find(|(q, _)| q == qualifier)
+            .map(|(_, v)| v.clone())
+    }
+
+    /// The calendar day of that `SG4 DTM`, as `YYYY-MM-DD`.
+    ///
+    /// `None` when the segment is absent or its value does not start with a
+    /// `CCYYMMDD` — an unparseable date reads as absent rather than as a
+    /// plausible-looking wrong day.
+    fn iso_date(&self, qualifier: &str) -> Option<String> {
+        let raw = self.date(qualifier)?;
+        let day = raw.get(..8)?;
+        if !day.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        Some(format!("{}-{}-{}", &day[..4], &day[4..6], &day[6..8]))
+    }
+
+    /// The value of the first `SG6 RFF` with that DE 1153 qualifier.
+    fn reference(&self, qualifier: &str) -> Option<String> {
+        self.references
+            .iter()
+            .find(|(q, _)| q == qualifier)
+            .map(|(_, v)| v.clone())
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Vorgang({} locations={} antwort={})",
+            self.vorgangsnummer.as_deref().unwrap_or("-"),
+            self.locations.len(),
+            self.antwort_code.as_deref().unwrap_or("-")
+        )
+    }
+}
+
+fn vorgaenge_of(msg: &edi_energy::AnyMessage) -> Vec<Vorgang> {
+    let edi_energy::AnyMessage::Utilmd(m) = msg else {
+        return Vec::new();
+    };
+    m.transactions()
+        .iter()
+        .map(|tx| Vorgang {
+            vorgangsnummer: tx.vorgangsnummer().map(ToOwned::to_owned),
+            locations: tx
+                .locations
+                .iter()
+                .filter_map(|l| {
+                    l.location_id
+                        .as_ref()
+                        .map(|id| (l.qualifier.clone(), id.clone()))
+                })
+                .collect(),
+            dates: tx
+                .dtm
+                .iter()
+                .filter_map(|d| d.value.as_ref().map(|v| (d.qualifier.clone(), v.clone())))
+                .collect(),
+            references: tx
+                .references
+                .iter()
+                .filter_map(|r| {
+                    r.reference
+                        .as_ref()
+                        .map(|v| (r.qualifier.clone(), v.clone()))
+                })
+                .collect(),
+            transaktionsgrund: tx.transaktionsgrund().map(|g| g.grund),
+            antwort_code: tx.antwort().map(|a| a.code.clone()),
+            antwort_codeliste: tx.antwort().and_then(|a| a.codeliste.clone()),
+        })
+        .collect()
+}
+
 // ── Per-message report ────────────────────────────────────────────────────────
 
 /// The validation outcome for one message inside an interchange.
@@ -131,6 +266,9 @@ pub struct MessageReport {
     /// `is_valid` was decided vacuously — the message "passed" because nothing
     /// was checked. An assertion over such a message proves nothing.
     pub rules_applied: bool,
+    /// The SG4 Vorgänge this message carries, in wire order. Empty for every
+    /// message type that has none.
+    pub vorgaenge: Vec<Vorgang>,
     pub findings: Vec<Finding>,
 }
 
@@ -352,6 +490,7 @@ fn report_for(
         release: msg.detect_release().ok().map(|r| r.as_str().to_owned()),
         is_valid: report.is_valid(),
         rules_applied,
+        vorgaenge: vorgaenge_of(msg),
         findings: report
             .iter_issues()
             .map(|i| {
@@ -503,6 +642,28 @@ pub struct UtilmdTransaction {
     pub customers: Vec<(String, String)>,
     /// `(text function, text)` FTX pairs — `("ACB", …)` is the Bemerkung.
     pub free_texts: Vec<(String, String)>,
+    /// `SG4 STS+Z35` — the **third** party's answer code, restating what the
+    /// Altlieferant said.
+    ///
+    /// Muss on an Ablehnung whose Antwortcode is `A50` or `A57` (UTILMD AHB
+    /// Strom Bedingungen `[356]` / `[84]`): those two say the LFA refused to
+    /// release the Marktlokation, and the NB has to state *that* refusal's
+    /// ground beside its own. The code comes from `E_0624` — resolve it with
+    /// `antwort_code("E_0624", …)` rather than writing it out.
+    ///
+    /// This is the verbrauchende form, which is what a 55003 carries: a
+    /// verbrauchende Marktlokation has one Altlieferant and the Vorgang already
+    /// names it, so the segment's Lokations-Referenz columns stay empty.
+    pub antwort_dritter: Option<String>,
+    /// The Bilanzkreis this Vorgang assigns, as the `SG8 SEQ+Z79` Produktpaket.
+    ///
+    /// Renders the whole group the AHB prescribes — `SEQ+Z79+1`,
+    /// `PIA+5+9991000002082:Z11`, `CCI+Z66`, `CAV+ZV4:::<EIC>` — because the
+    /// Produkt-Code and the CAV qualifier are fixed by the document and a test
+    /// supplying them by hand would be transcribing four constants it cannot
+    /// check. The Bilanzkreis itself is an EIC **Party** code: draw one with
+    /// `bilanzkreise()` rather than inventing it.
+    pub bilanzkreis: Option<String>,
 }
 
 #[pymethods]
@@ -511,7 +672,8 @@ impl UtilmdTransaction {
     #[pyo3(signature = (
         vorgangsnummer, transaktionsgrund=None, transaktionsgrund_ergaenzung=None,
         antwort_code=None, antwort_ebd=None, dates=None,
-        references=None, locations=None, customers=None, free_texts=None
+        references=None, locations=None, customers=None, free_texts=None,
+        antwort_dritter=None, bilanzkreis=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -525,6 +687,8 @@ impl UtilmdTransaction {
         locations: Option<Vec<(String, String)>>,
         customers: Option<Vec<(String, String)>>,
         free_texts: Option<Vec<(String, String)>>,
+        antwort_dritter: Option<String>,
+        bilanzkreis: Option<String>,
     ) -> Self {
         Self {
             vorgangsnummer,
@@ -537,6 +701,8 @@ impl UtilmdTransaction {
             locations: locations.unwrap_or_default(),
             customers: customers.unwrap_or_default(),
             free_texts: free_texts.unwrap_or_default(),
+            antwort_dritter,
+            bilanzkreis,
         }
     }
 
@@ -595,6 +761,28 @@ fn document_date_for(document_date: Option<&str>, on: Option<&str>) -> PyResult<
         }
         None => Ok(None),
     }
+}
+
+/// Refuse free text the interchange charset cannot carry.
+///
+/// A BDEW interchange declares `UNB+UNOC:3`, which is **ISO 8859-1**. German
+/// prose copied out of a BDEW document routinely is not: the em-dash, the
+/// typographic quotes and the ellipsis all sit outside Latin-1, and the
+/// `bedeutung` strings in this workspace's own Antwortcode catalogue carry
+/// hundreds of them.
+///
+/// Serialising one fails deep inside the encoder with a message that names
+/// neither the character nor the constraint, so the check happens here where
+/// the field is still known. Substituting a lookalike would be worse: the wire
+/// would carry text the author did not write.
+fn ensure_latin1(field: &str, text: &str) -> PyResult<()> {
+    if let Some((index, ch)) = text.char_indices().find(|(_, c)| (*c as u32) > 0xFF) {
+        return Err(PyValueError::new_err(format!(
+            "{field} contains {ch:?} (U+{:04X}) at character {index}, which the              interchange charset cannot carry: a BDEW interchange declares              UNB+UNOC:3, i.e. ISO 8859-1. German prose taken from a BDEW document              often needs rewriting for the wire — the em-dash, the typographic              quotes and the ellipsis are all outside it.",
+            ch as u32
+        )));
+    }
+    Ok(())
 }
 
 fn pid(value: u32) -> PyResult<Pruefidentifikator> {
@@ -678,7 +866,18 @@ pub fn build_utilmd(
             t = t.customer(q.as_str(), id.as_str());
         }
         for (f, text) in &tx.free_texts {
+            ensure_latin1(&format!("free_texts[{f}]"), text)?;
             t = t.free_text(f.as_str(), text.as_str());
+        }
+        if let Some(code) = &tx.antwort_dritter {
+            t = t.antwort_dritter(
+                edi_energy::utilmd_codes::DritterAntwortStatus::verbrauchend(code.as_str()),
+            );
+        }
+        if let Some(bk) = &tx.bilanzkreis {
+            t = t.produktpaket(edi_energy::utilmd_codes::Produktpaket::bilanzkreis(
+                bk.as_str(),
+            ));
         }
         b = t.done();
     }
@@ -689,17 +888,34 @@ pub fn build_utilmd(
         .map_err(|e| PyRuntimeError::new_err(format!("UTILMD serialize failed: {e}")))
 }
 
+/// One interval quantity: `(qualifier, value, unit, start, end)`, where the
+/// bounds are EDIFACT DE 2379 format `303` (`CCYYMMDDHHMMZZZ`).
+///
+/// Named rather than written inline because the bounds are what separates an
+/// interval reading from a bare `QTY`, and a five-tuple in a signature says
+/// nothing about which two elements those are.
+type IntervalQuantity = (String, String, String, String, String);
+
 /// Build an MSCONS message and return the rendered EDIFACT bytes.
 ///
 /// `quantities` are `(qualifier, value, unit)` triples, e.g.
-/// `("220", "1234.567", "KWH")`. `bilanzierungsgebiet` populates the SG6
-/// `LOC+Z17`; pass a real EIC (see `bilanzierungsgebiet_from_prefix`) — the
-/// object-type character is what separates it from a Bilanzkreis.
+/// `("220", "1234.567", "KWH")` — a summed or point-in-time figure.
+///
+/// `intervals` are `(qualifier, value, unit, start, end)` quintuples, where
+/// `start` and `end` are EDIFACT format `303` (`CCYYMMDDHHMMZZZ`). **Interval
+/// data must use these**: a bare `QTY` carries no time reference, so the
+/// receiver cannot place the value on the settlement grid — and the AHB does
+/// not catch it, so a Lastgang built from `quantities` validates while being
+/// unusable. `Zaehlerstandsgang.as_mscons()` renders them for a whole day.
+///
+/// `bilanzierungsgebiet` populates the SG6 `LOC+Z17`; pass a real EIC (see
+/// `bilanzierungsgebiet_from_prefix`) — the object-type character is what
+/// separates it from a Bilanzkreis.
 #[pyfunction]
 #[pyo3(signature = (
-    pruefidentifikator, sender, receiver, metering_point, quantities, *,
-    on=None, release=None, message_ref="1", document_date=None, obis=None,
-    bilanzierungsgebiet=None
+    pruefidentifikator, sender, receiver, metering_point, quantities=None, *,
+    intervals=None, on=None, release=None, message_ref="1", document_date=None,
+    obis=None, bilanzierungsgebiet=None
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn build_mscons(
@@ -707,7 +923,8 @@ pub fn build_mscons(
     sender: &str,
     receiver: &str,
     metering_point: &str,
-    quantities: Vec<(String, String, String)>,
+    quantities: Option<Vec<(String, String, String)>>,
+    intervals: Option<Vec<IntervalQuantity>>,
     on: Option<&str>,
     release: Option<&str>,
     message_ref: &str,
@@ -734,8 +951,25 @@ pub fn build_mscons(
     if let Some(eic) = bilanzierungsgebiet {
         mp = mp.bilanzierungsgebiet(eic);
     }
+    let quantities = quantities.unwrap_or_default();
+    let intervals = intervals.unwrap_or_default();
+    if quantities.is_empty() && intervals.is_empty() {
+        return Err(PyValueError::new_err(
+            "an MSCONS carries at least one quantity — pass quantities= for a \
+             summed or point-in-time figure, or intervals= for a Lastgang",
+        ));
+    }
     for (q, v, u) in &quantities {
         mp = mp.quantity(q.as_str(), v.as_str(), u.as_str());
+    }
+    for (q, v, u, start, end) in &intervals {
+        mp = mp.quantity_for_period(
+            q.as_str(),
+            v.as_str(),
+            u.as_str(),
+            start.as_str(),
+            end.as_str(),
+        );
     }
 
     mp.done()
@@ -791,6 +1025,7 @@ pub fn build_aperak(
         b = b.error_code(c);
     }
     if let Some(t) = error_text {
+        ensure_latin1("error_text", t)?;
         b = b.error_text(t);
     }
     if let Some(d) = document_date_for(document_date, on)? {
@@ -894,6 +1129,7 @@ pub fn build_aperak_for(
         b = b.document_code("312");
     }
     if let Some(t) = error_text {
+        ensure_latin1("error_text", t)?;
         b = b.error_text(t);
     }
     b.serialize()
@@ -917,9 +1153,11 @@ pub fn build_aperak_for(
 /// Beendigung der Zuordnung. A simulator that omits them produces an answer no
 /// conformant counterparty accepts, which is the opposite of a useful test.
 ///
-/// `process_dates` and `references` are appended to the echoed ones — that is
-/// where the answer's own content goes, e.g. `("93", "20261101")` for a
-/// confirmed Zuordnungsende.
+/// `process_dates`, `references` and `free_texts` are appended to the echoed
+/// ones — that is where the answer's own content goes, e.g. `("93", "20261101")`
+/// for a confirmed Zuordnungsende. An Antwortcode routinely makes one of them
+/// conditional-Muss: `A06` („Andere Anmeldung in Bearbeitung") obliges a
+/// `DTM+Z07`, and several codes oblige an `FTX+ACB` Erläuterung.
 ///
 /// `message_index` selects which message of the interchange is being answered.
 /// An interchange routinely carries several, and each is a separate Vorgang with
@@ -929,7 +1167,7 @@ pub fn build_aperak_for(
 #[pyo3(signature = (
     received, answer_pid, *, on=None, release=None, message_ref="1",
     document_date=None, document_code=None, antwort_code=None, antwort_ebd=None,
-    process_dates=None, references=None, message_index=0
+    process_dates=None, references=None, free_texts=None, message_index=0
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn build_answer(
@@ -944,6 +1182,7 @@ pub fn build_answer(
     antwort_ebd: Option<&str>,
     process_dates: Option<Vec<(String, String)>>,
     references: Option<Vec<(String, String)>>,
+    free_texts: Option<Vec<(String, String)>>,
     message_index: usize,
 ) -> PyResult<Vec<u8>> {
     let sparte = match answer_pid {
@@ -980,8 +1219,8 @@ pub fn build_answer(
         // direction: the UTILMD AHB gives an Anwendungsfall one code across all
         // three of its PIDs, so a 55005 Bestätigung Abmeldung is `E02` just like
         // the 55004 it answers, and a 55017 is `E35` like its 55016. Echoing the
-        // request is right by construction; hard-coding `E01` made the simulator
-        // answer 55004 and 55016 with messages our own AHB layer rejects.
+        // request is therefore right by construction, where any fixed code is
+        // right for one Anwendungsfall and rejected by the AHB for the rest.
         .document_code(
             document_code
                 .or_else(|| request.bgm().map(|b| b.document_code.as_str()))
@@ -1025,6 +1264,10 @@ pub fn build_answer(
         for (q, r) in references.iter().flatten() {
             a = a.reference(q.as_str(), r.as_str());
         }
+        for (f, text) in free_texts.iter().flatten() {
+            ensure_latin1(&format!("free_texts[{f}]"), text)?;
+            a = a.free_text(f.as_str(), text.as_str());
+        }
         b = a.done();
     }
 
@@ -1060,6 +1303,443 @@ pub fn build_contrl_for(
     let b = if accept { b.accept() } else { b.reject() };
     b.serialize()
         .map_err(|e| PyRuntimeError::new_err(format!("CONTRL serialize failed: {e}")))
+}
+
+/// One refused Rechnungsposition of a REMADV.
+#[pyclass(get_all, set_all, from_py_object)]
+#[derive(Clone, Default)]
+pub struct Positionsfehler {
+    /// `SG10 DLI` DE 1082 — the position number this refers to, taken from the
+    /// answered invoice's own `SG26`.
+    pub positionsnummer: u16,
+    /// `SG12 AJT` — `(Antwortcode, EBD)` pairs this position is refused with.
+    /// Resolve them with `antwort_code(ebd, code)` rather than writing them out.
+    pub gruende: Vec<(String, String)>,
+    /// `SG12 FTX+ABO` — the Erläuterung a catch-all code requires.
+    pub erlaeuterung: Option<String>,
+}
+
+#[pymethods]
+impl Positionsfehler {
+    #[new]
+    #[pyo3(signature = (positionsnummer, gruende, erlaeuterung=None))]
+    fn new(
+        positionsnummer: u16,
+        gruende: Vec<(String, String)>,
+        erlaeuterung: Option<String>,
+    ) -> Self {
+        Self {
+            positionsnummer,
+            gruende,
+            erlaeuterung,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Positionsfehler(#{} {:?})",
+            self.positionsnummer,
+            self.gruende
+                .iter()
+                .map(|(c, _)| c.as_str())
+                .collect::<Vec<_>>()
+        )
+    }
+}
+
+/// Build a REMADV — the **answer to an invoice**.
+///
+/// A Zahlungsavis confirms an INVOIC and states what will be transferred; a
+/// Rückmeldung refuses it and says why. The reason rides `AJT`: DE 4465 the
+/// Antwortcode, DE 1082 the EBD it is drawn from — the REMADV twin of UTILMD's
+/// `STS+E01`, and required for the same reason, since a rejection without its
+/// code gives the sender nothing to correct.
+///
+/// `rechnungsbezug` is Muss on every use case: it names the invoice being
+/// answered (its `BGM` DE 1004) and the two amounts. `ueberweisungsbetrag` is
+/// `"0"` on a refusal — refusing an invoice transfers nothing.
+///
+/// `kopf_gruende` are the Kopfebene `SG7 AJT`; `positionsfehler` are the
+/// per-position `SG10`/`SG12`, which the AHB makes Muss on 33004.
+#[pyfunction]
+#[pyo3(signature = (
+    pruefidentifikator, sender, receiver, *, rechnungsnummer, faelliger_betrag,
+    ueberweisungsbetrag, rechnungsdatum, dokumentenart="380", on=None,
+    release=None, kopf_gruende=None, positionsfehler=None, waehrung=None,
+    message_ref="1", document_id=None, document_date=None
+))]
+#[allow(clippy::too_many_arguments)]
+pub fn build_remadv(
+    pruefidentifikator: u32,
+    sender: &str,
+    receiver: &str,
+    rechnungsnummer: &str,
+    faelliger_betrag: &str,
+    ueberweisungsbetrag: &str,
+    rechnungsdatum: &str,
+    dokumentenart: &str,
+    on: Option<&str>,
+    release: Option<&str>,
+    kopf_gruende: Option<Vec<(String, String)>>,
+    positionsfehler: Option<Vec<Positionsfehler>>,
+    waehrung: Option<&str>,
+    message_ref: &str,
+    document_id: Option<&str>,
+    document_date: Option<&str>,
+) -> PyResult<Vec<u8>> {
+    use edi_energy::builders::{Abweichungsgrund, Rechnungsbezug};
+
+    let rel = resolve_release(MessageType::Remadv, release, on, None)?;
+    let mut b = RemadvBuilder::new(rel)
+        .sender(sender)
+        .receiver(receiver)
+        .pruefidentifikator(pruefidentifikator.to_string())
+        .message_ref(message_ref)
+        .rechnungsbezug(Rechnungsbezug {
+            dokumentenart: dokumentenart.to_owned(),
+            rechnungsnummer: rechnungsnummer.to_owned(),
+            faelliger_betrag: faelliger_betrag.to_owned(),
+            ueberweisungsbetrag: ueberweisungsbetrag.to_owned(),
+            rechnungsdatum: rechnungsdatum.to_owned(),
+        });
+    if let Some(id) = document_id {
+        b = b.document_id(id);
+    }
+    if let Some(d) = document_date_for(document_date, on)? {
+        b = b.document_date(d);
+    }
+    if let Some(w) = waehrung {
+        b = b.waehrung(w);
+    }
+    for (code, ebd) in kopf_gruende.unwrap_or_default() {
+        b = b.abweichungsgrund(Abweichungsgrund::new(code, ebd));
+    }
+    let positionsfehler = positionsfehler.unwrap_or_default();
+    for p in &positionsfehler {
+        if let Some(text) = &p.erlaeuterung {
+            ensure_latin1(
+                &format!("positionsfehler[{}].erlaeuterung", p.positionsnummer),
+                text,
+            )?;
+        }
+    }
+    let positionen: Vec<_> = positionsfehler
+        .into_iter()
+        .map(|p| edi_energy::builders::Positionsfehler {
+            positionsnummer: p.positionsnummer,
+            gruende: p
+                .gruende
+                .into_iter()
+                .map(|(code, ebd)| Abweichungsgrund::new(code, ebd))
+                .collect(),
+            erlaeuterung: p.erlaeuterung,
+        })
+        .collect();
+    if !positionen.is_empty() {
+        b = b.positionsfehler(positionen);
+    }
+
+    b.serialize()
+        .map_err(|e| PyRuntimeError::new_err(format!("REMADV serialize failed: {e}")))
+}
+
+/// Build an ORDRSP — the answer to an ORDERS, in the WiM and ESA processes.
+///
+/// The third wire an Antwortcode travels on: `SG2 AJT` carries DE 4465 (the
+/// Prüfschritt code) and DE 1082 (the Entscheidungsbaum it belongs to), the
+/// same pair as REMADV's `AJT` and UTILMD's `SG4 STS+E01`. Without the EBD the
+/// receiver cannot resolve the code — the same numeric code lives in several
+/// trees, which is the reason the catalogue is keyed on the pair.
+///
+/// `abonnement` (`IMD+7081` `Z01`/`Z02`/`Z03`) echoes the ORDERS being answered
+/// and is what selects the EBD the `AJT` cites, so it is Muss on 19011/19012.
+/// `line_item` and `item_description` emit the `LIN`/`IMD` segments the AHB
+/// requires on some PIDs; they carry no content the caller chooses.
+#[pyfunction]
+#[pyo3(signature = (
+    pruefidentifikator, sender, receiver, *, antwort_code=None, antwort_ebd=None,
+    on=None, release=None, abonnement=None, adjustment_reason=None,
+    document_code=None, document_id=None, references=None, line_item=false,
+    item_description=false, message_ref="1", document_date=None
+))]
+#[allow(clippy::too_many_arguments)]
+pub fn build_ordrsp(
+    pruefidentifikator: u32,
+    sender: &str,
+    receiver: &str,
+    antwort_code: Option<&str>,
+    antwort_ebd: Option<&str>,
+    on: Option<&str>,
+    release: Option<&str>,
+    abonnement: Option<&str>,
+    adjustment_reason: Option<&str>,
+    document_code: Option<&str>,
+    document_id: Option<&str>,
+    references: Option<Vec<(String, String)>>,
+    line_item: bool,
+    item_description: bool,
+    message_ref: &str,
+    document_date: Option<&str>,
+) -> PyResult<Vec<u8>> {
+    let rel = resolve_release(MessageType::Ordrsp, release, on, None)?;
+    let mut b = edi_energy::builders::OrdrespBuilder::new(rel)
+        .sender(sender)
+        .receiver(receiver)
+        .pruefidentifikator(pruefidentifikator)
+        .message_ref(message_ref);
+    match (antwort_code, antwort_ebd) {
+        (Some(code), Some(ebd)) => b = b.adjustment(code, ebd),
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(PyValueError::new_err(
+                "an ORDRSP adjustment needs both antwort_code and antwort_ebd:                  DE 1082 names the Entscheidungsbaum the code belongs to, and the                  same numeric code lives in several trees",
+            ));
+        }
+        (None, None) => {}
+    }
+    if let Some(a) = abonnement {
+        b = b.abonnement(a);
+    }
+    if let Some(r) = adjustment_reason {
+        b = b.adjustment_reason(r);
+    }
+    if let Some(c) = document_code {
+        b = b.document_code(c);
+    }
+    if let Some(id) = document_id {
+        b = b.document_id(id);
+    }
+    for (q, v) in references.unwrap_or_default() {
+        b = b.reference(q, v);
+    }
+    if line_item {
+        b = b.line_item();
+    }
+    if item_description {
+        b = b.item_description();
+    }
+    if let Some(d) = document_date_for(document_date, on)? {
+        b = b.document_date(d);
+    }
+    b.serialize()
+        .map_err(|e| PyRuntimeError::new_err(format!("ORDRSP serialize failed: {e}")))
+}
+
+/// Build an ORDERS — the WiM / ESA / Sperrung request.
+///
+/// The message an [`build_ordrsp`] answers, so the pair closes a round trip: a
+/// test drives the request and feeds the counterparty's answer back. `location`
+/// names the object the order concerns, `abonnement` (`IMD+7081`) the
+/// subscription kind an ESA Wertebestellung orders, and `ausfuehrungsdatum` the
+/// date a Sperrung or Entsperrung is to be carried out on.
+#[pyfunction]
+#[pyo3(signature = (
+    pruefidentifikator, sender, receiver, *, location=None, abonnement=None,
+    ausfuehrungsdatum=None, on=None, release=None, document_code=None,
+    document_id=None, references=None, item_description=None, message_ref="1",
+    document_date=None
+))]
+#[allow(clippy::too_many_arguments)]
+pub fn build_orders(
+    pruefidentifikator: u32,
+    sender: &str,
+    receiver: &str,
+    location: Option<&str>,
+    abonnement: Option<&str>,
+    ausfuehrungsdatum: Option<&str>,
+    on: Option<&str>,
+    release: Option<&str>,
+    document_code: Option<&str>,
+    document_id: Option<&str>,
+    references: Option<Vec<(String, String)>>,
+    item_description: Option<&str>,
+    message_ref: &str,
+    document_date: Option<&str>,
+) -> PyResult<Vec<u8>> {
+    let rel = resolve_release(MessageType::Orders, release, on, None)?;
+    let mut b = edi_energy::builders::OrdersBuilder::new(rel)
+        .sender(sender)
+        .receiver(receiver)
+        .pruefidentifikator(pruefidentifikator)
+        .message_ref(message_ref);
+    if let Some(id) = location {
+        b = b.location(id);
+    }
+    if let Some(a) = abonnement {
+        b = b.abonnement(a);
+    }
+    if let Some(d) = ausfuehrungsdatum {
+        b = b.ausfuehrungsdatum(d);
+    }
+    if let Some(c) = document_code {
+        b = b.document_code(c);
+    }
+    if let Some(id) = document_id {
+        b = b.document_id(id);
+    }
+    for (q, v) in references.unwrap_or_default() {
+        b = b.reference(q, v);
+    }
+    if let Some(text) = item_description {
+        b = b.item_description(text);
+    }
+    if let Some(d) = document_date_for(document_date, on)? {
+        b = b.document_date(d);
+    }
+    b.serialize()
+        .map_err(|e| PyRuntimeError::new_err(format!("ORDERS serialize failed: {e}")))
+}
+
+/// Build an IFTSTA — the WiM status message.
+///
+/// `SG15 STS` carries the status as a `(DE 9015 category, DE 4405 reason)` pair
+/// — `("Z21", "105")` is „Bestellung / beendet" — and `SG14 CNI` the
+/// Vorgangsnummer, which is Muss on a WiM status. `order_reference` is the
+/// Belegnummer of the ORDERS the status refers to (`SG15 RFF+AGI`), which is
+/// what correlates it: a LOC-less answer correlates by order reference.
+#[pyfunction]
+#[pyo3(signature = (
+    pruefidentifikator, sender, receiver, *, status=None, vorgangsnummer=None,
+    order_reference=None, vertragsende=None, on=None, release=None,
+    document_code=None, document_id=None, message_ref="1", document_date=None
+))]
+#[allow(clippy::too_many_arguments)]
+pub fn build_iftsta(
+    pruefidentifikator: u32,
+    sender: &str,
+    receiver: &str,
+    status: Option<(String, String)>,
+    vorgangsnummer: Option<&str>,
+    order_reference: Option<&str>,
+    vertragsende: Option<&str>,
+    on: Option<&str>,
+    release: Option<&str>,
+    document_code: Option<&str>,
+    document_id: Option<&str>,
+    message_ref: &str,
+    document_date: Option<&str>,
+) -> PyResult<Vec<u8>> {
+    let rel = resolve_release(MessageType::Iftsta, release, on, None)?;
+    let mut b = edi_energy::builders::IftstaBuilder::new(rel)
+        .sender(sender)
+        .receiver(receiver)
+        .pruefidentifikator(pruefidentifikator)
+        .message_ref(message_ref);
+    if let Some((category, reason)) = status {
+        b = b.status(category, reason);
+    }
+    if let Some(n) = vorgangsnummer {
+        b = b.vorgangsnummer(n);
+    }
+    if let Some(r) = order_reference {
+        b = b.order_reference(r);
+    }
+    if let Some(d) = vertragsende {
+        b = b.vertragsende(d);
+    }
+    if let Some(c) = document_code {
+        b = b.document_code(c);
+    }
+    if let Some(id) = document_id {
+        b = b.document_id(id);
+    }
+    if let Some(d) = document_date_for(document_date, on)? {
+        b = b.document_date(d);
+    }
+    b.serialize()
+        .map_err(|e| PyRuntimeError::new_err(format!("IFTSTA serialize failed: {e}")))
+}
+
+/// Build a QUOTES — the ESA Angebot answering a REQOTE Preisanfrage.
+///
+/// `bindungsfrist` is a **count plus a unit**, not a date: an eight-digit
+/// `CCYYMMDD` there is a number where the AHB expects a duration, and a
+/// receiver parsing it finds no date — which is how an Angebot gets read as an
+/// Ablehnung, since the segment's presence is what tells the two apart.
+/// `unit` is `"monat"`, `"woche"` or `"tag"`.
+///
+/// `contact` is the `(name, communication)` Ansprechpartner the AHB makes Muss
+/// on the ESA Angebot PIDs, rendered as `CTA` plus `COM`.
+///
+/// An ESA has no Preisblatt, so the accepted Angebot's `price` is the basis for
+/// the INVOIC that follows it.
+#[pyfunction]
+#[pyo3(signature = (
+    pruefidentifikator, sender, receiver, *, location=None, bindungsfrist=None,
+    product=None, price=None, contact=None, on=None, release=None,
+    document_code=None, document_id=None, references=None, currency=None,
+    message_ref="1", document_date=None
+))]
+#[allow(clippy::too_many_arguments)]
+pub fn build_quotes(
+    pruefidentifikator: u32,
+    sender: &str,
+    receiver: &str,
+    location: Option<&str>,
+    bindungsfrist: Option<(String, String)>,
+    product: Option<&str>,
+    price: Option<&str>,
+    contact: Option<(String, String)>,
+    on: Option<&str>,
+    release: Option<&str>,
+    document_code: Option<&str>,
+    document_id: Option<&str>,
+    references: Option<Vec<(String, String)>>,
+    currency: Option<&str>,
+    message_ref: &str,
+    document_date: Option<&str>,
+) -> PyResult<Vec<u8>> {
+    use edi_energy::builders::DauerEinheit;
+
+    let rel = resolve_release(MessageType::Quotes, release, on, None)?;
+    let mut b = edi_energy::builders::QuotesBuilder::new(rel)
+        .sender(sender)
+        .receiver(receiver)
+        .pruefidentifikator(pruefidentifikator)
+        .message_ref(message_ref);
+    if let Some(id) = location {
+        b = b.location(id);
+    }
+    if let Some((count, unit)) = bindungsfrist {
+        let einheit = match unit.to_ascii_lowercase().as_str() {
+            "monat" => DauerEinheit::Monat,
+            "woche" => DauerEinheit::Woche,
+            "tag" => DauerEinheit::Tag,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "bindungsfrist unit must be \"monat\", \"woche\" or \"tag\", \
+                     got {other:?} — the AHB expects a duration, and a date there \
+                     is read as no Bindungsfrist at all"
+                )));
+            }
+        };
+        b = b.bindungsfrist(count, einheit);
+    }
+    if let Some(pr) = product {
+        b = b.product(pr);
+    }
+    if let Some(value) = price {
+        b = b.price(value);
+    }
+    if let Some((name, comm)) = contact {
+        b = b.contact(name, comm);
+    }
+    if let Some(c) = document_code {
+        b = b.document_code(c);
+    }
+    if let Some(id) = document_id {
+        b = b.document_id(id);
+    }
+    if let Some(c) = currency {
+        b = b.currency(c);
+    }
+    for (q, v) in references.unwrap_or_default() {
+        b = b.reference(q, v);
+    }
+    if let Some(d) = document_date_for(document_date, on)? {
+        b = b.document_date(d);
+    }
+    b.serialize()
+        .map_err(|e| PyRuntimeError::new_err(format!("QUOTES serialize failed: {e}")))
 }
 
 /// Wrap one or more messages in a UNB/UNZ interchange envelope.
@@ -1121,8 +1801,15 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(build_aperak_for, m)?)?;
     m.add_function(wrap_pyfunction!(build_contrl_for, m)?)?;
     m.add_function(wrap_pyfunction!(build_answer, m)?)?;
+    m.add_function(wrap_pyfunction!(build_remadv, m)?)?;
+    m.add_function(wrap_pyfunction!(build_ordrsp, m)?)?;
+    m.add_function(wrap_pyfunction!(build_orders, m)?)?;
+    m.add_function(wrap_pyfunction!(build_iftsta, m)?)?;
+    m.add_function(wrap_pyfunction!(build_quotes, m)?)?;
     m.add_function(wrap_pyfunction!(build_interchange, m)?)?;
     m.add_class::<UtilmdTransaction>()?;
+    m.add_class::<Vorgang>()?;
+    m.add_class::<Positionsfehler>()?;
     m.add_class::<Finding>()?;
     m.add_class::<MessageReport>()?;
     m.add_class::<Envelope>()?;
@@ -1387,6 +2074,7 @@ mod tests {
                 Some("A10"),
                 Some("E_0609"),
                 Some(vec![("92".into(), "20261101".into())]),
+                None,
                 None,
                 0,
             ),

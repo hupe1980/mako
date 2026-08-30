@@ -28,7 +28,11 @@ NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
 IDE+24+VORGANG-0001'\
 LOC+Z16+51238696781'\
-UNT+9+1'\
+SEQ+Z79+1'\
+PIA+5+9991000002082:Z11'\
+CCI+Z66'\
+CAV+ZV4:::11XBK-EEG-----1'\
+UNT+13+1'\
 UNZ+1+1'";
 
 /// Same structure but with a hypothetical release 5.5.4a that has no

@@ -20,11 +20,14 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Software Development :: Testing",
 ]
-# No runtime dependencies. Everything regulated is compiled into the extension,
-# and the pure-Python layer is stdlib only — including the EPEX generator, whose
-# day boundary comes from the platform's own timezone resolution rather than
-# from a Python tz database. A test library that pins numpy is a test library
-# that fights its consumers' lockfiles.
+# No runtime dependencies. Everything a regulator defines is compiled into the
+# extension, so no Python library could supply it — including the Europe/Berlin
+# day, which comes from the extension's tz database and so needs no `tzdata` on
+# Windows, where `zoneinfo` ships none. See MAKOTEST.md for the full rationale.
+#
+# `hypothesis` is the one extra: `makotest.strategies` imports it and nothing
+# else does. `pytest` is not a dependency — the plugin loads through the
+# `pytest11` entry point, so it is only imported inside a pytest run.
 dependencies = []
 
 [project.optional-dependencies]

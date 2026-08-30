@@ -13,6 +13,7 @@ import pytest
 
 from conftest import MELO, ON, utilmd_interchange
 from makotest import (
+    UtilmdTransaction,
     assert_edifact_valid,
     build_answer,
     build_aperak,
@@ -174,3 +175,120 @@ class TestBusinessAnswer:
         )
         with pytest.raises(ValueError, match="build_aperak_for"):
             build_answer(wire, 55002, on=ON)
+
+
+class TestProduktpaket:
+    """The Bilanzkreis a Zuordnung assigns, as the `SG8 SEQ+Z79` group."""
+
+    def test_the_whole_group_is_rendered_from_the_eic_alone(self):
+        """Four constants the document fixes, so a test does not transcribe them.
+
+        `SEQ+Z79+1`, the Produkt-Code `9991000002082`, `CCI+Z66` and the `ZV4`
+        CAV qualifier are all fixed by the AHB. A test supplying them by hand
+        would be copying values it has no way to check.
+        """
+        wire = utilmd_interchange_with_bilanzkreis("11XBK-EEG-----1")
+        text = wire.decode()
+        assert "SEQ+Z79" in text
+        assert "PIA+5+9991000002082:Z11" in text
+        assert "CCI+Z66" in text
+        assert "CAV+ZV4:::11XBK-EEG-----1" in text
+        assert_edifact_valid(wire, on=ON)
+
+    def test_a_vorgang_without_one_carries_no_sg8_at_all(self):
+        """Absent, not empty — an empty group is a different message.
+
+        Built on a 55003, which is not one of the six Anwendungsfälle the AHB
+        makes the Produktpaket Muss on: a 55001 without one is refused.
+        """
+        message = build_utilmd(
+            55003,
+            NB_ID,
+            LF_ID,
+            on=ON,
+            transactions=[UtilmdTransaction("VORGANG-1", locations=[("melo", MELO)])],
+        )
+        assert "SEQ+" not in message.decode()
+
+
+def utilmd_interchange_with_bilanzkreis(eic: str) -> bytes:
+    message = build_utilmd(
+        55001,
+        LF_ID,
+        NB_ID,
+        on=ON,
+        message_ref="MSG-1",
+        transactions=[
+            UtilmdTransaction(
+                "VORGANG-1",
+                locations=[("melo", MELO)],
+                dates=[("92", "20260501")],
+                references=[("Z13", "55001")],
+                bilanzkreis=eic,
+            )
+        ],
+    )
+    return build_interchange(
+        sender=LF_ID, receiver=NB_ID, dar="BK1", messages=[message], on=ON
+    )
+
+
+class TestAntwortDritter:
+    """`SG4 STS+Z35` — the Altlieferant's own refusal, restated by the NB.
+
+    Muss on an Ablehnung whose Antwortcode is `A50` or `A57` (UTILMD AHB Strom
+    Bedingungen `[356]` / `[84]`): both say the LFA refused to release the
+    Marktlokation, and GPKE Teil 2 § 2.1.2 Nr. 6 makes the NB state that
+    refusal's ground beside its own.
+    """
+
+    def test_the_ablehnung_carries_both_statuses(self):
+        wire = ablehnung_mit_widerspruch("A50", "A32")
+        text = wire.decode()
+        assert "STS+E01++A50:E_0623" in text, "the NB's own answer"
+        assert "STS+Z35++A32:E_0624" in text, "the LFA's, from its own tree"
+        assert_edifact_valid(wire, on=ON)
+
+    def test_the_third_party_code_comes_from_its_own_tree(self):
+        """`E_0624` is the Beendigung der Zuordnung the LFA answered from.
+
+        A code resolved against the NB's tree would be a different meaning
+        under the same characters, which is why the segment names `E_0624`.
+        """
+        from makotest import antwort_code
+
+        assert antwort_code("E_0624", "A32") is not None
+        assert antwort_code("E_0623", "A32") is None
+
+    def test_an_ablehnung_without_it_still_validates(self):
+        """The compiled profile carries no rule for this conditional.
+
+        Pinned as the known limitation it is: the AHB states the condition, the
+        authored profile does not, so a 55003 stating `A50` with no `STS+Z35`
+        passes here while a conformant counterparty would refuse it.
+        """
+        wire = ablehnung_mit_widerspruch("A50", None)
+        assert "STS+Z35" not in wire.decode()
+        assert_edifact_valid(wire, on=ON)
+
+
+def ablehnung_mit_widerspruch(code: str, dritter: str | None) -> bytes:
+    message = build_utilmd(
+        55003,
+        NB_ID,
+        LF_ID,
+        on=ON,
+        message_ref="MSG-1",
+        transactions=[
+            UtilmdTransaction(
+                "VORGANG-1",
+                locations=[("melo", MELO)],
+                antwort_code=code,
+                antwort_ebd="E_0623",
+                antwort_dritter=dritter,
+            )
+        ],
+    )
+    return build_interchange(
+        sender=NB_ID, receiver=LF_ID, dar="W1", messages=[message], on=ON
+    )

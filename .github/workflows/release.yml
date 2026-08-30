@@ -43,6 +43,22 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
 
+      # The tag names the release; the workspace version names the artifacts.
+      # `makotest`'s wheel version is `dynamic`, so maturin takes it from
+      # `Cargo.toml` and never sees the tag — a mismatch publishes the workspace
+      # version under the tag's release, and `skip-existing` turns that into a
+      # silent success when the wrong version is already on PyPI.
+      - name: Tag matches workspace version
+        run: |
+          workspace="$(awk '/^\[workspace\.package\]/{f=1;next} /^\[/{f=0} f && /^version/{gsub(/[^0-9.]/,"");print;exit}' Cargo.toml)"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$workspace" != "$tag" ]; then
+            echo "::error::tag v$tag does not match workspace version $workspace —"
+            echo "::error::bump [workspace.package] version in Cargo.toml, or retag."
+            exit 1
+          fi
+          echo "tag v$tag matches workspace version $workspace"
+
       - name: Format check
         run: cargo fmt --all -- --check
 

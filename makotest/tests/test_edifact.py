@@ -7,7 +7,7 @@ interchange is how a broken second one gets shipped.
 
 import pytest
 
-from conftest import MELO, ON, utilmd_interchange
+from conftest import BILANZKREIS, MELO, ON, utilmd_interchange
 from makotest import (
     UtilmdTransaction,
     assert_edifact_valid,
@@ -38,6 +38,7 @@ def _message(
                 locations=[("melo", melo)],
                 dates=[("92", "20260501")],
                 references=[("Z13", str(pid))],
+                bilanzkreis=BILANZKREIS,
             )
         ],
     )

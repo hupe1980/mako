@@ -114,6 +114,11 @@ fn render_utilmd(
         .rff("Z13", msg_ref)
         .transaction("VORGANG-0001")
         .marktlokation(malo)
+        // `SG8 SEQ+Z79` is Muss on 55001 (UTILMD AHB Strom 2.1 §5.3): without a
+        // Bilanzkreis the NB cannot assign the Marktlokation to the LF.
+        .produktpaket(edi_energy::utilmd_codes::Produktpaket::bilanzkreis(
+            "11XBK-EEG-----1",
+        ))
         .done()
         .serialize()
         .unwrap_or_else(|e| panic!("UTILMD {pid_u32} serialization failed: {e}"))

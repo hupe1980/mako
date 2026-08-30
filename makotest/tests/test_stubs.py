@@ -9,7 +9,10 @@ matching entry here.
 from __future__ import annotations
 
 import ast
+import inspect
 import pathlib
+
+import pytest
 
 from makotest import _native
 
@@ -62,4 +65,43 @@ def test_the_package_reexports_every_binding_it_documents():
     assert not native_only, (
         f"{sorted(native_only)} are compiled bindings the package does not "
         f"re-export — a consumer would have to reach into makotest._native."
+    )
+
+
+def _stub_parameters() -> dict[str, list[str]]:
+    """Parameter names per stubbed top-level function, in declaration order."""
+    tree = ast.parse(STUB.read_text(encoding="utf-8"))
+    out: dict[str, list[str]] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        args = node.args
+        out[node.name] = [
+            a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)
+        ]
+    return out
+
+
+@pytest.mark.parametrize("name", sorted(_stub_parameters()))
+def test_the_stub_signature_matches_the_compiled_one(name):
+    """Names matching is not enough — a consumer type-checks against parameters.
+
+    A binding that gains an argument in Rust without one here type-checks as an
+    error at every call site that passes it, and one that loses an argument
+    type-checks as valid at a call that now raises. Both are silent until a
+    consumer upgrades.
+    """
+    compiled = getattr(_native, name)
+    try:
+        signature = inspect.signature(compiled)
+    except ValueError:  # pragma: no cover - no text signature to compare
+        pytest.skip(f"{name} exposes no __text_signature__")
+    actual = [
+        p.name
+        for p in signature.parameters.values()
+        if p.kind is not inspect.Parameter.VAR_KEYWORD
+    ]
+    assert actual == _stub_parameters()[name], (
+        f"{name}: the stub declares {_stub_parameters()[name]} but the compiled "
+        f"binding takes {actual}."
     )

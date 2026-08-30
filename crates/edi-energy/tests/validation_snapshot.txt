@@ -1,6 +1,6 @@
 # Validation verdict per fixture: <path>\t<severity>\t<rule id>.
 # Regenerate with BLESS_VALIDATION_SNAPSHOT=1; read the diff before committing.
-# 391 fixtures, 1086 lines.
+# 391 fixtures, 1088 lines.
 aperak/invalid/missing_acw_ref.edi	error	AHB-29001-ERC-M
 aperak/invalid/missing_acw_ref.edi	error	AHB-29001-RFF-M
 aperak/invalid/missing_acw_ref.edi	error	MIG-APERAK-MIG-2.1i-GROUP-SG2-RFF-CARD-MIN
@@ -909,6 +909,7 @@ utilmd/gen/pid_55607.gen.edi	error	AHB-55607-CCI-M
 utilmd/gen/pid_55607.gen.edi	error	AHB-55607-SG4-STS-M
 utilmd/gen/pid_55607.gen.edi	error	AHB-55607-STS-M
 utilmd/gen/pid_55608.gen.edi	error	AHB-55608-SG4-STS-M
+utilmd/gen/pid_55608.gen.edi	error	AHB-55608-SG8-PRESENT
 utilmd/gen/pid_55608.gen.edi	error	AHB-55608-STS-M
 utilmd/gen/pid_55609.gen.edi	error	AHB-55609-SG4-STS-M
 utilmd/gen/pid_55609.gen.edi	error	AHB-55609-STS-M
@@ -916,6 +917,7 @@ utilmd/gen/pid_55611.gen.edi	error	AHB-55611-SG4-DTM-M
 utilmd/gen/pid_55611.gen.edi	error	AHB-55611-SG4-STS-M
 utilmd/gen/pid_55611.gen.edi	error	AHB-55611-STS-M
 utilmd/invalid/55036_ohne_sg12_altlieferant.edi	error	AHB-55036-SG12-PRESENT
+utilmd/invalid/bad_lokations_id.edi	error	AHB-55001-SG8-PRESENT
 utilmd/invalid/bad_lokations_id.edi	error	SEM-UTILMD-LOKATIONS-ID
 utilmd/valid/beispiel_44001_lieferbeginn_gas.edi	clean
 utilmd/valid/beispiel_44022_stornierung_gas.edi	clean

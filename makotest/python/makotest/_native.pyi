@@ -33,6 +33,21 @@ class Finding:
     @property
     def is_error(self) -> bool: ...
 
+class Vorgang:
+    """One SG4 Vorgang as it stands on the wire, read back off a parsed message."""
+
+    vorgangsnummer: str | None
+    locations: list[tuple[str, str]]
+    dates: list[tuple[str, str]]
+    references: list[tuple[str, str]]
+    transaktionsgrund: str | None
+    antwort_code: str | None
+    antwort_codeliste: str | None
+    def location(self, lokationstyp: str) -> str | None: ...
+    def date(self, qualifier: str) -> str | None: ...
+    def iso_date(self, qualifier: str) -> str | None: ...
+    def reference(self, qualifier: str) -> str | None: ...
+
 class MessageReport:
     """The validation outcome for one message inside an interchange."""
 
@@ -114,6 +129,10 @@ class UtilmdTransaction:
     """`(Lokationstyp, id)` SG5 LOC pairs — `("malo", …)`, `("melo", …)`."""
     customers: list[tuple[str, str]]
     free_texts: list[tuple[str, str]]
+    antwort_dritter: str | None
+    """`SG4 STS+Z35` — the third party's answer code, from `E_0624`."""
+    bilanzkreis: str | None
+    """The Bilanzkreis, rendered as the whole `SG8 SEQ+Z79` Produktpaket."""
     def __init__(
         self,
         vorgangsnummer: str,
@@ -126,6 +145,8 @@ class UtilmdTransaction:
         locations: list[tuple[str, str]] | None = None,
         customers: list[tuple[str, str]] | None = None,
         free_texts: list[tuple[str, str]] | None = None,
+        antwort_dritter: str | None = None,
+        bilanzkreis: str | None = None,
     ) -> None: ...
 
 def build_utilmd(
@@ -147,15 +168,21 @@ def build_mscons(
     sender: str,
     receiver: str,
     metering_point: str,
-    quantities: list[tuple[str, str, str]],
+    quantities: list[tuple[str, str, str]] | None = None,
     *,
+    intervals: list[tuple[str, str, str, str, str]] | None = None,
     on: str | None = None,
     release: str | None = None,
     message_ref: str = "1",
     document_date: str | None = None,
     obis: str | None = None,
     bilanzierungsgebiet: str | None = None,
-) -> bytes: ...
+) -> bytes:
+    """`quantities` are `(qualifier, value, unit)`; `intervals` add `(start, end)`.
+
+    Interval data needs `intervals`: a bare `QTY` carries no time reference.
+    """
+
 def build_aperak(
     sender: str,
     receiver: str,
@@ -212,12 +239,128 @@ def build_answer(
     release: str | None = None,
     message_ref: str = "1",
     document_date: str | None = None,
-    document_code: str = "E01",
+    document_code: str | None = None,
+    antwort_code: str | None = None,
+    antwort_ebd: str | None = None,
     process_dates: list[tuple[str, str]] | None = None,
     references: list[tuple[str, str]] | None = None,
+    free_texts: list[tuple[str, str]] | None = None,
     message_index: int = 0,
 ) -> bytes:
     """The UTILMD business answer to one message of `received`, under `answer_pid`."""
+
+class Positionsfehler:
+    """One refused Rechnungsposition of a REMADV."""
+
+    positionsnummer: int
+    gruende: list[tuple[str, str]]
+    erlaeuterung: str | None
+    def __init__(
+        self,
+        positionsnummer: int,
+        gruende: list[tuple[str, str]],
+        erlaeuterung: str | None = None,
+    ) -> None: ...
+
+def build_iftsta(
+    pruefidentifikator: int,
+    sender: str,
+    receiver: str,
+    *,
+    status: tuple[str, str] | None = None,
+    vorgangsnummer: str | None = None,
+    order_reference: str | None = None,
+    vertragsende: str | None = None,
+    on: str | None = None,
+    release: str | None = None,
+    document_code: str | None = None,
+    document_id: str | None = None,
+    message_ref: str = "1",
+    document_date: str | None = None,
+) -> bytes:
+    """The WiM status message — `SG15 STS` is a (category, reason) pair."""
+
+def build_quotes(
+    pruefidentifikator: int,
+    sender: str,
+    receiver: str,
+    *,
+    location: str | None = None,
+    bindungsfrist: tuple[str, str] | None = None,
+    product: str | None = None,
+    price: str | None = None,
+    contact: tuple[str, str] | None = None,
+    on: str | None = None,
+    release: str | None = None,
+    document_code: str | None = None,
+    document_id: str | None = None,
+    references: list[tuple[str, str]] | None = None,
+    currency: str | None = None,
+    message_ref: str = "1",
+    document_date: str | None = None,
+) -> bytes:
+    """The ESA Angebot — `bindungsfrist` is a count plus a unit, never a date."""
+
+def build_orders(
+    pruefidentifikator: int,
+    sender: str,
+    receiver: str,
+    *,
+    location: str | None = None,
+    abonnement: str | None = None,
+    ausfuehrungsdatum: str | None = None,
+    on: str | None = None,
+    release: str | None = None,
+    document_code: str | None = None,
+    document_id: str | None = None,
+    references: list[tuple[str, str]] | None = None,
+    item_description: str | None = None,
+    message_ref: str = "1",
+    document_date: str | None = None,
+) -> bytes:
+    """The WiM / ESA / Sperrung request an ORDRSP answers."""
+
+def build_ordrsp(
+    pruefidentifikator: int,
+    sender: str,
+    receiver: str,
+    *,
+    antwort_code: str | None = None,
+    antwort_ebd: str | None = None,
+    on: str | None = None,
+    release: str | None = None,
+    abonnement: str | None = None,
+    adjustment_reason: str | None = None,
+    document_code: str | None = None,
+    document_id: str | None = None,
+    references: list[tuple[str, str]] | None = None,
+    line_item: bool = False,
+    item_description: bool = False,
+    message_ref: str = "1",
+    document_date: str | None = None,
+) -> bytes:
+    """The answer to an ORDERS — its `SG2 AJT` carries the Antwortcode and EBD."""
+
+def build_remadv(
+    pruefidentifikator: int,
+    sender: str,
+    receiver: str,
+    *,
+    rechnungsnummer: str,
+    faelliger_betrag: str,
+    ueberweisungsbetrag: str,
+    rechnungsdatum: str,
+    dokumentenart: str = "380",
+    on: str | None = None,
+    release: str | None = None,
+    kopf_gruende: list[tuple[str, str]] | None = None,
+    positionsfehler: list[Positionsfehler] | None = None,
+    waehrung: str | None = None,
+    message_ref: str = "1",
+    document_id: str | None = None,
+    document_date: str | None = None,
+) -> bytes:
+    """The answer to an invoice: a Zahlungsavis or a Rückmeldung with its AJT."""
 
 def build_interchange(
     sender: str,
@@ -277,6 +420,9 @@ def contrl_due_at(received: str) -> str: ...
 def aperak_strom_due_at(received: str) -> str: ...
 def aperak_gas_folgeprozess_due_at(received: str) -> str: ...
 def aperak_gas_initialprozess_due_at(received: str) -> str: ...
+def format_303(instant: str) -> str:
+    """An RFC 3339 instant as EDIFACT DE 2379 format `303` — `CCYYMMDDHHMMZZZ`."""
+
 def berlin_day_bounds(date: str) -> tuple[str, str]:
     """The half-open UTC bounds of one Europe/Berlin day — 23, 24 or 25 hours."""
 
@@ -298,15 +444,37 @@ class AntwortObligation:
     family: str
     """`"gpke"`, `"geli-gas"`, `"wim"` or `"wim-gas"`."""
     shape: str
-    """`"werktag_at"`, `"end_of_werktag"` or `"werktage_at_cutoff"`."""
+    """`"werktag_at"`, `"same_day_at"`, `"same_day"`, `"end_of_werktag"` or
+    `"werktage_at_cutoff"`."""
     werktage: int | None
     clock_time: str | None
     source: str
+    @property
+    def window(self) -> str: ...
     def due_at(self, received: str) -> str: ...
 
 def antwort_obligation(trigger_pid: int) -> AntwortObligation | None: ...
 def antwort_obligations() -> list[AntwortObligation]: ...
 def antwort_deadline(trigger_pid: int, received: str) -> str | None: ...
+
+# ── Antwortcodes (Entscheidungsbaum Codelisten) ───────────────────────────────
+
+class AntwortCode:
+    """One published Antwortcode, resolved against the tree that publishes it."""
+
+    code: str
+    tree: str
+    wire_codeliste: str | None
+    cluster: str
+    bedeutung: str
+    braucht_bemerkung: bool
+    @property
+    def ist_zustimmung(self) -> bool | None: ...
+
+def entscheidungsbaeume() -> list[str]: ...
+def antwort_code(tree: str, code: str) -> AntwortCode | None: ...
+def antwort_codes(tree: str) -> list[AntwortCode]: ...
+def antwort_codes_for_pid(trigger_pid: int) -> list[AntwortCode]: ...
 
 # ── Prüfidentifikatoren and releases ──────────────────────────────────────────
 
@@ -318,6 +486,9 @@ def pid_has_ahb_rules(
 ) -> bool: ...
 def message_types_of(pid: int) -> list[str]:
     """A list: APERAK and COMDIS both declare 29001 and 29002."""
+
+def pid_carrying_message_types() -> list[str]:
+    """Every EDIFACT type the BDEW assigns Prüfidentifikatoren to, sorted."""
 
 def answer_pids(anfrage: int) -> tuple[int, int] | None: ...
 def bestaetigung_pid(anfrage: int) -> int | None: ...

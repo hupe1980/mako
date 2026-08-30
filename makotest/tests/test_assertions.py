@@ -89,10 +89,27 @@ class TestInvoiceReconciliation:
             {"gesamtnetto": 5, "rechnungspositionen": [{"teilsummeNetto": {"wert": 5}}]}
         )
 
-    def test_an_invoice_with_no_positions_must_have_no_total(self):
-        assert_invoice_reconciles({"gesamtnetto": "0.00"})
-        with pytest.raises(AssertionError):
-            assert_invoice_reconciles({"gesamtnetto": "10.00"})
+    def test_an_identity_is_checked_only_when_both_its_sides_are_stated(self):
+        """A partial invoice is asserted for what it states, not for what it omits.
+
+        The position sum needs both the positions and the total; an invoice that
+        states one side alone is a mapping this assertion has no identity for,
+        not an invoice whose arithmetic is wrong.
+        """
+        assert_invoice_reconciles(
+            {"gesamtbrutto": "10.00", "gesamtnetto": "10.00", "zuZahlen": "10.00"}
+        )
+
+    def test_an_invoice_stating_no_identity_at_all_is_refused(self):
+        """The toolkit's own central failure mode, in its own assertion.
+
+        With nothing to reconcile there is nothing to fail on, so a silent pass
+        over an empty or misspelled mapping would be an assertion that cannot
+        fail — a `ValueError`, because it is the test that is wrong.
+        """
+        for nothing_to_check in ({}, {"gesamtnetto": "10.00"}, {"rechnungsnummer": "R1"}):
+            with pytest.raises(ValueError, match="none of the four identities"):
+                assert_invoice_reconciles(nothing_to_check)
 
     def test_a_discount_is_deducted_from_what_is_owed(self):
         assert_invoice_reconciles(
@@ -123,3 +140,21 @@ class TestBo4eGeneration:
     def test_a_different_generation_is_refused(self):
         with pytest.raises(AssertionError, match="BO4E generation mismatch"):
             assert_bo4e_generation_matches("v202710.0.0")
+
+    @pytest.mark.parametrize("advertised", ["BO4E-202607", "v1.202607"])
+    def test_a_generation_behind_other_digits_is_still_found(self, advertised):
+        """Collapsing every digit misreads anything numeric before the version.
+
+        `BO4E-202607` reads as `420260` that way, and the platform gets a
+        mismatch reported against a version that matched — a failure pointing
+        at the system under test for a defect in the comparison.
+        """
+        assert _generation(advertised) == "202607"
+        assert_bo4e_generation_matches(advertised)
+
+    @pytest.mark.parametrize("advertised", ["2.1", "unknown", ""])
+    def test_a_string_naming_no_generation_is_a_mismatch_not_a_pass(self, advertised):
+        """Unparseable is not "equal" — that would pass on any nonsense."""
+        assert _generation(advertised) is None
+        with pytest.raises(AssertionError, match="BO4E generation mismatch"):
+            assert_bo4e_generation_matches(advertised)

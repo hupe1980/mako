@@ -12,11 +12,16 @@
 //!
 //! Question 3 is the one a harness gets wrong. "A Werktage Frist expires at
 //! 17:00 Europe/Berlin" is true of the WiM MSB-Wechsel windows and of nothing
-//! else: a GPKE answer window is a **clock time on the first Werktag after the
-//! Übertragungstag** (11:00 / 06:00 / 05:00 / 09:00) and a GeLi Gas window runs
-//! to the **end** of the *n*-th Werktag. Asserting a GPKE deadline with
-//! Werktage-plus-cutoff arithmetic is wrong by hours in one direction or six
-//! in the other, and the loose direction is silent.
+//! else: a GPKE answer window is a **clock time on the *n*-th Werktag after the
+//! Übertragungstag** (11:00 / 06:00 / 05:00 / 09:00) — or, for the Ersatz-/
+//! Grundversorgung and the LF-Zuordnung, that clock time **on the ÜT itself** —
+//! and a GeLi Gas window runs to the **end** of the *n*-th Werktag. Asserting a
+//! GPKE deadline with Werktage-plus-cutoff arithmetic is wrong by hours in one
+//! direction or six in the other, and the loose direction is silent.
+//!
+//! The two GPKE shapes share a clock time and land a day apart, so the Werktag
+//! count is load-bearing: a window read off `clock_time` alone is a day late for
+//! every „am ÜT" obligation.
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -203,6 +208,30 @@ pub fn aperak_gas_initialprozess_due_at(received: &str) -> PyResult<String> {
     fmt_dt(fristen::aperak_gas_initialprozess_due_at(t))
 }
 
+/// An RFC 3339 instant as EDIFACT DE 2379 format `303` — `CCYYMMDDHHMMZZZ`.
+///
+/// The zone suffix is part of the value, not decoration: a zone-less `303` is
+/// malformed, and BDEW fixes the zone to UTC (`+00`) wherever the format is
+/// used. The instant is converted rather than assumed, so a caller holding a
+/// Berlin-offset timestamp gets the right minute.
+///
+/// Bound rather than formatted in Python because this is a wire format a
+/// regulator defines, and a second implementation drifts from the builders at
+/// the first change — `the_bound_formatter_matches_what_a_builder_emits` pins
+/// the two together.
+#[pyfunction]
+pub fn format_303(instant: &str) -> PyResult<String> {
+    let t = parse_dt(instant)?.to_offset(time::UtcOffset::UTC);
+    Ok(format!(
+        "{:04}{:02}{:02}{:02}{:02}+00",
+        t.year(),
+        t.month() as u8,
+        t.day(),
+        t.hour(),
+        t.minute()
+    ))
+}
+
 /// The half-open UTC bounds of one Europe/Berlin calendar day, RFC 3339.
 ///
 /// A German delivery day is a **local** day, and it is 23, 24 or 25 hours long
@@ -289,11 +318,25 @@ pub struct AntwortObligation {
     pub ebd: Option<String>,
     /// `"gpke"`, `"geli-gas"`, `"wim"` or `"wim-gas"`.
     pub family: String,
-    /// `"next_werktag_at"`, `"end_of_werktag"` or `"werktage_at_cutoff"`.
+    /// How the window is measured. One of:
+    ///
+    /// | `shape` | Window | `werktage` | `clock_time` |
+    /// |---|---|---|---|
+    /// | `"werktag_at"` | that clock time on the *n*-th Werktag after the ÜT | *n* | set |
+    /// | `"same_day_at"` | that clock time **on the ÜT itself** | `0` | set |
+    /// | `"same_day"` | the anchor's own day, no cut-off stated | `0` | `None` |
+    /// | `"end_of_werktag"` | the **end** of the *n*-th Werktag | *n* | `None` |
+    /// | `"werktage_at_cutoff"` | 17:00 Europe/Berlin on the *n*-th Werktag | *n* | `None` |
+    ///
+    /// Rendering a window from `clock_time` alone is a day out on
+    /// `"same_day_at"`: „15:00 Uhr **am ÜT**" and „15:00 Uhr des 1. WT nach dem
+    /// ÜT" are different obligations, and `werktage` is what separates them.
     pub shape: String,
-    /// Werktage, for the two day-counted shapes. `None` for `next_werktag_at`.
+    /// Werktage the window runs for — `0` for the two same-day shapes. Always
+    /// present, so a consumer formats the window from `shape` and this pair
+    /// without a fallback branch.
     pub werktage: Option<u32>,
-    /// `"HH:MM"` Berlin, for `next_werktag_at`. `None` for the others.
+    /// `"HH:MM"` Berlin, for the two wall-clock shapes. `None` for the others.
     pub clock_time: Option<String>,
     /// Citation, for the audit trail.
     pub source: String,
@@ -310,17 +353,34 @@ impl AntwortObligation {
         fmt_dt(o.frist.due_at(t, HolidayCalendar::BdewMaKo))
     }
 
-    fn __repr__(&self) -> String {
-        let window = match (&self.clock_time, self.werktage) {
+    /// The window in words — `"15:00 on the ÜT"`, `"11:00 on the 1. WT"`,
+    /// `"4 WT"`.
+    ///
+    /// Formatted from `shape` and `werktage` together, never from `clock_time`
+    /// alone: „15:00 Uhr am ÜT" and „15:00 Uhr des 1. WT nach dem ÜT" are a day
+    /// apart and differ only in the Werktag count.
+    #[getter]
+    fn window(&self) -> String {
+        match (&self.clock_time, self.werktage) {
             (Some(t), Some(0)) => format!("{t} on the ÜT"),
             (Some(t), Some(n)) => format!("{t} on the {n}. WT"),
-            (Some(t), None) => format!("{t} on the 1. WT"),
+            (None, Some(0)) => "on the ÜT".to_owned(),
             (None, Some(n)) => format!("{n} WT"),
+            // `werktage` is present on every published obligation — pinned by
+            // `every_obligation_renders_its_window`.
+            (Some(t), None) => t.clone(),
             (None, None) => "?".to_owned(),
-        };
+        }
+    }
+
+    fn __repr__(&self) -> String {
         format!(
             "AntwortObligation({} {} — {} answers within {}, {})",
-            self.trigger_pid, self.name, self.answered_by, window, self.family
+            self.trigger_pid,
+            self.name,
+            self.answered_by,
+            self.window(),
+            self.family
         )
     }
 }
@@ -411,6 +471,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(aperak_gas_initialprozess_due_at, m)?)?;
 
     m.add_function(wrap_pyfunction!(berlin_day_bounds, m)?)?;
+    m.add_function(wrap_pyfunction!(format_303, m)?)?;
     m.add_function(wrap_pyfunction!(berlin_instant, m)?)?;
     m.add_function(wrap_pyfunction!(berlin_mtu_count, m)?)?;
     m.add_function(wrap_pyfunction!(antwort_obligation, m)?)?;
@@ -424,10 +485,10 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 mod tests {
     use super::*;
 
-    /// The three shapes must produce three different instants for the same
-    /// arrival, or binding the table adds nothing over a Werktage count.
+    /// The families must produce different instants for the same arrival, or
+    /// binding the table adds nothing over a Werktage count.
     #[test]
-    fn the_three_shapes_are_genuinely_different_instants() {
+    fn the_families_are_genuinely_different_instants() {
         let received = "2026-03-02T09:00:00Z"; // a Monday
         // GPKE Anmeldung — 11:00 on the 1. WT after the ÜT.
         let gpke = antwort_deadline(55_001, received).unwrap().unwrap();
@@ -513,6 +574,23 @@ mod tests {
         }
     }
 
+    /// The bound formatter and the builders must agree, or a test asserting a
+    /// measurement period compares two different renderings of one instant.
+    #[test]
+    fn the_bound_formatter_matches_what_a_builder_emits() {
+        // The 25-hour October day starts at 22:00 UTC the previous day.
+        assert_eq!(
+            format_303("2026-10-24T22:00:00Z").unwrap(),
+            "202610242200+00"
+        );
+        // A Berlin-offset instant converts rather than being taken at face value.
+        assert_eq!(
+            format_303("2026-10-25T00:00:00+02:00").unwrap(),
+            "202610242200+00"
+        );
+        assert!(format_303("not a timestamp").is_err());
+    }
+
     #[test]
     fn an_unquantified_pid_reports_unknown_rather_than_a_default() {
         assert!(antwort_obligation(44_020).is_none());
@@ -550,5 +628,31 @@ mod tests {
             );
             assert!(!o.source.is_empty(), "{} has no Fundstelle", o.trigger_pid);
         }
+    }
+
+    /// „15:00 Uhr am ÜT" and „15:00 Uhr des 1. WT nach dem ÜT" are a day apart
+    /// and share a clock time, so the rendered window has to come from the
+    /// Werktag count as well.
+    #[test]
+    fn a_same_day_window_is_not_rendered_as_the_next_werktag() {
+        let same_day = antwort_obligation(55_013).expect("Ersatz-/Grundversorgung");
+        assert_eq!(same_day.shape, "same_day_at");
+        assert_eq!(same_day.window(), "15:00 on the ÜT");
+        // …and the instant agrees: the ÜT itself, not the day after.
+        assert!(
+            same_day
+                .due_at("2026-03-02T09:00:00Z")
+                .unwrap()
+                .starts_with("2026-03-02T15:00:00")
+        );
+
+        let next_werktag = antwort_obligation(55_001).expect("Anmeldung");
+        assert_eq!(next_werktag.window(), "11:00 on the 1. WT");
+        assert_eq!(
+            antwort_obligation(44_001)
+                .expect("GeLi Gas Anmeldung")
+                .window(),
+            "4 WT"
+        );
     }
 }

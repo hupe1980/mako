@@ -2,8 +2,8 @@
 
 A library you cannot point at a file from a shell is one only Python teams
 adopt. The three things worth reaching for without writing a test are: what is
-wrong with this interchange, when is this answer due, and is this identifier one
-a counterparty would accept.
+wrong with this interchange, when is this answer due, is this identifier one a
+counterparty would accept, and what is a counterparty entitled to answer with.
 
 Everything here is a thin front end over the same bindings the assertions use,
 so the CLI and a test cannot disagree about an answer.
@@ -12,6 +12,7 @@ so the CLI and a test cannot disagree about an answer.
     makotest frist 55001 --received 2026-03-02T09:00:00Z
     makotest id 9900357000004
     makotest pids UTILMD --on 2026-04-01 --sparte STROM
+    makotest codes --pid 55001
 
 Exit status is 0 when the answer is yes and 1 when it is no, so a shell can
 branch on it.
@@ -26,6 +27,8 @@ from collections.abc import Sequence
 from typing import Any
 
 from ._native import (
+    antwort_codes,
+    antwort_codes_for_pid,
     antwort_obligation,
     eic_is_valid,
     eic_type_char,
@@ -52,8 +55,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "frist": _frist,
         "id": _identify,
         "pids": _pids,
+        "codes": _codes,
         "versions": _versions,
     }[args.command]
+    # `--json` is accepted on either side of the subcommand; argparse cannot
+    # share one flag across both levels, so the two dests are merged here.
+    args.json = bool(getattr(args, "json", False) or getattr(args, "json_global", False))
     try:
         return handler(args)
     except (ValueError, OSError) as exc:
@@ -71,6 +78,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--json",
+        dest="json_global",
+        action="store_true",
+        help="emit machine-readable JSON instead of a human report",
+    )
+    #: `--json` again on every subcommand, so it works on either side of it.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "--json",
         action="store_true",
         help="emit machine-readable JSON instead of a human report",
     )
@@ -78,6 +93,7 @@ def _parser() -> argparse.ArgumentParser:
 
     validate = sub.add_parser(
         "validate",
+        parents=[common],
         help="validate an EDIFACT interchange (MIG + AHB + semantic rules)",
     )
     validate.add_argument("file", help="path to the interchange, or - for stdin")
@@ -92,7 +108,9 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
 
-    frist = sub.add_parser("frist", help="the published answer Frist for a PID")
+    frist = sub.add_parser(
+        "frist", parents=[common], help="the published answer Frist for a PID"
+    )
     frist.add_argument("pid", type=int, help="the inbound Prüfidentifikator")
     frist.add_argument(
         "--received",
@@ -100,17 +118,35 @@ def _parser() -> argparse.ArgumentParser:
         help="when the request arrived; prints the instant the answer is due",
     )
 
-    identify = sub.add_parser("id", help="classify a BDEW identifier")
+    identify = sub.add_parser("id", parents=[common], help="classify a BDEW identifier")
     identify.add_argument("value", help="a MaLo, MeLo, Marktpartner-ID or EIC")
 
     pids = sub.add_parser(
-        "pids", help="Prüfidentifikatoren the compiled profiles validate"
+        "pids",
+        parents=[common],
+        help="Prüfidentifikatoren the compiled profiles validate",
     )
     pids.add_argument("message_type", help="e.g. UTILMD")
     pids.add_argument("--on", metavar="ISO_DATE", help="restrict to that date's profile")
     pids.add_argument("--sparte", choices=["STROM", "GAS"], help="UTILMD track")
 
-    sub.add_parser("versions", help="every compiled BDEW format version")
+    codes = sub.add_parser(
+        "codes",
+        parents=[common],
+        help="the Antwortcodes an Entscheidungsbaum publishes",
+    )
+    target = codes.add_mutually_exclusive_group(required=True)
+    target.add_argument("--ebd", metavar="E_XXXX", help="the Entscheidungsbaum")
+    target.add_argument(
+        "--pid",
+        type=int,
+        metavar="N",
+        help="an inbound Prüfidentifikator, resolved to the tree its Frist names",
+    )
+
+    sub.add_parser(
+        "versions", parents=[common], help="every compiled BDEW format version"
+    )
     return parser
 
 
@@ -212,11 +248,10 @@ def _frist(args: argparse.Namespace) -> int:
             ],
         )
         return 1
-    window = (
-        f"{obligation.clock_time} on the 1. Werktag"
-        if obligation.clock_time
-        else f"{obligation.werktage} Werktage"
-    )
+    # Rendered by the binding, from the shape and the Werktag count together —
+    # „15:00 Uhr am ÜT" and „15:00 Uhr des 1. WT nach dem ÜT" share a clock time
+    # and are a day apart.
+    window = obligation.window
     payload: dict[str, Any] = {
         "pruefidentifikator": obligation.trigger_pid,
         "name": obligation.name,
@@ -225,6 +260,7 @@ def _frist(args: argparse.Namespace) -> int:
         "shape": obligation.shape,
         "werktage": obligation.werktage,
         "clock_time": obligation.clock_time,
+        "window": window,
         "bestaetigung_pid": obligation.bestaetigung_pid,
         "ablehnung_pid": obligation.ablehnung_pid,
         "ebd": obligation.ebd,
@@ -315,6 +351,56 @@ def _pids(args: argparse.Namespace) -> int:
         ],
     )
     return 0 if codes else 1
+
+
+def _codes(args: argparse.Namespace) -> int:
+    if args.ebd:
+        tree, codes = args.ebd, antwort_codes(args.ebd)
+    else:
+        codes = antwort_codes_for_pid(args.pid)
+        obligation = antwort_obligation(args.pid)
+        tree = obligation.ebd if obligation else None
+        if not codes:
+            _emit(
+                args,
+                {"pruefidentifikator": args.pid, "ebd": tree, "codes": []},
+                [
+                    f"no Entscheidungsbaum with a published Codeliste for "
+                    f"Prüfidentifikator {args.pid}."
+                ],
+            )
+            return 1
+    _emit(
+        args,
+        {
+            "ebd": tree,
+            "codes": [
+                {
+                    "code": c.code,
+                    "cluster": c.cluster,
+                    "ist_zustimmung": c.ist_zustimmung,
+                    "wire_codeliste": c.wire_codeliste,
+                    "bedeutung": c.bedeutung,
+                    "braucht_bemerkung": c.braucht_bemerkung,
+                }
+                for c in codes
+            ],
+        },
+        [f"{tree} — {len(codes)} Antwortcode(s)"]
+        + [
+            f"  {c.code:5} {c.cluster:30} {c.bedeutung}"
+            + ("  [braucht FTX+ACB]" if c.braucht_bemerkung else "")
+            for c in codes
+        ]
+        + [
+            "",
+            # DE 1131 carries the Codeliste, which is the EBD number only for
+            # the GPKE and GeLi Gas trees.
+            "  SG4 STS+E01 DE 1131 carries "
+            + ", ".join(sorted({c.wire_codeliste or "(nothing)" for c in codes})),
+        ],
+    )
+    return 0
 
 
 def _versions(args: argparse.Namespace) -> int:

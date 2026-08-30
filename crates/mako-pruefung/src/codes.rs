@@ -4940,6 +4940,55 @@ pub fn lookup(ebd: &str, code: &str) -> Option<&'static AntwortCode> {
 mod tests {
     use super::*;
 
+    /// Every code the UTILMD AHB makes `FTX` Pflicht for must say so here.
+    ///
+    /// Two BDEW documents describe the same obligation from different sides:
+    /// the Entscheidungsbaum-Codeliste marks a code whose answer needs a
+    /// written Erläuterung, and the AHB states it as a conditional-Muss on the
+    /// `SG4 FTX` „Bemerkung" segment. They are imported separately, so they can
+    /// drift — and the drift is silent in the direction that matters: a caller
+    /// trusting `braucht_bemerkung` sends the code bare and the receiver's AHB
+    /// layer rejects it.
+    ///
+    /// The UTILMD AHB attaches that condition to **one** code: `E14`
+    /// („Ablehnung Sonstiges", Gas Bedingung `[48]`). The catch-all codes of a
+    /// tree are the other carriers, marked from the EBD document's own rule
+    /// that „bei Nutzung dieses Antwortgrundes muss im Freitextfeld eine
+    /// Begründung angegeben werden".
+    ///
+    /// `Z35` is deliberately **not** here. Gas Bedingung `[84]` names it, but it
+    /// governs the `SG4 STS` „Status der Antwort des dritten Marktbeteiligten"
+    /// segment, not the FTX — the Gas twin of Strom's `[356]` on `A50`. A code
+    /// that obliges a second STS is not a code that obliges a Bemerkung.
+    #[test]
+    fn every_ahb_ftx_condition_has_a_bemerkung_marker() {
+        let carriers: Vec<_> = CODELISTEN
+            .iter()
+            .flat_map(|(tree, list)| list.iter().map(move |c| (*tree, c)))
+            .filter(|(_, c)| c.code == "E14")
+            .collect();
+        assert!(!carriers.is_empty(), "E14 is published by no tree");
+        for (tree, entry) in carriers {
+            assert!(
+                entry.braucht_bemerkung,
+                "{tree}/E14: the AHB makes FTX Pflicht for it (Gas Bedingung [48])"
+            );
+        }
+
+        // `Z35` obliges the third-party STS, never an FTX.
+        for (tree, list) in CODELISTEN {
+            for entry in *list {
+                if entry.code == "Z35" {
+                    assert!(
+                        !entry.braucht_bemerkung,
+                        "{tree}/Z35 obliges SG4 STS „Status der Antwort des dritten \
+                         Marktbeteiligten\" (Gas Bedingung [84]), not a Bemerkung"
+                    );
+                }
+            }
+        }
+    }
+
     /// The **five** Use-Cases of PID 31009 resolve to five different quartets,
     /// and the recipient's Marktrolle narrows it only to two. Answering an ESA
     /// invoice under `E_0406` names a tree whose codes mean something else

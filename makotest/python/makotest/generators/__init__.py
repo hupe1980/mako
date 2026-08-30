@@ -5,5 +5,12 @@ convenience beats a Rust binding.
 """
 
 from .epex import EpexGenerator, MtuPrice, Profile
+from .lastgang import LastgangGenerator, Lastprofil
 
-__all__ = ["EpexGenerator", "MtuPrice", "Profile"]
+__all__ = [
+    "EpexGenerator",
+    "LastgangGenerator",
+    "Lastprofil",
+    "MtuPrice",
+    "Profile",
+]

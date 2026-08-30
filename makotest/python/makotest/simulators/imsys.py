@@ -18,7 +18,12 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Literal
 
-from .._native import berlin_day_bounds, berlin_mtu_count
+from .._native import (
+    berlin_day_bounds,
+    berlin_mtu_count,
+    build_mscons,
+    format_303,
+)
 
 __all__ = [
     "READING_QUALITIES",
@@ -157,6 +162,69 @@ class Zaehlerstandsgang:
     def mtu_count(self) -> int:
         """Market time units this delivery day has."""
         return berlin_mtu_count(self.tag, self.mtu_minutes)
+
+    def as_mscons(
+        self,
+        *,
+        pruefidentifikator: int,
+        sender_mp_id: str,
+        receiver_mp_id: str,
+        on: str,
+        malo_id: str | None = None,
+        obis_code: str = "1-0:1.29.0",
+        qualifier: str = "220",
+        unit: str = "KWH",
+        message_ref: str = "1",
+    ) -> bytes:
+        """The delivery as an MSCONS **message** (`UNH`…`UNT`).
+
+        One `QTY` per delivered interval, each carrying its own measurement
+        period. That is the distinction that matters: a bare `QTY` has no time
+        reference, so the receiver cannot place the value on the settlement
+        grid — and the AHB does **not** reject it, so a Lastgang assembled from
+        flat quantities validates while being unusable. Building it here is what
+        keeps a test from producing that message by accident.
+
+        Gaps are **absent** intervals, exactly as in `as_direct_push`: the
+        receiver forms an Ersatzwert, and a zero would be settled against.
+
+        `malo_id` names the Marktlokation when the series is reported against
+        one (13025 is „Lastgang Marktlokation, Tranche"); it defaults to this
+        gateway's Messlokation, which is what 13018 reports against.
+
+        Wrap the result with `build_interchange()` — a message is not sendable
+        on its own.
+        """
+        gaps = set(self.luecken)
+        start, _ = berlin_day_bounds(self.tag)
+        day = _dt.datetime.fromisoformat(start)
+        step = _dt.timedelta(minutes=self.mtu_minutes)
+        intervals = [
+            (
+                qualifier,
+                f"{round(Decimal(str(value)), 4):f}",
+                unit,
+                format_303((day + i * step).isoformat()),
+                format_303((day + (i + 1) * step).isoformat()),
+            )
+            for i, value in enumerate(self.werte)
+            if i not in gaps
+        ]
+        if not intervals:
+            raise ValueError(
+                f"every interval of {self.tag} is a Lücke, so there is no value "
+                f"to report — an MSCONS with no QTY is not a delivery"
+            )
+        return build_mscons(
+            pruefidentifikator,
+            sender_mp_id,
+            receiver_mp_id,
+            malo_id or self.melo_id,
+            intervals=intervals,
+            on=on,
+            obis=obis_code,
+            message_ref=message_ref,
+        )
 
     def as_direct_push(
         self,

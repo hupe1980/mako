@@ -3077,7 +3077,7 @@ fn emit_segment_order_rule_fn(out: &mut String, mig: &MigProfile, pack_name: &st
             .join(", ");
         writeln!(
             out,
-            "        /// Tags that trigger a repeatable segment group in the detail section."
+            "        /// Tags that trigger a repeatable segment group, in either section."
         )
         .unwrap();
         writeln!(
@@ -3088,12 +3088,59 @@ fn emit_segment_order_rule_fn(out: &mut String, mig: &MigProfile, pack_name: &st
         writeln!(out).unwrap();
         writeln!(
             out,
-            "        /// Strict order check for the header section (no group repetition expected)."
+            "        /// Order check for the header section, aware of repeating groups."
         )
         .unwrap();
+        writeln!(out, "        ///").unwrap();
+        writeln!(
+            out,
+            "        /// A group may repeat on either side of `UNS`. REMADV puts its whole"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "        /// Rückmeldung there — `SG5 DOC` holding `SG7 AJT` and `SG10 DLI`, the"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "        /// latter up to 9999 times, one per refused Rechnungsposition (MIG 2.9e"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "        /// segment 0410). A flat cursor here rejects the second `DLI`, which is"
+        )
+        .unwrap();
+        writeln!(out, "        /// every itemized rejection there is.").unwrap();
         writeln!(out, "        fn check_header_section(segs: &[edifact_rs::Segment<'_>], expected: &[&str], rule_id: &str, issues: &mut Vec<ValidationIssue>) {{").unwrap();
         writeln!(out, "            let mut cursor: usize = 0;").unwrap();
         writeln!(out, "            for seg in segs {{").unwrap();
+        writeln!(
+            out,
+            "                // A group trigger seen at or before the cursor opens a new"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "                // occurrence of that group; rewind to it."
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "                if DETAIL_GROUP_TRIGGERS.contains(&seg.tag.as_ref()) {{"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "                    if let Some(pos) = expected.iter().position(|&t| t == seg.tag) {{"
+        )
+        .unwrap();
+        writeln!(out, "                        if pos <= cursor {{").unwrap();
+        writeln!(out, "                            cursor = pos;").unwrap();
+        writeln!(out, "                        }}").unwrap();
+        writeln!(out, "                    }}").unwrap();
+        writeln!(out, "                }}").unwrap();
         writeln!(out, "                if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {{").unwrap();
         writeln!(out, "                    cursor += pos;").unwrap();
         writeln!(
@@ -3149,12 +3196,12 @@ fn emit_segment_order_rule_fn(out: &mut String, mig: &MigProfile, pack_name: &st
         .unwrap();
         writeln!(
             out,
-            "        /// QTY. Resetting only on the *outermost* trigger — the previous behaviour —"
+            "        /// QTY. Every trigger resets, not only the outermost one: a multi-interval"
         )
         .unwrap();
         writeln!(
             out,
-            "        /// rejected every multi-interval MSCONS, which is every Lastgang there is."
+            "        /// MSCONS — which is every Lastgang there is — repeats the inner group."
         )
         .unwrap();
         writeln!(out, "        fn check_detail_section(segs: &[edifact_rs::Segment<'_>], expected: &[&str], rule_id: &str, issues: &mut Vec<ValidationIssue>) {{").unwrap();

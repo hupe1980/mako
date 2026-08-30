@@ -27,6 +27,10 @@ pip install makotest                  # no runtime dependencies
 pip install 'makotest[hypothesis]'    # + property-based strategies
 ```
 
+Nothing is pinned because nothing needs to be: everything regulated is compiled
+into the extension, and the Europe/Berlin day comes from its tz database — so
+there is no `tzdata` requirement on Windows, where `zoneinfo` ships no data.
+
 Wheels are **abi3** (`abi3-py311`) — one wheel serves Python 3.11 and later.
 
 The same answers are reachable from a shell, for whoever is holding a real
@@ -36,6 +40,7 @@ message rather than writing a test:
 $ makotest validate inbound.edi --on 2026-04-01
 $ makotest frist 55001 --received 2026-03-02T09:00:00Z
 $ makotest id 9900357000004      # → satisfies NEITHER check-digit procedure
+$ makotest codes --pid 55001     # what a counterparty may answer with
 ```
 
 ---
@@ -76,6 +81,7 @@ test ergonomics is Python.**
 | EDIFACT build + MIG/AHB/semantic validation, release per format version | Rust — `edi-energy` |
 | Identifier check digits (MaLo, MP-ID, EIC, §8.2 resources) | Rust — `rubo4e` |
 | Werktag calendar, acknowledgement clocks, answer Fristen | Rust — `mako-fristen` |
+| Antwortcodes per Entscheidungsbaum | Rust — `mako-pruefung` |
 | CloudEvents type catalog and subscription matcher | Rust — `mako-events` |
 | Counterparty behaviour, EPEX curves, fixtures | Python |
 
@@ -97,10 +103,15 @@ wrong; `ValueError` means the test is.
 
 ## A tour
 
-**Fristen have three shapes, so ask the table.** "A Werktage Frist expires at
+**Four families, four Frist shapes, and Gas differs on the wire too** — a Gas
+answer names no Codeliste in `SG4 STS+E01` DE 1131 where a GPKE answer names its
+EBD, and UTILMD runs a parallel `G…` release track on the same date as `S…`.
+
+**Fristen have four shapes, so ask the table.** "A Werktage Frist expires at
 17:00 Berlin" is true of the WiM MSB-Wechsel windows and of nothing else — GPKE
-states a clock time on the 1. Werktag after the ÜT, GeLi Gas the *end* of the
-n-th Werktag.
+states a clock time on the n-th Werktag after the ÜT, or on the ÜT itself, and
+GeLi Gas the *end* of the n-th Werktag. The two GPKE shapes share a clock time
+and land a day apart.
 
 ```python
 assert_deadline_is(response["deadline"], received=received, pid=55001)
@@ -133,7 +144,7 @@ partner has never had its Fristüberwachung exercised.
 
 ```python
 def test_nb_bestaetigt(nb_sim, anmeldung):
-    nb_sim.on(55001).bestaetigung(process_dates=[("92", "20260501")])
+    nb_sim.on(55001).bestaetigung(antwort_code="A51", ebd="E_0623")
     reply = nb_sim.receive(anmeldung, received_at="2026-03-02T09:00:00Z")
 
     assert reply.pid == 55002  # the AHB answer PID — never Anfrage + 1
@@ -154,6 +165,53 @@ def test_verspaetete_antwort(nb_sim, anmeldung):
 An interchange carries several messages, each its own Vorgang — the reply answers
 all of them, and `reply.pid` raises rather than speaking for one.
 
+**A counterparty remembers what it accepted.** A Netzbetreiber holding an open
+Vorgang for a Marktlokation does not answer a second Anmeldung the way it
+answered the first — `E_0622` publishes `A06` „Andere Anmeldung in Bearbeitung"
+for exactly that, and a platform re-sending a confirmed request is otherwise
+never contradicted.
+
+```python
+nb_sim.on(55001).bestaetigung(antwort_code="A51", ebd="E_0623")
+nb_sim.on(55001).bei_offenem_vorgang().ablehnung(antwort_code="A06", ...)
+```
+
+Only a Bestätigung opens a Vorgang, and the register is keyed on the **Lokation**
+— the Vorgangsnummer is the sender's reference, and a duplicate carries a new one.
+
+**Answers are read back structurally**, not by matching bytes: `LOC+Z16` and
+`LOC+Z17` differ by one character, and a substring check passes on the wrong one.
+
+```python
+v = validate_edifact(reply.business, on).messages[0].vorgaenge[0]
+v.location("melo"), v.iso_date("92"), v.antwort_code
+```
+
+**An answer states a code its Entscheidungsbaum publishes.** `SG4 STS+E01` is
+AHB-Muss on every Antwortnachricht, and a code means nothing outside its tree —
+`A02` is „Vorlauffrist nicht eingehalten" in `E_0607` and something else in
+`E_0622`. The catalogue decides: a code the tree has no leaf for, or one whose
+Cluster contradicts the answer PID it would ride, is refused at binding time.
+
+```python
+antwort_code("E_0622", "A06").bedeutung  # what the BDEW says it means
+antwort_codes_for_pid(55001)  # the tree's whole outcome space
+assert_antwort_code(reply.antwort_code, ebd="E_0622", accepted=False)
+```
+
+The catalogue serves three wires — `SG4 STS+E01` on a UTILMD, `AJT` on a REMADV
+and an ORDRSP — with one lookup for all of them. That is what makes **55 of the
+58** published answer obligations answerable: a Frist and an Antwortcode are of
+no use if the answer's message type cannot be built.
+
+DE 1131 carries the *Codeliste*, which for every WiM tree is an `S_xxxx` and not
+the EBD number — `E_0200` names `S_0090` on a Zustimmung and `S_0054` on an
+Ablehnung.
+
+**A Bilanzkreis is a segment group, named once.** `bilanzkreis="11XBK-EEG-----1"`
+on a transaction renders the whole `SG8 SEQ+Z79` Produktpaket — the Produkt-Code
+and CAV qualifier are AHB constants a test should not be transcribing.
+
 **Events are the other wire contract.**
 
 ```python
@@ -169,6 +227,21 @@ a valid EIC, so a hand-rolled strategy spends its budget on the rejection path.
 @given(malo=malo_ids(), pid=pruefidentifikatoren(message_type="UTILMD"))
 def test_every_utilmd_roundtrips(malo, pid): ...
 ```
+
+**Lastgang curves are synthetic, and say so.** Four shapes — household, Gewerbe,
+Wärmepumpe, PV feed-in — scaled to an annual quantity with a seasonal weight.
+They are deliberately *not* Standardlastprofile: the BDEW coefficient tables are
+not in this build, and a generator calling itself `H0` while inventing them
+would make every settlement asserted against it look authoritative and be wrong.
+
+```python
+gang = smgw.deliver("2026-10-25", werte=LastgangGenerator(seed=42).day("2026-10-25"))
+gang.as_mscons(pruefidentifikator=13025, ...)   # one QTY per interval, with its period
+```
+
+Interval data carries its **measurement period**. A bare `QTY` states a magnitude
+with no time reference — a receiver cannot settle against it, and the AHB does
+not reject it, so the flat form validates while being unusable.
 
 **EPEX days are Europe/Berlin days**, so the DST days carry 92 and 100
 quarter-hourly MTUs rather than 96 — and negative prices are supported, which
@@ -190,7 +263,7 @@ Registered through the `pytest11` entry point — no `conftest.py` wiring.
 
 | | |
 |---|---|
-| **Fixtures** | `nb_sim`, `biko_sim`, `imsys_sim`, `epex`, `frozen_clock`, `makotest_seed`, `makotest_on`, `mako_endpoint` |
+| **Fixtures** | `nb_sim`, `biko_sim`, `imsys_sim`, `epex`, `lastgang`, `frozen_clock`, `makotest_seed`, `makotest_on`, `mako_endpoint` |
 | **Markers** | `@pytest.mark.regulatory("GPKE Teil 2")`, `@pytest.mark.requires_docker` |
 | **Options** | `--makotest-on ISO_DATE`, `--makotest-seed N`, `--mako-endpoint URL` |
 
