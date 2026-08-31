@@ -364,7 +364,7 @@ pub(crate) async fn list_billing_periods(
     }
 
     let fmt = format_description!("[year]-[month]-[day]");
-    let today = OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
     let parse_date = |raw: Option<&str>, fallback: time::Date| match raw {
         Some(s) => time::Date::parse(s, fmt)
             .map_err(|_| s.to_owned())

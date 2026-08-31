@@ -100,9 +100,8 @@ pub struct HandlerState {
     /// Optional secret signing outbound CloudEvents (Standard Webhooks).
     pub erp_webhook_secret: Option<secrecy::SecretString>,
     /// §14a SMGW/CLS compliance thresholds, so the synchronous checks on the
-    /// upsert and audit endpoints use the same numbers as the daily sweep. They
-    /// were hardcoded `30, 2` at four call sites while the docs called them
-    /// configurable.
+    /// upsert and audit endpoints use the same numbers as the daily sweep —
+    /// four call sites that would otherwise each carry their own literal.
     pub smgw: crate::config::SmgwConfig,
     /// Delivery-surveillance thresholds, shared by the worker and the on-demand
     /// scan endpoint so both judge by the same numbers.
@@ -226,7 +225,7 @@ pub async fn handle_webhook(
             return StatusCode::NO_CONTENT.into_response();
         }
 
-        let today = time::OffsetDateTime::now_utc().date();
+        let today = mako_fristen::heute();
         let geplant_am = today.next_day().unwrap_or(today);
         let ausfuehrt_bis = geplant_am
             .checked_add(time::Duration::days(7))
@@ -313,7 +312,7 @@ pub async fn handle_webhook(
                 use time::format_description::well_known::Iso8601;
                 time::Date::parse(s, &Iso8601::DEFAULT).ok()
             })
-            .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+            .unwrap_or_else(mako_fristen::heute);
 
         let ausfuehrt_bis = geplant_am
             .checked_add(time::Duration::days(3))
@@ -462,7 +461,7 @@ pub async fn handle_webhook(
             let brennwert = decimal("brennwert_kwh_per_m3");
             let zustandszahl = decimal("zustandszahl");
             if brennwert.is_some() || zustandszahl.is_some() {
-                let (default_from, default_to) = month_of(received_at.date());
+                let (default_from, default_to) = month_of(mako_fristen::berlin_date(received_at));
                 let date = |key: &str| {
                     data[key].as_str().and_then(|s| {
                         time::Date::parse(s, &time::format_description::well_known::Iso8601::DATE)

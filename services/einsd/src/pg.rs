@@ -554,11 +554,11 @@ pub async fn upsert_anlage(
     // ── Auto-set mastr_violation_start on first registration without MaStR ──
     // §52 Abs. 1 Nr. 11 EEG 2023: penalty accrues from when the NB registers
     // the plant and notes the missing MaStR entry. Set the start date to today
-    // (using CURRENT_DATE) only when the column is NULL (not already tracking).
+    // (using heute()) only when the column is NULL (not already tracking).
     if !req.mastr_registriert {
         sqlx::query(
             r"UPDATE eeg_anlagen
-              SET mastr_violation_start = COALESCE(mastr_violation_start, CURRENT_DATE)
+              SET mastr_violation_start = COALESCE(mastr_violation_start, heute())
               WHERE tr_id = $1 AND tenant = $2 AND mastr_violation_start IS NULL",
         )
         .bind(&req.tr_id)
@@ -640,7 +640,7 @@ pub async fn list_expiring(
         r"SELECT * FROM eeg_anlagen
           WHERE tenant = $1
             AND status = 'aktiv'
-            AND foerderendedatum BETWEEN CURRENT_DATE AND CURRENT_DATE + ($2 * INTERVAL '1 day')
+            AND foerderendedatum BETWEEN heute() AND heute() + ($2 * INTERVAL '1 day')
           ORDER BY foerderendedatum ASC",
     )
     .bind(tenant)
@@ -666,7 +666,7 @@ pub async fn list_expiring_unalerted(
           WHERE tenant = $1
             AND status = 'aktiv'
             AND foerderung_alert_sent_at IS NULL
-            AND foerderendedatum BETWEEN CURRENT_DATE AND CURRENT_DATE + ($2 * INTERVAL '1 day')
+            AND foerderendedatum BETWEEN heute() AND heute() + ($2 * INTERVAL '1 day')
           ORDER BY foerderendedatum ASC",
     )
     .bind(tenant)
@@ -1570,7 +1570,7 @@ fn build_gutschrift(
         currency: Currency::EUR,
         period_label: format!("{year:04}-{month:02}"),
         period: Some(period),
-        issue_date: Some(time::OffsetDateTime::now_utc().date().to_string()),
+        issue_date: Some(mako_fristen::heute().to_string()),
         due_date: output.faelligkeitsdatum.map(|d| d.to_string()),
         // `PartyIdentifier` carries an optional ISO 6523 ICD
         // `scheme`. Both values are left scheme-less on purpose: the tenant is a
@@ -2776,15 +2776,11 @@ pub async fn negative_price_calendar_days(
     from: time::OffsetDateTime,
     to: time::OffsetDateTime,
 ) -> anyhow::Result<u32> {
-    let berlin = time_tz::timezones::db::europe::BERLIN;
     let spot = fetch_spot_prices(pool, from, to).await?;
     let tage: std::collections::BTreeSet<time::Date> = spot
         .iter()
         .filter(|(_, price)| price.is_sign_negative())
-        .map(|(t, _)| {
-            use time_tz::OffsetDateTimeExt as _;
-            t.to_timezone(berlin).date()
-        })
+        .map(|(t, _)| mako_fristen::berlin_date(*t))
         .collect();
     Ok(u32::try_from(tage.len()).unwrap_or(u32::MAX))
 }

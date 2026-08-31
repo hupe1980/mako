@@ -99,7 +99,7 @@ pub fn run(workspace_root: &str, _args: &[String]) -> bool {
     }
 
     // ── Step 3: cross-check ───────────────────────────────────────────────────
-    let today = time::OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
     let mut ok = true;
     let mut superseded = 0usize;
 

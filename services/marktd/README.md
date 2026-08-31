@@ -451,7 +451,7 @@ services:
       POSTGRES_PASSWORD: secret
 
   marktd:
-    image: ghcr.io/hupe1980/marktd:latest
+    image: ghcr.io/hupe1980/mako-marktd:latest
     depends_on: [postgres]
     environment:
       MARKTD_DATABASE__URL:           postgres://marktd:secret@postgres/marktd

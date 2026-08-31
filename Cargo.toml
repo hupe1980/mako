@@ -65,7 +65,14 @@ miette       = { version = "7", features = ["fancy-no-syscall"] }
 # `schemars` (no mako type exposes a rubo4e type in a JSON Schema) and `strum`
 # (its `FromStr` accepts the `"UNKNOWN"` catch-all; `from_wire` refuses it).
 rubo4e       = { version = "0.13.0", features = ["versioned", "identifiers", "decimal", "time", "validate", "json", "builder"] }
-rust_decimal = { version = "1", features = ["db-postgres", "macros"] }
+# `serde-str` makes a `Decimal` deserialize from its **string** form only. A
+# JSON float cannot represent 0.1, so accepting one for a price or a billed
+# quantity rounds it through `f64` silently — the same argument that makes the
+# storage column `NUMERIC(18,5)`. It is enabled here rather than inherited from
+# `metering/serde`, because a feature picked up through one dependency applies
+# only to builds that happen to include it: `cargo build -p billingd` would
+# accept the float its workspace test run refuses.
+rust_decimal = { version = "1", features = ["db-postgres", "macros", "serde-str"] }
 billing      = { version = "0.14.0", features = ["serde"] }
 # EN 16931 semantic invoice model + business-rule validation (the `billing`
 # adapter bridges the shared money core); en16931-formats renders XRechnung/CII +
@@ -139,7 +146,7 @@ invoic-checker   = { path = "crates/invoic-checker",   version = "0.18" }
 mako-pruefung      = { path = "crates/mako-pruefung",      version = "0.18", default-features = false }
 energy-billing   = { path = "crates/energy-billing",   version = "0.18" }
 dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.18" }
-metering         = { version = "0.19" }
+metering         = { version = "0.21" }
 sepa             = { version = "0.6.0" }
 # Immutable, tamper-evident double-entry ledger kernel (sibling repo). accountingd's
 # storage/accounting base. Domain-neutral by design — the BillingDocument→Entry and

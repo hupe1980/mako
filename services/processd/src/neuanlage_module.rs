@@ -82,8 +82,8 @@ pub async fn handle_process_initiated(
         return Ok(false);
     }
 
-    let today = today_berlin();
-    let uebertragungstag = payload.received_at.date();
+    let today = mako_fristen::heute();
+    let uebertragungstag = mako_fristen::berlin_date(payload.received_at);
     let letzter_pruefungstag = mako_fristen::add_werktage(
         uebertragungstag,
         mako_pruefung::nb::neuanlage::IDENTIFIKATION_WERKTAGE,
@@ -144,7 +144,7 @@ pub async fn run_pruflauf(
     pool: &PgPool,
     makod: &MakodClient,
 ) -> anyhow::Result<usize> {
-    let today = today_berlin();
+    let today = mako_fristen::heute();
     let due = neuanlage::due_for_pruefung(pool, &cfg.tenant, today, PRUFLAUF_BATCH).await?;
     let mut evaluated = 0;
     for fall in &due {
@@ -326,13 +326,6 @@ fn to_anfrage(fall: &NeuanlageFall) -> NeuanlageAnfrage {
         uebertragungstag: fall.uebertragungstag,
         erzeugung,
     }
-}
-
-fn today_berlin() -> Date {
-    use time_tz::{OffsetDateTimeExt, timezones};
-    OffsetDateTime::now_utc()
-        .to_timezone(timezones::db::europe::BERLIN)
-        .date()
 }
 
 // ── Payload ───────────────────────────────────────────────────────────────────

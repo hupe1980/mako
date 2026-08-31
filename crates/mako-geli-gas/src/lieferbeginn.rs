@@ -250,8 +250,7 @@ pub struct GasSupplierChangeData {
     /// BDEW Prüfidentifikator of the initial Anfrage message.
     pub pruefidentifikator: Pruefidentifikator,
     /// EDIFACT message reference of the initial Anfrage.
-    #[serde(default)]
-    pub message_ref: Option<MessageRef>,
+    pub message_ref: MessageRef,
 }
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -649,7 +648,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 document_date: document_date.clone(),
                 process_date: process_date.clone(),
                 pruefidentifikator: *pruefidentifikator,
-                message_ref: Some(message_ref.clone()),
+                message_ref: message_ref.clone(),
             }),
 
             GasSupplierChangeEvent::ValidationPassed { .. } => {
@@ -704,7 +703,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     document_date: document_date.clone(),
                     process_date: process_date.clone(),
                     pruefidentifikator: *pruefidentifikator,
-                    message_ref: Some(message_ref.clone()),
+                    message_ref: message_ref.clone(),
                 };
                 if variant.is_one_way() {
                     GasSupplierChangeState::Completed(data)
@@ -958,10 +957,8 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     outbox_payload["response_pid"] =
                         serde_json::Value::Number(rpid.as_u32().into());
                 }
-                if let Some(ref mr) = data.message_ref {
-                    outbox_payload["orig_message_ref"] =
-                        serde_json::Value::String(mr.as_str().to_owned());
-                }
+                outbox_payload["orig_message_ref"] =
+                    serde_json::Value::String(data.message_ref.as_str().to_owned());
 
                 let mut all_outbox = vec![PendingOutbox::new(
                     "UTILMD",

@@ -46,8 +46,9 @@ pub struct InboundMakoEvent {
     /// - `mabis-*` prefix → `"BIKO"` role
     /// - everything else (gpke-*, geli-gas-*, gabi-gas-*) → `"NB"` role
     ///
-    /// Absent when the outbox message was produced before this field was
-    /// introduced (forward-compatible: `marktrole` remains `None` in that case).
+    /// Absent on an event that does not come out of a workflow — a direct
+    /// master-data write, say. `marktrole` is then `None` and the event
+    /// fans out to every subscriber rather than to one role.
     #[serde(default)]
     pub makoworkflow: Option<String>,
     /// W3C Trace Context `traceparent` header value (B10).

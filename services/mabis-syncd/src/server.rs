@@ -31,7 +31,7 @@ use mako_service::oidc::Claims;
 
 use crate::config::Config;
 use crate::pg;
-use crate::sync_engine::{SyncEngine, berlin_date, previous_month_period};
+use crate::sync_engine::{SyncEngine, previous_month_period};
 
 /// RFC 3339 for the wire — never `time`'s derived component array.
 ///
@@ -158,7 +158,7 @@ async fn trigger_sync(
     let as_of = body["as_of"].as_str().and_then(|s| {
         OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
     });
-    let today = berlin_date(OffsetDateTime::now_utc());
+    let today = mako_fristen::heute();
     let (default_from, default_to) = previous_month_period(today);
 
     // A malformed date must not fall back to the default: silently filing the

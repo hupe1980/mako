@@ -1764,7 +1764,7 @@ fn detect_format_version(msg: &AnyMessage) -> FormatVersion {
         return fallback("release not present or unparseable in UNH");
     };
 
-    let today = OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
     let Ok(profile) = ReleaseRegistry::global().profile_on(message_type, release, today) else {
         // The interesting case: a release mako has no profile for on this date —
         // a future FV it has not been updated for, or one already archived.

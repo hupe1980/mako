@@ -222,7 +222,7 @@ impl MsbWechselPayload {
     /// The Übertragungstag as a German-local calendar date — the anchor every
     /// WiM Vorlauffrist is measured from.
     fn uebertragungstag(&self) -> time::Date {
-        mako_fristen::berlin_at(self.received_at.date(), time::Time::MIDNIGHT).date()
+        mako_fristen::berlin_date(self.received_at)
     }
 }
 
@@ -941,7 +941,7 @@ pub async fn handle_preisanfrage_reqote(
     // A marktd outage is not a business finding: only a genuine *absence* of a
     // PreisblattMessung may escalate. A transport error propagates so the
     // fan-out redelivers.
-    let today = time::OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
     let preisblatt = marktd
         .get_preisblatt_messung(&cfg.own_mp_id, today)
         .await

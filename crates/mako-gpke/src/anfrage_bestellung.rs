@@ -163,7 +163,7 @@ pub struct AnfrageData {
     /// EDIFACT document date from `DTM+137`.
     pub document_date: String,
     /// EDIFACT message reference from UNH 0062.
-    pub message_ref: Option<MessageRef>,
+    pub message_ref: MessageRef,
 }
 
 // ── Domain state ──────────────────────────────────────────────────────────────
@@ -321,7 +321,7 @@ impl Workflow for GpkeAnfrageBestellungWorkflow {
                 vorgang_id: vorgang_id.clone(),
                 bearbeitungsstatus: bearbeitungsstatus.clone(),
                 document_date: document_date.clone(),
-                message_ref: Some(message_ref.clone()),
+                message_ref: message_ref.clone(),
             }),
 
             AnfrageBestellungEvent::ValidationPassed { .. } => match state {

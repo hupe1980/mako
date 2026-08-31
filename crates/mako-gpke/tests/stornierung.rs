@@ -253,7 +253,7 @@ fn terminal_states_are_terminal() {
             receiver: nb_mp_id(),
             vorgang_id: vorgang(),
             document_date: "20250601".to_owned(),
-            message_ref: Some(msg("x")),
+            message_ref: msg("x"),
         }),
     ];
 

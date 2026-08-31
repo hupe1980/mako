@@ -253,7 +253,7 @@ pub(super) async fn dispatch_geli_eog_anmelden(
         })?
         .to_owned();
 
-    let today = time::OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
     let document_date = format!(
         "{:04}{:02}{:02}",
         today.year(),

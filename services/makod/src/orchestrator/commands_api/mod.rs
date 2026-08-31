@@ -1117,7 +1117,7 @@ mod tests {
     /// the moment its KBKA closed. Two months back is inside the BKA clearing
     /// window for every Summenzeitreihe in the table.
     fn offener_bilanzierungsmonat() -> String {
-        let heute = time::OffsetDateTime::now_utc().date();
+        let heute = mako_fristen::heute();
         let mut d = heute.replace_day(1).expect("day 1 exists");
         for _ in 0..2 {
             d = d

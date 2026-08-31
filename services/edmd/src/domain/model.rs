@@ -727,9 +727,9 @@ pub struct TimeSeriesQuery {
     pub from: OffsetDateTime,
     pub to: OffsetDateTime,
     pub sparte: Option<Sparte>,
-    /// Tenant data-isolation key.  **Required for all production queries** —
-    /// omitting this field causes `pg/timeseries.rs::query()` to reject the call.
-    /// Previously `tenant_id: Option<Uuid>` allowed NULL which leaked cross-tenant data.
+    /// Tenant data-isolation key. Not optional: `store` scopes every read on it
+    /// (`column_eq(TENANT_COL, …)`), and a query that could omit it would fold
+    /// two tenants' readings for one MaLo into a single series.
     pub tenant: String,
 }
 

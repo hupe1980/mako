@@ -45,19 +45,39 @@ impl DauerEinheit {
         }
     }
 
-    /// The duration `count` of these units expressed as a [`time::Duration`].
+    /// Resolve `count` of these units against `anchor`.
     ///
-    /// A month is taken as 30 days — the AHB gives no calendar rule, and the
-    /// Bindungsfrist is a deadline the ESA must beat, so the conservative
-    /// (shorter) reading is the safe one.
+    /// `DTM+273` and `DTM+279` state a **span**, not a date, and a span runs
+    /// from the document that states it — the `DTM+137` Dokumentendatum of the
+    /// QUOTES. Resolving against the moment the message is parsed instead makes
+    /// the same message mean different things on a replay and silently extends
+    /// a Bindungsfrist that a queued message should already have spent.
+    ///
+    /// A `Monat` is a calendar month, clamped to the last day of the target
+    /// month (31 January + 1 Monat is 28/29 February). Returns `None` only when
+    /// the result leaves the representable calendar range.
     #[must_use]
-    pub const fn to_duration(self, count: i64) -> time::Duration {
+    pub fn resolve_from(
+        self,
+        anchor: time::OffsetDateTime,
+        count: i64,
+    ) -> Option<time::OffsetDateTime> {
         match self {
-            Self::Monat => time::Duration::days(count * 30),
-            Self::Woche => time::Duration::weeks(count),
-            Self::Tag => time::Duration::days(count),
+            Self::Monat => add_calendar_months(anchor, count),
+            Self::Woche => anchor.checked_add(time::Duration::weeks(count)),
+            Self::Tag => anchor.checked_add(time::Duration::days(count)),
         }
     }
+}
+
+/// Add `count` calendar months to `at`, clamping the day to the target month.
+fn add_calendar_months(at: time::OffsetDateTime, count: i64) -> Option<time::OffsetDateTime> {
+    let total = i64::from(at.year()) * 12 + i64::from(at.month() as u8) - 1 + count;
+    let year = i32::try_from(total.div_euclid(12)).ok()?;
+    let month = time::Month::try_from(u8::try_from(total.rem_euclid(12) + 1).ok()?).ok()?;
+    let day = at.day().min(time::util::days_in_month(month, year));
+    let date = time::Date::from_calendar_date(year, month, day).ok()?;
+    Some(at.replace_date(date))
 }
 
 #[derive(Debug, Clone)]

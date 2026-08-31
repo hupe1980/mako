@@ -30,6 +30,8 @@ Commands:
   check-bo4e-discriminants  Refuse a hand-written BO4E `_typ` — the discriminant is the type's
   check-bo4e-examples  Refuse a documented BO4E example using a field BO4E does not define
   check-malo-ids       Refuse a MaLo-ID literal whose BDEW check digit is wrong
+  check-business-dates   Refuse a business date read in UTC rather than in Europe/Berlin
+  check-dep-versions     Documented dependency versions must match the manifests
   check-wire-timestamps  Refuse raw `time` values in JSON output (they serialise as component arrays)
                         under axum 0.8 (the fix is `/{param}`)
   check-answer-commands  Refuse an invoicd PID route naming a makod command that does not exist
@@ -132,6 +134,8 @@ mod check_answer_commands;
 mod check_bo4e_attributes;
 mod check_bo4e_discriminants;
 mod check_bo4e_examples;
+mod check_business_dates;
+mod check_dep_versions;
 mod check_malo_ids;
 mod check_prompt_tools;
 mod check_publish_order;
@@ -167,6 +171,8 @@ fn main() {
         Some("check-bo4e-examples") => check_bo4e_examples(),
         Some("check-malo-ids") => check_malo_ids(),
         Some("sync-regulatories") => sync_regulatories(),
+        Some("check-business-dates") => check_business_dates(),
+        Some("check-dep-versions") => check_dep_versions(),
         Some("check-wire-timestamps") => check_wire_timestamps(),
         Some("check-answer-commands") => check_answer_commands(),
         Some("check-tool-grants") => check_tool_grants(),
@@ -267,6 +273,20 @@ fn check_malo_ids() {
     let workspace_root =
         std::env::var("CARGO_MANIFEST_DIR").map_or_else(|_| ".".to_owned(), |d| format!("{d}/.."));
     if !check_malo_ids::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_business_dates() {
+    let (workspace_root, _) = workspace_info();
+    if !check_business_dates::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_dep_versions() {
+    let (workspace_root, _) = workspace_info();
+    if !check_dep_versions::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }

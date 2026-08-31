@@ -13,13 +13,12 @@
 //! `serde_json::json!` ships it silently — the code compiles, the response is
 //! valid JSON, and the field looks populated.
 //!
-//! It reached mako's MCP surface: nine timestamp fields across `obsd`, `einsd`
-//! and `sperrd` served component arrays to every operator and every agent
-//! reading them. The one that mattered most was `obsd`'s `deadline_at`, because
-//! the deadline specialist's whole job is deciding whether a Frist has passed —
-//! and it was being handed an undocumented integer array to do arithmetic on.
+//! The MCP surface is where it costs most: a deadline specialist's whole job is
+//! deciding whether a Frist has passed, and an `obsd` `deadline_at` served as an
+//! undocumented integer array is something it can only do arithmetic on by
+//! guessing.
 //!
-//! Nothing in the type system objects, and no test noticed, because a component
+//! Nothing in the type system objects, and no test notices, because a component
 //! array is a perfectly good JSON value. This check is the missing compiler.
 //!
 //! ## What it looks for

@@ -1178,7 +1178,7 @@ register and is detected where register readings live.
 | V03 | Negative energy | Error (off for a bidirectional register) |
 | V04 | Statistical outlier (Hampel) | Warning |
 | V05 | Zero run | Warning |
-| V06 | Interval length | Warning |
+| V06 | Interval length | Warning — a daily gas series is measured against the **Gastag**, so a 23- or 25-hour DST day is right rather than short |
 | V07 | Collapsed DST hour | Error |
 | V08 | Future timestamp | Warning |
 | V09 | Non-billable quality | Error |
@@ -1923,7 +1923,7 @@ Response shape (one `Energiemenge` per stored interval read):
     "_typ": "ENERGIEMENGE",
     "obisKennzahl": "1-0:1.29.0",
     "menge": {
-      "wert": 42.375,
+      "wert": "42.375",
       "einheit": "KWH"
     },
     "zeitraum": {
@@ -2001,7 +2001,7 @@ Response shape:
           "startdatum": "2026-01-01", "startuhrzeit": "00:00:00+00:00",
           "enddatum":   "2026-01-01", "enduhrzeit":   "00:15:00+00:00"
         },
-        "wert": 1.234,
+        "wert": "1.234",
         "status": "ABGELESEN"
       }
     ]
@@ -2056,14 +2056,14 @@ the gap as its resolution.
   {
     "sparte": "STROM",
     "obis_kennzahl": "1-0:1.29.0",
-    "zeitIntervallLaenge": { "wert": 1, "einheit": "VIERTELSTUNDE" },
+    "zeitIntervallLaenge": { "wert": "1", "einheit": "VIERTELSTUNDE" },
     "werte": [
       {
         "zeitraum": {
           "startdatum": "2026-01-01", "startuhrzeit": "00:00:00+00:00",
           "enddatum":   "2026-01-01", "enduhrzeit":   "00:15:00+00:00"
         },
-        "wert": 1.234,
+        "wert": "1.234",
         "status": "ABGELESEN"
       }
     ]
@@ -2209,9 +2209,9 @@ from `marktd` and raises one `JAHRESABLESUNG` order each. Two properties:
   gas as electricity, and the Sparte decides whether the Zählerstand the order
   comes back with is kWh or m³ — a reading filed in the wrong dimension is
   refused, not stored.
-- **One `INSERT … SELECT unnest(…) ON CONFLICT DO NOTHING`**, not a `SELECT` and
-  an `INSERT` per MaLo. At the 50 000-MaLo ceiling that was 100 000 round trips,
-  and the per-MaLo pre-check was never what made the run safe: only the
+- **One `INSERT … SELECT unnest(…) ON CONFLICT DO NOTHING`**, not a `SELECT`
+  and an `INSERT` per MaLo — 100 000 round trips at the 50 000-MaLo ceiling. A
+  per-MaLo pre-check would not make the run safe either: only the
   `ablese_scheduled_unique` constraint survives two campaign runs racing.
   `rows_affected` is then exactly the number of orders created.
 
@@ -2618,8 +2618,7 @@ region               = "eu-central-1"
 # access_key_id / secret_access_key optional — omit to use the instance-role chain.
 # endpoint_url       = "http://minio:9000"   # S3-compatible (MinIO/Ceph/R2 → path-style)
 settlement_lag_days  = 7    # age at which an interval settles hot → cold
-partition_step_days  = 1    # cold-tier partition granularity
-archival_step_days   = 1    # watermark advance per archival sweep
+archival_step_days   = 1    # watermark advance per sweep, and the partition granularity
 cold_file_target_mib = 512  # target Parquet file size
 maintenance_interval_secs = 3600  # how often the tiering loop runs a cycle
 ddl_lock_timeout_secs = 3   # how long DDL waits for its lock before giving up

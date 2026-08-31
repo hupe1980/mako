@@ -6,7 +6,7 @@
 //!
 //! ## Explainability: `PositionTrace`
 //!
-//! Every `BillingPosition` now carries a `trace: PositionTrace` that answers
+//! Every `BillingPosition` carries a `trace: PositionTrace` that answers
 //! *"why does this amount appear on the invoice?"* — matching the audit depth of
 //! `grid-billing::CalculationTrace`. Each trace records:
 //! - the input quantity and unit price before rounding

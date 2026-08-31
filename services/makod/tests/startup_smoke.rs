@@ -267,6 +267,10 @@ fn the_landing_page_figures_match_the_registered_engine() {
             "../../concepts/AGENTD.md",
             format!("**{workflows} workflows and {pids} PIDs**"),
         ),
+        (
+            "../../concepts/MARKET_LANDSCAPE.md",
+            format!("**{workflows} workflows and {pids} PIDs**"),
+        ),
     ] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(doc);
         let Ok(src) = std::fs::read_to_string(&path) else {

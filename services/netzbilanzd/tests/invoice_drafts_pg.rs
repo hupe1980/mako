@@ -852,7 +852,7 @@ async fn a_disputed_draft_is_not_reported_as_dispatch_overdue() {
 #[tokio::test]
 async fn a_draft_running_out_of_time_is_reported_however_young() {
     with_pg!(|pool| {
-        let today = time::OffsetDateTime::now_utc().date();
+        let today = mako_fristen::heute();
 
         // Drafted moments ago, but due tomorrow.
         let mut urgent = Draft::nne("t1", MALO, "NNE-2026-000001");

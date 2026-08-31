@@ -481,6 +481,20 @@ pub struct GasDay {
     pub date: Date,
 }
 
+/// A German wall-clock hour on `date`, as a UTC instant.
+///
+/// Every KoV window is stated in local time — „D-1 13:00 CET", „D+3 12:00 CET"
+/// — so the hour is resolved against Europe/Berlin and then converted, the same
+/// way every Frist is. `mako_fristen::berlin_at` owns the timezone database, so
+/// the gas day and the Fristen cannot disagree about when an hour is.
+fn berlin_clock(date: Date, hour: u8) -> OffsetDateTime {
+    mako_fristen::berlin_at(
+        date,
+        Time::from_hms(hour, 0, 0).expect("whole hour is valid"),
+    )
+    .to_offset(time::UtcOffset::UTC)
+}
+
 impl GasDay {
     /// Construct a gas day from a calendar date.
     #[must_use]
@@ -507,19 +521,11 @@ impl GasDay {
     ///
     /// # Panics
     ///
-    /// Does not panic in practice — the time literals 04:00 and 05:00 are always valid.
+    /// Does not panic in practice — 06:00 is never inside a DST gap.
     #[must_use]
     pub fn start_utc(&self) -> OffsetDateTime {
-        use time_tz::{OffsetDateTimeExt, timezones};
-        let berlin = timezones::db::europe::BERLIN;
-        // Try 05:00 UTC (= 06:00 CET in winter); if Berlin local hour is not 6 use 04:00 UTC.
-        let candidate_winter = OffsetDateTime::new_utc(self.date, Time::from_hms(5, 0, 0).unwrap());
-        let candidate_summer = OffsetDateTime::new_utc(self.date, Time::from_hms(4, 0, 0).unwrap());
-        if candidate_winter.to_timezone(berlin).hour() == 6 {
-            candidate_winter
-        } else {
-            candidate_summer
-        }
+        // 06:00 Berlin — 05:00 UTC under CET, 04:00 under CEST.
+        berlin_clock(self.date, 6)
     }
 
     /// The gas day a DVGW `DTM+Z01` period denotes.
@@ -538,14 +544,12 @@ impl GasDay {
     /// one minute either side of that lands on the previous date.
     #[must_use]
     pub fn from_period(start: OffsetDateTime, end: OffsetDateTime) -> Option<Self> {
-        use time_tz::{OffsetDateTimeExt, timezones};
         let hours = (end - start).whole_hours();
         if !(23..=25).contains(&hours) {
             return None;
         }
-        let berlin = start.to_timezone(timezones::db::europe::BERLIN);
         Some(Self {
-            date: berlin.date(),
+            date: mako_fristen::berlin_date(start),
         })
     }
 
@@ -588,22 +592,10 @@ impl GasDay {
     ///
     /// # Panics
     ///
-    /// Does not panic in practice — the time literals 11:00 and 12:00 are always valid.
+    /// Does not panic in practice — 13:00 is never inside a DST gap.
     #[must_use]
     pub fn nomination_deadline_utc(&self) -> OffsetDateTime {
-        use time_tz::{OffsetDateTimeExt, timezones};
-        let berlin = timezones::db::europe::BERLIN;
-        let d_minus_1 = self.date - Duration::days(1);
-        // 12:00 UTC = 13:00 CET; 11:00 UTC = 13:00 CEST
-        let candidate_winter =
-            OffsetDateTime::new_utc(d_minus_1, Time::from_hms(12, 0, 0).unwrap());
-        let candidate_summer =
-            OffsetDateTime::new_utc(d_minus_1, Time::from_hms(11, 0, 0).unwrap());
-        if candidate_winter.to_timezone(berlin).hour() == 13 {
-            candidate_winter
-        } else {
-            candidate_summer
-        }
+        berlin_clock(self.date - Duration::days(1), 13)
     }
 
     /// NOMRES response deadline for this gas day: D-1 15:00 CET in UTC.
@@ -621,19 +613,7 @@ impl GasDay {
     /// Does not panic in practice.
     #[must_use]
     pub fn nomres_deadline_utc(&self) -> OffsetDateTime {
-        use time_tz::{OffsetDateTimeExt, timezones};
-        let berlin = timezones::db::europe::BERLIN;
-        let d_minus_1 = self.date - Duration::days(1);
-        // 14:00 UTC = 15:00 CET; 13:00 UTC = 15:00 CEST
-        let candidate_winter =
-            OffsetDateTime::new_utc(d_minus_1, Time::from_hms(14, 0, 0).unwrap());
-        let candidate_summer =
-            OffsetDateTime::new_utc(d_minus_1, Time::from_hms(13, 0, 0).unwrap());
-        if candidate_winter.to_timezone(berlin).hour() == 15 {
-            candidate_winter
-        } else {
-            candidate_summer
-        }
+        berlin_clock(self.date - Duration::days(1), 15)
     }
 
     /// Initial ALOCAT deadline: gas day D+3 at 12:00 CET in UTC.
@@ -649,17 +629,7 @@ impl GasDay {
     /// Does not panic in practice.
     #[must_use]
     pub fn initial_alocat_deadline_utc(&self) -> OffsetDateTime {
-        use time_tz::{OffsetDateTimeExt, timezones};
-        let berlin = timezones::db::europe::BERLIN;
-        let d_plus_3 = self.date + Duration::days(3);
-        // 11:00 UTC = 12:00 CET; 10:00 UTC = 12:00 CEST
-        let candidate_winter = OffsetDateTime::new_utc(d_plus_3, Time::from_hms(11, 0, 0).unwrap());
-        let candidate_summer = OffsetDateTime::new_utc(d_plus_3, Time::from_hms(10, 0, 0).unwrap());
-        if candidate_winter.to_timezone(berlin).hour() == 12 {
-            candidate_winter
-        } else {
-            candidate_summer
-        }
+        berlin_clock(self.date + Duration::days(3), 12)
     }
 
     /// Final ALOCAT deadline: M+2 (end of the second calendar month after the
@@ -676,9 +646,6 @@ impl GasDay {
     /// Does not panic in practice.
     #[must_use]
     pub fn final_alocat_deadline_utc(&self) -> OffsetDateTime {
-        use time_tz::{OffsetDateTimeExt, timezones};
-        let berlin = timezones::db::europe::BERLIN;
-
         // M+2: month of gas day + 2, last day of that month
         let month_num = self.date.month() as u8;
         let year = self.date.year();
@@ -699,14 +666,7 @@ impl GasDay {
             Date::from_calendar_date(target_year, target_month, target_month.length(target_year))
                 .unwrap_or_else(|_| self.date + Duration::days(60));
 
-        // 11:00 UTC = 12:00 CET (winter); 10:00 UTC = 12:00 CEST (summer)
-        let candidate_winter = OffsetDateTime::new_utc(last_day, Time::from_hms(11, 0, 0).unwrap());
-        let candidate_summer = OffsetDateTime::new_utc(last_day, Time::from_hms(10, 0, 0).unwrap());
-        if candidate_winter.to_timezone(berlin).hour() == 12 {
-            candidate_winter
-        } else {
-            candidate_summer
-        }
+        berlin_clock(last_day, 12)
     }
 
     /// Format as `YYYY-MM-DD` (DVGW standard gas day identifier).
@@ -988,6 +948,21 @@ mod tests {
         let start = d.start_utc();
         assert_eq!(start.hour(), 5);
         assert_eq!(start.minute(), 0);
+    }
+
+    /// The Gastag is **not** the Berlin calendar day.
+    ///
+    /// Both are stated in German local time and both survive DST, which is why
+    /// a calendar-day window reads as though it would do for gas. It is six
+    /// hours out of phase in every season, so a gas quantity booked against
+    /// `berlin_midnight` lands on the wrong Gastag for a quarter of the day.
+    #[test]
+    fn the_gastag_is_six_hours_after_the_calendar_day() {
+        for d in [date!(2026 - 01 - 15), date!(2026 - 07 - 15)] {
+            let gastag = GasDay::new(d).start_utc();
+            let kalendertag = mako_fristen::berlin_midnight(d);
+            assert_eq!(gastag - kalendertag, time::Duration::hours(6), "{d}");
+        }
     }
 
     #[test]

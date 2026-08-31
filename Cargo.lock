@@ -1473,6 +1473,7 @@ dependencies = [
  "en16931-formats",
  "energy-billing",
  "mako-events",
+ "mako-fristen",
  "mako-geli-gas",
  "mako-markt",
  "mako-service",
@@ -3846,6 +3847,7 @@ version = "0.18.0"
 dependencies = [
  "criterion",
  "edifact-rs",
+ "mako-fristen",
  "miette",
  "proptest",
  "rubo4e",
@@ -3893,6 +3895,7 @@ dependencies = [
  "futures",
  "krafka",
  "mako-events",
+ "mako-fristen",
  "mako-markt",
  "mako-service",
  "mako-wim",
@@ -3957,6 +3960,7 @@ dependencies = [
  "billing",
  "eeg-billing",
  "mako-events",
+ "mako-fristen",
  "mako-markt",
  "mako-pruefung",
  "mako-service",
@@ -5889,6 +5893,7 @@ name = "invoic-checker"
 version = "0.18.0"
 dependencies = [
  "billing",
+ "mako-fristen",
  "mako-pruefung",
  "rubo4e",
  "rust_decimal",
@@ -6770,6 +6775,7 @@ dependencies = [
  "dvgw-edi",
  "mako-engine",
  "mako-events",
+ "mako-fristen",
  "mako-invoic",
  "metering",
  "rust_decimal",
@@ -6850,6 +6856,7 @@ version = "0.18.0"
 dependencies = [
  "energy-api",
  "mako-events",
+ "mako-fristen",
  "reqwest 0.13.4",
  "rubo4e",
  "rust_decimal",
@@ -7061,8 +7068,8 @@ dependencies = [
  "clap",
  "futures",
  "hmac 0.12.1",
- "jiff",
  "mako-events",
+ "mako-fristen",
  "mako-markt",
  "mako-service",
  "mako-wim",
@@ -7164,23 +7171,22 @@ dependencies = [
 
 [[package]]
 name = "metering"
-version = "0.19.0"
+version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a22f7ddf64aac54c9d73df0a2f6321d34f81069ec39123bbb0e6ce0f046d6c85"
+checksum = "2ae04084cd88635ca3326ef2ab5b385bb94b4034ed12a66cd2fbfed335dd2445"
 dependencies = [
  "rust_decimal",
  "serde",
  "thiserror 2.0.20",
  "time",
  "time-tz",
- "uuid",
 ]
 
 [[package]]
 name = "meterstore"
-version = "0.6.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c7123b7649d3831e82cfa276ede8b99a97d0a59456af5484af5ebe2f1bddf18"
+checksum = "c7db94fe0aac040fb1b57cf50c09338809c25c0f1efeee019c26755f51182793"
 dependencies = [
  "arrow",
  "async-stream",
@@ -7363,6 +7369,7 @@ dependencies = [
  "grid-billing",
  "invoic-checker",
  "mako-events",
+ "mako-fristen",
  "mako-markt",
  "mako-redispatch",
  "mako-service",
@@ -8760,6 +8767,7 @@ dependencies = [
  "axum",
  "futures",
  "http-body-util",
+ "mako-fristen",
  "mako-service",
  "reqwest 0.13.4",
  "rmcp",
@@ -8980,6 +8988,7 @@ dependencies = [
  "anyhow",
  "axum",
  "mako-events",
+ "mako-fristen",
  "mako-markt",
  "mako-service",
  "reqwest 0.13.4",
@@ -13148,6 +13157,7 @@ dependencies = [
  "axum",
  "hmac 0.12.1",
  "mako-events",
+ "mako-fristen",
  "mako-markt",
  "mako-service",
  "reqwest 0.13.4",
@@ -13902,6 +13912,7 @@ version = "0.1.0"
 dependencies = [
  "jsonschema",
  "lopdf",
+ "mako-fristen",
  "quick-xml 0.40.1",
  "reqwest 0.13.4",
  "rubo4e",

@@ -877,9 +877,7 @@ pub async fn post_storno(
         )));
     }
 
-    let invoice_date = req
-        .invoice_date
-        .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+    let invoice_date = req.invoice_date.unwrap_or_else(mako_fristen::heute);
     let due_date = req
         .due_date
         .unwrap_or_else(|| invoice_date.saturating_add(time::Duration::days(30)));
@@ -1074,9 +1072,7 @@ pub async fn post_korrektur(
         ));
     }
 
-    let invoice_date = req
-        .invoice_date
-        .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+    let invoice_date = req.invoice_date.unwrap_or_else(mako_fristen::heute);
     let due_date = req
         .due_date
         .unwrap_or_else(|| invoice_date.saturating_add(time::Duration::days(30)));

@@ -71,8 +71,8 @@ fn electricity_without_any_work_price_is_refused() {
 fn any_form_of_work_price_satisfies_the_guard() {
     let rates = RegulatoryRates::default();
     for json in [
-        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#,
-        r#"{"category":"STROM","arbeitspreis_ht_ct_per_kwh":32.0,"arbeitspreis_nt_ct_per_kwh":24.0}"#,
+        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#,
+        r#"{"category":"STROM","arbeitspreis_ht_ct_per_kwh":"32.0","arbeitspreis_nt_ct_per_kwh":"24.0"}"#,
         r#"{"category":"STROM","dynamic_epex":true}"#,
     ] {
         let product: Product = serde_json::from_str(json).unwrap();
@@ -92,7 +92,7 @@ fn any_form_of_work_price_satisfies_the_guard() {
 fn an_explicit_zero_price_is_a_decision_and_is_allowed() {
     let rates = RegulatoryRates::default();
     let product: Product =
-        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":0.0}"#).unwrap();
+        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"0.0"}"#).unwrap();
     let engine = product.build_engine(&GridInput::default(), &rates);
     let warnings = engine.validate(&ctx(&rates), &Quantities::default());
     assert!(!warnings.iter().any(|w| w.code == "KEIN_ARBEITSPREIS"));
@@ -145,7 +145,7 @@ fn heat_without_a_work_price_is_refused() {
 fn a_dynamic_tariff_without_its_interval_series_is_refused() {
     let rates = RegulatoryRates::default();
     let product: Product = serde_json::from_str(
-        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":20}"#,
+        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":"20"}"#,
     )
     .unwrap();
     let q = Quantities {
@@ -247,7 +247,7 @@ fn a_dynamic_series_within_tolerance_still_bills() {
 fn water_without_any_trinkwasser_price_is_refused() {
     let rates = RegulatoryRates::default();
     let product: Product =
-        serde_json::from_str(r#"{"category":"WASSER","schmutzwasser_eur_per_m3":2.5}"#).unwrap();
+        serde_json::from_str(r#"{"category":"WASSER","schmutzwasser_eur_per_m3":"2.5"}"#).unwrap();
     let q = Quantities {
         wasser: Some(energy_billing::WasserMeterInput {
             frischwasser_m3: dec!(120),
@@ -278,7 +278,7 @@ fn water_without_any_trinkwasser_price_is_refused() {
 fn emobility_charging_without_a_kwh_price_is_refused() {
     let rates = RegulatoryRates::default();
     let product: Product =
-        serde_json::from_str(r#"{"category":"EMOBILITY","emobility_service_fee_eur":4.99}"#)
+        serde_json::from_str(r#"{"category":"EMOBILITY","emobility_service_fee_eur":"4.99"}"#)
             .unwrap();
     let q = Quantities {
         emobility: Some(energy_billing::EmobilityMeterInput {
@@ -309,7 +309,7 @@ fn emobility_charging_without_a_kwh_price_is_refused() {
 fn emobility_bundled_charging_states_a_zero_and_is_billed() {
     let rates = RegulatoryRates::default();
     let product: Product = serde_json::from_str(
-        r#"{"category":"EMOBILITY","emobility_service_fee_eur":49.0,"emobility_kwh_price_ct":0.0}"#,
+        r#"{"category":"EMOBILITY","emobility_service_fee_eur":"49.0","emobility_kwh_price_ct":"0.0"}"#,
     )
     .unwrap();
     let q = Quantities {
@@ -332,7 +332,7 @@ fn emobility_bundled_charging_states_a_zero_and_is_billed() {
 fn service_events_without_a_price_are_flagged_but_do_not_block() {
     let rates = RegulatoryRates::default();
     let product: Product =
-        serde_json::from_str(r#"{"category":"ENERGIEDIENSTLEISTUNG","service_fee_eur":9.9}"#)
+        serde_json::from_str(r#"{"category":"ENERGIEDIENSTLEISTUNG","service_fee_eur":"9.9"}"#)
             .unwrap();
     let q = Quantities {
         service: Some(energy_billing::ServiceMeterInput {

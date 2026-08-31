@@ -344,9 +344,9 @@ Content-Type: application/json
   "malo_id":            "51238696012",
   "eeg_gesetz":         2023,
   "inbetriebnahme":     "2024-06-01",
-  "leistung_kwp":       9.8,
+  "leistung_kwp":       "9.8",
   "erzeugungsart":      "SOLAR_AUFDACH",
-  "verguetungssatz_ct": 8.11,
+  "verguetungssatz_ct": "8.11",
   "settlement_model":   "VERGUETUNG",
   "mastr_registriert":  true,
   "mastr_nummer":       "SEE900000012345",
@@ -545,7 +545,7 @@ quarter-hours (`negative_price_quarter_hours`, §51a):
 POST /api/v1/anlagen/{tr_id}/settle/2026/7
 Content-Type: application/json
 
-{ "einspeisemenge_kwh": 1000, "kwh_during_negative_epex": 80, "negative_price_quarter_hours": 16 }
+{ "einspeisemenge_kwh": "1000", "kwh_during_negative_epex": "80", "negative_price_quarter_hours": 16 }
 ```
 
 Result: `effective_kwh = 920; settlement_eur = 920 × rate / 100`.
@@ -561,7 +561,7 @@ PUT /api/v1/epex-spot
 Content-Type: application/json
 
 { "source": "epex-day-ahead",
-  "prices": [ { "delivery_start": "2026-07-01T12:00:00Z", "resolution_min": 15, "price_ct_kwh": -1.5 }, … ] }
+  "prices": [ { "delivery_start": "2026-07-01T12:00:00Z", "resolution_min": 15, "price_ct_kwh": "-1.5" }, … ] }
 ```
 
 The billing month is taken in **Europe/Berlin**, not UTC: both the day-ahead curve and edmd's
@@ -618,7 +618,7 @@ the measured Standortertrag of the preceding five years. Record each one:
 POST /api/v1/anlagen/{tr_id}/wind-reevaluation
 Content-Type: application/json
 
-{ "wirksam_ab_jahr": 6, "guetefaktor": 0.95 }
+{ "wirksam_ab_jahr": 6, "guetefaktor": "0.95" }
 ```
 
 `einsd` stores the re-evaluations in `wind_guetefaktor_reevaluations` and, at settle time,
@@ -817,7 +817,7 @@ charge may be netted against it (Abs. 6).
 ### Violation start tracking
 
 - **On registration** (`POST /api/v1/anlagen`): `mastr_registriert = false` sets
-  `mastr_violation_start = CURRENT_DATE` when not already tracked.
+  `mastr_violation_start = heute()` (the Europe/Berlin date) when not already tracked.
 - **On MaStR confirmation** (`POST .../mastr-registrierung`): clears it, stopping accrual.
 - **At settlement**: `monate_des_verstosses` counts inclusive calendar months from the
   start date, because §52 Abs. 2 charges for every month the breach subsists "ganz oder
@@ -833,7 +833,7 @@ When the NB curtails a plant's output (Einspeisemanagement / Redispatch 2.0), §
 POST /api/v1/anlagen/{tr_id}/settle/2024/6
 Content-Type: application/json
 
-{ "einspeisemenge_kwh": 850, "einspeisemanagement_kwh": 150 }
+{ "einspeisemenge_kwh": "850", "einspeisemanagement_kwh": "150" }
 ```
 
 `einsd` adds a separate §13a EnWG position to the settlement:
@@ -861,7 +861,7 @@ Content-Type: application/json
   "new_model": "DIREKTVERMARKTUNG",
   "effective_date": "2026-08-01",
   "direktvermarkter_mp_id": "9910000000001",
-  "direktverm_aw_ct": 6.28
+  "direktverm_aw_ct": "6.28"
 }
 ```
 
@@ -1016,8 +1016,8 @@ POST /api/v1/anlagen/{tr_id}/settle/2024/6
 Content-Type: application/json
 
 {
-  "einspeisemenge_kwh": 1000,
-  "kwh_during_negative_epex": 80,
+  "einspeisemenge_kwh": "1000",
+  "kwh_during_negative_epex": "80",
   "negative_price_quarter_hours": 12
 }
 ```
@@ -1041,10 +1041,10 @@ POST /api/v1/anlagen/DE0123456789.../settle/2024/6
 Content-Type: application/json
 
 {
-  "einspeisemenge_kwh": 312.5,
-  "kwh_during_negative_epex": 0,
+  "einspeisemenge_kwh": "312.5",
+  "kwh_during_negative_epex": "0",
   "negative_price_quarter_hours": 0,
-  "einspeisemanagement_kwh": 0,
+  "einspeisemanagement_kwh": "0",
   "billing_days_fraction": null
 }
 ```
@@ -1056,10 +1056,10 @@ Response:
 ```json
 {
   "id": "3fa85f64-...", "billing_year": 2024, "billing_month": 6,
-  "settlement_eur": 23.22, "faelligkeitsdatum": "2024-07-15", "status": "calculated",
+  "settlement_eur": "23.22", "faelligkeitsdatum": "2024-07-15", "status": "calculated",
   "positions": [
     { "description": "Einspeisevergütung §21 EEG 2023", "legal_basis": "§21 EEG 2023",
-      "kwh": 312.5, "rate_ct_kwh": 7.43, "eur": 23.22 }
+      "kwh": "312.5", "rate_ct_kwh": "7.43", "eur": "23.22" }
   ]
 }
 ```
@@ -1127,7 +1127,7 @@ POST /api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction
 Content-Type: application/json
 
 {
-  "einspeisemenge_kwh": 340.5,
+  "einspeisemenge_kwh": "340.5",
   "reason": "MeterDataCorrected",
   "reason_detail": "Corrected reading after Zählernachlesung on 2024-07-20"
 }
@@ -1193,7 +1193,7 @@ New `foerderendedatum` = December 31 of (year + 20) per §25 Abs. 1 Satz 2 EEG.
 POST /api/v1/anlagen/{tr_id}/repowering
 Content-Type: application/json
 
-{ "repowering_datum": "2026-05-01", "leistung_kwp_neu": 6.2 }
+{ "repowering_datum": "2026-05-01", "leistung_kwp_neu": "6.2" }
 ```
 
 `eeg_gesetz` and `verguetungssatz_ct` are updated to the current law/rate. Original
@@ -1264,7 +1264,7 @@ Required for `DIREKTVERMARKTUNG` and `POST_EEG_SPOT`:
 PUT /api/v1/epex-monthly/2024/6
 Content-Type: application/json
 
-{ "avg_ct_kwh": 6.82, "source": "netztransparenz.de" }
+{ "avg_ct_kwh": "6.82", "source": "netztransparenz.de" }
 ```
 
 ---

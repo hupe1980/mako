@@ -1,21 +1,21 @@
 //! Metered values must survive the round trip from the wire to the ERP event.
 //!
-//! # What was broken
+//! # What the round trip has to carry
 //!
-//! `makod` decoded every MSCONS interval and then threw it away. The adapter
-//! took only the `SG5 NAD` party id off the message; `MesswerteLieferungData`
-//! had no field for a quantity, an OBIS code or a period; and the workflow's
-//! only outbox entry was
+//! An adapter that reads only the `SG5 NAD` party id off an MSCONS, a
+//! `MesswerteLieferungData` with no field for a quantity, an OBIS code or a
+//! period, or an outbox entry of
 //!
 //! ```text
 //! PendingOutbox::new("ProcessCompleted", "", json!({ "pid": pid.as_u32() }))
 //! ```
 //!
-//! `edmd` refuses an event with no `malo_id` before it looks at anything else,
-//! so the delivery was acknowledged, the process completed — and nothing was
-//! stored. That applied to every PID in `MSCONS_PIDS`, not only the ESA's
-//! Typ-2 values: `edmd`'s `store_typ2_reads` has exactly one caller, inside the
-//! branch that could never be reached, so `esa_typ2_reads` was unpopulatable.
+//! all look healthy end to end: `edmd` refuses an event with no `malo_id`
+//! before it looks at anything else, so the delivery is acknowledged, the
+//! process completes — and nothing is stored. It applies to every PID in
+//! `MSCONS_PIDS`, the ESA's Typ-2 values included: `edmd`'s `store_typ2_reads`
+//! has exactly one caller, and an unreachable branch above it makes
+//! `esa_typ2_reads` unpopulatable.
 //!
 //! # Why the test renders first
 //!

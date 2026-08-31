@@ -18,6 +18,7 @@ name = "netzbilanzd"
 path = "src/main.rs"
 
 [dependencies]
+mako-fristen = { workspace = true }
 mako-events = { workspace = true }
 grid-billing    = { workspace = true, features = ["bo4e"] }
 mako-redispatch = { path = "../../crates/mako-redispatch" }

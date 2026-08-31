@@ -225,13 +225,13 @@ impl SperrdMcpHandler {
             r"SELECT id::TEXT, malo_id, lf_mp_id, order_type, arbeitszeit,
                      COALESCE(ausfuehrung_am, fruehestens_am) AS soll_am,
                      ausfuehrung_am IS NOT NULL                AS ist_fixtermin,
-                     (CURRENT_DATE - COALESCE(ausfuehrung_am, fruehestens_am))::INT AS tage_offen,
+                     (heute() - COALESCE(ausfuehrung_am, fruehestens_am))::INT AS tage_offen,
                      treffpunkt_strasse, treffpunkt_plz, treffpunkt_ort, treffpunkt_hinweis,
                      hinweis
               FROM sperr_orders
               WHERE tenant = $1
                 AND status = 'pending'
-                AND COALESCE(ausfuehrung_am, fruehestens_am) <= CURRENT_DATE
+                AND COALESCE(ausfuehrung_am, fruehestens_am) <= heute()
               ORDER BY soll_am ASC",
         )
         .bind(&self.state.tenant)

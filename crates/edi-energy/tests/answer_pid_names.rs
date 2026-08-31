@@ -9,11 +9,10 @@
 //! or shifted pair is detectable: the positive answer's name must begin with
 //! *Bestätigung* and the negative one's with *Ablehnung*.
 //!
-//! This is not hypothetical. The GPKE crate's own documentation described 55002
-//! as "Anfrage Lieferende" and 55003 as "Bestätigung Lieferbeginn" — the
-//! pre-FV2025-10-01 numbering, off by one against the shipped profiles. The
-//! code was right and the prose was wrong, which is the hard direction to spot
-//! by reading.
+//! The numbering shifted at FV2025-10-01, so prose naming 55002 "Anfrage
+//! Lieferende" or 55003 "Bestätigung Lieferbeginn" is off by one against the
+//! shipped profiles while the code around it is right — the direction that is
+//! hard to spot by reading, and the one this test decides mechanically.
 //!
 //! Names are read from the profile JSON rather than the runtime registry
 //! because codegen does not carry the PID name into the generated profile.

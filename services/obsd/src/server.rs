@@ -263,7 +263,7 @@ async fn get_kpis(
         };
         (from, to)
     } else {
-        let today = OffsetDateTime::now_utc().date();
+        let today = mako_fristen::heute();
         let from = Date::from_calendar_date(today.year(), today.month(), 1).unwrap();
         (from, today)
     };
@@ -504,8 +504,9 @@ struct GleichbehandlungQuery {
 /// **`gap_pp` is `affiliate − third_party`, in percentage points.** A positive
 /// gap means the affiliate fared better, which is the concern. This convention
 /// is `ParityComparison`'s and is shared with the `de.obs.stp.parity.alert`
-/// CloudEvent and the MCP tool — three surfaces previously computed it, two one
-/// way and one the other.
+/// CloudEvent and the MCP tool: three surfaces read one sign, because a sign
+/// computed per surface is a sign that can disagree about which side was
+/// favoured.
 ///
 /// **No threshold is asserted.** The Bundesnetzagentur publishes no numeric
 /// parity limit for this figure; what counts as a gap worth explaining is the

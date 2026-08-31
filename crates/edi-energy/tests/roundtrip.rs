@@ -1207,14 +1207,12 @@ mod comdis_roundtrip {
         // Runtime gate: FV2026-10-01 activates on 2026-10-01.
         // This check replaces a static #[ignore] so the test transitions
         // automatically without any manual code change.
-        if !time::OffsetDateTime::now_utc()
-            .date()
-            .ge(&time::Date::from_calendar_date(2026, time::Month::October, 1).unwrap())
-        {
+        // The cutover is a German midnight, so the day is the Berlin one.
+        let today = mako_fristen::heute();
+        if today < time::Date::from_calendar_date(2026, time::Month::October, 1).unwrap() {
             println!(
                 "skipping: COMDIS AHB 1.0g (FV2026-10-01) not yet active \
-                 (activates 2026-10-01, today is {})",
-                time::OffsetDateTime::now_utc().date()
+                 (activates 2026-10-01, today is {today})"
             );
             return;
         }

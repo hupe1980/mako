@@ -844,9 +844,9 @@ async fn stornierung_withdraws_a_registration_that_has_not_left_the_queue() {
     assert_eq!(offen, 0, "nothing is left to register");
 }
 
-/// Once the Lieferende has passed, supply ends and the contract closes — the
-/// transition nothing used to perform, which left terminated contracts sitting
-/// in GEKÜNDIGT for ever with components nominally still in supply.
+/// Once the Lieferende has passed, supply ends and the contract closes.
+/// Without the transition a terminated contract sits in GEKÜNDIGT for ever
+/// with components nominally still in supply.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn supply_that_has_run_out_closes_its_contract() {
@@ -866,13 +866,11 @@ async fn supply_that_has_run_out_closes_its_contract() {
     activate(&pool, created.id).await;
 
     // A Lieferende still ahead changes nothing.
-    sqlx::query(
-        "UPDATE vertragskomponenten SET lieferende = CURRENT_DATE + 30 WHERE vertrag_id=$1",
-    )
-    .bind(created.id)
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("UPDATE vertragskomponenten SET lieferende = heute() + 30 WHERE vertrag_id=$1")
+        .bind(created.id)
+        .execute(&pool)
+        .await
+        .unwrap();
     assert!(
         pg::close_due_supply(&pool, tenant)
             .await
@@ -882,7 +880,7 @@ async fn supply_that_has_run_out_closes_its_contract() {
     );
 
     // A Lieferende in the past ends it.
-    sqlx::query("UPDATE vertragskomponenten SET lieferende = CURRENT_DATE - 1 WHERE vertrag_id=$1")
+    sqlx::query("UPDATE vertragskomponenten SET lieferende = heute() - 1 WHERE vertrag_id=$1")
         .bind(created.id)
         .execute(&pool)
         .await
@@ -1390,7 +1388,7 @@ async fn each_sammelrechnung_site_reports_its_own_product() {
     // Once supply is running, each site reports its own product — reading the
     // contract's `bundle_code` here named a bundle where billing needed a
     // tariff, and gave every site of the framework the same one.
-    sqlx::query("UPDATE komponenten_produkte SET gueltig_von = CURRENT_DATE - 1")
+    sqlx::query("UPDATE komponenten_produkte SET gueltig_von = heute() - 1")
         .execute(&pool)
         .await
         .unwrap();

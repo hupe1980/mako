@@ -611,7 +611,7 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
 
     // Every PID across the non-archived profiles, each at the release in force
     // today — the code a counterparty would actually put on the wire.
-    let today = time::OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
     let active_pids = collect_active_pids(&profiles_dir, today);
     if active_pids.is_empty() {
         eprintln!("generate-fixtures: no active profiles found under {profiles_dir}");

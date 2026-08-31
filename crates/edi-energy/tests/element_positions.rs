@@ -117,7 +117,7 @@ fn an_element_has_one_position_across_every_message_family() {
     );
 }
 
-/// The specific layouts that were wrong, pinned by value so a regenerate that
+/// The layouts most easily got wrong, pinned by value so a regenerate that
 /// silently drops the canonical table is caught even if it happens to stay
 /// self-consistent across families.
 #[test]

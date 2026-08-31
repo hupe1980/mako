@@ -12,7 +12,7 @@
 //! use rust_decimal::dec;
 //! use time::macros::date;
 //!
-//! let product: Product = serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#).unwrap();
+//! let product: Product = serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#).unwrap();
 //! let ctx = BillingContext {
 //!     malo_id:         "51238696012".to_owned(),
 //!     lf_mp_id:        "9900000000001".to_owned(),

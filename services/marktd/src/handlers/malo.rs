@@ -25,7 +25,6 @@ use mako_markt::{
 use mako_service::cedar::CedarEnforcer;
 use rubo4e::current::{Lastprofil, Marktlokation, Profilart};
 use serde::{Deserialize, Serialize};
-use time::Date;
 use utoipa::{IntoParams, ToSchema};
 
 use super::{Claims, IfMatch, IntoMdmResponse as _, etag, malformed_if_match, parse_if_match};
@@ -536,23 +535,11 @@ where
     }
 }
 
-/// Returns today's date in German local time (CET/CEST via Europe/Berlin).
+/// Today's date in German local time — [`mako_fristen::heute`].
 ///
-/// Regulatory deadlines and `rollenzuordnung` validity queries must use
-/// German local time, not UTC.  Using UTC causes off-by-one errors around
-/// midnight during winter/summer transitions.
-pub(crate) fn today_berlin() -> Date {
-    let tz = jiff::tz::TimeZone::get("Europe/Berlin")
-        .expect("jiff bundles IANA tz data; Europe/Berlin always present");
-    let zoned = jiff::Timestamp::now().to_zoned(tz);
-    let d = zoned.date();
-    time::Date::from_calendar_date(
-        d.year() as i32,
-        time::Month::try_from(d.month() as u8).expect("jiff month 1..=12 always valid"),
-        d.day() as u8,
-    )
-    .expect("jiff date maps to a valid time::Date")
-}
+/// Re-exported here because `rollenzuordnung` validity queries and every other
+/// „which record is in force now" read in this service go through it.
+pub(crate) use mako_fristen::heute as today_berlin;
 
 // ── Lastprofil derivation ─────────────────────────────────────────────────────
 

@@ -343,8 +343,8 @@ impl MakodClient {
 /// Decide whether a `makod` 409 is an idempotent replay or a real rejection.
 ///
 /// Split out from [`MakodClient::post_command`] so the decision can be tested
-/// without an HTTP server — the classification is the part that was wrong, not
-/// the transport.
+/// without an HTTP server: the classification is the part with the failure
+/// modes, and it is decided from the body alone.
 fn classify_conflict(
     body: &serde_json::Value,
     command: &str,

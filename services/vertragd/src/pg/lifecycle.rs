@@ -44,7 +44,7 @@ pub async fn find_auto_renewal_due(
     tenant: &str,
     look_ahead_days: i64,
 ) -> Result<Vec<AutoRenewalRow>> {
-    let today = time::OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
     let cutoff = today + time::Duration::days(look_ahead_days);
     Ok(sqlx::query_as::<_, AutoRenewalRow>(
         r"SELECT v.id, v.kunden_id, v.vertrags_nr, v.vertragsende, v.renewal_monate,
@@ -194,7 +194,7 @@ pub async fn find_expiring_vertraege(
     within_days: i64,
     only_unnotified: bool,
 ) -> Result<Vec<ExpiringVertragRow>> {
-    let today = time::OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
     let cutoff = today + time::Duration::days(within_days);
     Ok(sqlx::query_as::<_, ExpiringVertragRow>(
         r"SELECT id, kunden_id, vertrags_nr, status, kundentyp, vertragsart,

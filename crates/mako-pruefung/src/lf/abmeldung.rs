@@ -15,7 +15,7 @@
 
 use time::Date;
 
-use mako_fristen::{HolidayCalendar, add_werktage, next_werktag};
+use mako_fristen::{HolidayCalendar, add_werktage, berlin_date, next_werktag};
 
 use crate::codes::{E_0609_CODES, E_3002_CODES, EBD_ABMELDUNG, EBD_ABMELDUNG_GAS};
 use crate::lf::types::{Bekannt, LfAnfrage, LfEntscheidung, LfVertragslage, Lokationsart};
@@ -207,7 +207,7 @@ fn pruefe_zuordnungsermaechtigung(
     // Monatserster *and* the next one after the Nachrichteneingang. A first of
     // the month two years out is a Monatserster too, and the Zuordnungs-
     // ermächtigung it claims to end has nothing to do with it.
-    if termin != naechster_monatserster(anfrage.eingang.date()) {
+    if termin != naechster_monatserster(berlin_date(anfrage.eingang)) {
         return code(c("A05", "A24"), 85);
     }
     // 100/580 — hat der BKV die Deaktivierung vorgenommen?
@@ -295,6 +295,16 @@ fn naechster_monatserster(von: Date) -> Date {
 
 /// `E_0609` Prüfschritt 120/600 — „Liegt das Eingangsdatum der Abmeldung nach
 /// dem 5. WT des Monats, in dem die Zuordnungsermächtigung endet?"
+///
+/// „Der Monat, in dem die Zuordnungsermächtigung endet" is the month of the
+/// **Zuordnungsende** — the Monatserster Prüfschritt 85 fixes the Lieferende
+/// to. GPKE Teil 2 (BK6-24-174 Lesefassung) states the window explicitly for
+/// the Ankündigung der Beendigung der Zuordnung: „der früheste ÜT [ist] in dem
+/// Monat, in dem die Zuordnungsermächtigung endet, jedoch spätester ÜT ist der
+/// 5. WT des Monats, in dem die Zuordnungsermächtigung endet". Both bounds name
+/// the same month, so the window opens on its 1st and closes on its 5th
+/// Werktag — which is inside the MaBiS Erstaufschlag for the month that has
+/// just been supplied, the settlement run that needs the Zuordnung right.
 fn eingang_nach_fuenftem_werktag(anfrage: &LfAnfrage, lieferende: Date) -> bool {
     let Ok(monatserster) = Date::from_calendar_date(lieferende.year(), lieferende.month(), 1)
     else {
@@ -304,7 +314,7 @@ fn eingang_nach_fuenftem_werktag(anfrage: &LfAnfrage, lieferende: Date) -> bool 
     // starts there rather than a day later.
     let erster_wt = next_werktag(monatserster, HolidayCalendar::BdewMaKo);
     let fuenfter_wt = add_werktage(erster_wt, 4, HolidayCalendar::BdewMaKo);
-    anfrage.eingang.date() > fuenfter_wt
+    berlin_date(anfrage.eingang) > fuenfter_wt
 }
 
 // ── Gas ───────────────────────────────────────────────────────────────────────

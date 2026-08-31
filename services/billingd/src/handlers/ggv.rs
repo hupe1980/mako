@@ -176,12 +176,11 @@ pub async fn post_tarifwechsel(
     .await?;
 
     // Both legs go through the same pipeline every other invoice uses, with
-    // the readings the caller split by hand. Driving the engine directly here
-    // — which is what this did — produced a Tarifwechsel invoice with none of
-    // the § 40 content the law requires of it: no contract facts, no
-    // Zählernummer, no consumption comparison, no BG-7 buyer and no § 13b
-    // reverse-charge derivation. It looked like an invoice and was missing half
-    // of one.
+    // the readings the caller split by hand. Driving the engine directly would
+    // produce a Tarifwechsel invoice with none of the § 40 content the law
+    // requires of it — no contract facts, no Zählernummer, no consumption
+    // comparison, no BG-7 buyer, no § 13b reverse-charge derivation — and it
+    // would still look like an invoice.
     let legs = vec![
         TariffLeg {
             tariff: req.old_tariff.clone(),

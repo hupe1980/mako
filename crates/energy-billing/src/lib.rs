@@ -22,7 +22,7 @@
 //! use rust_decimal::dec;
 //! use time::macros::date;
 //!
-//! let json = r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0,"grundpreis_ct_per_day":8.0}"#;
+//! let json = r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0","grundpreis_ct_per_day":"8.0"}"#;
 //! let product: Product = serde_json::from_str(json).unwrap();
 //! let ctx = BillingContext {
 //!     malo_id:         "51238696012".to_owned(),

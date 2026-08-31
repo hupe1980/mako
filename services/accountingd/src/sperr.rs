@@ -53,7 +53,6 @@ use std::sync::Arc;
 use mako_fristen::{self as fristen, HolidayCalendar};
 use mako_markt::makod_client::{ForwardCommand, MakodClient};
 use sqlx::PgPool;
-use time::OffsetDateTime;
 
 use crate::config::AccountingdConfig;
 use crate::pg;
@@ -153,7 +152,7 @@ pub async fn run_sperr_sequence(
 
         // ── Phase 2: Sperrankündigung (§41f Abs. 5) ─────────────────────────
         // The announced disconnection date is today + 8 Werktage.
-        let today = OffsetDateTime::now_utc().date();
+        let today = mako_fristen::heute();
         let geplantes_sperrdatum =
             fristen::add_werktage(today, ankuendigung_wt, HolidayCalendar::BdewMaKo);
         for (case_id, malo_id, lf_mp_id, verzug_ct) in

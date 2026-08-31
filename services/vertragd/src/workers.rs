@@ -95,7 +95,7 @@ impl Worker {
 /// Propagates storage errors; one contract's failure is logged and the run
 /// continues, because one bad row must not hold up every other notice.
 pub async fn preisanpassung(pool: &PgPool, cfg: &VertragdConfig) -> anyhow::Result<()> {
-    let today = time::OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
     let outputd = cfg
         .outputd_url
         .as_deref()
@@ -254,7 +254,7 @@ async fn issue_preisanpassung_document(
         return Ok(None);
     };
 
-    let today = time::OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
     let mut channels = vec!["PORTAL".to_owned()];
     if buyer.email.is_some() {
         channels.push("EMAIL".to_owned());
@@ -321,7 +321,7 @@ async fn issue_preisanpassung_document(
 ///
 /// Propagates storage errors.
 pub async fn auto_renewal(pool: &PgPool, cfg: &VertragdConfig) -> anyhow::Result<()> {
-    let today = time::OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
 
     // Phase 1: the advance notice, once per term.
     for row in pg::find_auto_renewal_due(pool, &cfg.tenant, 30).await? {

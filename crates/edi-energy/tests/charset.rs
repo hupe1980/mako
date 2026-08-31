@@ -77,11 +77,11 @@ fn the_streaming_path_decodes_the_same_repertoire() {
 /// streaming one.
 ///
 /// `Parser::parse_reader`, `parse_interchange_buffered` and the reader form of
-/// `parse_interchange_full` used to hand the bytes straight to a UTF-8
-/// tokeniser while the byte-slice paths transcoded first. The same conformant
-/// interchange therefore parsed or failed depending only on which overload the
-/// caller reached for — and the failing ones are the paths an AS4 adapter uses,
-/// where the payload arrives as a stream.
+/// `parse_interchange_full` each have their own path to the tokeniser. One that
+/// skipped the transcode would make the same conformant interchange parse or
+/// fail depending only on which overload the caller reached for — and the
+/// reader forms are what an AS4 adapter uses, where the payload arrives as a
+/// stream.
 #[test]
 fn every_reader_entry_point_decodes_the_declared_repertoire() {
     use edi_energy::Parser;

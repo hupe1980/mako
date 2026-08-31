@@ -232,7 +232,7 @@ load balancer.
 ```yaml
 # docker-compose.yml (excerpt)
 portald:
-  image: ghcr.io/hupe1980/portald:latest
+  image: ghcr.io/hupe1980/mako-portald:latest
   ports: ["9480:9480"]
   volumes:
     - ./portald.toml:/etc/mako/portald.toml:ro

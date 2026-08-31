@@ -66,101 +66,101 @@ target "_base" {
 target "makod" {
   inherits = ["_base"]
   target   = "runtime"
-  tags     = ["${REGISTRY}/makod"]
+  tags     = ["${REGISTRY}/mako-makod"]
 }
 
 target "marktd" {
   inherits = ["_base"]
   target   = "marktd-runtime"
-  tags     = ["${REGISTRY}/marktd"]
+  tags     = ["${REGISTRY}/mako-marktd"]
 }
 
 target "processd" {
   inherits = ["_base"]
   target   = "processd-runtime"
-  tags     = ["${REGISTRY}/processd"]
+  tags     = ["${REGISTRY}/mako-processd"]
 }
 
 target "invoicd" {
   inherits = ["_base"]
   target   = "invoicd-runtime"
-  tags     = ["${REGISTRY}/invoicd"]
+  tags     = ["${REGISTRY}/mako-invoicd"]
 }
 
 target "edmd" {
   inherits = ["_base"]
   target   = "edmd-runtime"
-  tags     = ["${REGISTRY}/edmd"]
+  tags     = ["${REGISTRY}/mako-edmd"]
 }
 
 target "obsd" {
   inherits = ["_base"]
   target   = "obsd-runtime"
-  tags     = ["${REGISTRY}/obsd"]
+  tags     = ["${REGISTRY}/mako-obsd"]
 }
 
 target "netzbilanzd" {
   inherits = ["_base"]
   target   = "netzbilanzd-runtime"
-  tags     = ["${REGISTRY}/netzbilanzd"]
+  tags     = ["${REGISTRY}/mako-netzbilanzd"]
 }
 
 target "sperrd" {
   inherits = ["_base"]
   target   = "sperrd-runtime"
-  tags     = ["${REGISTRY}/sperrd"]
+  tags     = ["${REGISTRY}/mako-sperrd"]
 }
 
 target "einsd" {
   inherits = ["_base"]
   target   = "einsd-runtime"
-  tags     = ["${REGISTRY}/einsd"]
+  tags     = ["${REGISTRY}/mako-einsd"]
 }
 
 target "productd" {
   inherits = ["_base"]
   target   = "productd-runtime"
-  tags     = ["${REGISTRY}/productd"]
+  tags     = ["${REGISTRY}/mako-productd"]
 }
 
 target "billingd" {
   inherits = ["_base"]
   target   = "billingd-runtime"
-  tags     = ["${REGISTRY}/billingd"]
+  tags     = ["${REGISTRY}/mako-billingd"]
 }
 
 target "outputd" {
   inherits = ["_base"]
   target   = "outputd-runtime"
-  tags     = ["${REGISTRY}/outputd"]
+  tags     = ["${REGISTRY}/mako-outputd"]
 }
 
 target "accountingd" {
   inherits = ["_base"]
   target   = "accountingd-runtime"
-  tags     = ["${REGISTRY}/accountingd"]
+  tags     = ["${REGISTRY}/mako-accountingd"]
 }
 
 target "vertragd" {
   inherits = ["_base"]
   target   = "vertragd-runtime"
-  tags     = ["${REGISTRY}/vertragd"]
+  tags     = ["${REGISTRY}/mako-vertragd"]
 }
 
 target "portald" {
   inherits = ["_base"]
   target   = "portald-runtime"
-  tags     = ["${REGISTRY}/portald"]
+  tags     = ["${REGISTRY}/mako-portald"]
 }
 
 target "agentd" {
   inherits = ["_base"]
   target   = "agentd-runtime"
-  tags     = ["${REGISTRY}/agentd"]
+  tags     = ["${REGISTRY}/mako-agentd"]
 }
 
 target "mabis-syncd" {
   inherits = ["_base"]
   target   = "mabis-syncd-runtime"
-  tags     = ["${REGISTRY}/mabis-syncd"]
+  tags     = ["${REGISTRY}/mako-mabis-syncd"]
 }

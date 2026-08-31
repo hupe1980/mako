@@ -127,7 +127,7 @@ async fn sweep(
     notify: &tokio::sync::Notify,
     tenant: &str,
 ) {
-    let today = time::OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
     let expired = match repo.revoke_expired(today).await {
         Ok(rows) => rows,
         Err(e) => {

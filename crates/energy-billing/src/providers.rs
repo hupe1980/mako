@@ -1299,8 +1299,6 @@ impl BillingProvider for GasProvider {
         // ── Arbeitspreis ───────────────────────────────────────────────────────
         if kwh_hs > Decimal::ZERO {
             // Resolve effective gas price: gas_indexed_price > seasonal > direct.
-            // The legacy `indexed_price` field folds into `gas_indexed_price` via
-            // `#[serde(alias = "indexed_price")]`, so there is one source to read.
             let active_indexed = product.gas_indexed_price.as_ref();
             let gas_ap_ct = if let Some(idx) = active_indexed {
                 // Gas indexed price (TTF/NCG-linked, §41 EnWG Sonderkundenvertrag)

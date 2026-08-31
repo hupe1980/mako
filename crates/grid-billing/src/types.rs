@@ -959,8 +959,10 @@ impl BillingPositionKind {
 /// Modul 2 is the *prozentuale* reduction; Modul 1 is the flat annual pauschale
 /// and carries no factor at all (see [`ArbeitspreisModell::Modul1Pauschal`]).
 ///
-/// A newtype because the range matters: `0.85` is a 15 % reduction, and a value
-/// outside `(0, 1]` is not a reduction at all. The unconstrained `Decimal` this
+/// A newtype because the range matters: `"0.85"` is a 15 % reduction, and a
+/// value outside `(0, 1]` is not a reduction at all. It travels as a JSON
+/// **string** like every other `Decimal` — see the architecture page's
+/// *Quantities and money on the wire*. The unconstrained `Decimal` this
 /// replaces was range-checked in the validator and *not* in the engine, so a
 /// caller who skipped validation could multiply the tariff by 5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -2146,17 +2148,21 @@ mod input_model_tests {
     /// body and multiplied the Arbeitspreis by it.
     #[test]
     fn a_wire_reduktionsfaktor_is_range_checked() {
-        let ok: Reduktionsfaktor = serde_json::from_str("0.85").expect("in range");
+        // A `Decimal` is a JSON string on the wire, so the factor is too — a
+        // float cannot carry 0.85 exactly and this one multiplies a tariff.
+        let ok: Reduktionsfaktor = serde_json::from_str(r#""0.85""#).expect("in range");
         assert_eq!(ok.get(), dec!(0.85));
 
-        for bad in ["0", "-0.5", "1.01", "5"] {
+        for bad in [r#""0""#, r#""-0.5""#, r#""1.01""#, r#""5""#] {
             assert!(
                 serde_json::from_str::<Reduktionsfaktor>(bad).is_err(),
                 "{bad} must be refused"
             );
         }
         // The boundary is inclusive at 1 — no reduction is still a valid factor.
-        assert!(serde_json::from_str::<Reduktionsfaktor>("1").is_ok());
+        assert!(serde_json::from_str::<Reduktionsfaktor>(r#""1""#).is_ok());
+        // A bare number is refused before the range is even considered.
+        assert!(serde_json::from_str::<Reduktionsfaktor>("0.85").is_err());
     }
 
     /// The Arbeitspreis model round-trips, so a settlement input can be stored

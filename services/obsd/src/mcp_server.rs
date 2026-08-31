@@ -537,9 +537,9 @@ fn projection_json(p: &mako_obs::domain::ProcessProjection) -> serde_json::Value
 
 /// First and last day of a `YYYY-MM` period, or of the current month.
 fn month_bounds(period: Option<&str>) -> Result<(time::Date, time::Date), McpError> {
-    use time::{Date, Month, OffsetDateTime};
+    use time::{Date, Month};
 
-    let today = OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
     let (year, month_u8) = match period {
         Some(p) => {
             let (y, m) = p

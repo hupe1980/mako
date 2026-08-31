@@ -757,7 +757,7 @@ pub async fn put_portal_sepa(
         "bic":            req.bic,
         "kontoinhaber":   req.kontoinhaber,
         "mandatsref":     mandatsref(&malo_id),
-        "signed_at":      time::OffsetDateTime::now_utc().date().to_string(),
+        "signed_at":      mako_fristen::heute().to_string(),
         "debtor_address": req.debtor_address,
     });
 

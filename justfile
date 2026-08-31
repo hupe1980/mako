@@ -58,10 +58,8 @@ test-accountingd-db:
     cargo test -p accountingd --test db_scenarios -- --include-ignored --test-threads=1
 
 # Execution-queue integration tests for sperrd (ORDERS 17115/17117 ingest,
-# the claim guard, and the IFTSTA 21039 retry queue) against real PostgreSQL.
-# In `test-db` since 2026-08: it was defined and listed nowhere, so the one
-# suite covering the §41f disconnection execution path ran only if somebody
-# typed its name.
+# the claim guard, and the IFTSTA 21039 retry queue) against real PostgreSQL —
+# the only suite covering the §41f disconnection execution path.
 test-sperrd-db:
     cargo test -p sperrd --test db_scenarios -- --include-ignored --test-threads=1
 
@@ -92,7 +90,6 @@ test-marktd-db:
         -- --include-ignored --test-threads=1
 
 # processd's SQL suite (approval queue claim/dispatch, decision audit log).
-# It existed but was in no recipe, so nothing ran it.
 test-processd-db:
     cargo test -p processd --no-default-features --features integrated \
         --test sql_integration -- --include-ignored --test-threads=1
@@ -111,8 +108,7 @@ fmt-check:
 
 # Dependency audit: licenses + advisories
 # cargo deny does not accept --all-features; it always resolves the full
-# workspace graph from Cargo.lock. Stale skip entries (previously gated on
-# slatedb/energy-api features) have been cleaned up; deny check now runs clean.
+# workspace graph from Cargo.lock.
 deny:
     cargo deny check
 
@@ -185,18 +181,18 @@ clippy-roles:
         cargo clippy -p makod --no-default-features --features "$f" --all-targets -- -D warnings
     done
     # processd's role features are § 7 EnWG binary separation: an nb-only build
-    # must contain no LF or MSB answer path. They were never linted, which is
-    # how `msb-only` came to not compile at all — the MSB module was gated on
-    # the NB features, so every MSB obligation shipped inside the NB binary.
+    # must contain no LF or MSB answer path. Each profile is linted and its
+    # `role_separation` suite run, because a module gated on the wrong role
+    # feature ships one role's obligations inside another role's binary.
     for f in "lf-only" "nb-only" "msb-only" "integrated"; do
         echo "==> cargo clippy -p processd --no-default-features --features $f"
         cargo clippy -p processd --no-default-features --features "$f" --all-targets -- -D warnings
         cargo test   -p processd --no-default-features --features "$f" --test role_separation
     done
     # mako-pruefung carries role features of its own — the EBD trees are grouped
-    # by prüfende Rolle, so an NB-only build should hold no LF catalogue. They
-    # were never linted, which is how an unused re-export came to sit in every
-    # role-scoped build while the default build stayed clean.
+    # by prüfende Rolle, so an NB-only build holds no LF catalogue. The default
+    # build stays clean whatever the role gates do, so each one needs its own
+    # pass.
     for f in "role-nb" "role-lf" "role-msb" "role-mabis" "role-nb,role-lf"; do
         echo "==> cargo clippy -p mako-pruefung --no-default-features --features $f"
         cargo clippy -p mako-pruefung --no-default-features --features "$f" --all-targets -- -D warnings
@@ -252,15 +248,13 @@ regulatories:
 
 # Run every shipped example to completion.
 #
-# `cargo check --all-targets` compiles examples but never runs them, which is
-# how three of six rotted unnoticed: two drove their workflow into a state the
-# domain refuses, and the one demonstrating a *valid* message shipped a fixture
-# missing a mandatory segment group. An example that exits non-zero is a broken
-# promise to whoever pastes it, so the gate is a real run.
+# `cargo check --all-targets` compiles examples but never runs them, so a driven
+# workflow that the domain refuses, or a fixture missing a mandatory segment
+# group, compiles clean. An example that exits non-zero is a broken promise to
+# whoever pastes it, so the gate is a real run.
 #
 # The list comes from `cargo metadata`, not from this file: a hand-kept list is
-# a list a new example is forgotten from, and an ungated example is the thing
-# being fixed here.
+# a list a new example is forgotten from.
 examples:
     #!/usr/bin/env bash
     set -uo pipefail
@@ -277,7 +271,7 @@ examples:
         python3 -c "import json,sys; m=json.load(sys.stdin); [print(p['name'], t['name']) for p in m['packages'] for t in p['targets'] if 'example' in t['kind']]" | sort)
     exit $fail
 
-ci: check test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-wire-timestamps check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci validate-release-codes lint-makotest test-makotest
+ci: check test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-wire-timestamps check-business-dates check-dep-versions check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci validate-release-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -492,11 +486,24 @@ check-bo4e-discriminants:
 check-bo4e-examples:
     cargo xtask check-bo4e-examples
 
+# Refuse a business date read in UTC. A Lieferbeginn, a Rechnungsdatum and the
+# day a Frist starts counting are German calendar dates; `now_utc().date()` and
+# SQL `current_date` answer the UTC resp. session date, which is the previous
+# day for an hour every night. Use `mako_fristen::heute()` and the schema's
+# `heute()` function.
+check-business-dates:
+    cargo xtask check-business-dates
+
+# The architecture page lists every external crate mako's domain rests on with
+# the version it is pinned to. A version in prose is a claim like any other:
+# check it against the manifests.
+check-dep-versions:
+    cargo xtask check-dep-versions
+
 # Refuse a raw `time` value on a JSON wire: `OffsetDateTime` and `Date` derive
 # `Serialize` as their component array ([y, ordinal, h, m, s, ns, ±h, ±m, ±s]),
-# which is `time`'s internal layout and readable by nothing. Nine such fields
-# reached mako's MCP surface, including the `deadline_at` an agent was expected
-# to do arithmetic on.
+# which is `time`'s internal layout and readable by nothing — least of all by an
+# agent asked to decide whether a `deadline_at` has passed.
 check-wire-timestamps:
     cargo xtask check-wire-timestamps
 

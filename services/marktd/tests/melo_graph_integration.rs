@@ -110,7 +110,7 @@ async fn melo_put_keeps_fk_and_graph_in_agreement() {
     seed_malos(&pool).await;
     let melo_repo = PgMeloRepository::new(pool.clone(), TENANT);
     let lz = PgLokationszuordnungRepository::new(pool.clone());
-    let today = time::OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
     let data = bo4e_melo(serde_json::json!({ "messlokationsId": MELO }));
 
     // 1. Initial PUT with parent A.
@@ -303,7 +303,7 @@ async fn lokationsbuendel_codes_are_extracted_into_typed_columns() {
         .await
         .expect("malo upsert");
     let malo = malo_repo
-        .find(&malo_id(MALO_A), time::OffsetDateTime::now_utc().date())
+        .find(&malo_id(MALO_A), mako_fristen::heute())
         .await
         .unwrap()
         .expect("malo stored");
@@ -417,11 +417,7 @@ async fn patch_stammdaten_updates_typed_columns_only() {
     )
     .await
     .expect("seed malo");
-    let before = repo
-        .find(&m, time::OffsetDateTime::now_utc().date())
-        .await
-        .unwrap()
-        .unwrap();
+    let before = repo.find(&m, mako_fristen::heute()).await.unwrap().unwrap();
 
     // Apply a change to several typed columns, incl. the §14a EnWG
     // Fernsteuerbarkeit (UTILMD CCI+7037 Z97/Z96 → bool).
@@ -440,11 +436,7 @@ async fn patch_stammdaten_updates_typed_columns_only() {
         .expect("patch existing MaLo");
     assert!(applied, "row present → applied");
 
-    let after = repo
-        .find(&m, time::OffsetDateTime::now_utc().date())
-        .await
-        .unwrap()
-        .unwrap();
+    let after = repo.find(&m, mako_fristen::heute()).await.unwrap().unwrap();
     assert_eq!(after.netzebene.as_deref(), Some("MSP"));
     assert_eq!(after.bilanzierungsmethode.as_deref(), Some("RLM"));
     assert_eq!(after.regelzone.as_deref(), Some("10YDE-EON------1"));

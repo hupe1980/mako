@@ -338,7 +338,8 @@ pub struct Steuerbarkeit {
 /// timings), once under `Enthaltene_TR` ([`TrTechnischeParameter`], the plant
 /// nameplate) and once under `CR_Objekt` (the load gradients alone). Sharing
 /// one Rust type across them silently drops whichever fields the other shapes
-/// carry, which is what used to happen to the entire TR nameplate.
+/// carry — the whole TR nameplate, in the case of `Enthaltene_TR` — so each
+/// shape gets its own type.
 ///
 /// All fields are optional; only those relevant to the resource type are
 /// populated.

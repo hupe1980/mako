@@ -149,8 +149,7 @@ pub struct SteuerungsauftragData {
     /// `konfigurationsprodukte` list before dispatching the ORDRSP
     /// `bestaetigen` response (M1 guard).
     ///
-    /// `None` for legacy processes created before this field was introduced
-    /// or for `InitialZustand` (reset) commands.
+    /// `None` for an `InitialZustand` (reset) command, which names no product.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub produkt_code: Option<String>,
 }

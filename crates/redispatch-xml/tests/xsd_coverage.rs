@@ -9,12 +9,12 @@
 //! and the value is silently dropped. Nothing downstream can tell that apart
 //! from a document that genuinely omitted it.
 //!
-//! That is not hypothetical. Until this test was written the `Stammdaten` model
-//! was missing, among fifty others, `Bilanzkreis_Ausgleichsfahrplan_anfNB` and
-//! the per-Quote `Bilanzkreis_Ausgleichsfahrplan` — the **Redispatch-
-//! Bilanzkreis**, which `BilAReM` Kap. 2.3.2 names as one of the three things a
-//! Planwertmodell-Zuordnung must carry, and which is where the bilanzielle
-//! Ausgleich is booked.
+//! The `Stammdaten` document alone declares several hundred elements, and the
+//! ones that matter most are the least conspicuous: `BilAReM` Kap. 2.3.2 names
+//! `Bilanzkreis_Ausgleichsfahrplan_anfNB` and the per-Quote
+//! `Bilanzkreis_Ausgleichsfahrplan` — the **Redispatch-Bilanzkreis** the
+//! bilanzielle Ausgleich is booked against — as things a Planwertmodell-
+//! Zuordnung must carry, and neither announces itself in the model's shape.
 //!
 //! # How it runs
 //!

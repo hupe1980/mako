@@ -10,6 +10,19 @@
 --     native `WITHOUT OVERLAPS` would remove the need for it; the platform
 --     targets 15+.
 --   (pgcrypto is NOT required: gen_random_uuid() is built in since PG 13.)
+-- ── heute() — the business date ───────────────────────────────────────────────
+--
+-- Every date this schema compares against is a German calendar date — the day a
+-- Frist runs out, a validity window opens, an obligation falls due.
+-- PostgreSQL's own `current_date` answers the *session* time zone's date, which
+-- on a UTC server is still yesterday between 23:00 and midnight Berlin time
+-- (22:00 in summer). `heute()` states the conversion once, so it holds however
+-- the connection was opened. The Rust side reads the same date through
+-- `mako_fristen::heute`.
+CREATE OR REPLACE FUNCTION heute() RETURNS date
+    LANGUAGE sql STABLE
+    AS $$ SELECT (now() AT TIME ZONE 'Europe/Berlin')::date $$;
+
 CREATE EXTENSION IF NOT EXISTS btree_gist;
 
 -- Design decisions:
@@ -1312,7 +1325,7 @@ CREATE TABLE esa_einwilligungen (
     scope               TEXT        NOT NULL DEFAULT 'werte',
     granted_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     -- Effective window; valid_to NULL = open-ended until revoked.
-    valid_from          DATE        NOT NULL DEFAULT CURRENT_DATE,
+    valid_from          DATE        NOT NULL DEFAULT heute(),
     valid_to            DATE,
     -- GDPR Art. 7(3): set on Widerruf. Non-NULL ⇒ consent no longer a lawful basis.
     revoked_at          TIMESTAMPTZ,
@@ -1407,7 +1420,7 @@ CREATE TABLE esa_messprodukt_preise (
     bestellung_ref  TEXT,
     -- Half-open validity, as every other dated table here. `valid_to` closes
     -- when the subscription ends (ORDRSP 19011 on a 17008, or IFTSTA 21042).
-    valid_from      DATE        NOT NULL DEFAULT CURRENT_DATE,
+    valid_from      DATE        NOT NULL DEFAULT heute(),
     valid_to        DATE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -1466,7 +1479,7 @@ CREATE TABLE esa_messprodukt_katalog (
     -- declined.
     als_einmalig BOOLEAN     NOT NULL DEFAULT TRUE,
     -- Half-open `[valid_from, valid_to)`, as every other dated table here.
-    valid_from   DATE        NOT NULL DEFAULT CURRENT_DATE,
+    valid_from   DATE        NOT NULL DEFAULT heute(),
     valid_to     DATE,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),

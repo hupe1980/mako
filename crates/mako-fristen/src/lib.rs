@@ -8,6 +8,7 @@
 //!
 //! | Question | Answer |
 //! |---|---|
+//! | *What is today's date, in the market's terms?* | [`heute`], [`berlin_date`], [`berlin_midnight`], [`berlin_now`] |
 //! | *When is the 4th Werktag after this instant?* | [`add_werktage`], [`deadline_at_werktage`], [`end_of_werktag_after`], [`next_werktag_at`] |
 //! | *Which window does PID 55001 carry?* | [`antwort`] |
 //! | *Which messages does receiving it oblige me to send?* | [`meldung`] |
@@ -408,6 +409,84 @@ pub fn aperak_gas_due_at(pid: u32, received: OffsetDateTime) -> (&'static str, O
 #[must_use]
 pub const fn aperak_hat_anerkennungsmeldung(sparte_ist_gas: bool) -> bool {
     !sparte_ist_gas
+}
+
+/// The Europe/Berlin calendar date of `instant`.
+///
+/// A German market obligation is stated in calendar days — a Lieferbeginn, a
+/// Rechnungsdatum, the day a Frist starts counting from. `OffsetDateTime::date`
+/// answers the **UTC** date, which is the previous day for every instant
+/// between 23:00 Berlin and midnight (22:00 in summer). One hour a night, every
+/// such date is off by one, and nothing about the value says so.
+///
+/// # Example
+///
+/// ```rust
+/// use mako_fristen::berlin_date;
+/// use time::macros::{date, datetime};
+///
+/// // 00:30 Berlin on 1 February is 23:30 UTC on 31 January.
+/// let instant = datetime!(2026-01-31 23:30 UTC);
+/// assert_eq!(instant.date(), date!(2026-01-31));
+/// assert_eq!(berlin_date(instant), date!(2026-02-01));
+/// ```
+///
+/// **Only for instants that are instants.** A BO4E `date-time` field carrying a
+/// pure date — `rechnungsdatum`, `wunschtermin`, a `Zeitraum` bound — is written
+/// as UTC midnight and read back with `OffsetDateTime::date`; converting one of
+/// those here answers the day before.
+#[must_use]
+pub fn berlin_date(instant: OffsetDateTime) -> Date {
+    instant.to_timezone(timezones::db::europe::BERLIN).date()
+}
+
+/// Now, expressed in the Europe/Berlin offset.
+///
+/// The same instant `OffsetDateTime::now_utc()` returns, carrying the German
+/// wall clock rather than UTC. For a record a regulator reads — an audit row, a
+/// dead-letter entry — that is the clock the obligation was stated in, and
+/// converting at display time puts the conversion in as many places as there
+/// are readers.
+#[must_use]
+pub fn berlin_now() -> OffsetDateTime {
+    OffsetDateTime::now_utc().to_timezone(timezones::db::europe::BERLIN)
+}
+
+/// Today, as the German market states it — the Europe/Berlin calendar date.
+///
+/// The one answer to „welcher Tag ist heute" for every business decision:
+/// which price slice is in force, which profile version applies, what date an
+/// invoice carries, which day a Frist starts counting from. See
+/// [`berlin_date`] for why the UTC date is not that answer.
+#[must_use]
+pub fn heute() -> Date {
+    berlin_date(OffsetDateTime::now_utc())
+}
+
+/// The instant at which the Europe/Berlin **calendar** day `date` begins,
+/// expressed in UTC.
+///
+/// Consecutive days tile the timeline without gap or overlap across both DST
+/// transitions, so `[berlin_midnight(from), berlin_midnight(to.next_day()))`
+/// is exactly the German calendar window `from..=to` — the window a Strom
+/// billing period, a Bilanzierungsmonat and a § 41a Lastgang query all mean. A
+/// window built from UTC midnights loses the first hour of the first day and
+/// gains the last hour of the day after the last.
+///
+/// **Not the Gastag.** Gas balances on a day running 06:00 → 06:00 Berlin
+/// (Art. 3 Nr. 6 VO (EU) 312/2014, KoV), which is a different boundary and a
+/// different date for the six hours before it opens. Use
+/// `mako_gabi_gas::GasDay` — or `metering::calendar::gas_day_start_utc` — for
+/// anything settled on a gas day; this function is the electricity and
+/// calendar-date answer only.
+///
+/// # Panics
+///
+/// Panics if the timezone database cannot resolve local midnight, which the
+/// Europe/Berlin transitions (02:00 → 03:00) never touch.
+#[must_use]
+pub fn berlin_midnight(date: Date) -> OffsetDateTime {
+    berlin_at(date, Time::MIDNIGHT).to_offset(time::UtcOffset::UTC)
 }
 
 /// Construct an [`OffsetDateTime`] at `at` Europe/Berlin on `date`, in UTC.
@@ -837,6 +916,23 @@ pub fn next_werktag(from: Date, cal: HolidayCalendar) -> Date {
 /// directly would give a systematic 1–2 hour error on every regulatory
 /// deadline.
 ///
+/// # The count starts on the day of receipt
+///
+/// `from` is the Übertragungstag, and the count runs from its Berlin calendar
+/// date whatever weekday that is — a message received on a Saturday starts its
+/// Frist on the Saturday. **GPKE Teil 1 (BK6-24-174 Lesefassung) Kap. 7** defines
+/// the ÜT as „der Tag des Empfangs der Übertragungsdatei … aus der
+/// AS4-Zustellquittung" and attaches no rule deeming a non-Werktag arrival
+/// received on the next Werktag; nor does Allgemeine Festlegungen 6.1d, whose
+/// Werktag definition covers only which days count. Only the Werktage *counted*
+/// skip weekends and holidays.
+///
+/// The same Kapitel adds the one condition that does apply: the ÜT counts „nur
+/// …, sofern es sich um eine positive Zustellquittung bzw. Response-Nachricht
+/// handelt". A negative acknowledgement starts no Frist, which is the caller's
+/// to enforce — `mako_wim::wertebestellung::Zustellquittung` is the model for
+/// carrying it.
+///
 /// 17:00 is never in a DST transition window for Europe/Berlin (transitions
 /// happen at 02:00), so the conversion is unambiguous on all dates.
 ///
@@ -1022,6 +1118,43 @@ pub fn is_werktag(date: Date, cal: HolidayCalendar) -> bool {
 mod tests {
     use super::*;
     use time::{Date, Month, OffsetDateTime, Time};
+
+    #[test]
+    fn berlin_date_is_not_the_utc_date_at_the_turn_of_the_day() {
+        // 23:30 UTC in winter is already the next day in Berlin.
+        let winter = time::macros::datetime!(2026-01-31 23:30 UTC);
+        assert_eq!(winter.date(), time::macros::date!(2026 - 01 - 31));
+        assert_eq!(berlin_date(winter), time::macros::date!(2026 - 02 - 01));
+        // In summer the window opens an hour earlier.
+        let summer = time::macros::datetime!(2026-06-30 22:30 UTC);
+        assert_eq!(summer.date(), time::macros::date!(2026 - 06 - 30));
+        assert_eq!(berlin_date(summer), time::macros::date!(2026 - 07 - 01));
+        // Midday is the same date either way.
+        let midday = time::macros::datetime!(2026-06-30 10:00 UTC);
+        assert_eq!(berlin_date(midday), midday.date());
+    }
+
+    #[test]
+    fn berlin_days_tile_the_timeline_across_both_dst_transitions() {
+        // Spring forward: 29.03.2026 is 23 hours long.
+        let spring = time::macros::date!(2026 - 03 - 29);
+        let start = berlin_midnight(spring);
+        let end = berlin_midnight(spring.next_day().unwrap());
+        assert_eq!(end - start, Duration::hours(23));
+        // Autumn back: 25.10.2026 is 25 hours long.
+        let autumn = time::macros::date!(2026 - 10 - 25);
+        let start = berlin_midnight(autumn);
+        let end = berlin_midnight(autumn.next_day().unwrap());
+        assert_eq!(end - start, Duration::hours(25));
+        // A UTC-midnight window would have been 24 hours in both cases, and
+        // would have started an hour into the German day.
+        assert_ne!(berlin_midnight(spring), spring.midnight().assume_utc());
+    }
+
+    #[test]
+    fn heute_agrees_with_berlin_date_of_now() {
+        assert_eq!(heute(), berlin_date(OffsetDateTime::now_utc()));
+    }
 
     fn date(y: i32, m: u8, d: u8) -> Date {
         Date::from_calendar_date(y, Month::try_from(m).unwrap(), d).unwrap()

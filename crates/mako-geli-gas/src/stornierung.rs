@@ -168,7 +168,7 @@ pub struct GeliGasStornierungData {
     /// EDIFACT document date from DTM+137.
     pub document_date: String,
     /// EDIFACT message reference from the 44022 message.
-    pub message_ref: Option<MessageRef>,
+    pub message_ref: MessageRef,
 }
 
 // ── Domain state ──────────────────────────────────────────────────────────────
@@ -314,7 +314,7 @@ impl Workflow for GeliGasStornierungWorkflow {
                 receiver: receiver.clone(),
                 vorgang_id: vorgang_id.clone(),
                 document_date: document_date.clone(),
-                message_ref: Some(message_ref.clone()),
+                message_ref: message_ref.clone(),
             }),
 
             GeliGasStornierungEvent::ValidationPassed { .. } => {
@@ -443,10 +443,8 @@ impl Workflow for GeliGasStornierungWorkflow {
                 if positive {
                     aperak_payload["suppress_wire"] = serde_json::Value::Bool(true);
                 }
-                if let Some(ref mr) = data.message_ref {
-                    aperak_payload["orig_message_ref"] =
-                        serde_json::Value::String(mr.as_str().to_owned());
-                }
+                aperak_payload["orig_message_ref"] =
+                    serde_json::Value::String(data.message_ref.as_str().to_owned());
                 if let Some(ref r) = reason {
                     aperak_payload["reason"] = serde_json::Value::String(r.clone());
                 }
@@ -642,7 +640,7 @@ mod tests {
             receiver: MarktpartnerCode::new("9907317000007"),
             vorgang_id: MaLo::new("STORNO0000A"),
             document_date: "20251001000000+00".to_owned(),
-            message_ref: None,
+            message_ref: MessageRef::new("00001"),
         };
         let state = GeliGasStornierungState::Completed(data);
         let output = GeliGasStornierungWorkflow::handle(

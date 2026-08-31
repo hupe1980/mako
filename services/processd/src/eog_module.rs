@@ -240,8 +240,8 @@ async fn handle_gap_detected(
         Ok(Some(vs)) => vs
             .lieferende
             .and_then(|d| d.next_day())
-            .unwrap_or_else(|| time::OffsetDateTime::now_utc().date()),
-        _ => time::OffsetDateTime::now_utc().date(),
+            .unwrap_or_else(mako_fristen::heute),
+        _ => mako_fristen::heute(),
     };
 
     let cmd = ForwardCommand {
@@ -394,7 +394,7 @@ pub async fn sweep_ersatzversorgung_timer(
           WHERE tenant = $1
             AND status = 'active'
             AND eog_art = 'ERSATZVERSORGUNG'
-            AND eog_seit + INTERVAL '3 months' <= CURRENT_DATE + make_interval(days => $2)
+            AND eog_seit + INTERVAL '3 months' <= heute() + make_interval(days => $2)
           RETURNING malo_id, gv_mp_id, eog_seit, haushaltskunde",
     )
     .bind(tenant)
@@ -409,7 +409,7 @@ pub async fn sweep_ersatzversorgung_timer(
           WHERE tenant = $1
             AND status IN ('active', 'expiring')
             AND eog_art = 'ERSATZVERSORGUNG'
-            AND eog_seit + INTERVAL '3 months' <= CURRENT_DATE
+            AND eog_seit + INTERVAL '3 months' <= heute()
           RETURNING malo_id, gv_mp_id, eog_seit, haushaltskunde",
     )
     .bind(tenant)

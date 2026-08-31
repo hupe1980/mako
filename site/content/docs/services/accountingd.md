@@ -478,7 +478,7 @@ With **neither** an Abschlag nor a prior Jahresrechnung on record the Satz-1 gat
 cannot be established and the case is **conservatively excluded** — mako never
 disconnects without a provable consumption basis.
 
-Two things about *what* is measured, both of which were wrong before:
+Two things about *what* is measured:
 
 **The Zahlungsverzug is `accounts.verzug_ct`** — a second ledger-derived cache
 beside `balance_ct`, and deliberately a different number: the sum of open debit

@@ -407,7 +407,7 @@ appears in a `billing_records` row and is absent from its category CHECK.
 discriminator. Call `product.build_engine(&grid, &rates)` to obtain a configured `BillingEngine`:
 
 ```rust
-// Deserializes from {"category":"STROM","arbeitspreis_ct_per_kwh":32.0,...}
+// Deserializes from {"category":"STROM","arbeitspreis_ct_per_kwh":"32.0",...}
 let product: Product = serde_json::from_str(&product_json)?;
 let engine = product.build_engine(&grid, &rates);
 // No more Option<BillingEngine> or PricingModel::try_from() needed
@@ -480,10 +480,10 @@ Content-Type: application/json
   "period_from": "2026-01-01",
   "period_to":   "2026-01-31",
   "switch_date": "2026-01-15",
-  "old_tariff":  { "category": "STROM", "arbeitspreis_ct_per_kwh": 28.0 },
-  "new_tariff":  { "category": "STROM", "arbeitspreis_ct_per_kwh": 32.0 },
-  "old_meter":   { "arbeitsmenge_kwh": 140 },
-  "new_meter":   { "arbeitsmenge_kwh": 170 }
+  "old_tariff":  { "category": "STROM", "arbeitspreis_ct_per_kwh": "28.0" },
+  "new_tariff":  { "category": "STROM", "arbeitspreis_ct_per_kwh": "32.0" },
+  "old_meter":   { "arbeitsmenge_kwh": "140" },
+  "new_meter":   { "arbeitsmenge_kwh": "170" }
 }
 ```
 
@@ -570,7 +570,10 @@ When the product in `productd` has `dynamic_epex: true`, `billingd` automaticall
    per OBIS register, and folding them together unfiltered would bill a prosumer's
    Einspeisung as grid draw, add a dual-tariff meter's `1.8.1`/`1.8.2` to the
    `1.8.0` they decompose, and price a `1-0:1.6.0` peak-demand register in **kW**
-   as energy — each at a dynamic price, against a §41a customer
+   as energy — each at a dynamic price, against a §41a customer. The window is
+   bounded by **Berlin midnights** — a billing period is a run of German
+   calendar days, and a UTC-midnight window would drop the period's first four
+   quarter-hours and pick up four belonging to the next one
 2. Fetches 15-min EPEX prices from `productd` (`GET /api/v1/epex-prices/{date}/quarter-hourly`),
    keyed on each Market Time Unit's UTC start instant (SDAC 15-min go-live 2025-10-01)
 3. Calculates `Σ(kWh_MTU × (EPEX_MTU_ct + Aufschlag_ct)) / 100` as the energy cost —
@@ -855,7 +858,7 @@ sniffing the body to tell a structured refusal from a bare string.
 | `POST` | `/api/v1/billing/sammelrechnung/{rv_id}` | B2B consolidated invoice for a Rahmenvertrag — whole run in one transaction, bundle scored by the risk gate |
 | `POST` | `/api/v1/billing/ggv/{ggv_id}` | § 42b EnWG Gebäudestromnutzung, one transaction per run |
 | `POST` | `/api/v1/billing/vpp/{vpp_id}` | § 41e dispatch settlement (Gutschrift) |
-| `POST` | `/api/v1/webhooks/vpp-dispatch` | `de.vpp.dispatch.confirmed` auto-settlement (HMAC) |
+| `POST` | `/api/v1/webhooks/vpp-dispatch` | `de.vpp.dispatch.confirmed` auto-settlement (HMAC). Settles only when `sender_mp_id` is the contracted `aggregator_mp_id` — a § 14a Steuerung by the Netzbetreiber rides the same PID 55168 and is recorded, not paid |
 | `GET` | `/api/v1/billing/review-queue` | Analyst work list — REVIEW + HELD, highest risk first |
 | `POST` | `/api/v1/billing/{id}/release` | Release a HELD record for dispatch |
 | `POST` | `/api/v1/billing/{id}/submit-b2g` | XRechnung B2G submission (§ 4a EGovG i.V.m. ERechV) |

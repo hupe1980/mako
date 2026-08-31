@@ -72,6 +72,8 @@ graph LR
 5. [Check Digit Algorithms](#check-digit-algorithms)
 6. [EDIFACT Encoding](#edifact-encoding)
 7. [Rust API](#rust-api)
+8. [Quantities and money on the wire](#quantities-and-money-on-the-wire)
+9. [Dates and days](#dates-and-days)
 
 ---
 
@@ -485,6 +487,97 @@ accepts `WAERME`/`WASSER` for submetering series.
 | Gas balancing domain model | [GaBi Gas domain](#gas-domain-gabi-gas) (below) |
 
 ---
+
+## Quantities and money on the wire
+
+**A `Decimal` is a JSON string, in both directions.** `{"arbeitspreis_ct_per_kwh": "32.0"}`,
+never `32.0`.
+
+Serde's data model has no arbitrary-precision number, so a JSON number has
+already been through `f64` before any deserializer sees it. Two things are gone
+by then and nothing downstream can recover them: the **scale** (`119.00` arrives
+as `119`) and precision past ~15 significant digits. For a billed quantity or a
+unit price that is the same objection that makes the storage column
+`NUMERIC(18,5)` — a settled energy figure is a Buchungsbeleg (§ 147 AO / GoBD)
+and must be exact.
+
+`rust_decimal/serde-str` is therefore enabled on the **workspace** pin, not
+inherited from a dependency that happens to turn it on. Cargo unifies features
+per build graph: taken from `metering/serde`, the rule would apply to a
+workspace build and not to `cargo build -p billingd`, so a service would accept
+in production the float its own workspace test run refuses.
+
+Two deliberate exceptions, both on inbound-only surfaces:
+
+| Surface | Behaviour | Why |
+|---|---|---|
+| MCP tool arguments (`DecimalArg`) | string **or** number | A model emits a number; the value is re-read from the number's own digits, not through `f64` |
+| BO4E payloads (`rubo4e`) | string **or** number | BO4E-python writes `"119.00"`, go-bo4e writes `119.00`; the standard settles neither. mako always **emits** the string |
+
+## Dates and days
+
+Three different things in this domain are called a "day", and confusing any two
+of them is silent — the value looks right, and it is wrong by an hour or by a
+date.
+
+| Kind | What it is | Where it comes from |
+|---|---|---|
+| **Instant** | an absolute point in time: a meter interval, an event timestamp, a delivery attempt | `OffsetDateTime`, stored as `TIMESTAMPTZ` |
+| **Calendar day** | the German civil day, 00:00 → 00:00 Europe/Berlin: a Lieferbeginn, a Rechnungsdatum, the day a Frist starts, an electricity billing period | `mako_fristen::{heute, berlin_date, berlin_midnight}` |
+| **Gastag** | 06:00 → 06:00 Europe/Berlin, the day gas balances on (Art. 3 Nr. 6 VO (EU) 312/2014, KoV; DVGW G 2000 § 3.2) | `mako_gabi_gas::GasDay` |
+
+Instants are never converted for storage or comparison — they are absolute.
+The other two are local, and both survive DST: a calendar day is 23, 24 or 25
+hours long, and so is a Gastag.
+
+### A business date is a Berlin date
+
+`OffsetDateTime::now_utc().date()` answers the **UTC** calendar date, which is
+still yesterday between 23:00 Berlin and midnight (22:00 in summer). SQL
+`current_date` answers the *session* time zone's date, which on a UTC server is
+the same thing. Either one, used for a business date, is off by one for an hour
+every night — dating an invoice into the previous month, starting a Frist a day
+early, or selecting the outgoing Formatversion for an hour after a cutover.
+
+`mako-fristen` is the one answer, and every service reads it from there:
+
+```rust
+use mako_fristen::{heute, berlin_date, berlin_midnight};
+
+let today = heute();                       // the German calendar date, now
+let d     = berlin_date(some_instant);     // the German calendar date of an instant
+let start = berlin_midnight(d);            // when that day begins, as a UTC instant
+```
+
+Every schema defines the SQL counterpart, so a comparison written in SQL agrees
+with one written in Rust however the connection was opened:
+
+```sql
+CREATE OR REPLACE FUNCTION heute() RETURNS date
+    LANGUAGE sql STABLE
+    AS $$ SELECT (now() AT TIME ZONE 'Europe/Berlin')::date $$;
+```
+
+`just check-business-dates` refuses both UTC idioms across the workspace.
+
+**A library does not read the clock.** `edi-energy` resolves a Formatversion
+against a date the *caller* states — `ParseConfig::with_reference_date`,
+`validate_on_date`, `ProcessContext::for_date` — and disambiguates nothing by
+date when none is given. A Formatversion takes effect at German midnight, so
+„which day is it" decides which profile applies, and a parser is the wrong place
+to decide it. `makod` supplies `mako_fristen::heute()` at its validation gates.
+
+### Periods are tiled from Berlin midnights
+
+A billing period, a Bilanzierungsmonat and a § 41a Lastgang window are runs of
+German calendar days, so their bounds are
+`[berlin_midnight(from), berlin_midnight(to.next_day()))`. A window of UTC
+midnights sits an hour into the German day: it drops the first four
+quarter-hours of the period and picks up four belonging to the next one.
+
+**A gas quantity is not settled on that grid.** Use `GasDay::start_utc` /
+`end_utc` for anything booked against a Gastag — it is six hours later in every
+season, so a calendar-day window mis-books a quarter of each day.
 
 ## Gas Domain — GaBi Gas
 

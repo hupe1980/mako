@@ -635,11 +635,11 @@ fn utilmd_gas_g1_1_boundary_selects_correct_profile() {
 
 /// `pid_has_ahb_rules` must reject unregistered Prüfidentifikatoren.
 ///
-/// It previously discriminated on `rule_count() > 0`, which is `true` for
-/// *every* PID: an unknown code yields the `unknown-pid` stand-in pack, and
-/// that pack carries exactly one warning rule. The predicate was therefore
-/// always-true, and its own doctest passed vacuously. The generated profiles
-/// must also still emit the literal that `UNKNOWN_PID_PACK` names.
+/// `rule_count() > 0` cannot express this: an unknown code yields the
+/// `unknown-pid` stand-in pack, which carries exactly one warning rule, so the
+/// count is non-zero for *every* PID and a predicate built on it is always
+/// true — including in its own doctest. The generated profiles must also still
+/// emit the literal that `UNKNOWN_PID_PACK` names.
 #[cfg(feature = "utilmd")]
 #[test]
 fn pid_has_ahb_rules_discriminates_known_from_unknown() {

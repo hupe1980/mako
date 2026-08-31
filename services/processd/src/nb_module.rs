@@ -1043,11 +1043,7 @@ pub async fn resume_after_lfa_antwort(
         NbEntscheidung::Accept(_) => {
             // The ÜT of the Anmeldung, in German local time: the day the Fall-b
             // „mindestens 1 WT nach dem ÜT" floor counts from.
-            use time_tz::{OffsetDateTimeExt as _, timezones};
-            let uet = waiting
-                .received_at
-                .to_timezone(timezones::db::europe::BERLIN)
-                .date();
+            let uet = mako_fristen::berlin_date(waiting.received_at);
             let zuordnungsende = meldung.zuordnungsende(lfa_zuordnungsende, uet);
             let beendigung = meldung.beendigung(&malo_id, zuordnungsende);
             // The Zuordnungsende the LFA actually answered with, when it falls

@@ -211,7 +211,7 @@ impl VertragdMcpHandler {
         Parameters(_): Parameters<serde_json::Value>,
     ) -> Result<CallToolResult, McpError> {
         use crate::domain::{Vertragsart, preisanpassungsregime};
-        let today = time::OffsetDateTime::now_utc().date();
+        let today = mako_fristen::heute();
         let rows = crate::pg::offene_preisanpassungen(&self.state.pool, &self.state.tenant, today)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -265,7 +265,7 @@ impl VertragdMcpHandler {
             time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT)
                 .map_err(|_| McpError::invalid_params("dates must be YYYY-MM-DD", None))
         };
-        let heute = time::OffsetDateTime::now_utc().date();
+        let heute = mako_fristen::heute();
         let (von, bis) = match (p.from.as_deref(), p.to.as_deref()) {
             (Some(f), Some(t)) => (parse(f)?, parse(t)?),
             _ => (heute, heute),
@@ -406,7 +406,7 @@ impl VertragdMcpHandler {
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         let haushaltskunde = kunde.is_none_or(|k| k.haushaltskunde);
-        let today = time::OffsetDateTime::now_utc().date();
+        let today = mako_fristen::heute();
         let art = Vertragsart::from_db(&vertrag.vertragsart);
         let fristen: serde_json::Map<String, serde_json::Value> = [
             Kuendigungsgrund::Ordentlich,

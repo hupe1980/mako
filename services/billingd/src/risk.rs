@@ -449,7 +449,7 @@ mod tests {
     fn invoice(kwh: Decimal) -> Invoice {
         let rates = energy_billing::RegulatoryRates::default();
         let product: Product = serde_json::from_str(
-            r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0,"grundpreis_ct_per_day":8.0}"#,
+            r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0","grundpreis_ct_per_day":"8.0"}"#,
         )
         .unwrap();
         let ctx = BillingContext {
@@ -525,7 +525,7 @@ mod tests {
     fn a_feed_in_settlement_is_not_a_dead_meter() {
         let rates = energy_billing::RegulatoryRates::default();
         let product: Product =
-            serde_json::from_str(r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":8.2}"#)
+            serde_json::from_str(r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":"8.2"}"#)
                 .expect("EEG product");
         let ctx = BillingContext {
             malo_id: "51238696781".into(),

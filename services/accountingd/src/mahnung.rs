@@ -183,7 +183,7 @@ pub async fn build_view(
 
     Ok(Some(MahnungView {
         stufe,
-        datum: OffsetDateTime::now_utc().date().to_string(),
+        datum: mako_fristen::heute().to_string(),
         zahlungsfrist: case.due_date.to_string(),
         absender: absender(cfg),
         empfaenger: PartyView {
@@ -292,7 +292,7 @@ pub async fn issue_pending(
             kunden_nr: case.kunden_nr.clone(),
             recipient,
             channels,
-            date: OffsetDateTime::now_utc().date(),
+            date: mako_fristen::heute(),
             ident: case.case_id.to_string(),
         };
         match outputd.issue_mahnung(&request).await {

@@ -356,7 +356,7 @@ fn an_anfrage_ablehnung_ends_the_process() {
     let (s, _) = step(
         &s,
         C::ReceiveAnfrageAblehnung {
-            message_ref: Some(mref("QUO-REJ")),
+            message_ref: mref("QUO-REJ"),
             reason: Some("Messprodukt nicht lieferbar".to_owned()),
         },
     )
@@ -607,7 +607,7 @@ fn an_unpriced_quotes_is_not_an_angebot() {
     let (s, _) = step(
         &s,
         C::ReceiveAnfrageAblehnung {
-            message_ref: Some(mref("QUO-LEER")),
+            message_ref: mref("QUO-LEER"),
             reason: Some("Gerätetechnik misst die angeforderten Werte nicht".to_owned()),
         },
     )

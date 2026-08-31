@@ -335,9 +335,10 @@ pub const PARITY_MIN_SAMPLE: i64 = 10;
 /// **Sign convention, stated once and used everywhere.** `gap_pp` is
 /// `affiliate − third_party`, in percentage points. A **positive** gap means the
 /// affiliate fared better, which is the discrimination concern § 6a / § 7a EnWG
-/// exists to catch. Three surfaces in `obsd` previously computed this, two with
-/// one sign and one with the other, so the CloudEvent and the MCP tool
-/// disagreed about which side was favoured.
+/// exists to catch. `obsd` reports the gap on three surfaces — the projection,
+/// the CloudEvent and the MCP tool — and each reads it from here, because a
+/// sign computed per surface is a sign that can disagree about which side was
+/// favoured.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ParityComparison {
     pub affiliate: ParityGroup,

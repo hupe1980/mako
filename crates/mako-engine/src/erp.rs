@@ -156,8 +156,7 @@ pub enum ErpEventType {
     /// The counterparty sent an APERAK rejecting our UTILMD.
     ///
     /// `erc_code` is `Some` when the APERAK carried a structured ERC segment
-    /// (BDEW APERAK AHB 1.0 §2.2).  It is `None` for legacy outbox messages
-    /// that predate the typed ERC code field.
+    /// (BDEW APERAK AHB 1.0 §2.2), and `None` when the counterparty sent none.
     AperakRejected {
         /// Structured BDEW ERC error code from the APERAK ERC segment.
         ///
@@ -335,9 +334,6 @@ pub struct ErpEvent {
     /// Carried through from `OutboxMessage::workflow_name`.  Emitted as the
     /// `makoworkflow` CloudEvents extension attribute by `WebhookErpAdapter`.
     /// `marktd` maps this to `marktrole` for role-scoped ERP subscriber fan-out.
-    ///
-    /// Empty string for events produced by legacy outbox messages that
-    /// predate this field.
     pub workflow_name: Box<str>,
 }
 

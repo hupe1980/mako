@@ -115,7 +115,7 @@ impl Daemon for MabisSyncd {
                     // The Bilanzierungsmonat and its Werktag calendar are civil,
                     // so the due date is compared against the Berlin date — a UTC
                     // date is a day behind for the first hour of every local day.
-                    let today = mabis_syncd::sync_engine::berlin_date(now);
+                    let today = mako_fristen::berlin_date(now);
                     let (from, to) = mabis_syncd::sync_engine::previous_month_period(today);
                     let due = mako_fristen::add_werktage(
                         to,

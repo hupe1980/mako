@@ -49,7 +49,7 @@ fn sperrung_pids_have_rules_in_the_current_release() {
 ///
 /// The AHB carries `IMD 00010 Muss` solely in the 17117 column — its `Z53`/`Z54`
 /// values ("innerhalb/außerhalb der Arbeitszeit") only make sense for an
-/// unblocking order. Both profiles previously gave that mark to 17115.
+/// unblocking order, and 17115 (Sperrauftrag) must not carry the mark.
 #[test]
 fn imd_is_mandatory_only_for_the_entsperrauftrag() {
     for release in ["fv20260401", "fv20261001"] {

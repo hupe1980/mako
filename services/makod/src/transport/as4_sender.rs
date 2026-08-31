@@ -548,7 +548,7 @@ impl As4Sender for BdewAs4Sender {
                                  {message_id_str} ({message_type}): {e}"
                             )));
                         }
-                        Ok(parsed) => match parsed.validate() {
+                        Ok(parsed) => match parsed.validate_on_date(mako_fristen::heute()) {
                             Err(e) => {
                                 return Err(EngineError::Serialization(format!(
                                     "loopback gate: AHB validation failed to run for \
@@ -816,7 +816,7 @@ impl As4Sender for BdewAs4Sender {
                          {message_id_str} ({message_type}): {e}"
                     )));
                 }
-                Ok(parsed) => match parsed.validate() {
+                Ok(parsed) => match parsed.validate_on_date(mako_fristen::heute()) {
                     Err(e) => {
                         return Err(EngineError::Serialization(format!(
                             "pre-send gate: AHB validation failed to run for \

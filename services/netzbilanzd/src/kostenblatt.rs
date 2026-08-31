@@ -760,7 +760,7 @@ mod tests {
         let body = serde_json::json!({
             "coverage_pct": 100.0,
             "intervals": [
-                { "start": "2026-01-15T10:00:00Z", "kwh": 1.25 },
+                { "start": "2026-01-15T10:00:00Z", "kwh": "1.25" },
                 { "start": "2026-01-15T10:15:00Z", "kwh": "1.30" }
             ]
         });

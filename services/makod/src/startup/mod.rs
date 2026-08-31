@@ -284,7 +284,7 @@ pub(crate) fn build_engine(
     // EngineBuilder::build so a missing profile panics with an actionable message
     // rather than silently dead-lettering at first dispatch.
     .with_profile_validator({
-        let today = time::OffsetDateTime::now_utc().date();
+        let today = mako_fristen::heute();
         move |msg_type| {
             // If the type code is unrecognised, treat as missing (fail-safe).
             let Some(mt) = edi_energy::MessageType::from_unh_code(msg_type) else {

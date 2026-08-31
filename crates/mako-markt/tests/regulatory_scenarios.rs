@@ -425,7 +425,7 @@ mod tests {
             valid_from: date!(2020 - 01 - 01),
             valid_to: None,
         };
-        let today = time::OffsetDateTime::now_utc().date();
+        let today = mako_fristen::heute();
         let valid = a.valid_from <= today && a.valid_to.is_none_or(|to| to >= today);
         assert!(valid, "open-ended assignment must be valid today");
     }
@@ -439,7 +439,7 @@ mod tests {
             valid_from: date!(2020 - 01 - 01),
             valid_to: Some(date!(2021 - 12 - 31)),
         };
-        let today = time::OffsetDateTime::now_utc().date();
+        let today = mako_fristen::heute();
         let valid = a.valid_from <= today && a.valid_to.is_none_or(|to| to >= today);
         assert!(!valid, "past assignment must be expired");
     }
@@ -453,7 +453,7 @@ mod tests {
             valid_from: date!(2099 - 01 - 01), // far future
             valid_to: None,
         };
-        let today = time::OffsetDateTime::now_utc().date();
+        let today = mako_fristen::heute();
         let valid = a.valid_from <= today && a.valid_to.is_none_or(|to| to >= today);
         assert!(!valid, "future assignment must not yet be valid");
     }

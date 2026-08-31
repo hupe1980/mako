@@ -746,10 +746,9 @@ pub struct DeviceChangeData {
     pub document_date: String,
     /// BDEW Prüfidentifikator.
     pub pruefidentifikator: Pruefidentifikator,
-    /// Original UTILMD message reference, preserved for APERAK construction.
-    /// `None` only for processes initiated before this field was added (old snapshots).
-    #[serde(default)]
-    pub message_ref: Option<MessageRef>,
+    /// Original UTILMD message reference. The APERAK has to name the message
+    /// it answers (`RFF+ACW`), so it is carried from `Initiated` onward.
+    pub message_ref: MessageRef,
     /// `IDE+24` DE 7402 of the inbound order.
     ///
     /// The answer must echo it — that is how the counterparty correlates a
@@ -1206,7 +1205,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                 device_id: DeviceId::new(""),
                 document_date: process_date.clone(),
                 pruefidentifikator: *pruefidentifikator,
-                message_ref: Some(message_ref.clone()),
+                message_ref: message_ref.clone(),
                 vorgangsnummer: None,
                 process_date: Some(process_date.clone()),
                 bestaetigter_zuordnungsbeginn: None,
@@ -1255,7 +1254,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                 device_id: device_id.clone(),
                 document_date: document_date.clone(),
                 pruefidentifikator: *pruefidentifikator,
-                message_ref: Some(message_ref.clone()),
+                message_ref: message_ref.clone(),
                 vorgangsnummer: vorgangsnummer.clone(),
                 process_date: process_date.clone(),
                 bestaetigter_zuordnungsbeginn: None,
@@ -1682,10 +1681,8 @@ impl Workflow for WimDeviceChangeWorkflow {
                 if suppress_wire {
                     aperak_payload["suppress_wire"] = serde_json::Value::Bool(true);
                 }
-                if let Some(ref mr) = data.message_ref {
-                    aperak_payload["orig_message_ref"] =
-                        serde_json::Value::String(mr.as_str().to_owned());
-                }
+                aperak_payload["orig_message_ref"] =
+                    serde_json::Value::String(data.message_ref.as_str().to_owned());
                 if let Some(ref r) = reason {
                     aperak_payload["reason"] = serde_json::Value::String(r.clone());
                 }
@@ -1913,10 +1910,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                     payload["zuordnungsbeginn"] = serde_json::Value::String(beginn.clone());
                 }
 
-                let message_ref = data
-                    .message_ref
-                    .clone()
-                    .unwrap_or_else(|| MessageRef::new(data.melo_id.as_str()));
+                let message_ref = data.message_ref.clone();
                 Ok(WorkflowOutput::with_outbox(
                     vec![DeviceChangeEvent::GesamtvorgangGemeldet {
                         erfolgreich,

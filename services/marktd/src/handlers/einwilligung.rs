@@ -111,9 +111,7 @@ pub async fn grant_einwilligung(
         location_ids: body.location_ids.clone(),
         scope: body.scope.unwrap_or_else(|| "werte".to_owned()),
         granted_at: time::OffsetDateTime::now_utc(),
-        valid_from: body
-            .valid_from
-            .unwrap_or_else(|| time::OffsetDateTime::now_utc().date()),
+        valid_from: body.valid_from.unwrap_or_else(mako_fristen::heute),
         valid_to: body.valid_to,
         revoked_at: None,
         evidence_uri: body.evidence_uri,
@@ -458,8 +456,7 @@ pub async fn get_esa_preise(
     {
         return forbidden("read-einwilligung denied");
     }
-    let at =
-        q.at.unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+    let at = q.at.unwrap_or_else(mako_fristen::heute);
     match repo
         .esa_preise_at(&tenant, &esa_mp_id, &msb_mp_id, at)
         .await
@@ -573,8 +570,7 @@ pub async fn get_esa_messprodukt_angebot(
     {
         return forbidden("read-einwilligung denied");
     }
-    let at =
-        q.at.unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+    let at = q.at.unwrap_or_else(mako_fristen::heute);
     let code = mako_wim::esa::normalize_code(&messprodukt);
     let Some(produkt) = mako_wim::esa::messprodukt(&code) else {
         return StatusCode::NOT_FOUND.into_response();

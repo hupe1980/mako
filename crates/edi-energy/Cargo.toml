@@ -114,6 +114,11 @@ serde        = ["dep:serde", "edifact-rs/serde"]
 diagnostics  = ["dep:miette", "edifact-rs/diagnostics"]
 
 [dev-dependencies]
+# Tests only. The library reads no clock — a date it resolves a Formatversion
+# against is always the caller's — but a test that gates on a cutover date has
+# to ask what day it is, and there is one answer to that on this platform.
+# Path-only, so `cargo publish` strips it and no consumer inherits it.
+mako-fristen = { path = "../mako-fristen" }
 miette     = { workspace = true }
 serde_json = { workspace = true }
 proptest   = "1"

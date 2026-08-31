@@ -336,7 +336,7 @@ pub async fn get_abschlaege(
         Ok(d) => d,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
-    let to = match parse("to", q.to.as_deref(), OffsetDateTime::now_utc().date()) {
+    let to = match parse("to", q.to.as_deref(), mako_fristen::heute()) {
         Ok(d) => d,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
@@ -504,7 +504,7 @@ pub async fn ingest_webhook(
         return StatusCode::BAD_REQUEST.into_response();
     };
     let data = ce.get("data");
-    let today = OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
 
     match ce_type {
         // ── Billing invoice (billingd) ────────────────────────────────────────
@@ -2664,7 +2664,7 @@ pub async fn delete_mandate(
     if let Err(e) = cedar.check(&claims.principal(), "manage-sepa", &cfg.tenant) {
         return forbidden(&e);
     }
-    let today = time::OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
     let rows = sqlx::query(
         "UPDATE sepa_mandates SET revoked_at = $1, updated_at = now() \
          WHERE mandate_id = $2 AND tenant = $3 AND revoked_at IS NULL",
@@ -3038,7 +3038,7 @@ pub async fn post_buchen(
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
 
-    let today = OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
     let booking_date = req
         .booking_date
         .as_deref()
@@ -3401,7 +3401,7 @@ pub async fn settle_jahresabschluss(
         }
     }
 
-    let today = OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
     // Deterministic idempotency key — the ledger post is keyed by it, so a
     // redelivery replays as a no-op returning the original settlement entry.
     let ce_id = format!("jahresabschluss:{malo_id}:{year}");
@@ -4413,7 +4413,7 @@ pub async fn post_clear(
     if let Ok(None) = fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let today = OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
     match ledger.apply_fifo_clearing(lf_mp_id, &malo_id, today).await {
         Ok(Some(id)) => Json(serde_json::json!({
             "cleared": true,
@@ -4444,7 +4444,7 @@ pub async fn post_reset_clearing(
     let Ok(uuid) = Uuid::parse_str(&clearing_id) else {
         return (StatusCode::BAD_REQUEST, "invalid clearing_id").into_response();
     };
-    let today = OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
     match ledger
         .reset_clearing(doubleentry::clearing::ClearingId::from_uuid(uuid), today)
         .await
@@ -4685,7 +4685,7 @@ pub async fn post_run_eeg_payouts(
     };
 
     let use_instant = req.instant_override.unwrap_or(cfg.eeg.sepa_instant);
-    let today = time::OffsetDateTime::now_utc();
+    let today = mako_fristen::heute();
     let year = req.billing_year.unwrap_or(today.year() as i16);
     let month = req.billing_month.unwrap_or(today.month() as i16);
 
@@ -4772,9 +4772,10 @@ pub async fn post_run_eeg_payouts(
             }
         };
         // §25 Abs. 1 EEG 2023 — "unverzüglich nach Ende des Monats": the payout
-        // leaves today. The crate's default execution date is not something a
-        // payment date should be inherited from.
-        let execution_date = today.date();
+        // leaves today, as the German banking calendar counts it. The crate's
+        // default execution date is not something a payment date should be
+        // inherited from.
+        let execution_date = today;
         let creditor_address = account.postal_address();
         let pain_xml = match build_pain_001(
             &crate::sepa::DebtorIdentity {
@@ -5542,7 +5543,7 @@ pub async fn post_sepa_reversal(
     // The compensating ledger entry re-opens the receivable. Positive = Forderung.
     let ledger_entry_id = match (entry.malo_id.as_deref(), entry.lf_mp_id.as_deref()) {
         (Some(malo_id), Some(lf_mp_id)) => {
-            let today = time::OffsetDateTime::now_utc().date();
+            let today = mako_fristen::heute();
             match crate::pg::post_entry(
                 &ledger,
                 &pool,
@@ -5832,7 +5833,7 @@ pub(crate) async fn create_eeg_payout_order(
     };
     // §25 Abs. 1 EEG 2023 — "unverzüglich nach Ende des Monats": the payout
     // leaves today rather than on a library default.
-    let execution_date = time::OffsetDateTime::now_utc().date();
+    let execution_date = mako_fristen::heute();
     let pain_xml = match build_pain_001(
         &crate::sepa::DebtorIdentity {
             iban: debtor_iban,

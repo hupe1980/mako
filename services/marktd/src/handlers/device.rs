@@ -1346,7 +1346,7 @@ pub async fn get_zaehlzeitdefinitionen(
 
     // Optionally filter to currently valid registers only.
     let only_valid = q.valid_only.unwrap_or(false);
-    let today = time::OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
     let registers: Vec<_> = registers
         .into_iter()
         .filter(|r| !only_valid || r.valid_to.map(|d| d >= today).unwrap_or(true))

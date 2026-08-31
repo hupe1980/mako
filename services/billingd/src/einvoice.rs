@@ -320,7 +320,7 @@ pub fn to_credit_note(
     original: &en16931::Invoice,
     new_number: &str,
 ) -> anyhow::Result<en16931::Invoice> {
-    let today = en16931::Date::try_from(time::OffsetDateTime::now_utc().date())
+    let today = en16931::Date::try_from(mako_fristen::heute())
         .map_err(|e| anyhow::anyhow!("today is not a representable EN 16931 date: {e}"))?;
     Ok(original.to_credit_note(new_number, today))
 }

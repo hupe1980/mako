@@ -12,6 +12,8 @@
 //! Source: BDEW *Entscheidungsbaum-Diagramme und Codelisten* 4.3, Kap. 6.2.1
 //! and 13.3.1.
 
+use mako_fristen::berlin_date;
+
 use crate::codes::{E_0614_CODES, E_3001_CODES, EBD_KUENDIGUNG, EBD_KUENDIGUNG_GAS};
 use crate::lf::types::{
     Bekannt, LfAnfrage, LfEntscheidung, LfVertragslage, Lokationsart, Terminart, Vollmacht,
@@ -111,7 +113,7 @@ pub fn pruefe_kuendigung(anfrage: &LfAnfrage, lage: &LfVertragslage) -> LfEntsch
     };
 
     // Prüfschritt 20/505 — liegt der Kündigungstermin vor dem Nachrichteneingang?
-    if kuendigungstermin < anfrage.eingang.date() {
+    if kuendigungstermin < berlin_date(anfrage.eingang) {
         code!(c("A01", "A10"), 20);
     }
 
@@ -303,7 +305,7 @@ pub fn pruefe_kuendigung_gas(anfrage: &LfAnfrage, lage: &LfVertragslage) -> LfEn
                 ),
             );
         }
-        Some(t) if t < anfrage.eingang.date() => {
+        Some(t) if t < berlin_date(anfrage.eingang) => {
             return LfEntscheidung::eskalation(
                 0,
                 format!(

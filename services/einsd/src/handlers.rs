@@ -122,7 +122,6 @@ struct FeedInInterval {
 /// previous month's prices and the last hour was dropped. On a negative-price
 /// night that is a whole hour of feed-in either paid or not paid in error.
 pub fn billing_month_range(year: i16, month: i16) -> Option<(OffsetDateTime, OffsetDateTime)> {
-    let berlin = time_tz::timezones::db::europe::BERLIN;
     let start_date = Date::from_calendar_date(
         i32::from(year),
         time::Month::try_from(u8::try_from(month).ok()?).ok()?,
@@ -141,19 +140,10 @@ pub fn billing_month_range(year: i16, month: i16) -> Option<(OffsetDateTime, Off
         )
         .ok()?
     };
-    // Midnight Berlin is never inside a DST gap (transitions happen at 02:00/03:00),
-    // so the ambiguous/none arms are unreachable; they are handled rather than
-    // unwrapped because a month boundary that panics takes the whole batch down.
-    let to_instant = |d: Date| -> Option<OffsetDateTime> {
-        use time_tz::{OffsetResult, PrimitiveDateTimeExt as _};
-        let midnight = time::PrimitiveDateTime::new(d, time::Time::MIDNIGHT);
-        match midnight.assume_timezone(berlin) {
-            OffsetResult::Some(dt) => Some(dt.to_offset(time::UtcOffset::UTC)),
-            OffsetResult::Ambiguous(earlier, _) => Some(earlier.to_offset(time::UtcOffset::UTC)),
-            OffsetResult::None => None,
-        }
-    };
-    Some((to_instant(start_date)?, to_instant(end_date)?))
+    Some((
+        mako_fristen::berlin_midnight(start_date),
+        mako_fristen::berlin_midnight(end_date),
+    ))
 }
 
 /// §51 auto-derivation: fetch ¼h feed-in from edmd, overlay the stored EPEX spot
@@ -1365,7 +1355,7 @@ pub async fn post_mastr_registrierung(
             }
         }
     } else {
-        time::OffsetDateTime::now_utc().date()
+        mako_fristen::heute()
     };
 
     // Transactional outbox: the `eeg_anlagen` state change (mastr_registriert)
@@ -1822,7 +1812,7 @@ pub async fn post_switch_veraeusserungsform(
     // The check is on the request date because that is when the notification is
     // enqueued. A backdated switch is refused rather than silently accepted: it
     // would change what the plant is owed for a month already settled.
-    if let Some(earliest) = fruehester_wechseltermin(time::OffsetDateTime::now_utc().date())
+    if let Some(earliest) = fruehester_wechseltermin(mako_fristen::heute())
         && effective_date < earliest
     {
         return (
@@ -2569,7 +2559,7 @@ pub async fn get_aw_reduktionen(
             Ok(d) => d,
             Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
         },
-        None => time::OffsetDateTime::now_utc().date(),
+        None => mako_fristen::heute(),
     };
     match crate::pg::aw_reduktionen_am(&pool, &cfg.tenant, &tr_id, on).await {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),

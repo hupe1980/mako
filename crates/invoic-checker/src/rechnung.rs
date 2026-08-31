@@ -157,7 +157,7 @@ fn build(
     let eingangsdatum = fakten
         .eingangsdatum
         .or(rechnungsdatum)
-        .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+        .unwrap_or_else(mako_fristen::heute);
 
     let leistungszeitraum = rechnung.billing_period().map(|p| Zeitraum {
         von: *p.start(),

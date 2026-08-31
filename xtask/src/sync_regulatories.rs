@@ -695,7 +695,7 @@ fn download_file(file_id: u64) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 
 /// Today, as the catalogue writes its dates.
 fn today_iso() -> String {
-    let now = time::OffsetDateTime::now_utc().date();
+    let now = mako_fristen::heute();
     format!(
         "{:04}-{:02}-{:02}",
         now.year(),

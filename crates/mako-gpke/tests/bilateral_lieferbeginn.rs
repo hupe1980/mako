@@ -90,7 +90,7 @@ fn nb_process() -> Process<GpkeSupplierChangeWorkflow, InMemoryEventStore> {
 
 // ── EDIFACT rendering ─────────────────────────────────────────────────────────
 //
-// Replicates the minimal logic of `services/makod/src/edifact_renderer.rs`
+// Replicates the minimal logic of `makod`'s `orchestrator::edifact_renderer`
 // inline so the test is independent of the `makod` binary crate.
 
 /// Render a UTILMD to EDIFACT wire bytes from domain fields.

@@ -186,11 +186,11 @@ pub async fn run_jahresablesung_campaign(
     // Default dates: geplant_am = Dec 31, ausfuehrt_bis = Jan 31 next year.
     let geplant_am = req.geplant_am.unwrap_or_else(|| {
         time::Date::from_calendar_date(year, time::Month::December, 31)
-            .unwrap_or_else(|_| time::OffsetDateTime::now_utc().date())
+            .unwrap_or_else(|_| mako_fristen::heute())
     });
     let ausfuehrt_bis = req.ausfuehrt_bis.unwrap_or_else(|| {
         time::Date::from_calendar_date(year + 1, time::Month::January, 31)
-            .unwrap_or_else(|_| time::OffsetDateTime::now_utc().date())
+            .unwrap_or_else(|_| mako_fristen::heute())
     });
 
     let max_malos = req.max_malos.unwrap_or(5_000).min(50_000);
@@ -357,7 +357,7 @@ pub(crate) async fn jahresablesung_compliance(
     let rows = sqlx::query(
         r"SELECT status,
                  count(*)                                        AS orders,
-                 count(*) FILTER (WHERE ausfuehrt_bis < CURRENT_DATE
+                 count(*) FILTER (WHERE ausfuehrt_bis < heute()
                                     AND status <> 'AUSGEFUEHRT') AS overdue
           FROM   ablese_auftraege
           WHERE  tenant = $1

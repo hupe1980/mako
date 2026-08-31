@@ -337,7 +337,7 @@ pub async fn create_order_pg(
     let befund = vorlauffrist_befund(
         req.ausfuehrung_am,
         req.fruehestens_am,
-        time::OffsetDateTime::now_utc().date(),
+        mako_fristen::heute(),
     );
     if let Some(b) = befund.filter(|b| !b.eingehalten) {
         tracing::warn!(
@@ -410,7 +410,7 @@ pub async fn list_orders_pg(
           WHERE tenant = $1
             AND ($2::TEXT IS NULL OR status = $2)
             AND ($3::TEXT IS NULL OR malo_id = $3)
-            AND (NOT $4 OR COALESCE(ausfuehrung_am, fruehestens_am) <= CURRENT_DATE)
+            AND (NOT $4 OR COALESCE(ausfuehrung_am, fruehestens_am) <= heute())
           ORDER BY COALESCE(ausfuehrung_am, fruehestens_am) NULLS LAST, created_at DESC
           LIMIT $5"
     ))
@@ -909,12 +909,12 @@ pub async fn stats_pg(pool: &PgPool, tenant: &str) -> anyhow::Result<SperrStats>
               COUNT(*) FILTER (WHERE status = 'cancelled')    AS cancelled,
               COUNT(*) FILTER (
                   WHERE status = 'pending'
-                    AND COALESCE(ausfuehrung_am, fruehestens_am) < CURRENT_DATE
+                    AND COALESCE(ausfuehrung_am, fruehestens_am) < heute()
               )                                                AS overdue_pending,
               COUNT(*) FILTER (
                   WHERE status = 'pending'
                     AND ausfuehrung_faellig_am IS NOT NULL
-                    AND ausfuehrung_faellig_am < CURRENT_DATE
+                    AND ausfuehrung_faellig_am < heute()
               )                                                AS frist_ueberschritten,
               COUNT(*) FILTER (WHERE vorlauffrist_eingehalten = false)
                                                                AS vorlauffrist_verletzt,
@@ -922,7 +922,7 @@ pub async fn stats_pg(pool: &PgPool, tenant: &str) -> anyhow::Result<SperrStats>
                   WHERE status IN ('executed', 'failed')
                     AND iftsta_dispatched_at IS NULL
                     AND iftsta_faellig_am IS NOT NULL
-                    AND iftsta_faellig_am < CURRENT_DATE
+                    AND iftsta_faellig_am < heute()
               )                                                AS iftsta_ueberfaellig,
               COUNT(*) FILTER (
                   WHERE status IN ('executed', 'failed')
@@ -979,7 +979,7 @@ pub async fn list_ausfuehrung_ueberfaellig(
           WHERE tenant = $1
             AND status = 'pending'
             AND ausfuehrung_faellig_am IS NOT NULL
-            AND ausfuehrung_faellig_am < CURRENT_DATE
+            AND ausfuehrung_faellig_am < heute()
             AND ausfuehrung_eskaliert_at IS NULL
           ORDER BY ausfuehrung_faellig_am
           LIMIT 100",

@@ -73,7 +73,7 @@ pub fn check_release_coverage() {
             }
         }
     } else {
-        time::OffsetDateTime::now_utc().date()
+        mako_fristen::heute()
     };
 
     let profiles_root = Path::new("crates/edi-energy/profiles");

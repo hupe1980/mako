@@ -219,7 +219,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //   GPKE:     fristen::add_hours(now, 24)                → 24 h
     //   WiM:      fristen::add_werktage(today, 5, BdewMaKo)   → 5 Werktage
     //   GeLi Gas: fristen::add_werktage(today, 10, BdewMaKo)  → 10 Werktage ← here
-    let received_date = time::OffsetDateTime::now_utc().date();
+    let received_date = mako_fristen::heute();
     let aperak_due_date = fristen::add_werktage(received_date, 10, HolidayCalendar::BdewMaKo);
     let aperak_due_at = aperak_due_date.midnight().assume_utc();
 

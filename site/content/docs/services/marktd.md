@@ -122,7 +122,7 @@ services:
       retries: 10
 
   marktd:
-    image: ghcr.io/hupe1980/marktd:0.12.0
+    image: ghcr.io/hupe1980/mako-marktd:0.12.0
     depends_on:
       postgres:
         condition: service_healthy
@@ -1176,7 +1176,7 @@ curl "http://localhost:8180/api/v1/correlations/51238696012" \
 ## Docker Deployment
 
 ```bash
-docker pull ghcr.io/hupe1980/marktd:0.12.0
+docker pull ghcr.io/hupe1980/mako-marktd:0.12.0
 
 docker run -d \
   --name marktd \
@@ -1185,7 +1185,7 @@ docker run -d \
   -e DATABASE_URL=postgres://marktd:secret@postgres/marktd \
   -e MAKOD_API_KEY=my-api-key \
   -e MAKOD_WEBHOOK_SECRET=my-webhook-secret \
-  ghcr.io/hupe1980/marktd:0.12.0 \
+  ghcr.io/hupe1980/mako-marktd:0.12.0 \
   --config=/etc/marktd/marktd.toml
 ```
 

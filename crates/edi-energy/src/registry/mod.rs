@@ -363,14 +363,19 @@ impl ReleaseRegistry {
         })
     }
 
-    /// Look up the profile for a `(message_type, release)` pair.
+    /// Look up the profile for a `(message_type, release)` pair, **without
+    /// disambiguating by date**: the last registered candidate wins.
     ///
-    /// When the same wire release code identifies multiple profiles (e.g. COMDIS
-    /// `"1.0g"` is used for both `fv20251001` and `fv20261001`), the profile with
-    /// the greatest `valid_from` that is ≤ today's UTC date is returned.  When all
-    /// candidate profiles lack a `valid_from`, the last registered one is returned.
+    /// A wire release code can identify more than one profile — BDEW reuses the
+    /// code across consecutive Formatversionen (INVOIC `"2.8e"`, UTILTS
+    /// `"1.1e"`). Only a date separates those, and this crate does not read a
+    /// clock: which day a message is judged on is the caller's fact, not the
+    /// parser's. Use [`profile_on`][Self::profile_on] wherever the answer can
+    /// depend on it.
     ///
-    /// For an explicit date query use [`profile_on`][Self::profile_on].
+    /// This form answers the questions a date cannot change — where the
+    /// Prüfidentifikator sits in the message, which segments the layout has —
+    /// because consecutive Formatversionen sharing one wire code share those.
     ///
     /// # Errors
     ///
@@ -381,11 +386,7 @@ impl ReleaseRegistry {
         message_type: MessageType,
         release: &Release,
     ) -> Result<&dyn Profile, Error> {
-        self.profile_on(
-            message_type,
-            release,
-            time::OffsetDateTime::now_utc().date(),
-        )
+        self.profile_on(message_type, release, time::Date::MAX)
     }
 
     /// Like [`profile`][Self::profile] but disambiguates same-wire-code profiles
@@ -791,13 +792,17 @@ impl ReleaseRegistry {
 ///
 /// `ProcessContext` selects the normatively-active profile for each message
 /// type based on a date, so callers never need to hard-code release strings.
-/// When BDEW publishes a new format version and the profile is registered,
-/// `ProcessContext::current()` automatically switches to it on the effective
-/// date — **no code change at the call site is required**.
+/// When BDEW publishes a new format version and the profile is registered, a
+/// context anchored to a later date picks it up on the effective date — **no
+/// code change at the call site is required**.
+///
+/// The date is always the caller's: a Formatversion changes at German midnight,
+/// so the caller states which day it means — a service reads that from
+/// `mako_fristen::heute()` — rather than having a parser read a clock.
 ///
 /// Both global and isolated registries are supported:
-/// - [`ProcessContext::current()`] / [`ProcessContext::for_date()`] use the
-///   process-global registry (suitable for single-process applications).
+/// - [`ProcessContext::for_date()`] uses the process-global registry (suitable
+///   for single-process applications).
 /// - [`Platform::process_context()`][crate::Platform::process_context] creates a
 ///   context backed by the platform's own isolated registry (required for
 ///   multi-tenant servers and test isolation).
@@ -807,7 +812,8 @@ impl ReleaseRegistry {
 /// ```rust,no_run
 /// use edi_energy::ProcessContext;
 ///
-/// let ctx = ProcessContext::current();
+/// // The caller states the day; a service reads it from `mako_fristen::heute()`.
+/// let ctx = ProcessContext::for_date(time::macros::date!(2026 - 04 - 01));
 /// let release = ctx.active_release(edi_energy::MessageType::Mscons)
 ///     .expect("MSCONS profile must be registered");
 /// assert!(!release.as_str().is_empty());
@@ -836,20 +842,13 @@ impl ProcessContext {
     ///
     /// This is the low-level constructor used by
     /// [`Platform::process_context()`][crate::Platform::process_context].
-    /// Most application code should use [`ProcessContext::for_date`] or
-    /// [`ProcessContext::current`].
+    /// Most application code should use [`ProcessContext::for_date`].
     #[must_use]
     pub fn for_date_with_registry(
         date: time::Date,
         registry: std::sync::Arc<ReleaseRegistry>,
     ) -> Self {
         Self { date, registry }
-    }
-
-    /// Create a context using today's UTC date, backed by the global registry.
-    #[must_use]
-    pub fn current() -> Self {
-        Self::for_date(time::OffsetDateTime::now_utc().date())
     }
 
     /// The date this context is anchored to.

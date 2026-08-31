@@ -561,7 +561,7 @@ impl Daemon for Accountingd {
                     .unwrap_or(14)
                     .clamp(1, 60);
                 loop {
-                    let today = time::OffsetDateTime::now_utc().date();
+                    let today = mako_fristen::heute();
                     // Wraps correctly across month end.
                     let target_date = today + time::Duration::days(lead_days);
                     let target_billing_day = target_date.day() as i16;
@@ -970,7 +970,7 @@ impl Daemon for Accountingd {
                         tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600)).await;
                         continue;
                     };
-                    let today = time::OffsetDateTime::now_utc().date();
+                    let today = mako_fristen::heute();
                     let open = (u8::from(today.month()), today.day()) >= (start_month, start_day);
                     if open {
                         let year = today.year() - 1;

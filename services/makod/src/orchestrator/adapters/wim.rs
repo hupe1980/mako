@@ -1025,20 +1025,29 @@ fn esa_freitext(msg: &AnyMessage, qualifier: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Read a `DTM` whose DE 2380 is a **duration** and resolve it against now.
+/// Read a `DTM` whose DE 2380 is a **duration** and resolve it against the
+/// document date of the message that states it.
 ///
 /// `DTM+273` (Gültigkeitsdauer/Bindungsfrist) and `DTM+279` (Einrichtungs-
 /// zeitspanne) both carry a count in DE 2380 and its unit in DE 2379 — `802`
 /// Monat, `803` Woche, `804` Tag (QUOTES AHB 1.1a condition `[908]`). Parsed
 /// as `CCYYMMDD` they find nothing at all.
+///
+/// The span runs from the MSB's `DTM+137` Dokumentendatum, so the same message
+/// resolves to the same instant however long it waited in a queue and however
+/// often it is replayed. Anchoring on arrival would hand a stale offer a fresh
+/// Bindungsfrist.
 fn extract_dauer(msg: &AnyMessage, qualifier: &str) -> Option<time::OffsetDateTime> {
+    let anchor = extract_dtm_date(msg, "137").map_or_else(time::OffsetDateTime::now_utc, |d| {
+        mako_fristen::berlin_midnight(d)
+    });
     msg.segments()
         .iter()
         .find(|s| s.tag == "DTM" && s.component_str(0, 0) == Some(qualifier))
         .and_then(|s| {
             let count: i64 = s.component_str(0, 1)?.trim().parse().ok()?;
             let einheit = edi_energy::builders::DauerEinheit::from_code(s.component_str(0, 2)?)?;
-            Some(time::OffsetDateTime::now_utc() + einheit.to_duration(count))
+            einheit.resolve_from(anchor, count)
         })
 }
 
@@ -1217,8 +1226,8 @@ pub fn wim_wertebestellung_registry() -> AdapterRegistry<WimWertebestellungWorkf
                     // Übermittlung. Muss on 35003; absent only on a
                     // non-conformant message, where "today" is the honest
                     // reading of "as soon as possible".
-                    let wunschtermin = extract_dtm_date(msg, "76")
-                        .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+                    let wunschtermin =
+                        extract_dtm_date(msg, "76").unwrap_or_else(mako_fristen::heute);
                     let gegenstand = Box::new(mako_wim::esa::Bestellgegenstand {
                         messprodukt,
                         wunschtermin,
@@ -1344,7 +1353,7 @@ pub fn esa_wertebestellung_registry() -> AdapterRegistry<EsaWertebestellungWorkf
                     let angebot = extract_angebot(msg);
                     if angebot.ist_leer() {
                         return Ok(EsaWertebestellungCommand::ReceiveAnfrageAblehnung {
-                            message_ref: Some(message_ref),
+                            message_ref,
                             reason: esa_freitext(msg, "ACB"),
                         });
                     }

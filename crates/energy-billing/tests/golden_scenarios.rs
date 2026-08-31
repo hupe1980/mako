@@ -63,7 +63,7 @@ fn sect41a_dynamic_tariff_rejects_non_imsys_metering_mode() {
     };
 
     let tariff: Product = serde_json::from_str(
-        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":20}"#,
+        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":"20"}"#,
     )
     .unwrap();
 
@@ -166,8 +166,8 @@ fn golden_strom_slp_eintarif_jan_2026() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
-        "arbeitspreis_ct_per_kwh": 28.50,
-        "grundpreis_ct_per_day": 8.00
+        "arbeitspreis_ct_per_kwh": "28.50",
+        "grundpreis_ct_per_day": "8.00"
     }"#,
     )
     .unwrap();
@@ -247,8 +247,8 @@ fn golden_strom_reverse_charge_13b_charges_no_vat() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
-        "arbeitspreis_ct_per_kwh": 28.50,
-        "grundpreis_ct_per_day": 8.00
+        "arbeitspreis_ct_per_kwh": "28.50",
+        "grundpreis_ct_per_day": "8.00"
     }"#,
     )
     .unwrap();
@@ -336,8 +336,8 @@ fn golden_gas_with_levies_jan_2026() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "GAS",
-        "gas_arbeitspreis_ct_per_kwh_hs": 7.50,
-        "gas_grundpreis_ct_per_day": 5.00
+        "gas_arbeitspreis_ct_per_kwh_hs": "7.50",
+        "gas_grundpreis_ct_per_day": "5.00"
     }"#,
     )
     .unwrap();
@@ -458,7 +458,7 @@ fn golden_eeg_gutschrift_kleinunternehmer_jan_2026() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "EEG",
-        "eeg_verguetungssatz_ct_per_kwh": 8.20,
+        "eeg_verguetungssatz_ct_per_kwh": "8.20",
         "kleinunternehmer_19_ustg": true
     }"#,
     )
@@ -554,8 +554,8 @@ fn golden_rlm_demand_charge() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
-        "arbeitspreis_ct_per_kwh": 24.00,
-        "leistungspreis_strom_ct_per_kw_month": 4.50
+        "arbeitspreis_ct_per_kwh": "24.00",
+        "leistungspreis_strom_ct_per_kw_month": "4.50"
     }"#,
     )
     .unwrap();
@@ -659,7 +659,7 @@ fn golden_gas_kwk_is_billed_the_full_energiesteuer_with_a_53a_note() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "GAS",
-        "gas_arbeitspreis_ct_per_kwh_hs": 8.00,
+        "gas_arbeitspreis_ct_per_kwh_hs": "8.00",
         "steuerentlastungen": ["ENERGIESTEUER53A"]
     }"#,
     )
@@ -809,7 +809,7 @@ fn sect40a_kilowattstundenpreis_brutto_includes_all_charges() {
         ..Default::default()
     };
     let tariff: Product = serde_json::from_str(
-        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0,"grundpreis_ct_per_day":8.22}"#,
+        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0","grundpreis_ct_per_day":"8.22"}"#,
     )
     .unwrap();
     let invoice = BillingEngine::new()
@@ -897,7 +897,7 @@ fn sect41_rechnung_json_contains_mandatory_fields() {
         ..Default::default()
     };
     let tariff: Product =
-        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#).unwrap();
+        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#).unwrap();
     let invoice = BillingEngine::new()
         .add(ElectricityProvider::from_product(
             &tariff,
@@ -1004,7 +1004,7 @@ fn sect42c_energy_sharing_credit_reduces_effective_cost() {
 
     // SHARING tariff: full STROM price + sharing credit
     let strom_tariff: Product = serde_json::from_str(
-        r#"{"category":"SHARING","arbeitspreis_ct_per_kwh":32.0,"sharing_credit_ct_per_kwh":20.0}"#,
+        r#"{"category":"SHARING","arbeitspreis_ct_per_kwh":"32.0","sharing_credit_ct_per_kwh":"20.0"}"#,
     )
     .unwrap();
     let invoice = strom_tariff
@@ -1047,7 +1047,7 @@ fn sect42c_energy_sharing_credit_reduces_effective_cost() {
 
     // Effective cost is less than without sharing
     let tariff_no_share: Product =
-        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":32.0}"#).unwrap();
+        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"32.0"}"#).unwrap();
     let invoice_no_share = BillingEngine::new()
         .add(ElectricityProvider::from_product(
             &tariff_no_share,
@@ -1109,7 +1109,7 @@ fn an_industrial_customer_is_billed_the_full_stromsteuer_and_told_about_9b() {
         ..Default::default()
     };
     let tariff: Product = serde_json::from_str(
-        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":18.0,"steuerentlastungen":["STROMSTEUER9B"]}"#,
+        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"18.0","steuerentlastungen":["STROMSTEUER9B"]}"#,
     )
     .unwrap();
 
@@ -1214,11 +1214,11 @@ fn emitted_invoices() -> Vec<(&'static str, energy_billing::Invoice)> {
     };
 
     let strom: Product = serde_json::from_str(
-        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":28.50,"grundpreis_ct_per_day":8.00}"#,
+        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"28.50","grundpreis_ct_per_day":"8.00"}"#,
     )
     .expect("strom fixture");
     let gas: Product = serde_json::from_str(
-        r#"{"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":7.50,"gas_grundpreis_ct_per_day":5.00}"#,
+        r#"{"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":"7.50","gas_grundpreis_ct_per_day":"5.00"}"#,
     )
     .expect("gas fixture");
 
@@ -1296,10 +1296,10 @@ fn golden_sect41a_dynamic_day_reconciles_to_the_cent() {
         r#"{
         "category": "STROM",
         "dynamic_epex": true,
-        "grundpreis_ct_per_day": 30.0,
-        "dynamic_aufschlag_ct_per_kwh": 3.0,
-        "dynamic_epex_floor_ct_kwh": 0.0,
-        "dynamic_epex_cap_ct_kwh": 40.0
+        "grundpreis_ct_per_day": "30.0",
+        "dynamic_aufschlag_ct_per_kwh": "3.0",
+        "dynamic_epex_floor_ct_kwh": "0.0",
+        "dynamic_epex_cap_ct_kwh": "40.0"
     }"#,
     )
     .unwrap();
@@ -1393,8 +1393,8 @@ fn golden_sect41a_average_price_matches_the_amount() {
     use std::collections::HashMap;
 
     let tariff: Product = serde_json::from_str(
-        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0,
-             "dynamic_aufschlag_ct_per_kwh":2.0}"#,
+        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":"0",
+             "dynamic_aufschlag_ct_per_kwh":"2.0"}"#,
     )
     .unwrap();
     // Deliberately uneven: 3 kWh at 10 ct and 1 kWh at 30 ct average to 15 ct,
@@ -1496,7 +1496,7 @@ fn golden_sect41a_prices_every_mtu_of_a_dst_day() {
         }
 
         let tariff: Product = serde_json::from_str(
-            r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0}"#,
+            r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":"0"}"#,
         )
         .unwrap();
         let rates = RegulatoryRates::default();
@@ -1541,7 +1541,7 @@ fn golden_sect41a_only_an_unpriced_kwh_blocks_the_run() {
     use std::collections::HashMap;
 
     let tariff: Product = serde_json::from_str(
-        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0}"#,
+        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":"0"}"#,
     )
     .unwrap();
     let t0 = time::macros::datetime!(2026-01-15 08:00 UTC);
@@ -1616,9 +1616,9 @@ fn golden_mieterstrom_invoice_reconciles_and_states_its_ceiling() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "SOLAR",
-        "solar_arbeitspreis_ct_per_kwh": 24.0,
-        "grundversorgung_arbeitspreis_ct_per_kwh": 30.0,
-        "anlage_kwp": 60.0
+        "solar_arbeitspreis_ct_per_kwh": "24.0",
+        "grundversorgung_arbeitspreis_ct_per_kwh": "30.0",
+        "anlage_kwp": "60.0"
     }"#,
     )
     .unwrap();
@@ -1699,8 +1699,8 @@ fn golden_mieterstrom_ceiling_is_exact_at_ninety_percent() {
     let rates = RegulatoryRates::default();
     let bill_at = |ms_ct: &str| {
         let tariff: Product = serde_json::from_str(&format!(
-            r#"{{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":{ms_ct},
-                 "grundversorgung_arbeitspreis_ct_per_kwh":30.0}}"#
+            r#"{{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":"{ms_ct}",
+                 "grundversorgung_arbeitspreis_ct_per_kwh":"30.0"}}"#
         ))
         .unwrap();
         let ctx = BillingContext {
@@ -1737,7 +1737,7 @@ fn golden_mieterstrom_without_a_reference_tariff_bills_unchecked() {
     use energy_billing::SolarMeterInput;
 
     let tariff: Product =
-        serde_json::from_str(r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":35.0}"#)
+        serde_json::from_str(r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":"35.0"}"#)
             .unwrap();
     let rates = RegulatoryRates::default();
     let ctx = BillingContext {
@@ -1775,7 +1775,7 @@ fn golden_mieterstrom_outside_the_exemption_is_taxed() {
     use energy_billing::SolarMeterInput;
 
     let tariff: Product = serde_json::from_str(
-        r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":24.0,
+        r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":"24.0",
              "stromsteuer_tarif":{"art":"REGEL"}}"#,
     )
     .unwrap();
@@ -1824,9 +1824,9 @@ fn golden_ggv_splits_pv_and_grid_and_taxes_only_the_grid() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "SOLAR",
-        "solar_arbeitspreis_ct_per_kwh": 24.0,
-        "arbeitspreis_ct_per_kwh": 32.0,
-        "gemeinschaft_rabatt_ct_per_kwh": 3.0
+        "solar_arbeitspreis_ct_per_kwh": "24.0",
+        "arbeitspreis_ct_per_kwh": "32.0",
+        "gemeinschaft_rabatt_ct_per_kwh": "3.0"
     }"#,
     )
     .unwrap();
@@ -1891,7 +1891,7 @@ fn golden_sect41a_a_year_of_intervals_does_not_drift() {
     use std::collections::HashMap;
 
     let tariff: Product = serde_json::from_str(
-        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0.0}"#,
+        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":"0.0"}"#,
     )
     .unwrap();
 
@@ -1969,7 +1969,7 @@ fn golden_sect41a_price_times_quantity_matches_the_amount() {
     use std::collections::HashMap;
 
     let tariff: Product = serde_json::from_str(
-        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0.0}"#,
+        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":"0.0"}"#,
     )
     .unwrap();
 

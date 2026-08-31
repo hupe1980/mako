@@ -18,6 +18,7 @@ name = "edmd"
 path = "src/lib.rs"
 
 [dependencies]
+mako-fristen = { workspace = true }
 mako-events = { workspace = true }
 mako-markt = { workspace = true, features = ["marktd-client"] }
 # The Kapitel-4.6 Messprodukt catalogue: the ESA Typ-2 surveillance sizes its
@@ -31,7 +32,7 @@ metering  = { workspace = true, features = ["serde"] }
 # directly — it pulls only `axum` (already a dep), not `reqwest`. `object-store-all`
 # enables meterstore's S3/GCS/Azure cold-tier backends: meterstore owns the whole
 # Iceberg catalog stack now, so edmd links none of it directly (see below).
-meterstore = { version = "0.6", default-features = false, features = ["catalog-facade", "object-store-all"] }
+meterstore = { version = "0.8", default-features = false, features = ["catalog-facade", "object-store-all"] }
 rubo4e     = { workspace = true }
 
 anyhow             = { workspace = true }

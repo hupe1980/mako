@@ -2446,10 +2446,10 @@ async fn a_zaehlerstandsgang_differences_into_a_lastgang() {
 
 /// § 40 Abs. 2 Nr. 6 EnWG: the invoice's opening and closing register reading.
 ///
-/// The columns carried that citation from the start and were hardcoded `None`,
-/// so every invoice built from the aggregate was missing a statutory line. They
-/// come from the Zählerstandsgang, and the bounds are **at or before** each end
-/// — a reading dated after the period end did not hold at the period end.
+/// The pair comes from the Zählerstandsgang, and the bounds are **at or
+/// before** each end — a reading dated after the period end did not hold at the
+/// period end. An aggregate that cannot fill them builds an invoice missing a
+/// statutory line.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn a_billing_period_reports_its_opening_and_closing_zaehlerstand() {
@@ -2709,7 +2709,7 @@ async fn a_sharing_community_is_the_set_of_rules_sharing_a_plant() {
         sqlx::query(
             "INSERT INTO virtual_meter_configs
                (virtual_malo_id, display_name, rule_type, rule_json, sparte, valid_from, tenant)
-             VALUES ($1,$1,'GGV_CONSTANT_ALLOCATION',$2,'STROM',CURRENT_DATE,$3)",
+             VALUES ($1,$1,'GGV_CONSTANT_ALLOCATION',$2,'STROM',heute(),$3)",
         )
         .bind(vid)
         .bind(&rule)

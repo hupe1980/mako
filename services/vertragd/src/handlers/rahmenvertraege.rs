@@ -154,7 +154,7 @@ pub async fn kuendigen(
         ));
     }
 
-    let today = time::OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
     let eingang = input.eingang.unwrap_or(today);
     if eingang > today {
         return Err(ApiError::unprocessable(

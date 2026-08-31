@@ -281,7 +281,7 @@ pub async fn run_import_cycle(
                             time::Month::try_from(month).unwrap_or(time::Month::January),
                             1,
                         )
-                        .unwrap_or_else(|_| time::OffsetDateTime::now_utc().date());
+                        .unwrap_or_else(|_| mako_fristen::heute());
                         if let Err(e) = gas_repo
                             .upsert_gas(price_month, marktgebiet, *mehr, *minder, "the-api")
                             .await
@@ -384,7 +384,7 @@ pub async fn run_import_cycle(
                             time::Month::try_from(month).unwrap_or(time::Month::January),
                             1,
                         )
-                        .unwrap_or_else(|_| time::OffsetDateTime::now_utc().date());
+                        .unwrap_or_else(|_| mako_fristen::heute());
                         if let Err(e) = strom_repo
                             .upsert_strom(price_month, *mehr, *minder, "bdew-csv")
                             .await

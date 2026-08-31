@@ -515,7 +515,9 @@ A gap is a coverage statement; an overlap is an error.
 `UNH DE 0057` identifies the MIG, not the Formatversion — REQOTE AHB 1.1 and 1.2
 both carry wire release `1.3c`, so only the date distinguishes them.
 `ReleaseRegistry::profile_on` selects the greatest `valid_from ≤ date`, and
-`ProcessContext::current()` does the same for today.
+`ProcessContext::for_date` does the same for a context. The date is always
+supplied by the caller — `makod` states `mako_fristen::heute()`, the German
+calendar date, because a Formatversion takes effect at German midnight.
 
 Running processes continue under the FV they were spawned with
 (`WorkflowVersionPolicy::ForwardCompatible`), so a partial cutover needs no

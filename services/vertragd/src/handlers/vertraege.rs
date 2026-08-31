@@ -20,7 +20,7 @@ use crate::{
 };
 
 fn heute() -> Date {
-    time::OffsetDateTime::now_utc().date()
+    mako_fristen::heute()
 }
 
 /// Query parameters of the `by-malo` lookup.

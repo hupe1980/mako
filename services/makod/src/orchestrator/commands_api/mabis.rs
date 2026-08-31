@@ -120,7 +120,7 @@ pub(super) async fn dispatch_mabis_billing_einleiten(
     // This is what decides the Datenstatus the BIKO will assign, so it is
     // derived from the calendar rather than taken from the payload.
     let monat = parse_bilanzierungsmonat(&bilanzierungsmonat_str)?;
-    let heute = time::OffsetDateTime::now_utc().date();
+    let heute = mako_fristen::heute();
     let phase = monat.phase(zeitreihe, heute);
     if !phase.nimmt_versionen_an() {
         return Err(DispatchError::InvalidPayload(format!(

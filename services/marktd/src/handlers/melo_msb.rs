@@ -21,8 +21,8 @@ use axum::{
 };
 use mako_markt::repository::MeloMsbRepository;
 use serde::Deserialize;
+use time::Date;
 use time::format_description::well_known::Iso8601;
-use time::{Date, OffsetDateTime};
 use tracing::info;
 
 use mako_service::cedar::CedarEnforcer;
@@ -78,7 +78,7 @@ pub async fn get_melo_msb_at(
                     .into_response();
             }
         },
-        None => OffsetDateTime::now_utc().date(),
+        None => mako_fristen::heute(),
     };
     match repo.find_msb_at(&tenant, &melo_id, at).await {
         Ok(Some(msb_mp_id)) => Json(serde_json::json!({

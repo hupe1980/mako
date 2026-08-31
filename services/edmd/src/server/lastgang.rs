@@ -454,10 +454,10 @@ pub(crate) fn request_wants_arrow(headers: &axum::http::HeaderMap) -> bool {
 /// `meter_reads.quantity_kwh` is `NUMERIC(18,5)` because a settled energy figure
 /// is a Buchungsbeleg (§ 147 AO / GoBD) and must be exact. The bulk transport has
 /// to carry the same type: `mabis-syncd` and `billingd` read Lastgang and
-/// Zeitreihe over this stream precisely *because* it is the high-volume path,
-/// and it used to hand them `Float64`. Binary floating point cannot represent
-/// 0.1 kWh, so every value crossed the wire rounded, and a month of quarter-hours
-/// summed to a total that did not match the one the store would compute.
+/// Zeitreihe over this stream precisely *because* it is the high-volume path.
+/// `Float64` cannot represent 0.1 kWh, so it would round every value on the
+/// wire and a month of quarter-hours would sum to a total the store disagrees
+/// with.
 const QUANTITY_PRECISION: u8 = 18;
 const QUANTITY_SCALE: i8 = 5;
 

@@ -111,9 +111,7 @@ pub async fn post_mmm_run(
         ));
     }
 
-    let invoice_date = req
-        .invoice_date
-        .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+    let invoice_date = req.invoice_date.unwrap_or_else(mako_fristen::heute);
     let due_date = req
         .due_date
         .unwrap_or_else(|| invoice_date.saturating_add(time::Duration::days(30)));
@@ -266,9 +264,7 @@ pub async fn post_ggv_nne(
         return Err(ApiError::bad_request("period_to is before period_from"));
     }
 
-    let invoice_date = req
-        .invoice_date
-        .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+    let invoice_date = req.invoice_date.unwrap_or_else(mako_fristen::heute);
     let due_date = req
         .due_date
         .unwrap_or_else(|| invoice_date.saturating_add(time::Duration::days(30)));

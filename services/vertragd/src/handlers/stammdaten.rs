@@ -107,8 +107,7 @@ pub async fn get_messstellenvertrag(
         .await
         .map_err(ApiError::Internal)?
         .ok_or(ApiError::NotFound)?;
-    let on =
-        q.on.unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+    let on = q.on.unwrap_or_else(mako_fristen::heute);
     ok(row.view(on, q.haushaltskunde.unwrap_or(true)))
 }
 
@@ -161,8 +160,7 @@ pub async fn list_aggregatorvertraege(
     Query(q): Query<AggregatorvertragQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
     if let Some(sr_id) = q.sr_id {
-        let on =
-            q.on.unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+        let on = q.on.unwrap_or_else(mako_fristen::heute);
         let row = pg::find_active_aggregatorvertrag(&ctx.pool, ctx.tenant(), &sr_id, on)
             .await
             .map_err(ApiError::Internal)?

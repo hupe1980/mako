@@ -172,8 +172,7 @@ region              = "eu-central-1"
 # access_key_id / secret_access_key optional — omit to use the instance-role chain.
 # endpoint_url      = "http://minio:9000"   # S3-compatible (MinIO/Ceph/R2 → path-style)
 settlement_lag_days = 7    # age at which an interval settles hot → cold (mutable below this)
-partition_step_days = 1    # cold-tier partition granularity
-archival_step_days  = 1    # watermark advance per archival sweep
+archival_step_days  = 1    # watermark advance per sweep, and the partition granularity
 cold_file_target_mib = 512 # target Parquet file size
 maintenance_interval_secs = 3600  # tiering loop cycle period (archives due windows)
 ddl_lock_timeout_secs = 3  # how long DDL waits for its lock before giving up

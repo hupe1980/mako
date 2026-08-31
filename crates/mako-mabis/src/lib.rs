@@ -155,8 +155,8 @@ pub use zp_lifecycle::{
 /// | `mabis-anforderung` | ORDERS 17201–17208 · 17210; ORDRSP 19204 |
 /// | `mabis-ausgleichsenergiepreis` | PRICAT 27001 |
 ///
-/// Six of these were previously registered elsewhere or nowhere. See the module
-/// docs of each workflow for what the misplacement cost.
+/// Each workflow's module docs carry the use case it answers and the Fristen
+/// the Festlegung attaches to it.
 pub struct MabisModule;
 
 impl mako_engine::builder::EngineModule for MabisModule {

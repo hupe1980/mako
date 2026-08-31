@@ -143,12 +143,14 @@ async fn get_rechnung(
             if let Some(rechnung) = env.payload.get("data").and_then(|d| d.get("rechnung")) {
                 return (StatusCode::OK, axum::Json(rechnung.clone())).into_response();
             }
-            // rechnung field missing — event was written before this field existed
+            // The adapter embeds the decoded Rechnung on every
+            // `WimInvoicReceived`, so an event without one is a malformed
+            // stream rather than an invoice that has not arrived.
             return (
                 StatusCode::NOT_FOUND,
                 axum::Json(serde_json::json!({
                     "error": "RECHNUNG_NOT_EMBEDDED",
-                    "message": "InvoicReceived event predates rechnung embedding (process started before FV2025-10-01 cutover)"
+                    "message": "the WimInvoicReceived event of this process carries no rechnung payload"
                 })),
             )
                 .into_response();

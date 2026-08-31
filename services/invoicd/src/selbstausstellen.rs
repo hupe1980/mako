@@ -193,7 +193,7 @@ async fn build_and_dispatch(
     let settlement = grid_billing::settle_mmm(&input)
         .map_err(|e| unprocessable(format!("settlement failed: {e}")))?;
 
-    let invoice_date = time::OffsetDateTime::now_utc().date();
+    let invoice_date = mako_fristen::heute();
     let rechnungsnummer = rechnungsnummer(&state.tenant, &req.malo_id, req.year, req.month);
     let document = grid_billing::InvoiceDocument {
         settlement,

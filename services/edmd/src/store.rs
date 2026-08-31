@@ -106,6 +106,21 @@ fn input_err(e: impl std::fmt::Display) -> EdmError {
     }
 }
 
+/// The Marktpartner that filed a reading, as a typed BDEW-Codenummer.
+///
+/// `MeasurementSource::Mscons` and `VersionScope` both take a `BdewCode`, so the
+/// MP-ID is parsed once at the boundary rather than carried as a string that
+/// only fails deeper in. The check digit is verified but not enforced: the
+/// Bildungsvorschrift exempts GS1-issued GLNs, so refusing on it would reject
+/// codes the market has issued.
+fn operator_code(id: &str) -> Result<metering::ids::BdewCode, EdmError> {
+    id.parse()
+        .map_err(|e: metering::ParseError| EdmError::Rejected {
+            detail: format!("sender MP-ID {id:?} is not a BDEW-Codenummer: {e}"),
+            constraint: None,
+        })
+}
+
 /// Parse a MaLo-ID at the store boundary.
 ///
 /// `metering::MaloId` enforces the BDEW Bildungsvorschrift — eleven digits, a
@@ -198,9 +213,9 @@ pub const ZSG_TABLE: &str = "meter_readings_versions";
 pub struct TieringConfig {
     /// How long an interval stays mutable in the hot tier before it settles.
     pub settlement_lag: time::Duration,
-    /// Cold-tier partition granularity.
-    pub partition_step: time::Duration,
-    /// How far each archival sweep advances the tiering watermark.
+    /// How far each archival sweep advances the tiering watermark — and, with
+    /// it, the hot table's partition granularity. One step, because two could
+    /// only ever express the mistake of disagreeing.
     pub archival_step: time::Duration,
     /// Target Parquet file size in the cold tier, in bytes.
     pub cold_file_target_bytes: usize,
@@ -217,7 +232,6 @@ impl Default for TieringConfig {
     fn default() -> Self {
         Self {
             settlement_lag: time::Duration::weeks(1),
-            partition_step: time::Duration::DAY,
             archival_step: time::Duration::DAY,
             cold_file_target_bytes: 512 * 1024 * 1024,
             ddl_lock_timeout: time::Duration::seconds(3),
@@ -383,7 +397,6 @@ async fn table_builder(
         // under one Marktlokation carry the same OBIS code at the same instants
         // and the Messlokation is what tells their readings apart.
         .time_model(time_model)
-        .partition_step(tiering.partition_step)
         .archival_step(tiering.archival_step)
         .settlement_lag(tiering.settlement_lag)
         .identity_column(Field::new("tenant", DataType::Utf8, false))
@@ -634,11 +647,9 @@ impl MeterStoreTimeSeriesRepository {
         let worst_quality = crate::domain::worst_quality(&intervals);
 
         // § 40 Abs. 2 Nr. 6 EnWG: an energy invoice must show the opening and
-        // closing register reading. These were hardcoded `None` — the columns
-        // existed, carried that citation in a comment, and could never be
-        // filled, so every invoice built from this aggregate was missing a
-        // statutory line item. They come from the Zählerstandsgang, which is why
-        // edmd stores it (BK6-24-174).
+        // closing register reading. They come from the Zählerstandsgang, which
+        // is why edmd stores it (BK6-24-174) — an aggregate that cannot fill
+        // them builds an invoice missing a statutory line item.
         let (zaehlerstand_anfang, zaehlerstand_ende) = self
             .period_zaehlerstaende(&q.malo_id, from_ts, to_ts, &q.tenant)
             .await
@@ -891,10 +902,10 @@ fn read_to_stored_at(r: &MeterRead, version: Option<Version>) -> Result<StoredSe
     };
     // The operator that assigned the MSCONS version — the BDEW Codenummer of the
     // reporting NB/MSB, not the tenant.
-    let operator = r.sender_mp_id.clone().unwrap_or_else(|| r.tenant.clone());
+    let operator = operator_code(r.sender_mp_id.as_deref().unwrap_or(&r.tenant))?;
     // The Bilanzierungsmonat the version scope names is Sparte-dependent: gas
     // balances on the Gastag, so 01.02. 03:00 still belongs to January.
-    let scope = VersionScope::for_interval(&operator, r.dtm_from, r.sparte).map_err(store_err)?;
+    let scope = VersionScope::for_interval(operator, r.dtm_from, r.sparte).map_err(store_err)?;
     let recorded_at = r.valid_from_tx.unwrap_or_else(OffsetDateTime::now_utc);
     let version = match version {
         Some(v) => v,
@@ -904,7 +915,7 @@ fn read_to_stored_at(r: &MeterRead, version: Option<Version>) -> Result<StoredSe
     let source = MeasurementSource::Mscons {
         pid: r.pid,
         message_ref: None,
-        sender_mp_id: operator.clone(),
+        sender_mp_id: operator,
     };
     let mut series =
         MeasurementSeries::new(malo(&r.malo_id)?, obis, vec![interval], source, recorded_at);
@@ -1010,11 +1021,10 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         //
         // A batch edmd **authored** takes the other route. A § 60 Abs. 2
         // Ersatzwert stands in for a reading the substitution logic has already
-        // judged unusable, so it has to become the current value; delivered
-        // through the plain batch append it was silently outranked by any
-        // `FAULTY` reading that carried a stated MSCONS version — which is
-        // exactly the case Ersatzwertbildung exists for. See
-        // [`Self::append_superseding`].
+        // judged unusable, so it has to become the current value. Through the
+        // plain batch append it would be silently outranked by any `FAULTY`
+        // reading carrying a stated MSCONS version — which is exactly the case
+        // Ersatzwertbildung exists for. See [`Self::append_superseding`].
         let mut displacements = self
             .store
             .append(&stored)
@@ -1662,7 +1672,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 .sender_mp_id
                 .clone()
                 .unwrap_or_else(|| first.tenant.clone());
-            let scope = VersionScope::for_interval(&operator, first.read_at, first.sparte)
+            let scope = VersionScope::for_interval(operator.as_str(), first.read_at, first.sparte)
                 .map_err(store_err)?;
             let recorded_at = OffsetDateTime::now_utc();
 
@@ -1686,10 +1696,9 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                     _ => MeasurementSource::Mscons {
                         pid: 0,
                         message_ref: first.push_session.clone(),
-                        sender_mp_id: first
-                            .sender_mp_id
-                            .clone()
-                            .unwrap_or_else(|| first.tenant.clone()),
+                        sender_mp_id: operator_code(
+                            first.sender_mp_id.as_deref().unwrap_or(&first.tenant),
+                        )?,
                     },
                 },
                 ScopedVersion::new(scope, version_of(None, recorded_at)?),
@@ -1878,8 +1887,8 @@ fn typ2_to_stored(r: &Typ2Read) -> Result<StoredSeries, EdmError> {
         quality: r.quality,
         obis_code: obis,
     };
-    let operator = r.sender_mp_id.clone().unwrap_or_else(|| r.tenant.clone());
-    let scope = VersionScope::for_interval(&operator, r.dtm_from, r.sparte).map_err(store_err)?;
+    let operator = operator_code(r.sender_mp_id.as_deref().unwrap_or(&r.tenant))?;
+    let scope = VersionScope::for_interval(operator, r.dtm_from, r.sparte).map_err(store_err)?;
     let recorded_at = r.received_at.unwrap_or_else(OffsetDateTime::now_utc);
     // Typ-2 values are stored as delivered and never corrected, so arrival order
     // is the only order there is — but it still has to be an order, hence the

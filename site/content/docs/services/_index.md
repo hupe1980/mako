@@ -50,7 +50,7 @@ graph TB
     end
 
     subgraph lf_billing ["Retail Billing (LF)"]
-        productd[":9080 productd<br/>14 categories · §42d feed<br/>EPEX §41a · B2B Angebote"]
+        productd[":9080 productd<br/>14 categories · §42 Stromkennzeichnung<br/>EPEX §41a · B2B Angebote"]
         billingd[":9280 billingd<br/>13 categories · XRechnung 3.0<br/>RLM demand · §54 exemption"]
         outputd[":9880 outputd<br/>Typst templates · ZUGFeRD carrier<br/>issued documents · delivery evidence"]
         accountingd[":9380 accountingd<br/>Massenkontokorrent<br/>SEPA FRST/RCUR · GLN ID · Aging · §288 BGB"]
@@ -185,7 +185,7 @@ All services are available as multi-stage Docker images built with `cargo-chef`:
 
 ```bash
 # Single all-in-one daemon (makod only)
-docker pull ghcr.io/hupe1980/makod:latest
+docker pull ghcr.io/hupe1980/mako-makod:latest
 
 # NB STP demo — UTILMD 55001 Lieferbeginn end-to-end
 git clone https://github.com/hupe1980/mako

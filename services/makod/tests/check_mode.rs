@@ -125,10 +125,10 @@ primary = true
 /// `--check` must fail a config that enables an authenticated port without
 /// credentials — the same way the real boot fails it.
 ///
-/// This ordering was wrong once. The credential guard sat *below* the `--check`
-/// early exit, so `--check` reported "all startup validations passed" (exit 0)
-/// for a config whose real start then bailed with "--auth-key … is required".
-/// A pipeline gating rollout on the exit code promoted it.
+/// The credential guard has to sit *above* the `--check` early exit. Below it,
+/// `--check` reports "all startup validations passed" (exit 0) for a config
+/// whose real start bails with "--auth-key … is required", and a pipeline
+/// gating rollout on that exit code promotes it.
 #[test]
 fn check_rejects_an_authenticated_port_without_credentials() {
     let dir = tempfile::tempdir().expect("tempdir");

@@ -1765,12 +1765,11 @@ async fn a_correction_without_sect51_figures_keeps_the_accrual() {
 
 /// The §48 Abs. 2a Volleinspeisung rates must actually be in the table.
 ///
-/// They collided with the Überschuss rows on the old
-/// `(erzeugungsart, leistung_min_kwp, billing_start)` key, and the seed's
-/// `ON CONFLICT DO NOTHING` dropped every one of them — so the whole
-/// Volleinspeisung tariff was missing from a migration that reported success,
-/// and the lookup, which ignored `verguetungsform`, could not have found them
-/// anyway.
+/// `verguetungsform` is part of the key on both sides. Without it the
+/// Volleinspeisung rows collide with the Überschuss rows on
+/// `(erzeugungsart, leistung_min_kwp, billing_start)`, the seed's
+/// `ON CONFLICT DO NOTHING` drops every one of them, the migration still
+/// reports success — and the lookup could not find them in any case.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn volleinspeisung_rates_survive_the_seed_and_are_selectable() {
@@ -1866,7 +1865,7 @@ async fn the_foerderende_alert_is_emitted_once_per_plant() {
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
             erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum, einspeiser_id)
          VALUES ('TR-ALERT', $1, '51238696781', 2023, '2005-06-01', 9.5,
-                 'SOLAR_AUFDACH', 8.11, 'VERGUETUNG', CURRENT_DATE + 30, 'EB-1')",
+                 'SOLAR_AUFDACH', 8.11, 'VERGUETUNG', heute() + 30, 'EB-1')",
     )
     .bind(TENANT)
     .execute(&pool)

@@ -320,6 +320,38 @@ pub async fn post_vpp_billing(
 
 // ── Auto-settlement webhook ───────────────────────────────────────────────────
 
+/// Which legal instrument a confirmed Steuerungsauftrag belongs to.
+///
+/// § 14a EnWG netzorientierte Steuerung and § 41e flexibility dispatch reach the
+/// MSB as the *same* WiM Steuerungsauftrag (PID 55168), and one
+/// SteuerbareRessource can be subject to both. Only the sender separates them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Disposition {
+    /// The contracted Aggregator called the flexibility it pays for
+    /// (§ 41e EnWG, Art. 17 RL (EU) 2019/944) — settle it.
+    Sect41eDelivery,
+    /// Somebody else ordered the Steuerung — the Netzbetreiber dimming a
+    /// controllable load under § 14a EnWG. Its compensation is a reduced
+    /// Netzentgelt (Modul 1/2/3), not a Gutschrift from the aggregator, so
+    /// settling it here would pay for flexibility nobody dispatched and
+    /// compensate one curtailment twice.
+    Sect14aGridIntervention,
+}
+
+/// Decide [`Disposition`] from the dispatch's sender and the contracted
+/// aggregator.
+///
+/// An **absent** `sender_mp_id` is a grid intervention, not a delivery: a
+/// payment needs positive evidence that the party being paid is the party that
+/// dispatched, and a missing field is not that.
+pub(crate) fn disposition(sender_mp_id: &str, aggregator_mp_id: &str) -> Disposition {
+    if !sender_mp_id.is_empty() && sender_mp_id == aggregator_mp_id {
+        Disposition::Sect41eDelivery
+    } else {
+        Disposition::Sect14aGridIntervention
+    }
+}
+
 /// `POST /api/v1/webhooks/vpp-dispatch`
 ///
 /// **Dispatch-confirmed auto-settlement.**
@@ -368,6 +400,15 @@ pub async fn post_vpp_billing(
 ///   "produkt_code":        "TX-MODUL2-HT"
 /// }
 /// ```
+///
+/// `sender_mp_id` must be the contracted `aggregator_mp_id` for the dispatch to
+/// settle. § 14a EnWG and § 41e ride the same Steuerungsauftrag, so the sender
+/// is what separates a Netzbetreiber's grid intervention from the aggregator's
+/// flexibility call — see step 5b.
+///
+/// The event carries **no price**, deliberately: what a dispatch is worth is the
+/// § 41e Aggregatorvertrag's `capacity_price_eur_per_kwh` in `vertragd`, and a
+/// counterparty does not get to state what it is owed.
 pub async fn post_vpp_webhook(
     Extension(pool): Extension<PgPool>,
     Extension(deps): Extension<Arc<BillingDeps>>,
@@ -469,6 +510,12 @@ pub async fn post_vpp_webhook(
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse().ok())
         .unwrap_or(rust_decimal::Decimal::ZERO);
+    // Who ordered the Steuerung. §14a and §41e ride the same wire.
+    let sender_mp_id = data
+        .get("sender_mp_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_owned();
 
     // Only SR-IDs are currently supported for VPP contract lookup.
     // NeLo-IDs (grid constraint redispatch) use a different billing flow.
@@ -487,8 +534,8 @@ pub async fn post_vpp_webhook(
     // day this webhook happens to be processed. Selecting by "today" meant a
     // replayed or delayed event could bill under a different contract version
     // than the one in force when the flexibility was actually delivered.
-    let dispatch_date = parse_dispatch_date(&execution_time_from)
-        .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+    let dispatch_date =
+        parse_dispatch_date(&execution_time_from).unwrap_or_else(mako_fristen::heute);
     let contract = match vertragd
         .get_aggregatorvertrag(&location_id, dispatch_date)
         .await
@@ -511,6 +558,39 @@ pub async fn post_vpp_webhook(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
+
+    // ── 5b. Only the aggregator's own dispatch is a § 41e delivery ────────────
+    //
+    // § 14a EnWG netzorientierte Steuerung and § 41e flexibility dispatch reach
+    // the MSB as the *same* WiM Steuerungsauftrag (ORDERS/ORDRSP, PID 55168),
+    // and a SteuerbareRessource can be subject to both. What separates them is
+    // who sent it: the Netzbetreiber dimming a controllable load under § 14a, or
+    // the Aggregator calling the flexibility it contracted under § 41e /
+    // Art. 17 RL (EU) 2019/944.
+    //
+    // They are compensated on different legal bases and by different parties. A
+    // § 14a intervention is answered by a reduced Netzentgelt (Modul 1/2/3),
+    // which `billingd` prices on the network-charge side; paying the
+    // `capacity_price_eur_per_kwh` for it as well would credit the aggregator
+    // for flexibility it never dispatched and compensate the customer twice for
+    // one curtailment.
+    //
+    // The dispatch is still recorded, so the idempotency key is consumed and the
+    // § 14a audit trail keeps it.
+    if disposition(&sender_mp_id, &contract.aggregator_mp_id)
+        == Disposition::Sect14aGridIntervention
+    {
+        tracing::info!(
+            tx_id,
+            sr_id = %location_id,
+            sender_mp_id = %sender_mp_id,
+            aggregator_mp_id = %contract.aggregator_mp_id,
+            "billingd: vpp-dispatch — sender is not the contracted Aggregator; \
+             recording as a § 14a Steuerung, not settling it under § 41e"
+        );
+        let _ = crate::pg::record_vpp_dispatch(&pool, &tx_id, &cfg.tenant, None).await;
+        return StatusCode::ACCEPTED.into_response();
+    }
 
     // ── 6. Check vpp_auto_billing flag ────────────────────────────────────────
     if !cfg.vpp_auto_billing {
@@ -778,9 +858,56 @@ pub(crate) fn compute_dispatch_flexibility_kwh(
     (max_power_kw * duration_hours).round_kfm(6)
 }
 
-/// Extract the calendar date (UTC) from an ISO-8601 timestamp string.
+/// The German calendar date an ISO-8601 dispatch timestamp falls on.
+///
+/// The date selects the aggregator contract version in force and groups the
+/// dispatch for § 41e settlement, so it is the day the German market counts —
+/// a dispatch at 00:30 Berlin belongs to that day, not to the one the UTC
+/// clock is still on.
 pub(crate) fn parse_dispatch_date(ts: &str) -> Option<time::Date> {
     time::OffsetDateTime::parse(ts, &time::format_description::well_known::Rfc3339)
         .ok()
-        .map(|dt| dt.date())
+        .map(mako_fristen::berlin_date)
+}
+
+#[cfg(test)]
+mod disposition_tests {
+    use super::{Disposition, disposition};
+
+    const AGGREGATOR: &str = "9900123456789";
+    const NETZBETREIBER: &str = "9900000000001";
+
+    /// The aggregator calling its own contracted flexibility is the § 41e case.
+    #[test]
+    fn the_contracted_aggregator_delivers_under_sect41e() {
+        assert_eq!(
+            disposition(AGGREGATOR, AGGREGATOR),
+            Disposition::Sect41eDelivery
+        );
+    }
+
+    /// § 14a EnWG and § 41e ride the same Steuerungsauftrag (PID 55168), and one
+    /// SteuerbareRessource can carry both. Settling the Netzbetreiber's grid
+    /// intervention here would credit the aggregator for flexibility it never
+    /// dispatched, on top of the reduced Netzentgelt the customer already gets
+    /// for it.
+    #[test]
+    fn the_netzbetreibers_sect14a_steuerung_is_not_a_delivery() {
+        assert_eq!(
+            disposition(NETZBETREIBER, AGGREGATOR),
+            Disposition::Sect14aGridIntervention
+        );
+    }
+
+    /// A payment needs positive evidence of who dispatched. An event that names
+    /// no sender is not that evidence, whatever the contract says.
+    #[test]
+    fn an_unnamed_sender_never_settles() {
+        assert_eq!(
+            disposition("", AGGREGATOR),
+            Disposition::Sect14aGridIntervention
+        );
+        // Not even when the contract itself names no aggregator.
+        assert_eq!(disposition("", ""), Disposition::Sect14aGridIntervention);
+    }
 }

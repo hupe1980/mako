@@ -309,8 +309,8 @@ pub async fn list_rahmenvertrag_malos(
           JOIN kunden ku               ON ku.id = vv.kunden_id
           LEFT JOIN LATERAL (
               SELECT product_code FROM komponenten_produkte
-               WHERE komp_id = k.id AND gueltig_von <= CURRENT_DATE
-                 AND (gueltig_bis IS NULL OR gueltig_bis > CURRENT_DATE)
+               WHERE komp_id = k.id AND gueltig_von <= heute()
+                 AND (gueltig_bis IS NULL OR gueltig_bis > heute())
                LIMIT 1
           ) p ON TRUE
           WHERE vv.rahmenvertrag_id = $1
@@ -591,7 +591,7 @@ pub async fn list_pending_kuendigungen(
         r"SELECT * FROM versorgungsvertraege
           WHERE tenant = $1
             AND status = 'GEKÜNDIGT'
-            AND (kuendigung_zum IS NULL OR kuendigung_zum >= CURRENT_DATE)
+            AND (kuendigung_zum IS NULL OR kuendigung_zum >= heute())
           ORDER BY kuendigung_zum ASC NULLS LAST
           LIMIT $2",
     )
@@ -750,8 +750,8 @@ pub async fn list_portfolio_by_kunde(
           JOIN versorgungsvertraege v ON v.id = k.vertrag_id
           LEFT JOIN LATERAL (
               SELECT product_code FROM komponenten_produkte
-               WHERE komp_id = k.id AND gueltig_von <= CURRENT_DATE
-                 AND (gueltig_bis IS NULL OR gueltig_bis > CURRENT_DATE)
+               WHERE komp_id = k.id AND gueltig_von <= heute()
+                 AND (gueltig_bis IS NULL OR gueltig_bis > heute())
                LIMIT 1
           ) p ON TRUE
           WHERE v.kunden_id = $1 AND v.tenant = $2
@@ -860,7 +860,7 @@ pub async fn schedule_lieferende(
     sqlx::query(&format!(
         "UPDATE vertragskomponenten
          SET lieferende = $2,
-             status = CASE WHEN $2 < CURRENT_DATE THEN 'BEENDET' ELSE status END,
+             status = CASE WHEN $2 < heute() THEN 'BEENDET' ELSE status END,
              updated_at = now()
          WHERE id=$1 AND status NOT IN {KOMPONENTE_TERMINAL}"
     ))
@@ -889,7 +889,7 @@ pub async fn close_due_supply(pool: &PgPool, tenant: &str) -> Result<Vec<Uuid>> 
           WHERE tenant = $1
             AND status IN ('AKTIV','BESTAETIGT')
             AND lieferende IS NOT NULL
-            AND lieferende < CURRENT_DATE",
+            AND lieferende < heute()",
     )
     .bind(tenant)
     .execute(&mut *tx)
@@ -1108,7 +1108,7 @@ pub async fn widerruf_kuendigung(
             "Kündigung Widerruf only allowed for GEKÜNDIGT contracts, current status: {status}"
         );
     }
-    let heute = time::OffsetDateTime::now_utc().date();
+    let heute = mako_fristen::heute();
     if let Some(zum) = zum
         && zum <= heute
     {
@@ -1126,7 +1126,7 @@ pub async fn widerruf_kuendigung(
          SET status = 'AKTIV', lieferende = NULL, updated_at = now()
          WHERE vertrag_id = $1
            AND status IN ('AKTIV','BESTAETIGT','BEENDET')
-           AND lieferende IS NOT NULL AND lieferende > CURRENT_DATE",
+           AND lieferende IS NOT NULL AND lieferende > heute()",
     )
     .bind(id)
     .execute(&mut *conn)

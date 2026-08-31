@@ -148,9 +148,11 @@ pub struct ParseConfig {
     pub max_segments_per_message: Option<usize>,
     /// Reference date used for profile validity lookups during `validate()`.
     ///
-    /// When `None` (the default), `time::OffsetDateTime::now_utc().date()` is
-    /// used at validation time.  Set this to a fixed date in tests so that
-    /// profile resolution is deterministic regardless of when the test runs.
+    /// When `None` (the default), nothing is disambiguated by date: for a wire
+    /// code shared by two Formatversionen the last registered profile wins.
+    /// A Formatversion changes at German midnight, so „which day is it" decides
+    /// which one applies and this crate will not guess — set it, from
+    /// `mako_fristen::heute()` in a service or a fixed date in a test.
     ///
     /// # Example
     /// ```rust

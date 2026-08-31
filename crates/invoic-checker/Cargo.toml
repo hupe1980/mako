@@ -12,6 +12,7 @@ keywords     = ["invoic", "bo4e", "energy", "mako", "bdew"]
 categories   = ["data-structures", "finance"]
 
 [dependencies]
+mako-fristen = { workspace = true }
 billing      = { workspace = true }
 # The published `E_0264`/`E_0266` Antwortcodes an ESA's REMADV must carry. Only
 # the ESA trees: this crate answers invoices, not Messstellenbetrieb processes.

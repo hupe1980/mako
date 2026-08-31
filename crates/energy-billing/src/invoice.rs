@@ -1049,10 +1049,8 @@ fn mengeneinheit_of(unit: &str) -> Option<rubo4e::current::Mengeneinheit> {
 ///   attribute `to_rechnung()` uses)
 /// - All `wert` monetary fields → sign-negated
 ///
-/// ## Moved from `handlers.rs`
-///
-/// Previously `negate_rechnung_json()` in `billingd/src/handlers.rs`. Moved here
-/// so the library owns all sign-negation logic for invoices.
+/// Sign negation lives here rather than in a service, so every caller that
+/// corrects an invoice negates it the same way.
 pub fn negate_rechnung_json_for_correction(
     original: &serde_json::Value,
     original_rechnungsnummer: &str,

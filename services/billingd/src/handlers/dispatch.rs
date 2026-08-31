@@ -26,13 +26,12 @@ pub(crate) async fn build_quantities(
                 Product::Waermepumpe(p) | Product::Wallbox(p) => p.base.dynamic_epex,
                 _ => false,
             };
-            // The meter reading is resolved either way. A dynamic tariff prices
-            // from the Lastgang, but the §40 Abs. 2 Nr. 6 register readings, the
-            // §40a estimation flag and — the one that mattered — the
-            // `metering_mode` all live here. Leaving `electricity` unset on the
-            // dynamic path meant `DynamicElectricityProvider::validate_warnings`
-            // saw no metering mode at all, so the §41a Abs. 1 iMSys guard this
-            // service advertises never fired on a single production invoice.
+            // The meter reading is resolved either way. A dynamic tariff
+            // prices from the Lastgang, but the §40 Abs. 2 Nr. 6 register
+            // readings, the §40a estimation flag and the `metering_mode` all
+            // live here — and without the metering mode
+            // `DynamicElectricityProvider::validate_warnings` cannot apply the
+            // §41a Abs. 1 iMSys guard at all.
             q.electricity =
                 Some(resolve_strom_meter(req, malo_id, period_from, period_to, edmd).await?);
             if is_dynamic {
@@ -192,7 +191,7 @@ pub(crate) async fn dispatch_invoice(
     // instead, a catch-up run and every late Schlussrechnung issued invoices
     // that were already overdue on arrival, which the dunning downstream acted
     // on.
-    let issue_date = time::OffsetDateTime::now_utc().date();
+    let issue_date = mako_fristen::heute();
 
     let ctx = BillingContext {
         malo_id: malo_id.to_owned(),

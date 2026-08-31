@@ -302,9 +302,11 @@ Within a single process the store uses a per-key `DashMap<_, Arc<Mutex<()>>>` to
 | INVOIC | zum Zahlungsziel der Rechnung; der NB bei 31009 zum 4. WT davor | `mako_fristen::vorlauf::rechnung_antwort_spaetester_uet` |
 | MaBiS | no response Frist — the clearing window of Kap. 3.10 Tabelle 2 bounds it | `mako_mabis::Bilanzierungsmonat::clearing` |
 
-**Saturday is not a Werktag.** GPKE (BK6-24-174) Teil 1: *"alle Tage ..., die kein Samstag, Sonntag oder gesetzlicher Feiertag sind"*. A holiday observed in any single Bundesland counts nationwide, and 24.12. and 31.12. count as holidays.
+**Saturday is not a Werktag.** GPKE (BK6-24-174) Teil 1 Kap. 7: *"alle Tage ..., die kein Samstag, Sonntag oder gesetzlicher Feiertag sind"*. A holiday observed in any single Bundesland counts nationwide, and 24.12. and 31.12. count as holidays. Allgemeine Festlegungen 6.1d states the same definition under *WT*.
 
-Deadlines are always expressed as `17:00 Europe/Berlin` on the due date (not UTC). The `fristen` module uses `time_tz::assume_timezone(Europe/Berlin)` and the Anonymous Gregorian Easter algorithm for public holiday detection (valid for all years).
+**The count starts on the day of receipt, whatever weekday it is.** The same Kapitel defines the Übertragungstag as *"der Tag des Empfangs der Übertragungsdatei ... aus der AS4-Zustellquittung"* and attaches no rule deeming a weekend arrival received on the next Werktag — only the Werktage *counted* skip weekends and holidays. What it does attach is a condition on the acknowledgement: the ÜT counts *"nur ..., sofern es sich um eine positive Zustellquittung bzw. Response-Nachricht handelt"*, so a negative acknowledgement starts no Frist.
+
+Deadlines are always expressed as `17:00 Europe/Berlin` on the due date (not UTC), and the day of receipt is read as a Berlin calendar date — see [Dates and days](@/docs/architecture/domain-model.md#dates-and-days). The `fristen` module uses `time_tz::assume_timezone(Europe/Berlin)` and the Anonymous Gregorian Easter algorithm for public holiday detection (valid for all years).
 
 ---
 
@@ -315,7 +317,11 @@ message is a function of its date, not of what is deployed.
 
 Selection is `ReleaseRegistry::profile_on(message_type, release, date)`, which
 returns the profile with the greatest `valid_from ≤ date`. The date comes from
-`ParseConfig::with_reference_date` and defaults to today. The wire release code
+`ParseConfig::with_reference_date` or `validate_on_date`, and `makod` supplies
+`mako_fristen::heute()` — the German calendar date, because a Formatversion
+takes effect at German midnight. `edi-energy` reads no clock of its own: given
+no date it disambiguates nothing, and the last registered profile for the wire
+code wins. The wire release code
 in `UNH DE 0057` narrows the candidates but cannot decide alone — two
 Formatversionen can share one MIG.
 

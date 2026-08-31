@@ -38,10 +38,9 @@
 //! | 13012 | MSCONS    | TEP vergangenheitsbezogene Werte, Referenzmessung | NB → LF / MSB | 1 |
 //! | 17211 | ORDERS    | Reklamation Profile bzw. Profilscharen | LF → NB      | 2              |
 //!
-//! **17211 is a MaBiS code.** Its Prozessbeschreibung column reads „MABIS" and
-//! its sequence step is the answer leg of exactly this use case. It was
-//! previously filed with the Redispatch ORDERS codes, which left the profile
-//! delivery with no Reklamation at all.
+//! **17211 is a MaBiS code, not a Redispatch one.** Its Prozessbeschreibung
+//! column reads „MABIS" and its sequence step is the answer leg of exactly this
+//! use case — the Reklamation of a profile delivery.
 //!
 //! # Fristen (Kap. 6.5.3)
 //!

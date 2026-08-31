@@ -316,7 +316,7 @@ pub(crate) async fn create_virtual_meter(
 
     match sqlx::query(
         "INSERT INTO virtual_meter_configs (virtual_malo_id, display_name, rule_type, rule_json, legal_basis, sparte, valid_from, tenant)
-         VALUES ($1, $2, $3, $4, $5, $6, CURRENT_DATE, $7)
+         VALUES ($1, $2, $3, $4, $5, $6, heute(), $7)
          ON CONFLICT (virtual_malo_id, tenant) DO UPDATE
             SET display_name = EXCLUDED.display_name,
                 rule_type = EXCLUDED.rule_type,

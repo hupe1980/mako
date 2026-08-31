@@ -139,7 +139,7 @@ impl Daemon for Einsd {
                 tokio::time::sleep(tokio::time::Duration::from_secs(interval_secs)).await;
                 match pg::list_expiring_unalerted(&alert_pool, &alert_cfg.tenant, 180).await {
                     Ok(plants) if !plants.is_empty() => {
-                        let today = time::OffsetDateTime::now_utc().date();
+                        let today = mako_fristen::heute();
                         for plant in &plants {
                             let days_remaining = (plant.foerderendedatum - today).whole_days();
                             tracing::info!(
@@ -236,7 +236,7 @@ impl Daemon for Einsd {
         // correct technology-specific AW, these values must be available before monthly settlement runs.
         //
         // The external URL must return JSON with the structure:
-        //   `[{ "erzeugungsart": "WIND_ONSHORE", "avg_ct_kwh": 6.42 }, ...]`
+        //   `[{ "erzeugungsart": "WIND_ONSHORE", "avg_ct_kwh": "6.42" }, ...]`
         // where `erzeugungsart` matches the values in the `eeg_anlagen` table.
         if let Some(jmw_url_tpl) = cfg.jahresmarktwert_url.clone() {
             let jmw_pool = pool.clone();

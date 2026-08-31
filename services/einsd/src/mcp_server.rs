@@ -676,7 +676,7 @@ impl EinsdMcpHandler {
             ));
         };
 
-        let today = time::OffsetDateTime::now_utc().date();
+        let today = mako_fristen::heute();
         let foerderung_aktiv = anlage.foerderendedatum >= today;
         let heute_monatserster = today.replace_day(1).unwrap_or(today);
 
@@ -788,7 +788,7 @@ impl EinsdMcpHandler {
               WHERE tenant = $1
                 AND mastr_registriert = false
                 AND status = 'aktiv'
-                AND (foerderendedatum IS NULL OR foerderendedatum >= CURRENT_DATE)
+                AND (foerderendedatum IS NULL OR foerderendedatum >= heute())
               ORDER BY leistung_kwp DESC",
         )
         .bind(&self.state.tenant)
@@ -862,7 +862,7 @@ impl EinsdMcpHandler {
                 AND status = 'aktiv'
                 AND leistung_kwp > $2
                 AND settlement_model = $3
-                AND foerderendedatum >= CURRENT_DATE
+                AND foerderendedatum >= heute()
               ORDER BY leistung_kwp DESC",
         )
         .bind(&self.state.tenant)
@@ -1111,7 +1111,7 @@ Marktpraemie is floored at zero, so a cut can reduce the payment to zero but nev
                 .map_err(|e| {
                 McpError::invalid_params(format!("invalid date `{s}`: {e}"), None)
             })?,
-            None => time::OffsetDateTime::now_utc().date(),
+            None => mako_fristen::heute(),
         };
         let v =
             crate::pg::aw_reduktionen_am(&self.state.pool, &self.state.tenant, &params.tr_id, on)

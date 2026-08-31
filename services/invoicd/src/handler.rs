@@ -535,8 +535,7 @@ async fn run_check(
             // The ÜT — the day the Übertragungsdatei was received — is what
             // every WiM Frist is measured from, and `E_0264` Prüfschritte 20
             // and 70 compare against it.
-            let mut fakten =
-                invoic_checker::EmpfaengerFakten::neu(OffsetDateTime::now_utc().date());
+            let mut fakten = invoic_checker::EmpfaengerFakten::neu(mako_fristen::heute());
             // Prüfschritt 50 — `A05`. Answerable from this service's own
             // receipt store for every family, so it is answered here rather
             // than left defaulted.
@@ -641,7 +640,7 @@ async fn preisblatt_b_fakten(
     inc: &Incoming,
     process_id: Uuid,
 ) -> invoic_checker::EmpfaengerFakten {
-    let mut fakten = invoic_checker::EmpfaengerFakten::neu(OffsetDateTime::now_utc().date());
+    let mut fakten = invoic_checker::EmpfaengerFakten::neu(mako_fristen::heute());
     // Prüfschritt 40 — „Basiert die Rechnung auf einer Bestellung des
     // Rechnungsempfängers?" A Preisblatt-B Leistung is always billed against a
     // confirmed ORDERS 17011, and INVOIC AHB 1.0b makes `SG1 RFF+ACE` Muss, so
@@ -693,7 +692,7 @@ fn billing_date_of(rechnung: &Rechnung) -> time::Date {
         .billing_period()
         .map(|p| *p.start())
         .or_else(|| rechnung.rechnungsdatum_date())
-        .unwrap_or_else(|| OffsetDateTime::now_utc().date())
+        .unwrap_or_else(mako_fristen::heute)
 }
 
 /// How this ESA answered the invoice a Stornorechnung cancels — `E_0267`

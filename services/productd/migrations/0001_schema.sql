@@ -10,6 +10,19 @@
 -- All prices are user-defined in data.tarifpreise.
 -- productd contains no hardcoded commercial rates.
 
+-- ── heute() — the business date ───────────────────────────────────────────────
+--
+-- Every date this schema compares against is a German calendar date — the day a
+-- Frist runs out, a validity window opens, an obligation falls due.
+-- PostgreSQL's own `current_date` answers the *session* time zone's date, which
+-- on a UTC server is still yesterday between 23:00 and midnight Berlin time
+-- (22:00 in summer). `heute()` states the conversion once, so it holds however
+-- the connection was opened. The Rust side reads the same date through
+-- `mako_fristen::heute`.
+CREATE OR REPLACE FUNCTION heute() RETURNS date
+    LANGUAGE sql STABLE
+    AS $$ SELECT (now() AT TIME ZONE 'Europe/Berlin')::date $$;
+
 CREATE EXTENSION IF NOT EXISTS btree_gist;
 
 -- ── Products ──────────────────────────────────────────────────────────────────

@@ -462,9 +462,9 @@ fn the_tariff_seed_does_not_swallow_collisions() {
 /// The §51 auto-derivation must take the billing month in German local time.
 ///
 /// EPEX day-ahead prices and edmd's ¼h series are both published for the German
-/// market time. Taking the month from midnight UTC shifted the window by an hour
-/// — two at DST — so the first hour of the month was matched against the previous
-/// month's prices and the last hour was dropped entirely.
+/// market time. A month taken from midnight UTC is an hour out of phase — two at
+/// DST — so its first hour matches the previous month's prices and its last hour
+/// falls outside the window entirely.
 #[test]
 fn the_billing_month_window_is_german_local_time() {
     let code = code_only(HANDLERS);
@@ -473,8 +473,8 @@ fn the_billing_month_window_is_german_local_time() {
         .expect("billing_month_range must exist");
     let body = &code[at..at + 1400.min(code.len() - at)];
     assert!(
-        body.contains("europe::BERLIN"),
-        "the billing-month window must be anchored in Europe/Berlin"
+        body.contains("mako_fristen::berlin_midnight"),
+        "the billing-month window must be tiled from Berlin midnights"
     );
     assert!(
         !body.contains("assume_utc"),

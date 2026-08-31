@@ -245,7 +245,9 @@ pub use wim::*;
 /// own call site, because whether an unchecked message may be acted on is a
 /// per-process decision.
 pub(crate) fn ahb_verdict(msg: &AnyMessage) -> (bool, Vec<String>) {
-    let Some(report) = msg.validate().ok() else {
+    // Which Formatversion the message is judged under follows the day it is
+    // judged on, and that day is the German one — see `mako_fristen::heute`.
+    let Some(report) = msg.validate_on_date(mako_fristen::heute()).ok() else {
         return (false, Vec::new());
     };
     if report.is_valid() {

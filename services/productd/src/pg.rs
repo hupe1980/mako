@@ -202,7 +202,7 @@ pub async fn fetch_product(
     .bind(lf_mp_id)
     .bind(product_code)
     .bind(tenant)
-    .bind(as_of.unwrap_or_else(berlin_today))
+    .bind(as_of.unwrap_or_else(mako_fristen::heute))
     .fetch_optional(pool)
     .await
     .context("fetch product")
@@ -225,7 +225,7 @@ pub async fn soft_delete_product(
     tenant: &str,
     product_code: &str,
 ) -> anyhow::Result<bool> {
-    let today = berlin_today();
+    let today = mako_fristen::heute();
     let res = sqlx::query(
         r"UPDATE products
           SET valid_to = $3, updated_at = now()
@@ -366,7 +366,7 @@ pub async fn fetch_energiemix(
     .bind(lf_mp_id)
     .bind(product_code)
     .bind(tenant)
-    .bind(berlin_today())
+    .bind(mako_fristen::heute())
     .fetch_optional(pool)
     .await
     .context("fetch energiemix")?;
@@ -433,7 +433,7 @@ pub async fn list_products(
             AND ($3::text IS NULL OR sparte = $3)
             AND ($4::text IS NULL OR kundentyp = $4)
             AND ($5::bool IS TRUE OR product_status = 'PUBLISHED')
-            AND ($6::bool IS TRUE OR valid_to IS NULL OR valid_to >= CURRENT_DATE)
+            AND ($6::bool IS TRUE OR valid_to IS NULL OR valid_to >= heute())
           ORDER BY product_code, valid_from DESC NULLS LAST
           LIMIT $7",
     )
@@ -479,32 +479,6 @@ pub struct EpexPricePoint {
     pub avg_ct_kwh: Decimal,
 }
 
-/// Today's civil date in Europe/Berlin.
-///
-/// Every deadline in this service is a German civil date. Reading the UTC date
-/// makes the day roll over an hour early in summer, which expires an Angebot on
-/// its `gueltig_bis` evening and switches a price version a day early.
-#[must_use]
-pub fn berlin_today() -> Date {
-    use time_tz::OffsetDateTimeExt as _;
-    OffsetDateTime::now_utc()
-        .to_timezone(time_tz::timezones::db::europe::BERLIN)
-        .date()
-}
-
-/// UTC instant of Europe/Berlin local midnight for `date`.
-///
-/// Midnight never falls in a DST gap/overlap (transitions are at 02:00/03:00),
-/// so `take_first` is unambiguous.
-fn berlin_midnight_utc(date: Date) -> OffsetDateTime {
-    use time_tz::PrimitiveDateTimeExt;
-    let berlin = time_tz::timezones::db::europe::BERLIN;
-    date.midnight()
-        .assume_timezone(berlin)
-        .take_first()
-        .expect("Berlin local midnight is unambiguous")
-}
-
 pub async fn upsert_epex_day(
     pool: &PgPool,
     date: Date,
@@ -517,9 +491,9 @@ pub async fn upsert_epex_day(
 
     // Delivery day boundaries as UTC instants. The local day spans 23/24/25 h
     // across DST, so the MTU count is derived — never hard-coded to 24/96.
-    let day_start = berlin_midnight_utc(date);
+    let day_start = mako_fristen::berlin_midnight(date);
     let next_date = date.next_day().context("date overflow")?;
-    let day_end = berlin_midnight_utc(next_date);
+    let day_end = mako_fristen::berlin_midnight(next_date);
     let span_minutes = (day_end - day_start).whole_minutes();
     let expected = usize::try_from(span_minutes / mtu_minutes).unwrap_or(0);
     if req.prices.len() != expected {
@@ -1021,7 +995,7 @@ pub async fn accept_angebot(
         .await?
         .ok_or_else(|| anyhow::anyhow!("Angebot {id} not found"))?;
 
-    let today = berlin_today();
+    let today = mako_fristen::heute();
     if angebot.gueltig_bis < today {
         // Auto-expire
         sqlx::query("UPDATE angebote SET status='ABGELAUFEN', updated_at=now() WHERE id=$1")
@@ -1155,7 +1129,7 @@ pub async fn expire_stale_angebote(pool: &PgPool, tenant: &str) -> anyhow::Resul
             AND gueltig_bis < $2",
     )
     .bind(tenant)
-    .bind(berlin_today())
+    .bind(mako_fristen::heute())
     .execute(pool)
     .await
     .context("expire_stale_angebote")?;
@@ -1169,7 +1143,7 @@ pub async fn expire_stale_angebote(pool: &PgPool, tenant: &str) -> anyhow::Resul
 /// concurrent quotations both read the same count and then collided on the
 /// `angebotsnummer` unique constraint, so one of them simply failed.
 pub async fn next_angebotsnummer(pool: &PgPool, tenant: &str) -> anyhow::Result<String> {
-    let year = berlin_today().year();
+    let year = mako_fristen::heute().year();
     let seq: i64 = sqlx::query_scalar(
         r"INSERT INTO angebot_sequenzen (tenant, jahr, letzte_nummer)
           VALUES ($1, $2, 1)
@@ -1358,8 +1332,8 @@ pub struct ComparisonFeedResponse {
 /// | Filter | SQL condition |
 /// |---|---|
 /// | Category allowlist | `category IN ('STROM','GAS','WAERME','SOLAR','WAERMEPUMPE','WALLBOX')` |
-/// | Validity window | `valid_to IS NULL OR valid_to >= CURRENT_DATE` |
-/// | Validity start | `valid_from IS NULL OR valid_from <= CURRENT_DATE` |
+/// | Validity window | `valid_to IS NULL OR valid_to >= heute()` |
+/// | Validity start | `valid_from IS NULL OR valid_from <= heute()` |
 /// | Sparte | optional equality |
 /// | Kundentyp | optional equality |
 /// | Oekolabel | optional `@>` array containment |
@@ -1403,8 +1377,8 @@ pub async fn fetch_comparison_feed(
           FROM products
           WHERE lf_mp_id = $1
             AND category = ANY($2)
-            AND (valid_to IS NULL OR valid_to >= CURRENT_DATE)
-            AND (valid_from IS NULL OR valid_from <= CURRENT_DATE)
+            AND (valid_to IS NULL OR valid_to >= heute())
+            AND (valid_from IS NULL OR valid_from <= heute())
             AND ($3::text IS NULL OR sparte = $3)
             AND ($4::text IS NULL OR kundentyp = $4)
             AND ($5::bool IS FALSE OR dyn_source IS NOT NULL)

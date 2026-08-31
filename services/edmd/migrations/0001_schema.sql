@@ -13,6 +13,19 @@
 -- `btree_gist` provides GiST equality operators for TEXT so an interval-overlap
 -- EXCLUDE constraint can combine equality columns with tstzrange overlap.
 -- Shipped in postgres contrib; kept because meterstore's hot tier relies on it.
+-- ── heute() — the business date ───────────────────────────────────────────────
+--
+-- Every date this schema compares against is a German calendar date — the day a
+-- Frist runs out, a validity window opens, an obligation falls due.
+-- PostgreSQL's own `current_date` answers the *session* time zone's date, which
+-- on a UTC server is still yesterday between 23:00 and midnight Berlin time
+-- (22:00 in summer). `heute()` states the conversion once, so it holds however
+-- the connection was opened. The Rust side reads the same date through
+-- `mako_fristen::heute`.
+CREATE OR REPLACE FUNCTION heute() RETURNS date
+    LANGUAGE sql STABLE
+    AS $$ SELECT (now() AT TIME ZONE 'Europe/Berlin')::date $$;
+
 CREATE EXTENSION IF NOT EXISTS btree_gist;
 
 -- ── Meter data receipts ───────────────────────────────────────────────────────
@@ -366,7 +379,7 @@ CREATE TABLE virtual_meter_configs (
     -- which regime a community operates under, which `rule_type` cannot express.
     legal_basis     TEXT,
     sparte          TEXT        CHECK (sparte IS NULL OR sparte IN ('STROM', 'GAS', 'WAERME', 'WASSER')),
-    valid_from      DATE        NOT NULL DEFAULT CURRENT_DATE,
+    valid_from      DATE        NOT NULL DEFAULT heute(),
     valid_to        DATE,
     tenant          TEXT        NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),

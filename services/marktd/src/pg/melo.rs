@@ -124,7 +124,7 @@ impl MeloRepository for PgMeloRepository {
         .map_err(|e| MdmError::Internal(e.to_string()))?;
 
         // ── Graph reconciliation (single-write-path invariant) ────────────────
-        let today = time::OffsetDateTime::now_utc().date();
+        let today = mako_fristen::heute();
         let melo_str = melo_id.to_string();
         let new_parent = malo_id.map(ToString::to_string);
 

@@ -147,10 +147,9 @@ fn mentions_malo(line: &str) -> bool {
 /// Scan the workspace. Returns `true` when every MaLo literal validates.
 pub fn run(workspace_root: &Path) -> bool {
     let mut findings = Vec::new();
-    // `makotest` is in the list because leaving it out is how the Python
-    // identifier tests rotted unnoticed through a check-digit correction: the
-    // bindings under test are the same `MaloId`, so a fixture there is exactly
-    // as wrong as one in a Rust test, and only CI said so.
+    // `makotest` is in the list because its bindings are the same `MaloId`: a
+    // fixture there is exactly as wrong as one in a Rust test, and nothing but
+    // this check says so.
     for dir in [
         "services",
         "crates",

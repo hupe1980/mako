@@ -18,6 +18,7 @@ name = "marktd"
 path = "src/lib.rs"
 
 [dependencies]
+mako-fristen = { workspace = true }
 mako-events = { workspace = true }
 mako-markt = { path = "../../crates/mako-markt", features = ["makod-client"] }
 # The Kapitel-4.6 Messprodukt catalogue: the ESA product registry refuses a
@@ -45,7 +46,6 @@ secrecy            = "0.10"
 subtle             = "2"
 hmac               = { version = "0.12", features = ["std"] }
 sha2               = "0.10"
-jiff               = "0.2"
 reqwest            = { workspace = true }
 # Bounded-concurrent fan-out delivery (`for_each_concurrent`) so one slow
 # subscriber cannot stall a whole batch on the single-threaded worker.

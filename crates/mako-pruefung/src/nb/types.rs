@@ -232,8 +232,8 @@ pub struct AnmeldungAnfrage {
     ///
     /// Drives the date-plausibility rules (check 3): GPKE permits a
     /// retroactive Lieferbeginn for Ein-/Auszug within the statutory
-    /// backdating window, but not for a regular Wechsel. `None` (legacy
-    /// messages or extraction failure) is treated conservatively.
+    /// backdating window, but not for a regular Wechsel. `None` — the segment
+    /// was absent or could not be read — is treated conservatively.
     pub transaktionsgrund: Option<String>,
     /// Which `E_0622` branch the Anwendungsfall belongs to (Prüfschritt 10).
     ///

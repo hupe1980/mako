@@ -345,16 +345,15 @@ impl EdifactIngestDispatcher {
                     reason: "pid_not_in_dispatch_table",
                 }),
             },
-            // ── Workflows registered in PidRouter but Phase 2 dispatch not yet implemented ─
+            // ── Registered in the PidRouter, no typed dispatch arm ─────────
             //
-            // These workflows handle inbound PIDs that are registered in their
-            // respective domain modules. Full dispatch arms with typed adapters and
-            // workflow commands will be added in a follow-up. Until then, inbound
-            // messages are explicitly acknowledged as "not yet dispatched" rather
-            // than silently falling through to the catch-all warn arm.
+            // The PIDs below route to a workflow their domain module registers,
+            // but no adapter turns the message into a command. They are answered
+            // "not yet dispatched" so the arm is explicit rather than falling
+            // through to the catch-all warn.
             //
-            // To implement one of these: add an AdapterRegistry<WorkflowType> function
-            // to adapters.rs and add a proper spawn_or_resume arm above.
+            // Adding one: an `AdapterRegistry<WorkflowType>` in adapters.rs plus
+            // a `spawn_or_resume` arm above.
             // ── GeLi Gas Datenabruf (PIDs 17103/17104 inbound, 19103/19104 ORDRSP) ─
             // 17103/17104: NB/MSB receives ORDERS Anfrage from LF — spawn.
             // 19103/19104: LF receives ORDRSP rejection from NB — resume.

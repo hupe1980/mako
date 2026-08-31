@@ -138,7 +138,7 @@ impl ToolClient for StubTools {
             "get_gas_imbalance" => json!({
                 "bilanzkreis": "THE0BFH012345678",
                 "saldo": "MINDER",
-                "kwh_hs": -18450.75,
+                "kwh_hs": "-18450.75",
                 "allocation_version": "Initial"
             }),
             _ => json!({ "items": [] }),
@@ -152,7 +152,7 @@ fn imbnot_event() -> serde_json::Value {
     json!({
         "bilanzkreis_id": "THE0BFH012345678",
         "gas_day": "2026-08-06",
-        "imbalance_kwh": -18450.75,
+        "imbalance_kwh": "-18450.75",
         "malo_id": "51238696012",
         "anschlussnutzer": "Musterbäckerei Schmidt GmbH",
         "adresse": "Mühlenweg 14, 26121 Oldenburg",
@@ -333,7 +333,7 @@ async fn a_reference_only_event_keeps_personal_data_out_of_the_journal() {
     let reference_only = json!({
         "bilanzkreis_id": "THE0BFH012345678",
         "gas_day": "2026-08-06",
-        "imbalance_kwh": -18450.75,
+        "imbalance_kwh": "-18450.75",
         "malo_id": "51238696012",
     });
     let dumped = run_and_dump_journal(reference_only).await;

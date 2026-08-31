@@ -2399,10 +2399,11 @@ async fn the_dunning_case_and_its_announcement_are_atomic() {
 /// A second interest charge for the same period must not duplicate the row.
 ///
 /// The MAHNGEBUEHR ledger entry is idempotent on `interest:{malo}:{from}:{to}`,
-/// so a retry left the ledger correct — while `interest_charges` grew a second
-/// row and `GET /interest-charges` showed the customer the same Verzugszinsen
-/// twice. The table now carries a unique key, and the row, the announcement and
-/// the guard commit together.
+/// so a retry leaves the ledger correct whatever happens beside it. Idempotency
+/// therefore has to be the table's too — otherwise `interest_charges` grows a
+/// second row and `GET /interest-charges` shows the customer the same
+/// Verzugszinsen twice. The unique key, the row and the announcement commit
+/// together.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn interest_for_the_same_period_is_charged_once() {

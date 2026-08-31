@@ -73,9 +73,7 @@ use mako_markt::repository::{LieferStatus, VersorgungsStatusRecord};
 
 use crate::codes::{self, AntwortCode, EBD_ABMELDUNG_GAS_NB, EBD_ABMELDUNG_NB};
 
-use super::anmeldung::{
-    GAS_RUECKWIRKUNG_WOCHEN, has_werktag_strictly_between, months_before, today_berlin,
-};
+use super::anmeldung::{GAS_RUECKWIRKUNG_WOCHEN, has_werktag_strictly_between, months_before};
 use super::config::NetzCheckConfig;
 use super::types::{AbmeldungAnfrage, Marktlokationsart, Messtyp, NbEntscheidung, RejectReason};
 
@@ -186,7 +184,7 @@ pub fn evaluate_abmeldung(
     }
 
     // ── Prüfschritt 50: Vorlauffrist ─────────────────────────────────────────
-    let today = today_berlin(now);
+    let today = mako_fristen::berlin_date(now);
     if let Some(violation) = check_vorlauffrist(anfrage, today, *config) {
         return violation;
     }

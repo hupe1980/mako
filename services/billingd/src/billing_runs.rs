@@ -185,12 +185,18 @@ pub fn spawn_billing_run_worker(
                     return;
                 }
             }
+            // The trigger is a UTC hour — an operator schedules the run against
+            // a clock, not a calendar. What it sweeps *for* is a German business
+            // day, so both the once-a-day guard and the date handed to `sweep`
+            // are Berlin dates: an invoice must not be dated into the previous
+            // month because the worker woke an hour before German midnight.
             let now = time::OffsetDateTime::now_utc();
-            if now.hour() < cfg.billing_runs.run_hour_utc || last_sweep == Some(now.date()) {
+            let today = mako_fristen::heute();
+            if now.hour() < cfg.billing_runs.run_hour_utc || last_sweep == Some(today) {
                 continue;
             }
-            last_sweep = Some(now.date());
-            sweep(&deps, &pool, now.date()).await;
+            last_sweep = Some(today);
+            sweep(&deps, &pool, today).await;
         }
     });
 }

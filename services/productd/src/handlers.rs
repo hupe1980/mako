@@ -181,8 +181,8 @@ pub fn normalize_tarifpreisblatt(
                 }
                 // A value BO4E defines stays in the BO4E field. A mako
                 // extension moves to the `mako:preistyp` ZusatzAttribut and
-                // `preistyp` is dropped — see `mako_markt::bo4e` for why
-                // writing it into the standard's own enum field was wrong.
+                // `preistyp` is dropped: the standard's own enum field carries
+                // standard values only (see `mako_markt::bo4e`).
                 if let Some(obj) = pos.as_object_mut() {
                     if mako_markt::bo4e::is_bo4e_preistyp(&upper) {
                         obj.insert("preistyp".to_owned(), serde_json::json!(upper));
@@ -689,7 +689,7 @@ pub async fn get_epex_monthly_average(
 ///
 /// Import one dated nEHS certificate price (EUR/t CO₂) — an EEX auction
 /// clearing price (weekly from 01.07.2026), the Verkaufsphase price (68 EUR/t)
-/// or a manual entry. Body: `{ "eur_per_t": 63.50, "source": "auktion" }`.
+/// or a manual entry. Body: `{ "eur_per_t": "63.50", "source": "auktion" }`.
 pub async fn put_nehs_price(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
@@ -727,7 +727,7 @@ pub async fn get_nehs_price_latest(
                     .into_response();
             }
         },
-        None => time::OffsetDateTime::now_utc().date(),
+        None => mako_fristen::heute(),
     };
     match crate::pg::latest_nehs_price(&pool, date).await {
         Ok(Some((price_date, eur_per_t))) => Json(serde_json::json!({
@@ -1056,7 +1056,7 @@ fn estimate_jahreskosten(
 
 /// Default Angebot validity: today + 10 Werktage (≈ 14 calendar days).
 fn default_gueltig_bis() -> time::Date {
-    time::OffsetDateTime::now_utc().date() + time::Duration::days(14)
+    mako_fristen::heute() + time::Duration::days(14)
 }
 
 /// `POST /api/v1/angebote`

@@ -1179,10 +1179,10 @@ mod faelligkeit_tests {
     #[test]
     fn the_due_date_runs_from_the_issue_date_not_the_period_end() {
         // § 40c Abs. 1 EnWG measures the two weeks from when the payment
-        // request reaches the customer. A catch-up run billing an old period
-        // used to issue an invoice whose due date had already passed — the
-        // customer received a document that was overdue on arrival, and the
-        // dunning downstream acted on it.
+        // request reaches the customer, so a catch-up run billing an old period
+        // must date the Fälligkeit from the issue date. Measuring from the
+        // period end would deliver a document overdue on arrival, and the
+        // dunning downstream would act on it.
         let c = ctx(date!(2026 - 01 - 31), Some(date!(2026 - 06 - 10)));
         assert_eq!(c.ausstellungsdatum(), date!(2026 - 06 - 10));
         assert_eq!(c.faelligkeitsdatum(), date!(2026 - 06 - 24));

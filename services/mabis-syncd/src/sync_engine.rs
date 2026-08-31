@@ -55,40 +55,20 @@ fn fmt_edifact_version(t: OffsetDateTime) -> String {
     )
 }
 
-/// The Berlin civil date of an instant.
-///
-/// MaBiS Fristen and Bilanzierungsmonate run on the local calendar, so the
-/// Werktag arithmetic must not shift by a day around midnight UTC.
-#[must_use]
-pub fn berlin_date(t: OffsetDateTime) -> Date {
-    use time_tz::OffsetDateTimeExt as _;
-    t.to_timezone(time_tz::timezones::db::europe::BERLIN).date()
-}
-
-/// Berlin local midnight of `d`, as a UTC instant.
-///
-/// Midnight never falls in a DST gap/overlap (transitions are at 02:00/03:00),
-/// so `take_first` is unambiguous.
-#[must_use]
-pub fn berlin_midnight_utc(d: Date) -> OffsetDateTime {
-    use time_tz::PrimitiveDateTimeExt as _;
-    d.midnight()
-        .assume_timezone(time_tz::timezones::db::europe::BERLIN)
-        .take_first()
-        .expect("Berlin local midnight is unambiguous")
-        .to_offset(time::UtcOffset::UTC)
-}
-
 /// The settlement window `[from, to)` for a Bilanzierungsmonat, as UTC instants.
 ///
 /// `period_to` is the **inclusive** last day of the month, so the exclusive end
-/// is the following Berlin midnight. Taking `period_to` itself dropped the last
-/// day of every month, and UTC midnight shifted the grid by an hour, which made
-/// the two DST months come out four slots short or long.
+/// is the following Berlin midnight. The grid MaBiS settles on is the German
+/// calendar day, which [`mako_fristen::berlin_midnight`] tiles across both DST
+/// transitions; a window of UTC midnights is an hour out of phase with it and
+/// four slots short or long in the two months that change offset.
 #[must_use]
 pub fn aggregation_window(period_from: Date, period_to: Date) -> (OffsetDateTime, OffsetDateTime) {
     let end = period_to.next_day().unwrap_or(period_to);
-    (berlin_midnight_utc(period_from), berlin_midnight_utc(end))
+    (
+        mako_fristen::berlin_midnight(period_from),
+        mako_fristen::berlin_midnight(end),
+    )
 }
 
 /// Idempotency key for one Summenzeitreihe submission.
@@ -241,7 +221,7 @@ impl SyncEngine {
         // derived from the settlement calendar rather than chosen by the caller.
         // The Bilanzierungsmonat is civil, so the phase runs off the Berlin date
         // — a UTC date is a day behind for the first hour of every local day.
-        let (abrechnungslauf, phase) = phase_for(period_to, berlin_date(OffsetDateTime::now_utc()));
+        let (abrechnungslauf, phase) = phase_for(period_to, mako_fristen::heute());
 
         // The version is ascending per §3.8.2 and truncated to whole seconds,
         // because that is all the wire carries. A resubmission for the same
@@ -767,17 +747,15 @@ impl SyncEngine {
     ///
     /// That endpoint returns one BO4E object **per OBIS register**, which is the
     /// right shape for a BO4E export and the wrong input for a settlement
-    /// figure — folding it back into one series is the projection, and doing it
-    /// here got it wrong. The filter was `ObisCode::is_import`, so on a
-    /// dual-tariff MaLo the total register `1-0:1.8.0` passed it **and so did**
-    /// `1-0:1.8.1` and `1-0:1.8.2`, which are its own decomposition: the
-    /// consumption went into the Summenzeitreihe twice, in a filing the BIKO
-    /// cannot withdraw. `1-0:1.6.0` — a Jahreshöchstleistung in kW — is import
-    /// too, and was summed in as though it were energy, as was the
-    /// Fehlerregister `…63`.
+    /// figure: folding it back into one series *is* the projection. An
+    /// `ObisCode::is_import` filter, the obvious way to do it, admits the total
+    /// register `1-0:1.8.0` **and** the `1-0:1.8.1`/`1-0:1.8.2` that decompose
+    /// it — the consumption enters the Summenzeitreihe twice, in a filing the
+    /// BIKO cannot withdraw — plus `1-0:1.6.0`, a Jahreshöchstleistung in kW,
+    /// and the Fehlerregister `…63`.
     ///
-    /// edmd's `domain::register` decides all of that once, and now serves the
-    /// answer instead of the raw registers.
+    /// edmd's `domain::register` decides all of that once and serves the answer,
+    /// so this side reads a series rather than rebuilding one.
     async fn fetch_lastgang(
         &self,
         malo_id: &str,

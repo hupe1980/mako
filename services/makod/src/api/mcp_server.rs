@@ -991,7 +991,7 @@ impl MakodMcpHandler {
         use edi_energy::registry::{ReleaseRegistry, TransitionState};
 
         let registry = ReleaseRegistry::global();
-        let today = time::OffsetDateTime::now_utc().date();
+        let today = mako_fristen::heute();
 
         // Derived from the registry rather than a hardcoded list: `MessageType`
         // is `#[non_exhaustive]`, so an enumeration written here would silently

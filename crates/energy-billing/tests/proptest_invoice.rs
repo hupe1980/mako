@@ -167,7 +167,7 @@ proptest! {
         let tariff: Product = serde_json::from_value(serde_json::json!({
             "category": "STROM",
             "arbeitspreis_ct_per_kwh": ap,
-            "mwst_rate_override": 0.0,
+            "mwst_rate_override": "0.0",
         })).unwrap();
 
         let ctx = base_ctx();
@@ -199,7 +199,7 @@ proptest! {
     ) {
         let tariff: Product = serde_json::from_value(serde_json::json!({
             "category": "STROM",
-            "arbeitspreis_ct_per_kwh": 30.0,
+            "arbeitspreis_ct_per_kwh": "30.0",
             "grundpreis_ct_per_day": gp,
             "mwst_rate_override": mwst,
         })).unwrap();
@@ -491,7 +491,7 @@ proptest! {
         let tariff: Product = serde_json::from_value(serde_json::json!({
             "category": "WAERME",
             "waerme_grundpreis_eur_per_month": gp,
-            "waerme_arbeitspreis_ct_per_kwh": 9.0,
+            "waerme_arbeitspreis_ct_per_kwh": "9.0",
         })).unwrap();
         let rates = RegulatoryRates::default();
         let heat = |kwh: Decimal| Quantities {
@@ -577,13 +577,13 @@ proptest! {
                 "category": "STROM",
                 "arbeitspreis_ct_per_kwh": ap,
                 "indexed_price": {
-                    "base_ct_per_kwh": 5, "spread_ct_per_kwh": 1,
-                    "index_name": "Phelix Base", "factor_ct_per_unit": 0.1,
+                    "base_ct_per_kwh": "5", "spread_ct_per_kwh": "1",
+                    "index_name": "Phelix Base", "factor_ct_per_unit": "0.1",
                 },
             }),
             _ => serde_json::json!({
                 "category": "STROM",
-                "block_tiers": [{"bis_kwh": 1000, "preis_ct_per_kwh": ap}, {"preis_ct_per_kwh": ap}],
+                "block_tiers": [{"bis_kwh": "1000", "preis_ct_per_kwh": ap}, {"preis_ct_per_kwh": ap}],
             }),
         };
         let product: Product = serde_json::from_value(tariff).unwrap();

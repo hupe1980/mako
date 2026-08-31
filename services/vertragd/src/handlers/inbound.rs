@@ -275,7 +275,7 @@ pub async fn angebot(
                     Date::parse(s, &time::format_description::well_known::Iso8601::DATE).ok()
                 })
         })
-        .unwrap_or_else(|| domain::naechster_monatserster(time::OffsetDateTime::now_utc().date()));
+        .unwrap_or_else(|| domain::naechster_monatserster(mako_fristen::heute()));
 
     // The last day of the term, not the same day one year on: a twelve-month
     // contract starting 1 January ends on 31 December. `year + monate / 12`

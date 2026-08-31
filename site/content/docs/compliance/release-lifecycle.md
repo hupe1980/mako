@@ -314,8 +314,8 @@ When all profile and code changes are merged and `just ci` is green:
    - Publishes the workspace's library crates to [crates.io](https://crates.io)
      via `cargo publish`, in dependency order.
    - Builds and pushes multi-arch Docker images (`linux/amd64`, `linux/arm64`)
-     for each service daemon to `ghcr.io/hupe1980/<service>` (e.g.
-     `ghcr.io/hupe1980/makod`) with tags `X.Y.Z`, `X.Y`, and `latest`.
+     for each service daemon to `ghcr.io/hupe1980/mako-<service>` (e.g.
+     `ghcr.io/hupe1980/mako-makod`) with tags `X.Y.Z`, `X.Y`, and `latest`.
    - Builds and publishes the [`makotest`](@/docs/reference/makotest.md) Python
      package to [PyPI](https://pypi.org/project/makotest/).
 

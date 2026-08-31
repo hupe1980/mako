@@ -260,7 +260,7 @@ pub(crate) async fn post_iot_reads(
         .ok()
     });
     if let Some(bis) = eichung_expired
-        && bis < time::OffsetDateTime::now_utc().date()
+        && bis < mako_fristen::heute()
     {
         warnings.push(format!(
             "Eichfrist am {bis} abgelaufen (§37 Abs. 1 Satz 1 Nr. 1 MessEG) — \

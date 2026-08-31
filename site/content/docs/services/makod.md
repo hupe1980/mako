@@ -2240,13 +2240,13 @@ the GitHub Container Registry:
 
 ```bash
 # Pull the latest release
-docker pull ghcr.io/hupe1980/makod:latest
+docker pull ghcr.io/hupe1980/mako-makod:latest
 
 # Pin to a specific version
-docker pull ghcr.io/hupe1980/makod:latest
+docker pull ghcr.io/hupe1980/mako-makod:latest
 
 # Smoke-test the image
-docker run --rm ghcr.io/hupe1980/makod:latest --check
+docker run --rm ghcr.io/hupe1980/mako-makod:latest --check
 ```
 
 Images are tagged with the release version (e.g. `1.2.3`), its major.minor (`1.2`), and `latest`. Pin a concrete tag in production; the examples here use `latest` so they never go stale.
@@ -2323,7 +2323,7 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
         - name: makod
-          image: ghcr.io/hupe1980/makod:latest
+          image: ghcr.io/hupe1980/mako-makod:latest
           ports:
             - containerPort: 4080    # AS4
             - containerPort: 8080    # HTTP REST

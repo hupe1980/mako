@@ -240,13 +240,11 @@ pub struct OutboxMessage {
     /// Workflow family name that produced this message (e.g. `"gpke-sperrung"`).
     ///
     /// Stamped from the `EventEnvelope::workflow_id.name` at materialisation
-    /// time.  Used by the `OutboxErpWorker` to populate the `makoworkflow`
-    /// CloudEvents extension attribute, which `marktd` maps to `marktrole` for
-    /// role-scoped ERP fan-out.
-    ///
-    /// Empty string for messages materialised before this field was introduced
-    /// (backward-compatible deserialisation via `#[serde(default)]`).
-    #[serde(default)]
+    /// time — the path every message a workflow emits takes. Used by the
+    /// `OutboxErpWorker` to populate the `makoworkflow` CloudEvents extension
+    /// attribute, which `marktd` maps to `marktrole` for role-scoped ERP
+    /// fan-out. Empty only on a message built directly with
+    /// [`OutboxMessage::new`], which no workflow does.
     pub workflow_name: Box<str>,
 
     /// W3C `traceparent` of the request that caused this message.

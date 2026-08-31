@@ -112,8 +112,8 @@ impl EinwilligungRepository for PgEinwilligungRepository {
         let rows = sqlx::query(
             "SELECT * FROM esa_einwilligungen \
              WHERE tenant = $1 AND esa_mp_id = $2 AND revoked_at IS NULL \
-               AND valid_from <= CURRENT_DATE \
-               AND (valid_to IS NULL OR valid_to >= CURRENT_DATE) \
+               AND valid_from <= heute() \
+               AND (valid_to IS NULL OR valid_to >= heute()) \
              ORDER BY granted_at DESC",
         )
         .bind(tenant)
@@ -152,7 +152,7 @@ impl EinwilligungRepository for PgEinwilligungRepository {
         // nothing for it, which is what keeps the 17008 to one per consent.
         //
         // `valid_to` is the last day the consent is good for — the gate reads
-        // it as `valid_to >= CURRENT_DATE` — so a row expires the day *after*
+        // it as `valid_to >= heute()` — so a row expires the day *after*
         // it, and `< $1` is that boundary.
         sqlx::query(
             "UPDATE esa_einwilligungen SET revoked_at = now(), updated_at = now() \
@@ -237,7 +237,7 @@ impl EinwilligungRepository for PgEinwilligungRepository {
                 "INSERT INTO esa_messprodukt_preise \
                    (tenant, esa_mp_id, msb_mp_id, lokations_id, messprodukt, artikel_id, \
                     preistyp, betrag, einheit, waehrung, bestellung_ref, valid_from, valid_to) \
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,COALESCE($12, CURRENT_DATE),$13) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,COALESCE($12, heute()),$13) \
                  ON CONFLICT (tenant, esa_mp_id, msb_mp_id, lokations_id, messprodukt, \
                               artikel_id, valid_from) \
                  DO UPDATE SET preistyp       = EXCLUDED.preistyp, \
@@ -316,7 +316,7 @@ impl EinwilligungRepository for PgEinwilligungRepository {
                 "INSERT INTO esa_messprodukt_katalog \
                      (tenant, msb_mp_id, messprodukt, als_abo, als_einmalig, \
                       valid_from, valid_to) \
-                 VALUES ($1,$2,$3,$4,$5,COALESCE($6, CURRENT_DATE),$7) \
+                 VALUES ($1,$2,$3,$4,$5,COALESCE($6, heute()),$7) \
                  ON CONFLICT (tenant, msb_mp_id, messprodukt, valid_from) DO UPDATE \
                  SET als_abo      = EXCLUDED.als_abo, \
                      als_einmalig = EXCLUDED.als_einmalig, \
@@ -443,8 +443,8 @@ impl EinwilligungRepository for PgEinwilligungRepository {
         //    registry exists to prevent.
         let row = sqlx::query(
             "SELECT bool_or(revoked_at IS NULL \
-                            AND valid_from <= CURRENT_DATE \
-                            AND (valid_to IS NULL OR valid_to >= CURRENT_DATE)) AS has_active, \
+                            AND valid_from <= heute() \
+                            AND (valid_to IS NULL OR valid_to >= heute())) AS has_active, \
                     count(*) AS n \
              FROM esa_einwilligungen \
              WHERE tenant = $1 AND esa_mp_id = $2 AND $3 = ANY(location_ids)",

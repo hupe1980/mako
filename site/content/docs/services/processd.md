@@ -621,7 +621,7 @@ time-of-day cutoff.
 | Submission (Berlin date) | Earliest allowed Lieferbeginn |
 |---|---|
 | Today | Calendar day after the next Werktag after today |
-| Retroactive date (`< today_berlin`) | Rejected with `RETROACTIVE_DATE` |
+| Retroactive date (before today's Berlin date) | Rejected with `RETROACTIVE_DATE` |
 
 Response includes `earliest_lieferbeginn` and `berlin_date_at_submission` for
 operator transparency.

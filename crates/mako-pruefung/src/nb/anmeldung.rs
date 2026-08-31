@@ -86,7 +86,6 @@
 //! - §§ 21b, 21c EEG 2023
 
 use time::{Date, Duration, OffsetDateTime};
-use time_tz::{OffsetDateTimeExt, timezones};
 
 use mako_fristen::{self as fristen, HolidayCalendar};
 use mako_markt::domain::Sparte;
@@ -165,18 +164,6 @@ fn gas(c: &'static str, pruefschritt: u16, detail: String) -> NbEntscheidung {
         pruefschritt,
         detail,
     ))
-}
-
-// ── Berlin timezone helper ────────────────────────────────────────────────────
-
-/// Current calendar date in Germany (CET/CEST).
-///
-/// All deadline arithmetic uses German local time. An off-by-one-hour error at
-/// DST transitions would be a regulatory deadline violation.
-#[must_use]
-pub(crate) fn today_berlin(now: OffsetDateTime) -> Date {
-    let berlin = timezones::db::europe::BERLIN;
-    now.to_timezone(berlin).date()
 }
 
 // ── Werktag helpers ───────────────────────────────────────────────────────────
@@ -291,7 +278,7 @@ pub fn evaluate(
         };
     };
 
-    let today = today_berlin(now);
+    let today = mako_fristen::berlin_date(now);
 
     match (anfrage.sparte, anfrage.marktlokationsart) {
         (Sparte::Gas, _) => g_0011(anfrage, versorgung, grid, partner_known, today, *config),
@@ -1068,7 +1055,7 @@ mod tests {
 
     const CAL: HolidayCalendar = HolidayCalendar::BdewMaKo;
 
-    // 2026-07-08 10:00 UTC → today_berlin = Wed 2026-07-08.
+    // 2026-07-08 10:00 UTC → Berlin date Wed 2026-07-08.
     const NOW: OffsetDateTime = datetime!(2026-07-08 10:00 UTC);
     // Friday receipt for weekend-crossing cases.
     const NOW_FRIDAY: OffsetDateTime = datetime!(2026-07-10 10:00 UTC);

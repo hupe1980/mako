@@ -1473,7 +1473,9 @@ pub struct EngineBuilder<
     ///
     /// Controls role-conditional PID registration via
     /// [`EngineModule::register_pids_with_roles`]. Defaults to
-    /// [`DeploymentRoles::all()`] for backward compatibility.
+    /// [`DeploymentRoles::all()`]: an engine that names no roles registers
+    /// every PID its modules declare, which is what a test harness and a
+    /// combined-role deployment both want.
     deployment_roles: DeploymentRoles,
     /// Optional profile validator injected by `makod` or callers that have
     /// access to `edi-energy`.  When `Some`, called for each
@@ -1731,7 +1733,7 @@ impl<ES, SS, OS, DS, PR> EngineBuilder<ES, SS, OS, DS, PR> {
     /// ```rust,ignore
     /// use edi_energy::registry::ReleaseRegistry;
     ///
-    /// let today = time::OffsetDateTime::now_utc().date();
+    /// let today = mako_fristen::heute();
     /// builder.with_profile_validator(move |msg_type| {
     ///     ReleaseRegistry::global()
     ///         .profiles_for_str(msg_type)
@@ -2371,12 +2373,12 @@ mod tests {
 
     /// Cancelling the token must make `run` return.
     ///
-    /// The workers used to loop until the process exited: the shutdown path
-    /// cancelled a token nobody read, dropped their `JoinHandle`s — which does
-    /// not abort a Tokio task — and then closed the event store underneath
-    /// them. An outbox `acknowledge` losing that race leaves the counterparty
-    /// holding a message the outbox still shows as pending, and the next start
-    /// delivers it again.
+    /// A worker that does not read the token loops until the process exits,
+    /// and dropping its `JoinHandle` does not abort a Tokio task — so the event
+    /// store would close underneath a worker still running. An outbox
+    /// `acknowledge` losing that race leaves the counterparty holding a message
+    /// the outbox still shows as pending, and the next start delivers it
+    /// again.
     #[tokio::test]
     async fn a_cancelled_outbox_worker_returns() {
         let worker = OutboxWorker {

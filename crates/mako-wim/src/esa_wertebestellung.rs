@@ -116,8 +116,7 @@ pub enum EsaWertebestellungEvent {
     /// has); the `E_0252` code behind them has no segment to ride.
     AnfrageAbgelehnt {
         /// Reference of the inbound QUOTES.
-        #[serde(default)]
-        message_ref: Option<MessageRef>,
+        message_ref: MessageRef,
         /// `FTX+ACB` — the MSB's stated grounds.
         reason: String,
     },
@@ -468,7 +467,7 @@ pub enum EsaWertebestellungCommand {
     /// QUOTES 15003 with no priced position — the MSB will not deliver.
     ReceiveAnfrageAblehnung {
         /// Belegnummer of the inbound QUOTES.
-        message_ref: Option<MessageRef>,
+        message_ref: MessageRef,
         /// `FTX+ACB` — the grounds the MSB stated.
         reason: Option<String>,
     },

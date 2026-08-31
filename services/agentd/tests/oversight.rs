@@ -1,12 +1,12 @@
 //! **A mutating tool call waits for a named human, and a human can answer it.**
 //!
 //! Every one of the 28 manifests declares `oversight` — an approval mode, the
-//! roles eligible to give it, a deadline and what happens when it passes. Until
-//! the case layer was wired, none of it could happen: asking a human needs a
-//! case to hold the task, a calendar to resolve the deadline and a timer to
-//! expire it, and a plane without them failed the call instead of asking.
+//! roles eligible to give it, a deadline and what happens when it passes. None
+//! of it can happen without the case layer: asking a human needs a case to hold
+//! the task, a calendar to resolve the deadline and a timer to expire it, and a
+//! plane without them fails the call instead of asking.
 //!
-//! ## What this file also pins, because finding it cost an afternoon
+//! ## What this file also pins
 //!
 //! A model completion is labelled **untrusted always** — its source is
 //! `model:<id>`, and no prompt makes it otherwise. agentplane's taint gate

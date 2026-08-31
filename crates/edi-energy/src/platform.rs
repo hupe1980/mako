@@ -333,14 +333,6 @@ impl Platform {
         crate::registry::ProcessContext::for_date_with_registry(date, Arc::clone(&self.registry))
     }
 
-    /// Create a [`crate::registry::ProcessContext`] anchored to today's UTC date,
-    /// backed by this platform's isolated registry.
-    #[must_use]
-    pub fn current_context(&self) -> crate::registry::ProcessContext {
-        let today = time::OffsetDateTime::now_utc().date();
-        self.process_context(today)
-    }
-
     /// Check whether the wire release code in `envelope` is normatively
     /// acceptable on `date`, using this platform's registry.
     ///

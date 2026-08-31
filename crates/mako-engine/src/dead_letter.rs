@@ -39,8 +39,6 @@
 
 use std::sync::Arc;
 
-use time_tz::{OffsetDateTimeExt as _, timezones};
-
 // ── AuditContext ──────────────────────────────────────────────────────────────
 
 /// Structured audit context attached to every dead-letter event.
@@ -107,7 +105,6 @@ impl AuditContext {
     /// ```
     #[must_use]
     pub fn now() -> Self {
-        let berlin = timezones::db::europe::BERLIN;
         Self {
             message_type: None,
             release_code: None,
@@ -121,7 +118,7 @@ impl AuditContext {
             // Use Berlin local time so audit records align with the German
             // regulatory clock — an off-by-one-hour error at DST transitions
             // is a reportable BNetzA regulatory violation.
-            timestamp: time::OffsetDateTime::now_utc().to_timezone(berlin),
+            timestamp: mako_fristen::berlin_now(),
         }
     }
 

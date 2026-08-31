@@ -521,6 +521,60 @@ struct SliceResponse {
     slices: Vec<ProductSlice>,
 }
 
+/// The `[from, to)` instants of a billing period, as the German calendar means it.
+///
+/// A billing period is a run of German calendar days, so its bounds are Berlin
+/// midnights. UTC midnights sit an hour into the German day: the window would
+/// drop the period's first four quarter-hours and pick up four belonging to the
+/// next one. Both DST months are covered, because Berlin days tile the timeline
+/// whatever their length.
+fn lastgang_window(
+    period_from: time::Date,
+    period_to: time::Date,
+) -> (time::OffsetDateTime, time::OffsetDateTime) {
+    (
+        mako_fristen::berlin_midnight(period_from),
+        mako_fristen::berlin_midnight(period_to + time::Duration::days(1)),
+    )
+}
+
+#[cfg(test)]
+mod lastgang_window_tests {
+    use super::lastgang_window;
+    use time::macros::{date, datetime};
+
+    /// A § 41a period is billed per market time unit on the German calendar day.
+    #[test]
+    fn the_window_is_bounded_by_berlin_midnights() {
+        // January — CET, so German midnight is 23:00 UTC the day before.
+        let (from, to) = lastgang_window(date!(2026 - 01 - 01), date!(2026 - 01 - 31));
+        assert_eq!(from, datetime!(2025-12-31 23:00 UTC));
+        assert_eq!(to, datetime!(2026-01-31 23:00 UTC));
+
+        // July — CEST, so it is 22:00 UTC the day before.
+        let (from, to) = lastgang_window(date!(2026 - 07 - 01), date!(2026 - 07 - 31));
+        assert_eq!(from, datetime!(2026-06-30 22:00 UTC));
+        assert_eq!(to, datetime!(2026-07-31 22:00 UTC));
+    }
+
+    /// Consecutive periods tile without gap or overlap, DST months included.
+    #[test]
+    fn consecutive_periods_tile_across_both_transitions() {
+        let (_, march_end) = lastgang_window(date!(2026 - 03 - 01), date!(2026 - 03 - 31));
+        let (april_start, _) = lastgang_window(date!(2026 - 04 - 01), date!(2026 - 04 - 30));
+        assert_eq!(
+            march_end, april_start,
+            "no quarter-hour is billed twice or lost"
+        );
+
+        let (october_start, october_end) =
+            lastgang_window(date!(2026 - 10 - 01), date!(2026 - 10 - 31));
+        // October 2026 has the fall-back day, so the month is 25 hours longer
+        // than 31 × 24 h.
+        assert_eq!((october_end - october_start).whole_hours(), 31 * 24 + 1);
+    }
+}
+
 #[cfg(test)]
 mod slice_tests {
     use super::ProductSlice;
@@ -634,17 +688,13 @@ impl EdmdClient {
     ///
     /// # Why not `/api/v1/lastgang`
     ///
-    /// That endpoint returns one BO4E object **per OBIS register**, and this
-    /// method used to `flat_map` over all of them with no register filter at
-    /// all. So a prosumer's Einspeisung (`1-0:2.8.x`) was added to the grid draw
-    /// it bills, a dual-tariff meter's `1.8.1`/`1.8.2` were added to the
-    /// `1.8.0` they decompose, and a `1-0:1.6.0` peak-demand register in **kW**
-    /// was billed as though it were energy — each of them at a dynamic price,
-    /// against a §41a customer.
-    ///
-    /// Which registers a figure is about is `edmd`'s `domain::register` decision
-    /// and is served already made. Re-deriving it from a per-register export is
-    /// how this went wrong.
+    /// That endpoint returns one BO4E object **per OBIS register**, and a
+    /// billed figure is not a sum over registers: a prosumer's Einspeisung
+    /// (`1-0:2.8.x`) is not grid draw, a dual-tariff meter's `1.8.1`/`1.8.2`
+    /// decompose the `1.8.0` they would be added to, and `1-0:1.6.0` is a
+    /// peak-demand register in **kW**. Which registers a figure is about is
+    /// `edmd`'s `domain::register` decision, and `/energy` serves it already
+    /// made.
     ///
     /// Returns an empty Vec when the MaLo has no Bezugs-series.
     pub async fn get_lastgang(
@@ -653,11 +703,7 @@ impl EdmdClient {
         period_from: time::Date,
         period_to: time::Date,
     ) -> Result<Vec<DynamicInterval>> {
-        // Whole-day window: [from 00:00Z, day-after-to 00:00Z).
-        let from_dt = period_from.midnight().assume_utc();
-        let to_dt = (period_to + time::Duration::days(1))
-            .midnight()
-            .assume_utc();
+        let (from_dt, to_dt) = lastgang_window(period_from, period_to);
         let rfc3339 = time::format_description::well_known::Rfc3339;
         let path = format!("/api/v1/energy/{malo_id}");
         let request = self.up.get(&path).query(&[

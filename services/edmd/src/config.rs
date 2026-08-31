@@ -83,10 +83,8 @@ pub struct ArchiveConfig {
     /// tier. Below this age a reading can still be corrected in place. Default: 7.
     #[serde(default = "archive_default_settlement_lag_days")]
     pub settlement_lag_days: u32,
-    /// Cold-tier partition granularity, in days. Default: 1.
-    #[serde(default = "archive_default_step_days")]
-    pub partition_step_days: u32,
-    /// How far each archival sweep advances the tiering watermark, in days.
+    /// How far each archival sweep advances the tiering watermark, in days —
+    /// and the cold-tier partition granularity, which is the same step.
     /// Default: 1.
     #[serde(default = "archive_default_step_days")]
     pub archival_step_days: u32,
@@ -157,7 +155,6 @@ impl Default for ArchiveConfig {
             enabled: false,
             storage_uri: String::new(),
             settlement_lag_days: archive_default_settlement_lag_days(),
-            partition_step_days: archive_default_step_days(),
             archival_step_days: archive_default_step_days(),
             cold_file_target_mib: archive_default_cold_file_mib(),
             maintenance_interval_secs: archive_default_maintenance_interval_secs(),

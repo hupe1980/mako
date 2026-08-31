@@ -968,7 +968,7 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
               FROM ablese_auftraege
               WHERE tenant = $1
                 AND status IN ('OFFEN', 'BEAUFTRAGT', 'FEHLGESCHLAGEN')
-                AND ausfuehrt_bis < CURRENT_DATE
+                AND ausfuehrt_bis < heute()
                 AND ($2::text IS NULL OR ausfuehrender_msb = $2)
               ORDER BY ausfuehrt_bis ASC
               LIMIT $3",
@@ -991,7 +991,7 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
                 "status": r.try_get::<String, _>("status").ok(),
                 "fehlschlag_grund": r.try_get::<Option<String>, _>("fehlschlag_grund").ok().flatten(),
                 "days_overdue": r.try_get::<Option<time::Date>, _>("ausfuehrt_bis").ok().flatten().map(|d| {
-                    (time::OffsetDateTime::now_utc().date() - d).whole_days()
+                    (mako_fristen::heute() - d).whole_days()
                 }),
             })
         }).collect();
@@ -1341,7 +1341,7 @@ impl EdmdMcpHandler {
                  ### Completing a reading\n\
                  ```http\n\
                  PUT /api/v1/reading-orders/{id}/complete\n\
-                 { \"zaehlerstand_kwh\": 12345.678, \"mscons_ref\": \"MSG-001\" }\n\
+                 { \"zaehlerstand_kwh\": \"12345.678\", \"mscons_ref\": \"MSG-001\" }\n\
                  ```\n\n\
                  ### Querying\n\
                  `list_reading_orders(malo_id, status=OFFEN)` → pending orders\n\

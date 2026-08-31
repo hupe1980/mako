@@ -13,9 +13,9 @@ use time::macros::date;
 
 fn mixed_rate_invoice() -> energy_billing::Invoice {
     let elec: Product =
-        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#).unwrap();
+        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#).unwrap();
     let heat: Product = serde_json::from_str(
-        r#"{"category":"WAERME","waerme_arbeitspreis_ct_per_kwh":10.0,"mwst_rate_override":0.07}"#,
+        r#"{"category":"WAERME","waerme_arbeitspreis_ct_per_kwh":"10.0","mwst_rate_override":"0.07"}"#,
     )
     .unwrap();
     let quantities = Quantities {
@@ -53,7 +53,7 @@ fn mixed_rate_invoice() -> energy_billing::Invoice {
 /// The same supply, settled as a **Restrechnung** against one paid advance.
 fn restrechnung_invoice() -> energy_billing::Invoice {
     let elec: Product =
-        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#).unwrap();
+        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#).unwrap();
     let ctx = BillingContext {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
@@ -218,9 +218,8 @@ fn the_model_production_builds_is_checked_against_the_profile_it_declares() {
 /// upgrade happens exactly where the missing terms arrive.
 ///
 /// When BT-24 *does* name XRechnung it must name a published one: the namespace
-/// moved from XÖV to XStandards Einkauf at 3.0, and a `xoev-de` URN with a
-/// `_3.0` version — which shipped until 2026-08 — matches no version and fails
-/// BR-DE-21.
+/// moved from XÖV to XStandards Einkauf at 3.0, so a `xoev-de` URN carrying a
+/// `_3.0` version matches no published version and fails BR-DE-21.
 #[test]
 fn only_a_b2g_document_declares_xrechnung() {
     let retail =

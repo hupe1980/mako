@@ -499,7 +499,6 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
         .as_ref()
         .map(|a| crate::store::TieringConfig {
             settlement_lag: time::Duration::days(i64::from(a.settlement_lag_days)),
-            partition_step: time::Duration::days(i64::from(a.partition_step_days)),
             archival_step: time::Duration::days(i64::from(a.archival_step_days)),
             cold_file_target_bytes: a.cold_file_target_mib as usize * 1024 * 1024,
             ddl_lock_timeout: time::Duration::seconds(i64::from(a.ddl_lock_timeout_secs)),

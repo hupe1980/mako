@@ -133,8 +133,8 @@ impl ContrlAckService {
     ///
     /// `messages` should contain every successfully-parsed message from one
     /// UNB…UNZ interchange.  Syntax-error messages (parse failures) are not
-    /// passed here — they should trigger a CONTRL Syntaxfehlermeldung (UCI=4)
-    /// via a separate path (not yet implemented, tracked as part of F-033).
+    /// passed here: a parse failure owes a CONTRL Syntaxfehlermeldung (UCI=4),
+    /// which is a different message on a different path.
     ///
     /// # Errors
     ///

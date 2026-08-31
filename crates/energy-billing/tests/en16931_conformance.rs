@@ -38,9 +38,9 @@ fn party(name: &str, eas: &str) -> Party {
 #[test]
 fn mixed_rate_invoice_maps_to_conformant_en16931() {
     let elec: Product =
-        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#).unwrap();
+        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#).unwrap();
     let heat: Product = serde_json::from_str(
-        r#"{"category":"WAERME","waerme_arbeitspreis_ct_per_kwh":10.0,"mwst_rate_override":0.07}"#,
+        r#"{"category":"WAERME","waerme_arbeitspreis_ct_per_kwh":"10.0","mwst_rate_override":"0.07"}"#,
     )
     .unwrap();
 
@@ -117,7 +117,7 @@ fn reverse_charge_invoice_maps_to_ae_lines_and_breakdown() {
     use energy_billing::en16931_map::{SECT13B_EXEMPTION_REASON, VATEX_REVERSE_CHARGE};
 
     let elec: Product = serde_json::from_str(
-        r#"{"category":"STROM","grundpreis_ct_per_day":30.0,"arbeitspreis_ct_per_kwh":30.0}"#,
+        r#"{"category":"STROM","grundpreis_ct_per_day":"30.0","arbeitspreis_ct_per_kwh":"30.0"}"#,
     )
     .unwrap();
     let quantities = Quantities {
@@ -199,8 +199,8 @@ fn a_public_law_fee_cannot_share_a_document_with_a_taxable_supply() {
     use time::macros::date;
 
     let tariff: Product = serde_json::from_str(
-        r#"{"category":"WASSER","wasser_grundpreis_eur_per_month":8.0,
-             "wasser_mengenpreis_eur_per_m3":2.10,"schmutzwasser_eur_per_m3":2.60,
+        r#"{"category":"WASSER","wasser_grundpreis_eur_per_month":"8.0",
+             "wasser_mengenpreis_eur_per_m3":"2.10","schmutzwasser_eur_per_m3":"2.60",
              "abwasser_regime":"PUBLIC_LAW_FEE"}"#,
     )
     .unwrap();
@@ -264,8 +264,8 @@ fn a_private_law_wastewater_charge_renders_normally() {
     use time::macros::date;
 
     let tariff: Product = serde_json::from_str(
-        r#"{"category":"WASSER","wasser_mengenpreis_eur_per_m3":2.10,
-             "schmutzwasser_eur_per_m3":2.60,"abwasser_regime":"PRIVATE_LAW_CHARGE"}"#,
+        r#"{"category":"WASSER","wasser_mengenpreis_eur_per_m3":"2.10",
+             "schmutzwasser_eur_per_m3":"2.60","abwasser_regime":"PRIVATE_LAW_CHARGE"}"#,
     )
     .unwrap();
     let rates = RegulatoryRates::default();
@@ -316,7 +316,7 @@ fn both_settlement_forms_render_and_agree_on_what_is_due() {
     use time::macros::date;
 
     let tariff: Product = serde_json::from_str(
-        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0,"grundpreis_ct_per_day":30.0}"#,
+        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0","grundpreis_ct_per_day":"30.0"}"#,
     )
     .unwrap();
     let rates = RegulatoryRates::default();

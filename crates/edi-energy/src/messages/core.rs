@@ -42,7 +42,8 @@ pub(crate) struct MessageCore {
     ///
     /// Carried from [`ParseConfig::reference_date`](crate::ParseConfig::reference_date)
     /// so a parser configured with a fixed date actually validates against it.
-    /// `None` falls back to today's UTC date at validation time.
+    /// `None` disambiguates nothing by date: for a wire code shared by two
+    /// Formatversionen the last registered profile wins.
     pub(crate) reference_date: Option<time::Date>,
 }
 
@@ -159,7 +160,11 @@ impl MessageCore {
 
     /// Same as [`validate_against_with_semantic_and_registry`] but with explicit `reference_date`.
     ///
-    /// `reference_date = None` falls back to `time::OffsetDateTime::now_utc().date()`.
+    /// With no reference date from either source, no profile is disambiguated by
+    /// date — the last registered candidate for the wire code wins. This crate
+    /// reads no clock: which day a message is judged on decides which
+    /// Formatversion applies, and that is the caller's fact. `makod` states it
+    /// as `mako_fristen::heute()`.
     pub(crate) fn validate_against_with_semantic_and_registry_on_date(
         &self,
         release: &Release,
@@ -169,7 +174,7 @@ impl MessageCore {
     ) -> Result<EdiEnergyReport, Error> {
         let date = reference_date
             .or(self.reference_date)
-            .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+            .unwrap_or(time::Date::MAX);
         // Layer 1: EDIFACT envelope validation — only when an interchange wrapper is
         // present.  Messages produced by builders contain UNH…UNT but no UNB/UNZ;
         // skipping the envelope check for bare messages lets callers validate

@@ -239,9 +239,20 @@ under `PositionCategory::Credit`, the document type is
 side.
 
 Both VPP paths (the manual endpoint and the `de.vpp.dispatch.confirmed`
+webhook) settle against the same Aggregatorvertrag in `vertragd`.
 § 41e EnWG governs the *contract* (Textform, pre-contractual information, the
 provider's right to their load-management data); the remuneration itself is
 contractual, and the invoice states both.
+
+**Only the aggregator's own dispatch settles.** § 14a EnWG netzorientierte
+Steuerung and a § 41e flexibility call reach the MSB as the same WiM
+Steuerungsauftrag (ORDERS/ORDRSP, PID 55168), and one SteuerbareRessource can be
+subject to both — so the webhook compares the event's `sender_mp_id` against the
+contract's `aggregator_mp_id`. A Steuerung the Netzbetreiber ordered is recorded
+and *not* settled: its compensation is the reduced Netzentgelt (§ 14a Modul
+1/2/3), and paying the `capacity_price_eur_per_kwh` on top would credit the
+aggregator for flexibility it never dispatched and compensate one curtailment
+twice. An event naming no sender never settles.
 
 ## Typed engine errors on the wire
 

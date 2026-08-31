@@ -136,7 +136,7 @@ fn bill_full(
 fn strom_flat_brutto_includes_stromsteuer_and_mwst() {
     let (_f, _t) = period();
     let tariff = j(
-        r#"{"category":"STROM","register_count":"Eintarif","grundpreis_ct_per_day":30,"arbeitspreis_ct_per_kwh":10}"#,
+        r#"{"category":"STROM","register_count":"Eintarif","grundpreis_ct_per_day":"30","arbeitspreis_ct_per_kwh":"10"}"#,
     );
     let r = bill(&tariff, elec(dec!(100)));
     // Netto ≈ 21.35 EUR; Brutto ≈ 25.41 EUR
@@ -151,7 +151,7 @@ fn strom_flat_brutto_includes_stromsteuer_and_mwst() {
 fn strom_eeg_gutschrift_reduces_brutto() {
     let (_f, _t) = period();
     let tariff =
-        j(r#"{"category":"STROM","grundpreis_ct_per_day":30,"arbeitspreis_ct_per_kwh":10}"#);
+        j(r#"{"category":"STROM","grundpreis_ct_per_day":"30","arbeitspreis_ct_per_kwh":"10"}"#);
     let r0 = bill(&tariff, elec(dec!(200)));
     let r5 = bill(
         &tariff,
@@ -173,9 +173,10 @@ fn strom_eeg_gutschrift_reduces_brutto() {
 #[test]
 fn strom_mwst_override_zero_removes_vat() {
     let (_f, _t) = period();
-    let t1 = j(r#"{"category":"STROM","grundpreis_ct_per_day":30,"arbeitspreis_ct_per_kwh":10}"#);
+    let t1 =
+        j(r#"{"category":"STROM","grundpreis_ct_per_day":"30","arbeitspreis_ct_per_kwh":"10"}"#);
     let t2 = j(
-        r#"{"category":"STROM","grundpreis_ct_per_day":30,"arbeitspreis_ct_per_kwh":10,"mwst_rate_override":0}"#,
+        r#"{"category":"STROM","grundpreis_ct_per_day":"30","arbeitspreis_ct_per_kwh":"10","mwst_rate_override":"0"}"#,
     );
     let r1 = bill(&t1, elec(dec!(100)));
     let r2 = bill(&t2, elec(dec!(100)));
@@ -190,10 +191,10 @@ fn strom_mwst_override_zero_removes_vat() {
 fn strom_zweitarif_higher_than_ht_eintarif() {
     let (_f, _t) = period();
     let ht = j(
-        r#"{"category":"STROM","register_count":"Eintarif","grundpreis_ct_per_day":0,"arbeitspreis_ct_per_kwh":12}"#,
+        r#"{"category":"STROM","register_count":"Eintarif","grundpreis_ct_per_day":"0","arbeitspreis_ct_per_kwh":"12"}"#,
     );
     let zt = j(
-        r#"{"category":"STROM","register_count":"Zweitarif","grundpreis_ct_per_day":0,"arbeitspreis_ht_ct_per_kwh":12,"arbeitspreis_nt_ct_per_kwh":7}"#,
+        r#"{"category":"STROM","register_count":"Zweitarif","grundpreis_ct_per_day":"0","arbeitspreis_ht_ct_per_kwh":"12","arbeitspreis_nt_ct_per_kwh":"7"}"#,
     );
     let m_ht = MeterInput {
         arbeitsmenge_kwh: dec!(100),
@@ -234,7 +235,7 @@ fn strom_zweitarif_higher_than_ht_eintarif() {
 #[cfg(feature = "bo4e")]
 #[test]
 fn billing_result_rechnung_json_has_period() {
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":10}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"10"}"#);
     let r = bill(&tariff, elec(dec!(50)));
     let _j_r = r.to_rechnung_json();
     let start = _j_r["rechnungsperiode"]["startdatum"]
@@ -258,7 +259,7 @@ fn billing_result_rechnung_json_has_period() {
 fn gas_kwh_hs_direct_determines_arbeit() {
     let (_f, _t) = period();
     let tariff = j(
-        r#"{"category":"GAS","gas_grundpreis_ct_per_day":0,"gas_arbeitspreis_ct_per_kwh_hs":10}"#,
+        r#"{"category":"GAS","gas_grundpreis_ct_per_day":"0","gas_arbeitspreis_ct_per_kwh_hs":"10"}"#,
     );
     let m = GasMeterInput {
         messung_qm3: dec!(0),
@@ -288,7 +289,7 @@ fn gas_kwh_hs_direct_determines_arbeit() {
 fn gas_brennwert_conversion_equivalent_to_kwh_hs() {
     let (_f, _t) = period();
     let tariff = j(
-        r#"{"category":"GAS","gas_grundpreis_ct_per_day":0,"gas_arbeitspreis_ct_per_kwh_hs":10}"#,
+        r#"{"category":"GAS","gas_grundpreis_ct_per_day":"0","gas_arbeitspreis_ct_per_kwh_hs":"10"}"#,
     );
     // 100 m³ × 10 kWh/m³ × 1.0 Zs = 1000 kWh_Hs
     let m1 = GasMeterInput {
@@ -334,10 +335,10 @@ fn gas_brennwert_conversion_equivalent_to_kwh_hs() {
 fn wasser_tariff() -> Product {
     j(r#"{
         "category":"WASSER",
-        "wasser_grundpreis_eur_per_month": 8.50,
-        "wasser_mengenpreis_eur_per_m3": 2.10,
-        "schmutzwasser_eur_per_m3": 2.80,
-        "niederschlagswasser_eur_per_m2_year": 1.20
+        "wasser_grundpreis_eur_per_month": "8.50",
+        "wasser_mengenpreis_eur_per_m3": "2.10",
+        "schmutzwasser_eur_per_m3": "2.80",
+        "niederschlagswasser_eur_per_m2_year": "1.20"
     }"#)
 }
 
@@ -425,8 +426,8 @@ fn wasser_absetzung_reduces_schmutzwasser_only() {
 fn wasser_private_regime_taxes_abwasser_at_19_pct() {
     let tariff = j(r#"{
         "category":"WASSER",
-        "wasser_mengenpreis_eur_per_m3": 2.00,
-        "schmutzwasser_eur_per_m3": 3.00,
+        "wasser_mengenpreis_eur_per_m3": "2.00",
+        "schmutzwasser_eur_per_m3": "3.00",
         "abwasser_regime": "PRIVATE_LAW_CHARGE"
     }"#);
     let inv = bill(
@@ -476,10 +477,10 @@ fn wasser_absetzung_exceeding_frischwasser_blocks_billing() {
 fn waerme_leistungspreis_adds_to_brutto() {
     let (_f, _t) = period();
     let t1 = j(
-        r#"{"category":"WAERME","waerme_grundpreis_eur_per_month":0,"waerme_arbeitspreis_ct_per_kwh":12}"#,
+        r#"{"category":"WAERME","waerme_grundpreis_eur_per_month":"0","waerme_arbeitspreis_ct_per_kwh":"12"}"#,
     );
     let t2 = j(
-        r#"{"category":"WAERME","waerme_grundpreis_eur_per_month":0,"waerme_arbeitspreis_ct_per_kwh":12,"waerme_leistungspreis_eur_per_kw_month":5}"#,
+        r#"{"category":"WAERME","waerme_grundpreis_eur_per_month":"0","waerme_arbeitspreis_ct_per_kwh":"12","waerme_leistungspreis_eur_per_kw_month":"5"}"#,
     );
     let m = WaermeMeterInput {
         kwh_waerme: dec!(300),
@@ -517,10 +518,12 @@ fn waerme_leistungspreis_adds_to_brutto() {
 #[test]
 fn waerme_preisgleitklausel_resolves_and_overrides_static_arbeitspreis() {
     // base 8 + spread 4 = 12 ct/kWh effective, overriding the static 6.
-    let t = j(r#"{"category":"WAERME","waerme_grundpreis_eur_per_month":0,
-            "waerme_arbeitspreis_ct_per_kwh":6,
-            "waerme_indexed_price":{"base_ct_per_kwh":8,"spread_ct_per_kwh":4,
-                "index_name":"Fernwärme-Index","index_value":1,"factor_ct_per_unit":0}}"#);
+    let t = j(
+        r#"{"category":"WAERME","waerme_grundpreis_eur_per_month":"0",
+            "waerme_arbeitspreis_ct_per_kwh":"6",
+            "waerme_indexed_price":{"base_ct_per_kwh":"8","spread_ct_per_kwh":"4",
+                "index_name":"Fernwärme-Index","index_value":"1","factor_ct_per_unit":"0"}}"#,
+    );
     let m = WaermeMeterInput {
         kwh_waerme: dec!(100),
         spitzenleistung_kw: None,
@@ -555,9 +558,9 @@ fn waerme_preisgleitklausel_resolves_and_overrides_static_arbeitspreis() {
 #[test]
 fn sofortbonus_reduces_net_and_vat_as_entgeltminderung() {
     let plain =
-        j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0,"grundpreis_ct_per_day":0}"#);
+        j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0","grundpreis_ct_per_day":"0"}"#);
     let with_bonus = j(
-        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0,"grundpreis_ct_per_day":0,"sofortbonus_eur":50}"#,
+        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0","grundpreis_ct_per_day":"0","sofortbonus_eur":"50"}"#,
     );
     let r_plain = bill(&plain, elec(dec!(500)));
     let r_bonus = bill(&with_bonus, elec(dec!(500)));
@@ -586,7 +589,7 @@ fn sofortbonus_reduces_net_and_vat_as_entgeltminderung() {
 #[test]
 fn eeg_verguetung_is_credit_note() {
     let (_f, _t) = period();
-    let tariff = j(r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":8.1}"#);
+    let tariff = j(r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":"8.1"}"#);
     let m = EegMeterInput {
         einspeisung_kwh: dec!(500),
         ..Default::default()
@@ -627,7 +630,7 @@ fn eeg_verguetung_is_credit_note() {
 #[test]
 fn eeg_zero_einspeisung_is_zero() {
     let (_f, _t) = period();
-    let tariff = j(r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":8.1}"#);
+    let tariff = j(r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":"8.1"}"#);
     let r = bill_credit(
         &tariff,
         Quantities {
@@ -650,10 +653,10 @@ fn the_mieterstromzuschlag_never_reaches_the_tenants_invoice() {
     // 1,5 ct/kWh Zuschlag over-charges a 200 kWh tenant by 3,57 EUR for a
     // payment the network operator owes the landlord.
     let (_f, _t) = period();
-    let base = j(r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":25}"#);
+    let base = j(r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":"25"}"#);
     // The field no longer exists; serde ignores it, and nothing is billed.
     let legacy = j(
-        r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":25,"mieterstrom_aufschlag_ct_per_kwh":1.5}"#,
+        r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":"25","mieterstrom_aufschlag_ct_per_kwh":1.5}"#,
     );
     let m = SolarMeterInput {
         eigenverbrauch_kwh: dec!(200),
@@ -687,7 +690,7 @@ fn the_mieterstromzuschlag_never_reaches_the_tenants_invoice() {
 fn mieterstrom_above_ninety_percent_of_grundversorgung_is_refused() {
     let (f, t) = period();
     let over = j(
-        r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":28,"grundversorgung_arbeitspreis_ct_per_kwh":30}"#,
+        r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":"28","grundversorgung_arbeitspreis_ct_per_kwh":"30"}"#,
     );
     let ctx = ctx_for(f, t);
     let q = Quantities {
@@ -704,7 +707,7 @@ fn mieterstrom_above_ninety_percent_of_grundversorgung_is_refused() {
 
     // At the cap exactly (27 ct/kWh) it bills, and states the ceiling.
     let at_cap = j(
-        r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":27,"grundversorgung_arbeitspreis_ct_per_kwh":30}"#,
+        r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":"27","grundversorgung_arbeitspreis_ct_per_kwh":"30"}"#,
     );
     let r = bill(
         &at_cap,
@@ -723,7 +726,7 @@ fn mieterstrom_above_ninety_percent_of_grundversorgung_is_refused() {
 #[test]
 fn hems_platform_fee_one_month() {
     let (_f, _t) = period();
-    let tariff = j(r#"{"category":"HEMS","hems_subscription_eur_per_month":14.99}"#);
+    let tariff = j(r#"{"category":"HEMS","hems_subscription_eur_per_month":"14.99"}"#);
     let m = HemsMeterInput {
         months: Some(dec!(1)),
         optimization_events: None,
@@ -751,7 +754,7 @@ fn hems_platform_fee_one_month() {
 fn einspeisung_net_settlement_is_gutschrift() {
     let (_f, _t) = period();
     let tariff = j(
-        r#"{"category":"EINSPEISUNG","marktwert_ct_per_kwh":6.0,"vermarktungsgebuehr_ct_per_kwh":0.5}"#,
+        r#"{"category":"EINSPEISUNG","marktwert_ct_per_kwh":"6.0","vermarktungsgebuehr_ct_per_kwh":"0.5"}"#,
     );
     let m = EegMeterInput {
         einspeisung_kwh: dec!(800),
@@ -780,7 +783,7 @@ fn einspeisung_net_settlement_is_gutschrift() {
 fn gas_gasqualitaet_added_as_zusatz_attribut() {
     let (_f, _t) = period();
     let tariff = j(
-        r#"{"category":"GAS","gas_grundpreis_ct_per_day":0,"gas_arbeitspreis_ct_per_kwh_hs":10}"#,
+        r#"{"category":"GAS","gas_grundpreis_ct_per_day":"0","gas_arbeitspreis_ct_per_kwh_hs":"10"}"#,
     );
     // Billing with H2-blended gas: the Brennwert is already the measured H2-blended value
     let m = GasMeterInput {
@@ -836,7 +839,7 @@ fn gas_gasqualitaet_added_as_zusatz_attribut() {
 fn gas_no_gasqualitaet_no_zusatz_attribut() {
     let (_f, _t) = period();
     let tariff = j(
-        r#"{"category":"GAS","gas_grundpreis_ct_per_day":0,"gas_arbeitspreis_ct_per_kwh_hs":10}"#,
+        r#"{"category":"GAS","gas_grundpreis_ct_per_day":"0","gas_arbeitspreis_ct_per_kwh_hs":"10"}"#,
     );
     let m = GasMeterInput {
         messung_qm3: dec!(0),
@@ -871,10 +874,11 @@ fn gas_no_gasqualitaet_no_zusatz_attribut() {
 #[test]
 fn waermepumpe_modul1_steuerungsrabatt_reduces_brutto() {
     let (_f, _t) = period(); // 31 days Jan 2026
-    let without =
-        j(r#"{"category":"WAERMEPUMPE","grundpreis_ct_per_day":10,"arbeitspreis_ct_per_kwh":20}"#);
+    let without = j(
+        r#"{"category":"WAERMEPUMPE","grundpreis_ct_per_day":"10","arbeitspreis_ct_per_kwh":"20"}"#,
+    );
     let with_m1 = j(
-        r#"{"category":"WAERMEPUMPE","grundpreis_ct_per_day":10,"arbeitspreis_ct_per_kwh":20,"sect14a_modul1_pauschale_eur_per_kw_year":120}"#,
+        r#"{"category":"WAERMEPUMPE","grundpreis_ct_per_day":"10","arbeitspreis_ct_per_kwh":"20","sect14a_modul1_pauschale_eur_per_kw_year":"120"}"#,
     );
     let meter = MeterInput {
         arbeitsmenge_kwh: dec!(300),
@@ -915,7 +919,7 @@ fn wallbox_modul3_steuerungsrabatt_requires_steuerung_hours() {
     let (_f, _t) = period();
     // Without steuerung_stunden → Modul 3 position must NOT appear (hours = None)
     let tariff = j(
-        r#"{"category":"WALLBOX","grundpreis_ct_per_day":0,"arbeitspreis_ct_per_kwh":25,"sect14a_steuerungsentschaedigung_eur_per_kw_year":200}"#,
+        r#"{"category":"WALLBOX","grundpreis_ct_per_day":"0","arbeitspreis_ct_per_kwh":"25","sect14a_steuerungsentschaedigung_eur_per_kw_year":"200"}"#,
     );
     let meter_no_h = MeterInput {
         arbeitsmenge_kwh: dec!(200),
@@ -963,7 +967,7 @@ fn wallbox_modul3_steuerungsrabatt_requires_steuerung_hours() {
 fn strom_nne_arbeitspreis_adds_to_brutto() {
     let (_f, _t) = period();
     let tariff =
-        j(r#"{"category":"STROM","grundpreis_ct_per_day":0,"arbeitspreis_ct_per_kwh":10}"#);
+        j(r#"{"category":"STROM","grundpreis_ct_per_day":"0","arbeitspreis_ct_per_kwh":"10"}"#);
     let m = meter(dec!(200));
     let grid_with_nne = GridInput {
         nne_arbeitspreis_ct_per_kwh: Some(dec!(8)),
@@ -999,7 +1003,8 @@ fn strom_nne_arbeitspreis_adds_to_brutto() {
 #[test]
 fn strom_nne_grundpreis_adds_to_brutto() {
     let (_f, _t) = period(); // 31 days
-    let tariff = j(r#"{"category":"STROM","grundpreis_ct_per_day":0,"arbeitspreis_ct_per_kwh":0}"#);
+    let tariff =
+        j(r#"{"category":"STROM","grundpreis_ct_per_day":"0","arbeitspreis_ct_per_kwh":"0"}"#);
     let m = meter(dec!(0));
     // 240 EUR/year NNE Grundpreis
     let grid = GridInput {
@@ -1025,8 +1030,9 @@ fn strom_nne_grundpreis_adds_to_brutto() {
 #[test]
 fn gas_nne_and_bilanzierungsumlage_add_to_brutto() {
     let (_f, _t) = period();
-    let tariff =
-        j(r#"{"category":"GAS","gas_grundpreis_ct_per_day":0,"gas_arbeitspreis_ct_per_kwh_hs":5}"#);
+    let tariff = j(
+        r#"{"category":"GAS","gas_grundpreis_ct_per_day":"0","gas_arbeitspreis_ct_per_kwh_hs":"5"}"#,
+    );
     let m = GasMeterInput {
         messung_qm3: dec!(0),
         brennwert_kwh_per_qm3: None,
@@ -1075,7 +1081,7 @@ fn dynamic_strom_two_intervals_produce_positive_brutto() {
     use std::collections::HashMap;
     let _from = time::macros::date!(2026 - 01 - 01);
     let _to = time::macros::date!(2026 - 01 - 31);
-    let tariff = j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":20}"#);
+    let tariff = j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":"20"}"#);
     let intervals = [
         DynamicInterval {
             timestamp_utc: time::macros::datetime!(2026-01-01 13:00 UTC), // 14:00 CET
@@ -1117,7 +1123,7 @@ fn dynamic_strom_two_intervals_produce_positive_brutto() {
 #[test]
 fn dynamic_strom_quarter_hour_prices_are_distinct_within_an_hour() {
     use std::collections::HashMap;
-    let tariff = j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0}"#);
+    let tariff = j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":"0"}"#);
     // Four quarter-hours of the 13:00–14:00 UTC hour, 1 kWh each.
     let intervals: Vec<DynamicInterval> = [0i64, 15, 30, 45]
         .iter()
@@ -1167,9 +1173,9 @@ fn dynamic_strom_applies_arbeitspreis_aufschlag() {
     let mut prices = HashMap::new();
     prices.insert(time::macros::datetime!(2026-01-01 12:00 UTC), dec!(20)); // spot 20 ct
 
-    let plain = j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0}"#);
+    let plain = j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":"0"}"#);
     let with_aufschlag = j(
-        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0,"dynamic_aufschlag_ct_per_kwh":5}"#,
+        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":"0","dynamic_aufschlag_ct_per_kwh":"5"}"#,
     );
     let r_plain = bill(
         &plain,
@@ -1218,7 +1224,7 @@ fn dynamic_strom_cap_clamps_the_spot_component() {
 
     // Consumer-protection ceiling at 10 ct/kWh on the spot component.
     let capped = j(
-        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0,"dynamic_epex_cap_ct_kwh":10}"#,
+        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":"0","dynamic_epex_cap_ct_kwh":"10"}"#,
     );
     let r = bill(
         &capped,
@@ -1243,7 +1249,7 @@ fn dynamic_strom_cap_clamps_the_spot_component() {
 #[test]
 fn dynamic_strom_missing_price_hard_blocks_the_run() {
     use energy_billing::EngineError;
-    let tariff = j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0}"#);
+    let tariff = j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":"0"}"#);
     let intervals = [DynamicInterval {
         timestamp_utc: time::macros::datetime!(2026-01-15 10:00 UTC),
         kwh: dec!(1),
@@ -1290,7 +1296,7 @@ fn dynamic_strom_missing_price_hard_blocks_the_run() {
 fn emobility_service_fee_and_energy() {
     let (_f, _t) = period();
     let tariff = j(
-        r#"{"category":"EMOBILITY","emobility_service_fee_eur":9.99,"emobility_kwh_price_ct":35,"emobility_session_fee_eur":0.5}"#,
+        r#"{"category":"EMOBILITY","emobility_service_fee_eur":"9.99","emobility_kwh_price_ct":"35","emobility_session_fee_eur":"0.5"}"#,
     );
     let m = EmobilityMeterInput {
         months: Some(dec!(1)),
@@ -1321,7 +1327,7 @@ fn emobility_service_fee_and_energy() {
 #[test]
 fn emobility_zero_usage_gives_only_service_fee() {
     let (_f, _t) = period();
-    let tariff = j(r#"{"category":"EMOBILITY","emobility_service_fee_eur":4.99}"#);
+    let tariff = j(r#"{"category":"EMOBILITY","emobility_service_fee_eur":"4.99"}"#);
     let m = EmobilityMeterInput {
         months: Some(dec!(1)),
         kwh_charged: None,
@@ -1349,7 +1355,7 @@ fn emobility_zero_usage_gives_only_service_fee() {
 fn energiedienstleistung_flat_fee_and_events() {
     let (_f, _t) = period();
     let tariff = j(
-        r#"{"category":"ENERGIEDIENSTLEISTUNG","service_fee_eur":19.99,"service_event_price_eur":2.0}"#,
+        r#"{"category":"ENERGIEDIENSTLEISTUNG","service_fee_eur":"19.99","service_event_price_eur":"2.0"}"#,
     );
     let m = ServiceMeterInput {
         months: Some(dec!(1)),
@@ -1377,10 +1383,12 @@ fn energiedienstleistung_flat_fee_and_events() {
 fn waerme_reduced_mwst_7pct() {
     // §12 Abs. 2 Nr. 1 UStG: Fernwärme from renewable sources → 7% MwSt
     let (_f, _t) = period();
-    let t19 =
-        j(r#"{"category":"WAERME","waerme_arbeitspreis_ct_per_kwh":12,"mwst_rate_override":0.19}"#);
-    let t07 =
-        j(r#"{"category":"WAERME","waerme_arbeitspreis_ct_per_kwh":12,"mwst_rate_override":0.07}"#);
+    let t19 = j(
+        r#"{"category":"WAERME","waerme_arbeitspreis_ct_per_kwh":"12","mwst_rate_override":"0.19"}"#,
+    );
+    let t07 = j(
+        r#"{"category":"WAERME","waerme_arbeitspreis_ct_per_kwh":"12","mwst_rate_override":"0.07"}"#,
+    );
     let m = WaermeMeterInput {
         kwh_waerme: dec!(500),
         spitzenleistung_kw: None,
@@ -1420,7 +1428,7 @@ fn waerme_reduced_mwst_7pct() {
 fn rechnung_json_has_gesamtsteuer() {
     let (_f, _t) = period();
     let tariff =
-        j(r#"{"category":"STROM","grundpreis_ct_per_day":30,"arbeitspreis_ct_per_kwh":10}"#);
+        j(r#"{"category":"STROM","grundpreis_ct_per_day":"30","arbeitspreis_ct_per_kwh":"10"}"#);
     let r = bill(&tariff, elec(dec!(200)));
     let _json_obj = r.to_rechnung_json();
     let obj = _json_obj.as_object().unwrap();
@@ -1463,7 +1471,7 @@ fn rechnung_json_has_gesamtsteuer() {
 #[test]
 fn rechnung_json_has_rechnungstyp_and_rechnungsersteller() {
     let (_f, _t) = period();
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":10}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"10"}"#);
     let r = bill(&tariff, elec(dec!(100)));
     let _json_obj = r.to_rechnung_json();
     let obj = _json_obj.as_object().unwrap();
@@ -1510,7 +1518,7 @@ fn a_bad_check_digit_never_becomes_a_marktlokations_id() {
         regulatory_rates: rates_2026(),
         ..Default::default()
     };
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":10}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"10"}"#);
     let r = tariff
         .build_engine(&GridInput::default(), &rates_2026())
         .bill(ctx, &elec(dec!(100)))
@@ -1535,7 +1543,7 @@ fn a_bad_check_digit_never_becomes_a_marktlokations_id() {
 fn strom_ka_konzessionsabgabe_adds_to_brutto() {
     let (_f, _t) = period();
     let tariff =
-        j(r#"{"category":"STROM","grundpreis_ct_per_day":0,"arbeitspreis_ct_per_kwh":10}"#);
+        j(r#"{"category":"STROM","grundpreis_ct_per_day":"0","arbeitspreis_ct_per_kwh":"10"}"#);
     let m = meter(dec!(200));
     let grid_with_ka = GridInput {
         ka_ct_per_kwh: Some(dec!(2.39)),
@@ -1573,7 +1581,8 @@ fn strom_ka_konzessionsabgabe_adds_to_brutto() {
 #[test]
 fn strom_nne_leistungspreis_scales_with_peak_kw() {
     let (_f, _t) = period(); // 31 days
-    let tariff = j(r#"{"category":"STROM","grundpreis_ct_per_day":0,"arbeitspreis_ct_per_kwh":0}"#);
+    let tariff =
+        j(r#"{"category":"STROM","grundpreis_ct_per_day":"0","arbeitspreis_ct_per_kwh":"0"}"#);
     let m_low = MeterInput {
         arbeitsmenge_kwh: dec!(0),
         spitzenleistung_kw: Some(dec!(5)),
@@ -1622,9 +1631,9 @@ fn strom_nne_leistungspreis_scales_with_peak_kw() {
 #[test]
 fn eeg_marktpraemie_adds_to_settlement() {
     let (_f, _t) = period();
-    let base = j(r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":8.0}"#);
+    let base = j(r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":"8.0"}"#);
     let with_mp = j(
-        r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":8.0,"eeg_marktpraemie_ct_per_kwh":2.0,"eeg_managementpraemie_ct_per_kwh":0.4}"#,
+        r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":"8.0","eeg_marktpraemie_ct_per_kwh":"2.0","eeg_managementpraemie_ct_per_kwh":"0.4"}"#,
     );
     let m = EegMeterInput {
         einspeisung_kwh: dec!(500),
@@ -1665,7 +1674,7 @@ fn eeg_marktpraemie_adds_to_settlement() {
 fn eeg_kwkg_zuschlag_credit_in_eeg_billing() {
     let (_f, _t) = period();
     let tariff = j(
-        r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":0,"kwkg_zuschlag_ct_per_kwh":8.0}"#,
+        r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":"0","kwkg_zuschlag_ct_per_kwh":"8.0"}"#,
     );
     let m = EegMeterInput {
         einspeisung_kwh: dec!(400),
@@ -1696,9 +1705,9 @@ fn eeg_kwkg_zuschlag_credit_in_eeg_billing() {
 #[test]
 fn solar_gemeinschaft_rabatt_reduces_brutto() {
     let (_f, _t) = period();
-    let base = j(r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":25}"#);
+    let base = j(r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":"25"}"#);
     let with_r = j(
-        r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":25,"gemeinschaft_rabatt_ct_per_kwh":2.0}"#,
+        r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":"25","gemeinschaft_rabatt_ct_per_kwh":"2.0"}"#,
     );
     let m = SolarMeterInput {
         eigenverbrauch_kwh: dec!(300),
@@ -1734,9 +1743,9 @@ fn solar_gemeinschaft_rabatt_reduces_brutto() {
 #[test]
 fn gas_energiesteuer_override_applied() {
     let (_f, _t) = period();
-    let base = j(r#"{"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":10}"#);
+    let base = j(r#"{"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":"10"}"#);
     let with_o = j(
-        r#"{"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":10,"energiesteuer_gas_ct_per_kwh_override":0}"#,
+        r#"{"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":"10","energiesteuer_gas_ct_per_kwh_override":"0"}"#,
     );
     let m = GasMeterInput {
         kwh_hs: Some(dec!(500)),
@@ -1777,7 +1786,7 @@ fn billing_result_assert_valid_passes_for_all_categories() {
 
     // STROM
     bill(
-        &j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":10}"#),
+        &j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"10"}"#),
         Quantities {
             electricity: Some(m.clone()),
             ..Default::default()
@@ -1791,7 +1800,7 @@ fn billing_result_assert_valid_passes_for_all_categories() {
         ..Default::default()
     };
     bill(
-        &j(r#"{"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":8}"#),
+        &j(r#"{"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":"8"}"#),
         Quantities {
             gas: Some(gm.clone()),
             ..Default::default()
@@ -1806,7 +1815,7 @@ fn billing_result_assert_valid_passes_for_all_categories() {
         months: Some(dec!(1)),
     };
     bill(
-        &j(r#"{"category":"WAERME","waerme_arbeitspreis_ct_per_kwh":10}"#),
+        &j(r#"{"category":"WAERME","waerme_arbeitspreis_ct_per_kwh":"10"}"#),
         Quantities {
             heat: Some(wm.clone()),
             ..Default::default()
@@ -1816,7 +1825,7 @@ fn billing_result_assert_valid_passes_for_all_categories() {
 
     // EEG
     bill_credit(
-        &j(r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":8}"#),
+        &j(r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":"8"}"#),
         Quantities {
             eeg: Some(EegMeterInput {
                 einspeisung_kwh: dec!(500),
@@ -1836,7 +1845,7 @@ fn billing_result_position_total_by_tag() {
         ka_ct_per_kwh: Some(dec!(2)),
         ..GridInput::default()
     };
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":15}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"15"}"#);
     let r = bill_grid(
         &tariff,
         &grid,
@@ -1866,7 +1875,7 @@ fn billing_result_position_total_by_tag() {
 fn rechnung_json_has_rechnungsempfaenger_and_faelligkeitsdatum() {
     let (_f, _t) = period();
     let r = bill(
-        &j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":10}"#),
+        &j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"10"}"#),
         elec(dec!(100)),
     );
     let _json_obj = r.to_rechnung_json();
@@ -1905,7 +1914,7 @@ fn dynamic_strom_negative_epex_reduces_brutto() {
     use std::collections::HashMap;
     let _from = time::macros::date!(2026 - 01 - 01);
     let _to = time::macros::date!(2026 - 01 - 01);
-    let tariff = j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":100}"#); // 1 EUR/day
+    let tariff = j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":"100"}"#); // 1 EUR/day
     let intervals = [DynamicInterval {
         timestamp_utc: time::macros::datetime!(2026-01-01 12:00 UTC),
         kwh: dec!(1),
@@ -1948,7 +1957,7 @@ fn eeg_negativpreis_suspension_reduces_verguetung() {
     // For the LF role this is a contractual feature (not legally mandatory like for NB).
     // NB mandatory implementation lives in `eeg-billing` crate.
     let (_f, _t) = period();
-    let tariff = j(r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":8.0}"#);
+    let tariff = j(r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":"8.0"}"#);
 
     // No suspension
     let m_full = EegMeterInput {
@@ -2007,7 +2016,7 @@ fn eeg_kwkg_not_affected_by_negativpreis_suspension() {
     // §51 only suspends EEG payments. KWKG Zuschlag is NOT suspended (different law).
     let (_f, _t) = period();
     let tariff = j(
-        r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":0,"kwkg_zuschlag_ct_per_kwh":8.0}"#,
+        r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":"0","kwkg_zuschlag_ct_per_kwh":"8.0"}"#,
     );
 
     let m_no_susp = EegMeterInput {
@@ -2046,7 +2055,7 @@ fn eeg_kwkg_not_affected_by_negativpreis_suspension() {
 #[test]
 fn billing_result_levy_total_eur_method() {
     let (_f, _t) = period();
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":10}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"10"}"#);
     let r = bill(&tariff, elec(dec!(100)));
     let levy = r.total_by_tag("levy");
     // 100 kWh × 2.05 ct Stromsteuer = 2.05 EUR levy
@@ -2066,7 +2075,7 @@ fn billing_result_positions_by_tag_iterator() {
         ka_ct_per_kwh: Some(dec!(2)),
         ..GridInput::default()
     };
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":15}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"15"}"#);
     let r = bill_grid(
         &tariff,
         &grid,
@@ -2099,7 +2108,7 @@ fn billing_result_positions_by_tag_iterator() {
 fn hems_with_optimization_and_readout_events() {
     let (_f, _t) = period();
     let tariff = j(
-        r#"{"category":"HEMS","hems_subscription_eur_per_month":9.99,"hems_optimization_event_eur":0.50,"hems_readout_event_eur":0.10}"#,
+        r#"{"category":"HEMS","hems_subscription_eur_per_month":"9.99","hems_optimization_event_eur":"0.50","hems_readout_event_eur":"0.10"}"#,
     );
     let m = HemsMeterInput {
         months: Some(dec!(1)),
@@ -2134,10 +2143,10 @@ fn dynamic_strom_floor_prevents_negative_billing() {
     use std::collections::HashMap;
     // Floor = 0 ct/kWh
     let tariff_with_floor = j(
-        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0,"dynamic_epex_floor_ct_kwh":0}"#,
+        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":"0","dynamic_epex_floor_ct_kwh":"0"}"#,
     );
     let tariff_without_floor =
-        j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0}"#);
+        j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":"0"}"#);
 
     let intervals = [DynamicInterval {
         timestamp_utc: time::macros::datetime!(2026-01-01 12:00 UTC),
@@ -2189,8 +2198,9 @@ fn dynamic_strom_floor_prevents_negative_billing() {
 #[test]
 fn jahresabrechnung_deducts_abschlage_from_zahlbetrag() {
     use time::macros::date;
-    let tariff =
-        j(r#"{"category":"STROM","grundpreis_ct_per_day":10.0,"arbeitspreis_ct_per_kwh":30.0}"#);
+    let tariff = j(
+        r#"{"category":"STROM","grundpreis_ct_per_day":"10.0","arbeitspreis_ct_per_kwh":"30.0"}"#,
+    );
     let quantities = Quantities {
         electricity: Some(meter(dec!(1200))),
         ..Default::default()
@@ -2292,7 +2302,7 @@ fn zero_rated_abschlag_contains_no_tax() {
 /// §40 EnWG: invoice must display total all-inclusive ct/kWh.
 #[test]
 fn sect40_kilowattstundenpreis_computed_correctly() {
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#);
     let kwh = dec!(500);
     let invoice = bill(&tariff, elec(kwh));
     invoice.assert_valid();
@@ -2322,11 +2332,13 @@ fn sect40_kilowattstundenpreis_computed_correctly() {
 fn strom_auf_abschlag_discount_reduces_brutto() {
     let kwh = dec!(500);
     let without = bill(
-        &j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#),
+        &j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#),
         elec(kwh),
     );
     let with_discount = bill(
-        &j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0,"auf_abschlag_ct_per_kwh":-2.0}"#),
+        &j(
+            r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0","auf_abschlag_ct_per_kwh":"-2.0"}"#,
+        ),
         elec(kwh),
     );
     with_discount.assert_valid();
@@ -2344,12 +2356,12 @@ fn strom_auf_abschlag_discount_reduces_brutto() {
 fn strom_auf_abschlag_monthly_surcharge_increases_brutto() {
     let kwh = dec!(300);
     let without = bill(
-        &j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":25.0}"#),
+        &j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"25.0"}"#),
         elec(kwh),
     );
     let with_surcharge = bill(
         &j(
-            r#"{"category":"STROM","arbeitspreis_ct_per_kwh":25.0,"auf_abschlag_eur_per_month":5.0}"#,
+            r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"25.0","auf_abschlag_eur_per_month":"5.0"}"#,
         ),
         elec(kwh),
     );
@@ -2368,8 +2380,9 @@ fn strom_auf_abschlag_monthly_surcharge_increases_brutto() {
 /// MSB fee appears as Fee position on the invoice (MsbG 2016).
 #[test]
 fn strom_msb_gebuehr_appears_as_fee_position() {
-    let tariff =
-        j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":28.0,"msb_gebuehr_ct_per_day":4.0}"#);
+    let tariff = j(
+        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"28.0","msb_gebuehr_ct_per_day":"4.0"}"#,
+    );
     let invoice = bill(&tariff, elec(dec!(400)));
     invoice.assert_valid();
 
@@ -2411,7 +2424,7 @@ fn behg_year_aware_rate_differs_by_year() {
     );
 
     let tariff: Product =
-        serde_json::from_str(r#"{"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":7.50}"#)
+        serde_json::from_str(r#"{"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":"7.50"}"#)
             .unwrap();
     let gas_meter = GasMeterInput {
         kwh_hs: Some(dec!(500)),
@@ -2487,7 +2500,7 @@ fn billing_context_prorata_mid_month_start() {
 /// Zählerstand appears as Info position when provided.
 #[test]
 fn strom_zaehlerstand_produces_info_position() {
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#);
     let meter_with_reading = MeterInput {
         arbeitsmenge_kwh: dec!(500),
         zaehlernummer: Some("1SBK0000000000".to_owned()),
@@ -2552,9 +2565,9 @@ fn strom_block_tariff_splits_consumption_across_tiers() {
     let tariff: Product = serde_json::from_value(json!({
         "category": "STROM",
         "block_tiers": [
-            { "bis_kwh": 1000.0, "preis_ct_per_kwh": 28.0 },
-            { "bis_kwh": 3000.0, "preis_ct_per_kwh": 24.0 },
-            { "preis_ct_per_kwh": 20.0 }
+            { "bis_kwh": "1000.0", "preis_ct_per_kwh": "28.0" },
+            { "bis_kwh": "3000.0", "preis_ct_per_kwh": "24.0" },
+            { "preis_ct_per_kwh": "20.0" }
         ]
     }))
     .unwrap();
@@ -2591,9 +2604,9 @@ fn strom_block_tariff_all_three_tiers() {
     let tariff: Product = serde_json::from_value(json!({
         "category": "STROM",
         "block_tiers": [
-            { "bis_kwh": 1000.0, "preis_ct_per_kwh": 28.0 },
-            { "bis_kwh": 3000.0, "preis_ct_per_kwh": 24.0 },
-            { "preis_ct_per_kwh": 20.0 }
+            { "bis_kwh": "1000.0", "preis_ct_per_kwh": "28.0" },
+            { "bis_kwh": "3000.0", "preis_ct_per_kwh": "24.0" },
+            { "preis_ct_per_kwh": "20.0" }
         ]
     }))
     .unwrap();
@@ -2624,13 +2637,13 @@ fn strom_block_tariff_lower_than_flat_rate_for_high_consumption() {
     // Block tariff is cheaper at high consumption than a flat 28ct rate
     use serde_json::json;
     let flat_tariff: Product =
-        serde_json::from_value(json!({ "category": "STROM", "arbeitspreis_ct_per_kwh": 28.0 }))
+        serde_json::from_value(json!({ "category": "STROM", "arbeitspreis_ct_per_kwh": "28.0" }))
             .unwrap();
     let block_tariff: Product = serde_json::from_value(json!({
         "category": "STROM",
         "block_tiers": [
-            { "bis_kwh": 1000.0, "preis_ct_per_kwh": 28.0 },
-            { "preis_ct_per_kwh": 20.0 }
+            { "bis_kwh": "1000.0", "preis_ct_per_kwh": "28.0" },
+            { "preis_ct_per_kwh": "20.0" }
         ]
     }))
     .unwrap();
@@ -2656,7 +2669,7 @@ fn strom_block_tariff_lower_than_flat_rate_for_high_consumption() {
 fn strom_verbrauchshistorie_produces_info_positions() {
     use time::macros::date;
 
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#);
     let ctx = BillingContext {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
@@ -2723,7 +2736,7 @@ fn strom_verbrauchshistorie_produces_info_positions() {
 #[cfg(feature = "bo4e")]
 #[test]
 fn strom_rechnung_json_includes_sect40_kilowattstundenpreis() {
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#);
     let invoice = bill(&tariff, elec(dec!(500)));
     invoice.assert_valid();
 
@@ -2753,7 +2766,7 @@ fn strom_rechnung_json_includes_sect40_kilowattstundenpreis() {
 #[test]
 fn strom_energiemix_appears_in_rechnung_json() {
     use time::macros::date;
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":28.0}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"28.0"}"#);
     let ctx = BillingContext {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
@@ -2873,9 +2886,9 @@ fn ggv_hybrid_billing_splits_pv_and_grid_portions() {
     // Build tariff: solar_arbeitspreis (PV) + arbeitspreis (grid fallback)
     let tariff: Product = serde_json::from_value(json!({
         "category": "SOLAR",
-        "solar_arbeitspreis_ct_per_kwh": 22.0,    // GGV PV rate (cheaper)
-        "arbeitspreis_ct_per_kwh": 30.0,           // Grid fallback rate
-        "gemeinschaft_rabatt_ct_per_kwh": 1.5      // §42b Abs. 3 Rabatt
+        "solar_arbeitspreis_ct_per_kwh": "22.0",    // GGV PV rate (cheaper)
+        "arbeitspreis_ct_per_kwh": "30.0",           // Grid fallback rate
+        "gemeinschaft_rabatt_ct_per_kwh": "1.5"      // §42b Abs. 3 Rabatt
     }))
     .unwrap();
 
@@ -2955,8 +2968,8 @@ fn ggv_no_grid_when_pv_covers_full_consumption() {
 
     let tariff: Product = serde_json::from_value(json!({
         "category": "SOLAR",
-        "solar_arbeitspreis_ct_per_kwh": 20.0,
-        "arbeitspreis_ct_per_kwh": 29.0  // Grid fallback (not used here)
+        "solar_arbeitspreis_ct_per_kwh": "20.0",
+        "arbeitspreis_ct_per_kwh": "29.0"  // Grid fallback (not used here)
     }))
     .unwrap();
 
@@ -3024,7 +3037,7 @@ fn ggv_nutzungsplan_allocate_uses_lrm_for_exact_sum() {
 #[test]
 fn solar_provider_simple_path_unchanged_without_ggv() {
     let tariff = j(
-        r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":25.0,"gemeinschaft_rabatt_ct_per_kwh":1.5}"#,
+        r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":"25.0","gemeinschaft_rabatt_ct_per_kwh":"1.5"}"#,
     );
     let invoice = bill(
         &tariff,
@@ -3074,8 +3087,9 @@ fn solar_provider_simple_path_unchanged_without_ggv() {
 fn solar_zero_mwst_produces_no_tax_position() {
     use energy_billing::PositionCategory;
     // Solar with mwst_rate_override=0 → no MwSt
-    let tariff =
-        j(r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":20.0,"mwst_rate_override":0.0}"#);
+    let tariff = j(
+        r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":"20.0","mwst_rate_override":"0.0"}"#,
+    );
     let invoice = bill(
         &tariff,
         Quantities {
@@ -3107,7 +3121,7 @@ fn solar_zero_mwst_produces_no_tax_position() {
 fn waerme_reduced_mwst_7pct_produces_correct_tax() {
     use energy_billing::PositionCategory;
     let tariff = j(
-        r#"{"category":"WAERME","waerme_arbeitspreis_ct_per_kwh":12.0,"mwst_rate_override":0.07}"#,
+        r#"{"category":"WAERME","waerme_arbeitspreis_ct_per_kwh":"12.0","mwst_rate_override":"0.07"}"#,
     );
     let invoice = bill(
         &tariff,
@@ -3148,9 +3162,9 @@ fn waerme_reduced_mwst_7pct_produces_correct_tax() {
 fn multi_rate_mwst_electricity_and_heat_on_same_invoice() {
     use energy_billing::PositionCategory; // no, use bill_full
     // Build engine manually for multi-product invoice
-    let elec_tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
+    let elec_tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#);
     let heat_tariff = j(
-        r#"{"category":"WAERME","waerme_arbeitspreis_ct_per_kwh":10.0,"mwst_rate_override":0.07}"#,
+        r#"{"category":"WAERME","waerme_arbeitspreis_ct_per_kwh":"10.0","mwst_rate_override":"0.07"}"#,
     );
 
     let _quantities = Quantities {
@@ -3231,7 +3245,7 @@ fn minimum_invoice_topup_when_below_minimum() {
     use energy_billing::PositionCategory;
     use time::macros::date;
 
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":5.0}"#); // very cheap
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"5.0"}"#); // very cheap
 
     // Set minimum to EUR 100 brutto
     let ctx = BillingContext {
@@ -3279,7 +3293,7 @@ fn minimum_invoice_topup_when_below_minimum() {
 fn minimum_invoice_no_topup_when_already_above_minimum() {
     use time::macros::date;
 
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#);
     let ctx = BillingContext {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
@@ -3332,15 +3346,15 @@ fn bundled_invoice_electricity_19pct_and_heat_7pct_window_two_tax_positions() {
     // Electricity tariff — no override → engine default 19% applies
     let elec_tariff: Product = serde_json::from_value(json!({
         "category": "STROM",
-        "arbeitspreis_ct_per_kwh": 30.0
+        "arbeitspreis_ct_per_kwh": "30.0"
     }))
     .unwrap();
 
     // Heat tariff inside the temporary 7 % window (§28 Abs. 5/6 UStG)
     let heat_tariff: Product = serde_json::from_value(json!({
         "category": "WAERME",
-        "waerme_arbeitspreis_ct_per_kwh": 10.0,
-        "mwst_rate_override": 0.07
+        "waerme_arbeitspreis_ct_per_kwh": "10.0",
+        "mwst_rate_override": "0.07"
     }))
     .unwrap();
 
@@ -3430,8 +3444,8 @@ fn heat_positions_carry_7pct_applicable_tax_rate() {
 
     let heat_tariff: Product = serde_json::from_value(json!({
         "category": "WAERME",
-        "waerme_arbeitspreis_ct_per_kwh": 12.0,
-        "mwst_rate_override": 0.07
+        "waerme_arbeitspreis_ct_per_kwh": "12.0",
+        "mwst_rate_override": "0.07"
     }))
     .unwrap();
 
@@ -3514,12 +3528,12 @@ fn gas_indexed_price_ttf_computes_correctly() {
     // Effective price = 0.5 + 0.3 + 35.0 × 0.1 = 4.3 ct/kWh
     let tariff: Product = serde_json::from_value(json!({
         "category": "GAS",
-        "indexed_price": {
-            "base_ct_per_kwh": 0.5,
-            "spread_ct_per_kwh": 0.3,
+        "gas_indexed_price": {
+            "base_ct_per_kwh": "0.5",
+            "spread_ct_per_kwh": "0.3",
             "index_name": "TTF_Front_Month",
-            "index_value": 35.0,
-            "factor_ct_per_unit": 0.1
+            "index_value": "35.0",
+            "factor_ct_per_unit": "0.1"
         }
     }))
     .unwrap();
@@ -3565,10 +3579,10 @@ fn gas_indexed_price_falls_back_when_no_index_value() {
     // No index_value provided → fallback to gas_arbeitspreis_ct_per_kwh
     let tariff: Product = serde_json::from_value(json!({
         "category": "GAS",
-        "gas_arbeitspreis_ct_per_kwh_hs": 8.0,
+        "gas_arbeitspreis_ct_per_kwh_hs": "8.0",
         "indexed_price": {
-            "base_ct_per_kwh": 0.5,
-            "spread_ct_per_kwh": 0.3,
+            "base_ct_per_kwh": "0.5",
+            "spread_ct_per_kwh": "0.3",
             "index_name": "TTF_Front_Month",
             "factor_ct_per_unit": 0.1
             // No index_value
@@ -3610,11 +3624,11 @@ fn electricity_indexed_price_phelix_computes_correctly() {
     let tariff: Product = serde_json::from_value(json!({
         "category": "STROM",
         "indexed_price": {
-            "base_ct_per_kwh": 0.5,
-            "spread_ct_per_kwh": 0.2,
+            "base_ct_per_kwh": "0.5",
+            "spread_ct_per_kwh": "0.2",
             "index_name": "Phelix_Base",
-            "index_value": 80.0,
-            "factor_ct_per_unit": 0.1
+            "index_value": "80.0",
+            "factor_ct_per_unit": "0.1"
         }
     }))
     .unwrap();
@@ -3660,8 +3674,8 @@ fn fernwaerme_is_standard_rated_by_default() {
 
     let tariff: Product = serde_json::from_value(json!({
         "category": "WAERME",
-        "waerme_arbeitspreis_ct_per_kwh": 12.0,
-        "waerme_erneuerbar_anteil_pct": 0.8   // disclosure only — must NOT reduce VAT
+        "waerme_arbeitspreis_ct_per_kwh": "12.0",
+        "waerme_erneuerbar_anteil_pct": "0.8"   // disclosure only — must NOT reduce VAT
     }))
     .unwrap();
 
@@ -3703,8 +3717,8 @@ fn fernwaerme_temporary_7pct_window_via_override() {
 
     let tariff: Product = serde_json::from_value(json!({
         "category": "WAERME",
-        "waerme_arbeitspreis_ct_per_kwh": 10.0,
-        "mwst_rate_override": 0.07   // period inside 01.10.2022–31.03.2024
+        "waerme_arbeitspreis_ct_per_kwh": "10.0",
+        "mwst_rate_override": "0.07"   // period inside 01.10.2022–31.03.2024
     }))
     .unwrap();
 
@@ -3746,8 +3760,8 @@ fn seasonal_gas_winter_price_higher_than_summer() {
     let tariff: Product = serde_json::from_value(json!({
         "category": "GAS",
         "seasonal_prices": [
-            { "from_month": 10, "to_month": 3, "gas_arbeitspreis_ct_per_kwh_hs": 12.5, "label": "Winter" },
-            { "from_month": 4,  "to_month": 9, "gas_arbeitspreis_ct_per_kwh_hs": 8.0,  "label": "Sommer" }
+            { "from_month": 10, "to_month": 3, "gas_arbeitspreis_ct_per_kwh_hs": "12.5", "label": "Winter" },
+            { "from_month": 4,  "to_month": 9, "gas_arbeitspreis_ct_per_kwh_hs": "8.0",  "label": "Sommer" }
         ]
     })).unwrap();
 
@@ -3820,9 +3834,9 @@ fn seasonal_electricity_summer_rate_lower_than_base() {
 
     let tariff: Product = serde_json::from_value(json!({
         "category": "STROM",
-        "arbeitspreis_ct_per_kwh": 30.0,    // base price (used when no season matches)
+        "arbeitspreis_ct_per_kwh": "30.0",    // base price (used when no season matches)
         "seasonal_prices": [
-            { "from_month": 6, "to_month": 8, "arbeitspreis_ct_per_kwh": 22.0, "label": "Sommer" }
+            { "from_month": 6, "to_month": 8, "arbeitspreis_ct_per_kwh": "22.0", "label": "Sommer" }
         ]
     }))
     .unwrap();
@@ -3903,8 +3917,8 @@ fn prosumer_bills_only_grid_consumption_no_nne_on_self_consumption() {
 
     let tariff: Product = serde_json::from_value(json!({
         "category": "STROM",
-        "grundpreis_ct_per_day": 10.0,
-        "arbeitspreis_ct_per_kwh": 30.0
+        "grundpreis_ct_per_day": "10.0",
+        "arbeitspreis_ct_per_kwh": "30.0"
     }))
     .unwrap();
 
@@ -4014,8 +4028,9 @@ fn prosumer_meter_helpers() {
 #[cfg(feature = "bo4e")]
 #[test]
 fn sect40b_preisvergleichsdaten_in_rechnung_json() {
-    let tariff =
-        j(r#"{"category":"STROM","grundpreis_ct_per_day":30.0,"arbeitspreis_ct_per_kwh":28.0}"#);
+    let tariff = j(
+        r#"{"category":"STROM","grundpreis_ct_per_day":"30.0","arbeitspreis_ct_per_kwh":"28.0"}"#,
+    );
     let invoice = bill(&tariff, elec(dec!(100)));
     invoice.assert_valid();
 
@@ -4056,7 +4071,7 @@ fn sect40b_preisvergleichsdaten_in_rechnung_json() {
 #[cfg(feature = "bo4e")]
 #[test]
 fn initial_invoice_type_maps_to_endkundenrechnung() {
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#);
     let invoice = bill(&tariff, elec(dec!(100)));
     let json = invoice.to_rechnung_json();
     assert_eq!(
@@ -4074,7 +4089,7 @@ fn initial_invoice_type_maps_to_endkundenrechnung() {
 #[cfg(feature = "bo4e")]
 #[test]
 fn advance_payment_invoice_type_maps_to_abschlagsrechnung() {
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#);
     let invoice = bill_full(
         &tariff,
         &GridInput::default(),
@@ -4099,8 +4114,9 @@ fn advance_payment_invoice_type_maps_to_abschlagsrechnung() {
 #[cfg(feature = "bo4e")]
 #[test]
 fn cancellation_invoice_reverses_all_signs() {
-    let tariff =
-        j(r#"{"category":"STROM","grundpreis_ct_per_day":10.0,"arbeitspreis_ct_per_kwh":30.0}"#);
+    let tariff = j(
+        r#"{"category":"STROM","grundpreis_ct_per_day":"10.0","arbeitspreis_ct_per_kwh":"30.0"}"#,
+    );
 
     // Produce the original invoice
     let original = bill(&tariff, elec(dec!(200)));
@@ -4152,7 +4168,7 @@ fn cancellation_invoice_reverses_all_signs() {
 #[cfg(feature = "bo4e")]
 #[test]
 fn correction_invoice_has_original_reference_in_json() {
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#);
     let invoice = bill_full(
         &tariff,
         &GridInput::default(),
@@ -4191,7 +4207,7 @@ fn correction_invoice_has_original_reference_in_json() {
 #[cfg(feature = "bo4e")]
 #[test]
 fn nb_mp_id_appears_in_rechnung_json_when_set() {
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#);
     let ctx = BillingContext {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
@@ -4235,7 +4251,7 @@ fn nb_mp_id_appears_in_rechnung_json_when_set() {
 #[cfg(feature = "bo4e")]
 #[test]
 fn nb_mp_id_absent_from_json_when_not_set() {
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#);
     let invoice = bill(&tariff, elec(dec!(100)));
     let json = invoice.to_rechnung_json();
     assert!(
@@ -4253,7 +4269,7 @@ fn nb_mp_id_absent_from_json_when_not_set() {
 fn welcome_bonus_reduces_brutto_with_bonus_category() {
     use energy_billing::BillingPosition;
 
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#);
     let base_invoice = bill(&tariff, elec(dec!(200)));
 
     // Add a welcome bonus position manually via BillingEngine
@@ -4342,8 +4358,8 @@ fn welcome_bonus_reduces_brutto_with_bonus_category() {
 /// producing a combined invoice with positions from all products.
 #[test]
 fn multi_product_electricity_and_gas_on_one_invoice() {
-    let elec_tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
-    let gas_tariff = j(r#"{"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":8.0}"#);
+    let elec_tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#);
+    let gas_tariff = j(r#"{"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":"8.0"}"#);
 
     let ctx = BillingContext {
         malo_id: "51238696781".to_owned(),
@@ -4404,7 +4420,7 @@ fn eeg_kleinunternehmer_zero_pct_mwst() {
         r#"{
         "category": "EEG",
         "kleinunternehmer_19_ustg": true,
-        "eeg_verguetungssatz_ct_per_kwh": 8.2
+        "eeg_verguetungssatz_ct_per_kwh": "8.2"
     }"#,
     )
     .unwrap();
@@ -4453,8 +4469,8 @@ fn eeg_regelbesteuerung_normal_mwst() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "EEG",
-        "anlage_kwp": 50.0,
-        "eeg_verguetungssatz_ct_per_kwh": 8.2
+        "anlage_kwp": "50.0",
+        "eeg_verguetungssatz_ct_per_kwh": "8.2"
     }"#,
     )
     .unwrap();
@@ -4500,7 +4516,7 @@ fn a_produzierendes_gewerbe_is_billed_the_full_stromsteuer() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
-        "arbeitspreis_ct_per_kwh": 18.0,
+        "arbeitspreis_ct_per_kwh": "18.0",
         "steuerentlastungen": ["STROMSTEUER9B"]
     }"#,
     )
@@ -4555,7 +4571,7 @@ fn fahrstrom_is_billed_at_the_reduced_rate() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
-        "arbeitspreis_ct_per_kwh": 18.0,
+        "arbeitspreis_ct_per_kwh": "18.0",
         "stromsteuer_tarif": { "art": "ERMAESSIGUNG", "grund": "FAHRSTROM" }
     }"#,
     )
@@ -4591,7 +4607,7 @@ fn a_kleinanlage_exemption_removes_the_levy() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
-        "arbeitspreis_ct_per_kwh": 18.0,
+        "arbeitspreis_ct_per_kwh": "18.0",
         "stromsteuer_tarif": { "art": "BEFREIUNG", "grund": "KLEINANLAGE" }
     }"#,
     )
@@ -4638,7 +4654,7 @@ fn is_estimated_meter_produces_info_position() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
-        "arbeitspreis_ct_per_kwh": 30.0
+        "arbeitspreis_ct_per_kwh": "30.0"
     }"#,
     )
     .unwrap();
@@ -4685,7 +4701,7 @@ fn zaehler_replaced_produces_info_position() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
-        "arbeitspreis_ct_per_kwh": 30.0
+        "arbeitspreis_ct_per_kwh": "30.0"
     }"#,
     )
     .unwrap();
@@ -4729,7 +4745,7 @@ fn preisgarantie_bis_produces_info_position_when_in_future() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
-        "arbeitspreis_ct_per_kwh": 30.0,
+        "arbeitspreis_ct_per_kwh": "30.0",
         "preisgarantie_bis": "2027-12-31"
     }"#,
     )
@@ -4773,7 +4789,7 @@ fn billing_run_id_propagated_to_invoice_and_json() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
-        "arbeitspreis_ct_per_kwh": 30.0
+        "arbeitspreis_ct_per_kwh": "30.0"
     }"#,
     )
     .unwrap();
@@ -4857,7 +4873,7 @@ fn electricity_consumption_is_standard_rated_regardless_of_own_pv() {
     let rates = RegulatoryRates::default();
     for kwp in ["10.0", "30.0", "31.0"] {
         let tariff: Product =
-            serde_json::from_str(&format!(r#"{{"category":"STROM","anlage_kwp": {kwp}}}"#))
+            serde_json::from_str(&format!(r#"{{"category":"STROM","anlage_kwp": "{kwp}"}}"#))
                 .unwrap();
         let Product::Strom(p) = &tariff else {
             unreachable!()
@@ -4870,7 +4886,7 @@ fn electricity_consumption_is_standard_rated_regardless_of_own_pv() {
     }
     // An explicit override still wins (e.g. a caller-assessed reverse-charge case).
     let overridden: Product =
-        serde_json::from_str(r#"{"category":"STROM","mwst_rate_override": 0.0}"#).unwrap();
+        serde_json::from_str(r#"{"category":"STROM","mwst_rate_override": "0.0"}"#).unwrap();
     let Product::Strom(p) = &overridden else {
         unreachable!()
     };
@@ -4888,8 +4904,8 @@ fn tou_pricing_ht_nt_matches_manual_calculation() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
-        "arbeitspreis_ht_ct_per_kwh": 32.0,
-        "arbeitspreis_nt_ct_per_kwh": 18.0
+        "arbeitspreis_ht_ct_per_kwh": "32.0",
+        "arbeitspreis_nt_ct_per_kwh": "18.0"
     }"#,
     )
     .unwrap();
@@ -4977,8 +4993,8 @@ fn grundpreis_prorated_for_partial_period() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
-        "arbeitspreis_ct_per_kwh": 30.0,
-        "grundpreis_ct_per_day": 10.0
+        "arbeitspreis_ct_per_kwh": "30.0",
+        "grundpreis_ct_per_day": "10.0"
     }"#,
     )
     .unwrap();
@@ -5022,13 +5038,13 @@ fn invoice_merge_combines_positions_and_recalculates_totals() {
     // Two sub-period invoices merged: old tariff Jan 1-14, new tariff Jan 15-31.
     let tariff_old: Product = serde_json::from_str(
         r#"{
-        "category": "STROM", "arbeitspreis_ct_per_kwh": 28.0, "mwst_rate_override": 0.19
+        "category": "STROM", "arbeitspreis_ct_per_kwh": "28.0", "mwst_rate_override": "0.19"
     }"#,
     )
     .unwrap();
     let tariff_new: Product = serde_json::from_str(
         r#"{
-        "category": "STROM", "arbeitspreis_ct_per_kwh": 32.0, "mwst_rate_override": 0.19
+        "category": "STROM", "arbeitspreis_ct_per_kwh": "32.0", "mwst_rate_override": "0.19"
     }"#,
     )
     .unwrap();
@@ -5100,7 +5116,7 @@ fn invoice_allocate_proportionally_penny_correct() {
     // 60% → EUR 60, 40% → EUR 40. Sum must equal original exactly.
     let tariff: Product = serde_json::from_str(
         r#"{
-        "category": "STROM", "arbeitspreis_ct_per_kwh": 20.0, "mwst_rate_override": 0.0
+        "category": "STROM", "arbeitspreis_ct_per_kwh": "20.0", "mwst_rate_override": "0.0"
     }"#,
     )
     .unwrap();
@@ -5161,8 +5177,8 @@ fn nne_grundpreis_is_clipped_to_the_contract() {
 
     let product: energy_billing::Product = serde_json::from_value(serde_json::json!({
         "category": "STROM",
-        "arbeitspreis_ct_per_kwh": 30.0,
-        "grundpreis_ct_per_day": 10.0,
+        "arbeitspreis_ct_per_kwh": "30.0",
+        "grundpreis_ct_per_day": "10.0",
     }))
     .unwrap();
     let grid = GridInput {
@@ -5217,7 +5233,7 @@ fn the_promised_warnings_fire() {
 
     let product: energy_billing::Product = serde_json::from_value(serde_json::json!({
         "category": "STROM",
-        "arbeitspreis_ct_per_kwh": 30.0,
+        "arbeitspreis_ct_per_kwh": "30.0",
         "preisgarantie_bis": "2026-02-10",
     }))
     .unwrap();
@@ -5263,13 +5279,13 @@ fn sect14a_modul3_bills_three_bands() {
 
     let product: energy_billing::Product = serde_json::from_value(serde_json::json!({
         "category": "WAERMEPUMPE",
-        "arbeitspreis_ct_per_kwh": 20.0,
+        "arbeitspreis_ct_per_kwh": "20.0",
         // BK6-22-300: Modul 3 is only offered in combination with Modul 1, and
         // only against an iMSys — both are preconditions the engine enforces.
-        "sect14a_modul1_pauschale_eur_per_kw_year": 0.0,
-        "sect14a_modul3_nne_ht_ct_per_kwh": 12.0,
-        "sect14a_modul3_nne_st_ct_per_kwh": 6.0,
-        "sect14a_modul3_nne_nt_ct_per_kwh": 2.0,
+        "sect14a_modul1_pauschale_eur_per_kw_year": "0.0",
+        "sect14a_modul3_nne_ht_ct_per_kwh": "12.0",
+        "sect14a_modul3_nne_st_ct_per_kwh": "6.0",
+        "sect14a_modul3_nne_nt_ct_per_kwh": "2.0",
     }))
     .unwrap();
     let ctx = BillingContext {
@@ -5318,10 +5334,10 @@ fn sect14a_modul3_with_flat_nne_is_refused() {
 
     let product: energy_billing::Product = serde_json::from_value(serde_json::json!({
         "category": "WALLBOX",
-        "arbeitspreis_ct_per_kwh": 20.0,
-        "sect14a_modul3_nne_ht_ct_per_kwh": 12.0,
-        "sect14a_modul3_nne_st_ct_per_kwh": 6.0,
-        "sect14a_modul3_nne_nt_ct_per_kwh": 2.0,
+        "arbeitspreis_ct_per_kwh": "20.0",
+        "sect14a_modul3_nne_ht_ct_per_kwh": "12.0",
+        "sect14a_modul3_nne_st_ct_per_kwh": "6.0",
+        "sect14a_modul3_nne_nt_ct_per_kwh": "2.0",
     }))
     .unwrap();
     let grid = GridInput {
@@ -5356,7 +5372,7 @@ fn sect14a_modul3_with_flat_nne_is_refused() {
 #[test]
 fn ersatzversorgung_over_three_months_blocks_the_run() {
     let product: Product =
-        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#).unwrap();
+        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#).unwrap();
     let ctx = BillingContext {
         malo_id: "51238696781".to_owned(),
         vertragsart: energy_billing::Vertragsart::Ersatzversorgung,
@@ -5389,7 +5405,7 @@ fn ersatzversorgung_over_three_months_blocks_the_run() {
 #[test]
 fn ersatzversorgung_within_three_months_bills_and_names_the_regime() {
     let product: Product =
-        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#).unwrap();
+        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#).unwrap();
     let ctx = BillingContext {
         malo_id: "51238696781".to_owned(),
         vertragsart: energy_billing::Vertragsart::Ersatzversorgung,
@@ -5423,7 +5439,7 @@ fn ersatzversorgung_within_three_months_bills_and_names_the_regime() {
 #[test]
 fn sondervertrag_is_stated_explicitly() {
     let product: Product =
-        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#).unwrap();
+        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#).unwrap();
     let ctx = BillingContext {
         malo_id: "51238696781".to_owned(),
         period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
@@ -5482,12 +5498,12 @@ fn sect14a_modul2_and_modul3_together_are_refused() {
     use energy_billing::Sect14aModul3Verbrauch;
     let product: Product = serde_json::from_value(serde_json::json!({
         "category": "WAERMEPUMPE",
-        "arbeitspreis_ct_per_kwh": 28.0,
-        "grundpreis_ct_per_day": 10.0,
-        "sect14a_modul2_nne_reduktion_ct_per_kwh": 3.0,
-        "sect14a_modul3_nne_ht_ct_per_kwh": 12.0,
-        "sect14a_modul3_nne_st_ct_per_kwh": 6.0,
-        "sect14a_modul3_nne_nt_ct_per_kwh": 2.0,
+        "arbeitspreis_ct_per_kwh": "28.0",
+        "grundpreis_ct_per_day": "10.0",
+        "sect14a_modul2_nne_reduktion_ct_per_kwh": "3.0",
+        "sect14a_modul3_nne_ht_ct_per_kwh": "12.0",
+        "sect14a_modul3_nne_st_ct_per_kwh": "6.0",
+        "sect14a_modul3_nne_nt_ct_per_kwh": "2.0",
     }))
     .unwrap();
     let ctx = BillingContext {
@@ -5523,12 +5539,12 @@ fn sect14a_modul1_combines_with_modul3() {
     use energy_billing::Sect14aModul3Verbrauch;
     let product: Product = serde_json::from_value(serde_json::json!({
         "category": "WAERMEPUMPE",
-        "arbeitspreis_ct_per_kwh": 28.0,
-        "grundpreis_ct_per_day": 10.0,
-        "sect14a_modul1_pauschale_eur_per_kw_year": 24.0,
-        "sect14a_modul3_nne_ht_ct_per_kwh": 12.0,
-        "sect14a_modul3_nne_st_ct_per_kwh": 6.0,
-        "sect14a_modul3_nne_nt_ct_per_kwh": 2.0,
+        "arbeitspreis_ct_per_kwh": "28.0",
+        "grundpreis_ct_per_day": "10.0",
+        "sect14a_modul1_pauschale_eur_per_kw_year": "24.0",
+        "sect14a_modul3_nne_ht_ct_per_kwh": "12.0",
+        "sect14a_modul3_nne_st_ct_per_kwh": "6.0",
+        "sect14a_modul3_nne_nt_ct_per_kwh": "2.0",
     }))
     .unwrap();
     let ctx = BillingContext {
@@ -5596,8 +5612,8 @@ fn ctx_for(from: time::Date, to: time::Date) -> BillingContext {
 fn gas_rlm_leistungspreis_scales_with_the_billed_months() {
     let tariff = j(r#"{
         "category":"GAS",
-        "gas_arbeitspreis_ct_per_kwh_hs":8.0,
-        "gas_leistungspreis_ct_per_kw_month":30.0
+        "gas_arbeitspreis_ct_per_kwh_hs":"8.0",
+        "gas_leistungspreis_ct_per_kw_month":"30.0"
     }"#);
     let quantities = Quantities {
         gas: Some(GasMeterInput {
@@ -5630,8 +5646,9 @@ fn gas_rlm_leistungspreis_scales_with_the_billed_months() {
 /// the Abschlag netting. Brutto 1200 less 1000 paid reverses to −200, never −2200.
 #[test]
 fn cancellation_negates_the_abschlag_netting() {
-    let tariff =
-        j(r#"{"category":"STROM","grundpreis_ct_per_day":10.0,"arbeitspreis_ct_per_kwh":30.0}"#);
+    let tariff = j(
+        r#"{"category":"STROM","grundpreis_ct_per_day":"10.0","arbeitspreis_ct_per_kwh":"30.0"}"#,
+    );
     let abschlage = vec![AbschlagDeduction {
         datum: date!(2026 - 01 - 15),
         betrag_eur: dec!(50),
@@ -5672,7 +5689,7 @@ fn cancellation_negates_the_abschlag_netting() {
 /// them.
 #[test]
 fn cancellation_with_minimum_invoice_is_still_negated() {
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":5.0}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"5.0"}"#);
     let build = |invoice_type: InvoiceType| {
         let ctx = BillingContext {
             minimum_invoice_eur_brutto: Some(dec!(100.00)),
@@ -5709,7 +5726,7 @@ fn cancellation_with_minimum_invoice_is_still_negated() {
 /// supply position like any other — it must not attract 19 % on its own.
 #[test]
 fn minimum_invoice_topup_is_reverse_charged_under_sect13b() {
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":5.0}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"5.0"}"#);
     let ctx = BillingContext {
         minimum_invoice_eur_brutto: Some(dec!(100.00)),
         reverse_charge: true,
@@ -5746,7 +5763,7 @@ fn minimum_invoice_topup_is_reverse_charged_under_sect13b() {
 #[test]
 fn dynamic_grundpreis_is_prorated_to_the_contract_days() {
     use std::collections::HashMap;
-    let tariff = j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":20}"#);
+    let tariff = j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":"20"}"#);
     let intervals = [DynamicInterval {
         timestamp_utc: time::macros::datetime!(2026-01-20 13:00 UTC),
         kwh: dec!(1),
@@ -5782,7 +5799,7 @@ fn dynamic_grundpreis_is_prorated_to_the_contract_days() {
 /// standard-rate consumption base — that understates the supplier's output VAT.
 #[test]
 fn eeg_gutschrift_kleinunternehmer_does_not_reduce_the_standard_rate_base() {
-    let base = r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0"#;
+    let base = r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0""#;
     let quantities = Quantities {
         electricity: Some(meter(dec!(1000))),
         eeg_gutschrift_eur: Some(dec!(100)),
@@ -5898,12 +5915,12 @@ impl energy_billing::BillingProvider for FixedPositions {
 /// covering the field used a positive surcharge.
 #[test]
 fn a_monthly_rabatt_reduces_the_invoice() {
-    let plain = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":25.0}"#);
+    let plain = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"25.0"}"#);
     let with_rabatt = j(
-        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":25.0,"auf_abschlag_eur_per_month":-5.0}"#,
+        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"25.0","auf_abschlag_eur_per_month":"-5.0"}"#,
     );
     let with_aufschlag = j(
-        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":25.0,"auf_abschlag_eur_per_month":5.0}"#,
+        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"25.0","auf_abschlag_eur_per_month":"5.0"}"#,
     );
 
     let base = bill(&plain, elec(dec!(300)));
@@ -5940,7 +5957,7 @@ fn a_monthly_rabatt_reduces_the_invoice() {
 #[test]
 fn fernwaerme_without_stated_months_bills_the_billed_period() {
     let tariff = j(
-        r#"{"category":"WAERME","waerme_grundpreis_eur_per_month":25.0,"waerme_arbeitspreis_ct_per_kwh":9.0}"#,
+        r#"{"category":"WAERME","waerme_grundpreis_eur_per_month":"25.0","waerme_arbeitspreis_ct_per_kwh":"9.0"}"#,
     );
     let rates = rates_2026();
     let ctx = BillingContext {
@@ -5981,9 +5998,9 @@ fn fernwaerme_without_stated_months_bills_the_billed_period() {
 #[test]
 fn fernwaerme_passes_through_its_co2_cost_and_states_the_emissions() {
     let tariff = j(
-        r#"{"category":"WAERME","waerme_arbeitspreis_ct_per_kwh":9.0,
-             "waerme_co2_kosten_ct_per_kwh":0.9,"waerme_co2_emission_g_per_kwh":180,
-             "waerme_erneuerbar_anteil_pct":35}"#,
+        r#"{"category":"WAERME","waerme_arbeitspreis_ct_per_kwh":"9.0",
+             "waerme_co2_kosten_ct_per_kwh":"0.9","waerme_co2_emission_g_per_kwh":"180",
+             "waerme_erneuerbar_anteil_pct":"35"}"#,
     );
     let r = bill(
         &tariff,
@@ -6013,9 +6030,9 @@ fn fernwaerme_passes_through_its_co2_cost_and_states_the_emissions() {
 /// the *config* is not the presence of a price.
 #[test]
 fn an_indexed_tariff_without_its_index_value_is_refused() {
-    let tariff = j(r#"{"category":"STROM","grundpreis_ct_per_day":30,
-             "indexed_price":{"base_ct_per_kwh":5,"spread_ct_per_kwh":1,
-                              "index_name":"Phelix Base","factor_ct_per_unit":0.1}}"#);
+    let tariff = j(r#"{"category":"STROM","grundpreis_ct_per_day":"30",
+             "indexed_price":{"base_ct_per_kwh":"5","spread_ct_per_kwh":"1",
+                              "index_name":"Phelix Base","factor_ct_per_unit":"0.1"}}"#);
     let (f, t) = period();
     let err = tariff
         .build_engine(&no_grid(), &rates_2026())
@@ -6030,10 +6047,10 @@ fn an_indexed_tariff_without_its_index_value_is_refused() {
 /// would bill a price the contract does not contain.
 #[test]
 fn an_indexed_tariff_outranks_the_static_arbeitspreis() {
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30,
-             "indexed_price":{"base_ct_per_kwh":5,"spread_ct_per_kwh":1,
-                              "index_name":"Phelix Base","index_value":80,
-                              "factor_ct_per_unit":0.1}}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30",
+             "indexed_price":{"base_ct_per_kwh":"5","spread_ct_per_kwh":"1",
+                              "index_name":"Phelix Base","index_value":"80",
+                              "factor_ct_per_unit":"0.1"}}"#);
     let r = bill(&tariff, elec(dec!(1000)));
     let ap = r
         .positions
@@ -6063,8 +6080,8 @@ fn a_dynamic_invoice_carries_the_same_display_duties_as_a_static_one() {
     prices.insert(time::macros::datetime!(2026-01-01 12:00 UTC), dec!(20));
 
     let tariff = j(
-        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":30,
-             "dynamic_aufschlag_ct_per_kwh":5,"msb_gebuehr_ct_per_day":5}"#,
+        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":"30",
+             "dynamic_aufschlag_ct_per_kwh":"5","msb_gebuehr_ct_per_day":"5"}"#,
     );
     let (f, t) = period();
     let mut ctx = ctx_for(f, t);
@@ -6122,10 +6139,10 @@ fn modul3_needs_modul1_and_an_imsys() {
 
     let bands = serde_json::json!({
         "category": "WAERMEPUMPE",
-        "arbeitspreis_ct_per_kwh": 28.0,
-        "sect14a_modul3_nne_ht_ct_per_kwh": 12.0,
-        "sect14a_modul3_nne_st_ct_per_kwh": 6.0,
-        "sect14a_modul3_nne_nt_ct_per_kwh": 2.0,
+        "arbeitspreis_ct_per_kwh": "28.0",
+        "sect14a_modul3_nne_ht_ct_per_kwh": "12.0",
+        "sect14a_modul3_nne_st_ct_per_kwh": "6.0",
+        "sect14a_modul3_nne_nt_ct_per_kwh": "2.0",
     });
     let q = |mode| Quantities {
         electricity: Some(MeterInput {
@@ -6154,7 +6171,7 @@ fn modul3_needs_modul1_and_an_imsys() {
 
     // Bands with Modul 1, on an SLP meter → only the metering finding.
     let mut with_m1 = bands.clone();
-    with_m1["sect14a_modul1_pauschale_eur_per_kw_year"] = serde_json::json!(24.0);
+    with_m1["sect14a_modul1_pauschale_eur_per_kw_year"] = serde_json::json!("24.0");
     let product: Product = serde_json::from_value(with_m1.clone()).unwrap();
     let msg = product
         .build_engine(&no_grid(), &rates_2026())
@@ -6181,7 +6198,7 @@ fn modul3_needs_modul1_and_an_imsys() {
 #[test]
 fn a_minimum_invoice_topup_reaches_the_minimum_at_the_agreed_rate() {
     let tariff = j(
-        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":25.0,"minimum_invoice_eur_brutto":100.0}"#,
+        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"25.0","minimum_invoice_eur_brutto":"100.0"}"#,
     );
     let rates = rates_2026();
     let (f, t) = period();
@@ -6226,7 +6243,7 @@ fn a_minimum_invoice_topup_reaches_the_minimum_at_the_agreed_rate() {
 fn the_invoice_states_how_the_reading_was_obtained() {
     use energy_billing::Ablesungsart;
 
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#);
     let read = |art| Quantities {
         electricity: Some(MeterInput {
             arbeitsmenge_kwh: dec!(500),
@@ -6273,7 +6290,7 @@ fn the_invoice_states_how_the_reading_was_obtained() {
 #[test]
 fn a_sharing_credit_shows_what_it_was_derived_from() {
     let tariff = j(
-        r#"{"category":"SHARING","arbeitspreis_ct_per_kwh":30.0,"sharing_credit_ct_per_kwh":8.0}"#,
+        r#"{"category":"SHARING","arbeitspreis_ct_per_kwh":"30.0","sharing_credit_ct_per_kwh":"8.0"}"#,
     );
     let r = bill(
         &tariff,
@@ -6330,7 +6347,7 @@ fn a_sharing_credit_shows_what_it_was_derived_from() {
 #[test]
 fn a_zweitarif_product_without_an_ht_nt_split_is_refused() {
     let tariff = j(r#"{"category":"STROM","register_count":"Zweitarif",
-             "arbeitspreis_ht_ct_per_kwh":32.0,"arbeitspreis_nt_ct_per_kwh":22.0}"#);
+             "arbeitspreis_ht_ct_per_kwh":"32.0","arbeitspreis_nt_ct_per_kwh":"22.0"}"#);
     let (f, t) = period();
     let err = tariff
         .build_engine(&no_grid(), &rates_2026())
@@ -6364,7 +6381,7 @@ fn a_zweitarif_product_without_an_ht_nt_split_is_refused() {
 #[test]
 fn ht_and_nt_alone_are_enough_to_bill() {
     let tariff = j(
-        r#"{"category":"STROM","arbeitspreis_ht_ct_per_kwh":32.0,"arbeitspreis_nt_ct_per_kwh":22.0}"#,
+        r#"{"category":"STROM","arbeitspreis_ht_ct_per_kwh":"32.0","arbeitspreis_nt_ct_per_kwh":"22.0"}"#,
     );
     let r = bill(
         &tariff,
@@ -6388,7 +6405,7 @@ fn ht_and_nt_alone_are_enough_to_bill() {
 #[test]
 fn an_ht_nt_split_that_does_not_add_up_is_refused() {
     let tariff = j(
-        r#"{"category":"STROM","arbeitspreis_ht_ct_per_kwh":32.0,"arbeitspreis_nt_ct_per_kwh":22.0}"#,
+        r#"{"category":"STROM","arbeitspreis_ht_ct_per_kwh":"32.0","arbeitspreis_nt_ct_per_kwh":"22.0"}"#,
     );
     let (f, t) = period();
     let err = tariff
@@ -6418,7 +6435,7 @@ fn an_ht_nt_split_that_does_not_add_up_is_refused() {
 /// which is the general statement of this whole failure class.
 #[test]
 fn an_eintarif_product_bills_a_two_register_meter_on_its_total() {
-    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#);
     let r = bill(
         &tariff,
         Quantities {
@@ -6452,8 +6469,8 @@ fn half_a_zweitarif_is_refused_as_a_product_defect() {
         ..Default::default()
     };
     for tariff in [
-        r#"{"category":"STROM","arbeitspreis_nt_ct_per_kwh":22.0}"#,
-        r#"{"category":"STROM","arbeitspreis_ht_ct_per_kwh":32.0}"#,
+        r#"{"category":"STROM","arbeitspreis_nt_ct_per_kwh":"22.0"}"#,
+        r#"{"category":"STROM","arbeitspreis_ht_ct_per_kwh":"32.0"}"#,
     ] {
         let err = j(tariff)
             .build_engine(&no_grid(), &rates_2026())
@@ -6470,7 +6487,7 @@ fn half_a_zweitarif_is_refused_as_a_product_defect() {
     // Both priced: it bills. 400 × 32 + 600 × 22 = 260,00 EUR.
     let ok = bill(
         &j(
-            r#"{"category":"STROM","arbeitspreis_ht_ct_per_kwh":32.0,"arbeitspreis_nt_ct_per_kwh":22.0}"#,
+            r#"{"category":"STROM","arbeitspreis_ht_ct_per_kwh":"32.0","arbeitspreis_nt_ct_per_kwh":"22.0"}"#,
         ),
         q,
     );
@@ -6491,7 +6508,7 @@ fn a_negated_correction_is_still_a_conformant_bo4e_document() {
 
     let (_f, _t) = period();
     let tariff =
-        j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30,"grundpreis_eur_per_month":12}"#);
+        j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30","grundpreis_eur_per_month":"12"}"#);
     let original = bill(&tariff, elec(dec!(1000))).to_rechnung_json();
 
     // The original is conformant to begin with — otherwise this proves nothing.

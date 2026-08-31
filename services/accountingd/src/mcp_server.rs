@@ -412,7 +412,7 @@ Returns count of matched and unmatched entries.",
                 )
                 .await
                 {
-                    let today = time::OffsetDateTime::now_utc().date();
+                    let today = mako_fristen::heute();
                     let _ = post_entry(
                         &self.state.ledger,
                         &self.state.pool,
@@ -624,7 +624,7 @@ SEPA pre-notification failures. \
         use crate::pg::{find_accounts_due, raise_abschlagsforderung};
         let dry_run = p.dry_run.unwrap_or(false);
         // Determine billing day (today or explicit)
-        let today = time::OffsetDateTime::now_utc().date();
+        let today = mako_fristen::heute();
         let day = p.day_of_month.unwrap_or(today.day() as i16);
         let accounts = match find_accounts_due(&self.state.pool, &self.state.tenant, day).await {
             Ok(a) => a,
@@ -682,7 +682,7 @@ aRAP (unbilled) cannot be computed here — requires GET edmd /api/v1/billing-pe
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::compute_abgrenzung;
         let cutoff = p.cutoff_date.as_deref().unwrap_or("today").to_owned();
-        let today = time::OffsetDateTime::now_utc().date();
+        let today = mako_fristen::heute();
         let (prap_ct, abschlag_total_ct, accounts_with_advance) = match compute_abgrenzung(
             &self.state.ledger,
             &self.state.pool,
@@ -756,11 +756,9 @@ Confirm with post_manual_booking or by importing the bank file.",
         // ── The exact rung ───────────────────────────────────────────────────
         //
         // If the reference names a customer, there is nothing to rank: the
-        // payer said who they are. The previous version of this tool went
-        // straight to fuzzy amount matching and scored a "reference substring"
-        // signal whose inputs were hardcoded to `None`, so two of its three
-        // reference branches were unreachable and the score it reported was
-        // amount proximity wearing a reference-matching label.
+        // payer said who they are. Resolving that first is what keeps the score
+        // honest — a tool that falls through to fuzzy amount matching reports
+        // amount proximity under a reference-matching label.
         let iban_hash = p
             .iban
             .as_deref()
@@ -908,7 +906,6 @@ amount_ct: positive = debit (increases balance); negative = credit (reduces bala
         Parameters(p): Parameters<ManualBuchungParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::{post_entry, upsert_account};
-        use time::OffsetDateTime;
 
         upsert_account(
             &self.state.pool,
@@ -919,7 +916,7 @@ amount_ct: positive = debit (increases balance); negative = credit (reduces bala
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let today = OffsetDateTime::now_utc().date();
+        let today = mako_fristen::heute();
         // reference_id (when given) makes the post idempotent; else a fresh key.
         let idempotency = p
             .reference_id

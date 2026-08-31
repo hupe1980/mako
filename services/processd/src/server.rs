@@ -1017,7 +1017,6 @@ mod rest {
             return deny;
         }
         use mako_fristen::{self as fristen, HolidayCalendar};
-        use time_tz::{OffsetDateTimeExt as _, timezones};
 
         let malo_id = match body
             .get("malo_id")
@@ -1118,10 +1117,7 @@ mod rest {
         // The Frist is day-granular — there is no time-of-day cutoff. Inverted:
         // the earliest Zuordnungsbeginn is the calendar day after the next
         // Werktag after the submission day (German local date).
-        let berlin = timezones::db::europe::BERLIN;
-        let now_utc = time::OffsetDateTime::now_utc();
-        let now_berlin = now_utc.to_timezone(berlin);
-        let today_berlin = now_berlin.date();
+        let today_berlin = mako_fristen::heute();
 
         if lieferbeginn < today_berlin {
             return (
@@ -1334,11 +1330,8 @@ mod rest {
         let mut vorlauf_hinweis = None;
         if let Some(lieferbeginn) = lieferbeginn {
             use mako_fristen::{HolidayCalendar, add_werktage};
-            use time_tz::{OffsetDateTimeExt as _, timezones};
 
-            let today_berlin = time::OffsetDateTime::now_utc()
-                .to_timezone(timezones::db::europe::BERLIN)
-                .date();
+            let today_berlin = mako_fristen::heute();
             let fruehestens =
                 add_werktage(today_berlin, GELI_GAS_VORLAUF_WT, HolidayCalendar::BdewMaKo);
 

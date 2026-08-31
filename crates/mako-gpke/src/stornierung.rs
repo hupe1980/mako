@@ -171,7 +171,7 @@ pub struct GpkeStornierungData {
     /// EDIFACT document date from DTM+137.
     pub document_date: String,
     /// EDIFACT message reference from the 55022 message.
-    pub message_ref: Option<MessageRef>,
+    pub message_ref: MessageRef,
 }
 
 // ── Domain state ──────────────────────────────────────────────────────────────
@@ -320,7 +320,7 @@ impl Workflow for GpkeStornierungWorkflow {
                 receiver: receiver.clone(),
                 vorgang_id: vorgang_id.clone(),
                 document_date: document_date.clone(),
-                message_ref: Some(message_ref.clone()),
+                message_ref: message_ref.clone(),
             }),
 
             GpkeStornierungEvent::ValidationPassed { .. } => {
@@ -609,7 +609,7 @@ mod tests {
             receiver: MarktpartnerCode::new("9907317000007"),
             vorgang_id: MaLo::new("STORNO0000A"),
             document_date: "20251001000000+00".to_owned(),
-            message_ref: None,
+            message_ref: MessageRef::new("00001"),
         };
         let state = GpkeStornierungState::Completed(data);
         let output = GpkeStornierungWorkflow::handle(

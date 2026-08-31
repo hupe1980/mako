@@ -178,7 +178,8 @@ pub trait EdiEnergyMessage: Send + Sync {
         self.validate_on_date(ctx.date())
     }
 
-    /// Validate the message as if today's date were `reference_date`.
+    /// Validate the message as of `reference_date` — the day it is judged on,
+    /// which is what decides the applicable Formatversion.
     ///
     /// Equivalent to [`validate`](Self::validate) but uses `reference_date` for
     /// profile validity lookups instead of `time::OffsetDateTime::now_utc()`.

@@ -508,7 +508,7 @@ async fn evaluate(
             // cut-over — where the MSB's discretion still stood.
             let pflicht_am = payload
                 .ausfuehrungsdatum
-                .unwrap_or_else(|| payload.received_at.date());
+                .unwrap_or_else(|| mako_fristen::berlin_date(payload.received_at));
             let pflicht = produkt.ist_pflicht_am(pflicht_am);
 
             // Prüfschritt 9: the Gerätetechnik. `None` — „not established" —
@@ -732,7 +732,7 @@ async fn evaluate_anfrage(
     // Without a `DTM+76` Wunschtermin on the message, today is the honest read.
     let am = payload
         .ausfuehrungsdatum
-        .unwrap_or_else(|| payload.received_at.date());
+        .unwrap_or_else(|| mako_fristen::berlin_date(payload.received_at));
 
     let Some(produkt) = mako_wim::esa::messprodukt(&payload.messprodukt) else {
         // A code outside Kapitel 4.6 is not a product this Marktrolle may ask

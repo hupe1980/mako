@@ -662,7 +662,7 @@ fn abmeldung_vorlauffrist(anfrage: &LfAnfrage, termin: Option<Date>) -> Bekannt 
     }
     window
         .check(
-            anfrage.eingang.date(),
+            mako_fristen::berlin_date(anfrage.eingang),
             zuordnungsende,
             mako_fristen::HolidayCalendar::BdewMaKo,
         )
@@ -850,7 +850,7 @@ pub async fn process_lf_antwort(
     if let Some(vertrag) = fetch_vertrag(
         config,
         &anfrage.malo_id,
-        anfrage.eingang.date(),
+        mako_fristen::berlin_date(anfrage.eingang),
         payload.kunde_name.as_deref(),
     )
     .await

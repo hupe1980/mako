@@ -1,8 +1,8 @@
 //! Bridge to [`billing`] document types.
 //!
-//! Since [`SettleOutput`] now carries `positions: Vec<SettlePosition>`, this
-//! module is a thin adapter — it calls `SettlePosition::to_line_item` on each
-//! position and handles the special cases (`NoData`, `PriceMissing`, `Sanctioned`).
+//! [`SettleOutput`] carries `positions: Vec<SettlePosition>`, so this module is
+//! a thin adapter — it calls `SettlePosition::to_line_item` on each position and
+//! handles the special cases (`NoData`, `PriceMissing`, `Sanctioned`).
 //!
 //! # A `PricingModel` with no usage
 //!

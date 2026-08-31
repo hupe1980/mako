@@ -2368,8 +2368,8 @@ const ABS3_GATES: &str = r"
                   SELECT 1 FROM dunning_locks dl
                   WHERE dl.account_id = a.account_id
                     AND dl.aufgehoben_at IS NULL
-                    AND dl.valid_from <= CURRENT_DATE
-                    AND (dl.valid_to IS NULL OR dl.valid_to >= CURRENT_DATE))";
+                    AND dl.valid_from <= heute()
+                    AND (dl.valid_to IS NULL OR dl.valid_to >= heute()))";
 
 /// Phase 1 — no Androhung has gone out yet.
 const PHASE_1_ANDROHUNG: &str = "AND dc.sperrandrohung_at IS NULL";
@@ -2384,7 +2384,7 @@ const PHASE_2_ANKUENDIGUNG: &str = "AND dc.sperrandrohung_at IS NOT NULL \
 const PHASE_3_SPERRAUFTRAG: &str = "AND dc.sperrankuendigung_at IS NOT NULL \
      AND dc.sperrauftrag_ce_id IS NULL \
      AND dc.geplantes_sperrdatum IS NOT NULL \
-     AND dc.geplantes_sperrdatum <= CURRENT_DATE";
+     AND dc.geplantes_sperrdatum <= heute()";
 
 /// Run one phase's candidate query.
 ///
@@ -2541,8 +2541,8 @@ pub async fn list_entsperrauftrag_candidates(
                       SELECT 1 FROM dunning_locks dl
                       WHERE dl.account_id = a.account_id
                         AND dl.aufgehoben_at IS NULL
-                        AND dl.valid_from <= CURRENT_DATE
-                        AND (dl.valid_to IS NULL OR dl.valid_to >= CURRENT_DATE)))",
+                        AND dl.valid_from <= heute()
+                        AND (dl.valid_to IS NULL OR dl.valid_to >= heute())))",
     )
     .bind(tenant)
     .fetch_all(pool)
@@ -2701,7 +2701,7 @@ pub async fn place_dunning_lock(
               (tenant, account_id, grund, rechtsgrundlage, note,
                valid_from, valid_to, created_by)
           SELECT $1, dc.account_id, $3, $4, $5,
-                 COALESCE($6, CURRENT_DATE), $7, $8
+                 COALESCE($6, heute()), $7, $8
           FROM dunning_cases dc
           WHERE dc.id = $2 AND dc.tenant = $1
           RETURNING lock_id",
@@ -2834,7 +2834,7 @@ pub async fn list_locks_due_review(
           WHERE tenant = $1
             AND aufgehoben_at IS NULL
             AND valid_to IS NULL
-            AND valid_from <= CURRENT_DATE - make_interval(days => $2::int)
+            AND valid_from <= heute() - make_interval(days => $2::int)
           ORDER BY valid_from",
     )
     .bind(tenant)
@@ -3272,7 +3272,7 @@ pub async fn run_auto_dunning(
     fee_stufe2_ct: i64,
     fee_stufe3_ct: i64,
 ) -> anyhow::Result<AutoDunningResult> {
-    let today = OffsetDateTime::now_utc().date();
+    let today = mako_fristen::heute();
 
     // Idempotency check — skip if already ran today.
     let already: bool = sqlx::query_scalar(
@@ -3706,7 +3706,7 @@ pub async fn fetch_ecb_base_rate(
     pool: &PgPool,
     reference_date: Option<time::Date>,
 ) -> anyhow::Result<rust_decimal::Decimal> {
-    let date = reference_date.unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+    let date = reference_date.unwrap_or_else(mako_fristen::heute);
     let row = sqlx::query(
         "SELECT rate_pct FROM ecb_base_rates WHERE valid_from <= $1 ORDER BY valid_from DESC LIMIT 1",
     )

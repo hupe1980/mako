@@ -468,7 +468,7 @@ pub fn mabis_summenzeitreihe_registry() -> AdapterRegistry<MabisBillingWorkflow>
             // message (Kap. 3.10 Tabelle 2).
             let im_erstaufschlag = bilanzierungsmonat_aus(&document_date).is_some_and(|monat| {
                 monat
-                    .phase(zeitreihe, time::OffsetDateTime::now_utc().date())
+                    .phase(zeitreihe, mako_fristen::heute())
                     .ist_erstaufschlag()
             });
 

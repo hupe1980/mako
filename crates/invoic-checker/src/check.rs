@@ -818,7 +818,7 @@ impl InvoicCheckEngine {
             .billing_period()
             .map(|p| *p.start())
             .or_else(|| rechnung.rechnungsdatum_date())
-            .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+            .unwrap_or_else(mako_fristen::heute);
 
         if !preisblatt_store.has_preisblatt_for(sender_mp_id) {
             findings.push(Finding {
@@ -1217,7 +1217,7 @@ impl InvoicCheckEngine {
             .billing_period()
             .map(|p| *p.start())
             .or_else(|| rechnung.rechnungsdatum_date())
-            .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+            .unwrap_or_else(mako_fristen::heute);
 
         let published_prices: Vec<EuroAmount> = preisblatt_messung
             .and_then(|pm| pm.preispositionen.as_ref())
@@ -2022,10 +2022,10 @@ mod tests {
 
     /// A 500 kWh position billed at the **2001+** rate is a deviation.
     ///
-    /// The check used to collect every tier's price and ask whether the invoice
-    /// matched *any* of them, which ignored the bounds completely: the cheapest
-    /// tier applied to the smallest quantity passed silently. rubo4e 0.10's
-    /// `PreisstaffelSliceExt::select_for` picks the tier the quantity actually
+    /// The tier is selected by the position's **quantity**, not by matching the
+    /// billed price against any published tier: accepting whichever tier happens
+    /// to match would let the cheapest tier price the smallest quantity and pass
+    /// silently. `PreisstaffelSliceExt::select_for` picks the tier the quantity
     /// falls in, so the position is measured against 0.30 and disputed.
     #[test]
     fn a_position_billed_at_the_wrong_staffel_is_a_deviation() {

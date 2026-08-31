@@ -31,7 +31,7 @@
 //! ```rust
 //! use energy_billing::Product;
 //!
-//! let json = r##"{"category":"STROM","arbeitspreis_ct_per_kwh":28.5}"##;
+//! let json = r##"{"category":"STROM","arbeitspreis_ct_per_kwh":"28.5"}"##;
 //! let product: Product = serde_json::from_str(json).unwrap();
 //! assert!(matches!(product, Product::Strom(_)));
 //! ```
@@ -357,8 +357,7 @@ pub struct GasProduct {
     #[serde(default)]
     pub gas_leistungspreis_ct_per_kw_month: Option<Decimal>,
     /// B2B indexed gas price (TTF, NCG, GASPOOL) — §41 EnWG Sonderkundenvertrag.
-    /// Also accepted as `"indexed_price"` for backward compat.
-    #[serde(default, alias = "indexed_price")]
+    #[serde(default)]
     pub gas_indexed_price: Option<IndexedPriceConfig>,
     #[serde(default)]
     pub seasonal_prices: Option<Vec<SeasonalPriceOverride>>,
@@ -661,7 +660,7 @@ pub struct SharingProduct {
 ///
 /// ```rust
 /// use energy_billing::Product;
-/// let json = r##"{"category":"STROM","arbeitspreis_ct_per_kwh":28.5}"##;
+/// let json = r##"{"category":"STROM","arbeitspreis_ct_per_kwh":"28.5"}"##;
 /// let p: Product = serde_json::from_str(json).unwrap();
 /// assert!(matches!(p, Product::Strom(_)));
 /// ```
@@ -766,7 +765,7 @@ impl Product {
     ///
     /// ```rust
     /// use energy_billing::{Product, GridInput, RegulatoryRates};
-    /// let json = r##"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"##;
+    /// let json = r##"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"##;
     /// let p: Product = serde_json::from_str(json).unwrap();
     /// let engine = p.build_engine(&GridInput::default(), &RegulatoryRates::default());
     /// ```
@@ -892,8 +891,7 @@ mod tests {
 
     #[test]
     fn product_strom_roundtrip() {
-        let json =
-            r#"{"category":"STROM","arbeitspreis_ct_per_kwh":28.5,"grundpreis_ct_per_day":8.0}"#;
+        let json = r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"28.5","grundpreis_ct_per_day":"8.0"}"#;
         let p: Product = serde_json::from_str(json).unwrap();
         match &p {
             Product::Strom(e) => {
@@ -908,7 +906,7 @@ mod tests {
 
     #[test]
     fn product_waermepumpe_flattens_electricity_base() {
-        let json = r#"{"category":"WAERMEPUMPE","arbeitspreis_ct_per_kwh":20.0,"sect14a_modul2_nne_reduktion_ct_per_kwh":1.5}"#;
+        let json = r#"{"category":"WAERMEPUMPE","arbeitspreis_ct_per_kwh":"20.0","sect14a_modul2_nne_reduktion_ct_per_kwh":"1.5"}"#;
         let p: Product = serde_json::from_str(json).unwrap();
         match p {
             Product::Waermepumpe(c) => {
@@ -927,7 +925,7 @@ mod tests {
 
     #[test]
     fn product_gas_roundtrip() {
-        let json = r#"{"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":7.5,"gas_grundpreis_ct_per_day":5.0}"#;
+        let json = r#"{"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":"7.5","gas_grundpreis_ct_per_day":"5.0"}"#;
         let p: Product = serde_json::from_str(json).unwrap();
         match p {
             Product::Gas(g) => {

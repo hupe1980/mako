@@ -281,7 +281,7 @@ use time::macros::date;
 // Deserialize directly from productd JSONB using the "category" discriminator
 let product: Product = serde_json::from_str(r#"{
     "category": "STROM",
-    "arbeitspreis_ct_per_kwh": 32.0,
+    "arbeitspreis_ct_per_kwh": "32.0",
     "grundpreis_ct_per_day": 12.0
 }"#)?;
 
@@ -323,9 +323,9 @@ Each category has its own struct with only the relevant fields — no silent fie
 
 ```rust
 // Deserializes via #[serde(tag = "category")] from flat productd JSONB:
-// {"category":"STROM","arbeitspreis_ct_per_kwh":28.5} → Product::Strom(ElectricityProduct{...})
-// {"category":"WAERMEPUMPE","sect14a_modul2_nne_reduktion_ct_per_kwh":1.5,...} → Product::Waermepumpe(...)
-// {"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":7.5,...} → Product::Gas(GasProduct{...})
+// {"category":"STROM","arbeitspreis_ct_per_kwh":"28.5"} → Product::Strom(ElectricityProduct{...})
+// {"category":"WAERMEPUMPE","sect14a_modul2_nne_reduktion_ct_per_kwh":"1.5",...} → Product::Waermepumpe(...)
+// {"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":"7.5",...} → Product::Gas(GasProduct{...})
 ```
 
 | `Product` variant | Category string | Provider | Key features |
@@ -615,7 +615,7 @@ pub struct MeterInput {
 |---|---|---|
 | `energiesteuer_tarif` | §§ 24 Abs. 2, 25–28 EnergieStG | `REGEL` \| `BEFREIUNG{grund}` (Erlaubnisschein) |
 | `gas_leistungspreis_ct_per_kw_month` | §41 EnWG | RLM demand charge for large gas customers |
-| `gas_indexed_price` | §41 EnWG (Sonderkundenvertrag) | B2B TTF/NCG indexed price (alias: `indexed_price`) |
+| `gas_indexed_price` | §41 EnWG (Sonderkundenvertrag) | B2B TTF/NCG indexed price |
 
 ---
 

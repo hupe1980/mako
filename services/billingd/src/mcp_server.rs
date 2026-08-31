@@ -920,11 +920,11 @@ unpriced intervals would silently under-bill.",
                 **Path 1 — Direct kWh_Hs (preferred for iMSys / MSCONS data)**\n\
                 Supply `kwh_hs` directly in `gas_meter`. The Brennwertkorrektur position\n\
                 appears in the invoice with quantity = 0 m³ (informational only, §25 Nr. 4 MessEV).\n\
-                ```json\n{ \"gas_meter\": { \"kwh_hs\": 450.5 } }\n```\n\n\
+                ```json\n{ \"gas_meter\": { \"kwh_hs\": \"450.5\" } }\n```\n\n\
                 **Path 2 — m³ × Brennwert × Zustandszahl**\n\
                 Supply `messung_qm3`, `brennwert_kwh_per_qm3`, `zustandszahl`.\n\
                 billingd computes: kWh_Hs = m³ × Hs × Z (rounded to 3dp).\n\
-                ```json\n{ \"gas_meter\": { \"messung_qm3\": 42.3, \"brennwert_kwh_per_qm3\": 10.68, \"zustandszahl\": 0.964 } }\n```\n\n\
+                ```json\n{ \"gas_meter\": { \"messung_qm3\": \"42.3\", \"brennwert_kwh_per_qm3\": \"10.68\", \"zustandszahl\": \"0.964\" } }\n```\n\n\
                 **`gasqualitaet` (including hydrogen-blended gas)**\n\
                 BO4E v202607 defines exactly two values, `H_GAS` and `L_GAS`, and those\n\
                 are the only ones billingd accepts — there is no `H2_BLEND` wire value\n\

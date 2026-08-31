@@ -805,7 +805,7 @@ fn check_profile(
         mirrored.values().any(|title| title.trim() == want)
     };
     let today = {
-        let now = time::OffsetDateTime::now_utc().date();
+        let now = mako_fristen::heute();
         format!(
             "{:04}-{:02}-{:02}",
             now.year(),
@@ -1003,7 +1003,7 @@ fn check_profile(
         .and_then(|d| {
             time::Date::parse(d, &time::format_description::well_known::Iso8601::DATE).ok()
         })
-        .is_none_or(|until| until >= time::OffsetDateTime::now_utc().date());
+        .is_none_or(|until| until >= mako_fristen::heute());
 
     // 7. MIG qualifier_restrictions: all referenced DE IDs should be in codelists
     check_mig_qualifiers(&mig, &codelist_keys, &rel_prefix, warnings);

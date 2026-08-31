@@ -24,6 +24,7 @@ makod-client = ["dep:reqwest"]
 marktd-client = ["dep:reqwest"]
 
 [dependencies]
+mako-fristen = { workspace = true }
 mako-events  = { workspace = true }
 
 rubo4e      = { workspace = true }

@@ -34,10 +34,10 @@ pub fn serialize(doc: &Document) -> Result<Vec<u8>, RedispatchXmlError> {
 /// Insert the document type's default `xmlns` into the root element.
 ///
 /// `quick-xml`'s serde serializer cannot emit namespace declarations, so a
-/// serialized document previously failed the namespace check of [`parse`] —
-/// round-trips only worked through the unchecked `parse_as` path. Injecting
-/// the XSD's default namespace makes `parse(serialize(d))` genuinely
-/// lossless. Documents without an XSD namespace pass through unchanged.
+/// serialized document would fail the namespace check of [`parse`] and
+/// round-trip only through the unchecked `parse_as` path. Injecting the XSD's
+/// default namespace makes `parse(serialize(d))` genuinely lossless. Documents
+/// without an XSD namespace pass through unchanged.
 ///
 /// [`parse`]: crate::parse::parse
 fn inject_default_namespace(bytes: Vec<u8>, doc_type: crate::documents::DocumentType) -> Vec<u8> {

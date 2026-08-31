@@ -699,7 +699,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}
+          images: ghcr.io/${{ github.repository_owner }}/mako-${{ matrix.service }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -716,5 +716,5 @@ jobs:
           tags=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< '${{ steps.meta.outputs.json }}')
           # shellcheck disable=SC2086
           docker buildx imagetools create $tags \
-            "ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}@sha256:${amd64}" \
-            "ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}@sha256:${arm64}"
+            "ghcr.io/${{ github.repository_owner }}/mako-${{ matrix.service }}@sha256:${amd64}" \
+            "ghcr.io/${{ github.repository_owner }}/mako-${{ matrix.service }}@sha256:${arm64}"
