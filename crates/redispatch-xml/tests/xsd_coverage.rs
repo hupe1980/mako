@@ -18,11 +18,15 @@
 //!
 //! # How it runs
 //!
-//! The XSDs live in `regulatories/bdew-mako/`, which is **not tracked in git**
+//! The XSDs live in `regulatories/bdew-mako/`, and are **not tracked in git**
 //! (they are third-party copyrighted publications; `regulatories/README.md`
 //! carries the download URL for every file). The test therefore **skips** when
-//! the folder is absent, exactly like the Docker-dependent suites, and asserts
-//! when it is present. Skipping is reported, not silent.
+//! it finds no XSD to read, exactly like the Docker-dependent suites, and
+//! asserts against every one it does find. Skipping is reported, not silent.
+//!
+//! The condition is the XSDs, not the folder: `manifest.json` in that same
+//! folder *is* tracked, so `regulatories/bdew-mako/` exists in every checkout
+//! and its presence says nothing about whether the mirror has been synced.
 //!
 //! # What "covered" means
 //!
@@ -192,19 +196,16 @@ fn source_for(doc: &str) -> String {
 
 #[test]
 fn every_xsd_element_is_modelled_or_explained() {
-    let Some(dir) = xsd_dir() else {
+    let xsds = xsd_dir().map(|dir| newest_xsds(&dir)).unwrap_or_default();
+    if xsds.is_empty() {
         eprintln!(
-            "SKIP xsd_coverage: regulatories/bdew-mako/ is absent. The XSDs are \
+            "SKIP xsd_coverage: no .xsd under regulatories/bdew-mako/. The XSDs are \
              third-party publications and are not tracked in git; \
-             regulatories/README.md carries the download URL for each one."
+             regulatories/README.md carries the download URL for each one, and \
+             `cargo xtask sync-regulatories --download` fetches them."
         );
         return;
-    };
-    let xsds = newest_xsds(&dir);
-    assert!(
-        !xsds.is_empty(),
-        "regulatories/bdew-mako/ exists but holds no .xsd files"
-    );
+    }
 
     let excused: BTreeSet<&str> = NOT_MODELLED.iter().map(|(name, _)| *name).collect();
 
