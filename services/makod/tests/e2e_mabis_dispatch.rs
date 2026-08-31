@@ -118,7 +118,8 @@ fn cav_fuer(serie: mako_mabis::ZpSerie) -> Option<(&'static str, &'static str)> 
         | S::TaeglicheAauez
         | S::LfAaszr
         | S::MonatlicheAauezBkvLf
-        | S::MonatlicheAauezBkvAnfNb => return None,
+        | S::MonatlicheAauezBkvAnfNb
+        | S::NetzgangzeitreiheNzr => return None,
     })
 }
 

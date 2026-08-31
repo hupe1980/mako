@@ -31,6 +31,33 @@ pub const IDE_VORGANG: &str = "24";
 /// `IDE+Z01` — Identifikation einer Liste (`MaBiS` Summenzeitreihen).
 pub const IDE_LISTE: &str = "Z01";
 
+/// `BGM` DE 1001 `Z07` — **Aktivierung/Deaktivierung von `MaBiS`-ZP**.
+///
+/// All three Prüfidentifikatoren of the `MaBiS`-ZP lifecycle carry it (UTILMD
+/// AHB Strom 2.2 Kap. 13.3). A Zählpunkt is activated, not angemeldet, so the
+/// `E01` an ordinary Vorgang uses states the wrong Dokumentenart.
+pub const BGM_MABIS_ZP_LIFECYCLE: &str = "Z07";
+
+/// `BGM` DE 1001 `Z05` — **Clearingliste**.
+///
+/// Every `MaBiS` Clearingliste and every answer to one carries it (UTILMD AHB
+/// Strom 2.2 Kap. 13.4), in place of the `E01`/`E02`/`E44` an ordinary Vorgang
+/// uses.
+pub const BGM_CLEARINGLISTE: &str = "Z05";
+
+/// `SG8 SEQ+Z22` — Daten der Summenzeitreihe.
+///
+/// The Clearinglisten head block. Muss on both 55065 and 55066 (UTILMD AHB
+/// Strom 2.2 Kap. 13.4), paired with [`RFF_ZEITREIHE`].
+pub const SEQ_SUMMENZEITREIHE: &str = "Z22";
+
+/// `SG8 RFF+AUU` — Referenz auf eine Zeitreihe; DE 1154 is its Version.
+///
+/// `MaBiS` keys a Summenzeitreihe's versions on the Erstellungszeitpunkt, so a
+/// Clearingliste that names no version cannot be matched to the one it
+/// reconciles.
+pub const RFF_ZEITREIHE: &str = "AUU";
+
 // ── SG5 LOC ───────────────────────────────────────────────────────────────────
 
 /// `SG5 LOC` DE 3227 — the Lokationstyp qualifiers (MIG Zähler 0330).
@@ -43,7 +70,7 @@ pub mod loc {
     /// Marktlokations-ID, `[951]` Zählpunktbezeichnung. Sending `Z16` on a Gas
     /// UTILMD states a qualifier the receiving AHB does not define.
     pub const MELDEPUNKT: &str = "172";
-    /// `LOC+Z15` — MaBiS-Zählpunkt.
+    /// `LOC+Z15` — `MaBiS`-Zählpunkt.
     pub const MABIS_ZAEHLPUNKT: &str = "Z15";
     /// `LOC+Z16` — Marktlokation.
     pub const MARKTLOKATION: &str = "Z16";
@@ -178,6 +205,47 @@ pub mod transaktionsgrund {
     pub const AUFHEBUNG_FRUEHERE_ANMELDUNG: &str = "ZH0";
     /// `ZH1` — Aufhebung einer zukünftigen Zuordnung wegen Stilllegung.
     pub const AUFHEBUNG_STILLLEGUNG: &str = "ZH1";
+    /// `ZH2` — Aufhebung einer zukünftigen Zuordnung wegen aufgehobenem
+    /// Vertragsverhältnis.
+    ///
+    /// „Vertrag zwischen Absender des Geschäftsvorfalls und Kunde wurde
+    /// aufgehoben, wird z. B. verwendet wenn der Kunde den Vertrag widerruft."
+    /// The one Aufhebungsgrund `E_0607` Prüfschritte 60 / 560 route on.
+    pub const AUFHEBUNG_VERTRAGSVERHAELTNIS: &str = "ZH2";
+    /// `Z15` — Zusätzlicher Datensatz.
+    pub const ZUSAETZLICHER_DATENSATZ: &str = "Z15";
+    /// `ZE3` — Stammdatenänderung.
+    pub const STAMMDATENAENDERUNG: &str = "ZE3";
+    /// `ZJ4` — Übernahme aufgrund nicht erfolgtem iMS-Einbau.
+    pub const UEBERNAHME_KEIN_IMS: &str = "ZJ4";
+    /// `ZP3` — Stammdaten.
+    pub const STAMMDATEN: &str = "ZP3";
+    /// `ZP4` — Werte.
+    pub const WERTE: &str = "ZP4";
+    /// `ZQ7` — Abmeldung wg. fehlender Zuordnungsermächtigung.
+    pub const ABMELDUNG_FEHLENDE_ZUORDNUNGSERMAECHTIGUNG: &str = "ZQ7";
+    /// `ZR9` — Kündigung aufgrund Vertrag mit Anschlussnehmer.
+    pub const KUENDIGUNG_ANSCHLUSSNEHMER: &str = "ZR9";
+    /// `ZT0` — Abmeldung wegen fehlender Zuordnungsermächtigung aufgrund
+    /// Änderung ZRT.
+    pub const ABMELDUNG_FEHLENDE_ZE_ZRT: &str = "ZT0";
+    /// `ZT4` — Ende wegen Kündigung durch LF (den bislang beliefernden LFA).
+    pub const ENDE_KUENDIGUNG_LF: &str = "ZT4";
+    /// `ZT5` — Ende wegen Kündigung durch Kunde/LFN.
+    ///
+    /// Also covers „keine Kündigung des Vertrages notwendig da Vertrag nur auf
+    /// bestimmte Zeit gelaufen ist" and a Kündigung durch Dritte.
+    pub const ENDE_KUENDIGUNG_KUNDE: &str = "ZT5";
+    /// `ZT6` — `EoG` wegen Kündigung durch LF.
+    pub const EOG_KUENDIGUNG_LF: &str = "ZT6";
+    /// `ZT7` — `EoG` wegen Kündigung durch Kunde/LFN.
+    pub const EOG_KUENDIGUNG_KUNDE: &str = "ZT7";
+    /// `ZU1` — Änderung von MSB Abrechnungsdaten.
+    pub const AENDERUNG_MSB_ABRECHNUNGSDATEN: &str = "ZU1";
+    /// `ZX2` — Abrechnungsdaten BK-Abrechnung erzeugender `MaLo`.
+    pub const ABRECHNUNGSDATEN_BK_ERZEUGEND: &str = "ZX2";
+    /// `ZX3` — Abrechnungsdaten BK-Abrechnung verbrauchender `MaLo`.
+    pub const ABRECHNUNGSDATEN_BK_VERBRAUCHEND: &str = "ZX3";
 }
 
 /// `SG4 STS+7` DE 9013 (element 3) — Transaktionsgrundergänzung.

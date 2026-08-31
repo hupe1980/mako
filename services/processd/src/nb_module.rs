@@ -55,6 +55,7 @@ use mako_pruefung::nb::types::{
     ErzeugungsAnmeldung, Geschaeftsvorfall, Marktlokationsart, Veraeusserungsform,
 };
 use mako_pruefung::{AnmeldungAnfrage, Messtyp, NbEntscheidung};
+use rust_decimal::Decimal;
 use time::OffsetDateTime;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -355,6 +356,12 @@ fn erzeugung_of(
         // sonstige Direktvermarktung, still an EEG plant.
         nicht_eeg_kwkg: false,
         ausfallverguetung: false,
+        // The Tranchen facts belong to Geschäftsvorfall 3, which `ZW5` returns
+        // before reaching here. They are filled in by the caller once the
+        // Tranchengröße and the assignment list are read.
+        gewuenschter_prozentsatz: None,
+        tranchen_prozent: std::collections::BTreeMap::new(),
+        direktvermarktungspflichtig: false,
     })
 }
 
@@ -490,7 +497,9 @@ pub async fn evaluate_and_decide(
         zuordnungsbeginn: payload.process_date,
         vorgangsnummer: payload.vorgangsnummer.clone(),
         tranche: payload.transaktionsgrund_ergaenzung.as_deref() == Some("ZW5"),
-        altlieferant: versorgung.as_ref().and_then(|v| v.lf_mp_id.clone()),
+        altlieferant: versorgung
+            .as_ref()
+            .and_then(|v| v.lf_mp_id().map(ToOwned::to_owned)),
     };
 
     let mut anfrage = payload.into_anfrage();
@@ -526,11 +535,29 @@ pub async fn evaluate_and_decide(
     // Set unconditionally to `Erforderlich` here; phase two replaces it with
     // `Gestellt` and the LFA's answer. A Marktlokation with no incumbent stays
     // `NichtErforderlich`, which is `E_0623` Prüfschritt 20 „nein".
-    anfrage.abmeldeanfrage = match versorgung.as_ref().and_then(|v| v.lf_mp_id.clone()) {
-        Some(lfa) => mako_pruefung::Abmeldeanfrage::Erforderlich {
-            lfa_mp_ids: vec![lfa],
-        },
-        None => mako_pruefung::Abmeldeanfrage::NichtErforderlich,
+    //
+    // „im Fall von Geschäftsvorfall 3 allen LFA" (SD Lieferbeginn Nr. 3): a
+    // tranchierte Marktlokation is held by several, and every one of them is
+    // asked — which is why this reads the whole assignment list rather than
+    // „the" Lieferant.
+    let lfa_mp_ids: Vec<String> = versorgung
+        .as_ref()
+        .map(|v| v.aktive().map(|z| z.lf_mp_id.clone()).collect())
+        .unwrap_or_default();
+    // Freeze the shares the Anfragen go out against. `E_0623` Prüfschritte
+    // 510–530 count over the Zuordnung as it stood when the NB asked, not as
+    // the projection holds it when the last answer arrives hours later — the
+    // same reason `MeldepflichtContext` is frozen here rather than re-read.
+    if let (Some(erz), Some(vs)) = (anfrage.erzeugung.as_mut(), versorgung.as_ref()) {
+        erz.tranchen_prozent = vs
+            .aktive()
+            .map(|z| (z.lf_mp_id.clone(), z.prozent))
+            .collect();
+    }
+    anfrage.abmeldeanfrage = if lfa_mp_ids.is_empty() {
+        mako_pruefung::Abmeldeanfrage::NichtErforderlich
+    } else {
+        mako_pruefung::Abmeldeanfrage::Erforderlich { lfa_mp_ids }
     };
     let anfrage = anfrage;
     let now = OffsetDateTime::now_utc();
@@ -697,6 +724,8 @@ pub async fn evaluate_and_decide(
                 // Anmeldung was decided, not as the projection holds them once
                 // the switch has been booked.
                 meldung: serde_json::to_value(&meldung)?,
+                // Nothing has answered yet; phase two merges one entry per LFA.
+                antworten: serde_json::json!({}),
                 received_at,
                 tenant: config.tenant.clone(),
             };
@@ -879,6 +908,72 @@ async fn dispatch_abmeldeanfrage(
 ///
 /// # Errors
 ///
+/// The `E_0623` Prüfschritte 500–540 facts, assembled from the waiting row.
+///
+/// `None` for anything but a Geschäftsvorfall 3 — the other branches decide on
+/// the one LFA's answer and the tree ignores this argument there.
+///
+/// The **shares** come from `AnmeldungAnfrage::tranchen_prozent`, frozen at
+/// phase one out of `marktd`'s assignment list: the Zuordnung the Anfrage went
+/// out against is the one the answers are about, not whatever the projection
+/// holds hours later. The **answers** come from `waiting.antworten`, one entry
+/// per LFA that replied; an LFA with no entry answered with silence.
+fn tranchen_lage(
+    waiting: &AbmeldeanfrageRecord,
+    anfrage: &AnmeldungAnfrage,
+) -> Option<mako_pruefung::TranchenLage> {
+    let erz = anfrage.erzeugung.as_ref()?;
+    if erz.geschaeftsvorfall != mako_pruefung::nb::types::Geschaeftsvorfall::Drei {
+        return None;
+    }
+    let tranchen = waiting
+        .lfa_mp_ids
+        .iter()
+        .map(|lfa| mako_pruefung::TranchenAntwort {
+            lf_mp_id: lfa.clone(),
+            prozent: erz
+                .tranchen_prozent
+                .get(lfa)
+                .copied()
+                .unwrap_or(Decimal::ZERO),
+            antwort: waiting.antworten.get(lfa).and_then(lfa_antwort),
+        })
+        .collect();
+    Some(mako_pruefung::TranchenLage {
+        tranchen,
+        gewuenschter_prozentsatz: erz.gewuenschter_prozentsatz.unwrap_or(Decimal::ONE_HUNDRED),
+        direktvermarktungspflichtig: erz.direktvermarktungspflichtig,
+    })
+}
+
+/// One recorded answer, back as the tree's own type.
+///
+/// A recorded entry with no `antwortcode` is a lapsed Frist, which is silence —
+/// the same `None` an LFA that never replied gets.
+fn lfa_antwort(v: &serde_json::Value) -> Option<mako_pruefung::LfaAntwort> {
+    let code = v.get("antwortcode")?.as_str()?.to_owned();
+    if v.get("zustimmung")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        Some(mako_pruefung::LfaAntwort::Zustimmung {
+            code,
+            zuordnungsende: v
+                .get("zuordnungsende")
+                .and_then(|d| d.as_str())
+                .and_then(parse_civil_date),
+        })
+    } else {
+        Some(mako_pruefung::LfaAntwort::Widerspruch {
+            code,
+            grund: v
+                .get("grund")
+                .and_then(|g| g.as_str())
+                .map(ToOwned::to_owned),
+        })
+    }
+}
+
 /// Propagates store and transport failures so the fan-out redelivers.
 pub async fn resume_after_lfa_antwort(
     event: &serde_json::Value,
@@ -897,21 +992,6 @@ pub async fn resume_after_lfa_antwort(
         return Ok(false);
     };
 
-    // `take` is one statement with `WHERE resolved_at IS NULL`: the LFA's answer
-    // and the 09:00 lapse race by design, and the loser must find nothing. That
-    // is what makes the Anmeldung answered exactly once.
-    let Some(waiting) = pending.take(anmeldung_process_id, &config.tenant).await? else {
-        info!(
-            %anmeldung_process_id,
-            "processd NB: no Anmeldung waiting on this Abmeldeanfrage — already resolved"
-        );
-        return Ok(true);
-    };
-
-    let mut anfrage: AnmeldungAnfrage = serde_json::from_value(waiting.anfrage.clone())?;
-    // The Meldepflicht facts as of the Anmeldung. Phase one wrote them because
-    // the Zuordnung it is about to end is the one that was in force then.
-    let meldung: MeldepflichtContext = serde_json::from_value(waiting.meldung.clone())?;
     let zustimmung = data
         .get("zustimmung")
         .and_then(serde_json::Value::as_bool)
@@ -928,6 +1008,49 @@ pub async fn resume_after_lfa_antwort(
         .get("grund")
         .and_then(|v| v.as_str())
         .map(ToOwned::to_owned);
+    // Which LFA answered. A Geschäftsvorfall 3 asked several, so the answer has
+    // to say whose it is before it can be counted.
+    let lfa_mp_id = data
+        .get("lfa_mp_id")
+        .or_else(|| data.get("absender_mp_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_owned();
+
+    // `record_antwort` is one statement with `WHERE resolved_at IS NULL`: the
+    // LFA's answer and the 09:00 lapse race by design, and the loser must find
+    // nothing. It resolves the row only once **every** LFA has answered (or the
+    // Frist lapsed and the rest are silence), so a tranchierte Marktlokation is
+    // not decided on the first share to reply.
+    let antwort_json = serde_json::json!({
+        "lfa_mp_id":  lfa_mp_id,
+        "zustimmung": zustimmung,
+        "antwortcode": antwortcode,
+        "grund":       grund,
+        "zuordnungsende": data.get("zuordnungsende").and_then(|v| v.as_str()),
+    });
+    let Some(waiting) = pending
+        .record_antwort(
+            anmeldung_process_id,
+            &config.tenant,
+            &lfa_mp_id,
+            &antwort_json,
+            fristablauf,
+        )
+        .await?
+    else {
+        info!(
+            %anmeldung_process_id, %lfa_mp_id,
+            "processd NB: Abmeldeanfrage not resolved — already answered, or LFA answers \
+             are still outstanding"
+        );
+        return Ok(true);
+    };
+
+    let mut anfrage: AnmeldungAnfrage = serde_json::from_value(waiting.anfrage.clone())?;
+    // The Meldepflicht facts as of the Anmeldung. Phase one wrote them because
+    // the Zuordnung it is about to end is the one that was in force then.
+    let meldung: MeldepflichtContext = serde_json::from_value(waiting.meldung.clone())?;
 
     // **Fall b** — the LFA released the Marktlokation earlier than asked and
     // „teilt sein Lieferendedatum in der Antwort mit" (`A34`). That date is what
@@ -963,7 +1086,15 @@ pub async fn resume_after_lfa_antwort(
         }),
     };
 
-    let result = mako_pruefung::evaluate_lieferbeginn(&anfrage, None);
+    // ── E_0623 Prüfschritte 500–540 ───────────────────────────────────────
+    //
+    // A Geschäftsvorfall 3 does not decide on one LFA's answer but on the
+    // arithmetic over every Tranche's: which shares came free, and whether
+    // enough of them did. `waiting.antworten` now holds one entry per LFA that
+    // replied; an LFA missing from it answered with silence, which GPKE
+    // Teil 2 § 2.1.2 makes a Zustimmung.
+    let lage = tranchen_lage(&waiting, &anfrage);
+    let result = mako_pruefung::evaluate_lieferbeginn(&anfrage, lage.as_ref());
     let pid = waiting.pid as u32;
     let malo_id = waiting.malo_id.clone();
 
@@ -1153,12 +1284,14 @@ pub async fn resume_after_lfa_antwort(
 /// MP-IDs being equal is not a reason to skip it.
 ///
 /// **The third, 55038 / 44038 „Aufhebung einer zukünftigen Zuordnung", is not
-/// derived here.** It addresses an LFZ whose future Zuordnung the new Anmeldung
-/// displaces, and `VersorgungsStatusRecord` has one future-supplier slot
-/// (`lf_mp_id_next`), which `marktd` has already filled with *this* LFN by the
-/// time the decision runs. A distinct LFZ is not representable, and a competing
-/// pending Anmeldung is refused `A06` before it could be. The command
-/// (`gpke.zuordnung.aufheben`) exists for an operator or ERP that can see one.
+/// derived here.** It addresses an **LFZ** whose future Zuordnung this Anmeldung
+/// displaces — an announced assignment held by another supplier, which
+/// `marktd`'s projection now carries beside this one
+/// (`VersorgungsStatusRecord::andere_anmeldung_in_bearbeitung`). It is not
+/// derived from the *Anmeldung* decision because that decision refuses such an
+/// Anmeldung with `A06`: an LFZ is displaced by a Zuordnung the NB has already
+/// confirmed, not by one it is ruling on. The command
+/// (`gpke.zuordnung.aufheben`) renders it.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct MeldepflichtContext {
     sparte: Sparte,
@@ -1741,7 +1874,7 @@ fn classify(result: &NbEntscheidung) -> (AnmeldungDecision, Option<String>, Opti
 /// Antwortnachricht and restricts the code to the named EBD's cluster, so an
 /// answer dispatched as a bare `accepted: bool` renders a UTILMD with no
 /// Ablehnungsgrund at all — well-formed EDIFACT that says nothing. `makod`
-/// re-resolves `antwort_code` against `antwort_ebd` and derives the response PID
+/// re-resolves `antwort_code` against `antwort_codeliste` and derives the response PID
 /// from the published Cluster, so the two cannot disagree.
 ///
 /// The Gas Codelisten are not named in `STS` DE 1131, so a Gas answer sends
@@ -1769,12 +1902,12 @@ async fn dispatch(
         "antwort_code": antwort.antwortcode,
         // The tree the code was resolved against — always present, and what
         // `makod` re-validates on. The Gas Codelisten carry no DE 1131, so
-        // `antwort_ebd` is absent there while `antwort_tree` is not.
+        // `antwort_codeliste` is absent there while `antwort_tree` is not.
         "antwort_tree": antwort.tree,
         "zustimmung":   accept,
     });
     if let Some(ebd) = &antwort.ebd {
-        payload["antwort_ebd"] = serde_json::json!(ebd);
+        payload["antwort_codeliste"] = serde_json::json!(ebd);
     }
     if let Some(detail) = detail {
         // `FTX+ACB` — required alongside the catch-all codes, useful on all of

@@ -1,6 +1,6 @@
 """GeLi Gas end to end — the track, the Frist shape, and the wire differences.
 
-The toolkit claims four families, and Gas differs from Strom in three ways a
+The toolkit publishes five families, and Gas differs from Strom in three ways a
 Strom-only suite never touches: UTILMD runs a parallel **release track** (`G…`
 against `S…`) on the same date, the answer Frist runs to the **end of the n-th
 Werktag** rather than to a clock time on it, and a Gas answer names **no

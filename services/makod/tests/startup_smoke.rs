@@ -5,10 +5,15 @@
 //! `EngineModule` also has a matching entry in the deadline-dispatch coverage table,
 //! catching missing `DISPATCH_TABLE` entries before they reach production.
 //!
-//! It instantiates the **full** production module stack with in-memory stores
-//! (matching `services/makod/src/main.rs` module registration) and calls
+//! It builds the production module stack from
+//! `makod::startup::production_modules` with in-memory stores and calls
 //! `assert_dispatch_coverage`, which panics if any registered workflow is
 //! absent from the dispatch table.
+//!
+//! Taking the list from production rather than restating it is the point. A
+//! module registered by the daemon but missing here registers workflows whose
+//! deadlines nothing dispatches, and shrinks every figure the second test pins
+//! — both failures are silent, and both happened.
 
 use std::sync::Arc;
 
@@ -16,40 +21,33 @@ use mako_engine::{
     builder::EngineBuilder, deadline::InMemoryDeadlineStore, event_store::InMemoryEventStore,
     registry::InMemoryProcessRegistry, snapshot::InMemorySnapshotStore,
 };
-use mako_gabi_gas::GaBiGasModule;
-use mako_geli_gas::GeliGasModule;
-use mako_gpke::GpkeModule;
-use mako_mabis::MabisModule;
-use mako_redispatch::RedispatchModule;
-use mako_wim::WimModule;
 
 use makod::deadline_dispatch;
 
-/// Every workflow declared by all five production modules must appear in
+/// Every workflow declared by every production module must appear in
 /// `deadline_dispatch::DISPATCH_TABLE`.  If a new module or workflow is added
 /// without a matching dispatch arm, this test panics with an actionable message
-/// before the bug can reach a production binary.
+/// before the bug can reach a production binary. That arm is what a fired
+/// deadline resolves to, and a `Deadline` label no arm matches fires into
+/// `None` **silently** — so this is the only signal.
 ///
-/// Module stack must match `services/makod/src/main.rs`:
-/// - `GpkeModule`    — PIDs 55001–55002, 55016 + INVOIC + IFTSTA
-/// - `WimModule`     — PIDs 55039/55042/55051/55168 (WiM Strom Messstellenbetrieb)
-/// - `GeliGasModule` — PIDs 44001–44021 (GeLi Gas; 44022–44024 registered by WimGasModule) + PID 31011 (AWH Rechnung)
-/// - `WimGasModule`  — PIDs 44039–44053, 44168–44170 (WiM Gas MSB-Wechsel)
-/// - `MabisModule`   — PID 13003 (Bilanzkreisabrechnung Strom)
+/// The stack comes from [`makod::startup::production_modules`] — the same list
+/// the daemon builds from, so this test cannot fall behind it. Enumerating the
+/// modules here again is what let it fall behind before.
 #[test]
 fn all_registered_workflows_covered_by_dispatch_table() {
-    let ctx = EngineBuilder::new()
+    let mut builder = EngineBuilder::new()
         .with_event_store(Arc::new(InMemoryEventStore::new()))
         .with_snapshot_store(InMemorySnapshotStore::new())
         .with_deadline_store(InMemoryDeadlineStore::new())
-        .with_registry(InMemoryProcessRegistry::new())
-        .register(Box::new(GpkeModule))
-        .register(Box::new(WimModule))
-        .register(Box::new(GeliGasModule))
-        .register(Box::new(MabisModule))
-        .register(Box::new(GaBiGasModule))
-        .register(Box::new(RedispatchModule))
-        .build();
+        .with_registry(InMemoryProcessRegistry::new());
+    // The one production list — see `makod::startup::production_modules`. Never
+    // restate the stack here: a guard with its own copy silently stops seeing a
+    // module the daemon registers.
+    for module in makod::startup::production_modules() {
+        builder = builder.register(module);
+    }
+    let ctx = builder.build();
 
     // Panics with an actionable message if any registered workflow is absent
     // from the dispatch table — that panic is the test-failure signal.
@@ -214,18 +212,18 @@ fn party_registry_rejects_duplicate_role() {
 /// assertion reports — not to loosen the assertion.
 #[test]
 fn the_landing_page_figures_match_the_registered_engine() {
-    let ctx = EngineBuilder::new()
+    let mut builder = EngineBuilder::new()
         .with_event_store(Arc::new(InMemoryEventStore::new()))
         .with_snapshot_store(InMemorySnapshotStore::new())
         .with_deadline_store(InMemoryDeadlineStore::new())
-        .with_registry(InMemoryProcessRegistry::new())
-        .register(Box::new(GpkeModule))
-        .register(Box::new(WimModule))
-        .register(Box::new(GeliGasModule))
-        .register(Box::new(MabisModule))
-        .register(Box::new(GaBiGasModule))
-        .register(Box::new(RedispatchModule))
-        .build();
+        .with_registry(InMemoryProcessRegistry::new());
+    // The one production list — see `makod::startup::production_modules`. Never
+    // restate the stack here: a guard with its own copy silently stops seeing a
+    // module the daemon registers.
+    for module in makod::startup::production_modules() {
+        builder = builder.register(module);
+    }
+    let ctx = builder.build();
 
     let pids = ctx.pid_router().len();
     let workflows = ctx.registered_workflows().len();
@@ -239,8 +237,8 @@ fn the_landing_page_figures_match_the_registered_engine() {
     // Both are correct and measure different things; do not "harmonise" them.
     // The figure moves whenever a module registers or retires a PID; update it
     // together with the page rather than reasoning about the delta here.
-    const LANDING_PAGE_PIDS: usize = 458;
-    const LANDING_PAGE_WORKFLOWS: usize = 63;
+    const LANDING_PAGE_PIDS: usize = 467;
+    const LANDING_PAGE_WORKFLOWS: usize = 66;
 
     assert_eq!(
         pids, LANDING_PAGE_PIDS,
@@ -253,9 +251,16 @@ fn the_landing_page_figures_match_the_registered_engine() {
          the engine registers {workflows} — update the page"
     );
 
-    // The landing page is not the only place that states the pair. Two prose
-    // sentences restate it to explain what a role-scoped build is a subset
-    // *of*, and a sentence naming a number nothing checks goes stale on its own.
+    // The landing page is not the only place that states these figures. Prose
+    // elsewhere restates them to explain what a role-scoped build is a subset
+    // *of*, and a sentence naming a number nothing checks goes stale on its own
+    // — the two service-overview mentions below drifted to a figure that never
+    // matched any build, precisely because they were not listed here.
+    //
+    // A doc that names only the workflow count is listed too: the pair and the
+    // lone number go stale the same way, and the diagram labels are where a
+    // reader looks first.
+    //
     // `concepts/` is not in git, so a checkout without it is normal and only a
     // file that exists and disagrees is a finding.
     for (doc, sentence) in [
@@ -270,6 +275,14 @@ fn the_landing_page_figures_match_the_registered_engine() {
         (
             "../../concepts/MARKET_LANDSCAPE.md",
             format!("**{workflows} workflows and {pids} PIDs**"),
+        ),
+        (
+            "../../site/content/docs/architecture/_index.md",
+            format!("EDIFACT ↔ BO4E, {workflows} workflows"),
+        ),
+        (
+            "../../site/content/docs/services/_index.md",
+            format!("EDIFACT runtime · {workflows} workflows"),
         ),
     ] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(doc);

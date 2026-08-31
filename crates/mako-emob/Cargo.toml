@@ -1,0 +1,29 @@
+[package]
+name         = "mako-emob"
+version.workspace     = true
+description  = "NZR-EMob / Modell 2 allocation engine — the virtual Bilanzierungsgebiet for charge-session-exact supplier allocation (BK6-20-160 Anlage 6, BK6-24-267)"
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+readme       = "README.md"
+keywords     = ["emob", "nzr-emob", "bilanzierungsgebiet", "energy", "bdew"]
+categories   = ["data-structures"]
+
+[dependencies]
+mako-engine  = { workspace = true }
+mako-fristen = { workspace = true }
+mako-mabis   = { path = "../mako-mabis", version = "0.18" }
+# The allocation identity `Σ allocated + residual = total` and the Decimal
+# arithmetic behind it. Reused rather than reimplemented: its residual is
+# exactly the NZR-EMob **Deltamenge**, and its own doc example is a
+# quarter-hour at an Übergabestelle with three sessions behind it.
+metering     = { workspace = true, features = ["serde"] }
+rubo4e       = { workspace = true }
+rust_decimal = { workspace = true }
+serde        = { workspace = true, features = ["derive"] }
+serde_json   = { workspace = true }
+thiserror    = { workspace = true }
+time         = { workspace = true }
+

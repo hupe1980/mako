@@ -89,7 +89,7 @@ flowchart LR
         LA["mabis-listenabgleich<br/>55065+55066 · 55195+55196<br/>55201+55202 · 55223+55224"]
     end
     subgraph bin["Binary Antwort per series"]
-        ZP["mabis-zp-lifecycle<br/>55062–55064 · 55071/55072<br/>55197–55214"]
+        ZP["mabis-zp-lifecycle<br/>55062–55064 · 55071/55072<br/>55197–55214 · 55235–55237"]
     end
     subgraph req["Request — the list arrives as its own process"]
         AN["mabis-anforderung<br/>ORDERS 17201–17208 · 17210<br/>ORDRSP 19204"]
@@ -102,7 +102,7 @@ flowchart LR
 | `profile` | `mabis-profile` | normierte Profile und Profilscharen + the LF's Reklamation |
 | `clearingliste` | `mabis-clearingliste` | the four record-only UTILMD lists |
 | `listenabgleich` | `mabis-listenabgleich` | the four lists that owe a Korrekturliste |
-| `zp_lifecycle` | `mabis-zp-lifecycle` | MaBiS-ZP Aktivierung/Deaktivierung per series |
+| `zp_lifecycle` | `mabis-zp-lifecycle` | MaBiS-ZP Aktivierung/Deaktivierung per series, incl. the NZR-EMob Zuordnung des ZP der NGZ zur NZR (55235–55237, AHB Kap. 13.16) |
 | `anforderung` | `mabis-anforderung` | ORDERS list requests + the one Ablehnung |
 | `fristen` | — | Kap. 3.10 Tabelle 2, executable |
 | `zeitreihen` | — | Kap. 2 Tabelle 1 + the `CAV` codelist |
@@ -352,6 +352,15 @@ The record-only lists are 55067 (Bilanzkreiszuordnungsliste), 55069
 (Clearingliste DZR), 55070 (Clearingliste BAS) and 55073 (Liste der
 Profildefinitionen). Three of them are the *delivery* leg of an ORDERS request
 the counterparty already made.
+
+**A Korrekturliste is a list on the wire, not a Vorgang.** `BGM+Z05`, the
+Bilanzierungsmonat in `DTM+157` (`610` `CCYYMM` — the Dokumentendatum is when
+the list was *made*), then an `IDE+Z01` head that is the Geschäftsvorfall and
+carries the MaBiS-Zählpunkt, the Version der Zeitreihe and the answered list's
+number. Each disputed Marktlokation follows as an `IDE+24` with its own
+`STS+E01` and `LOC+Z16`. Head status and members are mutually exclusive, which
+is the same split `SendKorrektur` and `SendGesamtAblehnung` already make
+(UTILMD AHB Strom 2.2 Kap. 13.4).
 
 ## Usage
 

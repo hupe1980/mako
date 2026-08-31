@@ -120,8 +120,8 @@ pub enum LfStornierungEvent {
         sender: MarktpartnerCode,
         /// GLN of the GNB receiving the Stornierung request.
         receiver: MarktpartnerCode,
-        /// Vorgangsnummer from IDE+24 — identifies the original process being cancelled.
-        vorgang_id: MaLo,
+        /// The Gas Marktlokation the cancelled Vorgang was about, `SG5 LOC+172`.
+        malo: MaLo,
         /// BGM 1001 qualifier encoding the original message type (`E01`/`E02`/`E35`).
         bgm_qualifier: String,
     },
@@ -167,8 +167,8 @@ pub struct LfStornierungData {
     pub sender: MarktpartnerCode,
     /// GLN of the GNB.
     pub receiver: MarktpartnerCode,
-    /// Vorgangsnummer from IDE+24 of the original process.
-    pub vorgang_id: MaLo,
+    /// The Gas Marktlokation the cancelled Vorgang was about, `SG5 LOC+172`.
+    pub malo: MaLo,
     /// BGM 1001 qualifier (`E01` / `E02` / `E35`).
     pub bgm_qualifier: String,
 }
@@ -243,7 +243,7 @@ pub enum LfStornierungCommand {
         /// GNB GLN, resolved from the MaLo / process cache.
         receiver: MarktpartnerCode,
         /// Vorgangsnummer (IDE+24) of the original process being cancelled.
-        vorgang_id: MaLo,
+        malo: MaLo,
         /// BGM 1001 qualifier for the type of the original message.
         /// Use `"E01"` for Anmeldung, `"E02"` for Abmeldung, `"E35"` for Kündigung.
         bgm_qualifier: String,
@@ -321,13 +321,13 @@ impl Workflow for GeliGasLfStornierungWorkflow {
                 pruefidentifikator,
                 sender,
                 receiver,
-                vorgang_id,
+                malo,
                 bgm_qualifier,
             } => LfStornierungState::Pending(LfStornierungData {
                 pruefidentifikator: *pruefidentifikator,
                 sender: sender.clone(),
                 receiver: receiver.clone(),
-                vorgang_id: vorgang_id.clone(),
+                malo: malo.clone(),
                 bgm_qualifier: bgm_qualifier.clone(),
             }),
             LfStornierungEvent::AntwortReceived {
@@ -362,7 +362,7 @@ impl Workflow for GeliGasLfStornierungWorkflow {
                 pid,
                 sender,
                 receiver,
-                vorgang_id,
+                malo,
                 bgm_qualifier,
             } => {
                 if !matches!(state, LfStornierungState::New) {
@@ -378,7 +378,7 @@ impl Workflow for GeliGasLfStornierungWorkflow {
                     pruefidentifikator: pid,
                     sender: sender.clone(),
                     receiver: receiver.clone(),
-                    vorgang_id: vorgang_id.clone(),
+                    malo: malo.clone(),
                     bgm_qualifier: bgm_qualifier.clone(),
                 };
 
@@ -388,17 +388,21 @@ impl Workflow for GeliGasLfStornierungWorkflow {
                 // `message_type = "UTILMD"` and serialises the payload
                 // to wire-format EDIFACT G before handing it to AS4.
                 // `document_date` and `message_ref` are derived at dispatch time.
+                // The keys are the UTILMD renderer's, not this workflow's:
+                // `BGM` DE 1001 rides `document_code` and names which
+                // Anwendungsfall is being cancelled (`E01` Kündigung, `E02`
+                // Rücktritt, `E35` Sperrung — UTILMD AHB Gas, GeLi Gas 3.0).
+                // The Gas track puts every Lokation in `SG5 LOC+172`, which the
+                // renderer derives from the release track.
                 let outbox = PendingOutbox::new(
                     "UTILMD",
                     receiver.as_str(),
                     serde_json::json!({
-                        "direction":     "outbound",
                         "pid":           pid.as_u32(),
                         "sender":        sender.as_str(),
                         "receiver":      receiver.as_str(),
-                        "vorgang_id":    vorgang_id.as_str(),
-                        "bgm_qualifier": bgm_qualifier,
-                        "sparte":        "gas",
+                        "malo":          malo.as_str(),
+                        "document_code": bgm_qualifier,
                     }),
                 );
 
@@ -493,7 +497,7 @@ mod tests {
             pid: pid(44022),
             sender: lf_mp_id(),
             receiver: gnb_gln(),
-            vorgang_id: vorgang(),
+            malo: vorgang(),
             bgm_qualifier: "E01".to_owned(),
         };
         let output = GeliGasLfStornierungWorkflow::handle(&state, cmd).unwrap();
@@ -514,7 +518,7 @@ mod tests {
             pruefidentifikator: pid(44022),
             sender: lf_mp_id(),
             receiver: gnb_gln(),
-            vorgang_id: vorgang(),
+            malo: vorgang(),
             bgm_qualifier: "E01".to_owned(),
         });
         let cmd = LfStornierungCommand::HandleAntwort {
@@ -537,7 +541,7 @@ mod tests {
             pruefidentifikator: pid(44022),
             sender: lf_mp_id(),
             receiver: gnb_gln(),
-            vorgang_id: vorgang(),
+            malo: vorgang(),
             bgm_qualifier: "E02".to_owned(),
         });
         let cmd = LfStornierungCommand::HandleAntwort {
@@ -561,7 +565,7 @@ mod tests {
             pid: pid(44001), // wrong PID
             sender: lf_mp_id(),
             receiver: gnb_gln(),
-            vorgang_id: vorgang(),
+            malo: vorgang(),
             bgm_qualifier: "E01".to_owned(),
         };
         assert!(GeliGasLfStornierungWorkflow::handle(&state, cmd).is_err());
@@ -573,7 +577,7 @@ mod tests {
             pruefidentifikator: pid(44022),
             sender: lf_mp_id(),
             receiver: gnb_gln(),
-            vorgang_id: vorgang(),
+            malo: vorgang(),
             bgm_qualifier: "E01".to_owned(),
         });
         let cmd = LfStornierungCommand::HandleAntwort {
@@ -592,7 +596,7 @@ mod tests {
             pruefidentifikator: pid(44022),
             sender: lf_mp_id(),
             receiver: gnb_gln(),
-            vorgang_id: vorgang(),
+            malo: vorgang(),
             bgm_qualifier: "E35".to_owned(),
         });
         let cmd = LfStornierungCommand::TimeoutExpired {
@@ -614,7 +618,7 @@ mod tests {
             pruefidentifikator: pid(44022),
             sender: lf_mp_id(),
             receiver: gnb_gln(),
-            vorgang_id: vorgang(),
+            malo: vorgang(),
             bgm_qualifier: "E01".to_owned(),
         });
         let cmd = LfStornierungCommand::TimeoutExpired {

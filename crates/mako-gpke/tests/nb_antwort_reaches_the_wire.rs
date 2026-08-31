@@ -95,7 +95,7 @@ fn the_anmeldung_bestaetigung_carries_a51_from_e0623() {
         p["antwort_code"], "A51",
         "SG4 STS+E01 is Muss on every Antwortnachricht"
     );
-    assert_eq!(p["antwort_ebd"], "E_0623");
+    assert_eq!(p["antwort_codeliste"], "E_0623");
     assert_eq!(p["sender"], NB, "the NB answers the LF that asked");
     assert_eq!(p["receiver"], LF);
 }
@@ -110,7 +110,7 @@ fn the_anmeldung_ablehnung_carries_its_e0622_code_and_bemerkung() {
     let p = utilmd(&out);
     assert_eq!(p["pid"], 55_003);
     assert_eq!(p["antwort_code"], "A07");
-    assert_eq!(p["antwort_ebd"], "E_0622");
+    assert_eq!(p["antwort_codeliste"], "E_0622");
     assert_eq!(p["bemerkung"], "Vorlauffrist nicht eingehalten");
 }
 
@@ -122,7 +122,7 @@ fn the_abmeldung_bestaetigung_carries_a11_from_e0607() {
     let p = utilmd(&out);
     assert_eq!(p["pid"], 55_005);
     assert_eq!(p["antwort_code"], "A11");
-    assert_eq!(p["antwort_ebd"], "E_0607");
+    assert_eq!(p["antwort_codeliste"], "E_0607");
 }
 
 /// **55077 → 55078.** The erzeugende Marktlokation answers out of the same

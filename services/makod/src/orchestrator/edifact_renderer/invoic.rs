@@ -27,7 +27,7 @@ use super::*;
 /// | `document_date` | no       | Document date (`YYYYMMDD` or `YYYY-MM-DD`)    |
 /// | `message_ref`   | no       | Derived from `causation_event_id` when absent |
 /// | `antwort_code`  | no       | `SG7 AJT` DE 4465 — the Antwortcode on an Abweisung |
-/// | `antwort_ebd`   | no       | `SG7 AJT` DE 1082 — the EBD the code comes from |
+/// | `antwort_codeliste`   | no       | `SG7 AJT` DE 1082 — the EBD the code comes from |
 /// | `ablehnungsgrund` | no     | Free-text reason, rendered as `FTX+ACB`        |
 ///
 /// # An Abweisung must state why
@@ -106,7 +106,7 @@ pub(super) fn render_invoic(
 /// | `waehrung`      | no       | `SG4 CUX` DE 6345 (default `EUR`)             |
 /// | `rechnungsbezug`| no       | `SG5` — the answered invoice and its amounts  |
 /// | `antwort_code`  | no       | `SG7 AJT` DE 4465 — the Antwortcode on an Abweisung |
-/// | `antwort_ebd`   | no       | `SG7 AJT` DE 1082 — the EBD the code comes from |
+/// | `antwort_codeliste`   | no       | `SG7 AJT` DE 1082 — the EBD the code comes from |
 /// | `ablehnungsgrund` | no     | Free-text reason, rendered as `FTX+ACB`        |
 ///
 /// # An Abweisung must state why
@@ -191,7 +191,7 @@ pub(super) fn render_remadv(
     // Befund of the walk in `antwort_befunde` with its Ebene and, on a
     // position-level one, its Positionsnummer; `SG10` is Muss on 33004 and is
     // repeated „bis alle Fehler der Positionsebene genannt sind".
-    let ebd = p.get("antwort_ebd").and_then(|v| v.as_str());
+    let ebd = p.get("antwort_codeliste").and_then(|v| v.as_str());
     let positionsfehler = position_level_befunde(p, ebd);
     if !positionsfehler.is_empty() {
         builder = builder.positionsfehler(positionsfehler);

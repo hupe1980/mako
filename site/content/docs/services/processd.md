@@ -154,9 +154,21 @@ is GPKE Teil 2 § 2.1.2 Nr. 6's „der NB gibt zusätzlich den Grund der Ablehnu
 des LFA an". `processd` puts it on the `ablehnen` command and `makod` refuses to
 render the message without it.
 
-Geschäftsvorfall 3 is not decided automatically: Prüfschritte 500–600 read a
-Tranchen-Zuordnung the `versorgung` projection cannot express, so the tree
-escalates rather than choosing between two Ablehnungen and two Zustimmungen.
+Geschäftsvorfall 3 decides on **arithmetic**, not on one LFA's answer. A
+tranchierte Marktlokation is held by several LFA at once, so the NB asks all of
+them („im Fall von Geschäftsvorfall 3 allen LFA"), and Prüfschritte 500–540 count
+what came free: at least one release (510 → `A53`), enough percentage (520 →
+`A54`), and whether an unassigned share is left in the NB's own Bilanzkreis on a
+direktvermarktungspflichtige Marktlokation (530/540 → `A55` against `A56`, the
+trigger for „Herstellung einer 100 % LF-Zuordnung"). Four of the tree's six
+outcomes exist only here.
+
+`marktd` projects the assignments as a list with a share per LFA, and the waiting
+Anmeldung collects **one answer per Tranchen-LFA** before deciding — resolving on
+the first to arrive would settle a tranchierte Marktlokation on one share of it.
+A lapsed 09:00 Frist resolves it whatever is outstanding: silence is a Zustimmung.
+An LFA answering with a code `E_0624` does not publish as an Ablehnung escalates
+the whole Geschäftsvorfall, because that share is then neither free nor held.
 
 **Three trees, three alphabets.** `E_0622` Prüfschritt 10 splits Strom into two
 branches that share no Antwortcode, and Gas answers from a different Codeliste:
@@ -166,7 +178,8 @@ branches that share no Antwortcode, and Gas answers from a different Codeliste:
 | Strom, verbrauchende / ruhende MaLo | `E_0622` 15–70 | `A06` | `A07` | `A51` (`E_0623`) |
 | Strom, erzeugende MaLo / Tranche | `E_0622` 220–830 | `A45` | `A34`/`A28`/`A29`/`A30`/`A32`/`A35`/`A44` | `A58` (`E_0623`) |
 | Gas | `E_3005` / `G_0011` | `ZC5` | `E17` | `E15` (`G_0012`) |
-| Abmeldung Strom | `E_0607` | — | `A02` | `A11` |
+| Abmeldung Strom, verbrauchende / ruhende MaLo | `E_0607` 10–140 | — | `A02` | `A11` |
+| Abmeldung Strom, erzeugende MaLo / Tranche | `E_0607` 500–620 | — | `A22` (`A21` Datum) | `A27` |
 | Abmeldung Gas | `E_3019` / `G_0007` | — | `E17` | `E15` |
 
 Putting `A06` on a 44003 is not a wrong reason — it is a code the Gas Codeliste
@@ -235,19 +248,30 @@ a case re-evaluated on day 40 reaches the same verdict it did on day one.
 Inbound **55004** (Strom) / **44004** (Gas): the supplier ends the assignment
 and the NB answers 55005/55006 (44005/44006).
 
-| # | Prüfschritt | On failure |
-|---|---|---|
-| 1 | The MaLo is known to this NB | `Escalate` |
-| 2 | The requesting LF is the assigned Lieferant (Prüfschritt 110) | `Escalate` |
-| 3 | Vorlauffrist eingehalten (Prüfschritt 50) — Strom: one full Werktag between receipt and Zuordnungsende, or Monatserster + 1 Monat for an EEG-MaLo (§ 21b Abs. 1 EEG 2023); Gas: the GeLi Gas Kap. 3.2.1 retroactivity rules | `Reject A02` (Strom) / `E17` (Gas) |
-| 4 | Kein bereits bestätigtes Lieferende zum selben Datum (Prüfschritt 120) | `Reject A09` (Strom) / `Z08` (Gas) |
-| — | Prüfschritt 130 — did the *already confirmed* Abmeldung name an Auszugsgrund? | `Escalate` — the projection does not keep the earlier message's Transaktionsgrund, and `A10` and „confirm" are both live outcomes there |
+Prüfschritt 10 („verbrauchende oder ruhende Marktlokation?") splits Strom into
+**two branches that share no Antwortcode**, including the Zustimmung. Every
+question is asked twice, once per branch:
 
-Prüfschritte 10–30 (Kundenanlagen-Herauslösung) and 60–90 (ESV-Ende, Aufhebung
-einer zukünftigen Zuordnung) need Transaktionsgründe and prior process history
-the projection does not carry; they escalate rather than guess. Escalation is
-the § 20 EnWG-safe direction — an unfounded Ablehnung keeps a customer bound to
-a supplier they have left.
+| Prüfschritt | Rule | verbrauchend / ruhend | erzeugend |
+|---|---|---|---|
+| — | The MaLo is known to this NB, and the requesting LF holds an assignment — or a Lieferende at this very date is already settled, which is the state Prüfschritt 100 exists to recognise | `Escalate` | `Escalate` |
+| 50 / 500+520 | Vorlauffrist — verbrauchend: one full Werktag between receipt and Zuordnungsende; erzeugend: the Zuordnungsende must be a Monatserster (`A21`) and lie one month ahead (`A22`), § 21b Abs. 1 EEG 2023 | `A02` | `A21` / `A22` |
+| 90 / 570 | Eine Aufhebung einer zukünftigen Zuordnung (`ZH2`) nennt den Zeitpunkt, den der NB im Lieferbeginn bestätigt hat | `A06` | `A23` |
+| 80 | „Ende der ESV ohne Folgelieferung" (`Z41`) setzt eine E/G voraus, die innerhalb von 3 Monaten vor dem Endezeitpunkt begann | `A05` | — |
+| 100–130 / 580–610 | Kein bereits bestätigtes Lieferende zum selben Datum | `A09` | `A25` |
+| 140 / 620 | — | Zustimmung `A11` | Zustimmung `A27` |
+
+Gas has no such split: `G_0007` publishes one code space (`E17` Vorlauffrist,
+`Z08` bereits bestätigt, `E15` Zustimmung).
+
+**What is not decided here.** Prüfschritte 10–30 (Kundenanlagen-Herauslösung)
+turn on whether the Marktlokation is a „ruhende Marktlokation" of a Kundenanlage
+(§ 20 Abs. 1d EnWG / § 10c EEG), which the projection does not record, so `A01`
+is catalogued and unreachable. Prüfschritt 130 / 610 asks about the *already
+confirmed* Abmeldung's Transaktionsgrund — a fact about an earlier message —
+where `A10` / `A26` and „confirm" are both live outcomes, so it escalates rather
+than guess. Escalation is the § 20 EnWG-safe direction: an unfounded Ablehnung
+keeps a customer bound to a supplier they have left.
 
 ### STP rate targets
 

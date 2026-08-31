@@ -1008,7 +1008,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                         // Antwortnachricht. Without it the renderer emits a
                         // well-formed UTILMD that states no Grund at all.
                         "antwort_code": antwort.antwort_code,
-                        "antwort_ebd":  antwort.ebd,
+                        "antwort_codeliste":  antwort.ebd,
                         // `FTX+ACB` — the Erläuterung the catch-all codes
                         // require and every Ablehnung benefits from.
                         "bemerkung":    antwort.bemerkung,

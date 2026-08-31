@@ -258,6 +258,9 @@ impl EdifactIngestDispatcher {
     /// `register_pids`, add its name here AND add the corresponding `match`
     /// arm in `dispatch` below.
     pub const KNOWN_WORKFLOW_NAMES: &'static [&'static str] = &[
+        mako_emob::EmobAbmeldungWorkflow::WORKFLOW_NAME,
+        mako_emob::EmobAnmeldungWorkflow::WORKFLOW_NAME,
+        mako_emob::EmobZuordnungsendeWorkflow::WORKFLOW_NAME,
         mako_wim::esa_wertebestellung::WORKFLOW_NAME,
         "gabi-gas-allocation",
         "gabi-gas-invoic",
@@ -711,7 +714,7 @@ impl EdifactIngestDispatcher {
     /// Family router — pure routing by workflow-family name prefix.
     ///
     /// Each family's dispatch arms live in the correspondingly named submodule
-    /// (`gpke`, `geli_gas`, `wim`, `gabi_gas`, `mabis`,
+    /// (`gpke`, `geli_gas`, `wim`, `gabi_gas`, `mabis`, `emob`,
     /// `redispatch`); the per-family method re-matches on `workflow_name`.
     async fn dispatch_inner(
         &self,
@@ -730,6 +733,7 @@ impl EdifactIngestDispatcher {
             }
             n if n.starts_with("wim-") => self.dispatch_wim(msg, n, pid).await,
             n if n.starts_with("mabis-") => self.dispatch_mabis(msg, n, pid).await,
+            n if n.starts_with("emob-") => self.dispatch_emob(msg, n, pid).await,
             n if n.starts_with("redispatch-") => self.dispatch_redispatch(msg, n, pid).await,
             // ── All other workflows: not yet in Phase 2 dispatch table ────────
             wf_name => unknown_workflow_skip(wf_name, pid),
@@ -1804,6 +1808,7 @@ fn unknown_workflow_skip(wf_name: &str, pid: u32) -> Result<IngestOutcome, Engin
 
 // ── Per-family dispatch submodules ────────────────────────────────────────────
 
+mod emob;
 mod gabi_gas;
 mod geli_gas;
 mod gpke;

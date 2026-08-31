@@ -558,7 +558,7 @@ impl Workflow for GpkeNeuanlageWorkflow {
                             // `SG4 STS+E01++<code>:E_0608` — Muss on every
                             // Antwortnachricht.
                             "antwort_code": antwort.antwort_code,
-                            "antwort_ebd":  antwort.ebd,
+                            "antwort_codeliste":  antwort.ebd,
                             "bemerkung":    antwort.bemerkung,
                         }),
                     ));

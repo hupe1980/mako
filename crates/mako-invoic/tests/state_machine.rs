@@ -283,7 +283,7 @@ async fn an_answered_invoice_puts_a_remadv_on_the_wire() {
     assert_eq!(abweisung.payload["pid"], 33_003);
     assert_eq!(abweisung.payload["document_code"], "239");
     assert_eq!(abweisung.payload["antwort_code"], "A70");
-    assert_eq!(abweisung.payload["antwort_ebd"], "E_0406");
+    assert_eq!(abweisung.payload["antwort_codeliste"], "E_0406");
     assert!(abweisung.payload["ablehnungsgrund"].is_string());
 }
 
@@ -376,7 +376,7 @@ async fn the_second_round_may_refuse_again() {
         .expect("the second refusal reaches the market too");
     // `A25` is undefined in `E_0264`; naming the wrong tree loses the fact that
     // this is a second round.
-    assert_eq!(abweisung.payload["antwort_ebd"], "E_0266");
+    assert_eq!(abweisung.payload["antwort_codeliste"], "E_0266");
     assert_eq!(abweisung.payload["antwort_code"], "A25");
 }
 

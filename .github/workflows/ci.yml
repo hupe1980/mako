@@ -122,7 +122,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p edi-energy ${{ matrix.features }}
+      # `--all-targets` so the Criterion benches are built and their `main` runs
+      # in test mode. Without it the bench targets are never compiled here, and a
+      # bench that panics — an expired `validate_on_date` reference date is the
+      # recurring one, since every annual BDEW release moves a profile's validity
+      # window — stays green in CI and fails only for whoever runs
+      # `cargo test --all-targets` locally.
+      - run: cargo test -p edi-energy ${{ matrix.features }} --all-targets
 
   # ── Workspace tests (all crates except edi-energy feature matrix) ───────────
   test-workspace:
@@ -155,7 +161,7 @@ jobs:
           df -h /
       # Exclude edi-energy (covered by the feature-matrix job above) and the
       # binary daemon (makod) which requires runtime-only feature flags.
-      - run: cargo test --workspace --all-features --exclude edi-energy --exclude makod
+      - run: cargo test --workspace --all-features --exclude edi-energy --exclude makod --all-targets
 
   # ── makod binary and integration tests ──────────────────────────────────────
   test-makod:
@@ -416,6 +422,12 @@ jobs:
       # carrying its UNH 0057 code, so a BDEW release bump cannot land in
       # mig.json without a message that exercises it.
       - run: cargo xtask validate-release-codes
+      # Holds every Antwortcode against the published Entscheidungsbaum PDF —
+      # tree, code and Cluster. `regulatories/` is gitignored and not mirrored
+      # here, so this SKIPS on CI and is a real gate only for a developer who has
+      # run `cargo xtask sync-regulatories --download`. It is wired in so the
+      # step exists the moment the mirror is available to a runner.
+      - run: cargo xtask validate-ebd-codes
 
   validate-pruefids:
     name: Validate Pruefidentifikator coverage

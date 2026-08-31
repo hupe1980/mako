@@ -27,12 +27,14 @@ use std::sync::Arc;
 use time::Date;
 use tokio::sync::RwLock;
 
+use rust_decimal::Decimal;
+
 use crate::{
     domain::MaloId,
     error::MdmError,
     repository::{
-        LieferStatus, PageResult, VersorgungsStatusHistoryRecord, VersorgungsStatusRecord,
-        VersorgungsStatusRepository,
+        LfZuordnung, LieferStatus, PageResult, VersorgungsStatusHistoryRecord,
+        VersorgungsStatusRecord, VersorgungsStatusRepository, ZuordnungsStatus,
     },
 };
 
@@ -46,6 +48,75 @@ use crate::{
 pub struct InMemoryVersorgungsStatusRepository {
     store: Arc<RwLock<HashMap<(String, String), VersorgungsStatusRecord>>>,
     history: Arc<RwLock<Vec<VersorgungsStatusHistoryRecord>>>,
+}
+
+impl InMemoryVersorgungsStatusRepository {
+    /// A fresh, unsupplied record — what every mutation starts from when the
+    /// MaLo is not in the projection yet.
+    fn blank(malo_id: &MaloId, tenant: &str, nb_mp_id: &str) -> VersorgungsStatusRecord {
+        VersorgungsStatusRecord {
+            malo_id: malo_id.clone(),
+            tenant: tenant.to_owned(),
+            lieferstatus: LieferStatus::Unbeliefert,
+            zuordnungen: Vec::new(),
+            lieferende: None,
+            msb_mp_id: None,
+            nb_mp_id: nb_mp_id.to_owned(),
+            eog_seit: None,
+            last_process_id: None,
+            updated_at: time::OffsetDateTime::now_utc(),
+            version: 0,
+        }
+    }
+
+    /// Snapshot a record into the history log — the one place the two shapes
+    /// are mapped onto each other.
+    async fn snapshot(&self, rec: &VersorgungsStatusRecord, at: time::OffsetDateTime) {
+        self.history
+            .write()
+            .await
+            .push(VersorgungsStatusHistoryRecord {
+                id: rec.version,
+                malo_id: rec.malo_id.clone(),
+                tenant: rec.tenant.clone(),
+                lieferstatus: rec.lieferstatus,
+                zuordnungen: rec.zuordnungen.clone(),
+                lieferende: rec.lieferende,
+                msb_mp_id: rec.msb_mp_id.clone(),
+                nb_mp_id: rec.nb_mp_id.clone(),
+                last_process_id: rec.last_process_id,
+                version: rec.version,
+                valid_from: at,
+            });
+    }
+
+    /// Apply `edit` to the record for this MaLo, bump its version and snapshot
+    /// it. `edit` returning `false` means „nothing changed" — no version bump,
+    /// no history row, which is what makes a redelivered event idempotent.
+    async fn mutate(
+        &self,
+        malo_id: &MaloId,
+        tenant: &str,
+        nb_mp_id: &str,
+        process_id: Option<uuid::Uuid>,
+        edit: impl FnOnce(&mut VersorgungsStatusRecord) -> bool,
+    ) {
+        let key = (malo_id.as_ref().to_owned(), tenant.to_owned());
+        let now = time::OffsetDateTime::now_utc();
+        let mut store = self.store.write().await;
+        let entry = store
+            .entry(key)
+            .or_insert_with(|| Self::blank(malo_id, tenant, nb_mp_id));
+        if !edit(entry) {
+            return;
+        }
+        entry.last_process_id = process_id;
+        entry.updated_at = now;
+        entry.version += 1;
+        let rec = entry.clone();
+        drop(store);
+        self.snapshot(&rec, now).await;
+    }
 }
 
 impl VersorgungsStatusRepository for InMemoryVersorgungsStatusRepository {
@@ -71,25 +142,10 @@ impl VersorgungsStatusRepository for InMemoryVersorgungsStatusRepository {
         let mut rec = rec;
         rec.version = new_version;
         rec.updated_at = now;
-        let hist = VersorgungsStatusHistoryRecord {
-            id: new_version, // use version as surrogate in tests
-            malo_id: rec.malo_id.clone(),
-            tenant: rec.tenant.clone(),
-            lieferstatus: rec.lieferstatus,
-            lf_mp_id: rec.lf_mp_id.clone(),
-            lf_mp_id_next: rec.lf_mp_id_next.clone(),
-            lf_next_lieferbeginn: rec.lf_next_lieferbeginn,
-            lieferbeginn: rec.lieferbeginn,
-            lieferende: rec.lieferende,
-            msb_mp_id: rec.msb_mp_id.clone(),
-            nb_mp_id: rec.nb_mp_id.clone(),
-            last_process_id: rec.last_process_id,
-            version: new_version,
-            valid_from: now,
-        };
+        let snap = rec.clone();
         store.insert(key, rec);
         drop(store);
-        self.history.write().await.push(hist);
+        self.snapshot(&snap, now).await;
         Ok(new_version)
     }
 
@@ -123,10 +179,7 @@ impl VersorgungsStatusRepository for InMemoryVersorgungsStatusRepository {
                 malo_id: h.malo_id.clone(),
                 tenant: h.tenant.clone(),
                 lieferstatus: h.lieferstatus,
-                lf_mp_id: h.lf_mp_id.clone(),
-                lf_mp_id_next: h.lf_mp_id_next.clone(),
-                lf_next_lieferbeginn: h.lf_next_lieferbeginn,
-                lieferbeginn: h.lieferbeginn,
+                zuordnungen: h.zuordnungen.clone(),
                 lieferende: h.lieferende,
                 msb_mp_id: h.msb_mp_id.clone(),
                 nb_mp_id: h.nb_mp_id.clone(),
@@ -192,52 +245,37 @@ impl VersorgungsStatusRepository for InMemoryVersorgungsStatusRepository {
         tenant: &str,
         lf_mp_id_next: &str,
         lf_next_lieferbeginn: Option<time::Date>,
+        prozent: Decimal,
+        tranche_id: Option<&str>,
         nb_mp_id: &str,
         process_id: Option<uuid::Uuid>,
     ) -> Result<(), MdmError> {
-        let key = (malo_id.as_ref().to_owned(), tenant.to_owned());
-        let mut store = self.store.write().await;
-        let now = time::OffsetDateTime::now_utc();
-        let entry = store.entry(key).or_insert_with(|| VersorgungsStatusRecord {
-            malo_id: malo_id.clone(),
-            tenant: tenant.to_owned(),
-            lieferstatus: LieferStatus::Unbeliefert,
-            lf_mp_id: None,
-            lf_mp_id_next: None,
-            lf_next_lieferbeginn: None,
-            lieferbeginn: None,
-            lieferende: None,
-            msb_mp_id: None,
-            nb_mp_id: nb_mp_id.to_owned(),
-            eog_seit: None,
-            last_process_id: process_id,
-            updated_at: now,
-            version: 0,
-        });
-        entry.lf_mp_id_next = Some(lf_mp_id_next.to_owned());
-        entry.lf_next_lieferbeginn = lf_next_lieferbeginn;
-        entry.last_process_id = process_id;
-        entry.updated_at = now;
-        entry.version += 1;
-        let rec = entry.clone();
-        drop(store);
-        let hist = VersorgungsStatusHistoryRecord {
-            id: rec.version,
-            malo_id: rec.malo_id.clone(),
-            tenant: rec.tenant.clone(),
-            lieferstatus: rec.lieferstatus,
-            lf_mp_id: rec.lf_mp_id.clone(),
-            lf_mp_id_next: rec.lf_mp_id_next.clone(),
-            lf_next_lieferbeginn: rec.lf_next_lieferbeginn,
-            lieferbeginn: rec.lieferbeginn,
-            lieferende: rec.lieferende,
-            msb_mp_id: rec.msb_mp_id.clone(),
-            nb_mp_id: rec.nb_mp_id.clone(),
-            last_process_id: rec.last_process_id,
-            version: rec.version,
-            valid_from: now,
-        };
-        self.history.write().await.push(hist);
+        self.mutate(malo_id, tenant, nb_mp_id, process_id, |rec| {
+            // Re-announcing the same (LF, Tranche) updates in place, so an
+            // at-least-once redelivery does not accumulate assignments.
+            let slot = rec.zuordnungen.iter_mut().find(|z| {
+                z.status == ZuordnungsStatus::Angekuendigt
+                    && z.lf_mp_id == lf_mp_id_next
+                    && z.tranche_id.as_deref() == tranche_id
+            });
+            let Some(z) = slot else {
+                rec.zuordnungen.push(LfZuordnung {
+                    lf_mp_id: lf_mp_id_next.to_owned(),
+                    prozent,
+                    tranche_id: tranche_id.map(ToOwned::to_owned),
+                    status: ZuordnungsStatus::Angekuendigt,
+                    zuordnungsbeginn: lf_next_lieferbeginn,
+                    zuordnungsende: None,
+                    process_id,
+                });
+                return true;
+            };
+            z.prozent = prozent;
+            z.zuordnungsbeginn = lf_next_lieferbeginn;
+            z.process_id = process_id;
+            true
+        })
+        .await;
         Ok(())
     }
 
@@ -245,41 +283,45 @@ impl VersorgungsStatusRepository for InMemoryVersorgungsStatusRepository {
         &self,
         malo_id: &MaloId,
         tenant: &str,
+        lf_mp_id: Option<&str>,
         process_id: Option<uuid::Uuid>,
     ) -> Result<(), MdmError> {
-        let key = (malo_id.as_ref().to_owned(), tenant.to_owned());
-        let mut store = self.store.write().await;
-        let now = time::OffsetDateTime::now_utc();
-        if let Some(entry) = store.get_mut(&key) {
-            if entry.lf_mp_id_next.is_some() {
-                entry.lf_mp_id = entry.lf_mp_id_next.take();
-                entry.lieferbeginn = entry.lf_next_lieferbeginn.take();
-                entry.lf_next_lieferbeginn = None;
-                entry.lieferstatus = LieferStatus::Beliefert;
-                entry.last_process_id = process_id;
-                entry.updated_at = now;
-                entry.version += 1;
-                let rec = entry.clone();
-                drop(store);
-                let hist = VersorgungsStatusHistoryRecord {
-                    id: rec.version,
-                    malo_id: rec.malo_id.clone(),
-                    tenant: rec.tenant.clone(),
-                    lieferstatus: rec.lieferstatus,
-                    lf_mp_id: rec.lf_mp_id.clone(),
-                    lf_mp_id_next: rec.lf_mp_id_next.clone(),
-                    lf_next_lieferbeginn: rec.lf_next_lieferbeginn,
-                    lieferbeginn: rec.lieferbeginn,
-                    lieferende: rec.lieferende,
-                    msb_mp_id: rec.msb_mp_id.clone(),
-                    nb_mp_id: rec.nb_mp_id.clone(),
-                    last_process_id: rec.last_process_id,
-                    version: rec.version,
-                    valid_from: now,
-                };
-                self.history.write().await.push(hist);
+        self.mutate(malo_id, tenant, "", process_id, |rec| {
+            // `None` is „the one that is pending", which is well defined
+            // exactly while there is one; with several it resolves to none.
+            let lf_mp_id = match lf_mp_id {
+                Some(lf) => lf.to_owned(),
+                None => match rec.lf_mp_id_next() {
+                    Some(lf) => lf.to_owned(),
+                    None => return false,
+                },
+            };
+            let lf_mp_id = lf_mp_id.as_str();
+            let Some(idx) = rec
+                .zuordnungen
+                .iter()
+                .position(|z| z.status == ZuordnungsStatus::Angekuendigt && z.lf_mp_id == lf_mp_id)
+            else {
+                return false; // nothing announced by this LF — idempotent no-op
+            };
+            let tranche = rec.zuordnungen[idx].tranche_id.clone();
+            // An Anmeldung for a Tranche displaces only that Tranche's holder;
+            // an untranchierte one displaces the single 100 % assignment.
+            rec.zuordnungen
+                .retain(|z| z.status != ZuordnungsStatus::Aktiv || z.tranche_id != tranche);
+            if let Some(z) = rec
+                .zuordnungen
+                .iter_mut()
+                .find(|z| z.status == ZuordnungsStatus::Angekuendigt && z.lf_mp_id == lf_mp_id)
+            {
+                z.status = ZuordnungsStatus::Aktiv;
+                z.process_id = process_id;
             }
-        }
+            rec.lieferstatus = LieferStatus::Beliefert;
+            rec.eog_seit = None;
+            true
+        })
+        .await;
         Ok(())
     }
 
@@ -287,54 +329,24 @@ impl VersorgungsStatusRepository for InMemoryVersorgungsStatusRepository {
         &self,
         malo_id: &MaloId,
         tenant: &str,
+        lf_mp_id: Option<&str>,
         nb_mp_id: &str,
         process_id: Option<uuid::Uuid>,
     ) -> Result<(), MdmError> {
-        let key = (malo_id.as_ref().to_owned(), tenant.to_owned());
-        let mut store = self.store.write().await;
-        let now = time::OffsetDateTime::now_utc();
-        let entry = store.entry(key).or_insert_with(|| VersorgungsStatusRecord {
-            malo_id: malo_id.clone(),
-            tenant: tenant.to_owned(),
-            lieferstatus: LieferStatus::Unbeliefert,
-            lf_mp_id: None,
-            lf_mp_id_next: None,
-            lf_next_lieferbeginn: None,
-            lieferbeginn: None,
-            lieferende: None,
-            msb_mp_id: None,
-            nb_mp_id: nb_mp_id.to_owned(),
-            eog_seit: None,
-            last_process_id: process_id,
-            updated_at: now,
-            version: 0,
-        });
-        entry.lieferstatus = LieferStatus::Unbeliefert;
-        entry.lf_mp_id = None;
-        entry.lieferbeginn = None;
-        entry.nb_mp_id.clone_from(&nb_mp_id.to_owned());
-        entry.last_process_id = process_id;
-        entry.updated_at = now;
-        entry.version += 1;
-        let rec = entry.clone();
-        drop(store);
-        let hist = VersorgungsStatusHistoryRecord {
-            id: rec.version,
-            malo_id: rec.malo_id.clone(),
-            tenant: rec.tenant.clone(),
-            lieferstatus: rec.lieferstatus,
-            lf_mp_id: rec.lf_mp_id.clone(),
-            lf_mp_id_next: rec.lf_mp_id_next.clone(),
-            lf_next_lieferbeginn: rec.lf_next_lieferbeginn,
-            lieferbeginn: rec.lieferbeginn,
-            lieferende: rec.lieferende,
-            msb_mp_id: rec.msb_mp_id.clone(),
-            nb_mp_id: rec.nb_mp_id.clone(),
-            last_process_id: rec.last_process_id,
-            version: rec.version,
-            valid_from: now,
-        };
-        self.history.write().await.push(hist);
+        self.mutate(malo_id, tenant, nb_mp_id, process_id, |rec| {
+            rec.zuordnungen.retain(|z| {
+                z.status != ZuordnungsStatus::Aktiv || lf_mp_id.is_some_and(|lf| z.lf_mp_id != lf)
+            });
+            // One LFA leaving a tranchierte Marktlokation does not make it
+            // unsupplied — only the last one does.
+            if rec.aktive().next().is_none() {
+                rec.lieferstatus = LieferStatus::Unbeliefert;
+                rec.eog_seit = None;
+            }
+            nb_mp_id.clone_into(&mut rec.nb_mp_id);
+            true
+        })
+        .await;
         Ok(())
     }
 
@@ -342,46 +354,25 @@ impl VersorgungsStatusRepository for InMemoryVersorgungsStatusRepository {
         &self,
         malo_id: &MaloId,
         tenant: &str,
+        lf_mp_id: Option<&str>,
         process_id: Option<uuid::Uuid>,
     ) -> Result<(), MdmError> {
         let key = (malo_id.as_ref().to_owned(), tenant.to_owned());
-        let mut store = self.store.write().await;
-        let Some(entry) = store.get_mut(&key) else {
+        if !self.store.read().await.contains_key(&key) {
             return Ok(());
-        };
-        if entry.lf_mp_id_next.is_none() {
-            return Ok(()); // no pending announcement — no-op
         }
-        entry.lf_mp_id_next = None;
-        entry.lf_next_lieferbeginn = None;
-        entry.last_process_id = process_id;
-        entry.updated_at = time::OffsetDateTime::now_utc();
-        entry.version += 1;
-        let rec = entry.clone();
-        drop(store);
-        self.history
-            .write()
-            .await
-            .push(VersorgungsStatusHistoryRecord {
-                id: rec.version,
-                malo_id: rec.malo_id.clone(),
-                tenant: rec.tenant.clone(),
-                lieferstatus: rec.lieferstatus,
-                lf_mp_id: rec.lf_mp_id.clone(),
-                lf_mp_id_next: rec.lf_mp_id_next.clone(),
-                lf_next_lieferbeginn: rec.lf_next_lieferbeginn,
-                lieferbeginn: rec.lieferbeginn,
-                lieferende: rec.lieferende,
-                msb_mp_id: rec.msb_mp_id.clone(),
-                nb_mp_id: rec.nb_mp_id.clone(),
-                last_process_id: rec.last_process_id,
-                version: rec.version,
-                valid_from: rec.updated_at,
+        self.mutate(malo_id, tenant, "", process_id, |rec| {
+            let before = rec.zuordnungen.len();
+            rec.zuordnungen.retain(|z| {
+                z.status != ZuordnungsStatus::Angekuendigt
+                    || lf_mp_id.is_some_and(|lf| z.lf_mp_id != lf)
             });
+            rec.zuordnungen.len() != before
+        })
+        .await;
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn begin_eog_supply(
         &self,
         malo_id: &MaloId,
@@ -400,54 +391,22 @@ impl VersorgungsStatusRepository for InMemoryVersorgungsStatusRepository {
                 reason: "begin_eog_supply requires Ersatzversorgung or Grundversorgung".into(),
             });
         }
-        let key = (malo_id.as_ref().to_owned(), tenant.to_owned());
-        let mut store = self.store.write().await;
-        let now = time::OffsetDateTime::now_utc();
-        let entry = store.entry(key).or_insert_with(|| VersorgungsStatusRecord {
-            malo_id: malo_id.clone(),
-            tenant: tenant.to_owned(),
-            lieferstatus: eog_status,
-            lf_mp_id: None,
-            lf_mp_id_next: None,
-            lf_next_lieferbeginn: None,
-            lieferbeginn: None,
-            lieferende: None,
-            msb_mp_id: None,
-            nb_mp_id: nb_mp_id.to_owned(),
-            eog_seit: None,
-            last_process_id: process_id,
-            updated_at: now,
-            version: 0,
-        });
-        entry.lieferstatus = eog_status;
-        entry.lf_mp_id = Some(gv_mp_id.to_owned());
-        entry.lieferbeginn = eog_seit;
-        entry.eog_seit = eog_seit;
-        entry.nb_mp_id = nb_mp_id.to_owned();
-        entry.last_process_id = process_id;
-        entry.updated_at = now;
-        entry.version += 1;
-        let rec = entry.clone();
-        drop(store);
-        self.history
-            .write()
-            .await
-            .push(VersorgungsStatusHistoryRecord {
-                id: rec.version,
-                malo_id: rec.malo_id.clone(),
-                tenant: rec.tenant.clone(),
-                lieferstatus: rec.lieferstatus,
-                lf_mp_id: rec.lf_mp_id.clone(),
-                lf_mp_id_next: rec.lf_mp_id_next.clone(),
-                lf_next_lieferbeginn: rec.lf_next_lieferbeginn,
-                lieferbeginn: rec.lieferbeginn,
-                lieferende: rec.lieferende,
-                msb_mp_id: rec.msb_mp_id.clone(),
-                nb_mp_id: rec.nb_mp_id.clone(),
-                last_process_id: rec.last_process_id,
-                version: rec.version,
-                valid_from: now,
+        self.mutate(malo_id, tenant, nb_mp_id, process_id, |rec| {
+            // The E/G becomes the sole supplier of record; every announced
+            // assignment stays, because a pending switch ends the fallback.
+            rec.zuordnungen
+                .retain(|z| z.status != ZuordnungsStatus::Aktiv);
+            rec.zuordnungen.push(LfZuordnung {
+                zuordnungsbeginn: eog_seit,
+                process_id,
+                ..LfZuordnung::ganz(gv_mp_id, ZuordnungsStatus::Aktiv)
             });
+            rec.lieferstatus = eog_status;
+            rec.eog_seit = eog_seit;
+            nb_mp_id.clone_into(&mut rec.nb_mp_id);
+            true
+        })
+        .await;
         Ok(())
     }
 }

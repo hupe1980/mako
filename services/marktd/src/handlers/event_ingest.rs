@@ -23,6 +23,8 @@
 //!
 //! Idempotency: duplicate event IDs return `202 Accepted` without re-processing.
 
+use rust_decimal::Decimal;
+use std::str::FromStr as _;
 use std::sync::Arc;
 
 use crate::pg::{
@@ -558,26 +560,27 @@ pub async fn derive_supply_state(
                 .get("process_date")
                 .and_then(|v| v.as_str())
                 .and_then(parse_civil_date);
+            // The share the Anmeldung registers — `SG8` Tranchengröße
+            // (`9991000002090`). Absent on an untranchierte Marktlokation,
+            // which is the whole of it.
+            let prozent = data
+                .get("prozentsatz")
+                .and_then(|v| v.as_str())
+                .and_then(|s| Decimal::from_str(s).ok())
+                .unwrap_or(Decimal::ONE_HUNDRED);
+            let tranche_id = data.get("tranche_id").and_then(|v| v.as_str());
             transitioned = Vs::announce_lf_next_tx(
                 conn,
                 &malo_id,
                 tenant,
                 lf_mp_id_next,
                 lf_next_lieferbeginn,
+                prozent,
+                tranche_id,
                 &nb_mp_id,
                 process_id,
             )
             .await?;
-            if !transitioned {
-                // A different supplier already holds the announcement. Keeping
-                // it is what lets `mako-pruefung` reject the second Anmeldung
-                // with A06 „Andere Anmeldung in Bearbeitung"; overwriting it
-                // made that check compare the new Anmeldung against itself.
-                warn!(
-                    malo_id = %malo_str, pid, lf_mp_id_next,
-                    "event_ingest: competing Anmeldung — the pending announcement is kept"
-                );
-            }
         }
 
         // L1/N1: patch malo.bilanzierungsmethode + malo.fallgruppe from the
@@ -588,8 +591,23 @@ pub async fn derive_supply_state(
         PgMaloRepository::patch_typenmerkmal_tx(conn, &malo_id, bilanzierungsmethode, fallgruppe)
             .await?;
     } else if is_completed && ANMELDUNG_BESTAETIGT_PIDS.contains(&pid) {
-        // Bestätigung Anmeldung — promote the announced LF to active.
-        transitioned = Vs::confirm_supply_tx(conn, &malo_id, tenant, process_id).await?;
+        // Bestätigung Anmeldung — promote *this* supplier's announcement. The
+        // Marktlokation may carry several (a tranchierte one always does), so
+        // the confirmation names whose it is rather than „the pending one".
+        // The Bestätigung usually names no supplier, and it does not have to:
+        // „the pending announcement" is well defined while there is one. Only a
+        // Marktlokation carrying several — which a tranchierte one does — needs
+        // the payload to say which, and `confirm_supply_tx` declines rather
+        // than pick.
+        let confirmed = data.get("new_supplier").and_then(|v| v.as_str());
+        transitioned = Vs::confirm_supply_tx(conn, &malo_id, tenant, confirmed, process_id).await?;
+        if !transitioned {
+            warn!(
+                malo_id = %malo_str, pid,
+                "event_ingest: Bestätigung matched no single pending announcement — either \
+                 already confirmed, or several are pending and the payload names none"
+            );
+        }
 
         // **Fall b** — the Altlieferant answered the Abmeldeanfrage with its own,
         // *earlier* Lieferendedatum (`E_0624` `A34`). The confirmation stands at
@@ -630,42 +648,69 @@ pub async fn derive_supply_state(
             .get("process_date")
             .and_then(|v| v.as_str())
             .and_then(parse_civil_date);
-        Vs::end_supply_tx(conn, &malo_id, tenant, &nb_mp_id, lieferende, process_id).await?;
+        // `old_supplier` names which assignment ends; absent, every running one
+        // does, which is what an untranchierte Marktlokation's Lieferende means.
+        let old_supplier = data.get("old_supplier").and_then(|v| v.as_str());
+        Vs::end_supply_tx(
+            conn,
+            &malo_id,
+            tenant,
+            old_supplier,
+            &nb_mp_id,
+            lieferende,
+            process_id,
+        )
+        .await?;
         transitioned = true;
 
-        let row: Option<(
-            Option<String>,
-            Option<time::Date>,
-            Option<time::Date>,
-            String,
-        )> = sqlx::query_as(
-            "SELECT lf_mp_id_next, lf_next_lieferbeginn, lieferende, nb_mp_id
-                   FROM versorgungsstatus
-                  WHERE malo_id = $1 AND tenant = $2",
-        )
-        .bind(&malo_id)
-        .bind(tenant)
-        .fetch_optional(&mut *conn)
-        .await
-        .map_err(|e| mako_markt::error::MdmError::Internal(e.to_string()))?;
+        // `still_supplied` is the Tranchen guard: on a tranchierte
+        // Marktlokation one LFA leaving does not leave the Marktlokation
+        // uncovered, and opening a §38 Ersatzversorgung against a
+        // Marktlokation that still has suppliers would be worse than missing
+        // one. `next_beginn` is the **earliest** announced Zuordnungsbeginn,
+        // because the gap ends when the first successor starts.
+        let row: Option<(bool, bool, Option<time::Date>, Option<time::Date>, String)> =
+            sqlx::query_as(
+                r#"SELECT
+                       EXISTS (SELECT 1 FROM lf_zuordnung z
+                               WHERE z.malo_id = v.malo_id AND z.tenant = v.tenant
+                                 AND z.status = 'Aktiv') AS still_supplied,
+                       EXISTS (SELECT 1 FROM lf_zuordnung z
+                               WHERE z.malo_id = v.malo_id AND z.tenant = v.tenant
+                                 AND z.status = 'Angekuendigt') AS has_next,
+                       (SELECT min(z.zuordnungsbeginn) FROM lf_zuordnung z
+                        WHERE z.malo_id = v.malo_id AND z.tenant = v.tenant
+                          AND z.status = 'Angekuendigt') AS next_beginn,
+                       v.lieferende, v.nb_mp_id
+                   FROM versorgungsstatus v
+                   WHERE v.malo_id = $1 AND v.tenant = $2"#,
+            )
+            .bind(&malo_id)
+            .bind(tenant)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| mako_markt::error::MdmError::Internal(e.to_string()))?;
 
         // A supply gap is an uncovered *interval*, not merely "no successor at
         // all": an announced Lieferbeginn later than the day after the Lieferende
         // leaves the MaLo unversorgt in between, and §38 Abs. 1 EnWG attaches to
         // that interval exactly as it does to an open-ended gap.
-        let gap = row.as_ref().and_then(|(next, next_beginn, ende, nb)| {
-            let ende = (*ende)?;
-            let gap_from = ende.next_day()?;
-            match (next, next_beginn) {
-                (None, _) => Some((gap_from, None, nb.clone())),
-                (Some(_), Some(beginn)) if *beginn > gap_from => {
-                    Some((gap_from, Some(*beginn), nb.clone()))
+        let gap = row
+            .as_ref()
+            .filter(|(still_supplied, ..)| !still_supplied)
+            .and_then(|(_, has_next, next_beginn, ende, nb)| {
+                let ende = (*ende)?;
+                let gap_from = ende.next_day()?;
+                match (has_next, next_beginn) {
+                    (false, _) => Some((gap_from, None, nb.clone())),
+                    (true, Some(beginn)) if *beginn > gap_from => {
+                        Some((gap_from, Some(*beginn), nb.clone()))
+                    }
+                    // A successor announced without a date cannot be shown to
+                    // leave a gap; the 55002 confirmation settles it either way.
+                    (true, _) => None,
                 }
-                // A successor announced without a date cannot be shown to leave a
-                // gap; the 55002 confirmation settles it either way.
-                (Some(_), _) => None,
-            }
-        });
+            });
 
         if let Some((gap_from, gap_until, row_nb_mp_id)) = gap {
             events.push(gap_detected(
@@ -771,7 +816,11 @@ pub async fn derive_supply_state(
         // Ablehnung Anmeldung: reset the announced future Lieferant so no
         // consumer acts on a switch that will not happen — and so the next
         // supplier's Anmeldung is not rejected against a stale announcement.
-        transitioned = Vs::clear_lf_next_tx(conn, &malo_id, tenant, process_id).await?;
+        // Only the refused supplier's own announcement is dropped: a competing
+        // Anmeldung the NB has not ruled on yet must survive its rival's
+        // Ablehnung.
+        let refused = data.get("new_supplier").and_then(|v| v.as_str());
+        transitioned = Vs::clear_lf_next_tx(conn, &malo_id, tenant, refused, process_id).await?;
     }
 
     if transitioned {
@@ -806,21 +855,33 @@ async fn versorgung_changed(
     sparte: &str,
     pid: u32,
 ) -> Result<MarktEvent, mako_markt::error::MdmError> {
+    // The assignment list travels whole: a subscriber cannot reconstruct a
+    // tranchierte Marktlokation from a scalar „the Lieferant", and the two
+    // derived fields below are absent exactly when it is one.
     #[allow(clippy::type_complexity)]
     let row: Option<(
         String,
-        Option<String>,
-        Option<String>,
-        Option<time::Date>,
-        Option<time::Date>,
+        serde_json::Value,
         Option<time::Date>,
         Option<time::Date>,
         i64,
     )> = sqlx::query_as(
-        "SELECT lieferstatus, lf_mp_id, lf_mp_id_next, lf_next_lieferbeginn,
-                lieferbeginn, lieferende, eog_seit, version
-           FROM versorgungsstatus
-          WHERE malo_id = $1 AND tenant = $2",
+        "SELECT v.lieferstatus,
+                COALESCE((
+                    SELECT jsonb_agg(jsonb_build_object(
+                               'lf_mp_id',         z.lf_mp_id,
+                               'prozent',          z.prozent::text,
+                               'tranche_id',       z.tranche_id,
+                               'status',           z.status,
+                               'zuordnungsbeginn', to_char(z.zuordnungsbeginn, 'YYYY-MM-DD'),
+                               'zuordnungsende',   to_char(z.zuordnungsende, 'YYYY-MM-DD')
+                           ) ORDER BY z.status, z.lf_mp_id)
+                    FROM lf_zuordnung z
+                    WHERE z.malo_id = v.malo_id AND z.tenant = v.tenant
+                ), '[]'::jsonb) AS zuordnungen,
+                v.lieferende, v.eog_seit, v.version
+           FROM versorgungsstatus v
+          WHERE v.malo_id = $1 AND v.tenant = $2",
     )
     .bind(malo_id)
     .bind(tenant)
@@ -830,25 +891,37 @@ async fn versorgung_changed(
 
     let data = row.map_or_else(
         || serde_json::json!({ "malo_id": malo_str, "sparte": sparte, "pid": pid }),
-        |(
-            lieferstatus,
-            lf_mp_id,
-            lf_mp_id_next,
-            lf_next_lieferbeginn,
-            lieferbeginn,
-            lieferende,
-            eog_seit,
-            version,
-        )| {
+        |(lieferstatus, zuordnungen, lieferende, eog_seit, version)| {
+            // The one-supplier shorthand, for subscribers that only ever see
+            // untranchierte Marktlokationen. `null` when several hold it —
+            // there is no single supplier, and naming one arbitrarily would be
+            // worse than naming none.
+            let only = |status: &str| {
+                let mut it = zuordnungen
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|z| z.get("status").and_then(|s| s.as_str()) == Some(status));
+                let first = it.next()?;
+                it.next().is_none().then_some(first)
+            };
+            let aktiv = only("Aktiv");
+            let angekuendigt = only("Angekuendigt");
+            let field = |z: Option<&serde_json::Value>, k: &str| {
+                z.and_then(|z| z.get(k))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null)
+            };
             serde_json::json!({
                 "malo_id":              malo_str,
                 "sparte":               sparte,
                 "pid":                  pid,
                 "lieferstatus":         lieferstatus,
-                "lf_mp_id":             lf_mp_id,
-                "lf_mp_id_next":        lf_mp_id_next,
-                "lf_next_lieferbeginn": lf_next_lieferbeginn.map(|d| d.to_string()),
-                "lieferbeginn":         lieferbeginn.map(|d| d.to_string()),
+                "lf_mp_id":             field(aktiv, "lf_mp_id"),
+                "lf_mp_id_next":        field(angekuendigt, "lf_mp_id"),
+                "lf_next_lieferbeginn": field(angekuendigt, "zuordnungsbeginn"),
+                "lieferbeginn":         field(aktiv, "zuordnungsbeginn"),
+                "zuordnungen":          zuordnungen,
                 "lieferende":           lieferende.map(|d| d.to_string()),
                 "eog_seit":             eog_seit.map(|d| d.to_string()),
                 "version":              version,

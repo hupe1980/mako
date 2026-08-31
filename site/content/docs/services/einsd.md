@@ -666,7 +666,7 @@ POST /api/v1/anlagen/{tr_id}/settle/2026/4
 ```
 
 A plant in its fourth consecutive Ausfallvergütung month is still settled — the statute
-does not stop the payment — but the receipt now carries the Pflichtzahlung alongside it.
+does not stop the payment — and the receipt carries the Pflichtzahlung alongside it.
 
 ### §51 Abs. 3 — the reporting duty
 

@@ -116,14 +116,10 @@ fn message_type_of(pid: u32) -> Option<MessageType> {
 
 #[tokio::test]
 async fn every_routed_pid_has_ahb_rules() {
-    let modules: Vec<Box<dyn EngineModule>> = vec![
-        Box::new(mako_gpke::GpkeModule),
-        Box::new(mako_wim::WimModule),
-        Box::new(mako_geli_gas::GeliGasModule),
-        Box::new(mako_gabi_gas::GaBiGasModule),
-        Box::new(mako_mabis::MabisModule),
-        Box::new(mako_redispatch::RedispatchModule),
-    ];
+    // The one production list — see `makod::startup::production_modules`. Never
+    // restate the stack here: a guard with its own copy silently stops seeing a
+    // module the daemon registers.
+    let modules: Vec<Box<dyn EngineModule>> = makod::startup::production_modules();
     let roles = DeploymentRoles::all();
     let platform = Platform::with_all_profiles();
 
@@ -186,7 +182,7 @@ async fn every_routed_pid_has_ahb_rules() {
     // `site/templates/index.html` states this next to the routed count. The two
     // describe the same catalogue from different sides, so a PID gaining rules
     // moves the page — update it to the number this reports.
-    const LANDING_PAGE_PIDS_WITH_RULES: usize = 349;
+    const LANDING_PAGE_PIDS_WITH_RULES: usize = 358;
     assert_eq!(
         with_rules, LANDING_PAGE_PIDS_WITH_RULES,
         "site/templates/index.html says {LANDING_PAGE_PIDS_WITH_RULES} routed PIDs carry \

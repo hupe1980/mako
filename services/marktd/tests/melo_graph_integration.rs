@@ -429,6 +429,7 @@ async fn patch_stammdaten_updates_typed_columns_only() {
                 bilanzierungsmethode: Some("RLM".to_owned()),
                 regelzone: Some("10YDE-EON------1".to_owned()),
                 fernsteuerbar: Some(true),
+                abwicklungsmodell: Some("MODELL_2".to_owned()),
                 ..Default::default()
             },
         )
@@ -445,8 +446,27 @@ async fn patch_stammdaten_updates_typed_columns_only() {
         Some(true),
         "§14a Fernsteuerbarkeit applied"
     );
+    assert_eq!(
+        after.abwicklungsmodell.as_deref(),
+        Some("MODELL_2"),
+        "NZR-EMob Abwicklungsmodell applied — the MaLo is balanced in the LPB's \
+         Bilanzierungsgebiet, not by the VNB"
+    );
     // gasqualitaet was not in the patch → unchanged (COALESCE).
     assert_eq!(after.gasqualitaet, before.gasqualitaet);
+    // The CHECK rejects anything outside the BO4E enum, so a typo cannot land.
+    assert!(
+        repo.patch_stammdaten(
+            &m,
+            &MaloStammdatenPatch {
+                abwicklungsmodell: Some("MODELL_3".to_owned()),
+                ..Default::default()
+            },
+        )
+        .await
+        .is_err(),
+        "an Abwicklungsmodell outside the BO4E enum must be refused by the CHECK"
+    );
     // The optimistic version is NOT bumped by a Stammdatenänderung.
     assert_eq!(after.version, before.version, "version untouched");
 }

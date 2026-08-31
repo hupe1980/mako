@@ -18,7 +18,7 @@
 //! content carries the PID), falling back to a synthetic template for reply
 //! families that have no fixture at all.
 //!
-//! Reach today: **318 of 432 registrations**. Every registration it cannot
+//! Reach today: **351 registrations**. Every registration it cannot
 //! exercise is a Prüfidentifikator with no AHB profile entry — the
 //! `KNOWN_PROFILE_GAPS` set from `e2e_ahb_rule_coverage_guard` — plus the
 //! send-only entries below. That is one root cause with three downstream
@@ -346,14 +346,10 @@ async fn make_dispatcher() -> EdifactIngestDispatcher {
 
 /// Every registered `(pid, workflow)` pair, across every domain module.
 fn registered_pairs() -> Vec<(u32, String)> {
-    let modules: Vec<Box<dyn EngineModule>> = vec![
-        Box::new(mako_gpke::GpkeModule),
-        Box::new(mako_wim::WimModule),
-        Box::new(mako_geli_gas::GeliGasModule),
-        Box::new(mako_gabi_gas::GaBiGasModule),
-        Box::new(mako_mabis::MabisModule),
-        Box::new(mako_redispatch::RedispatchModule),
-    ];
+    // The one production list — see `makod::startup::production_modules`. Never
+    // restate the stack here: a guard with its own copy silently stops seeing a
+    // module the daemon registers.
+    let modules: Vec<Box<dyn EngineModule>> = makod::startup::production_modules();
     let roles = DeploymentRoles::all();
 
     let mut pairs: Vec<(u32, String)> = Vec::new();
@@ -413,10 +409,10 @@ async fn every_registered_pid_reaches_a_dispatch_arm() {
         }
     }
 
-    // Ratchet: 318 registrations are exercised today. A drop means fixtures
+    // Ratchet: 351 registrations are exercised today. A drop means fixtures
     // moved or the lookup broke, which would hollow the guard out silently.
     assert!(
-        exercised >= 310,
+        exercised >= 351,
         "only {exercised} PIDs were exercised (expected >= 310) — fixture \
          lookup is probably broken, and the coverage assertion below would \
          then be verifying almost nothing"

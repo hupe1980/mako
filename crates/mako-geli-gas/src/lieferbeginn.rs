@@ -946,7 +946,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     "process_date":  data.process_date,
                     "variant":       format!("{:?}", data.variant),
                     // `SG4 STS+E01` — Muss on every Antwortnachricht. The Gas
-                    // Codelisten carry no DE 1131, so there is no `antwort_ebd`.
+                    // Codelisten carry no DE 1131, so there is no `antwort_codeliste`.
                     "antwort_code":  antwort_code,
                 });
                 if let Some(ref r) = bemerkung {

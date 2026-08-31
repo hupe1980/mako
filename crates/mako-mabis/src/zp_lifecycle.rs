@@ -107,6 +107,22 @@
 //!                                                  └─ WeiterleitungGesendet → Weitergeleitet (terminal)
 //! ```
 
+//! # On the wire
+//!
+//! `BGM+Z07` „Aktivierung/Deaktivierung von MaBiS-ZP" — not the `E01` an
+//! Anmeldung uses, because a Zählpunkt is activated rather than angemeldet.
+//! The object is a **MaBiS-Zählpunkt** in `SG5 LOC+Z15` and no Marktlokation;
+//! the date is `SG4 DTM+158` Bilanzierungsbeginn on an Aktivierung and
+//! `DTM+159` Bilanzierungsende on a Deaktivierung, never a Vertragsdatum
+//! (UTILMD AHB Strom 2.2 Kap. 13.3).
+//!
+//! The 55064 answer carries `SG4 STS+E01` DE 1131 — which of the twelve
+//! Entscheidungsbäume decided it — but **not** DE 9013. Only `E_0010` and
+//! `E_0020` have walks in `mako_pruefung::mabis::zp`; the other ten publish
+//! codes this workspace has not catalogued, and a fabricated Prüfschritt on a
+//! message that settles a Bilanzkreisabrechnung is worse than an absent one.
+//!
+
 use mako_engine::{
     error::WorkflowError,
     outbox::PendingOutbox,
@@ -170,6 +186,19 @@ pub enum ZpSerie {
     MonatlicheAauezBkvLf,
     /// Monatliche AAÜZ, forwarded to the BKV of the anfordernder NB (55209–55214).
     MonatlicheAauezBkvAnfNb,
+    /// Zuordnung des Zählpunkts der **Netzgangzeitreihe** zur Netzzeitreihe
+    /// (55235/55236/55237), verantwortlicher NB → benachbarter NB, informiert
+    /// an den ÜNB.
+    ///
+    /// The NZR-EMob leg: a Modell-2 Übergabestelle's Netzgangzeitreihe has to
+    /// be assigned to the receiving NB's Netzzeitreihe before any value flows
+    /// (BDEW AWH Ergänzung MaBiS Netzgangzeitreihe Kap. 1.8.2). It is **MaBiS
+    /// rather than Modell 2** — UTILMD AHB Strom 2.2 Kap. 13.16, answered from
+    /// `E_0102`/`E_0103` — which is why it lives here and not in `mako-emob`.
+    ///
+    /// Unlike the 55062/55063 families this one has its own Anfrage codes, so
+    /// [`Self::from_wire`] never returns it: there is nothing to disambiguate.
+    NetzgangzeitreiheNzr,
 }
 
 /// Last day the tägliche AAÜZ process exists — BK6-23-241 Tenorziffer 5 repeals
@@ -201,6 +230,7 @@ impl ZpSerie {
             Self::LfAaszr => "LF-AASZR",
             Self::MonatlicheAauezBkvLf => "monatliche AAÜZ (BKV des LF)",
             Self::MonatlicheAauezBkvAnfNb => "monatliche AAÜZ (BKV des anfordernden NB)",
+            Self::NetzgangzeitreiheNzr => "Zuordnung ZP der NGZ zur NZR",
         }
     }
 
@@ -562,6 +592,33 @@ pub const ZP_FAMILIEN: &[ZpFamilie] = &[
         antwort_ebd: Some("E_0079"),
         weiterleitung: Some(55214),
     },
+    // ── NZR-EMob: Zuordnung des ZP der NGZ zur NZR (AHB Strom 2.2 Kap. 13.16) ─
+    //
+    // One Antwort code for both directions — 55237 answers the Zuordnung out of
+    // `E_0102` and the Beendigung out of `E_0103`, which is exactly why the
+    // Antwort PID and the EBD are separate columns in this table.
+    //
+    // The Weiterleitung is the **same code re-addressed to the ÜNB**: the AHB
+    // gives 55235/55236 two recipients („NB an NB" and „NB an ÜNB") while 55237
+    // is „NB an NB" only, and the AWH sequences the ÜNB copy *after* the answer
+    // (Lfd 19150 follows 19130). `SendWeiterleitung` requires `Bestaetigt`, so
+    // that ordering is the state machine's rather than a convention.
+    ZpFamilie {
+        serie: ZpSerie::NetzgangzeitreiheNzr,
+        vorgang: ZpVorgang::Aktivierung,
+        anfrage: 55235,
+        antwort: Some(55237),
+        antwort_ebd: Some("E_0102"),
+        weiterleitung: Some(55235),
+    },
+    ZpFamilie {
+        serie: ZpSerie::NetzgangzeitreiheNzr,
+        vorgang: ZpVorgang::Deaktivierung,
+        anfrage: 55236,
+        antwort: Some(55237),
+        antwort_ebd: Some("E_0103"),
+        weiterleitung: Some(55236),
+    },
 ];
 
 /// Look up the family for one series and Vorgang.
@@ -812,6 +869,13 @@ pub enum ZpLifecycleCommand {
     /// Send the Antwort for a received Anfrage.
     SendAntwort {
         /// `true` to confirm, `false` to reject.
+        ///
+        /// A cluster, not a code. `SG4 STS+E01` DE 9013 stays unstated until
+        /// the twelve Entscheidungsbäume a 55064 is answered out of are
+        /// catalogued in `mako_pruefung`: only `E_0010` and `E_0020` have
+        /// walks today, and inventing a code for the other ten would put a
+        /// fabricated Prüfschritt on a message that settles a
+        /// Bilanzkreisabrechnung.
         bestaetigt: bool,
         /// Rejection reason — required when `bestaetigt` is `false`.
         grund: Option<String>,
@@ -981,7 +1045,8 @@ impl Workflow for MabisZpLifecycleWorkflow {
                     ))
                 })?;
 
-                let (Some(antwort), Some(ebd)) = (familie.antwort, familie.antwort_ebd) else {
+                let (Some(antwort_pid_code), Some(ebd)) = (familie.antwort, familie.antwort_ebd)
+                else {
                     return Err(WorkflowError::rejected(format!(
                         "{} (Anfrage {}) definiert keine Antwort",
                         familie.serie.label(),
@@ -995,24 +1060,38 @@ impl Workflow for MabisZpLifecycleWorkflow {
                     ));
                 }
 
-                let antwort_pid = Pruefidentifikator::new(antwort).map_err(|e| {
-                    WorkflowError::rejected(format!("invalid Antwort PID {antwort}: {e}"))
+                let antwort_pid = Pruefidentifikator::new(antwort_pid_code).map_err(|e| {
+                    WorkflowError::rejected(format!("invalid Antwort PID {antwort_pid_code}: {e}"))
                 })?;
 
-                let outbox = PendingOutbox::new(
-                    "UTILMD",
-                    data.sender.as_str(),
-                    serde_json::json!({
-                        "pid": antwort,
-                        // The Antwortcode must be read against this tree and no
-                        // other — 55064 is answered out of twelve of them.
-                        "ebd": ebd,
-                        "mabis_zp_id": data.mabis_zp_id,
-                        "process_date": data.document_date,
-                        "bestaetigt": bestaetigt,
-                        "grund": grund,
-                    }),
-                );
+                // The keys are the UTILMD renderer's. A MaBiS Vorgang names a
+                // **MaBiS-Zählpunkt** and no Marktlokation, so the ZP is the
+                // primary `SG5 LOC+Z15`; the answer travels back the way the
+                // Anfrage came, so the parties swap.
+                let mut payload = serde_json::json!({
+                    "pid": antwort_pid_code,
+                    "sender": data.receiver.as_str(),
+                    "receiver": data.sender.as_str(),
+                    "mabis_zaehlpunkt": data.mabis_zp_id,
+                    // `SG4 STS+E01` DE 1131 — the tree this answer belongs to.
+                    // 55064 is answered out of twelve of them, so the Antwort
+                    // is unreadable without it. DE 9013 is not stated: see
+                    // `SendAntwort`.
+                    "antwort_codeliste": ebd,
+                });
+                // `SG4 DTM+158` on an answer to an Aktivierung, `DTM+159` on
+                // one to a Deaktivierung (UTILMD AHB Strom 2.2 Kap. 13.3,
+                // Bedingungen `[30]`/`[34]`). The lifecycle has no
+                // Vertragsdatum: a Zählpunkt has no contract.
+                let datum_key = match data.vorgang {
+                    ZpVorgang::Aktivierung => "bilanzierungsbeginn",
+                    ZpVorgang::Deaktivierung => "bilanzierungsende",
+                };
+                payload[datum_key] = serde_json::Value::String(data.document_date.clone());
+                if let Some(ref text) = grund {
+                    payload["bemerkung"] = serde_json::Value::String(text.clone());
+                }
+                let outbox = PendingOutbox::new("UTILMD", data.sender.as_str(), payload);
 
                 Ok(WorkflowOutput {
                     events: vec![ZpLifecycleEvent::AntwortGesendet {
@@ -1061,8 +1140,10 @@ impl Workflow for MabisZpLifecycleWorkflow {
                     empfaenger.as_str(),
                     serde_json::json!({
                         "pid": weiterleitung,
-                        "mabis_zp_id": data.mabis_zp_id,
-                        "process_date": data.document_date,
+                        "sender": data.receiver.as_str(),
+                        "receiver": empfaenger.as_str(),
+                        "mabis_zaehlpunkt": data.mabis_zp_id,
+                        "bilanzierungsbeginn": data.document_date,
                     }),
                 );
 
@@ -1214,8 +1295,45 @@ mod tests {
         let expected: Vec<u32> = vec![
             55062, 55063, 55064, 55071, 55072, 55197, 55198, 55199, 55200, 55203, 55204, 55205,
             55206, 55207, 55208, 55209, 55210, 55211, 55212, 55213, 55214,
+            // NZR-EMob Zuordnung des ZP der NGZ zur NZR (AHB Kap. 13.16).
+            55235, 55236, 55237,
         ];
         assert_eq!(pids, expected);
+    }
+
+    /// The NZR-EMob Zuordnung des ZP der NGZ zur NZR — its own Anfrage codes,
+    /// one shared Antwort code, two different trees.
+    #[test]
+    fn the_ngz_zuordnung_answers_one_pid_out_of_two_trees() {
+        let auf = familie_for(ZpSerie::NetzgangzeitreiheNzr, ZpVorgang::Aktivierung)
+            .expect("Zuordnung is a family");
+        let ab = familie_for(ZpSerie::NetzgangzeitreiheNzr, ZpVorgang::Deaktivierung)
+            .expect("Beendigung is a family");
+
+        assert_eq!((auf.anfrage, ab.anfrage), (55235, 55236));
+
+        // One Antwort code for both directions. Reading the tree off the
+        // Antwort PID would therefore be impossible — which is exactly why the
+        // EBD is its own column and the workflow never derives it.
+        assert_eq!(auf.antwort, ab.antwort, "55237 answers both");
+        assert_eq!(auf.antwort, Some(55237));
+        assert_eq!(auf.antwort_ebd, Some("E_0102"));
+        assert_eq!(ab.antwort_ebd, Some("E_0103"));
+        assert_ne!(auf.antwort_ebd, ab.antwort_ebd);
+
+        // The ÜNB copy is the same code re-addressed, sent only once the
+        // neighbouring NB has confirmed (AHB Kap. 13.16 gives 55235/55236 two
+        // recipients and 55237 one).
+        assert_eq!(auf.weiterleitung, Some(55235));
+        assert_eq!(ab.weiterleitung, Some(55236));
+
+        // It has its own Anfrage codes, so it is never resolved off the
+        // 55062/55063 SG10 discriminator.
+        assert!(!serien_fuer_pid(55062).contains(&ZpSerie::NetzgangzeitreiheNzr));
+        assert_eq!(serien_fuer_pid(55235), vec![ZpSerie::NetzgangzeitreiheNzr]);
+
+        // MaBiS, not Modell 2 — it outlives no Festlegung end date.
+        assert_eq!(ZpSerie::NetzgangzeitreiheNzr.endet_am(), None);
     }
 
     #[test]
@@ -1313,7 +1431,7 @@ mod tests {
         )
         .expect("answered");
         assert_eq!(antwort.outbox[0].payload["pid"], 55064);
-        assert_eq!(antwort.outbox[0].payload["ebd"], "E_0028");
+        assert_eq!(antwort.outbox[0].payload["antwort_codeliste"], "E_0028");
     }
 
     #[test]
@@ -1336,7 +1454,7 @@ mod tests {
         .expect("pruefung");
         assert_eq!(antwort.outbox.len(), 1);
         assert_eq!(antwort.outbox[0].payload["pid"], 55204);
-        assert_eq!(antwort.outbox[0].payload["ebd"], "E_0071");
+        assert_eq!(antwort.outbox[0].payload["antwort_codeliste"], "E_0071");
         assert_eq!(
             antwort.outbox[0].recipient.as_ref(),
             "9900123456789",

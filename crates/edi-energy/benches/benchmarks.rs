@@ -332,15 +332,44 @@ fn bench_registry(c: &mut Criterion) {
 
 // ── Validate on specific date (avoids syscall) ────────────────────────────────
 
+// ── Reference dates for `validate_on_date` ───────────────────────────────────
+
+/// The first day the given release is in force, read from the registry.
+///
+/// **Derived, never pinned.** `validate_on_date` resolves the release the
+/// fixture's `UNH` declares and refuses a date outside that release's validity
+/// window (`ProfileNotYetActive` / `ProfileExpired`), so a literal date stops
+/// working the day the profile's window moves — and every annual BDEW release
+/// moves one. Both literals this replaced were already outside their fixtures'
+/// windows: the shared `2026-01-15` fell in the MSCONS coverage gap
+/// (2025-10-01 … 2026-03-31, which `validate-profiles` reports), and the Gas
+/// fixture's `2025-10-01` predated `G1.1` by half a year.
+///
+/// `valid_from` is inside the window by definition, which is what makes this
+/// self-maintaining: a fixture bumped to next year's release benchmarks against
+/// next year's date with no edit here.
+#[cfg(any(feature = "utilmd", feature = "mscons"))]
+fn in_force_date(message_type: edi_energy::MessageType, release: &str) -> time::Date {
+    edi_energy::ReleaseRegistry::global()
+        .profile(message_type, &Release::new(release))
+        .expect("the fixture's declared release is a registered profile")
+        .valid_from()
+        .expect("a registered profile states the day it takes effect")
+}
+
 /// Measures `validate_on_date()` which avoids the `now_utc()` syscall.
 /// Comparing this against `validate()` shows the cost of the date lookup.
+///
+/// Each fixture is validated on a date its own declared release is in force on
+/// — see [`in_force_date`]. The two messages therefore no longer share one
+/// literal, because `S2.1` and MSCONS `2.4c` have no day in common with every
+/// other release a fixture here declares.
 fn bench_validate_on_date(c: &mut Criterion) {
-    use time::macros::date;
-    let date = date!(2026 - 01 - 15);
     let mut group = c.benchmark_group("validate_on_date");
 
     #[cfg(feature = "utilmd")]
     {
+        let date = in_force_date(edi_energy::MessageType::Utilmd, "S2.1");
         let msg = Platform::with_all_profiles().parse(UTILMD_MINIMAL).unwrap();
         group.bench_function("utilmd", |b| {
             b.iter(|| black_box(&msg).validate_on_date(black_box(date)).unwrap())
@@ -349,6 +378,7 @@ fn bench_validate_on_date(c: &mut Criterion) {
 
     #[cfg(feature = "mscons")]
     {
+        let date = in_force_date(edi_energy::MessageType::Mscons, "2.4c");
         let msg = Platform::with_all_profiles().parse(MSCONS_MINIMAL).unwrap();
         group.bench_function("mscons", |b| {
             b.iter(|| black_box(&msg).validate_on_date(black_box(date)).unwrap())
@@ -515,13 +545,12 @@ fn bench_validate_multi_pid(c: &mut Criterion) {
 /// production-representative messages that include all mandatory AHB segments
 /// and have been verified against the published profile rules.
 fn bench_validate_fixture_file(c: &mut Criterion) {
-    use time::macros::date;
     let mut group = c.benchmark_group("validate_fixture_file");
 
     #[cfg(feature = "utilmd")]
     {
-        // Strom fixture (S2.2, FV2026-10-01).
-        let strom_date = date!(2026 - 10 - 01);
+        // Strom fixture — `UTILMD_MINIMAL` declares S2.1 (FV2025-10-01).
+        let strom_date = in_force_date(edi_energy::MessageType::Utilmd, "S2.1");
         let strom_msg = Platform::with_all_profiles().parse(UTILMD_MINIMAL).unwrap();
         group.bench_function("utilmd_strom_55001", |b| {
             b.iter(|| {
@@ -531,8 +560,9 @@ fn bench_validate_fixture_file(c: &mut Criterion) {
             })
         });
 
-        // Gas fixture (G1.1, FV2025-10-01) — uses the real test fixture file.
-        let gas_date = date!(2025 - 10 - 01);
+        // Gas fixture — `beispiel_44001_lieferbeginn_gas.edi` declares G1.1
+        // (FV2026-04-01), not the FV2025-10-01 this comment used to claim.
+        let gas_date = in_force_date(edi_energy::MessageType::Utilmd, "G1.1");
         let gas_msg = Platform::with_all_profiles()
             .parse(UTILMD_44001_GAS_FIXTURE)
             .unwrap();

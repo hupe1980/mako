@@ -402,6 +402,112 @@ async fn a_closed_neuanlage_case_must_state_its_antwortcode() {
 
 /// The Meldepflicht facts survive the wait for the LFA.
 ///
+/// A Geschäftsvorfall 3 asks **every** Tranchen-LFA, and `E_0623` Prüfschritte
+/// 510/520 count over all their answers — so the waiting row must not resolve on
+/// the first one to arrive. It resolves when the last outstanding LFA answers,
+/// or when the 09:00 Frist lapses and the rest are silence.
+#[tokio::test]
+async fn a_tranchierte_anmeldung_waits_for_every_lfa() {
+    let (pool, _pg) = pg_pool().await;
+    let repo = processd::pg::abmeldeanfrage::PgAbmeldeanfrageRepository::new(pool);
+    let tenant = "9900357000004";
+    let process_id = Uuid::new_v4();
+    let lfa = ["9900111000002", "9900111000003", "9900111000004"];
+
+    let rec = processd::pg::abmeldeanfrage::AbmeldeanfrageRecord {
+        antworten: serde_json::json!({}),
+        anmeldung_process_id: process_id,
+        malo_id: "51238696781".to_owned(),
+        lfn_mp_id: "9900555000005".to_owned(),
+        lfa_mp_ids: lfa.iter().map(|s| (*s).to_owned()).collect(),
+        pid: 55077,
+        anfrage: serde_json::json!({ "pid": 55077 }),
+        meldung: serde_json::json!({}),
+        received_at: time::OffsetDateTime::now_utc(),
+        tenant: tenant.to_owned(),
+    };
+    repo.record(&rec).await.expect("record");
+
+    let antwort = |code: &str| serde_json::json!({ "antwortcode": code, "zustimmung": true });
+
+    // The first two leave the row waiting: two thirds of the Marktlokation is
+    // not the Marktlokation.
+    for lf in &lfa[..2] {
+        assert!(
+            repo.record_antwort(process_id, tenant, lf, &antwort("A40"), false)
+                .await
+                .expect("record answer")
+                .is_none(),
+            "{lf} answered, but others are still outstanding"
+        );
+    }
+
+    // The last one resolves it, and every answer is there to count.
+    let resolved = repo
+        .record_antwort(process_id, tenant, lfa[2], &antwort("A40"), false)
+        .await
+        .expect("record last answer")
+        .expect("the last answer resolves the row");
+    for lf in &lfa {
+        assert_eq!(
+            resolved.antworten[*lf]["antwortcode"], "A40",
+            "every LFA's answer is carried into the decision"
+        );
+    }
+
+    // And it stays resolved: a redelivered answer must not decide twice.
+    assert!(
+        repo.record_antwort(process_id, tenant, lfa[0], &antwort("A40"), false)
+            .await
+            .expect("redelivery")
+            .is_none()
+    );
+}
+
+/// A lapsed 09:00 Frist resolves the row whatever is still outstanding: the LFA
+/// that did not answer answered with silence, which GPKE Teil 2 § 2.1.2 makes a
+/// Zustimmung — „Verstreicht die Frist, ohne dass eine Antwort beim NB eingeht,
+/// gilt dies als Bestätigung nach Fall a)".
+#[tokio::test]
+async fn a_lapsed_frist_resolves_a_tranchierte_anmeldung_at_once() {
+    let (pool, _pg) = pg_pool().await;
+    let repo = processd::pg::abmeldeanfrage::PgAbmeldeanfrageRepository::new(pool);
+    let tenant = "9900357000004";
+    let process_id = Uuid::new_v4();
+
+    repo.record(&processd::pg::abmeldeanfrage::AbmeldeanfrageRecord {
+        antworten: serde_json::json!({}),
+        anmeldung_process_id: process_id,
+        malo_id: "51238696781".to_owned(),
+        lfn_mp_id: "9900555000005".to_owned(),
+        lfa_mp_ids: vec!["9900111000002".to_owned(), "9900111000003".to_owned()],
+        pid: 55077,
+        anfrage: serde_json::json!({ "pid": 55077 }),
+        meldung: serde_json::json!({}),
+        received_at: time::OffsetDateTime::now_utc(),
+        tenant: tenant.to_owned(),
+    })
+    .await
+    .expect("record");
+
+    // One of the two answered; the Frist lapses on the other.
+    let resolved = repo
+        .record_antwort(
+            process_id,
+            tenant,
+            "9900111000002",
+            &serde_json::json!({ "antwortcode": null }),
+            true,
+        )
+        .await
+        .expect("lapse")
+        .expect("a lapsed Frist resolves the row even with an LFA outstanding");
+    assert!(
+        resolved.antworten.get("9900111000003").is_none(),
+        "the silent LFA carries no entry — the tree reads that as a Zustimmung"
+    );
+}
+
 /// Phase one writes the Anmeldung's facts and phase two runs hours later, when
 /// the LFA has answered or its 09:00 window has lapsed. The Beendigung der
 /// Zuordnung (55037 / 44037) states the **Altlieferant** and the
@@ -424,6 +530,7 @@ async fn a_waiting_anmeldung_carries_its_meldepflicht_facts() {
         "altlieferant": "9900111000002",
     });
     let rec = processd::pg::abmeldeanfrage::AbmeldeanfrageRecord {
+        antworten: serde_json::json!({}),
         anmeldung_process_id: process_id,
         malo_id: "51238696781".to_owned(),
         lfn_mp_id: "9900555000005".to_owned(),

@@ -447,9 +447,7 @@ impl MdmdMcpHandler {
             (
                 String,               // malo_id
                 String,               // lieferstatus
-                Option<String>,       // lf_mp_id
-                Option<String>,       // lf_mp_id_next
-                Option<time::Date>,   // lieferbeginn
+                serde_json::Value,    // zuordnungen
                 Option<time::Date>,   // lieferende
                 Option<String>,       // msb_mp_id
                 String,               // nb_mp_id
@@ -457,11 +455,26 @@ impl MdmdMcpHandler {
                 time::OffsetDateTime, // updated_at
             ),
         >(
-            r#"SELECT malo_id, lieferstatus, lf_mp_id, lf_mp_id_next,
-                      lieferbeginn, lieferende, msb_mp_id, nb_mp_id,
-                      version, updated_at
-               FROM versorgungsstatus
-               WHERE tenant = $1 AND malo_id = $2"#,
+            // Who supplies the Marktlokation is the `lf_zuordnung` list — a
+            // tranchierte one is held by several LFA at once — so it comes back
+            // whole.
+            r#"SELECT v.malo_id, v.lieferstatus,
+                      COALESCE((
+                          SELECT jsonb_agg(jsonb_build_object(
+                                     'lf_mp_id',         z.lf_mp_id,
+                                     'prozent',          z.prozent::text,
+                                     'tranche_id',       z.tranche_id,
+                                     'status',           z.status,
+                                     'zuordnungsbeginn', to_char(z.zuordnungsbeginn, 'YYYY-MM-DD'),
+                                     'zuordnungsende',   to_char(z.zuordnungsende, 'YYYY-MM-DD')
+                                 ) ORDER BY z.status, z.lf_mp_id)
+                          FROM lf_zuordnung z
+                          WHERE z.malo_id = v.malo_id AND z.tenant = v.tenant
+                      ), '[]'::jsonb) AS zuordnungen,
+                      v.lieferende, v.msb_mp_id, v.nb_mp_id,
+                      v.version, v.updated_at
+               FROM versorgungsstatus v
+               WHERE v.tenant = $1 AND v.malo_id = $2"#,
         )
         .bind(&self.state.tenant)
         .bind(&p.malo_id)
@@ -473,9 +486,7 @@ impl MdmdMcpHandler {
             Some((
                 malo_id,
                 lieferstatus,
-                lf_mp_id,
-                lf_mp_id_next,
-                lieferbeginn,
+                zuordnungen,
                 lieferende,
                 msb_mp_id,
                 nb_mp_id,
@@ -484,9 +495,7 @@ impl MdmdMcpHandler {
             )) => ContentBlock::json(serde_json::json!({
                 "malo_id": malo_id,
                 "lieferstatus": lieferstatus,
-                "lf_mp_id": lf_mp_id,
-                "lf_mp_id_next": lf_mp_id_next,
-                "lieferbeginn": lieferbeginn.map(|d| d.to_string()),
+                "zuordnungen": zuordnungen,
                 "lieferende": lieferende.map(|d| d.to_string()),
                 "msb_mp_id": msb_mp_id,
                 "nb_mp_id": nb_mp_id,
@@ -864,8 +873,7 @@ Use after a tariff change to verify the new PRICAT was dispatched to all LF coun
     ) -> Result<CallToolResult, McpError> {
         let limit = p.limit.unwrap_or(20).clamp(1, 100);
         let rows = sqlx::query(
-            r"SELECT id, lieferstatus, lf_mp_id, lf_mp_id_next,
-                     lf_next_lieferbeginn, lieferbeginn, lieferende,
+            r"SELECT id, lieferstatus, zuordnungen, lieferende,
                      msb_mp_id, nb_mp_id, valid_from
               FROM versorgungsstatus_history
               WHERE tenant = $1 AND malo_id = $2
@@ -883,10 +891,7 @@ Use after a tariff change to verify the new PRICAT was dispatched to all LF coun
         let history: Vec<serde_json::Value> = rows.iter().map(|r| serde_json::json!({
             "id": r.try_get::<i64,_>("id").ok(),
             "lieferstatus": r.try_get::<String,_>("lieferstatus").ok(),
-            "lf_mp_id": r.try_get::<Option<String>,_>("lf_mp_id").ok().flatten(),
-            "lf_mp_id_next": r.try_get::<Option<String>,_>("lf_mp_id_next").ok().flatten(),
-            "lf_next_lieferbeginn": r.try_get::<Option<time::Date>,_>("lf_next_lieferbeginn").ok().flatten().map(|d| d.to_string()),
-            "lieferbeginn": r.try_get::<Option<time::Date>,_>("lieferbeginn").ok().flatten().map(|d| d.to_string()),
+            "zuordnungen": r.try_get::<serde_json::Value,_>("zuordnungen").ok(),
             "lieferende": r.try_get::<Option<time::Date>,_>("lieferende").ok().flatten().map(|d| d.to_string()),
             "msb_mp_id": r.try_get::<Option<String>,_>("msb_mp_id").ok().flatten(),
             "nb_mp_id": r.try_get::<String,_>("nb_mp_id").ok(),
@@ -1141,9 +1146,8 @@ Use after a tariff change to verify the new PRICAT was dispatched to all LF coun
 
         // Find the history row whose valid_from is the latest on or before `at_date`.
         let row = sqlx::query(
-            r"SELECT h.malo_id, h.lieferstatus, h.lf_mp_id, h.lf_mp_id_next,
-                     h.lieferbeginn, h.lieferende, h.msb_mp_id, h.nb_mp_id,
-                     h.valid_from, h.lf_next_lieferbeginn
+            r"SELECT h.malo_id, h.lieferstatus, h.zuordnungen,
+                     h.lieferende, h.msb_mp_id, h.nb_mp_id, h.valid_from
               FROM versorgungsstatus_history h
               WHERE h.malo_id = $1
                 AND h.tenant  = $2
@@ -1163,14 +1167,11 @@ Use after a tariff change to verify the new PRICAT was dispatched to all LF coun
             Some(r) => ContentBlock::json(serde_json::json!({
                 "malo_id": r.try_get::<String, _>("malo_id").ok(),
                 "lieferstatus": r.try_get::<String, _>("lieferstatus").ok(),
-                "lf_mp_id": r.try_get::<Option<String>, _>("lf_mp_id").ok().flatten(),
-                "lf_mp_id_next": r.try_get::<Option<String>, _>("lf_mp_id_next").ok().flatten(),
-                "lieferbeginn": r.try_get::<Option<time::Date>, _>("lieferbeginn").ok().flatten().map(|d| d.to_string()),
+                "zuordnungen": r.try_get::<serde_json::Value, _>("zuordnungen").ok(),
                 "lieferende": r.try_get::<Option<time::Date>, _>("lieferende").ok().flatten().map(|d| d.to_string()),
                 "msb_mp_id": r.try_get::<Option<String>, _>("msb_mp_id").ok().flatten(),
                 "nb_mp_id": r.try_get::<Option<String>, _>("nb_mp_id").ok().flatten(),
                 "valid_from": r.try_get::<time::OffsetDateTime, _>("valid_from").ok().map(|t| t.to_string()),
-                "lf_next_lieferbeginn": r.try_get::<Option<time::Date>, _>("lf_next_lieferbeginn").ok().flatten().map(|d| d.to_string()),
                 "queried_at": p.at,
             }))
             .map(|b| CallToolResult::success(vec![b]))

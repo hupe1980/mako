@@ -84,6 +84,13 @@ const DELIBERATE: &[(&str, &str)] = &[
          that accepted anything",
     ),
     (
+        "51238297069",
+        "`mako-emob` pins `VirtualMaloId`'s refusal to the **shape** rather than \
+         the arithmetic: eleven digits are refused whether or not the check \
+         digit holds, because a Netzbetreiber issuing the valid neighbour of a \
+         minted id collides just as hard. The test asserts both spellings",
+    ),
+    (
         "10YDE-EON------2",
         "`makotest` pins its EIC binding to the ENTSO-E worked example \
          (`10YDE-EON------` → `…1`) and asserts the neighbouring check character \

@@ -103,6 +103,9 @@ mako-pruefung  = { workspace = true }
 anyhow             = { workspace = true }
 thiserror          = { workspace = true }
 axum               = { version = "0.8", features = [] }
+# Exact percent arithmetic for the E_0623 Tranchen-Prüfschritte: the shares are
+# summed and compared against the one the LFN registered.
+rust_decimal       = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }
 toml               = { version = "0.8", default-features = false, features = ["parse"] }

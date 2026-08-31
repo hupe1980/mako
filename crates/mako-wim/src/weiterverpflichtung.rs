@@ -402,7 +402,7 @@ impl Workflow for WimWeiterverpflichtungWorkflow {
                     "antwort_codeliste": code.wire_codeliste().ok_or_else(|| {
                         WorkflowError::rejected(format!("{tree} {} names no Codeliste", code.code))
                     })?,
-                    "antwort_ebd":  tree,
+                    "antwort_tree":  tree,
                     "orig_message_ref": data.message_ref.as_str(),
                 });
                 if let Some(ref t) = abweichender_termin {
@@ -531,7 +531,7 @@ mod tests {
             )
             .expect("Z13");
             assert_eq!(out.outbox[0].payload["pid"], 19_003, "{sparte}");
-            assert_eq!(out.outbox[0].payload["antwort_ebd"], ebd);
+            assert_eq!(out.outbox[0].payload["antwort_tree"], ebd);
             assert_eq!(out.outbox[0].payload["antwort_codeliste"], codeliste);
         }
     }
@@ -548,7 +548,7 @@ mod tests {
         .expect("Z13");
         assert_eq!(&*out.outbox[0].message_type, "ORDRSP");
         assert_eq!(out.outbox[0].payload["pid"], 19_003);
-        assert_eq!(out.outbox[0].payload["antwort_ebd"], "E_0203");
+        assert_eq!(out.outbox[0].payload["antwort_tree"], "E_0203");
         // DE 1082 names the **Codeliste**, not the Entscheidungsbaum.
         assert_eq!(out.outbox[0].payload["antwort_codeliste"], "S_0061");
     }

@@ -380,9 +380,13 @@ async fn table_builder(
 
     // `source` is a fixed `IngestionSource` vocabulary, so it is declared as a
     // coded column — enforced by a DB `CHECK` like sparte/unit/quality, not just
-    // by the application that writes it. `sender_mp_id` is a free MP-ID and
-    // `allocation_version` a free MaBiS label (INITIAL/CORRECTION/ESA-…), so both
-    // stay unconstrained.
+    // by the application that writes it. `sender_mp_id` is a Marktpartner-ID and
+    // is declared `ValueCheck::Bdew`: thirteen digits, checked in the write path
+    // and by the hot table's own `CHECK`. Deliberately no check digit — §2.3 of
+    // the Bildungsvorschrift exempts GS1-issued GLNs, which are legitimate
+    // Marktpartner-IDs under a different procedure. `allocation_version` is a
+    // free MaBiS label (INITIAL/CORRECTION/ESA-…) with no format to enforce, so
+    // it stays unconstrained.
     let source_codes: Vec<&str> = crate::domain::IngestionSource::ALL
         .iter()
         .map(|s| s.as_str())
@@ -400,7 +404,11 @@ async fn table_builder(
         .archival_step(tiering.archival_step)
         .settlement_lag(tiering.settlement_lag)
         .identity_column(Field::new("tenant", DataType::Utf8, false))
-        .attribute_column(Field::new("sender_mp_id", DataType::Utf8, true))
+        .attribute_column(meterstore::checked_column(
+            "sender_mp_id",
+            meterstore::ValueCheck::Bdew,
+            true,
+        ))
         // Every store carries the GDPR subject reference. A Typ-2 value is
         // non-authoritative for settlement, which says nothing about whether it
         // is personal data: it is a quarter-hourly consumption series against a
@@ -1834,7 +1842,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 .map_err(store_err)?
                 .column_eq(TENANT_COL, tenant_scope(tenant))
                 .map_err(store_err)?
-                .melo(&melo)
+                .melo(melo.as_str())
                 .map_err(store_err)?
                 .obis(&register)
                 .map_err(store_err)?

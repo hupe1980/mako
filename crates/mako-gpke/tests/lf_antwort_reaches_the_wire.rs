@@ -61,7 +61,7 @@ fn the_lf_abmeldung_ablehnung_is_dispatched_with_its_antwortcode() {
 
     assert_eq!(utilmd.payload["pid"], 55_009, "A03 is an Ablehnungscode");
     assert_eq!(utilmd.payload["antwort_code"], "A03");
-    assert_eq!(utilmd.payload["antwort_ebd"], "E_0609");
+    assert_eq!(utilmd.payload["antwort_codeliste"], "E_0609");
     assert_eq!(utilmd.payload["malo"], MALO);
     // The answer goes back to the NB that asked.
     assert_eq!(utilmd.payload["sender"], LF);
@@ -131,7 +131,7 @@ fn the_beendigung_zuordnung_answer_is_dispatched() {
         .expect("the LFA answer must be transmitted");
     assert_eq!(utilmd.payload["pid"], 55_012);
     assert_eq!(utilmd.payload["antwort_code"], "A35");
-    assert_eq!(utilmd.payload["antwort_ebd"], "E_0624");
+    assert_eq!(utilmd.payload["antwort_codeliste"], "E_0624");
 }
 
 /// **55010 → 55011.** `A34` states the LFA's *own* Lieferendedatum, which must
@@ -203,7 +203,7 @@ fn the_zuordnung_lf_answer_is_dispatched_with_its_bemerkung() {
     assert_eq!(utilmd.payload["pid"], 55_609);
     assert_eq!(utilmd.payload["bemerkung"], "Marktlokation unbekannt");
     assert_eq!(
-        utilmd.payload["antwort_ebd"], "E_0603",
+        utilmd.payload["antwort_codeliste"], "E_0603",
         "55607–55609 is governed by E_0603…E_0606, one per Anwendungsfall"
     );
 }
@@ -244,7 +244,7 @@ fn the_kuendigung_answer_is_dispatched() {
         .expect("the LFA answer must be transmitted");
     assert_eq!(utilmd.payload["pid"], 55_018, "A06 is an Ablehnungscode");
     assert_eq!(utilmd.payload["antwort_code"], "A06");
-    assert_eq!(utilmd.payload["antwort_ebd"], "E_0614");
+    assert_eq!(utilmd.payload["antwort_codeliste"], "E_0614");
 }
 
 /// The Kündigung does not share the supplier change's PID table, so an

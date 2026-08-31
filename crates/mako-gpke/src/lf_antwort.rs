@@ -156,7 +156,7 @@ pub fn antwort_outbox(
         "antwort_code": antwort.antwort_code,
     });
     if let Some(ebd) = &antwort.ebd {
-        payload["antwort_ebd"] = serde_json::Value::String(ebd.clone());
+        payload["antwort_codeliste"] = serde_json::Value::String(ebd.clone());
     }
     if let Some(bemerkung) = &antwort.bemerkung {
         payload["bemerkung"] = serde_json::Value::String(bemerkung.clone());
@@ -217,7 +217,7 @@ mod tests {
     fn the_antwortcode_and_its_ebd_are_both_carried() {
         let p = outbox_for(&LfAntwort::ablehnung("A35", "E_0624"));
         assert_eq!(p["antwort_code"], "A35");
-        assert_eq!(p["antwort_ebd"], "E_0624");
+        assert_eq!(p["antwort_codeliste"], "E_0624");
     }
 
     /// A Gas answer carries no DE 1131 — the MIG does not name its Codeliste.
@@ -231,7 +231,7 @@ mod tests {
             bilanzkreis: None,
             termin: None,
         };
-        assert!(outbox_for(&antwort).get("antwort_ebd").is_none());
+        assert!(outbox_for(&antwort).get("antwort_codeliste").is_none());
     }
 
     /// `A34` states the supplier's own Lieferendedatum, not the requested one.

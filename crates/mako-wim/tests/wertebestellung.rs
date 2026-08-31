@@ -420,7 +420,7 @@ fn an_antwortcode_outside_the_tree_is_refused() {
         Some(u64::from(ABLEHNUNG_PID.as_u32())),
         "the code's Cluster puts the answer on the Ablehnungs-PID"
     );
-    assert_eq!(ob.payload["antwort_ebd"].as_str(), Some("E_0256"));
+    assert_eq!(ob.payload["antwort_codeliste"].as_str(), Some("E_0256"));
 }
 
 /// `E_0254` publishes four refusals, so a Beendigung is not always
@@ -463,7 +463,7 @@ fn a_refused_abbestellung_leaves_the_delivery_running() {
         Some(u64::from(ABLEHNUNG_PID.as_u32()))
     );
     assert_eq!(
-        out.outbox[0].payload["antwort_ebd"].as_str(),
+        out.outbox[0].payload["antwort_codeliste"].as_str(),
         Some("E_0254")
     );
     for ev in &out.events {
@@ -729,7 +729,10 @@ fn answer_bestellung_enqueues_ordrsp_confirm_or_reject() {
     // `IMD+7081` and the EBD the Prüfschritt code belongs to are Muss on every
     // ESA answer (ORDRSP AHB 1.1b §4.15, conditions [17]/[21]-[23]).
     assert_eq!(confirm.payload["abonnement"].as_str(), Some("Z01"));
-    assert_eq!(confirm.payload["antwort_ebd"].as_str(), Some("E_0256"));
+    assert_eq!(
+        confirm.payload["antwort_codeliste"].as_str(),
+        Some("E_0256")
+    );
     assert_eq!(confirm.payload["antwort_code"].as_str(), Some("A11"));
     assert!(
         confirm.payload["location"].is_null(),

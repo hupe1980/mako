@@ -30,6 +30,13 @@ struct UtilmdTransactionSpec {
     agr: Option<(String, String)>,
     /// `SG5 LOC` — one entry per Lokation the Vorgang names.
     locations: Vec<(String, String)>,
+    /// `SG8 SEQ+Z22` „Daten der Summenzeitreihe" with its `SG8 RFF+AUU`
+    /// Version der Zeitreihe.
+    ///
+    /// The Clearinglisten head carries it: `MaBiS` versions a Summenzeitreihe by
+    /// Erstellungszeitpunkt, and a list that does not say which version it
+    /// reconciles cannot be matched to one (UTILMD AHB Strom 2.2 Kap. 13.4).
+    summenzeitreihe_version: Option<String>,
     references: Vec<(String, String)>,
     /// `SG6 RFF+TN` — the Vorgangsnummer of the message being answered.
     referenz_vorgangsnummer: Option<String>,
@@ -68,6 +75,11 @@ struct UtilmdBuilderInner {
     receiver_agency: Option<AgencyCode>,
     message_ref: String,
     document_code: String,
+    /// `DTM+157` Gültigkeit, Beginndatum — `CCYYMM`, DE 2379 `610`.
+    ///
+    /// The Bilanzierungsmonat a Clearingliste covers. A header date beside
+    /// `DTM+137`, not a Vorgangs-date: the whole list is about one month.
+    gueltigkeit_beginn: Option<String>,
     document_date: Option<String>,
     rff_entries: Vec<(String, String)>,
     transactions: Vec<UtilmdTransactionSpec>,
@@ -119,6 +131,7 @@ impl UtilmdBuilder<Unset, Unset> {
                 receiver_agency: None,
                 message_ref: "1".to_owned(),
                 document_code: "E01".to_owned(),
+                gueltigkeit_beginn: None,
                 document_date: None,
                 rff_entries: Vec::new(),
                 transactions: Vec::new(),
@@ -231,9 +244,23 @@ impl<S, R> UtilmdBuilder<S, R> {
         self.transaction_with_qualifier(IDE_VORGANG, vorgangsnummer)
     }
 
+    /// Set `DTM+157` Gültigkeit, Beginndatum — the Bilanzierungsmonat, `CCYYMM`.
+    ///
+    /// DE 2379 is `610` here, the only place UTILMD uses a month granularity:
+    /// a Clearingliste is about one Bilanzierungsmonat and carries no day.
+    pub fn gueltigkeit_beginn(mut self, ccyymm: impl Into<String>) -> Self {
+        self.inner.gueltigkeit_beginn = Some(ccyymm.into());
+        self
+    }
+
     /// Start an `IDE+Z01` list block (`MaBiS` Summenzeitreihen).
     ///
-    /// UTILMD DE 7495 has exactly two values; this is the other one.
+    /// UTILMD DE 7495 has exactly two values; this is the other one. Every
+    /// `IDE+24` that follows is a member of the list rather than a
+    /// Geschäftsvorfall of its own („Das IDE+Z01 (Liste) definiert den
+    /// Geschäftsvorfall. Alle aufgelisteten IDE+24 sind Bestandteil des
+    /// Geschäftsvorfalls" — UTILMD AHB Strom 2.2 Bedingung `[564]`), which is
+    /// why only the head carries `SG6 RFF+Z13`.
     pub fn list_transaction(self, list_id: impl Into<String>) -> UtilmdTransactionBuilder<S, R> {
         self.transaction_with_qualifier(crate::utilmd_codes::IDE_LISTE, list_id)
     }
@@ -266,6 +293,11 @@ impl<S, R> UtilmdBuilder<S, R> {
 /// DE 1004, which every row of UTILMD AHB Strom 2.2 and Gas 1.2 names the
 /// *Dokumentennummer*.
 ///
+/// On a **Listennachricht** the Vorgang is the `IDE+Z01` head — „Alle
+/// aufgelisteten IDE+24 sind Bestandteil des Geschäftsvorfalls" (Bedingung
+/// `[564]`) — so only the head carries it and each `IDE+24` position carries
+/// `RFF+TN` instead. `carries_pid` is that distinction.
+///
 /// `RFF+TN` carries „Referenz Vorgangsnummer (aus Anfragenachricht)", Muss on
 /// every Antwortnachricht. It is what ties an answer to its request, because
 /// `IDE+24` DE 7402 must be a fresh number: the MIG's „Hinweis zu DE7402" makes
@@ -274,8 +306,9 @@ fn emit_sg6<W: std::io::Write>(
     w: &mut Writer<W>,
     pid_str: &str,
     tx: &UtilmdTransactionSpec,
+    carries_pid: bool,
 ) -> Result<(), Error> {
-    if !pid_str.is_empty() {
+    if carries_pid && !pid_str.is_empty() {
         emit_comp!(w, "RFF", ["Z13", pid_str]);
     }
     if let Some(referenz) = &tx.referenz_vorgangsnummer {
@@ -310,6 +343,13 @@ fn emit_sg8_produktpakete<W: std::io::Write>(
 ) -> Result<(), Error> {
     use crate::utilmd_codes::produkt;
 
+    // `SG8 SEQ+Z22` „Daten der Summenzeitreihe" with `SG8 RFF+AUU` — the
+    // Clearinglisten head. Emitted before the Produktpakete because the AHB
+    // numbers it 00015/00016, ahead of the SEQ+Z79 block.
+    if let Some(version) = &tx.summenzeitreihe_version {
+        emit_seg!(w, "SEQ", crate::utilmd_codes::SEQ_SUMMENZEITREIHE);
+        emit_comp!(w, "RFF", [crate::utilmd_codes::RFF_ZEITREIHE, version]);
+    }
     for paket in &tx.produktpakete {
         emit_seg!(
             w,
@@ -374,6 +414,7 @@ fn emit_sg4<W: std::io::Write>(
     w: &mut Writer<W>,
     pid_str: &str,
     tx: &UtilmdTransactionSpec,
+    carries_pid: bool,
 ) -> Result<(), Error> {
     // MIG Zähler order inside SG4: IDE (0190), DTM (0230), STS (0250),
     // FTX (0280), AGR (0290), then SG5 LOC (0330), SG6 RFF (0360) and
@@ -467,7 +508,7 @@ fn emit_sg4<W: std::io::Write>(
     for (loc_q, loc_id) in &tx.locations {
         emit_comp!(w, "LOC", [loc_q], [loc_id]);
     }
-    emit_sg6(w, pid_str, tx)?;
+    emit_sg6(w, pid_str, tx, carries_pid)?;
     for (klassentyp, wert) in &tx.merkmale {
         // `CCI+<7059>++<7037>` — C502 „Einzelheiten zu Maßangaben" is
         // nicht benutzt and still occupies element 2.
@@ -531,6 +572,11 @@ impl<S, R> UtilmdBuilder<S, R> {
         // `+00`; `[494]` requires the stamp to be the creation moment or
         // earlier. There is no Anwendungsfall in any AHB that takes `102`.
         emit_comp!(w, "DTM", ["137", &super::ccyymmddhhmm_utc(&dtm_val), "303"]);
+        // `DTM+157` Gültigkeit, Beginndatum in `610` `CCYYMM` — the
+        // Bilanzierungsmonat a Clearingliste covers.
+        if let Some(monat) = &self.inner.gueltigkeit_beginn {
+            emit_comp!(w, "DTM", ["157", monat, "610"]);
+        }
         for (qualifier, reference) in &self.inner.rff_entries {
             emit_comp!(w, "RFF", [qualifier, reference]);
         }
@@ -550,8 +596,17 @@ impl<S, R> UtilmdBuilder<S, R> {
                 [id, "", super::agency_for(self.inner.receiver_agency, id)]
             );
         }
+        // On a Listennachricht the `IDE+Z01` head is the Geschäftsvorfall and
+        // carries `SG6 RFF+Z13`; its `IDE+24` members do not. A message without
+        // a head is a single Vorgang and carries it there.
+        let ist_liste = self
+            .inner
+            .transactions
+            .iter()
+            .any(|tx| tx.ide_qualifier == crate::utilmd_codes::IDE_LISTE);
         for tx in &self.inner.transactions {
-            emit_sg4(&mut w, &pid_str, tx)?;
+            let carries_pid = !ist_liste || tx.ide_qualifier == crate::utilmd_codes::IDE_LISTE;
+            emit_sg4(&mut w, &pid_str, tx, carries_pid)?;
         }
         w.finish_unt(&self.inner.message_ref)
             .map_err(Error::Parse)?;
@@ -706,6 +761,17 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
     }
 
     /// Add a SG6/RFF reference segment.
+    /// Set `SG8 SEQ+Z22` „Daten der Summenzeitreihe" with its `SG8 RFF+AUU`
+    /// Version der Zeitreihe.
+    ///
+    /// Muss on both Clearinglisten (UTILMD AHB Strom 2.2 Kap. 13.4). `MaBiS`
+    /// versions a Summenzeitreihe by Erstellungszeitpunkt, so a list that names
+    /// no version cannot be matched to the one it reconciles.
+    pub fn summenzeitreihe_version(mut self, version: impl Into<String>) -> Self {
+        self.spec.summenzeitreihe_version = Some(version.into());
+        self
+    }
+
     /// Set `SG6 RFF+TN` — „Referenz Vorgangsnummer (aus Anfragenachricht)".
     ///
     /// Pass the **request's** `IDE+24` DE 7402. The AHB marks the segment Muss

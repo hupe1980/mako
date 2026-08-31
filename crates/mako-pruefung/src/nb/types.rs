@@ -3,6 +3,7 @@
 //! All types are `Clone + Debug + Serialize + Deserialize` so that callers can
 //! log inputs/outputs and store audit records without extra conversions.
 
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use time::Date;
 use uuid::Uuid;
@@ -147,6 +148,25 @@ pub struct ErzeugungsAnmeldung {
     ///
     /// Both ride wire code `Z90`, so this comes from the NB's register.
     pub ausfallverguetung: bool,
+    /// The share the Anmeldung registers, in percent — `SG8` Tranchengröße
+    /// (`9991000002090`), Muss on a Geschäftsvorfall 3.
+    ///
+    /// `None` on an untranchierte Marktlokation, where the Anmeldung is for the
+    /// whole of it.
+    #[serde(default)]
+    pub gewuenschter_prozentsatz: Option<Decimal>,
+    /// What each currently assigned LFA holds, in percent, as of the Anmeldung.
+    ///
+    /// Frozen from `marktd`'s assignment list when the Anfragen zur Beendigung
+    /// der Zuordnung go out: `E_0623` Prüfschritte 510–530 count over the
+    /// Zuordnung the Anfragen were sent against, which is not necessarily the
+    /// one the projection holds when the last answer arrives hours later.
+    #[serde(default)]
+    pub tranchen_prozent: std::collections::BTreeMap<String, Decimal>,
+    /// Prüfschritt 540 — „Handelt es sich um eine direktvermarktungspflichtige
+    /// Marktlokation?" (§ 21b EEG), from the NB's EEG-Register.
+    #[serde(default)]
+    pub direktvermarktungspflichtig: bool,
 }
 
 impl ErzeugungsAnmeldung {
@@ -349,10 +369,98 @@ pub(crate) mod date_opt {
     }
 }
 
-// ── TranchenZuordnung ─────────────────────────────────────────────────────────
+// ── Tranchen (E_0623 Prüfschritte 500–600) ────────────────────────────────────
+
+/// One Tranche of a tranchierte Marktlokation, and the answer its LFA gave to
+/// the Anfrage zur Beendigung der Zuordnung.
+///
+/// A tranchierte Marktlokation is held by several LFA at once, so the NB sends
+/// the Anfrage „im Fall von Geschäftsvorfall 3 allen LFA" (GPKE Teil 2 § 2.1.2
+/// SD Lieferbeginn Nr. 3) and gets one answer per Tranche.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranchenAntwort {
+    /// MP-ID of the LFA holding this Tranche.
+    pub lf_mp_id: String,
+    /// The share this Tranche carries, in percent — the Aufteilungsfaktor of
+    /// the Tranchengröße product (`9991000002090`).
+    pub prozent: Decimal,
+    /// The LFA's answer. `None` is **silence**, which GPKE Teil 2 § 2.1.2 makes
+    /// a Zustimmung: „Verstreicht die Frist, ohne dass eine Antwort beim NB
+    /// eingeht, gilt dies als Bestätigung nach Fall a)."
+    pub antwort: Option<LfaAntwort>,
+}
+
+/// The facts `E_0623` Prüfschritte 500–540 read on a Geschäftsvorfall 3.
+///
+/// Two sources meet here: the **Tranchen-Zuordnung of the Marktlokation** —
+/// which LFA hold which shares — comes from the market master data, and each
+/// LFA's **answer** from the running Anfrage-Leg. Neither alone decides the
+/// Anmeldung; the arithmetic over both does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranchenLage {
+    /// Every LFA holding a share at the Zuordnungsbeginn, with its answer.
+    /// Empty when the Marktlokation carried no Tranche to release, which is
+    /// Prüfschritt 500 „nein".
+    pub tranchen: Vec<TranchenAntwort>,
+    /// The share the LFN registered — `SG8` Tranchengröße, `9991000002090`.
+    pub gewuenschter_prozentsatz: Decimal,
+    /// Prüfschritt 540 — „Handelt es sich um eine direktvermarktungspflichtige
+    /// Marktlokation?"
+    ///
+    /// Supplied rather than derived: it follows from the Anlage's registration
+    /// and installed capacity (§ 21b EEG), which is the NB's EEG-Register and
+    /// not anything the assignment list can answer.
+    pub direktvermarktungspflichtig: bool,
+}
+
+impl TranchenLage {
+    /// Run Prüfschritte 500–520 over the answers and return what 530–600 walk.
+    ///
+    /// # Errors
+    ///
+    /// Returns the escalation reason when an LFA answered with a code
+    /// `E_0624` does not publish as an Ablehnung. Prüfschritt 440 asks whether
+    /// the Widerspruch was [`A41`], and for a code the tree does not define
+    /// neither answer is safe — the same reading
+    /// [`super::lieferbeginn::evaluate_lieferbeginn`] applies to a single LFA.
+    ///
+    /// [`A41`]: super::lieferbeginn::BEREITS_ABGEMELDET_TRANCHE
+    pub fn auswerten(&self) -> Result<TranchenZuordnung, String> {
+        let mut freigeworden = Decimal::ZERO;
+        let mut weiter_gehalten = Decimal::ZERO;
+        let mut zustimmungen = 0_usize;
+        for t in &self.tranchen {
+            if super::lieferbeginn::tranche_freigeworden(t.antwort.as_ref(), &t.lf_mp_id)? {
+                freigeworden += t.prozent;
+                zustimmungen += 1;
+            } else {
+                weiter_gehalten += t.prozent;
+            }
+        }
+        // 530 „Verbleibt ein Anteil im Bilanzkreis des Netzbetreibers?" — after
+        // the change the Marktlokation is held by the LFA who kept their
+        // Tranchen plus the LFN's new one. Whatever those do not add up to is
+        // unassigned, and an unassigned share is balanced in the NB's own
+        // Bilanzkreis. `A55`'s own Hinweis says as much: „Info über fehlende
+        // Anteile an der Marktlokation in der Bilanzierung", and it triggers
+        // „Herstellung einer 100 % LF-Zuordnung" — the process that exists to
+        // close exactly this remainder.
+        let zugeordnet_danach = weiter_gehalten + self.gewuenschter_prozentsatz;
+        Ok(TranchenZuordnung {
+            // 500 — an Anfrage went out for every Tranche that was assigned.
+            anfragen_gestellt: !self.tranchen.is_empty(),
+            mindestens_eine_zustimmung: zustimmungen > 0,
+            ausreichender_prozentsatz: freigeworden >= self.gewuenschter_prozentsatz,
+            restanteil_im_nb_bilanzkreis: zugeordnet_danach < Decimal::ONE_HUNDRED,
+            direktvermarktungspflichtig: self.direktvermarktungspflichtig,
+            gewuenschter_prozentsatz: self.gewuenschter_prozentsatz,
+            freigewordener_prozentsatz: freigeworden,
+        })
+    }
+}
 
 /// The Tranchen arithmetic `E_0623` Prüfschritte 500–540 run on a
-/// Geschäftsvorfall 3.
+/// Geschäftsvorfall 3, as [`TranchenLage::auswerten`] derives it.
 ///
 /// A tranchierte Marktlokation is held by several LFA at once, so the question
 /// is not „did *the* LFA agree" but „did enough percentage come free". Four of
@@ -366,7 +474,15 @@ pub struct TranchenZuordnung {
     /// zugeordneten Lieferanten der Tranchen … gestellt?" `false` when the
     /// Marktlokation carried no Tranche to release.
     pub anfragen_gestellt: bool,
-    /// Prüfschritt 510.
+    /// Prüfschritt 510 — „Wurde mindestens einer Anfrage zur Beendigung der
+    /// Zuordnung zugestimmt?"
+    ///
+    /// Counted as **freed**, not as „answered with a Zustimmungscode": `A41`
+    /// „bereits beendet und eine vom NB bestätigte Abmeldung liegt vor" is
+    /// filed as an Ablehnung and still releases the Tranche, and 510's own
+    /// refusal `A53` reads „Der gewünschte Prozentsatz an der Marktlokation ist
+    /// **nicht frei**" — which would be false of a Marktlokation whose every
+    /// Tranche answered `A41`.
     pub mindestens_eine_zustimmung: bool,
     /// Prüfschritt 520.
     pub ausreichender_prozentsatz: bool,
@@ -376,9 +492,9 @@ pub struct TranchenZuordnung {
     /// Prüfschritt 540.
     pub direktvermarktungspflichtig: bool,
     /// The share the LFN registered, for the rejection text.
-    pub gewuenschter_prozentsatz: String,
+    pub gewuenschter_prozentsatz: Decimal,
     /// The share that actually came free, for the rejection text.
-    pub freigewordener_prozentsatz: String,
+    pub freigewordener_prozentsatz: Decimal,
 }
 
 // ── AbmeldungAnfrage ──────────────────────────────────────────────────────────

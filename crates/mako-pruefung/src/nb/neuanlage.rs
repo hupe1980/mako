@@ -562,6 +562,10 @@ mod tests {
             bestehende_veraeusserungsform: None,
             nicht_eeg_kwkg: false,
             ausfallverguetung: false,
+            // Untranchiert: the Anmeldung is for the whole Marktlokation.
+            gewuenschter_prozentsatz: None,
+            tranchen_prozent: std::collections::BTreeMap::new(),
+            direktvermarktungspflichtig: false,
         });
         let r = evaluate_neuanlage(
             &a,
@@ -595,6 +599,10 @@ mod tests {
             bestehende_veraeusserungsform: None,
             nicht_eeg_kwkg: false,
             ausfallverguetung: false,
+            // Untranchiert: the Anmeldung is for the whole Marktlokation.
+            gewuenschter_prozentsatz: None,
+            tranchen_prozent: std::collections::BTreeMap::new(),
+            direktvermarktungspflichtig: false,
         });
         let r = evaluate_neuanlage(
             &late_erz,
@@ -617,6 +625,10 @@ mod tests {
             bestehende_veraeusserungsform: None,
             nicht_eeg_kwkg: false,
             ausfallverguetung: false,
+            // Untranchiert: the Anmeldung is for the whole Marktlokation.
+            gewuenschter_prozentsatz: None,
+            tranchen_prozent: std::collections::BTreeMap::new(),
+            direktvermarktungspflichtig: false,
         });
         let r = evaluate_neuanlage(
             &a,
@@ -715,6 +727,10 @@ mod tests {
             bestehende_veraeusserungsform: None,
             nicht_eeg_kwkg: false,
             ausfallverguetung: false,
+            // Untranchiert: the Anmeldung is for the whole Marktlokation.
+            gewuenschter_prozentsatz: None,
+            tranchen_prozent: std::collections::BTreeMap::new(),
+            direktvermarktungspflichtig: false,
         });
         let letzter = mako_fristen::add_werktage(
             a.uebertragungstag,
@@ -814,6 +830,10 @@ mod tests {
             bestehende_veraeusserungsform: None,
             nicht_eeg_kwkg: false,
             ausfallverguetung: false,
+            // Untranchiert: the Anmeldung is for the whole Marktlokation.
+            gewuenschter_prozentsatz: None,
+            tranchen_prozent: std::collections::BTreeMap::new(),
+            direktvermarktungspflichtig: false,
         });
         let r = evaluate_neuanlage(&a, &eindeutig(), Some(&b), d(2026, Month::March, 4), &cfg());
         assert_eq!(r.antwortcode(), Some("A19"), "{r:?}");

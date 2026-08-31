@@ -364,7 +364,7 @@ async fn nb_lieferbeginn_bestaetigen_dispatches_to_supplier_change_workflow() {
     let payload = serde_json::json!({
         "malo_id": malo_id,
         "antwort_code": "A51",
-        "antwort_ebd": "E_0623",
+        "antwort_codeliste": "E_0623",
     });
     let outcome =
         makod::commands_api::dispatch_command(&state, "gpke.lieferbeginn.bestaetigen", &payload)
@@ -408,7 +408,7 @@ async fn nb_lieferbeginn_ablehnen_dispatches_to_supplier_change_workflow() {
     let payload = serde_json::json!({
         "malo_id": malo_id,
         "antwort_code": "A05",
-        "antwort_ebd": "E_0622",
+        "antwort_codeliste": "E_0622",
         "bemerkung": "Stammdaten unbekannt",
     });
     let outcome =
@@ -451,7 +451,7 @@ async fn nb_lieferende_bestaetigen_dispatches_to_supplier_change_workflow() {
     let payload = serde_json::json!({
         "malo_id": malo_id,
         "antwort_code": "A11",
-        "antwort_ebd": "E_0607",
+        "antwort_codeliste": "E_0607",
     });
     let outcome =
         makod::commands_api::dispatch_command(&state, "gpke.lieferende.bestaetigen", &payload)
@@ -481,7 +481,7 @@ async fn nb_lieferende_ablehnen_dispatches_to_supplier_change_workflow() {
     let payload = serde_json::json!({
         "malo_id": malo_id,
         "antwort_code": "A02",
-        "antwort_ebd": "E_0607",
+        "antwort_codeliste": "E_0607",
         "bemerkung": "Keine Umzugsmeldung",
     });
     let outcome =
@@ -507,7 +507,7 @@ async fn nb_bestaetigen_unknown_malo_returns_process_not_found() {
     let payload = serde_json::json!({
         "malo_id": "99999999945",
         "antwort_code": "A51",
-        "antwort_ebd": "E_0623",
+        "antwort_codeliste": "E_0623",
     });
     let err =
         makod::commands_api::dispatch_command(&state, "gpke.lieferbeginn.bestaetigen", &payload)
@@ -600,7 +600,7 @@ async fn a_bestaetigen_command_may_not_carry_an_ablehnungscode() {
         &serde_json::json!({
             "malo_id": malo_id,
             "antwort_code": "A07",
-            "antwort_ebd": "E_0622",
+            "antwort_codeliste": "E_0622",
         }),
     )
     .await
@@ -625,7 +625,7 @@ async fn an_answer_code_must_belong_to_the_named_tree() {
         &serde_json::json!({
             "malo_id": malo_id,
             "antwort_code": "A07",
-            "antwort_ebd": "E_0607",
+            "antwort_codeliste": "E_0607",
         }),
     )
     .await

@@ -771,7 +771,7 @@ RUN cargo build -p makod --release \
 
 Selecting no role at all is refused at startup rather than silently producing an
 all-roles binary. Each role build registers a strict subset of the default's
-**63 workflows over 458 Prüfidentifikatoren**, and the startup log records both
+**66 workflows over 467 Prüfidentifikatoren**, and the startup log records both
 counts for whichever roles were compiled, so the binary's scope is evidence for a
 BNetzA audit.
 

@@ -35,10 +35,14 @@ use super::*;
 /// | `dritter_antwortcode` | **on `A50` / `A57`** | `SG4 STS+Z35` — the LFA's own `E_0624` code, restated |
 /// | `dritter_referenz_lokation` | erzeugende Ablehnung | `STS+Z35` `C555` DE 9012 — which MaLo/Tranche the restated answer is about |
 /// | `dritter_objekt` | erzeugende Ablehnung | the second DE 9013 — `ZW3` Erzeugende MaLo / `ZW5` Tranche |
-/// | `bilanzierungsende` | Gas 44037/44038 | second `SG4 DTM+159`, Soll „wenn eine Bilanzierung stattfindet" |
+/// | `bilanzierungsbeginn` | 55238/55239 | second `SG4 DTM+158`, Muss on the Modell-2 Anmeldung |
+/// | `bilanzierungsende` | Gas 44037/44038, 55240–55243 | second `SG4 DTM+159`, Soll „wenn eine Bilanzierung stattfindet" |
+/// | `mabis_zaehlpunkt` | 55239 | second `SG5 LOC+Z15` — the ZPB des ZP der NGZ, beside the MaLo |
 /// | `dtm_qualifier`  | 55611     | overrides the per-PID `SG4 DTM` DE 2005 — there it follows the Grund |
 ///
-/// \* Exactly one of `malo` / `melo` is required, depending on the PID range.
+/// \* Exactly one of `malo` / `melo` / `mabis_zaehlpunkt` is required. The first
+/// two follow the PID range; a MaBiS Vorgang names only the third, and it then
+/// rides the primary `SG5 LOC+Z15` rather than a second one.
 ///
 /// # What the MIG fixes here
 ///
@@ -60,6 +64,16 @@ pub(super) fn render_utilmd(
     let mt = "UTILMD";
 
     let pid = require_u32(p, mt, "pid")?;
+
+    // A **Listennachricht** is a different message shape: an `IDE+Z01` head
+    // that is the Geschäftsvorfall, with one `IDE+24` member per disputed
+    // Marktlokation under it. Rendered by its own path below.
+    if let Some(positionen) = p.get("positionen").and_then(|v| v.as_array())
+        && !positionen.is_empty()
+    {
+        return render_utilmd_liste(p, msg, pid, positionen);
+    }
+
     let sender = require_str(p, mt, "sender")?;
     let receiver = p
         .get("receiver")
@@ -75,7 +89,30 @@ pub(super) fn render_utilmd(
         || mako_wim::antwort_pid_meaning(pid)
             .is_some_and(|(request, _)| mako_wim::geraetewechsel::wim_sparte(request).is_some());
     let location_id_key = if names_messlokation { "melo" } else { "malo" };
-    let location_id = require_str(p, mt, location_id_key)?;
+    // A MaBiS Vorgang is about a **MaBiS-Zählpunkt** and names no Marktlokation
+    // at all — the ZP-Lifecycle Anfragen and their answers carry only
+    // `mabis_zaehlpunkt`. Requiring a MaLo there refuses the whole message, and
+    // a UTILMD that does not render is raw JSON on the AS4 leg.
+    let location_id = match p.get(location_id_key).and_then(|v| v.as_str()) {
+        Some(id) if !id.is_empty() => Some(id),
+        _ => match p.get("mabis_zaehlpunkt").and_then(|v| v.as_str()) {
+            Some(zp) if !zp.is_empty() => Some(zp),
+            _ if utilmd_carries_sg5_loc(pid) => {
+                return Err(RenderError::MissingField {
+                    message_type: mt.into(),
+                    field: format!("{location_id_key} or mabis_zaehlpunkt").into(),
+                });
+            }
+            _ => None,
+        },
+    };
+    // Which `SG5 LOC` DE 3227 the primary Lokation rides. A payload that named
+    // only a MaBiS-Zählpunkt has already put it here, so the second-LOC block
+    // below must not repeat it.
+    let primary_is_mabis_zp = location_id.is_some()
+        && p.get(location_id_key)
+            .and_then(|v| v.as_str())
+            .is_none_or(str::is_empty);
 
     // `SG4 DTM` is not universal. UTILMD AHB Strom Kap. 8.11 / Gas Kap. 5.8
     // leave both the „Beginn zum" and „Ende zum" columns empty for the
@@ -141,7 +178,19 @@ pub(super) fn render_utilmd(
     // most Anwendungsfälle; the ones that end or cancel an assignment are `E02`
     // Abmeldungen, and every Gas Informationsmeldung is `E44`. The workflow that
     // knows its own Anwendungsfall supplies it.
-    if let Some(code) = p.get("document_code").and_then(|v| v.as_str()) {
+    //
+    // The MaBiS-ZP lifecycle is not an Anmeldung in any sense — UTILMD AHB
+    // Strom 2.2 Kap. 13.3 fixes `Z07` „Aktivierung/Deaktivierung von MaBiS-ZP"
+    // on all three of its Prüfidentifikatoren — so it defaults per PID rather
+    // than relying on every caller to remember.
+    let document_code = p
+        .get("document_code")
+        .and_then(|v| v.as_str())
+        .or(match pid {
+            55_062..=55_064 => Some(edi_energy::utilmd_codes::BGM_MABIS_ZP_LIFECYCLE),
+            _ => None,
+        });
+    if let Some(code) = document_code {
         builder = builder.document_code(code);
     }
 
@@ -162,19 +211,31 @@ pub(super) fn render_utilmd(
         tx = tx.date(dtm_qualifier, date);
     }
 
-    // `SG4 DTM+159` Bilanzierungsende — Soll on the Gas Informationsmeldungen
-    // 44037/44038 „wenn eine Bilanzierung stattfindet" (UTILMD AHB Gas Kap. 5.8
-    // Bedingung [29]). A second SG4 date beside the process date, not a
-    // replacement for it.
-    if let Some(bilanzierungsende) = p
-        .get("bilanzierungsende")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-    {
-        tx = tx.date(
+    // The **second** `SG4 DTM`. Both are dates beside the process date, never a
+    // replacement for it, and each has its own named field so a payload cannot
+    // state a Vertragsbeginn where the AHB wants a Bilanzierungsbeginn.
+    //
+    // | Field | DE 2005 | Where |
+    // |---|---|---|
+    // | `bilanzierungsbeginn` | `158` | UTILMD 55238/55239 — AHB Strom 2.2 Kap. 11, Bedingung `[317]` makes it carry the same value as `DTM+92` |
+    // | `bilanzierungsende` | `159` | Gas 44037/44038 „wenn eine Bilanzierung stattfindet" (AHB Gas Kap. 5.8 Bedingung `[29]`); UTILMD 55240–55243 beside `DTM+93` |
+    for (field, qualifier) in [
+        (
+            "bilanzierungsbeginn",
+            edi_energy::utilmd_codes::dtm::BILANZIERUNGSBEGINN,
+        ),
+        (
+            "bilanzierungsende",
             edi_energy::utilmd_codes::dtm::BILANZIERUNGSENDE,
-            normalise_date(bilanzierungsende),
-        );
+        ),
+    ] {
+        if let Some(date) = p
+            .get(field)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            tx = tx.date(qualifier, normalise_date(date));
+        }
     }
 
     // `SG4 SG6 RFF+TN` — „Referenz Vorgangsnummer (aus Anfragenachricht)",
@@ -352,8 +413,9 @@ pub(super) fn render_utilmd(
     // Zählpunktbezeichnung). Sending the Strom qualifier there is a segment the
     // receiver's own profile rejects, which is why this follows the track and
     // not the caller.
-    let tx = match p.get("lokationstyp").and_then(|v| v.as_str()) {
-        Some(qualifier) if !qualifier.is_empty() => tx.location(
+    let tx = match (location_id, p.get("lokationstyp").and_then(|v| v.as_str())) {
+        (None, _) => tx,
+        (Some(id), Some(qualifier)) if !qualifier.is_empty() => tx.location(
             edi_energy::Lokationstyp::from_qualifier_code(qualifier).ok_or_else(|| {
                 RenderError::MissingField {
                     message_type: mt.into(),
@@ -361,13 +423,30 @@ pub(super) fn render_utilmd(
                         .into(),
                 }
             })?,
-            location_id,
+            id,
         ),
-        _ if track == ReleaseTrack::Gas => {
-            tx.location(edi_energy::Lokationstyp::Meldepunkt, location_id)
+        (Some(id), _) if track == ReleaseTrack::Gas => {
+            tx.location(edi_energy::Lokationstyp::Meldepunkt, id)
         }
-        _ if names_messlokation => tx.messlokation(location_id),
-        _ => tx.marktlokation(location_id),
+        (Some(id), _) if primary_is_mabis_zp => {
+            tx.location(edi_energy::Lokationstyp::MabisZaehlpunkt, id)
+        }
+        (Some(id), _) if names_messlokation => tx.messlokation(id),
+        (Some(id), _) => tx.marktlokation(id),
+    };
+
+    // A **second** `SG5 LOC`, `Z15` MaBiS-Zählpunkt, beside the Marktlokation.
+    // UTILMD AHB Strom 2.2 Bedingung `[663]` makes the Modell-2 Bestätigung
+    // (55239) carry „die ID der Marktlokation und die ZPB des ZP der NGZ": the
+    // LPB has no other way to learn the Zählpunkt whose Netzgangzeitreihe it
+    // just won the right to receive.
+    let tx = match p
+        .get("mabis_zaehlpunkt")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty() && !primary_is_mabis_zp)
+    {
+        Some(zp) => tx.location(edi_energy::Lokationstyp::MabisZaehlpunkt, zp),
+        None => tx,
     };
 
     finish_interchange(tx.done().serialize(), sender, receiver, msg)
@@ -382,10 +461,175 @@ pub(super) fn render_utilmd(
 /// Altlieferant is and which Anmeldung it refers to — `SG12 NAD+VY` and
 /// `SG6 RFF+TN` — and no date of its own.
 ///
+/// The GeLi Gas Stornierung family (44022/44023/44024) is another: it cancels a
+/// Vorgang by reference and restates none of its dates. Its AHB table lists
+/// `DTM+137` alone — the document date, which the envelope carries — and no
+/// „Beginn zum" or „Ende zum" column at all. The MaBiS Korrekturlisten
+/// (55066/55196/55202/55224) are the same: they answer a list that covers a
+/// Bilanzierungsmonat, not a Vorgang that starts or ends on a day. The
+/// MaBiS-ZP lifecycle (55062–55064) states a `DTM+158` Bilanzierungsbeginn on
+/// an Aktivierung and a `DTM+159` Bilanzierungsende on a Deaktivierung, and
+/// no Vertragsdatum at all — the Zählpunkt has no contract.
+///
 /// Rendering one anyway emits a segment the receiving AHB does not define for
 /// the Anwendungsfall, which is a rejection the sender cannot see coming.
+/// Render a **Listennachricht** — the MaBiS Clearinglisten and their answers.
+///
+/// A different message shape from every other UTILMD: the `SG4 IDE+Z01` head
+/// *is* the Geschäftsvorfall and each `IDE+24` under it is a member rather than
+/// a Vorgang of its own („Das IDE+Z01 (Liste) definiert den Geschäftsvorfall.
+/// Alle aufgelisteten IDE+24 sind Bestandteil des Geschäftsvorfalls" — UTILMD
+/// AHB Strom 2.2 Kap. 13.4, Bedingung `[564]`).
+///
+/// | Where | Segment | Source |
+/// |---|---|---|
+/// | message | `BGM+Z05` Clearingliste, `DTM+157` Bilanzierungsmonat in `610` `CCYYMM` | Kap. 13.4 |
+/// | head | `IDE+Z01` Listennummer, `SG5 LOC+Z15` MaBiS-Zählpunkt (Muss), `SG6 RFF+Z13`, `SG6 RFF+TN` the answered list's number, `SG8 SEQ+Z22` + `RFF+AUU` Version der Zeitreihe (Muss) | Kap. 13.4 |
+/// | member | `IDE+24` Vorgangsnummer, `SG4 STS+E01` code + EBD (Muss), `SG5 LOC+Z16` Marktlokation (Muss) | Kap. 13.4 |
+///
+/// The head's own `STS+E01` and its members are **mutually exclusive**:
+/// Bedingung `[238]` marks the head status Muss „wenn SG4 IDE+24 (Vorgang)
+/// nicht vorhanden", and `[630]` says „wenn die Liste abgelehnt wird, ist kein
+/// Vorgang enthalten". A whole-list Ablehnung therefore takes the ordinary
+/// single-Vorgang path above, where its payload carries no `positionen`.
+fn render_utilmd_liste(
+    p: &serde_json::Value,
+    msg: &OutboxMessage,
+    pid: u32,
+    positionen: &[serde_json::Value],
+) -> Result<RenderedInterchange, RenderError> {
+    let mt = "UTILMD";
+
+    let sender = require_str(p, mt, "sender")?;
+    let receiver = p
+        .get("receiver")
+        .and_then(|v| v.as_str())
+        .unwrap_or(msg.recipient.as_ref());
+    let zaehlpunkt = require_str(p, mt, "mabis_zaehlpunkt")?;
+    let version = require_str(p, mt, "zeitreihen_version")?;
+    let listennummer = require_str(p, mt, "listennummer")?;
+    let codeliste = require_str(p, mt, "antwort_codeliste")?;
+
+    let release = active_release(MessageType::Utilmd, ReleaseTrack::Strom).ok_or_else(|| {
+        RenderError::NoActiveProfile {
+            message_type: mt.into(),
+        }
+    })?;
+    let edifact_pid = Pruefidentifikator::new(pid).map_err(|e| RenderError::MissingField {
+        message_type: mt.into(),
+        field: format!("pid value {pid} is invalid: {e}").into(),
+    })?;
+    let message_ref = p
+        .get("message_ref")
+        .and_then(|v| v.as_str())
+        .map(msg_ref_from_uuid)
+        .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
+
+    let mut builder = builders::UtilmdBuilder::new(release)
+        .sender(sender)
+        .receiver(receiver)
+        .pruefidentifikator(edifact_pid)
+        .message_ref(message_ref)
+        // `BGM+Z05` — every Clearingliste and every answer to one.
+        .document_code(edi_energy::utilmd_codes::BGM_CLEARINGLISTE);
+    if let Some(dd) = p.get("document_date").and_then(|v| v.as_str()) {
+        builder = builder.document_date(normalise_date(dd));
+    }
+    // `DTM+157` in `610` — the Bilanzierungsmonat, `CCYYMM`.
+    if let Some(monat) = p
+        .get("billing_period")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        builder = builder.gueltigkeit_beginn(monat);
+    }
+
+    // ── The head ─────────────────────────────────────────────────────────────
+    let mut head = builder
+        .list_transaction(listennummer)
+        .location(edi_energy::Lokationstyp::MabisZaehlpunkt, zaehlpunkt)
+        .summenzeitreihe_version(version);
+    // `SG6 RFF+TN` — „Es ist die Listennummer aus der Lieferanten- bzw.
+    // Bilanzierungsgebietsclearingliste zu verwenden" (Bedingung `[631]`).
+    if let Some(referenz) = p
+        .get("referenz_listennummer")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        head = head.referenz_vorgangsnummer(referenz);
+    }
+    let mut builder = head.done();
+
+    // ── The members ──────────────────────────────────────────────────────────
+    for (i, pos) in positionen.iter().enumerate() {
+        let malo =
+            pos.get("malo")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| RenderError::MissingField {
+                    message_type: mt.into(),
+                    field: format!("positionen[{i}].malo").into(),
+                })?;
+        let code = pos
+            .get("antwort_code")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| RenderError::MissingField {
+                message_type: mt.into(),
+                field: format!("positionen[{i}].antwort_code").into(),
+            })?;
+        // `IDE+24` DE 7402 must be unique across every Vorgangsnummer ever
+        // sent, so it is minted from the list number and the position rather
+        // than reusing the Marktlokations-ID.
+        let vorgangsnummer = pos
+            .get("vorgangsnummer")
+            .and_then(|v| v.as_str())
+            .map_or_else(|| format!("{listennummer}-{}", i + 1), ToOwned::to_owned);
+        let mut member = builder
+            .transaction(vorgangsnummer)
+            .antwort(edi_energy::utilmd_codes::AntwortStatus::from_codeliste(
+                code, codeliste,
+            ))
+            .marktlokation(malo);
+        if let Some(referenz) = pos
+            .get("referenz_vorgangsnummer")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            member = member.referenz_vorgangsnummer(referenz);
+        }
+        builder = member.done();
+    }
+
+    finish_interchange(builder.serialize(), sender, receiver, msg)
+}
+
+/// Whether this PID's Anwendungsfall names a Lokation at all.
+///
+/// Almost every UTILMD Vorgang is about one, so this answers `true` by default
+/// and names the exceptions. The **MaBiS Korrekturlisten** (55066, 55196,
+/// 55202, 55224) are the ones that are not: they answer a whole Clearingliste,
+/// and their Ablehnungs-Cluster refuses it outright — the Abonnement was never
+/// ordered, the version is not admitted, the Zeitraum is implausible. There is
+/// no Marktlokation such an answer is about, and the AHB marks `SG5 LOC` Kann
+/// on the family accordingly.
+///
+/// Requiring one there refuses the whole message, and a UTILMD that does not
+/// render leaves raw JSON on the AS4 leg.
+pub(super) const fn utilmd_carries_sg5_loc(pid: u32) -> bool {
+    !matches!(pid, 55_066 | 55_196 | 55_202 | 55_224)
+}
+
 pub(super) const fn utilmd_carries_sg4_date(pid: u32) -> bool {
-    !matches!(pid, 55_036 | 44_036)
+    !matches!(
+        pid,
+        55_036
+            | 44_036
+            | 44_022..=44_024
+            | 55_062..=55_064
+            | 55_066
+            | 55_196
+            | 55_202
+            | 55_224
+    )
 }
 
 /// The `SG4 DTM` DE 2005 qualifier for the process date of a given PID.
@@ -453,6 +697,18 @@ pub(super) fn utilmd_dtm_qualifier(pid: u32) -> &'static str {
         // does not define `157` at all. 55609 carries no SG4 date; the one
         // emitted here is an unlisted segment, not a missing Muss.
         55_600..=55_609 => dtm::BEGINN_ZUM,
+        // ── NZR-EMob / Modell 2 (UTILMD AHB Strom 2.2 Kap. 11) ────────────
+        //
+        // The Anmeldung and its answer name a Vertragsbeginn; everything that
+        // ends something — the Beendigung der Zuordnung, the Abmeldung and
+        // both their answers — names a Vertragsende. The default below would
+        // have given all six `92`, which is the wrong column on four of them.
+        //
+        // 55235/55237 (Zuordnung des ZP der NGZ zur NZR) begin an assignment,
+        // 55236 ends one. They are MaBiS rather than Modell 2, but they share
+        // this table.
+        55_235 | 55_237 | 55_238 | 55_239 => dtm::BEGINN_ZUM,
+        55_236 | 55_240..=55_243 => dtm::ENDE_ZUM,
         // Stammdatenänderung (GPKE Teil 4 / GeLi Gas): Änderung zum.
         55_109 | 55_110 | 55_136 | 55_137 | 55_610..=55_699 => dtm::AENDERUNG_ZUM,
         44_109..=44_199 => dtm::AENDERUNG_ZUM,

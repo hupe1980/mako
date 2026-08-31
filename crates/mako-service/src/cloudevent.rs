@@ -5,12 +5,14 @@
 //! the envelope shape, the `time` format (always RFC3339), the `source` URI
 //! convention, the `id` scheme (UUID v4 unless an idempotency key is supplied),
 //! and the HMAC signature format (`sha256=<hex>`) are identical on the wire no
-//! matter which daemon emits — the event catalog ([`mako_events`]) owns the
-//! `type` names, this module owns everything else about the envelope.
+//! matter which daemon emits — the `mako-events` catalogue owns the `type`
+//! names, this module owns everything else about the envelope.
 //!
-//! The `type` string itself is NOT hard-coded here: callers pass a
-//! [`mako_events`] constant (e.g. [`mako_events::billing::RECHNUNG_ERSTELLT`]),
-//! so producer and consumer stay in lockstep through the shared catalog.
+//! The `type` string itself is NOT hard-coded here: callers pass a catalogue
+//! constant (e.g. `mako_events::billing::RECHNUNG_ERSTELLT`), so producer and
+//! consumer stay in lockstep. Plain code spans rather than intra-doc links:
+//! `mako-events` is a dev-dependency here, so consumers of this crate do not
+//! inherit the catalogue just to build an envelope.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -42,7 +44,7 @@ pub struct CloudEvent {
     pub id: String,
     /// Emitting `source` URI — build with [`source`].
     pub source: String,
-    /// `CloudEvents` `type` — pass a [`mako_events`] catalog constant.
+    /// `CloudEvents` `type` — pass a `mako_events` catalogue constant.
     #[serde(rename = "type")]
     pub ce_type: String,
     /// RFC3339 UTC timestamp. Set at construction, so it is always RFC3339 on the

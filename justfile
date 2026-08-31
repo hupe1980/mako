@@ -21,8 +21,10 @@ check:
     cargo check --all-targets --all-features
 
 # Run all tests
+# `--all-targets` so bench targets are built and their `main` runs in test mode;
+# without it a panicking Criterion bench is invisible to `just ci`.
 test:
-    cargo test --all-features
+    cargo test --all-features --all-targets
 
 # Run tests for a specific crate (e.g. `just test-crate mako-engine`)
 test-crate crate:
@@ -193,7 +195,8 @@ clippy-roles:
     # by prüfende Rolle, so an NB-only build holds no LF catalogue. The default
     # build stays clean whatever the role gates do, so each one needs its own
     # pass.
-    for f in "role-nb" "role-lf" "role-msb" "role-mabis" "role-nb,role-lf"; do
+    for f in "role-nb" "role-lf" "role-msb" "role-mabis" "role-emob" \
+             "role-nb,role-lf" "role-mabis,role-emob"; do
         echo "==> cargo clippy -p mako-pruefung --no-default-features --features $f"
         cargo clippy -p mako-pruefung --no-default-features --features "$f" --all-targets -- -D warnings
     done
@@ -271,7 +274,7 @@ examples:
         python3 -c "import json,sys; m=json.load(sys.stdin); [print(p['name'], t['name']) for p in m['packages'] for t in p['targets'] if 'example' in t['kind']]" | sort)
     exit $fail
 
-ci: check test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-wire-timestamps check-business-dates check-dep-versions check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci validate-release-codes lint-makotest test-makotest
+ci: check test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-wire-timestamps check-business-dates check-dep-versions check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci validate-release-codes validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -464,6 +467,19 @@ validate-pruefids-strict:
 # fixture.  Prefer `validate-pruefids-strict` for local iteration.
 validate-pruefids-strict-ci:
     cargo xtask validate-pruefids --strict --min-coverage 1
+
+# Hold the mako-pruefung Antwortcode catalogue against the published EBD PDF.
+#
+# Checks each `code!` entry's tree, code and Cluster against
+# `regulatories/bdew-mako/Entscheidungsbaum-Diagramme_und_Codelisten_*.pdf`.
+# The Cluster is the half nothing else guards: the same code means Zustimmung in
+# one tree and Ablehnung in another, so a wrong one answers a confirmation with
+# a refusal on the wire and every other check still passes.
+#
+# `regulatories/` is gitignored, so this SKIPS without the mirror or without
+# poppler's `pdftotext`. Run `cargo xtask sync-regulatories --download` first.
+validate-ebd-codes:
+    cargo xtask validate-ebd-codes
 
 # Verify every receivable profile's release code appears in a UNH 0057 fixture
 validate-release-codes:

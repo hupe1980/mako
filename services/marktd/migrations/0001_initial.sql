@@ -77,6 +77,13 @@ CREATE TABLE malo (
     -- §14a EnWG Status der Fernsteuerbarkeit (UTILMD CCI+Z24++Z97 = true /
     -- Z96 = false). No BO4E field exists for it; a MaLo PUT leaves it alone.
     fernsteuerbar        BOOLEAN,
+    -- NZR-EMob Abwicklungsmodell (UTILMD CCI+ZA2++ZE9 = MODELL_1 /
+    -- ZF0 = MODELL_2, BK6-20-160 Anlage 6). Says whether the MaLo is balanced
+    -- at itself or inside a Ladepunktbetreiber's Bilanzierungsgebiet. Arrives
+    -- on the Stammdatenaenderung band and the WiM Anmeldungen, never on the
+    -- Modellwechsel PIDs 55238-55243. NULL means no counterparty has stated
+    -- one, which is not the same as MODELL_1.
+    abwicklungsmodell    TEXT CHECK (abwicklungsmodell IN ('MODELL_1', 'MODELL_2')),
     version      BIGINT      NOT NULL DEFAULT 1,
     data         JSONB       NOT NULL,              -- full BO4E MARKTLOKATION
     bo4e_version TEXT        NOT NULL DEFAULT '202607.1.0',
@@ -88,6 +95,8 @@ CREATE INDEX malo_big ON malo (bilanzierungsgebiet) WHERE bilanzierungsgebiet IS
 CREATE INDEX malo_bilanzierungsmethode ON malo (bilanzierungsmethode) WHERE bilanzierungsmethode IS NOT NULL;
 CREATE INDEX malo_regelzone ON malo (regelzone) WHERE regelzone IS NOT NULL;
 CREATE INDEX malo_fallgruppe ON malo (fallgruppe) WHERE fallgruppe IS NOT NULL;
+-- Partial: only Modell-2 MaLos are ever listed, and they are the rare case.
+CREATE INDEX malo_abwicklungsmodell ON malo (abwicklungsmodell) WHERE abwicklungsmodell IS NOT NULL;
 
 -- ── Rollenzuordnung (MaLo role assignments, temporal) ───────────────────────────
 
@@ -299,16 +308,12 @@ CREATE TABLE versorgungsstatus (
                           'Ruhend',
                           'Stillgelegt'
                       )),
-    lf_mp_id            TEXT,                -- MP-ID of the active Lieferant (set when lieferstatus = 'Beliefert')
-    -- MP-ID of the announced future LF (WHO). Set on receipt of an Anmeldung
-    -- (55001 / 55077 / 44001) and cleared by its Ablehnung (55003 / 55080 /
-    -- 44003) or by the Bestätigung that promotes it. The *first* announcement
-    -- wins: a competing supplier's Anmeldung does not overwrite it, because
-    -- mako-pruefung decides E_0622 Prüfschritt 70 „Andere Anmeldung in Bearbeitung"
-    -- by comparing this column against the requesting supplier.
-    lf_mp_id_next       TEXT,
-    lf_next_lieferbeginn DATE,               -- Announced Lieferbeginn of the future LF (WHEN; paired with lf_mp_id_next)
-    lieferbeginn      DATE,
+    -- Who supplies this Marktlokation is NOT a column here: it is the
+    -- `lf_zuordnung` list below. A Marktlokation can be held by several
+    -- Lieferanten at once (a tranchierte erzeugende MaLo, GPKE Teil 1
+    -- Geschäftsvorfall 3) and can carry more than one pending Anmeldung
+    -- (55038 / 44038 addresses an LFZ whose future Zuordnung is displaced),
+    -- and neither fits a scalar slot.
     lieferende        DATE,
     msb_mp_id           TEXT,
     nb_mp_id            TEXT        NOT NULL,
@@ -330,15 +335,64 @@ CREATE TABLE versorgungsstatus (
 
 CREATE INDEX versorgungsstatus_tenant_status
     ON versorgungsstatus (tenant, lieferstatus);
-CREATE INDEX versorgungsstatus_tenant_lf
-    ON versorgungsstatus (tenant, lf_mp_id)
-    WHERE lf_mp_id IS NOT NULL;
 CREATE INDEX versorgungsstatus_tenant_nb
     ON versorgungsstatus (tenant, nb_mp_id);
 -- §38 Abs. 4 timer scans: all running Ersatzversorgungen ordered by start date.
 CREATE INDEX versorgungsstatus_eog
     ON versorgungsstatus (tenant, eog_seit)
     WHERE lieferstatus = 'Ersatzversorgung';
+
+-- ── LF-Zuordnung per MaLo ─────────────────────────────────────────────────────
+--
+-- Who supplies a Marktlokation, as a list. One row per (MaLo, LF, Tranche,
+-- status).
+--
+-- A verbrauchende Marktlokation normally carries exactly one 100 % 'Aktiv' row.
+-- An *erzeugende* one can be tranchiert: several LFA hold Tranchen of it at
+-- once, each with its own Aufteilungsfaktor, and E_0623 Prüfschritte 500–540
+-- decide an Anmeldung on the arithmetic over those shares — „ist ein
+-- ausreichend großer Prozentsatz frei geworden?" — rather than on one
+-- supplier's answer. Four of that tree's six outcomes exist only there.
+--
+-- 'Angekuendigt' rows are pending Anmeldungen. There can be several: E_0622
+-- Prüfschritt 70 refuses the second one with A06, but the projection has to
+-- hold it to decide that, and 55038 / 44038 „Aufhebung einer zukünftigen
+-- Zuordnung" addresses an LFZ that is exactly such a row.
+--
+-- An assignment that has ended is deleted; its trace is the
+-- versorgungsstatus_history snapshot, which carries the whole list as JSONB.
+
+CREATE TABLE lf_zuordnung (
+    id                BIGSERIAL   PRIMARY KEY,
+    malo_id           TEXT        NOT NULL,
+    tenant            TEXT        NOT NULL,
+    lf_mp_id          TEXT        NOT NULL,
+    -- Share of the Marktlokation, in percent: 100 for an untranchierte MaLo,
+    -- the Aufteilungsfaktor of the Tranchengröße product (9991000002090) for a
+    -- Tranche. NUMERIC because the shares are summed and compared against the
+    -- share the LFN registered, and a float cannot hold 33.3 exactly.
+    prozent           NUMERIC(6,3) NOT NULL DEFAULT 100
+                          CHECK (prozent > 0 AND prozent <= 100),
+    -- Tranchen-ID (`SG5 LOC+Z21`); NULL for an untranchierte Marktlokation.
+    tranche_id        TEXT,
+    status            TEXT        NOT NULL CHECK (status IN ('Angekuendigt', 'Aktiv')),
+    zuordnungsbeginn  DATE,
+    zuordnungsende    DATE,
+    process_id        UUID,
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    -- NULLS NOT DISTINCT so the untranchierte case (tranche_id IS NULL) is one
+    -- assignment per (MaLo, LF, status) rather than unboundedly many.
+    UNIQUE NULLS NOT DISTINCT (tenant, malo_id, lf_mp_id, tranche_id, status),
+    FOREIGN KEY (malo_id, tenant) REFERENCES versorgungsstatus (malo_id, tenant)
+        ON DELETE CASCADE
+);
+
+-- The projection is read per MaLo on every decision.
+CREATE INDEX lf_zuordnung_malo ON lf_zuordnung (tenant, malo_id);
+-- „which Marktlokationen does this Lieferant hold?" — the LF-side portfolio
+-- query, and the one behind the §38 gap-closure sweep.
+CREATE INDEX lf_zuordnung_lf ON lf_zuordnung (tenant, lf_mp_id, status);
 
 -- ── Grundversorger (§36 Abs. 2 EnWG) ──────────────────────────────────────────
 --
@@ -751,10 +805,11 @@ CREATE TABLE versorgungsstatus_history (
     malo_id          TEXT        NOT NULL,
     tenant           TEXT        NOT NULL,
     lieferstatus     TEXT        NOT NULL,
-    lf_mp_id           TEXT,
-    lf_mp_id_next      TEXT,                -- announced future LF (WHO; paired with lf_next_lieferbeginn = WHEN)
-    lf_next_lieferbeginn DATE,
-    lieferbeginn     DATE,
+    -- The lf_zuordnung list as it stood, snapshotted whole. Denormalised
+    -- rather than versioned per assignment: a point-in-time read wants the
+    -- state of the Marktlokation at an instant, and reassembling that from
+    -- per-assignment validity would be a second temporal model for one fact.
+    zuordnungen      JSONB       NOT NULL DEFAULT '[]'::jsonb,
     lieferende       DATE,
     msb_mp_id          TEXT,
     nb_mp_id           TEXT        NOT NULL,

@@ -23,7 +23,15 @@ Beyond data storage, `marktd` includes:
 
 - **durable fan-out** — enriches inbound `de.mako.*` events with `marktrole` and fans out
   to all registered subscribers (ERP, `processd`, `invoicd`, `obsd`) via HMAC-signed webhooks.
-- **VersorgungsStatus derivation** — five-phase lifecycle: `announce_lf_next` (55001/55077/44001 `process.initiated`; the **first** announcement wins), `confirm_supply` (55002/55078/44002 `process.completed` — Bestätigung Anmeldung; a `lfa_lieferende` earlier than the Zuordnungsbeginn is Fall b and emits `de.markt.versorgung.gap-detected` for the days between), `end_supply` (55005/44005 `process.completed` — Bestätigung Lieferende, recording the contractual Lieferende the process carries; when it leaves an uncovered interval it emits `de.markt.versorgung.gap-detected` with `gap_from`/`gap_until`, the §38 EnWG gap-closure trigger), `begin_eog_supply` (55013/44013 `process.completed` — Anmeldung/Zuordnung EOG: the Grundversorger becomes the supplier of record, `eog_seit` anchors the §38 Abs. 4 3-month maximum), `clear_lf_next` (55003/55080/44003 `process.completed` — Ablehnung Anmeldung resets the announced future supplier). Tracks `lf_mp_id_next` + `lf_next_lieferbeginn` (pending transition), appends every change to `versorgungsstatus_history`, and supports `?at=YYYY-MM-DD` point-in-time queries.
+- **VersorgungsStatus derivation** — five transitions driven by inbound `de.mako.*`
+  process events: `announce_lf_next` (55001/55077/44001), `confirm_supply`
+  (55002/55078/44002), `clear_lf_next` (55003/55080/44003), `end_supply` (55005/44005)
+  and `begin_eog_supply` (55013/44013). Who supplies the Marktlokation is a **list**
+  (`lf_zuordnung`): a tranchierte erzeugende MaLo is held by several LFA at once and
+  more than one Anmeldung can be pending. An uncovered interval emits
+  `de.markt.versorgung.gap-detected` — the §38 EnWG gap-closure trigger — and every
+  change appends a whole-list snapshot to `versorgungsstatus_history`, which
+  `?at=YYYY-MM-DD` resolves against. The lifecycle table below has the detail.
 
 `marktd` is a **pure data hub**. Automated Anmeldung STP decisions are the
 responsibility of `processd`'s NB module, which subscribes to `marktd`'s fan-out
@@ -339,8 +347,9 @@ Two consequences are specific to `marktd`, which stores what it accepts:
   `nutzung`/`verbrauchsart`/`ist_fernschaltbar`/`malo_id`/`melo_id` on a
   TechnischeRessource, `konfigurationsprodukte` on a SteuerbareRessource and
   `zaehler_typ`/`eichung_bis` on a Zaehler are derived from the payload. Where
-  the BO declares no such field — `nelos.nb_mp_id`, a MaLo's `fallgruppe` and
-  `fernsteuerbar` — the envelope keeps it and an upsert leaves the column alone.
+  the BO declares no such field — `nelos.nb_mp_id`, a MaLo's `fallgruppe`,
+  `abwicklungsmodell` and `fernsteuerbar` — the envelope keeps it and an upsert
+  leaves the column alone.
 
 Writes that touch a shadowed column merge into the JSONB in the same statement,
 so the EDIFACT Stammdatenänderung patch and the `konfigurationsprodukte`
@@ -759,6 +768,7 @@ There are no incremental migration files — the initial schema is the authorita
 | `regelzone` | `TEXT` | Regelzone EIC code — maps to ÜNB for Redispatch 2.0 + MABIS |
 | `fallgruppe` | `TEXT` | GaBi Gas RLM category (e.g. `LNF`, `LF`, `TK`) |
 | `fernsteuerbar` | `BOOLEAN` | §14a EnWG „Status der Fernsteuerbarkeit" — `true` = technisch fernsteuerbar, `false` = nicht (UTILMD `CCI+7037` `Z97`/`Z96`) |
+| `abwicklungsmodell` | `TEXT` | NZR-EMob (BK6-20-160 Anlage 6) — `MODELL_1` (balanced at the Marktlokation) \| `MODELL_2` (balanced in a Ladepunktbetreiber's Bilanzierungsgebiet), from UTILMD `CCI+ZA2++ZE9`/`ZF0`. `NULL` means no counterparty has stated one — **not** Modell 1 |
 
 ### Key typed columns on `melo`
 
@@ -939,11 +949,16 @@ the build instead of rejecting valid data at run time.
 
 All columns are `NULL` when the BO4E payload does not carry the field.
 
-**Two columns are deliberately not in that table.** `fallgruppe` (the GaBi RLM
-Fallgruppe) is a `Bilanzierung` field and `fernsteuerbar` (§14a EnWG) has no
-BO4E field at all — neither is on `Marktlokation`, so a `PUT /malos/{id}` leaves
-both alone. They are written by the `Bilanzierung` resource and by the UTILMD
-Stammdatenänderung path (`TM+Z10`, `CCI+Z24++Z96/Z97`) respectively.
+**Three columns are deliberately not in that table.** `fallgruppe` (the GaBi RLM
+Fallgruppe) and `abwicklungsmodell` (NZR-EMob) are `Bilanzierung` fields, and
+`fernsteuerbar` (§14a EnWG) has no BO4E field at all — none is on
+`Marktlokation`, so a `PUT /malos/{id}` leaves all three alone. They are written
+by the `Bilanzierung` resource and by the UTILMD Stammdatenänderung path
+(`TM+Z10`, `CCI+Z24++Z96/Z97`, `CCI+ZA2++ZE9/ZF0`) respectively.
+
+`abwicklungsmodell` is nevertheless `CHECK`ed against the BO4E
+`Abwicklungsmodell` enum like the shadowed columns, because its vocabulary *is*
+BO4E's even though its writer is not the payload.
 
 The call also automatically pushes the NB and MSB GLNs to `makod`'s MaLo cache
 via `PUT /admin/malo/{malo_id}` — fire-and-forget; `makod` failure does not fail
@@ -1005,7 +1020,7 @@ every `sparten` filter.
 | marktd master data | `de.markt.partner.updated` | `PUT /api/v1/partners/{mp_id}` |
 | marktd NB contract | `de.markt.nb-contract.updated` | `PUT /api/v1/nb-contracts/{id}` — carries `vertragsart`, `version`, `tenant` in `data` |
 | marktd PRICAT | `de.markt.pricat.published` | `PUT /api/v1/preisblaetter/{nb_mp_id}` |
-| marktd supply | `de.markt.versorgung.changed` | **every** VersorgungsStatus transition — announce (55001/55077/44001), confirm (55002/55078/44002), reject (55003/55080/44003), end (55005/44005), EoG (55013/44013) — and the REST upsert. Carries the resulting `lieferstatus`, `lf_mp_id`, `lf_mp_id_next`, `lieferbeginn`, `lieferende`, `eog_seit`, `sparte`, `version` |
+| marktd supply | `de.markt.versorgung.changed` | **every** VersorgungsStatus transition — announce (55001/55077/44001), confirm (55002/55078/44002), reject (55003/55080/44003), end (55005/44005), EoG (55013/44013) — and the REST upsert. Carries the resulting `lieferstatus`, `zuordnungen`, `lieferende`, `eog_seit`, `sparte`, `version` |
 | marktd supply | `de.markt.versorgung.gap-detected` | An interval no supplier covers — a Lieferende (55005/44005) the announced successor does not follow on, or a Fall-b Bestätigung (55002/55078/44002) whose Altlieferant released earlier. §38 EnWG gap-closure trigger (consumer: `processd`) |
 | marktd supply | `de.markt.versorgung.eog-begonnen` | 55013/44013 completed → `begin_eog_supply` (Ersatz-/Grundversorgung active; consumer: `processd`) |
 | makod process relay | `de.mako.process.initiated` | forwarded from `makod` ingest |
@@ -1278,12 +1293,12 @@ A Lieferantenwechsel spans three distinct phases, each triggering a targeted par
 
 | Phase | CloudEvent | PID | Operation | Effect |
 |---|---|---|---|---|
-| **Announce** | `process.initiated` | 55001 / 55077 / 44001 | `announce_lf_next` | Sets `lf_mp_id_next` (WHO) + `lf_next_lieferbeginn` (WHEN). Does **not** change `lieferstatus`, and does **not** displace an announcement another supplier already holds. |
-| **Confirm** | `process.completed` | 55002 / 55078 / 44002 | `confirm_supply` | Atomic SQL: `lf_mp_id ← lf_mp_id_next`, `lieferbeginn ← lf_next_lieferbeginn`, `lieferstatus = Beliefert`, clears `lf_mp_id_next`. |
-| **End** | `process.completed` | 55005 / 44005 | `end_supply` | `lieferstatus = Unbeliefert`, clears `lf_mp_id`/`lieferbeginn`/`eog_seit` — preserves `lf_mp_id_next` if another transition is already announced. An uncovered interval → emits `de.markt.versorgung.gap-detected`. |
+| **Announce** | `process.initiated` | 55001 / 55077 / 44001 | `announce_lf_next` | Adds one `Angekuendigt` assignment, carrying the share (100 %, or the Tranchengröße `9991000002090`) and the Zuordnungsbeginn. Does **not** change `lieferstatus`. Several may be pending at once — a competing Anmeldung is what `E_0622` Prüfschritt 70 refuses with `A06`, and the projection has to hold it to decide that. |
+| **Confirm** | `process.completed` | 55002 / 55078 / 44002 | `confirm_supply` | Promotes **the named supplier's** announcement to `Aktiv` and displaces the running assignment on the same Tranche — only that one, so an Anmeldung for a 25 % Tranche leaves the LFA holding the other 75 % in place. `lieferstatus = Beliefert`. |
+| **End** | `process.completed` | 55005 / 44005 | `end_supply` | Removes the named running assignment, or all of them when none is named. `lieferstatus` becomes `Unbeliefert` only once **no** assignment is left: one LFA leaving a tranchierte Marktlokation does not make it unsupplied. Announced assignments are preserved. An uncovered interval → emits `de.markt.versorgung.gap-detected`. |
 | **EoG** | `process.completed` | 55013 / 44013 | `begin_eog_supply` | `lieferstatus = Ersatzversorgung`/`Grundversorgung` (per `data.eog_art`), `lf_mp_id = E/G`, `eog_seit = Zuordnungsbeginn` (may be retroactive — anchors §38 Abs. 4). Resolves the Bilanzkreis from the completion payload, else the NB's deposited `default_bilanzkreis` (EoG ohne Antwort). Emits `de.markt.versorgung.eog-begonnen` (incl. `bilanzkreis`). |
 | **Stammdatenänderung** | `process.completed` | GPKE Teil 4 / GeLi Gas Änderung PIDs | `patch_stammdaten` | **Object-generic apply.** Dispatches by the `data.objekt` marker to the matching typed-column patch — `MARKTLOKATION`→`malo` (incl. §14a `fernsteuerbar`), `MESSLOKATION`→`melo` + the **MSB-Zuordnung** (zugeordneter MSB `CAV+7111=Z91`) recorded on the dated `melo_msb_zuordnungen` timeline via `assign_msb` effective the Änderungsdatum, `NETZLOKATION`→`nelo` (incl. §14a `steuerkanal`), `TECHNISCHE_RESSOURCE`→`technische_ressourcen` (`nutzung` `CCI+7059` Z17/Z50/Z56, `verbrauchsart` `CAV+7111` Z64/Z65/ZE5/ZA8, `ist_fernschaltbar`), `STEUERBARE_RESSOURCE`→`steuerbare_ressourcen` (**Konfigurationsprodukte** — each SG8 `SEQ+Z79` product group → a BO4E `Konfigurationsprodukt` with `produktcode` `PIA+5` DE7140, zugeordneter Marktpartner `CAV+Z91`/`ZF0`, and `leistungskurvendefinition` from `CCI+Z66`; the full contracted array is **replaced**, not merged), `TRANCHE`→`tranche`. Each `Some` field overwrites its column via `COALESCE`; JSONB payload and `version` untouched; no-op when the object is unknown locally. Emits `de.markt.malo.stammdaten-geaendert` (MaLo) / `de.markt.stammdaten.geaendert` (other objects). Deep MeLo `standorteigenschaften` are acknowledged without a typed apply (structural-MIG level). |
-| **Clear** | `process.completed` | 55003 / 55080 / 44003 | `clear_lf_next` | Lieferbeginn rejected (Ablehnung Anmeldung): resets `lf_mp_id_next` + `lf_next_lieferbeginn` so no consumer acts on a switch that will not happen. Idempotent — a no-op when nothing is announced. |
+| **Clear** | `process.completed` | 55003 / 55080 / 44003 | `clear_lf_next` | Lieferbeginn rejected (Ablehnung Anmeldung): drops the refused supplier's announcement so no consumer acts on a switch that will not happen — a rival Anmeldung the NB has not ruled on survives it. Also the write behind 55038 / 44038 „Aufhebung einer zukünftigen Zuordnung", which is the same operation addressed at an LFZ. Idempotent. |
 
 All operations are idempotent under at-least-once fan-out delivery, and each emits
 `de.markt.versorgung.changed` carrying the state it produced.
@@ -1294,11 +1309,14 @@ All operations are idempotent under at-least-once fan-out delivery, and each emi
 VersorgungsStatusRecord
 ├── malo_id              — 11-digit Marktlokations-ID
 ├── lieferstatus         — Beliefert | Unbeliefert | Grundversorgung | Ersatzversorgung | Ruhend | Stillgelegt
-├── lf_mp_id             — active Lieferant MP-ID (set when Beliefert)
-├── lf_mp_id_next        — announced future Lieferant MP-ID (WHO; set on 55001/55077/44001)
-├── lf_next_lieferbeginn — announced Lieferbeginn date (WHEN; paired with lf_mp_id_next)
-├── lieferbeginn         — current supply start date
-├── lieferende           — announced supply end date
+├── zuordnungen[]        — who supplies it, as a list (see below)
+│   ├── lf_mp_id         — Lieferant MP-ID
+│   ├── prozent          — share of the Marktlokation (100 for an untranchierte one)
+│   ├── tranche_id       — Tranchen-ID (`SG5 LOC+Z21`), null when untranchiert
+│   ├── status           — Angekuendigt | Aktiv
+│   ├── zuordnungsbeginn — Lieferbeginn of this assignment
+│   └── zuordnungsende   — agreed end, once there is one
+├── lieferende           — announced supply end date of the Marktlokation
 ├── msb_mp_id            — active Messstellenbetreiber MP-ID
 ├── nb_mp_id             — Netzbetreiber MP-ID (partition key)
 ├── last_process_id      — UUID of the last process that triggered a state change
@@ -1312,11 +1330,12 @@ VersorgungsStatusRecord
 stateDiagram-v2
     [*] --> Unbeliefert : MaLo registered
 
-    Unbeliefert --> Unbeliefert : 55001/55077/44001 process.initiated<br/>→ lf_mp_id_next + lf_next_lieferbeginn set
-    Unbeliefert --> Beliefert   : 55002/55078/44002 process.completed<br/>→ confirm_supply (lf_mp_id_next → lf_mp_id)
+    Unbeliefert --> Unbeliefert : 55001/55077/44001 process.initiated<br/>→ Angekuendigt assignment added
+    Unbeliefert --> Beliefert   : 55002/55078/44002 process.completed<br/>→ confirm_supply (Angekuendigt → Aktiv)
 
-    Beliefert --> Beliefert     : 55001/55077/44001 process.initiated<br/>→ next LF announced; current LF still active
-    Beliefert --> Unbeliefert   : 55005/44005 process.completed<br/>→ end_supply (lf_mp_id_next preserved if set)
+    Beliefert --> Beliefert     : 55001/55077/44001 process.initiated<br/>→ next LF announced; running assignments untouched
+    Beliefert --> Beliefert     : 55005/44005 on one Tranche<br/>→ end_supply; other Tranchen still run
+    Beliefert --> Unbeliefert   : 55005/44005 process.completed<br/>→ end_supply, last assignment gone<br/>(announcements preserved)
 
     Unbeliefert --> Ersatzversorgung : 55013/44013 process.completed<br/>→ begin_eog_supply (§38 EnWG, eog_seit set)
     Unbeliefert --> Grundversorgung  : 55013/44013 process.completed<br/>→ begin_eog_supply (§36 EnWG, Haushaltskunde)
@@ -1344,15 +1363,22 @@ so the `processd` EoG module handles them identically: it resolves the
 Grundversorger (`GET /api/v1/grundversorger/{nb_mp_id}`) and dispatches
 `gpke.eog.anmelden` (UTILMD 55013).
 
-**GPKE rule A06.** `processd` reads `lf_mp_id_next` before accepting a new Anmeldung and
-compares it against the *requesting* supplier. `marktd` writes the marker while ingesting
-the `process.initiated`, before fanning the event out, so the Anmeldung under evaluation
-has already written its own MP-ID by the time the check runs — a bare `IS NOT NULL` test
-would reject every first-time Anmeldung against itself.
+**GPKE rule A06.** `processd` looks for an announcement by a supplier **other than** the
+requesting one before accepting a new Anmeldung. `marktd` records the announcement while
+ingesting the `process.initiated`, before fanning the event out, so the Anmeldung under
+evaluation is already in the projection by the time the check runs — a bare „is anything
+pending?" test would reject every first-time Anmeldung against itself.
 
-The comparison only means anything because `announce_lf_next` keeps the **first**
-announcement; a competing supplier does not displace it. The holder of the announcement
-may still correct its own date.
+Both announcements are kept: the tree has to rule on the rival, and 55038 / 44038's
+addressee *is* it.
+
+**Tranchierte Marktlokationen.** An erzeugende Marktlokation can be split across Tranchen
+held by several LFA at once, each with its own Aufteilungsfaktor. `E_0623` Prüfschritte
+500–540 decide such an Anmeldung on the arithmetic over those shares — „ist ein ausreichend
+großer Prozentsatz frei geworden?" — rather than on one supplier's answer, and four of that
+tree's six outcomes exist only there. `lf_mp_id` and `lf_mp_id_next` are derived from the
+list and are **absent** when several suppliers hold it: there is no single supplier to name,
+and naming one arbitrarily would be worse than naming none.
 
 **Optimistic concurrency.** Every write uses `WHERE malo_id = $1 AND tenant = $2 AND version = $3`.
 Conflict → `412 Precondition Failed` → retry after re-read.
@@ -1379,6 +1405,16 @@ PUT  /api/v1/versorgung/{malo_id}
 {
   "malo_id": "51238696012",
   "lieferstatus": "Beliefert",
+  "zuordnungen": [
+    {
+      "lf_mp_id": "4012345000023",
+      "prozent": "100.000",
+      "tranche_id": null,
+      "status": "Aktiv",
+      "zuordnungsbeginn": "2026-10-01",
+      "zuordnungsende": null
+    }
+  ],
   "lf_mp_id": "4012345000023",
   "lf_mp_id_next": null,
   "lf_next_lieferbeginn": null,

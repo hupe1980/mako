@@ -32,6 +32,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use mako_emob::modellwechsel::ModellwechselCommand;
 use mako_engine::{
     builder::DeadlineScheduler,
     deadline::{Deadline, DeadlineStore},
@@ -242,6 +243,17 @@ deadline_dispatch! {
     // wMSB's `A03` the gMSB may not fit the iMS, so the timer moves the Vorgang
     // to `Abgelehnt` rather than letting it sit open (WiM Teil 1 Kap. 3.5.2).
     WIM_ERSTEINBAU_WORKFLOW => WimErsteinbauWorkflow : ErsteinbauCommand::TimeoutExpired,
+    // NZR-EMob / Modell 2. Unlike the GPKE Beendigung der Zuordnung, **silence
+    // is not consent**: neither Anlage 6 nor the AWH gives an unanswered leg a
+    // default outcome, so the timer escalates rather than confirming — moving
+    // a Marktlokation between Bilanzierungsgebieten on no one's say-so is the
+    // one thing the model must not do.
+    mako_emob::EmobAnmeldungWorkflow::WORKFLOW_NAME
+        => mako_emob::EmobAnmeldungWorkflow : ModellwechselCommand::TimeoutExpired,
+    mako_emob::EmobZuordnungsendeWorkflow::WORKFLOW_NAME
+        => mako_emob::EmobZuordnungsendeWorkflow : ModellwechselCommand::TimeoutExpired,
+    mako_emob::EmobAbmeldungWorkflow::WORKFLOW_NAME
+        => mako_emob::EmobAbmeldungWorkflow : ModellwechselCommand::TimeoutExpired,
     }
     no_deadline: [
         // Pure receive-and-record workflows: they record an inbound message and

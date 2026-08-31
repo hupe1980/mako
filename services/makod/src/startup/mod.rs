@@ -179,93 +179,124 @@ pub(crate) fn lock_data_dir(
 /// but routes nothing, and would silently dead-letter every inbound message.
 /// `EngineBuilder::build` additionally panics when a registered module declares
 /// a message type with no active `edi-energy` profile.
+/// Every domain module this build registers, in registration order.
+///
+/// **The single list.** Production calls it from [`build_engine`]; the
+/// coverage guards in `tests/` call it instead of restating the stack. Four
+/// test files used to keep their own copy and two of them fell behind when a
+/// module was added — an omitted module registers workflows whose deadlines
+/// nothing dispatches and silently shrinks every figure the guards pin, so the
+/// list has to exist once.
+///
+/// Each entry is gated on the deployment roles that need it, so a role-scoped
+/// build registers fewer. The `default` feature set names every role, which is
+/// why a default build — what the guards run — yields the full stack.
+///
+/// Role → module mapping:
+/// - `role-lf-strom` / `role-nb-strom` → `GpkeModule` (both sides; the
+///   `PidRouter` separates them by Marktrolle)
+/// - `role-msb-*` / `role-nb-*` / `role-esa-strom` → `WimModule` (WiM in
+///   beiden Sparten, incl. the WiM Teil 2 ESA leg)
+/// - `role-lf-gas` / `role-nb-gas` → `GeliGasModule`
+/// - `role-nb-gas` → `GaBiGasModule`
+/// - `role-nb-strom` → `MabisModule`, `RedispatchModule`
+/// - `role-nb-strom` / `role-lf-strom` → `EmobModule` (all three parties to
+///   Modell 2 answer one of its legs)
+///
+/// # Panics
+///
+/// When the build selected no Marktrolle at all, so every module is gated out
+/// and the `PidRouter` would be empty.
+#[must_use]
+#[expect(
+    clippy::vec_init_then_push,
+    reason = "the pushes are #[cfg]-gated and cannot be merged into a vec![] literal"
+)]
+pub fn production_modules() -> Vec<Box<dyn mako_engine::builder::EngineModule>> {
+    let mut m: Vec<Box<dyn mako_engine::builder::EngineModule>> = Vec::new();
+
+    // GpkeModule — GPKE 55001–55018/55022–55024/55555/55600–55609 +
+    //   INVOIC 31001/31002/31005/31006 + ORDERS Sperrung 17115–17117 +
+    //   ORDERS/ORDRSP Konfiguration 17134/17135/19001/19002 + PARTIN
+    //   37000–37006. Both sides of GPKE live here; the PidRouter separates
+    //   them by Marktrolle.
+    #[cfg(any(feature = "role-lf-strom", feature = "role-nb-strom"))]
+    m.push(Box::new(mako_gpke::GpkeModule));
+
+    // WimModule — Messstellenbetrieb in **beiden Sparten**: 55039/55042/
+    //   55051/55168 and the Gas twins 44039/44042/44051/44168/44183, ORDERS
+    //   Geräteübernahme 17001–17011, INSRPT 23001–23012, INVOIC
+    //   31009/31003/31004, and the ESA-side Wertebestellung of WiM Teil 2
+    //   Kap. 4. One crate for both, so every WiM role loads it.
+    #[cfg(any(
+        feature = "role-msb-strom",
+        feature = "role-msb-gas",
+        feature = "role-nb-strom",
+        feature = "role-nb-gas",
+        feature = "role-esa-strom",
+    ))]
+    m.push(Box::new(mako_wim::WimModule));
+
+    // GeliGasModule — GeLi Gas 3.0 44001–44024 (incl. the Stornierung it
+    //   shares with WiM Gas) + ORDERS Sperrung Gas 17115–17117 + PARTIN Gas
+    //   37008–37014 + INVOIC 31011 (AWH Rechnung).
+    #[cfg(any(feature = "role-lf-gas", feature = "role-nb-gas"))]
+    m.push(Box::new(mako_geli_gas::GeliGasModule));
+
+    // GaBiGasModule — INVOIC 31007/31008/31010 + REMADV 33001 +
+    //   COMDIS 29001 + MSCONS 13013 Allokationsliste. BKV/MGV interactions
+    //   are GNB-side (BK7-24-01-008).
+    #[cfg(feature = "role-nb-gas")]
+    m.push(Box::new(mako_gabi_gas::GaBiGasModule));
+
+    // MabisModule — Bilanzkreisabrechnung Strom (BK6-24-174): MSCONS
+    //   Summenzeitreihen, IFTSTA Datenstatus, the MaBiS-ZP lifecycle.
+    #[cfg(feature = "role-nb-strom")]
+    m.push(Box::new(mako_mabis::MabisModule));
+
+    // EmobModule — NZR-EMob / Modell 2 (BK6-20-160 Anlage 6, BK6-24-267):
+    //   UTILMD 55238–55243, the three legs that move a Marktlokation into
+    //   and out of the LPB's Bilanzierungsgebiet.
+    //
+    //   Loaded for **both** Strom roles, because all three parties to the
+    //   model answer one of the legs: the VNB answers the Anmeldung and the
+    //   Abmeldung, the **LF** answers the Beendigung der Zuordnung (55240),
+    //   and the LPB — whose wire role is NB — receives both its own
+    //   answers. A `Marktrolle::Lpb` deployment is an NB deployment.
+    //
+    //   55235–55237 (Zuordnung des ZP der NGZ zur NZR) are deliberately
+    //   **not** here: they are MaBiS — UTILMD AHB Strom 2.2 Kap. 13.16,
+    //   answered from `E_0102`/`E_0103` — and `MabisModule` registers them
+    //   as the `ZpSerie::NetzgangzeitreiheNzr` family of
+    //   `mabis-zp-lifecycle`.
+    #[cfg(any(feature = "role-nb-strom", feature = "role-lf-strom"))]
+    m.push(Box::new(mako_emob::EmobModule));
+
+    // RedispatchModule — Redispatch 2.0 (§§ 13/13a/14 EnWG); XML routing +
+    //   IFTSTA 21037/21038. VNB, ANB and ÜNB share the NB Strom deployment
+    //   role; LF, MSB and gas-only deployments have no §13a obligations
+    //   (BK6-20-059/060/061).
+    #[cfg(feature = "role-nb-strom")]
+    m.push(Box::new(mako_redispatch::RedispatchModule));
+
+    // A binary with no role compiles but can route nothing — every module
+    // is gated out and the PidRouter is empty. Catch it here rather than
+    // shipping a daemon that silently dead-letters every inbound message.
+    assert!(
+        !m.is_empty(),
+        "this build selected no Marktrolle: every domain module was gated out. \
+         Build with the default features, or name at least one role feature \
+         (e.g. --no-default-features --features role-lf)."
+    );
+    m
+}
+
 pub(crate) fn build_engine(
     store: &SlateDbStore,
     dead_letter_sink: mako_engine::store_slatedb::SlateDbDeadLetterSink,
     deployment_roles: mako_engine::marktrolle::DeploymentRoles,
 ) -> MakodCtx {
-    // ── Domain module selection ────────────────────────────────────────────────
-    //
-    // When role feature flags are compiled in, only the modules relevant to the
-    // declared roles are registered.  This reduces binary size and eliminates
-    // unwanted PID registrations for role-scoped deployments (LF-only, NB-only,
-    // MSB-only, etc.).
-    //
-    // The `default` feature set names every role, so a plain build registers
-    // every module; selecting no role at all is caught by the assert below.
-    //
-    // Role → module mapping:
-    //   role-nb-strom / role-nb  → GpkeModule (NB-side GPKE + Sperrung)
-    //   role-lf-strom / role-lf  → GpkeModule (LF-side GPKE; GpkeModule handles
-    //                              both sides via PidRouter role dispatch)
-    //   role-msb-* / role-nb-*   → WimModule (WiM in beiden Sparten)
-    //   role-nb-gas / role-nb    → GeliGasModule + GaBiGasModule
-    //   role-lf-gas  / role-lf   → GeliGasModule (LF-side GeLi Gas)
-    //   role-nb-strom / role-nb  → MabisModule (MABIS PID 13003)
-    //
-    // Clippy's vec_init_then_push fires here because the pushes are
-    // #[cfg]-gated and cannot be merged into a vec![] literal.
-    #[expect(clippy::vec_init_then_push)]
-    let modules: Vec<Box<dyn mako_engine::builder::EngineModule>> = {
-        let mut m: Vec<Box<dyn mako_engine::builder::EngineModule>> = Vec::new();
-
-        // GpkeModule — GPKE 55001–55018/55022–55024/55555/55600–55609 +
-        //   INVOIC 31001/31002/31005/31006 + ORDERS Sperrung 17115–17117 +
-        //   ORDERS/ORDRSP Konfiguration 17134/17135/19001/19002 + PARTIN
-        //   37000–37006. Both sides of GPKE live here; the PidRouter separates
-        //   them by Marktrolle.
-        #[cfg(any(feature = "role-lf-strom", feature = "role-nb-strom"))]
-        m.push(Box::new(mako_gpke::GpkeModule));
-
-        // WimModule — Messstellenbetrieb in **beiden Sparten**: 55039/55042/
-        //   55051/55168 and the Gas twins 44039/44042/44051/44168/44183, ORDERS
-        //   Geräteübernahme 17001–17011, INSRPT 23001–23012, INVOIC
-        //   31009/31003/31004, and the ESA-side Wertebestellung of WiM Teil 2
-        //   Kap. 4. One crate for both, so every WiM role loads it.
-        #[cfg(any(
-            feature = "role-msb-strom",
-            feature = "role-msb-gas",
-            feature = "role-nb-strom",
-            feature = "role-nb-gas",
-            feature = "role-esa-strom",
-        ))]
-        m.push(Box::new(mako_wim::WimModule));
-
-        // GeliGasModule — GeLi Gas 3.0 44001–44024 (incl. the Stornierung it
-        //   shares with WiM Gas) + ORDERS Sperrung Gas 17115–17117 + PARTIN Gas
-        //   37008–37014 + INVOIC 31011 (AWH Rechnung).
-        #[cfg(any(feature = "role-lf-gas", feature = "role-nb-gas"))]
-        m.push(Box::new(mako_geli_gas::GeliGasModule));
-
-        // GaBiGasModule — INVOIC 31007/31008/31010 + REMADV 33001 +
-        //   COMDIS 29001 + MSCONS 13013 Allokationsliste. BKV/MGV interactions
-        //   are GNB-side (BK7-24-01-008).
-        #[cfg(feature = "role-nb-gas")]
-        m.push(Box::new(mako_gabi_gas::GaBiGasModule));
-
-        // MabisModule — Bilanzkreisabrechnung Strom (BK6-24-174): MSCONS
-        //   Summenzeitreihen, IFTSTA Datenstatus, the MaBiS-ZP lifecycle.
-        #[cfg(feature = "role-nb-strom")]
-        m.push(Box::new(mako_mabis::MabisModule));
-
-        // RedispatchModule — Redispatch 2.0 (§§ 13/13a/14 EnWG); XML routing +
-        //   IFTSTA 21037/21038. VNB, ANB and ÜNB share the NB Strom deployment
-        //   role; LF, MSB and gas-only deployments have no §13a obligations
-        //   (BK6-20-059/060/061).
-        #[cfg(feature = "role-nb-strom")]
-        m.push(Box::new(mako_redispatch::RedispatchModule));
-
-        // A binary with no role compiles but can route nothing — every module
-        // is gated out and the PidRouter is empty. Catch it here rather than
-        // shipping a daemon that silently dead-letters every inbound message.
-        assert!(
-            !m.is_empty(),
-            "this build selected no Marktrolle: every domain module was gated out. \
-             Build with the default features, or name at least one role feature \
-             (e.g. --no-default-features --features role-lf)."
-        );
-        m
-    };
+    let modules = production_modules();
 
     EngineBuilder::with_stores(
         store.clone(),
@@ -983,6 +1014,10 @@ mod tests {
 
         const SOURCES: &[(&str, &str)] = &[
             (
+                "emob.rs",
+                include_str!("../orchestrator/ingest_dispatcher/emob.rs"),
+            ),
+            (
                 "gabi_gas.rs",
                 include_str!("../orchestrator/ingest_dispatcher/gabi_gas.rs"),
             ),
@@ -1014,6 +1049,18 @@ mod tests {
         // appears in the source and valued by the constant itself — so a
         // renamed constant changes the value and the assertion below catches it.
         const CONSTANT_ARMS: &[(&str, &str)] = &[
+            (
+                "EmobAnmeldungWorkflow::WORKFLOW_NAME",
+                mako_emob::EmobAnmeldungWorkflow::WORKFLOW_NAME,
+            ),
+            (
+                "EmobZuordnungsendeWorkflow::WORKFLOW_NAME",
+                mako_emob::EmobZuordnungsendeWorkflow::WORKFLOW_NAME,
+            ),
+            (
+                "EmobAbmeldungWorkflow::WORKFLOW_NAME",
+                mako_emob::EmobAbmeldungWorkflow::WORKFLOW_NAME,
+            ),
             (
                 "mako_wim::esa_wertebestellung::WORKFLOW_NAME",
                 mako_wim::esa_wertebestellung::WORKFLOW_NAME,

@@ -617,7 +617,7 @@ pub(super) async fn dispatch_maloid_lieferbeginn_fortsetzen(
 /// | Field | Required | Wire slot |
 /// |---|---|---|
 /// | `antwort_code` | ✓ | `SG4 STS+E01` DE 9013 |
-/// | `antwort_ebd` | — | `SG4 STS+E01` DE 1131 (absent on the Gas Codelisten) |
+/// | `antwort_codeliste` | — | `SG4 STS+E01` DE 1131 (absent on the Gas Codelisten) |
 /// | `bemerkung` | — | `FTX+ACB` Erläuterung |
 /// | `termin` | — | `SG4 DTM+93`, `YYYYMMDD`, when the answer states its own date |
 ///
@@ -647,12 +647,12 @@ fn extract_lf_antwort(
         .to_owned();
 
     let ebd = payload
-        .get("antwort_ebd")
+        .get("antwort_codeliste")
         .and_then(|v| v.as_str())
         .map(ToOwned::to_owned)
         .or_else(|| default_ebd.map(ToOwned::to_owned));
 
-    // `antwort_tree` is the **lookup key**, `antwort_ebd` the DE 1131 wire
+    // `antwort_tree` is the **lookup key**, `antwort_codeliste` the DE 1131 wire
     // value. They differ for Gas, whose Codelisten the MIG does not name in the
     // segment: without the key a Gas answer could carry any string at all.
     let tree = payload
@@ -687,7 +687,7 @@ fn extract_lf_antwort(
                 .and_then(serde_json::Value::as_bool)
                 .ok_or_else(|| {
                     DispatchError::InvalidPayload(
-                        "an answer without an \"antwort_tree\" or \"antwort_ebd\" must \
+                        "an answer without an \"antwort_tree\" or \"antwort_codeliste\" must \
                          state \"zustimmung\": the cluster decides the response PID and \
                          cannot be derived from an unresolved code"
                             .into(),
@@ -831,7 +831,7 @@ pub(super) async fn dispatch_gpke_beendigung_zuordnung_antwort(
 /// |---|---|---|
 /// | `malo_id` | ✓ | Marktlokations-ID identifying the process |
 /// | `antwort_code` | ✓ | `SG4 STS+E01` DE 9013 — `A01` or `A99` |
-/// | `antwort_ebd` | — | `SG4 STS+E01` DE 1131 — the Anwendungsfall's EBD; defaults to `E_0603` |
+/// | `antwort_codeliste` | — | `SG4 STS+E01` DE 1131 — the Anwendungsfall's EBD; defaults to `E_0603` |
 /// | `bilanzkreis` | ✓ on `A01` | `SG8 SEQ+Z79` Produktpaket, Produkt-Code `9991000002082` |
 /// | `bemerkung` | ✓ on `A99` | `SG4 FTX+ACB` Erläuterung — Bedingung `[48]`, the Ablehnung only |
 pub(super) async fn dispatch_gpke_zuordnung_lf_antwort(
@@ -870,7 +870,7 @@ pub(super) async fn dispatch_gpke_zuordnung_lf_antwort(
 /// |---|---|---|
 /// | `malo_id` | ✓ | Marktlokations-ID identifying the NB-side process |
 /// | `antwort_code` | ✓ | `SG4 STS+E01` DE 9013 |
-/// | `antwort_ebd` | — | `SG4 STS+E01` DE 1131 (absent on the Gas Codelisten) |
+/// | `antwort_codeliste` | — | `SG4 STS+E01` DE 1131 (absent on the Gas Codelisten) |
 /// | `zustimmung` | Gas only | the cluster, which the Gas code alone cannot give |
 /// | `bemerkung` | — | `FTX+ACB` Erläuterung |
 ///

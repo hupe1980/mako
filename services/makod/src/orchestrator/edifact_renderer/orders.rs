@@ -462,7 +462,6 @@ pub(super) fn render_ordrsp(
         let code = p.get("antwort_code").and_then(serde_json::Value::as_str);
         let codeliste = p
             .get("antwort_codeliste")
-            .or_else(|| p.get("antwort_ebd"))
             .and_then(serde_json::Value::as_str);
         if let (Some(code), Some(codeliste)) = (code, codeliste) {
             builder = builder.adjustment(code, codeliste);

@@ -451,7 +451,7 @@ fn remadv_message_ref(payload: &serde_json::Value) -> mako_engine::types::Messag
 /// have, which surfaces as an incomplete answer rather than a wrong one.
 fn remadv_antwort(payload: &serde_json::Value) -> Option<mako_invoic::RemadvAntwort> {
     let ebd = payload
-        .get("antwort_ebd")
+        .get("antwort_codeliste")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())?;
     // The itemised form, when `invoicd` walked a tree that answers with a set.

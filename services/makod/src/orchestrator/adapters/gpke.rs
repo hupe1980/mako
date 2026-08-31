@@ -2092,6 +2092,9 @@ pub fn gpke_stammdaten_registry() -> AdapterRegistry<mako_gpke::GpkeStammdatenae
             if let Some(fs) = super::extract_fernsteuerbarkeit(segs) {
                 patch.insert("fernsteuerbar".into(), fs.into());
             }
+            if let Some(am) = super::extract_abwicklungsmodell(segs) {
+                patch.insert("abwicklungsmodell".into(), am.into());
+            }
             if let Some(sk) = super::extract_steuerkanal(segs) {
                 patch.insert("steuerkanal".into(), sk.into());
             }

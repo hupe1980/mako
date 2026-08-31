@@ -1149,7 +1149,7 @@ impl Workflow for WimWertebestellungWorkflow {
                     // `SG2 AJT` — DE 4465 the Prüfschritt code, DE 1082 the
                     // tree that publishes it. Muss on all four answer PIDs.
                     "antwort_code": antwort.map(|(_, c)| c.code),
-                    "antwort_ebd": antwort.map(|(t, _)| t),
+                    "antwort_codeliste": antwort.map(|(t, _)| t),
                     "reason": reason,
                     "messprodukt": data.gegenstand.messprodukt,
                 }),

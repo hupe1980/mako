@@ -52,5 +52,5 @@ pub use neuanlage::{
 pub use types::{
     Abmeldeanfrage, AbmeldungAnfrage, AnmeldungAnfrage, AntwortDetail, ErzeugungsAnmeldung,
     Geschaeftsvorfall, LfaAntwort, MaloGridRecord, Marktlokationsart, Messtyp, NbEntscheidung,
-    RejectReason, TranchenZuordnung, Veraeusserungsform,
+    RejectReason, TranchenAntwort, TranchenLage, TranchenZuordnung, Veraeusserungsform,
 };

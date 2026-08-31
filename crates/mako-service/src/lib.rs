@@ -70,10 +70,6 @@ pub mod metrics;
 #[cfg(feature = "rate-limit")]
 pub mod rate_limit;
 
-/// Compile-time catalog of every `CloudEvents` `type` in the workspace.
-pub use mako_events as cloud_events;
-pub use mako_plugin::{CloudEventPlugin, PluginContext, PluginError, PluginRegistry};
-
 pub use builder::ServiceBuilder;
 pub use cloudevent::{CloudEvent, PublishError, post_ce_with_retry, source};
 pub use config::{ConfigError, DatabaseConfig, HttpConfig, load_config};

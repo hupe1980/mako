@@ -313,7 +313,7 @@ async fn process_invoic(
                     // `SG7 AJT` — DE 4465 the code(s), DE 1082 the EBD they come
                     // from — plus the Prüfidentifikator the answer's own shape
                     // requires (33002 for one code, 33003/33004 for a set).
-                    obj.insert("antwort_ebd".to_owned(), serde_json::json!(grund.ebd));
+                    obj.insert("antwort_codeliste".to_owned(), serde_json::json!(grund.ebd));
                     obj.insert(
                         "antwort_code".to_owned(),
                         serde_json::json!(grund.befunde.first().map(|b| &b.code)),

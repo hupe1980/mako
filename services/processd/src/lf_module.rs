@@ -536,7 +536,7 @@ impl LfAnfragePayload {
                 // Anwendungsfall, or an operator replaying one, may name it
                 // directly.
                 str_field("anwendungsfall")
-                    .or_else(|| str_field("antwort_ebd"))
+                    .or_else(|| str_field("antwort_codeliste"))
                     .as_deref()
                     .and_then(mako_pruefung::ZuordnungsFall::from_ebd)
             });
@@ -578,7 +578,7 @@ pub fn lage_from_versorgung(
 
     // „Beliefert" for these trees means *we* hold the assignment — under our own
     // MP-ID, in any of the three states that are a supply.
-    let ours = vs.lf_mp_id.as_deref() == Some(own_mp_id);
+    let ours = vs.aktive().any(|z| z.lf_mp_id == own_mp_id);
     let beliefert = ours
         && matches!(
             vs.lieferstatus,
@@ -786,7 +786,7 @@ pub fn eog_zustaendigkeit(
     let gesetzliche_pflicht = versorgung.and_then(|vs| {
         matches!(vs.lieferstatus, LieferStatus::Beliefert)
             .then_some(false)
-            .filter(|_| vs.lf_mp_id.as_deref() != Some(config.own_mp_id.as_str()))
+            .filter(|_| !vs.aktive().any(|z| z.lf_mp_id == config.own_mp_id))
     });
 
     mako_pruefung::EogZustaendigkeit {
@@ -1073,7 +1073,7 @@ async fn dispatch_antwort(
         "zustimmung":   antwort.zustimmung,
     });
     if let Some(ebd) = &antwort.ebd {
-        payload["antwort_ebd"] = serde_json::Value::String(ebd.clone());
+        payload["antwort_codeliste"] = serde_json::Value::String(ebd.clone());
     }
     if let Some(bemerkung) = &antwort.bemerkung {
         payload["bemerkung"] = serde_json::Value::String(bemerkung.clone());
@@ -1196,10 +1196,14 @@ mod tests {
         VersorgungsStatusRecord {
             malo_id: "51238696012".parse::<MaloId>().expect("valid MaLo"),
             lieferstatus: status,
-            lf_mp_id: lf_mp_id.map(ToOwned::to_owned),
-            lf_mp_id_next: None,
-            lf_next_lieferbeginn: None,
-            lieferbeginn: None,
+            zuordnungen: lf_mp_id
+                .map(|lf| {
+                    vec![mako_markt::repository::LfZuordnung::ganz(
+                        lf,
+                        mako_markt::repository::ZuordnungsStatus::Aktiv,
+                    )]
+                })
+                .unwrap_or_default(),
             lieferende: None,
             msb_mp_id: None,
             nb_mp_id: "9900000000001".to_owned(),

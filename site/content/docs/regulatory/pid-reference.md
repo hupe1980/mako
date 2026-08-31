@@ -279,15 +279,15 @@ section on this page.
 | 55227 | Rückmeldung/Anfrage Blindabr.-Daten der NeLo | GPKE Teil 4 | LF → NB | 55225 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55230 | Änderung Blindabr.-Daten der NeLo | GPKE Teil 4 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55232 | Rückmeldung/Anfrage Blindabr.-Daten der NeLo | GPKE Teil 4 | NB → LF | 55230 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
-| 55235 | Zuordnung ZP der NGZ zur NZR | AWH MaBiS-Ergänzung | NB → NB · NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
-| 55236 | Beendigung Zuordnung ZP der NGZ zur NZR | AWH MaBiS-Ergänzung | NB → NB · NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
-| 55237 | Antwort | AWH MaBiS-Ergänzung | NB → NB | — | ✅ | — | ✅ | ✅ | — |
-| 55238 | Anmeldung in Modell 2 | AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | NB → VNB | — | ✅ | — | ✅ | ✅ | — |
-| 55239 | Antwort auf Anmeldung | AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | VNB → NB | — | ✅ | — | ✅ | ✅ | — |
-| 55240 | Beendigung der Zuordnung zur Marktlokation | AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | VNB → LF | — | ✅ | — | ✅ | ✅ | — |
-| 55241 | Antwort auf Beendigung | AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | LF → VNB | — | ✅ | — | ✅ | ✅ | — |
-| 55242 | Abmeldung aus dem Modell 2 | AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | NB → VNB | — | ✅ | — | ✅ | ✅ | — |
-| 55243 | Antwort auf Abmeldung | AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | VNB → NB | — | ✅ | — | ✅ | ✅ | — |
+| 55235 | Zuordnung ZP der NGZ zur NZR | AWH MaBiS-Ergänzung | NB → NB · NB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55236 | Beendigung Zuordnung ZP der NGZ zur NZR | AWH MaBiS-Ergänzung | NB → NB · NB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55237 | Antwort | AWH MaBiS-Ergänzung | NB → NB | 55235 · 55236 | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55238 | Anmeldung in Modell 2 | AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | NB → VNB | — | ✅ | — | ✅ | ✅ | `mako-emob` `emob-anmeldung` |
+| 55239 | Antwort auf Anmeldung | AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | VNB → NB | 55238 | ✅ | — | ✅ | ✅ | `mako-emob` `emob-anmeldung` |
+| 55240 | Beendigung der Zuordnung zur Marktlokation | AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | VNB → LF | — | ✅ | — | ✅ | ✅ | `mako-emob` `emob-zuordnungsende` |
+| 55241 | Antwort auf Beendigung | AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | LF → VNB | 55240 | ✅ | — | ✅ | ✅ | `mako-emob` `emob-zuordnungsende` |
+| 55242 | Abmeldung aus dem Modell 2 | AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | NB → VNB | — | ✅ | — | ✅ | ✅ | `mako-emob` `emob-abmeldung` |
+| 55243 | Antwort auf Abmeldung | AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | VNB → NB | 55242 | ✅ | — | ✅ | ✅ | `mako-emob` `emob-abmeldung` |
 | 55553 | Daten auf individuelle Bestellung | GPKE Teil 4 | MSB → NB · MSB → LF · MSB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55555 | Anfrage Daten der individuellen Bestellung | GPKE Teil 4 | NB → MSB · LF → MSB · MSB → MSB | 55553 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-anfrage-bestellung` |
 | 55557 | Änderung MSB-Abr.-Daten der MaLo | GPKE Teil 4 | MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |

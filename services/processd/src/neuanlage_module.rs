@@ -259,7 +259,7 @@ async fn dispatch(
     makod: &MakodClient,
     fall: &NeuanlageFall,
     antwort_code: &str,
-    antwort_ebd: Option<&str>,
+    antwort_codeliste: Option<&str>,
     accept: bool,
     detail: Option<&str>,
 ) -> anyhow::Result<()> {
@@ -269,8 +269,8 @@ async fn dispatch(
         "antwort_tree": mako_pruefung::codes::EBD_NEUANLAGE,
         "zustimmung":   accept,
     });
-    if let Some(ebd) = antwort_ebd {
-        payload["antwort_ebd"] = serde_json::json!(ebd);
+    if let Some(ebd) = antwort_codeliste {
+        payload["antwort_codeliste"] = serde_json::json!(ebd);
     }
     if let Some(detail) = detail {
         payload["bemerkung"] = serde_json::json!(detail);
@@ -315,6 +315,11 @@ fn to_anfrage(fall: &NeuanlageFall) -> NeuanlageAnfrage {
                     bestehende_veraeusserungsform: None,
                     nicht_eeg_kwkg: false,
                     ausfallverguetung: false,
+                    // Always the whole Marktlokation: a Neuanlage creates the
+                    // assignment, so there is no Tranche to share it with.
+                    gewuenschter_prozentsatz: None,
+                    tranchen_prozent: std::collections::BTreeMap::new(),
+                    direktvermarktungspflichtig: false,
                 })
         })
         .flatten();

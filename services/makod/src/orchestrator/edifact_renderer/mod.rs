@@ -24,7 +24,7 @@
 //! | ORDERS | `pid`, `orders_ref` (sender = `tenant_party_id`, receiver = `msg.recipient`); ESA 17007/17008 additionally `korrelation_ref`, `abonnement`, `ausfuehrungsdatum` |
 //! | REQOTE | `pid`, `sender`, `receiver`, `message_ref`; ESA 35003 additionally `location`, `messprodukt`, `wunschtermin`, `smgw` |
 //! | ORDCHG | `pid`, `sender`, `receiver`, `korrelation_ref` |
-//! | ORDRSP | `pid` (ESA 19011–19014), `sender`, `receiver`, `korrelation_ref`, `abonnement`, `antwort_code`, `antwort_ebd`, `document_id`, `document_date`, `message_ref` |
+//! | ORDRSP | `pid` (ESA 19011–19014), `sender`, `receiver`, `korrelation_ref`, `abonnement`, `antwort_code`, `antwort_codeliste`, `document_id`, `document_date`, `message_ref` |
 //! | QUOTES | `pid` (ESA 15003), `sender`, `receiver`, `korrelation_ref`, `bindungsfrist_tage`, `fruehester_start`, `messprodukt`, `artikel_ids`, `preise`, `document_id`, `document_date`, `message_ref` |
 //! | INVOIC | `sender`, `receiver`, `document_id`, `document_code`, `document_date`, `message_ref` |
 //! | REMADV | `sender`, `receiver`, `document_id`, `document_code`, `document_date`, `message_ref` |
@@ -420,7 +420,7 @@ mod tests {
                     "ueberweisungsbetrag": "0",
                     "rechnungsdatum": "2026-04-01",
                 },
-                "antwort_ebd": "E_0264",
+                "antwort_codeliste": "E_0264",
                 "antwort_befunde": [
                     {
                         "code": "A11",
@@ -828,6 +828,153 @@ mod tests {
         assert!(gas_ende.contains("DTM+159:"), "{gas_ende}");
     }
 
+    /// **The Modell-2 legs render as their AHB columns.**
+    ///
+    /// UTILMD AHB Strom 2.2 Kap. 11 fixes a different `BGM` DE 1001 and a
+    /// different `SG4 DTM` pair per leg, and the Bestätigung carries a second
+    /// `SG5 LOC`. Built through `mako_emob` rather than by hand, so the domain
+    /// crate and the renderer are checked against each other and not each
+    /// against its own idea of the payload.
+    #[test]
+    fn the_modell_2_legs_render_as_their_ahb_columns() {
+        use mako_emob::modellwechsel::{
+            ABMELDUNG, ANMELDUNG, EmobAntwort, ModellwechselCommand, ModellwechselEvent,
+            ModellwechselState, Modellwechseldaten, ZUORDNUNGSENDE,
+        };
+        use mako_engine::workflow::Workflow;
+
+        fn daten(pid: u32) -> Box<Modellwechseldaten> {
+            Box::new(Modellwechseldaten {
+                malo: mako_engine::types::MaLo::new("51238696012"),
+                sender: mako_engine::types::MarktpartnerCode::new("9900123456789"),
+                receiver: mako_engine::types::MarktpartnerCode::new("9900987654321"),
+                process_date: "20270101".to_owned(),
+                pruefidentifikator: mako_engine::types::Pruefidentifikator::const_new(pid),
+                vorgangsnummer: Some("LPB-0001".to_owned()),
+            })
+        }
+
+        fn wire_of(outbox: &mako_engine::outbox::PendingOutbox) -> String {
+            let msg = fake_msg("UTILMD", "9900987654321", outbox.payload.clone());
+            let bytes = render_to_wire_bytes(&msg, &test_registry("9900123456789"))
+                .expect("renders")
+                .bytes;
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+
+        // ── The three requests ────────────────────────────────────────────
+        for (leg, bgm, dtm, zweites_dtm) in [
+            (ANMELDUNG, "E01", "DTM+92:", "DTM+158:"),
+            (ZUORDNUNGSENDE, "E44", "DTM+93:", "DTM+159:"),
+            (ABMELDUNG, "E02", "DTM+93:", "DTM+159:"),
+        ] {
+            let out = send(leg, daten(leg.anfrage_pid));
+            let text = wire_of(&out);
+            assert!(
+                text.contains(&format!("BGM+{bgm}+{}", leg.anfrage_pid)),
+                "{} wants BGM+{bgm}:\n{text}",
+                leg.anfrage_pid
+            );
+            assert!(
+                text.contains(dtm),
+                "{} wants {dtm}:\n{text}",
+                leg.anfrage_pid
+            );
+            assert!(
+                text.contains(zweites_dtm),
+                "{} wants {zweites_dtm} (AHB Bedingung [317]):\n{text}",
+                leg.anfrage_pid
+            );
+        }
+
+        // ── The Bestätigung names the ZP der NGZ beside the MaLo ──────────
+        let received = ModellwechselEvent::AnfrageErhalten {
+            data: daten(55_238),
+            message_ref: mako_engine::types::MessageRef::new("MSG1"),
+        };
+        let state = <mako_emob::EmobAnmeldungWorkflow as Workflow>::apply(
+            ModellwechselState::New,
+            &received,
+        );
+        let answered = <mako_emob::EmobAnmeldungWorkflow as Workflow>::handle(
+            &state,
+            ModellwechselCommand::SendAntwort {
+                antwort: Box::new(
+                    EmobAntwort::zustimmung("A02", "E_0510")
+                        .mit_zp_ngz("DE0001234567890000000000000000123"),
+                ),
+            },
+        )
+        .expect("answered");
+        let text = wire_of(&answered.outbox[0]);
+        assert!(text.contains("BGM+E01+55239"), "{text}");
+        assert!(text.contains("LOC+Z16+51238696012"), "{text}");
+        assert!(
+            text.contains("LOC+Z15+DE0001234567890000000000000000123"),
+            "AHB Bedingung [663] — the 55239 names the ZP der NGZ:\n{text}"
+        );
+        // `A01` refuses in `E_0510` and agrees in `E_0511`, so DE 1131 is the
+        // only thing on the wire that says which tree answered.
+        assert!(text.contains("STS+E01++A02:E_0510"), "{text}");
+        assert!(text.contains("RFF+TN:LPB-0001"), "{text}");
+    }
+
+    /// Drive one leg's `Senden` command without naming its workflow type.
+    fn send(
+        leg: mako_emob::modellwechsel::LegWire,
+        data: Box<mako_emob::modellwechsel::Modellwechseldaten>,
+    ) -> mako_engine::outbox::PendingOutbox {
+        use mako_emob::modellwechsel::ModellwechselCommand;
+        use mako_engine::workflow::Workflow;
+        let cmd = ModellwechselCommand::Senden { data };
+        let out = match leg.anfrage_pid {
+            55_238 => <mako_emob::EmobAnmeldungWorkflow as Workflow>::handle(
+                &mako_emob::modellwechsel::ModellwechselState::New,
+                cmd,
+            ),
+            55_240 => <mako_emob::EmobZuordnungsendeWorkflow as Workflow>::handle(
+                &mako_emob::modellwechsel::ModellwechselState::New,
+                cmd,
+            ),
+            _ => <mako_emob::EmobAbmeldungWorkflow as Workflow>::handle(
+                &mako_emob::modellwechsel::ModellwechselState::New,
+                cmd,
+            ),
+        }
+        .expect("sent");
+        out.outbox.into_iter().next().expect("one message")
+    }
+
+    /// **The payload key for DE 1131 has exactly one spelling.**
+    ///
+    /// `mako-gpke` and `mako-geli-gas` build their answers through
+    /// [`mako_gpke::lf_antwort::antwort_outbox`]; `mako-wim` builds its own
+    /// JSON. Both must land in `SG4 STS+E01` DE 1131, and the only thing that
+    /// makes them do so is agreeing on the field name — the renderer reads one
+    /// key and silently omits the Codeliste when it is spelled the other way.
+    /// Where one answer PID carries several trees (55239 carries `E_0510`
+    /// *and* `E_0513`, 55003 carries `E_0622` and `E_0623`) DE 1131 is the
+    /// only thing on the wire that says which one answered.
+    #[test]
+    fn a_domain_built_answer_carries_its_codeliste_to_the_wire() {
+        let outbox = mako_gpke::lf_antwort::antwort_outbox(
+            55_009,
+            &mako_gpke::lf_antwort::LfAntwort::ablehnung("A35", "E_0624"),
+            &mako_engine::types::MaLo::new("51238696012"),
+            &mako_engine::types::MarktpartnerCode::new("9900987654321"),
+            &mako_engine::types::MarktpartnerCode::new("9900123456789"),
+            "20261101",
+            Some("NNV1234"),
+        );
+        let msg = fake_msg("UTILMD", "9900987654321", outbox.payload.clone());
+        let wire = render_to_wire_bytes(&msg, &test_registry("9900123456789")).expect("renders");
+        let text = String::from_utf8_lossy(&wire.bytes);
+        assert!(
+            text.contains("STS+E01++A35:E_0624"),
+            "DE 1131 was dropped between the domain crate and the wire:\n{text}"
+        );
+    }
+
     /// `SG4 STS+Z35` — the LFA's own Ablehnungsgrund, restated by the NB.
     ///
     /// GPKE Teil 2 § 2.1.2 Nr. 6: „Der NB gibt zusätzlich den Grund der
@@ -1112,7 +1259,7 @@ mod tests {
                     "receiver": "9900555000005",
                     "korrelation_ref": "ESA-BE-0001",
                     "abonnement": "Z01",
-                    "antwort_ebd": ebd,
+                    "antwort_codeliste": ebd,
                     "antwort_code": code,
                 }),
             );
@@ -1210,12 +1357,12 @@ mod tests {
             (
                 "ORDRSP",
                 19011_u32,
-                serde_json::json!({"antwort_ebd": "E_0256", "antwort_code": "A11"}),
+                serde_json::json!({"antwort_codeliste": "E_0256", "antwort_code": "A11"}),
             ),
             (
                 "ORDRSP",
                 19013_u32,
-                serde_json::json!({"antwort_ebd": "E_0257", "antwort_code": "A04"}),
+                serde_json::json!({"antwort_codeliste": "E_0257", "antwort_code": "A04"}),
             ),
             ("ORDCHG", 39002_u32, serde_json::json!({})),
             (
@@ -1868,7 +2015,7 @@ mod envelope_tests {
             } else {
                 ("E_0256", "A11")
             };
-            payload["antwort_ebd"] = serde_json::Value::String(ebd.to_owned());
+            payload["antwort_codeliste"] = serde_json::Value::String(ebd.to_owned());
             payload["antwort_code"] = serde_json::Value::String(code.to_owned());
         }
         let msg = outbox_msg(message_type, payload);

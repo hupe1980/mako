@@ -24,6 +24,11 @@ struct IftstaBuilderInner {
     pruefidentifikator: Option<u32>,
     sts_category: Option<String>,
     sts_reason: Option<String>,
+    sts_pruefschritt: Option<String>,
+    sts_codeliste: Option<String>,
+    meldepunkt: Option<String>,
+    marktlokation: Option<String>,
+    leistungsbeginn: Option<String>,
     vorgangsnummer: Option<String>,
     order_reference: Option<String>,
     vertragsende: Option<String>,
@@ -77,6 +82,11 @@ impl IftstaBuilder<Unset, Unset> {
                 pruefidentifikator: None,
                 sts_category: None,
                 sts_reason: None,
+                sts_pruefschritt: None,
+                sts_codeliste: None,
+                meldepunkt: None,
+                marktlokation: None,
+                leistungsbeginn: None,
                 vorgangsnummer: None,
                 order_reference: None,
                 vertragsende: None,
@@ -165,6 +175,51 @@ impl<S, R> IftstaBuilder<S, R> {
         self
     }
 
+    /// Set the SG15 `STS` Prüfschritt code (DE 9013) and the Codeliste it comes
+    /// from (DE 1131).
+    ///
+    /// Both together, never one alone: an Antwortcode means different things in
+    /// different Entscheidungsbäume, so DE 1131 is what makes DE 9013 readable.
+    /// The Ersteinbau iMS answers (21030/21031) carry `E_0233` here — the
+    /// Zustimmung cluster on 21030, the Ablehnung cluster on 21031 (IFTSTA AHB
+    /// 2.1 Kap. 6.7, Bedingungen `[47]`/`[48]`).
+    pub fn pruefschritt(mut self, code: impl Into<String>, codeliste: impl Into<String>) -> Self {
+        self.inner.sts_pruefschritt = Some(code.into());
+        self.inner.sts_codeliste = Some(codeliste.into());
+        self
+    }
+
+    /// Set the SG14 `LOC+172` Meldepunkt — the Zählpunktbezeichnung of the
+    /// Messlokation.
+    ///
+    /// `172` is the only DE 3227 value IFTSTA defines, in both Sparten, and the
+    /// Ersteinbau Anwendungsfälle mark the segment Muss (IFTSTA AHB 2.1
+    /// Kap. 6.7, Hinweis `[505]`).
+    pub fn meldepunkt(mut self, zaehlpunkt: impl Into<String>) -> Self {
+        self.inner.meldepunkt = Some(zaehlpunkt.into());
+        self
+    }
+
+    /// Set the SG15 `RFF+AVE` — the Marktlokations-ID.
+    ///
+    /// Muss on a 21029 whose receiver holds the role LF (Bedingung `[20]`): the
+    /// supplier is told about a Messlokation it knows only through its
+    /// Marktlokation.
+    pub fn marktlokation(mut self, malo_id: impl Into<String>) -> Self {
+        self.inner.marktlokation = Some(malo_id.into());
+        self
+    }
+
+    /// Set the SG15 `DTM+76` Lieferdatum/-zeit, geplant (`CCYYMMDD`).
+    ///
+    /// The planned Umstellungszeitpunkt of an Ersteinbau. DE 2379 is `102`
+    /// here, not the `303` the rest of the message uses — the AHB names the
+    /// format per date, and `[496]` requires it to be later than `DTM+137`.
+    pub fn leistungsbeginn(mut self, date: impl Into<String>) -> Self {
+        self.inner.leistungsbeginn = Some(date.into());
+        self
+    }
+
     /// Set the SG14 `CNI+<n>` Vorgangsnummer (mandatory for `WiM` status messages).
     pub fn vorgangsnummer(mut self, n: impl Into<String>) -> Self {
         self.inner.vorgangsnummer = Some(n.into());
@@ -228,18 +283,42 @@ impl<S, R> IftstaBuilder<S, R> {
         if let Some(vn) = &self.inner.vorgangsnummer {
             emit_seg!(w, "CNI", vn);
         }
-        // ── SG15 STS — status category (DE9015) + reason (DE4405) ────────────
+        // ── SG14 LOC+172 — Meldepunkt ────────────────────────────────────────
+        //
+        // Between `CNI` and the SG15 group, which is where the AHB's segment
+        // numbering puts it (`SG14 LOC` 00018, before `SG15 STS` 00034).
+        if let Some(zp) = &self.inner.meldepunkt {
+            emit_comp!(w, "LOC", ["172"], [zp]);
+        }
+        // ── SG15 STS — DE9015 category, DE4405 reason, DE9013 Prüfschritt,
+        //    DE1131 Codeliste ──────────────────────────────────────────────────
         if let (Some(cat), Some(reason)) = (&self.inner.sts_category, &self.inner.sts_reason) {
-            emit_comp!(w, "STS", [cat], ["", reason]);
+            if let (Some(code), Some(liste)) =
+                (&self.inner.sts_pruefschritt, &self.inner.sts_codeliste)
+            {
+                emit_comp!(w, "STS", [cat], ["", reason], [code, liste]);
+            } else {
+                emit_comp!(w, "STS", [cat], ["", reason]);
+            }
         }
         // ── SG15 RFF+Z13 — Prüfidentifikator ─────────────────────────────────
         if let Some(pid) = self.inner.pruefidentifikator {
             let pid_str = pid.to_string();
             emit_comp!(w, "RFF", ["Z13", &pid_str]);
         }
+        // ── SG15 RFF+AVE — Referenz auf die Marktlokation ────────────────────
+        if let Some(malo) = &self.inner.marktlokation {
+            emit_comp!(w, "RFF", ["AVE", malo]);
+        }
         // ── SG15 RFF+AGI — Beantragungsnummer (ref to the Bestellung) ────────
         if let Some(order_ref) = &self.inner.order_reference {
             emit_comp!(w, "RFF", ["AGI", order_ref]);
+        }
+        // ── SG15 DTM+76 — Lieferdatum/-zeit, geplant ─────────────────────────
+        //
+        // `102` `CCYYMMDD`, which is what the AHB names for this date alone.
+        if let Some(geplant) = &self.inner.leistungsbeginn {
+            emit_comp!(w, "DTM", ["76", geplant, "102"]);
         }
         // ── SG15 DTM+93 — Datum Vertragsende (Beendigung) ───────────────────
         //

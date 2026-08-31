@@ -153,6 +153,29 @@ pub enum Marktrolle {
     /// specific to the *losing* side of a switch.
     Lfa,
 
+    /// Ladepunktbetreiber (LPB/CPO) — charge-point operator running a virtual
+    /// Bilanzierungsgebiet under NZR-EMob / Modell 2.
+    ///
+    /// **A deployment role, never a wire role.** The BDEW Rollenmodell defines
+    /// no LPB: „der LPB kommuniziert aus prozessualer Sicht wie die Rolle NB"
+    /// (AWH „Zum Modell 2" V1.3 Kap. 1.4), so every UTILMD and MSCONS it sends
+    /// carries `NAD+MS` as **NB** and the Anwendungsübersicht spells its column
+    /// „NB (LPB)". What this variant separates is *routing*, the way
+    /// [`Marktrolle::Nmsb`]/[`Marktrolle::Amsb`] and
+    /// [`Marktrolle::Lfn`]/[`Marktrolle::Lfa`] do: one wire role, several
+    /// deployment identities.
+    ///
+    /// Without it the shared Prüfidentifikatoren are ambiguous in a deployment
+    /// that is both a VNB and an LPB. 55238 is *sent* by the LPB and *received*
+    /// by the VNB; 13003 means the Netzzeitreihe to one and the
+    /// Bilanzkreissummenzeitreihe eMob to the other. Registering both under
+    /// [`Marktrolle::Nb`] would route each message to both handlers.
+    ///
+    /// Sends 55238 / 55242 (Modellwechsel), the tägliche BK-SZR eMob and the
+    /// monthly BK-SZR (Kat. A) eMob; receives 55239 / 55243, the
+    /// Netzgangzeitreihe (13018) and the NZR (eMob).
+    Lpb,
+
     /// Marktgebietsverantwortlicher (MGV) — gas market-area manager.
     ///
     /// **Gas only.** Operates the Virtueller Handelspunkt and GaBi Gas
@@ -179,6 +202,7 @@ impl Marktrolle {
             Self::Lfg => "LFG",
             Self::Lfn => "LFN",
             Self::Lfa => "LFA",
+            Self::Lpb => "LPB",
             Self::Mgv => "MGV",
         }
     }
@@ -206,6 +230,7 @@ impl Marktrolle {
             "LFG" => Self::Lfg,
             "LFN" => Self::Lfn,
             "LFA" => Self::Lfa,
+            "LPB" => Self::Lpb,
             "MGV" => Self::Mgv,
             _ => return None,
         })

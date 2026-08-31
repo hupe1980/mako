@@ -238,6 +238,7 @@ impl MaloRepository for PgMaloRepository {
                       m.fallgruppe,
                       m.lokationsbuendel_objektcode,
                       m.fernsteuerbar,
+                      m.abwicklungsmodell,
                       m.version,
                       m.data,
                       m.bo4e_version,
@@ -259,7 +260,7 @@ impl MaloRepository for PgMaloRepository {
                      AND lz.valid_from <= $2
                      AND (lz.valid_to IS NULL OR lz.valid_to > $2)
                WHERE m.malo_id = $1
-               GROUP BY m.malo_id, m.sparte, m.netzebene, m.bilanzierungsgebiet, m.gasqualitaet, m.energierichtung, m.bilanzierungsmethode, m.regelzone, m.fallgruppe, m.lokationsbuendel_objektcode, m.fernsteuerbar, m.version, m.data, m.bo4e_version, m.updated_at"#,
+               GROUP BY m.malo_id, m.sparte, m.netzebene, m.bilanzierungsgebiet, m.gasqualitaet, m.energierichtung, m.bilanzierungsmethode, m.regelzone, m.fallgruppe, m.lokationsbuendel_objektcode, m.fernsteuerbar, m.abwicklungsmodell, m.version, m.data, m.bo4e_version, m.updated_at"#,
         )
         .bind(malo_id)
         .bind(at)
@@ -291,6 +292,7 @@ impl MaloRepository for PgMaloRepository {
                       m.fallgruppe,
                       m.lokationsbuendel_objektcode,
                       m.fernsteuerbar,
+                      m.abwicklungsmodell,
                       m.version,
                       m.data,
                       m.bo4e_version,
@@ -318,7 +320,7 @@ impl MaloRepository for PgMaloRepository {
                  AND ($5::text IS NULL OR m.fallgruppe        = $5)
                  AND ($6::text IS NULL OR m.bilanzierungsmethode = $6)
                  AND ($7::text IS NULL OR m.regelzone         = $7)
-               GROUP BY m.malo_id, m.sparte, m.netzebene, m.bilanzierungsgebiet, m.gasqualitaet, m.energierichtung, m.bilanzierungsmethode, m.regelzone, m.fallgruppe, m.lokationsbuendel_objektcode, m.fernsteuerbar, m.version, m.data, m.bo4e_version, m.updated_at
+               GROUP BY m.malo_id, m.sparte, m.netzebene, m.bilanzierungsgebiet, m.gasqualitaet, m.energierichtung, m.bilanzierungsmethode, m.regelzone, m.fallgruppe, m.lokationsbuendel_objektcode, m.fernsteuerbar, m.abwicklungsmodell, m.version, m.data, m.bo4e_version, m.updated_at
                ORDER BY m.malo_id
                LIMIT $8 OFFSET $9"#,
         )
@@ -383,6 +385,7 @@ impl MaloRepository for PgMaloRepository {
                    regelzone            = COALESCE($7, regelzone),
                    fallgruppe           = COALESCE($8, fallgruppe),
                    fernsteuerbar        = COALESCE($9, fernsteuerbar),
+                   abwicklungsmodell    = COALESCE($10, abwicklungsmodell),
                    updated_at           = now()
                WHERE malo_id = $1"#,
         )
@@ -395,6 +398,7 @@ impl MaloRepository for PgMaloRepository {
         .bind(&patch.regelzone)
         .bind(&patch.fallgruppe)
         .bind(patch.fernsteuerbar)
+        .bind(&patch.abwicklungsmodell)
         .execute(&self.pool)
         .await
         .map_err(|e| mako_markt::error::MdmError::Internal(e.to_string()))?
@@ -421,6 +425,7 @@ fn row_to_malo(r: PgRow) -> MaloRecord {
         fallgruppe: r.try_get("fallgruppe").unwrap_or(None),
         lokationsbuendel_objektcode: r.try_get("lokationsbuendel_objektcode").unwrap_or(None),
         fernsteuerbar: r.try_get("fernsteuerbar").unwrap_or(None),
+        abwicklungsmodell: r.try_get("abwicklungsmodell").unwrap_or(None),
         version: r.get("version"),
         data: r.get("data"),
         rollenzuordnung,

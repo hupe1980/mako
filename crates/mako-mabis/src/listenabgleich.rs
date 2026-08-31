@@ -88,6 +88,24 @@
 //! therefore run **first and to completion**
 //! ([`mako_pruefung::mabis::pruefe_liste`]), and which command the caller sends
 //! is checked against what that walk decides rather than trusted.
+//!
+//! # On the wire it is a list, not a Vorgang
+//!
+//! `BGM+Z05` Clearingliste, the Bilanzierungsmonat in `DTM+157` (`610`
+//! `CCYYMM`, never the Dokumentendatum — a December list distributed in
+//! January reconciles December), then an `IDE+Z01` head that *is* the
+//! Geschäftsvorfall: „Alle aufgelisteten IDE+24 sind Bestandteil des
+//! Geschäftsvorfalls" (UTILMD AHB Strom 2.2 Kap. 13.4, Bedingung `[564]`).
+//! The head names the MaBiS-Zählpunkt (`SG5 LOC+Z15`), the Version der
+//! Zeitreihe (`SG8 SEQ+Z22` / `RFF+AUU`) and the answered list's own number
+//! (`SG6 RFF+TN`); each disputed Marktlokation follows as an `IDE+24` with its
+//! own `STS+E01` and `LOC+Z16`.
+//!
+//! Head status and members are **mutually exclusive** — Bedingung `[238]`
+//! marks the head `STS+E01` Muss „wenn SG4 IDE+24 (Vorgang) nicht vorhanden",
+//! and `[630]`: „wenn die Liste abgelehnt wird, ist kein Vorgang enthalten".
+//! So a whole-list Ablehnung renders as a single Vorgang and a Korrekturliste
+//! as a list, which is the same split the two commands make.
 
 use mako_engine::{
     error::WorkflowError,
@@ -222,6 +240,19 @@ pub struct ListenabgleichData {
     pub billing_period: BillingPeriod,
     /// EDIFACT message reference of the list.
     pub message_ref: MessageRef,
+    /// `SG5 LOC+Z15` — the MaBiS-Zählpunkt the list is about.
+    ///
+    /// Muss on both the list and its answer: it is the Summenzeitreihe the
+    /// whole exchange reconciles, and an answer that omits it cannot be matched
+    /// to one.
+    pub mabis_zaehlpunkt: String,
+    /// `SG8 RFF+AUU` — the Version der Zeitreihe, a MaBiS Erstellungszeitpunkt.
+    pub zeitreihen_version: String,
+    /// `SG4 IDE+Z01` DE 7402 — the Listennummer the distributor assigned.
+    ///
+    /// The answer echoes it in `SG6 RFF+TN` („Es ist die Listennummer aus der
+    /// Lieferanten- bzw. Bilanzierungsgebietsclearingliste zu verwenden").
+    pub listennummer: String,
 }
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -244,6 +275,12 @@ pub enum ListenabgleichEvent {
         billing_period: BillingPeriod,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// `SG5 LOC+Z15` — the MaBiS-Zählpunkt the list is about.
+        mabis_zaehlpunkt: String,
+        /// `SG8 RFF+AUU` — the Version der Zeitreihe.
+        zeitreihen_version: String,
+        /// `SG4 IDE+Z01` DE 7402 — the Listennummer.
+        listennummer: String,
     },
     /// Korrekturliste / Prüfmitteilung dispatched back to the distributor.
     KorrekturGesendet {
@@ -347,6 +384,12 @@ pub enum ListenabgleichCommand {
         billing_period: BillingPeriod,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// `SG5 LOC+Z15` — the MaBiS-Zählpunkt the list is about.
+        mabis_zaehlpunkt: String,
+        /// `SG8 RFF+AUU` — the Version der Zeitreihe.
+        zeitreihen_version: String,
+        /// `SG4 IDE+Z01` DE 7402 — the Listennummer.
+        listennummer: String,
         /// `true` if AHB profile validation passed.
         validation_passed: bool,
         /// Validation errors collected by the AHB validator.
@@ -445,11 +488,17 @@ impl Workflow for MabisListenabgleichWorkflow {
             ListenabgleichEvent::ListeErhalten {
                 pruefidentifikator,
                 typ,
+                mabis_zaehlpunkt,
+                zeitreihen_version,
+                listennummer,
                 sender,
                 receiver,
                 billing_period,
                 message_ref,
             } => ListenabgleichState::ListeErhalten(Box::new(ListenabgleichData {
+                mabis_zaehlpunkt: mabis_zaehlpunkt.clone(),
+                zeitreihen_version: zeitreihen_version.clone(),
+                listennummer: listennummer.clone(),
                 pruefidentifikator: *pruefidentifikator,
                 typ: *typ,
                 sender: sender.clone(),
@@ -489,6 +538,9 @@ impl Workflow for MabisListenabgleichWorkflow {
         match command {
             ListenabgleichCommand::ReceiveListe {
                 pid,
+                mabis_zaehlpunkt,
+                zeitreihen_version,
+                listennummer,
                 sender,
                 receiver,
                 billing_period,
@@ -516,6 +568,9 @@ impl Workflow for MabisListenabgleichWorkflow {
 
                 Ok(vec![ListenabgleichEvent::ListeErhalten {
                     pruefidentifikator: pid,
+                    mabis_zaehlpunkt,
+                    zeitreihen_version,
+                    listennummer,
                     typ: familie.typ,
                     sender,
                     receiver,
@@ -555,18 +610,31 @@ impl Workflow for MabisListenabgleichWorkflow {
                 }
 
                 let korrekturen = u32::try_from(eintraege.len()).unwrap_or(u32::MAX);
+                // The answer travels back the way the list came, so the parties
+                // swap. `antwort_codeliste` is the DE 1131 key the renderer
+                // reads; the per-position codes ride `positionen`, which the
+                // renderer refuses rather than flattening — see below.
                 let outbox = PendingOutbox::new(
                     "UTILMD",
                     data.sender.as_str(),
                     serde_json::json!({
                         "pid": familie.antwort,
-                        "ebd": ebd,
+                        "sender": data.receiver.as_str(),
+                        "receiver": data.sender.as_str(),
+                        "antwort_codeliste": ebd,
+                        // The head of the `IDE+Z01` list: which
+                        // Summenzeitreihe, which version, and the Listennummer
+                        // the answer echoes in `SG6 RFF+TN`.
+                        "mabis_zaehlpunkt": data.mabis_zaehlpunkt,
+                        "zeitreihen_version": data.zeitreihen_version,
+                        "listennummer": format!("{}-K", data.listennummer),
+                        "referenz_listennummer": data.listennummer,
                         "korrekturen": korrekturen,
                         "positionen": eintraege
                             .iter()
                             .map(|(malo, code)| serde_json::json!({
                                 "malo": malo,
-                                "antwortcode": code.code,
+                                "antwort_code": code.code,
                                 "bedeutung": code.bedeutung,
                             }))
                             .collect::<Vec<_>>(),
@@ -638,12 +706,18 @@ impl Workflow for MabisListenabgleichWorkflow {
                     data.sender.as_str(),
                     serde_json::json!({
                         "pid": familie.antwort,
-                        "ebd": ebd,
+                        "sender": data.receiver.as_str(),
+                        "receiver": data.sender.as_str(),
+                        "antwort_code": antwort.code,
+                        "antwort_codeliste": ebd,
+                        "mabis_zaehlpunkt": data.mabis_zaehlpunkt,
+                        "zeitreihen_version": data.zeitreihen_version,
+                        "listennummer": format!("{}-A", data.listennummer),
+                        "referenz_listennummer": data.listennummer,
                         // No positions, and the count says so: an
                         // AblehnungDerGesamtenListe names no Marktlokation.
                         "korrekturen": 0,
                         "positionen": [],
-                        "antwortcode": antwort.code,
                         "bedeutung": antwort.bedeutung,
                         "billing_period": data.billing_period.as_str(),
                     }),
@@ -703,6 +777,9 @@ mod tests {
     fn receive(pid: u32) -> ListenabgleichCommand {
         ListenabgleichCommand::ReceiveListe {
             pid: Pruefidentifikator::new(pid).expect("valid PID"),
+            mabis_zaehlpunkt: "DE0004096999000000000000000000009".to_owned(),
+            zeitreihen_version: "20270115T090000000".to_owned(),
+            listennummer: "LST-1".to_owned(),
             sender: mp("9900123456789"),
             receiver: mp("9900987654321"),
             billing_period: BillingPeriod::new("2026-07"),
@@ -850,8 +927,11 @@ mod tests {
                 MabisListenabgleichWorkflow::handle(&state, korrektur(rolle, positionen.clone()))
                     .expect("both roles distribute 55065");
             (
-                out.outbox[0].payload["ebd"].as_str().unwrap().to_owned(),
-                out.outbox[0].payload["positionen"][0]["antwortcode"]
+                out.outbox[0].payload["antwort_codeliste"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+                out.outbox[0].payload["positionen"][0]["antwort_code"]
                     .as_str()
                     .unwrap()
                     .to_owned(),
@@ -878,7 +958,7 @@ mod tests {
             ),
         )
         .unwrap();
-        assert_eq!(out.outbox[0].payload["ebd"], "E_0017");
+        assert_eq!(out.outbox[0].payload["antwort_codeliste"], "E_0017");
         assert_eq!(
             out.outbox[0].recipient.as_ref(),
             "9900123456789",
@@ -909,6 +989,9 @@ mod tests {
     fn validation_failure_is_terminal_and_owes_nothing() {
         let cmd = ListenabgleichCommand::ReceiveListe {
             pid: Pruefidentifikator::new(55195).expect("valid PID"),
+            mabis_zaehlpunkt: "DE0004096999000000000000000000009".to_owned(),
+            zeitreihen_version: "20270115T090000000".to_owned(),
+            listennummer: "LST-1".to_owned(),
             sender: mp("9900123456789"),
             receiver: mp("9900987654321"),
             billing_period: BillingPeriod::new("2026-07"),
@@ -952,12 +1035,16 @@ mod tests {
         // The code must come out of the whole-list cluster. A Korrekturgrund
         // code carried on a message with no positions would name a
         // Marktlokation the message does not contain.
-        let code = payload["antwortcode"]
+        let code = payload["antwort_code"]
             .as_str()
             .expect("a code was resolved");
-        let entry =
-            mako_pruefung::mabis::lookup(payload["ebd"].as_str().expect("the tree is named"), code)
-                .expect("the tree publishes the code it answered with");
+        let entry = mako_pruefung::mabis::lookup(
+            payload["antwort_codeliste"]
+                .as_str()
+                .expect("the tree is named"),
+            code,
+        )
+        .expect("the tree publishes the code it answered with");
         assert_eq!(
             entry.cluster,
             mako_pruefung::codes::Cluster::AblehnungDerGesamtenListe,
@@ -1045,7 +1132,7 @@ mod tests {
             },
         )
         .expect("an inadmissible version refuses the list");
-        assert_eq!(out.outbox[0].payload["ebd"], "E_0047");
+        assert_eq!(out.outbox[0].payload["antwort_codeliste"], "E_0047");
         assert_eq!(out.outbox[0].payload["korrekturen"], 0);
     }
 

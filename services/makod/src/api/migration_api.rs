@@ -424,6 +424,39 @@ pub async fn dispatch_migrations(
                 to
             );
 
+            // ── NZR-EMob / Modell 2 ───────────────────────────────────────────
+            //
+            // All three legs share `ModellwechselState`, so one schema change
+            // would move all three at once — which is exactly why each is
+            // listed rather than one standing for the family.
+            identity!(
+                report,
+                count,
+                store,
+                mako_emob::EmobAnmeldungWorkflow,
+                mako_emob::EmobAnmeldungWorkflow::WORKFLOW_NAME,
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_emob::EmobZuordnungsendeWorkflow,
+                mako_emob::EmobZuordnungsendeWorkflow::WORKFLOW_NAME,
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_emob::EmobAbmeldungWorkflow,
+                mako_emob::EmobAbmeldungWorkflow::WORKFLOW_NAME,
+                from,
+                to
+            );
+
             // ── GaBi Gas ──────────────────────────────────────────────────────
             identity!(
                 report,

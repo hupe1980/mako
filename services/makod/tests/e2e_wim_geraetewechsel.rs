@@ -341,7 +341,12 @@ async fn e2e_wim_geraetewechsel_positive_aperak() {
         .expect("UTILMD payload must be a JSON object");
     assert_eq!(p["pid"].as_u64().unwrap(), 55_043);
     assert_eq!(p["antwort_code"].as_str().unwrap(), "E15");
-    assert_eq!(p["antwort_ebd"].as_str().unwrap(), "E_0201");
+    // Two different values, two different jobs: `antwort_codeliste` is the
+    // DE 1131 wire value — a WiM MSB-Wechsel answer names an `S_00xx` list, not
+    // an EBD number — and `antwort_tree` records which Entscheidungsbaum
+    // produced the code.
+    assert_eq!(p["antwort_codeliste"].as_str().unwrap(), "S_0055");
+    assert_eq!(p["antwort_tree"].as_str().unwrap(), "E_0201");
     assert_eq!(p["melo"].as_str().unwrap(), MELO_ID);
     let state_after_antwort = nb.state().await;
     assert!(

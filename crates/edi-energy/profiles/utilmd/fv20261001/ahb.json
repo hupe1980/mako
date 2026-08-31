@@ -5505,6 +5505,1822 @@
       ]
     },
     {
+      "code": 55235,
+      "name": "MaBiS / Zuordnung ZP der NGZ zur NZR",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z71"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "2005": [
+              "137",
+              "92"
+            ]
+          },
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein STS"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z15"
+            ]
+          },
+          "field_rules": [],
+          "_description": "AHB Bedingung [2096]: SG5 ist genau zweimal je SG4 IDE anzugeben — ZPB des ZP der NGZ und ZPB der NZR"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13",
+              "AVE"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein FTX"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "M",
+          "field_rules": []
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "M",
+          "field_rules": []
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "4347": [
+              "5"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein AGR"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "DTM",
+          "requirement": "M",
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "STS",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein STS"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z15"
+            ]
+          },
+          "group_required": true,
+          "_description": "AHB Bedingung [2096]: SG5 ist genau zweimal je SG4 IDE anzugeben — ZPB des ZP der NGZ und ZPB der NZR"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13",
+              "AVE"
+            ]
+          },
+          "group_required": true,
+          "_description": "SG6 und SG8 teilen sich den RFF-Trigger; die Gruppenregel lässt daher alle in dieser Nachricht zulässigen DE-1153-Codes zu"
+        },
+        {
+          "group_id": "SG8",
+          "tag": "SEQ",
+          "requirement": "M",
+          "_description": "SG8 enthält ein RFF und die Geschwistergruppe SG6 wird von RFF ausgelöst; die Gruppenpräsenz ist daher nicht prüfbar — die Segmentregeln SEQ/CCI/PIA/QTY binden unabhängig von der Gruppierung"
+        },
+        {
+          "group_id": "SG10",
+          "tag": "CCI",
+          "requirement": "M",
+          "_description": "SG8 enthält ein RFF und die Geschwistergruppe SG6 wird von RFF ausgelöst; die Gruppenpräsenz ist daher nicht prüfbar — die Segmentregeln SEQ/CCI/PIA/QTY binden unabhängig von der Gruppierung"
+        }
+      ]
+    },
+    {
+      "code": 55236,
+      "name": "MaBiS / Beendigung Zuordnung ZP der NGZ zur NZR",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z71"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "2005": [
+              "137",
+              "93"
+            ]
+          },
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein STS"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z15"
+            ]
+          },
+          "field_rules": [],
+          "_description": "AHB Bedingung [2096]: SG5 ist genau zweimal je SG4 IDE anzugeben"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein FTX"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt keine SG8"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt keine SG10"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein CAV"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "N"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "N"
+        },
+        {
+          "tag": "AGR",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein AGR"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "DTM",
+          "requirement": "M",
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "STS",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein STS"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z15"
+            ]
+          },
+          "group_required": true,
+          "_description": "AHB Bedingung [2096]: SG5 ist genau zweimal je SG4 IDE anzugeben"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "group_required": true
+        }
+      ]
+    },
+    {
+      "code": 55237,
+      "name": "MaBiS / Antwort auf Zuordnung / Beendigung Zuordnung ZP der NGZ zur NZR",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z71"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "2005": [
+              "137",
+              "92",
+              "93"
+            ]
+          },
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "field_rules": [],
+          "_description": "SG4 STS+7 trägt den Transaktionsgrund; das zweite STS+E01 trägt den Antwortcode in DE 9013 und die EBD-Nr. in DE 1131 (E_0102/E_0103)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z15"
+            ]
+          },
+          "field_rules": [],
+          "_description": "AHB Bedingung [2096]: SG5 ist genau zweimal je SG4 IDE anzugeben"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13",
+              "TN"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "AHB Bedingung [48]: Muss, wenn in dieser SG4 das STS+E01++A99 (Sonstiges) vorhanden ist"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt keine SG8"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt keine SG10"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein CAV"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "N"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "N"
+        },
+        {
+          "tag": "AGR",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein AGR"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "DTM",
+          "requirement": "C",
+          "_description": "AHB Bedingung [56]: Muss, wenn im SG4 STS+E01 im DE 9013 ein Antwortcode aus dem Cluster Zustimmung vorhanden ist"
+        },
+        {
+          "group_id": "SG4",
+          "tag": "STS",
+          "requirement": "M",
+          "group_required": true
+        },
+        {
+          "group_id": "SG5",
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z15"
+            ]
+          },
+          "group_required": true,
+          "_description": "AHB Bedingung [2096]: SG5 ist genau zweimal je SG4 IDE anzugeben"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13",
+              "TN"
+            ]
+          },
+          "group_required": true
+        }
+      ]
+    },
+    {
+      "code": 55238,
+      "name": "E-Mob / Anmeldung in Modell 2",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "2005": [
+              "137",
+              "92",
+              "158"
+            ]
+          },
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "field_rules": [],
+          "_description": "SG4 STS+7 trägt den Transaktionsgrund"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z16"
+            ]
+          },
+          "field_rules": [],
+          "_description": "AHB Bedingung [2061]: SG5 ist genau einmal je SG4 IDE anzugeben"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13",
+              "Z18"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "M",
+          "field_rules": []
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein CAV"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "N"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "N"
+        },
+        {
+          "tag": "AGR",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein AGR"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "DTM",
+          "requirement": "M",
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "STS",
+          "requirement": "M",
+          "group_required": true
+        },
+        {
+          "group_id": "SG5",
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z16"
+            ]
+          },
+          "group_required": true,
+          "_description": "AHB Bedingung [2061]: SG5 ist genau einmal je SG4 IDE anzugeben"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13",
+              "Z18"
+            ]
+          },
+          "group_required": true,
+          "_description": "SG6 und SG8 teilen sich den RFF-Trigger; die Gruppenregel lässt daher alle in dieser Nachricht zulässigen DE-1153-Codes zu"
+        },
+        {
+          "group_id": "SG8",
+          "tag": "SEQ",
+          "requirement": "M",
+          "_description": "SG8 enthält ein RFF und die Geschwistergruppe SG6 wird von RFF ausgelöst; die Gruppenpräsenz ist daher nicht prüfbar — die Segmentregeln SEQ/CCI/PIA/QTY binden unabhängig von der Gruppierung"
+        },
+        {
+          "group_id": "SG10",
+          "tag": "CCI",
+          "requirement": "M",
+          "_description": "SG8 enthält ein RFF und die Geschwistergruppe SG6 wird von RFF ausgelöst; die Gruppenpräsenz ist daher nicht prüfbar — die Segmentregeln SEQ/CCI/PIA/QTY binden unabhängig von der Gruppierung"
+        }
+      ]
+    },
+    {
+      "code": 55239,
+      "name": "E-Mob / Antwort auf Anmeldung in Modell 2",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "2005": [
+              "137",
+              "92",
+              "158"
+            ]
+          },
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "field_rules": [],
+          "_description": "SG4 STS+7 trägt den Transaktionsgrund; das zweite STS+E01 trägt den Antwortcode in DE 9013 und die EBD-Nr. in DE 1131 (E_0510/E_0513)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z16",
+              "Z15"
+            ]
+          },
+          "field_rules": [],
+          "_description": "AHB Bedingung [663]: es ist die ID der Marktlokation und die ZPB des ZP der NGZ anzugeben"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13",
+              "TN",
+              "Z18"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "AHB Bedingung [48]: Muss, wenn in dieser SG4 das STS+E01++A99 (Sonstiges) vorhanden ist"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "M",
+          "field_rules": []
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "M",
+          "field_rules": []
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "4347": [
+              "5"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "QTY",
+          "requirement": "N"
+        },
+        {
+          "tag": "AGR",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein AGR"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "DTM",
+          "requirement": "C",
+          "_description": "AHB Bedingung [56]: Muss, wenn im SG4 STS+E01 im DE 9013 ein Antwortcode aus dem Cluster Zustimmung vorhanden ist"
+        },
+        {
+          "group_id": "SG4",
+          "tag": "STS",
+          "requirement": "M",
+          "group_required": true
+        },
+        {
+          "group_id": "SG5",
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z16",
+              "Z15"
+            ]
+          },
+          "group_required": true,
+          "_description": "AHB Bedingung [663]: es ist die ID der Marktlokation und die ZPB des ZP der NGZ anzugeben"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13",
+              "TN",
+              "Z18"
+            ]
+          },
+          "group_required": true,
+          "_description": "SG6 und SG8 teilen sich den RFF-Trigger; die Gruppenregel lässt daher alle in dieser Nachricht zulässigen DE-1153-Codes zu"
+        },
+        {
+          "group_id": "SG8",
+          "tag": "SEQ",
+          "requirement": "M",
+          "_description": "SG8 enthält ein RFF und die Geschwistergruppe SG6 wird von RFF ausgelöst; die Gruppenpräsenz ist daher nicht prüfbar — die Segmentregeln SEQ/CCI/PIA/QTY binden unabhängig von der Gruppierung"
+        },
+        {
+          "group_id": "SG10",
+          "tag": "CCI",
+          "requirement": "M",
+          "_description": "SG8 enthält ein RFF und die Geschwistergruppe SG6 wird von RFF ausgelöst; die Gruppenpräsenz ist daher nicht prüfbar — die Segmentregeln SEQ/CCI/PIA/QTY binden unabhängig von der Gruppierung"
+        }
+      ]
+    },
+    {
+      "code": 55240,
+      "name": "E-Mob / Beendigung der Zuordnung zur Marktlokation",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E44"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "2005": [
+              "137",
+              "93",
+              "159"
+            ]
+          },
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "field_rules": [],
+          "_description": "SG4 STS+7 trägt den Transaktionsgrund"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z16"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt keine SG8"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt keine SG10"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein CAV"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "N"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "N"
+        },
+        {
+          "tag": "AGR",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein AGR"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "DTM",
+          "requirement": "M",
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "STS",
+          "requirement": "M",
+          "group_required": true
+        },
+        {
+          "group_id": "SG5",
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z16"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "group_required": true
+        }
+      ]
+    },
+    {
+      "code": 55241,
+      "name": "E-Mob / Antwort auf Beendigung der Zuordnung zur Marktlokation",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E44"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "2005": [
+              "137",
+              "93",
+              "159"
+            ]
+          },
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "field_rules": [],
+          "_description": "SG4 STS+7 trägt den Transaktionsgrund; das zweite STS+E01 trägt den Antwortcode in DE 9013 und die EBD-Nr. in DE 1131 (E_0511)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z16"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13",
+              "TN"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "AHB Bedingung [48]: Muss, wenn in dieser SG4 das STS+E01++A99 (Sonstiges) vorhanden ist"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt keine SG8"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt keine SG10"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein CAV"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "N"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "N"
+        },
+        {
+          "tag": "AGR",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein AGR"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "DTM",
+          "requirement": "C",
+          "_description": "AHB Bedingung [56]: Muss, wenn im SG4 STS+E01 im DE 9013 ein Antwortcode aus dem Cluster Zustimmung vorhanden ist"
+        },
+        {
+          "group_id": "SG4",
+          "tag": "STS",
+          "requirement": "M",
+          "group_required": true
+        },
+        {
+          "group_id": "SG5",
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z16"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13",
+              "TN"
+            ]
+          },
+          "group_required": true
+        }
+      ]
+    },
+    {
+      "code": 55242,
+      "name": "E-Mob / Abmeldung aus dem Modell 2",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E02"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "2005": [
+              "137",
+              "93",
+              "159"
+            ]
+          },
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "field_rules": [],
+          "_description": "SG4 STS+7 trägt den Transaktionsgrund"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z16",
+              "Z15"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt keine SG8"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt keine SG10"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein CAV"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "N"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "N"
+        },
+        {
+          "tag": "AGR",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein AGR"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "DTM",
+          "requirement": "M",
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "STS",
+          "requirement": "M",
+          "group_required": true
+        },
+        {
+          "group_id": "SG5",
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z16",
+              "Z15"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "group_required": true
+        }
+      ]
+    },
+    {
+      "code": 55243,
+      "name": "E-Mob / Antwort auf Abmeldung aus dem Modell 2",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E02"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "2005": [
+              "137",
+              "93",
+              "159"
+            ]
+          },
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "field_rules": [],
+          "_description": "SG4 STS+7 trägt den Transaktionsgrund; das zweite STS+E01 trägt den Antwortcode in DE 9013 und die EBD-Nr. in DE 1131 (E_0512)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z16",
+              "Z15"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13",
+              "TN"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "AHB Bedingung [48]: Muss, wenn in dieser SG4 das STS+E01++A99 (Sonstiges) vorhanden ist"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt keine SG8"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt keine SG10"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein CAV"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "N"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "N"
+        },
+        {
+          "tag": "AGR",
+          "requirement": "N",
+          "_description": "die AHB-Tabelle dieses Anwendungsfalls führt kein AGR"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG4",
+          "tag": "DTM",
+          "requirement": "C",
+          "_description": "AHB Bedingung [56]: Muss, wenn im SG4 STS+E01 im DE 9013 ein Antwortcode aus dem Cluster Zustimmung vorhanden ist"
+        },
+        {
+          "group_id": "SG4",
+          "tag": "STS",
+          "requirement": "M",
+          "group_required": true
+        },
+        {
+          "group_id": "SG5",
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z16",
+              "Z15"
+            ]
+          },
+          "group_required": true
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13",
+              "TN"
+            ]
+          },
+          "group_required": true
+        }
+      ]
+    },
+    {
       "code": 55555,
       "name": "Anfrage Daten der individuellen Bestellung",
       "segment_rules": [

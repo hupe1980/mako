@@ -12,7 +12,7 @@ keywords         = ["energy", "mako", "bdew", "gpke", "edifact"]
 categories       = ["data-structures"]
 
 [features]
-default = ["role-nb", "role-lf", "role-msb", "role-esa", "role-mabis"]
+default = ["role-nb", "role-lf", "role-msb", "role-esa", "role-mabis", "role-emob"]
 ## The trees whose prüfende Rolle is the Netzbetreiber (`E_0622`, `E_0607`).
 role-nb = ["dep:mako-markt"]
 ## The trees whose prüfende Rolle is the Lieferant (`E_0609`, `E_0624`, `E_0614`,
@@ -38,6 +38,14 @@ role-esa = []
 ## *Summenzeitreihe* rather than on one Marktrolle and a combined deployment
 ## checks both.
 role-mabis = []
+## The NZR-EMob / Modell 2 trees (`E_0510`–`E_0513`, EBD 4.3 Kap. 17): the VNB's
+## answers to an Anmeldung/Abmeldung in Modell 2 and the LF's answer to the
+## Beendigung der Zuordnung. Both sides, because the VNB's `E_0510` Prüfschritt 1
+## reads the LF's `E_0511` answer and a combined deployment walks both.
+##
+## The Zuordnung ZP der NGZ zur NZR (55235–55237) is answered from `role-mabis`
+## (`E_0102`/`E_0103`), so a full Modell-2 deployment enables both features.
+role-emob = []
 ## Enable in-memory test doubles. Must never appear in production builds.
 testing = []
 
@@ -45,6 +53,11 @@ testing = []
 mako-fristen = { workspace = true }
 mako-markt  = { workspace = true, optional = true }
 
+# Exact percent arithmetic for the E_0623 Tranchen-Prüfschritte: shares are
+# summed and compared against the share the LFN registered, and a binary float
+# cannot hold 33.3 % — a comparison that is off by an ulp refuses a valid
+# Anmeldung (A54) on arithmetic rather than on the market's facts.
+rust_decimal = { workspace = true }
 serde        = { workspace = true }
 serde_json   = { workspace = true }
 thiserror    = { workspace = true }

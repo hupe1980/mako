@@ -19,7 +19,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use rubo4e::current::{Bilanzierungsmethode, Energierichtung, Gasqualitaet, Zaehlertyp};
+use rubo4e::current::Zaehlertyp;
 
 fn migration_sql() -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations/0001_initial.sql");
@@ -63,6 +63,49 @@ fn check_values(sql: &str, column: &str) -> Vec<String> {
                 .map(str::to_owned)
         })
         .collect()
+}
+
+/// Every `CHECK` list written for `column`, in file order.
+///
+/// A column name is not unique across tables — `netzebene` constrains `malo`,
+/// `nelo` and `melo`'s measurement level — and [`check_values`] returns only the
+/// first. Proving one and calling the column guarded would leave the others free
+/// to drift, so every occurrence is returned and every occurrence is asserted.
+fn all_check_lists(sql: &str, column: &str) -> Vec<Vec<String>> {
+    let sql: String = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+    let anchors = [
+        format!("CHECK ({column} IS NULL OR {column} IN ("),
+        format!("CHECK ({column} IN ("),
+    ];
+    let mut out = Vec::new();
+    let mut from = 0usize;
+    while from < sql.len() {
+        let Some((anchor, at)) = anchors
+            .iter()
+            .filter_map(|a| sql[from..].find(a.as_str()).map(|i| (a, from + i)))
+            .min_by_key(|(_, i)| *i)
+        else {
+            break;
+        };
+        let start = at + anchor.len();
+        let end = start
+            + sql[start..]
+                .find("))")
+                .unwrap_or_else(|| panic!("unterminated CHECK list for `{column}`"));
+        out.push(
+            sql[start..end]
+                .split(',')
+                .filter_map(|tok| {
+                    let t = tok.trim();
+                    t.strip_prefix('\'')
+                        .and_then(|t| t.strip_suffix('\''))
+                        .map(str::to_owned)
+                })
+                .collect(),
+        );
+        from = end;
+    }
+    out
 }
 
 /// Every value in the `zaehler_typ` CHECK list must be a real BO4E `Zaehlertyp`.
@@ -145,53 +188,79 @@ fn imsys_spelling_is_the_zaehlertyp_one() {
 
 // ── Every BO4E-enum-backed column, not just `zaehler_typ` ────────────────────
 
-/// Prove one column's CHECK list is exactly its BO4E enum.
-///
-/// Generic over the enum so the check reads the same for every column and a new
-/// one costs a single line in [`every_bo4e_backed_check_matches_its_enum`].
-fn assert_check_matches_enum<E: rubo4e::Bo4eEnum>(sql: &str, column: &str) {
-    let list: BTreeSet<String> = check_values(sql, column).into_iter().collect();
+/// Prove every `CHECK` list written for `column` is exactly `expected`.
+fn assert_check_matches(sql: &str, column: &str, expected: &[&str]) {
+    let want: BTreeSet<String> = expected.iter().map(|v| (*v).to_owned()).collect();
+    let lists = all_check_lists(sql, column);
     assert!(
-        !list.is_empty(),
-        "CHECK list for `{column}` parsed as empty"
+        !lists.is_empty(),
+        "no CHECK list found for column `{column}` — the guard would pass by not looking"
     );
-
-    let enum_wire: BTreeSet<String> = E::VARIANTS.iter().map(|v| v.as_wire().to_owned()).collect();
-
-    assert_eq!(
-        list.len(),
-        E::COUNT,
-        "`{column}` CHECK list has {} entries against {} enum variants — duplicates?",
-        list.len(),
-        E::COUNT
-    );
-    let missing: Vec<&String> = enum_wire.difference(&list).collect();
-    let extra: Vec<&String> = list.difference(&enum_wire).collect();
-    assert!(
-        missing.is_empty() && extra.is_empty(),
-        "`{column}` CHECK list is out of sync with its BO4E enum — \
-         missing {missing:?}, stale {extra:?}. Reconcile the migration with rubo4e."
-    );
+    for (n, values) in lists.iter().enumerate() {
+        let list: BTreeSet<String> = values.iter().cloned().collect();
+        assert_eq!(
+            list.len(),
+            values.len(),
+            "`{column}` CHECK list #{n} repeats a value"
+        );
+        let missing: Vec<&String> = want.difference(&list).collect();
+        let extra: Vec<&String> = list.difference(&want).collect();
+        assert!(
+            missing.is_empty() && extra.is_empty(),
+            "`{column}` CHECK list #{n} is out of sync with its BO4E enum — \
+             missing {missing:?}, stale {extra:?}. Reconcile the migration with rubo4e."
+        );
+    }
 }
 
 /// Every column whose domain **is** a BO4E enum is proved against that enum.
 ///
-/// `zaehler_typ` had this guard alone; the other three were hand-written lists
-/// that nothing tied to the schema. BO4E changes enum membership *inside* a
-/// series — v202607.0.0 → v202607.1.0 removed `Messgroesse::PREISE` and two
-/// whole enums — so a list left unguarded goes stale on a patch release, and a
-/// value the enum no longer knows deserialises to `Unknown` rather than failing.
+/// The column→enum mapping is **not** restated here. `mako-markt` publishes it
+/// (`malo_enum_check_lists` and its melo/nelo/partner siblings) precisely so a
+/// migration generator or an operator script renders the same list instead of
+/// re-typing it — and a guard that re-typed it was the one consumer that could
+/// have caught drift and did not. Driving the test off those functions is what
+/// makes them load-bearing.
 ///
-/// Columns whose vocabulary is **mako's own** (`fallgruppe`, `netzebene`,
-/// `dispatch_status`, …) are deliberately not here: they are not BO4E enums and
-/// have no upstream to drift from.
+/// It also closes a real gap: the previous hand-written list asserted four
+/// columns and excused `netzebene` and `fallgruppe` as "mako's own vocabulary
+/// with no upstream to drift from". Both are BO4E enums — `Netzebene` and
+/// `Fallgruppenzuordnung` — so they had an upstream all along and nothing was
+/// watching it.
+///
+/// BO4E changes enum membership *inside* a series (v202607.0.0 → v202607.1.0
+/// removed `Messgroesse::PREISE` and two whole enums), so an unguarded list goes
+/// stale on a patch release and a value the enum no longer knows deserialises to
+/// `Unknown` rather than failing.
 #[test]
 fn every_bo4e_backed_check_matches_its_enum() {
     let sql = migration_sql();
-    assert_check_matches_enum::<Zaehlertyp>(&sql, "zaehler_typ");
-    assert_check_matches_enum::<Gasqualitaet>(&sql, "gasqualitaet");
-    assert_check_matches_enum::<Energierichtung>(&sql, "energierichtung");
-    assert_check_matches_enum::<Bilanzierungsmethode>(&sql, "bilanzierungsmethode");
+
+    let mut checked = 0usize;
+    for (column, expected) in mako_markt::bo4e::malo_enum_check_lists()
+        .into_iter()
+        .chain(mako_markt::bo4e::melo_enum_check_lists())
+        .chain(mako_markt::bo4e::nelo_enum_check_lists())
+        .chain(mako_markt::bo4e::partner_enum_check_lists())
+    {
+        assert_check_matches(&sql, column, &expected);
+        checked += 1;
+    }
+    assert!(
+        checked >= 9,
+        "only {checked} column(s) resolved — did a list empty out?"
+    );
+
+    // `zaehler_typ` is not in those lists (it is a `Zaehler` column, not a
+    // location one) and keeps its own line.
+    assert_check_matches(
+        &sql,
+        "zaehler_typ",
+        &Zaehlertyp::VARIANTS
+            .iter()
+            .map(rubo4e::Bo4eEnum::as_wire)
+            .collect::<Vec<_>>(),
+    );
 }
 
 /// The enums BO4E **removed** in v202607.1.0 must not reappear as a column

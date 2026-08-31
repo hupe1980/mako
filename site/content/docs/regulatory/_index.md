@@ -91,6 +91,7 @@ graph LR
 | **§41a EnWG** (Dynamic tariffs — EPEX Spot day-ahead) | Strom | `productd` (EPEX prices), `billingd` (§41a iMSys guard) |
 | **GDPR Art. 15/17/20** (data export, pseudonymization, portability) | — | `vertragd` (`/export`, `/anonymize`), `accountingd` (`/anonymize`) |
 | **XRechnung 3.0 CII / PEPPOL UBL** (EN 16931 e-invoice) | — | `billingd` |
+| **BK6-20-160 Anlage 6** (NZR-EMob / Modell 2 — ladevorgangscharfe bilanzielle Energiemengenzuordnung) · **BK6-24-267** (Modell 2 für Kundenanlagen, § 20 Abs. 1, 1a EnWG) | Strom | `mako-emob` (allocation engine + the three Modellwechsel-Workflows), `mako-mabis` (Zuordnung ZP der NGZ zur NZR, 55235–55237), `makod` (routing, adapters, UTILMD render), `marktd` (`malo.abwicklungsmodell`), `mako-pruefung` (`E_0510`–`E_0513`), `mako-fristen`, `edi-energy` (UTILMD 55235–55243, MSCONS 13018), `mako-engine` (`Marktrolle::Lpb`) |
 | **BK6-20-059/060/061** (Redispatch 2.0) | Strom | `mako-redispatch` (8 workflows), `redispatch-xml` (9 document types), `makod` (AS4 EDIFACT+XML ingest), `grid-billing` (§13a Vergütung) |
 | **BK6-23-241** (BilAReM, Beschluss 07.05.2026 — Planwert-/Prognosemodell, Kap.-3 Ausfallarbeit) | Strom | `mako-redispatch` (`bilarem` model/migration + `ausfallarbeit` engine), `grid-billing` (`bilarem_finanzielle_korrektur`), `netzbilanzd` (compute endpoints) |
 | **§19 Abs. 2/3 StromNEV + BK8-25-003-A / GBK-25-01 (AgNeS, draft)** | Strom | `grid-billing::regulatory` (regime turnovers as dates; **AgNeS-era Entgelt settlements are refused** until the Rahmenfestlegung supplies parameters) |
@@ -119,3 +120,13 @@ graph LR
 > it evidences that the PID is registered — only a curated `valid/` fixture,
 > asserted clean by the conformance suite, evidences that mako reads the
 > Anwendungsfall.
+>
+> **Antwortcode fidelity.** `cargo xtask validate-ebd-codes` holds every answer
+> code mako can send against the BDEW *Entscheidungsbaum-Diagramme und
+> Codelisten* PDF: the tree publishes the code, and the **Cluster** mako assigns
+> it is the Cluster the document prints. The Cluster is the half a code check
+> alone misses — `A01` is an Ablehnung in `E_0510` and a Zustimmung in
+> `E_0511`/`E_0512`, and `E_0205` and `E_0208` overlap on `A01`–`A03` while
+> disagreeing about what each means, so a wrong Cluster answers a confirmation
+> with a refusal and stays valid on the wire. The check needs the mirrored PDF
+> (`cargo xtask sync-regulatories --download`) and skips without it.

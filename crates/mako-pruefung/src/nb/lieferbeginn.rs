@@ -71,7 +71,7 @@ use crate::codes::{AntwortCode, Cluster, EBD_LIEFERBEGINN, EBD_LIEFERBEGINN_GAS,
 
 use super::types::{
     Abmeldeanfrage, AnmeldungAnfrage, Geschaeftsvorfall, LfaAntwort, NbEntscheidung, RejectReason,
-    TranchenZuordnung,
+    TranchenLage, TranchenZuordnung,
 };
 
 /// `E_0624` Prüfschritt code the LFA uses for „die Belieferung wurde zu dem
@@ -121,7 +121,7 @@ fn reject(ebd: &'static str, c: &'static str, pruefschritt: u16, detail: String)
 #[must_use]
 pub fn evaluate_lieferbeginn(
     anfrage: &AnmeldungAnfrage,
-    tranchen: Option<&TranchenZuordnung>,
+    tranchen: Option<&TranchenLage>,
 ) -> NbEntscheidung {
     if anfrage.sparte == Sparte::Gas {
         return g_0012(anfrage);
@@ -187,24 +187,45 @@ fn erzeugend(anfrage: &AnmeldungAnfrage) -> NbEntscheidung {
 /// decides.
 fn geschaeftsvorfall_3(
     anfrage: &AnmeldungAnfrage,
-    tranchen: Option<&TranchenZuordnung>,
+    tranchen: Option<&TranchenLage>,
 ) -> NbEntscheidung {
-    let Some(t) = tranchen else {
+    // Prüfschritt 500 „wurden Anfragen … gestellt?" presupposes that the
+    // Anfrage-Leg has run. While it has not, the answer is the same process
+    // step the other two branches return — and for a Geschäftsvorfall 3 it
+    // names **every** Tranchen-LFA, „im Fall von Geschäftsvorfall 3 allen LFA"
+    // (SD Lieferbeginn Nr. 3). Without this the tree would run the arithmetic
+    // over answers nobody has been asked for yet.
+    if matches!(anfrage.abmeldeanfrage, Abmeldeanfrage::Erforderlich { .. }) {
+        return anfrage_erforderlich(anfrage);
+    }
+    let Some(lage) = tranchen else {
         return NbEntscheidung::Escalate {
             reason: format!(
                 "MaLo {}: Geschäftsvorfall 3 answers out of E_0623 Prüfschritte 500–600, which \
                  read the Tranchen-Zuordnung of the Marktlokation — which LFA hold shares, \
                  which agreed to release them, and what percentage is left in the NB's own \
-                 Bilanzkreis. No `TranchenZuordnung` was supplied, and none of A53/A54/A55/A56 \
+                 Bilanzkreis. No `TranchenLage` was supplied, and none of A53/A54/A55/A56 \
                  is a safe default: two refuse the Anmeldung and two confirm it.",
                 anfrage.malo_id
             ),
         };
     };
+    // 420–440 per Tranche. An LFA answering with a code E_0624 does not publish
+    // as an Ablehnung escalates the whole Geschäftsvorfall, exactly as it does
+    // on the single-LFA branches — the share it holds is neither free nor held.
+    let t = &match lage.auswerten() {
+        Ok(t) => t,
+        Err(reason) => return NbEntscheidung::Escalate { reason },
+    };
     // ── 500: Anfragen an die zugeordneten Lieferanten gestellt? ─────────────
     if !t.anfragen_gestellt {
-        // „nein → 600": no Tranche was assigned, so nothing had to be released.
-        return gv3_zustimmung(t);
+        // „nein → **600**", not „nein → 530": no Tranche was assigned, so
+        // nothing had to be released and 530/540 are skipped entirely. Routing
+        // through them would let an Anmeldung against an unassigned
+        // Marktlokation answer `A55` — the „Herstellung einer 100 %
+        // LF-Zuordnung" trigger — on a Marktlokation where no Zuordnung was
+        // ended at all.
+        return NbEntscheidung::accept(EBD_LIEFERBEGINN, code(EBD_LIEFERBEGINN, "A56"));
     }
     // ── 510: mindestens einer Anfrage zugestimmt? ───────────────────────────
     if !t.mindestens_eine_zustimmung {
@@ -349,6 +370,50 @@ fn widerspruch(anfrage: &Abmeldeanfrage, bereits_abgemeldet: &str) -> Widerspruc
     }
 }
 
+/// Did this Tranche come free? — Prüfschritte 420–440, per LFA.
+///
+/// The same reading as [`widerspruch`] applies to one Tranche instead of to the
+/// whole Marktlokation: silence is consent, a Zustimmung releases, and `A41`
+/// „bereits beendet" is a refusal of the *Anfrage* that still releases the
+/// Tranche. The difference is only that `E_0623` then counts the shares rather
+/// than branching on the one answer.
+///
+/// # Errors
+///
+/// A code `E_0624` does not publish as an Ablehnung, for the reason
+/// [`widerspruch`] escalates on it: Prüfschritt 440 has no answer, and refusing
+/// the LFN's Anmeldung on it would be § 20 EnWG-unsafe.
+// The two `Ok(true)` arms are 420 „nein" and 430 „nein" — distinct Prüfschritte
+// reaching the same node, and merging them would lose which one a reader is
+// looking at. The same reason `widerspruch` carries this allow.
+#[allow(clippy::match_same_arms)]
+pub(super) fn tranche_freigeworden(
+    antwort: Option<&LfaAntwort>,
+    lf_mp_id: &str,
+) -> Result<bool, String> {
+    match antwort {
+        // 420 „nein" — the Frist lapsed, which GPKE makes a Bestätigung.
+        None => Ok(true),
+        // 430 „nein".
+        Some(LfaAntwort::Zustimmung { .. }) => Ok(true),
+        Some(LfaAntwort::Widerspruch { code: c, .. }) => {
+            // 440 „ja" — the Zuordnung is already ending, so the share is free.
+            if c == BEREITS_ABGEMELDET_TRANCHE {
+                return Ok(true);
+            }
+            match lookup(crate::codes::EBD_BEENDIGUNG_ZUORDNUNG, c) {
+                Some(resolved) if resolved.cluster == Cluster::Ablehnung => Ok(false),
+                _ => Err(format!(
+                    "LFA {lf_mp_id} answered the Anfrage zur Beendigung der Zuordnung with \
+                     {c:?}, which E_0624 does not publish as an Ablehnung. E_0623 Prüfschritt \
+                     440 asks whether the Widerspruch was {BEREITS_ABGEMELDET_TRANCHE}, and \
+                     neither answer is safe for a code the tree does not define."
+                )),
+            }
+        }
+    }
+}
+
 fn anfrage_erforderlich(anfrage: &AnmeldungAnfrage) -> NbEntscheidung {
     let Abmeldeanfrage::Erforderlich { lfa_mp_ids } = &anfrage.abmeldeanfrage else {
         unreachable!("only reached from the Erforderlich arm")
@@ -384,7 +449,10 @@ fn widerspruch_detail(
 #[allow(clippy::fn_params_excessive_bools, clippy::unnecessary_wraps)]
 mod tests {
     use super::*;
-    use crate::nb::types::{ErzeugungsAnmeldung, Marktlokationsart, Messtyp, Veraeusserungsform};
+    use crate::nb::types::{
+        ErzeugungsAnmeldung, Marktlokationsart, Messtyp, TranchenAntwort, Veraeusserungsform,
+    };
+    use rust_decimal::Decimal;
     use time::{Date, Month};
     use uuid::Uuid;
 
@@ -415,6 +483,10 @@ mod tests {
                 bestehende_veraeusserungsform: Some(Veraeusserungsform::Marktpraemie),
                 nicht_eeg_kwkg: false,
                 ausfallverguetung: false,
+                // Untranchiert: the Anmeldung is for the whole Marktlokation.
+                gewuenschter_prozentsatz: None,
+                tranchen_prozent: std::collections::BTreeMap::new(),
+                direktvermarktungspflichtig: false,
             }),
             abmeldeanfrage,
         }
@@ -581,21 +653,57 @@ mod tests {
         a
     }
 
-    fn tranchen(
-        mindestens_eine_zustimmung: bool,
-        ausreichender_prozentsatz: bool,
-        restanteil: bool,
-        dv_pflichtig: bool,
-    ) -> TranchenZuordnung {
-        TranchenZuordnung {
-            anfragen_gestellt: true,
-            mindestens_eine_zustimmung,
-            ausreichender_prozentsatz,
-            restanteil_im_nb_bilanzkreis: restanteil,
-            direktvermarktungspflichtig: dv_pflichtig,
-            gewuenschter_prozentsatz: "40".to_owned(),
-            freigewordener_prozentsatz: "25".to_owned(),
+    /// A Tranchen-Lage from real per-Tranche answers: the LFN wants 40 %, and
+    /// the Marktlokation is held in four 25 % Tranchen.
+    fn lage(antworten: [Option<LfaAntwort>; 4]) -> TranchenLage {
+        TranchenLage {
+            tranchen: antworten
+                .into_iter()
+                .enumerate()
+                .map(|(i, antwort)| TranchenAntwort {
+                    lf_mp_id: format!("99999999999{i}"),
+                    prozent: Decimal::from(25),
+                    antwort,
+                })
+                .collect(),
+            gewuenschter_prozentsatz: Decimal::from(40),
+            direktvermarktungspflichtig: false,
         }
+    }
+
+    /// `A40` — the Tranchen twin of `A36`. `E_0624` gives Prüfschritte 200–220
+    /// their own alphabet (`A39`–`A42`), so a Tranche never answers with the
+    /// verbrauchend branch's codes.
+    fn zustimmung() -> Option<LfaAntwort> {
+        Some(LfaAntwort::Zustimmung {
+            code: "A40".to_owned(),
+            zuordnungsende: None,
+        })
+    }
+
+    /// `A39` „Es besteht eine Vertragsbindung (Tranche)" — a refusal that is
+    /// neither `A41` nor a Zustimmungscode, so the Tranche stays held.
+    fn abgelehnt() -> Option<LfaAntwort> {
+        widerspruch("A39")
+    }
+
+    /// Prüfschritt 500 presupposes the Anfrage-Leg has run. While it has not,
+    /// a Geschäftsvorfall 3 owes the same process step the other branches do —
+    /// and it names **every** Tranchen-LFA, not one.
+    #[test]
+    fn geschaeftsvorfall_3_asks_every_tranchen_lfa_first() {
+        let lfa = vec!["9911111111110".to_owned(), "9922222222220".to_owned()];
+        let a = gv3(Abmeldeanfrage::Erforderlich {
+            lfa_mp_ids: lfa.clone(),
+        });
+        // Supplied even though a Lage is available: the answers are not in yet,
+        // so counting them would read silence as consent before the Frist ran.
+        let l = lage([zustimmung(), zustimmung(), zustimmung(), zustimmung()]);
+        let out = evaluate_lieferbeginn(&a, Some(&l));
+        let NbEntscheidung::AnfrageErforderlich { lfa_mp_ids, .. } = out else {
+            panic!("expected AnfrageErforderlich, got {out:?}")
+        };
+        assert_eq!(lfa_mp_ids, lfa);
     }
 
     /// Four of the six `E_0623` outcomes exist only on this branch, and two of
@@ -607,17 +715,23 @@ mod tests {
         assert!(evaluate_lieferbeginn(&a, None).is_escalate());
     }
 
+    /// Prüfschritt 510 — every LFA refused, so nothing came free.
     #[test]
     fn no_lfa_consented_refuses_with_a53() {
         let a = gv3(gestellt(None));
-        let out = evaluate_lieferbeginn(&a, Some(&tranchen(false, false, false, false)));
-        assert_eq!(out.antwortcode(), Some("A53"));
+        let l = lage([abgelehnt(), abgelehnt(), abgelehnt(), abgelehnt()]);
+        assert_eq!(
+            evaluate_lieferbeginn(&a, Some(&l)).antwortcode(),
+            Some("A53")
+        );
     }
 
+    /// Prüfschritt 520 — one 25 % Tranche came free against a 40 % request.
     #[test]
     fn too_little_freed_refuses_with_a54() {
         let a = gv3(gestellt(None));
-        let out = evaluate_lieferbeginn(&a, Some(&tranchen(true, false, false, false)));
+        let l = lage([zustimmung(), abgelehnt(), abgelehnt(), abgelehnt()]);
+        let out = evaluate_lieferbeginn(&a, Some(&l));
         assert_eq!(out.antwortcode(), Some("A54"));
         let NbEntscheidung::Reject(r) = out else {
             unreachable!()
@@ -626,36 +740,111 @@ mod tests {
         assert!(r.detail.contains("40"), "{}", r.detail);
     }
 
-    /// `A55` and `A56` are both Zustimmungen but they are not interchangeable:
-    /// `A55` is the trigger for „Herstellung einer 100 % LF-Zuordnung", which
-    /// only fires when a share stays in the NB's Bilanzkreis **and** the
-    /// Marktlokation is direktvermarktungspflichtig (530 ∧ 540).
+    /// Silence is consent per Tranche, exactly as it is for a single LFA:
+    /// „Verstreicht die Frist, ohne dass eine Antwort beim NB eingeht, gilt
+    /// dies als Bestätigung nach Fall a)". Two silent Tranchen free 50 %.
     #[test]
-    fn only_a_dv_pflichtige_malo_with_a_remainder_earns_a55() {
+    fn silence_frees_a_tranche() {
         let a = gv3(gestellt(None));
+        let l = lage([None, None, abgelehnt(), abgelehnt()]);
         assert_eq!(
-            evaluate_lieferbeginn(&a, Some(&tranchen(true, true, true, true))).antwortcode(),
-            Some("A55")
+            evaluate_lieferbeginn(&a, Some(&l)).antwortcode(),
+            Some("A56")
         );
-        for (restanteil, dv) in [(true, false), (false, true), (false, false)] {
-            assert_eq!(
-                evaluate_lieferbeginn(&a, Some(&tranchen(true, true, restanteil, dv)))
-                    .antwortcode(),
-                Some("A56"),
-                "restanteil={restanteil} dv={dv}"
-            );
-        }
+    }
+
+    /// `A41` „bereits beendet" refuses the *Anfrage* and still releases the
+    /// Tranche — the Prüfschritt-440 exception, counted per share here.
+    #[test]
+    fn bereits_abgemeldet_frees_the_tranche_it_refuses() {
+        let a = gv3(gestellt(None));
+        let l = lage([
+            widerspruch(BEREITS_ABGEMELDET_TRANCHE),
+            widerspruch(BEREITS_ABGEMELDET_TRANCHE),
+            abgelehnt(),
+            abgelehnt(),
+        ]);
+        assert_eq!(
+            evaluate_lieferbeginn(&a, Some(&l)).antwortcode(),
+            Some("A56")
+        );
+    }
+
+    /// A code `E_0624` does not publish as an Ablehnung leaves Prüfschritt 440
+    /// undecided for that share, so the whole Geschäftsvorfall escalates rather
+    /// than counting the Tranche either way.
+    #[test]
+    fn an_unpublished_code_on_one_tranche_escalates() {
+        let a = gv3(gestellt(None));
+        let l = lage([zustimmung(), zustimmung(), widerspruch("ZZZ"), None]);
+        assert!(evaluate_lieferbeginn(&a, Some(&l)).is_escalate());
+    }
+
+    /// Exactly the requested share coming free is enough — 520 asks for
+    /// „ausreichend groß", not „größer".
+    #[test]
+    fn exactly_the_requested_share_is_enough() {
+        let a = gv3(gestellt(None));
+        let mut l = lage([zustimmung(), abgelehnt(), abgelehnt(), abgelehnt()]);
+        l.gewuenschter_prozentsatz = Decimal::from(25);
+        assert_eq!(
+            evaluate_lieferbeginn(&a, Some(&l)).antwortcode(),
+            Some("A56")
+        );
     }
 
     /// Prüfschritt 500 „nein" — no Tranche was assigned, so nothing had to be
-    /// released and 510/520 never run.
+    /// released and 510/520 never run. An empty list is that question's „nein",
+    /// which is why it must not fall through to `A53`.
+    ///
+    /// 500 „nein" goes to **600**, skipping 530/540: an Anmeldung against an
+    /// unassigned Marktlokation ends no Zuordnung, so it cannot be the trigger
+    /// for „Herstellung einer 100 % LF-Zuordnung" that `A55` is — however the
+    /// two facts 530 and 540 read happen to stand.
     #[test]
-    fn geschaeftsvorfall_3_without_assigned_tranchen_confirms() {
+    fn geschaeftsvorfall_3_without_assigned_tranchen_confirms_with_a56() {
         let a = gv3(Abmeldeanfrage::NichtErforderlich);
-        let mut t = tranchen(false, false, false, false);
-        t.anfragen_gestellt = false;
+        let mut l = lage([None, None, None, None]);
+        l.tranchen.clear();
+        l.direktvermarktungspflichtig = true; // 540 „ja", and 530 would be too
         assert_eq!(
-            evaluate_lieferbeginn(&a, Some(&t)).antwortcode(),
+            evaluate_lieferbeginn(&a, Some(&l)).antwortcode(),
+            Some("A56")
+        );
+    }
+
+    /// Prüfschritt 530 is the arithmetic the assignment list makes answerable:
+    /// what the LFA who kept their Tranchen hold, plus what the LFN registers,
+    /// against 100 %. A remainder is what `A55` calls „fehlende Anteile an der
+    /// Marktlokation in der Bilanzierung".
+    #[test]
+    fn a55_needs_an_unassigned_remainder_and_direktvermarktungspflicht() {
+        let a = gv3(gestellt(None));
+        // Two 25 % Tranchen freed, two kept, LFN registers 50 % →
+        // 50 kept + 50 new = 100 %, nothing left in the NB's Bilanzkreis.
+        let mut voll = lage([zustimmung(), zustimmung(), abgelehnt(), abgelehnt()]);
+        voll.gewuenschter_prozentsatz = Decimal::from(50);
+        voll.direktvermarktungspflichtig = true;
+        assert_eq!(
+            evaluate_lieferbeginn(&a, Some(&voll)).antwortcode(),
+            Some("A56"),
+            "a fully assigned Marktlokation leaves no share in the NB's Bilanzkreis"
+        );
+
+        // The LFN takes only 40 of the 50 that came free → 10 % unassigned.
+        let mut rest = voll.clone();
+        rest.gewuenschter_prozentsatz = Decimal::from(40);
+        assert_eq!(
+            evaluate_lieferbeginn(&a, Some(&rest)).antwortcode(),
+            Some("A55")
+        );
+
+        // Same remainder, but the Marktlokation is not direktvermarktungs-
+        // pflichtig — 540 „nein" → 600.
+        let mut nicht_dv = rest.clone();
+        nicht_dv.direktvermarktungspflichtig = false;
+        assert_eq!(
+            evaluate_lieferbeginn(&a, Some(&nicht_dv)).antwortcode(),
             Some("A56")
         );
     }

@@ -339,14 +339,59 @@ pub fn mabis_listenabgleich_registry() -> AdapterRegistry<MabisListenabgleichWor
                 .and_then(|d| d.value_str())
                 .unwrap_or("")
                 .to_owned();
-            let billing_period = if document_date.len() >= 6 {
-                BillingPeriod::new(&document_date[..6])
-            } else {
-                BillingPeriod::new("")
-            };
+            // `DTM+157` Gültigkeit, Beginndatum in `610` `CCYYMM` — the
+            // Bilanzierungsmonat the list covers (UTILMD AHB Strom 2.2
+            // Kap. 13.4). The Dokumentendatum is when the list was *made*: a
+            // December list distributed in January reconciles December, and
+            // reading `DTM+137` for it settles the wrong month.
+            let billing_period = u
+                .dtm()
+                .iter()
+                .find(|d| d.qualifier == "157")
+                .and_then(|d| d.value_str())
+                .map_or_else(
+                    || {
+                        if document_date.len() >= 6 {
+                            BillingPeriod::new(&document_date[..6])
+                        } else {
+                            BillingPeriod::new("")
+                        }
+                    },
+                    |v| BillingPeriod::new(&v[..v.len().min(6)]),
+                );
+
+            // The `IDE+Z01` head carries what the whole list is about: its
+            // Listennummer, the MaBiS-Zählpunkt in `SG5 LOC+Z15`, and the
+            // Version der Zeitreihe in `SG8 RFF+AUU`. The answer has to name
+            // all three back.
+            let transaktionen = u.transactions();
+            let kopf = transaktionen
+                .iter()
+                .find(|t| t.ide.qualifier == edi_energy::utilmd_codes::IDE_LISTE);
+            let listennummer = kopf
+                .and_then(|t| t.vorgangsnummer())
+                .unwrap_or_default()
+                .to_owned();
+            let mabis_zaehlpunkt = kopf
+                .and_then(|t| t.location(edi_energy::Lokationstyp::MabisZaehlpunkt))
+                .unwrap_or_default()
+                .to_owned();
+            let zeitreihen_version = kopf
+                .and_then(|t| {
+                    t.sequences.iter().find_map(|seq| {
+                        seq.references
+                            .iter()
+                            .find(|r| r.qualifier == edi_energy::utilmd_codes::RFF_ZEITREIHE)
+                            .and_then(|r| r.reference.clone())
+                    })
+                })
+                .unwrap_or_default();
 
             Ok(ListenabgleichCommand::ReceiveListe {
                 pid,
+                mabis_zaehlpunkt,
+                zeitreihen_version,
+                listennummer,
                 sender: MarktpartnerCode::new(
                     u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
                 ),

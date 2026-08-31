@@ -1014,7 +1014,7 @@ fn remadv_outbox(
             "antwort_code".to_owned(),
             serde_json::json!(a.erster_code()),
         );
-        obj.insert("antwort_ebd".to_owned(), serde_json::json!(a.ebd));
+        obj.insert("antwort_codeliste".to_owned(), serde_json::json!(a.ebd));
         obj.insert("antwort_befunde".to_owned(), serde_json::json!(a.befunde));
     }
     PendingOutbox::new("REMADV", issuer, payload)

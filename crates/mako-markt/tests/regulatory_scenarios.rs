@@ -7,8 +7,8 @@ mod tests {
     use mako_markt::{
         domain::MaloId,
         repository::{
-            LieferStatus, NbEnergiemixRepository as _, Rollenzuordnung, VersorgungsStatusRecord,
-            VersorgungsStatusRepository as _,
+            LfZuordnung, LieferStatus, NbEnergiemixRepository as _, Rollenzuordnung,
+            VersorgungsStatusRecord, VersorgungsStatusRepository as _, ZuordnungsStatus,
         },
         testing::{InMemoryNbEnergiemixRepository, InMemoryVersorgungsStatusRepository},
     };
@@ -30,14 +30,24 @@ mod tests {
         lieferende: Option<time::Date>,
         nb_mp_id: &str,
     ) -> VersorgungsStatusRecord {
+        let mut zuordnungen = Vec::new();
+        if let Some(lf) = lf_mp_id {
+            zuordnungen.push(LfZuordnung {
+                zuordnungsbeginn: lieferbeginn,
+                ..LfZuordnung::ganz(lf, ZuordnungsStatus::Aktiv)
+            });
+        }
+        if let Some(lf) = lf_mp_id_next {
+            zuordnungen.push(LfZuordnung {
+                zuordnungsbeginn: lf_next_lieferbeginn,
+                ..LfZuordnung::ganz(lf, ZuordnungsStatus::Angekuendigt)
+            });
+        }
         VersorgungsStatusRecord {
             malo_id: malo_id(malo),
             tenant: tenant.to_owned(),
             lieferstatus: status,
-            lf_mp_id: lf_mp_id.map(str::to_owned),
-            lf_mp_id_next: lf_mp_id_next.map(str::to_owned),
-            lf_next_lieferbeginn,
-            lieferbeginn,
+            zuordnungen,
             lieferende,
             msb_mp_id: None,
             nb_mp_id: nb_mp_id.to_owned(),
@@ -92,13 +102,13 @@ mod tests {
             .unwrap();
         assert_eq!(r.lieferstatus, LieferStatus::Unbeliefert);
         assert_eq!(
-            r.lf_mp_id_next.as_deref(),
+            r.lf_mp_id_next(),
             Some("9910000000001"),
             "announced LF must be set"
         );
-        assert_eq!(r.lf_next_lieferbeginn, Some(date!(2026 - 10 - 01)));
+        assert_eq!(r.lf_next_lieferbeginn(), Some(date!(2026 - 10 - 01)));
         assert!(
-            r.lf_mp_id.is_none(),
+            r.lf_mp_id().is_none(),
             "active LF must not be set until NB confirms"
         );
     }
@@ -148,12 +158,12 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(r.lieferstatus, LieferStatus::Beliefert);
-        assert_eq!(r.lf_mp_id.as_deref(), Some("9910000000001"));
+        assert_eq!(r.lf_mp_id(), Some("9910000000001"));
         assert!(
-            r.lf_mp_id_next.is_none(),
+            r.lf_mp_id_next().is_none(),
             "announced LF must be cleared after confirmation"
         );
-        assert_eq!(r.lieferbeginn, Some(date!(2026 - 10 - 01)));
+        assert_eq!(r.lieferbeginn(), Some(date!(2026 - 10 - 01)));
         assert_eq!(r.version, 2);
     }
 
@@ -200,7 +210,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(r.lieferstatus, LieferStatus::Unbeliefert);
-        assert!(r.lf_mp_id.is_none(), "LF must be cleared after Lieferende");
+        assert!(
+            r.lf_mp_id().is_none(),
+            "LF must be cleared after Lieferende"
+        );
         assert_eq!(r.lieferende, Some(date!(2026 - 12 - 31)));
     }
 
@@ -264,9 +277,9 @@ mod tests {
             None,
             "9904234560001",
         );
-        assert!(rec.lf_mp_id_next.is_some());
+        assert!(rec.lf_mp_id_next().is_some());
         assert!(
-            rec.lf_mp_id.is_none(),
+            rec.lf_mp_id().is_none(),
             "at most one announced LF, no active LF during Anmeldung-phase"
         );
     }
@@ -465,7 +478,10 @@ mod tests {
 mod geli_gas_tests {
     use mako_markt::{
         domain::MaloId,
-        repository::{LieferStatus, VersorgungsStatusRecord, VersorgungsStatusRepository as _},
+        repository::{
+            LfZuordnung, LieferStatus, VersorgungsStatusRecord, VersorgungsStatusRepository as _,
+            ZuordnungsStatus,
+        },
         testing::InMemoryVersorgungsStatusRepository,
     };
     use time::macros::date;
@@ -483,13 +499,23 @@ mod geli_gas_tests {
         lf_next_lieferbeginn: Option<time::Date>,
         lieferende: Option<time::Date>,
     ) -> VersorgungsStatusRecord {
+        let mut zuordnungen = Vec::new();
+        if let Some(lf) = lf {
+            zuordnungen.push(LfZuordnung {
+                zuordnungsbeginn: lieferbeginn,
+                ..LfZuordnung::ganz(lf, ZuordnungsStatus::Aktiv)
+            });
+        }
+        if let Some(lf) = lf_next {
+            zuordnungen.push(LfZuordnung {
+                zuordnungsbeginn: lf_next_lieferbeginn,
+                ..LfZuordnung::ganz(lf, ZuordnungsStatus::Angekuendigt)
+            });
+        }
         VersorgungsStatusRecord {
             malo_id: gas_malo(),
             lieferstatus: status,
-            lf_mp_id: lf.map(str::to_owned),
-            lf_mp_id_next: lf_next.map(str::to_owned),
-            lf_next_lieferbeginn,
-            lieferbeginn,
+            zuordnungen,
             lieferende,
             msb_mp_id: Some("9880000000001".to_owned()), // DVGW GMSB
             nb_mp_id: "9870000000001".to_owned(),        // DVGW GNB
@@ -510,7 +536,7 @@ mod geli_gas_tests {
         repo.upsert(rec, None).await.unwrap();
         let result = repo.find(&gas_malo(), "test").await.unwrap().unwrap();
         assert_eq!(result.lieferstatus, LieferStatus::Unbeliefert);
-        assert!(result.lf_mp_id.is_none());
+        assert!(result.lf_mp_id().is_none());
     }
 
     /// GeLi Gas 3.0 PID 44003 (LFN-Anmeldung Bestätigung, GNB→LFN):
@@ -537,8 +563,8 @@ mod geli_gas_tests {
 
         let result = repo.find(&gas_malo(), "test").await.unwrap().unwrap();
         assert_eq!(result.lieferstatus, LieferStatus::Beliefert);
-        assert_eq!(result.lf_mp_id.as_deref(), Some("9810000000001"));
-        assert_eq!(result.lieferbeginn, Some(date!(2025 - 10 - 01)));
+        assert_eq!(result.lf_mp_id(), Some("9810000000001"));
+        assert_eq!(result.lieferbeginn(), Some(date!(2025 - 10 - 01)));
     }
 
     /// GeLi Gas 3.0 PID 44013 (LFN-Abmeldung): Lieferantenwechsel sets a future
@@ -571,8 +597,8 @@ mod geli_gas_tests {
         repo.upsert(wechsel, None).await.unwrap();
 
         let result = repo.find(&gas_malo(), "test").await.unwrap().unwrap();
-        assert_eq!(result.lf_mp_id_next.as_deref(), Some("9820000000001"));
-        assert_eq!(result.lf_next_lieferbeginn, Some(date!(2025 - 10 - 01)));
+        assert_eq!(result.lf_mp_id_next(), Some("9820000000001"));
+        assert_eq!(result.lf_next_lieferbeginn(), Some(date!(2025 - 10 - 01)));
         assert_eq!(result.lieferende, Some(date!(2025 - 10 - 01)));
     }
 
@@ -607,11 +633,11 @@ mod geli_gas_tests {
 
         let result = repo.find(&gas_malo(), "test").await.unwrap().unwrap();
         assert!(
-            result.lf_mp_id_next.is_none(),
+            result.lf_mp_id_next().is_none(),
             "stornierung must clear lf_mp_id_next"
         );
         assert!(
-            result.lf_next_lieferbeginn.is_none(),
+            result.lf_next_lieferbeginn().is_none(),
             "stornierung must clear lf_next_lieferbeginn"
         );
         assert!(

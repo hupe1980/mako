@@ -12,10 +12,10 @@ Abmeldung STP decisions belong to [`processd`](../processd), which subscribes to
 fan-out. `marktd` emits events; `processd` reacts. That keeps `marktd` independently
 testable and deployable with no decision logic in it.
 
-The boundary is subtle in one place: `marktd` writes `lf_mp_id_next` from an inbound
-Anmeldung *before* fanning the event out, so what it does with a **competing**
-announcement decides whether `processd` can apply EBD `E_0622` Prüfschritt 70 at all —
-see [The first announcement wins](#the-first-announcement-wins).
+The boundary is subtle in one place: `marktd` records an inbound Anmeldung's announcement
+*before* fanning the event out, so what it does with a **competing** one decides whether
+`processd` can apply EBD `E_0622` Prüfschritt 70 at all — see
+[Who supplies a Marktlokation is a list](#who-supplies-a-marktlokation-is-a-list).
 
 ---
 
@@ -28,10 +28,10 @@ retrievable with `?at=YYYY-MM-DD`, and **every** transition emits
 
 | Event | PID | Operation | Effect |
 |---|---|---|---|
-| `de.mako.process.initiated` | 55001 / **55077** / 44001 | `announce_lf_next` | Sets `lf_mp_id_next` + `lf_next_lieferbeginn` (who and when). Does **not** change `lieferstatus`. |
-| `de.mako.process.completed` | 55002 / **55078** / 44002 | `confirm_supply` | `lf_mp_id ← lf_mp_id_next`, `lieferbeginn ← lf_next_lieferbeginn`, `lieferstatus = Beliefert`, clears the announcement. A `lfa_lieferende` before the Zuordnungsbeginn is **Fall b** → `de.markt.versorgung.gap-detected` for the days between. |
-| `de.mako.process.completed` | 55003 / **55080** / 44003 | `clear_lf_next` | Ablehnung Anmeldung — drops the announced future Lieferant so nothing acts on a switch that will not happen. |
-| `de.mako.process.completed` | 55005 / 44005 | `end_supply` | `lieferstatus = Unbeliefert`, clears `lf_mp_id`, records the contractual `lieferende` from the process, preserves `lf_mp_id_next`; an uncovered interval → `de.markt.versorgung.gap-detected`. |
+| `de.mako.process.initiated` | 55001 / **55077** / 44001 | `announce_lf_next` | Adds one `Angekuendigt` assignment with its share and Zuordnungsbeginn. Does **not** change `lieferstatus`, and does not displace anything. |
+| `de.mako.process.completed` | 55002 / **55078** / 44002 | `confirm_supply` | Promotes the named supplier's announcement to `Aktiv`, displacing the running assignment **on the same Tranche** only; `lieferstatus = Beliefert`. A `lfa_lieferende` before the Zuordnungsbeginn is **Fall b** → `de.markt.versorgung.gap-detected` for the days between. |
+| `de.mako.process.completed` | 55003 / **55080** / 44003 | `clear_lf_next` | Ablehnung Anmeldung — drops that supplier's announcement so nothing acts on a switch that will not happen. A rival announcement survives it. |
+| `de.mako.process.completed` | 55005 / 44005 | `end_supply` | Drops the named running assignment (or all of them); `lieferstatus` becomes `Unbeliefert` only once none is left. Records the contractual `lieferende`; announcements are preserved; an uncovered interval → `de.markt.versorgung.gap-detected`. |
 | `de.mako.process.completed` | 55013 / 44013 | `begin_eog_supply` | `lieferstatus = Ersatzversorgung`/`Grundversorgung`, `eog_seit` set (the **§ 38 Abs. 4 EnWG** three-month anchor); emits `de.markt.versorgung.eog-begonnen`. |
 
 **55002 confirms and 55003 rejects** — "Bestätigung Anmeldung verb. MaLo" and "Ablehnung
@@ -42,16 +42,31 @@ Prüfidentifikatoren* 4.0, GPKE Teil 2, Prozessschritte 5 and 6.
 unassigned), and drives the identical projection — an EEG-/KWKG-MaLo's supplier change is
 a supplier change.
 
-### The first announcement wins
+### Who supplies a Marktlokation is a list
 
-A second Anmeldung by a *different* supplier while one is pending does **not** overwrite
-`lf_mp_id_next`, which is what makes EBD `E_0622` Prüfschritt 70 („Andere Anmeldung in
-Bearbeitung", `A06`) decidable at all. `marktd` writes the marker while ingesting the
-`process.initiated`, *before* fanning the event out, so the Anmeldung under evaluation has
-already written its own MP-ID by the time `processd` checks — the check compares MP-IDs
-rather than testing for presence, and overwriting would make that comparison always
-succeed. The same supplier re-sending (a corrected date, an at-least-once redelivery)
-still updates its own announcement.
+`lf_zuordnung` holds one row per assignment — supplier, share, Tranche, `Angekuendigt` or
+`Aktiv`. Two regulated cases carry more than one at a time:
+
+- A **tranchierte** erzeugende Marktlokation is held by several LFA at once, each with its
+  own Aufteilungsfaktor. EBD `E_0623` Prüfschritte 500–540 decide such an Anmeldung on the
+  arithmetic over those shares — „ist ein ausreichend großer Prozentsatz frei geworden?" —
+  and four of that tree's six outcomes exist only there.
+- An incoming Anmeldung can displace an **LFZ**, a supplier whose *future* Zuordnung it
+  supersedes. That is simply a second `Angekuendigt` row, and it is what 55038 / 44038
+  „Aufhebung einer zukünftigen Zuordnung" addresses.
+
+Both announcements are therefore kept, which is what makes EBD `E_0622` Prüfschritt 70
+(„Andere Anmeldung in Bearbeitung", `A06`) decidable at all: `marktd` records the
+announcement while ingesting the `process.initiated`, *before* fanning the event out, so
+the Anmeldung under evaluation is already in the projection when `processd` checks — the
+check looks for an announcement by a supplier **other than** the requesting one. The same
+supplier re-sending (a corrected date, an at-least-once redelivery) updates its own
+announcement rather than adding a second.
+
+`lf_mp_id` and `lf_mp_id_next` appear in the REST response and on
+`de.markt.versorgung.changed`, derived from the list for the ordinary one-supplier case.
+They are `null` when several suppliers hold the Marktlokation: there is no single supplier
+to name, and naming one arbitrarily would be worse than naming none.
 
 A transition that changes nothing emits nothing: a redelivered Ablehnung against a MaLo
 with no announcement is a no-op, with no version bump, no history row and no

@@ -18,9 +18,9 @@ use mako_markt::{
     domain::MaloId,
     error::MdmError,
     repository::{
-        AppState, CorrelationIndex, LieferStatus, MaloRepository, MeloRepository,
+        AppState, CorrelationIndex, LfZuordnung, LieferStatus, MaloRepository, MeloRepository,
         PartnerRepository, SubscriptionRepository, VersorgungsStatusHistoryRecord,
-        VersorgungsStatusRecord, VersorgungsStatusRepository,
+        VersorgungsStatusRecord, VersorgungsStatusRepository, ZuordnungsStatus,
     },
 };
 use mako_service::cedar::CedarEnforcer;
@@ -39,7 +39,18 @@ pub struct VersorgungsStatusResponse {
     pub malo_id: String,
     #[schema(value_type = String, example = "Beliefert")]
     pub lieferstatus: String,
+    /// Every Lieferant holding a share of this Marktlokation — the authoritative
+    /// answer to „who supplies it". A tranchierte Marktlokation carries several.
+    #[schema(value_type = Vec<Object>)]
+    pub zuordnungen: Vec<LfZuordnung>,
+    /// The single active Lieferant, when there is exactly one.
+    ///
+    /// Derived from `zuordnungen` and **absent on a tranchierte
+    /// Marktlokation**, where no single supplier exists — read `zuordnungen`
+    /// there rather than treating the omission as „unsupplied".
     pub lf_mp_id: Option<String>,
+    /// The single announced Lieferant, when exactly one Anmeldung is pending.
+    /// Derived, with the same caveat as `lf_mp_id`.
     pub lf_mp_id_next: Option<String>,
     pub lf_next_lieferbeginn: Option<String>,
     pub lieferbeginn: Option<String>,
@@ -58,10 +69,11 @@ impl From<VersorgungsStatusRecord> for VersorgungsStatusResponse {
         Self {
             malo_id: r.malo_id.as_ref().to_owned(),
             lieferstatus: r.lieferstatus.to_string(),
-            lf_mp_id: r.lf_mp_id,
-            lf_mp_id_next: r.lf_mp_id_next,
-            lf_next_lieferbeginn: r.lf_next_lieferbeginn.map(|d| d.to_string()),
-            lieferbeginn: r.lieferbeginn.map(|d| d.to_string()),
+            lf_mp_id: r.lf_mp_id().map(ToOwned::to_owned),
+            lf_mp_id_next: r.lf_mp_id_next().map(ToOwned::to_owned),
+            lf_next_lieferbeginn: r.lf_next_lieferbeginn().map(|d| d.to_string()),
+            lieferbeginn: r.lieferbeginn().map(|d| d.to_string()),
+            zuordnungen: r.zuordnungen,
             lieferende: r.lieferende.map(|d| d.to_string()),
             msb_mp_id: r.msb_mp_id,
             nb_mp_id: r.nb_mp_id,
@@ -83,10 +95,9 @@ pub struct VersorgungsStatusHistoryResponse {
     pub malo_id: String,
     #[schema(value_type = String, example = "Beliefert")]
     pub lieferstatus: String,
-    pub lf_mp_id: Option<String>,
-    pub lf_mp_id_next: Option<String>,
-    pub lf_next_lieferbeginn: Option<String>,
-    pub lieferbeginn: Option<String>,
+    /// The assignment list as it stood at `valid_from`.
+    #[schema(value_type = Vec<Object>)]
+    pub zuordnungen: Vec<LfZuordnung>,
     pub lieferende: Option<String>,
     pub msb_mp_id: Option<String>,
     pub nb_mp_id: String,
@@ -102,10 +113,7 @@ impl From<VersorgungsStatusHistoryRecord> for VersorgungsStatusHistoryResponse {
             id: r.id,
             malo_id: r.malo_id.as_ref().to_owned(),
             lieferstatus: r.lieferstatus.to_string(),
-            lf_mp_id: r.lf_mp_id,
-            lf_mp_id_next: r.lf_mp_id_next,
-            lf_next_lieferbeginn: r.lf_next_lieferbeginn.map(|d| d.to_string()),
-            lieferbeginn: r.lieferbeginn.map(|d| d.to_string()),
+            zuordnungen: r.zuordnungen,
             lieferende: r.lieferende.map(|d| d.to_string()),
             msb_mp_id: r.msb_mp_id,
             nb_mp_id: r.nb_mp_id,
@@ -120,6 +128,15 @@ impl From<VersorgungsStatusHistoryRecord> for VersorgungsStatusHistoryResponse {
 pub struct VersorgungsStatusUpsertRequest {
     #[schema(value_type = String, example = "Beliefert")]
     pub lieferstatus: String,
+    /// The assignment list, written wholesale — what is sent replaces what is
+    /// stored, so an omitted assignment is a removed one.
+    ///
+    /// This is the only way to state a tranchierte Marktlokation. The scalar
+    /// `lf_mp_id` / `lf_mp_id_next` below are a shorthand for the ordinary
+    /// one-supplier case and are ignored when `zuordnungen` is present.
+    #[schema(value_type = Vec<Object>)]
+    #[serde(default)]
+    pub zuordnungen: Option<Vec<LfZuordnung>>,
     pub lf_mp_id: Option<String>,
     pub lf_mp_id_next: Option<String>,
     pub lf_next_lieferbeginn: Option<String>,
@@ -381,18 +398,36 @@ where
         Ok(d) => d,
         Err(reason) => return MdmError::Unprocessable { reason }.into_response(),
     };
-    let rec = VersorgungsStatusRecord {
-        malo_id,
-        lieferstatus,
-        lf_mp_id: body.lf_mp_id,
-        lf_mp_id_next: body.lf_mp_id_next,
-        lf_next_lieferbeginn: body
+    // `zuordnungen` wins when present; otherwise the scalar shorthand is
+    // expanded into the one- or two-assignment list it stands for.
+    let zuordnungen = body.zuordnungen.unwrap_or_else(|| {
+        let lf_next_lieferbeginn = body
             .lf_next_lieferbeginn
             .as_deref()
             .map(|s| time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT))
             .transpose()
-            .unwrap_or(None),
-        lieferbeginn,
+            .unwrap_or(None);
+        let mut list = Vec::new();
+        if let Some(lf) = body.lf_mp_id {
+            list.push(LfZuordnung {
+                zuordnungsbeginn: lieferbeginn,
+                process_id: body.last_process_id,
+                ..LfZuordnung::ganz(lf, ZuordnungsStatus::Aktiv)
+            });
+        }
+        if let Some(lf) = body.lf_mp_id_next {
+            list.push(LfZuordnung {
+                zuordnungsbeginn: lf_next_lieferbeginn,
+                process_id: body.last_process_id,
+                ..LfZuordnung::ganz(lf, ZuordnungsStatus::Angekuendigt)
+            });
+        }
+        list
+    });
+    let rec = VersorgungsStatusRecord {
+        malo_id,
+        lieferstatus,
+        zuordnungen,
         lieferende,
         msb_mp_id: body.msb_mp_id,
         nb_mp_id: body.nb_mp_id,

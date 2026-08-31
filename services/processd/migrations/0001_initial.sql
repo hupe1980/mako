@@ -130,6 +130,16 @@ CREATE TABLE abmeldeanfragen (
     -- `anfrage`, which carries neither the incumbent nor the
     -- Transaktionsgrundergänzung that says the object is a Tranche.
     meldung                JSONB       NOT NULL,
+    -- One answer per LFA, keyed by MP-ID: {"9911111111111": {...}}.
+    --
+    -- A Geschäftsvorfall 3 asks every Tranchen-LFA and `E_0623` Prüfschritte
+    -- 510/520 count over *all* their answers, so the row cannot be resolved by
+    -- the first one to arrive. It resolves when every MP-ID in `lfa_mp_ids`
+    -- has answered, or when the 09:00 window lapses and the rest are silence —
+    -- which the Festlegung reads as a Zustimmung.
+    --
+    -- The ordinary one-LFA case is the same rule with a one-element array.
+    antworten              JSONB       NOT NULL DEFAULT '{}'::jsonb,
     -- When the Anmeldung arrived, so the operator queue can size the *answer*
     -- window (11:00) rather than the Anfrage's (09:00).
     received_at            TIMESTAMPTZ NOT NULL,

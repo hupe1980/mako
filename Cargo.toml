@@ -16,6 +16,7 @@ members = [
     "crates/dvgw-edi",
     "crates/mako-gabi-gas",
     "crates/mako-nbw",
+    "crates/mako-emob",
     "crates/mako-markt",
     "crates/mako-events",
     "crates/mako-obs",
@@ -144,9 +145,10 @@ invoic-checker   = { path = "crates/invoic-checker",   version = "0.18" }
 # the roles it actually checks (`features = ["role-msb"]`), so the feature graph
 # says which trees a build carries instead of every build carrying all of them.
 mako-pruefung      = { path = "crates/mako-pruefung",      version = "0.18", default-features = false }
+mako-emob        = { path = "crates/mako-emob",        version = "0.18" }
 energy-billing   = { path = "crates/energy-billing",   version = "0.18" }
 dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.18" }
-metering         = { version = "0.21" }
+metering         = { version = "0.22" }
 sepa             = { version = "0.6.0" }
 # Immutable, tamper-evident double-entry ledger kernel (sibling repo). accountingd's
 # storage/accounting base. Domain-neutral by design — the BillingDocument→Entry and

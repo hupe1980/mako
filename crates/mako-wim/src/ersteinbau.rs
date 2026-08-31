@@ -503,7 +503,7 @@ impl Workflow for WimErsteinbauWorkflow {
                     "receiver":         data.gmsb.as_str(),
                     "melo":             data.melo_id.as_str(),
                     "antwort_code":     code.code,
-                    "antwort_ebd":      ERSTEINBAU_EBD,
+                    "antwort_codeliste":      ERSTEINBAU_EBD,
                     "orig_message_ref": data.message_ref.as_str(),
                 });
                 Ok(WorkflowOutput::with_outbox(

@@ -9,12 +9,15 @@
 //! ```
 
 use mako_markt::domain::MaloId;
-use mako_markt::repository::VersorgungsStatusRepository as _;
+use mako_markt::repository::{LieferStatus, VersorgungsStatusRepository as _};
 use marktd::pg::PgVersorgungsStatusRepository;
+use rust_decimal::Decimal;
 use sqlx::PgPool;
+use time::macros::date;
 
 const SCHEMA: &str = include_str!("../migrations/0001_initial.sql");
 const TENANT: &str = "9900357000004";
+const NB: &str = "9900000000001";
 const MALO: &str = "51238696012"; // valid checksum
 
 async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
@@ -31,6 +34,22 @@ fn malo() -> MaloId {
     MALO.parse().expect("valid MaLo")
 }
 
+/// Announce a whole-Marktlokation Anmeldung — the ordinary untranchierte case.
+async fn announce(vs: &PgVersorgungsStatusRepository, m: &MaloId, lf: &str, beginn: time::Date) {
+    vs.announce_lf_next(
+        m,
+        TENANT,
+        lf,
+        Some(beginn),
+        Decimal::ONE_HUNDRED,
+        None,
+        NB,
+        Some(uuid::Uuid::new_v4()),
+    )
+    .await
+    .expect("announce");
+}
+
 // ── The 55004/44004 gap: a cancelled Lieferbeginn clears lf_mp_id_next ─────────
 
 #[tokio::test]
@@ -43,37 +62,28 @@ async fn cancelled_lieferbeginn_clears_the_announced_future_supplier() {
     let m = malo();
 
     // GPKE 55001: NB records the announced future supplier.
-    vs.announce_lf_next(
-        &m,
-        TENANT,
-        "9911111111111",
-        Some(time::macros::date!(2026 - 10 - 01)),
-        "9900000000001",
-        Some(uuid::Uuid::new_v4()),
-    )
-    .await
-    .expect("announce");
+    announce(&vs, &m, "9911111111111", date!(2026 - 10 - 01)).await;
     let after_announce = vs.find(&m, TENANT).await.expect("find").expect("row");
     assert_eq!(
-        after_announce.lf_mp_id_next.as_deref(),
+        after_announce.lf_mp_id_next(),
         Some("9911111111111"),
         "the future supplier is announced"
     );
 
     // Ablehnung Anmeldung: the announcement must be reset, or the next
     // supplier's Anmeldung is rejected against a stale marker.
-    vs.clear_lf_next(&m, TENANT, Some(uuid::Uuid::new_v4()))
+    vs.clear_lf_next(&m, TENANT, None, Some(uuid::Uuid::new_v4()))
         .await
         .expect("clear");
     let after_clear = vs.find(&m, TENANT).await.expect("find").expect("row");
     assert!(
-        after_clear.lf_mp_id_next.is_none() && after_clear.lf_next_lieferbeginn.is_none(),
+        after_clear.lf_mp_id_next().is_none() && after_clear.lf_next_lieferbeginn().is_none(),
         "the cancelled future supplier is cleared"
     );
 
     // Idempotent: a second cancellation is a no-op (no version bump).
     let v = after_clear.version;
-    vs.clear_lf_next(&m, TENANT, Some(uuid::Uuid::new_v4()))
+    vs.clear_lf_next(&m, TENANT, None, Some(uuid::Uuid::new_v4()))
         .await
         .expect("clear again");
     let again = vs.find(&m, TENANT).await.expect("find").expect("row");
@@ -83,77 +93,152 @@ async fn cancelled_lieferbeginn_clears_the_announced_future_supplier() {
     );
 }
 
-/// A second supplier's Anmeldung must **not** displace the pending one.
+/// A second supplier's Anmeldung is **recorded alongside** the pending one.
 ///
-/// `marktd` writes `lf_mp_id_next` while ingesting the `process.initiated`,
-/// *before* fanning the event out to `processd` — so by the time `mako-pruefung`
-/// runs its EBD `E_0622` Prüfschritt 70 check, the Anmeldung under evaluation
-/// has already written its own marker. The check therefore compares MP-IDs
-/// rather than testing for presence, and that is only meaningful if the *first*
-/// announcement survives: an overwriting upsert lets every Anmeldung find its
-/// own MP-ID there, so `A06` „Andere Anmeldung in Bearbeitung" never fires.
+/// `marktd` writes the announcement while ingesting the `process.initiated`,
+/// *before* fanning the event out to `processd` — so by the time
+/// `mako-pruefung` runs its EBD `E_0622` Prüfschritt 70 check, the Anmeldung
+/// under evaluation has already written its own. The check therefore looks for
+/// an announcement by a **different** supplier, which requires the projection
+/// to hold both: a single `lf_mp_id_next` slot could only keep one, and
+/// whichever it dropped became invisible to the tree that has to rule on it.
+///
+/// Holding both is also what makes 55038 / 44038 „Aufhebung einer zukünftigen
+/// Zuordnung" derivable — the LFZ it addresses *is* the rival announcement.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn a_competing_anmeldung_does_not_displace_the_pending_one() {
+async fn a_competing_anmeldung_is_recorded_beside_the_pending_one() {
     let Some((pool, _pg)) = test_pool("competing_anmeldung").await else {
         return;
     };
     let vs = PgVersorgungsStatusRepository::new(pool.clone());
     let m = malo();
 
-    vs.announce_lf_next(
-        &m,
-        TENANT,
-        "9911111111111",
-        Some(time::macros::date!(2026 - 10 - 01)),
-        "9900000000001",
-        Some(uuid::Uuid::new_v4()),
-    )
-    .await
-    .expect("first announce");
-    let first = vs.find(&m, TENANT).await.expect("find").expect("row");
+    announce(&vs, &m, "9911111111111", date!(2026 - 10 - 01)).await;
 
     // A different supplier announces while the first is still pending.
-    vs.announce_lf_next(
-        &m,
-        TENANT,
-        "9922222222222",
-        Some(time::macros::date!(2026 - 11 - 01)),
-        "9900000000001",
-        Some(uuid::Uuid::new_v4()),
-    )
-    .await
-    .expect("second announce");
+    announce(&vs, &m, "9922222222222", date!(2026 - 11 - 01)).await;
 
     let after = vs.find(&m, TENANT).await.expect("find").expect("row");
+    let mut pending: Vec<&str> = after.angekuendigte().map(|z| z.lf_mp_id.as_str()).collect();
+    pending.sort_unstable();
     assert_eq!(
-        after.lf_mp_id_next.as_deref(),
-        Some("9911111111111"),
-        "the first announcement must survive so A06 can be decided against it"
+        pending,
+        ["9911111111111", "9922222222222"],
+        "both announcements are held so E_0622 Prüfschritt 70 can be decided"
     );
-    assert_eq!(
-        after.version, first.version,
-        "a losing announcement is a no-op — no version bump, no history row"
+    assert!(
+        after.lf_mp_id_next().is_none(),
+        "with two pending there is no single announced supplier"
     );
 
-    // The *same* supplier re-sending (corrected date, at-least-once redelivery)
-    // still updates its own announcement.
-    vs.announce_lf_next(
+    // Each sees the other as the „andere Anmeldung in Bearbeitung", and neither
+    // sees itself — the comparison A06 turns on.
+    assert_eq!(
+        after
+            .andere_anmeldung_in_bearbeitung("9922222222222")
+            .map(|z| z.lf_mp_id.as_str()),
+        Some("9911111111111")
+    );
+    assert_eq!(
+        after
+            .andere_anmeldung_in_bearbeitung("9911111111111")
+            .map(|z| z.lf_mp_id.as_str()),
+        Some("9922222222222")
+    );
+
+    // The refusal of one leaves the other standing.
+    vs.clear_lf_next(
         &m,
         TENANT,
-        "9911111111111",
-        Some(time::macros::date!(2026 - 10 - 15)),
-        "9900000000001",
+        Some("9922222222222"),
         Some(uuid::Uuid::new_v4()),
     )
     .await
-    .expect("re-announce");
+    .expect("clear the refused one");
+    let after = vs.find(&m, TENANT).await.expect("find").expect("row");
+    assert_eq!(after.lf_mp_id_next(), Some("9911111111111"));
+
+    // The same supplier re-sending (corrected date, at-least-once redelivery)
+    // updates its own announcement rather than adding a second.
+    announce(&vs, &m, "9911111111111", date!(2026 - 10 - 15)).await;
     let corrected = vs.find(&m, TENANT).await.expect("find").expect("row");
+    assert_eq!(corrected.angekuendigte().count(), 1, "no duplicate");
     assert_eq!(
-        corrected.lf_next_lieferbeginn,
-        Some(time::macros::date!(2026 - 10 - 15)),
+        corrected.lf_next_lieferbeginn(),
+        Some(date!(2026 - 10 - 15)),
         "the holder of the announcement may correct its own date"
     );
+}
+
+/// A tranchierte Marktlokation is held by several LFA at once, which is the
+/// shape `E_0623` Prüfschritte 500–540 decide a Geschäftsvorfall 3 on.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_tranchierte_marktlokation_holds_several_suppliers_at_once() {
+    let Some((pool, _pg)) = test_pool("tranchen").await else {
+        return;
+    };
+    let vs = PgVersorgungsStatusRepository::new(pool.clone());
+    let m = malo();
+
+    for (i, lf) in ["9911111111111", "9922222222222"].into_iter().enumerate() {
+        let tranche = format!("TR-{i}");
+        vs.announce_lf_next(
+            &m,
+            TENANT,
+            lf,
+            Some(date!(2026 - 10 - 01)),
+            Decimal::from(25),
+            Some(&tranche),
+            NB,
+            Some(uuid::Uuid::new_v4()),
+        )
+        .await
+        .expect("announce tranche");
+        vs.confirm_supply(&m, TENANT, Some(lf), Some(uuid::Uuid::new_v4()))
+            .await
+            .expect("confirm tranche");
+    }
+
+    let rec = vs.find(&m, TENANT).await.expect("find").expect("row");
+    assert_eq!(rec.aktive().count(), 2, "two Tranchen run at once");
+    assert!(rec.ist_tranchiert());
+    assert!(
+        rec.lf_mp_id().is_none(),
+        "a tranchierte Marktlokation has no single supplier, and naming one \
+         arbitrarily would be worse than naming none"
+    );
+    assert_eq!(rec.lieferstatus, LieferStatus::Beliefert);
+    let held: Decimal = rec.aktive().map(|z| z.prozent).sum();
+    assert_eq!(held, Decimal::from(50), "50 % assigned, 50 % free");
+
+    // One LFA leaving does not make the Marktlokation unsupplied — the §38
+    // Ersatzversorgung must not open while the other Tranche still runs.
+    vs.end_supply(
+        &m,
+        TENANT,
+        Some("9911111111111"),
+        NB,
+        Some(uuid::Uuid::new_v4()),
+    )
+    .await
+    .expect("end one Tranche");
+    let rec = vs.find(&m, TENANT).await.expect("find").expect("row");
+    assert_eq!(rec.aktive().count(), 1);
+    assert_eq!(
+        rec.lieferstatus,
+        LieferStatus::Beliefert,
+        "one Tranche ending leaves the Marktlokation supplied"
+    );
+
+    // The last one does.
+    vs.end_supply(&m, TENANT, None, NB, Some(uuid::Uuid::new_v4()))
+        .await
+        .expect("end the rest");
+    let rec = vs.find(&m, TENANT).await.expect("find").expect("row");
+    assert_eq!(rec.aktive().count(), 0);
+    assert_eq!(rec.lieferstatus, LieferStatus::Unbeliefert);
 }
 
 /// The erzeugende-Marktlokation Anmeldung (55077 → 55078 / 55080) drives the
@@ -205,7 +290,7 @@ async fn the_erzeugende_malo_anmeldung_drives_the_same_projection() {
 
     let after = vs.find(&m, TENANT).await.expect("find").expect("row");
     assert_eq!(
-        after.lf_mp_id.as_deref(),
+        after.lf_mp_id(),
         Some("9911111111111"),
         "55078 must promote the announcement 55077 made"
     );
@@ -214,7 +299,7 @@ async fn the_erzeugende_malo_anmeldung_drives_the_same_projection() {
         mako_markt::repository::LieferStatus::Beliefert
     );
     assert_eq!(
-        after.lieferbeginn,
+        after.lieferbeginn(),
         Some(time::macros::date!(2026 - 10 - 01))
     );
 }
@@ -263,33 +348,27 @@ async fn announce_confirm_end_walks_the_lieferstatus_and_records_history() {
     let vs = PgVersorgungsStatusRepository::new(pool.clone());
     let m = malo();
 
-    vs.announce_lf_next(
-        &m,
-        TENANT,
-        "9911111111111",
-        Some(time::macros::date!(2026 - 10 - 01)),
-        "9900000000001",
-        Some(uuid::Uuid::new_v4()),
-    )
-    .await
-    .expect("announce");
+    announce(&vs, &m, "9911111111111", date!(2026 - 10 - 01)).await;
 
     // 55003: confirm → the announced LF becomes active, status Beliefert.
-    vs.confirm_supply(&m, TENANT, Some(uuid::Uuid::new_v4()))
+    vs.confirm_supply(&m, TENANT, None, Some(uuid::Uuid::new_v4()))
         .await
         .expect("confirm");
     let active = vs.find(&m, TENANT).await.expect("find").expect("row");
     assert_eq!(active.lieferstatus.to_string(), "Beliefert");
-    assert_eq!(active.lf_mp_id.as_deref(), Some("9911111111111"));
-    assert!(active.lf_mp_id_next.is_none(), "pending promoted to active");
+    assert_eq!(active.lf_mp_id(), Some("9911111111111"));
+    assert!(
+        active.lf_mp_id_next().is_none(),
+        "pending promoted to active"
+    );
 
     // 55005 (Bestätigung Lieferende): end → Unbeliefert, active LF cleared.
-    vs.end_supply(&m, TENANT, "9900000000001", Some(uuid::Uuid::new_v4()))
+    vs.end_supply(&m, TENANT, None, NB, Some(uuid::Uuid::new_v4()))
         .await
         .expect("end");
     let ended = vs.find(&m, TENANT).await.expect("find").expect("row");
     assert_eq!(ended.lieferstatus.to_string(), "Unbeliefert");
-    assert!(ended.lf_mp_id.is_none());
+    assert!(ended.lf_mp_id().is_none());
     assert!(ended.eog_seit.is_none());
 
     // 55013 (Anmeldung/Zuordnung EOG completed): the Grundversorger becomes
@@ -308,22 +387,13 @@ async fn announce_confirm_end_walks_the_lieferstatus_and_records_history() {
     .expect("begin eog");
     let eog = vs.find(&m, TENANT).await.expect("find").expect("row");
     assert_eq!(eog.lieferstatus.to_string(), "Ersatzversorgung");
-    assert_eq!(eog.lf_mp_id.as_deref(), Some("9922222222222"));
+    assert_eq!(eog.lf_mp_id(), Some("9922222222222"));
     assert_eq!(eog.eog_seit, Some(time::macros::date!(2026 - 11 - 15)));
 
     // A regular switch confirmation ends the fallback supply and clears
     // the §38 clock.
-    vs.announce_lf_next(
-        &m,
-        TENANT,
-        "9911111111111",
-        Some(time::macros::date!(2027 - 01 - 01)),
-        "9900000000001",
-        Some(uuid::Uuid::new_v4()),
-    )
-    .await
-    .expect("announce during EoG");
-    vs.confirm_supply(&m, TENANT, Some(uuid::Uuid::new_v4()))
+    announce(&vs, &m, "9911111111111", date!(2027 - 01 - 01)).await;
+    vs.confirm_supply(&m, TENANT, None, Some(uuid::Uuid::new_v4()))
         .await
         .expect("confirm ends EoG");
     let back = vs.find(&m, TENANT).await.expect("find").expect("row");
@@ -1218,7 +1288,7 @@ async fn fall_b_announces_the_uncovered_interval() {
     // …and the switch itself still happened.
     let vs = marktd::pg::PgVersorgungsStatusRepository::new(pool.clone());
     let after = vs.find(&m, TENANT).await.expect("find").expect("row");
-    assert_eq!(after.lf_mp_id.as_deref(), Some("9911111111111"));
+    assert_eq!(after.lf_mp_id(), Some("9911111111111"));
 }
 
 /// An ordinary confirmation announces no gap: the LFA released exactly at the

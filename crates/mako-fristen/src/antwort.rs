@@ -75,6 +75,14 @@ pub enum Family {
     Wim,
     /// WiM Gas (Messstellenbetrieb Gas) — BK7-24-01-009 / AWH WiM Gas V2.0.
     WimGas,
+    /// NZR-EMob / Modell 2 — Anlage 6 zum Beschluss BK6-20-160, as the BDEW
+    /// Anwendungshilfe „Zum Modell 2" V1.3 states the Prozessschritte.
+    ///
+    /// Its own family rather than a corner of GPKE: the Modellwechsel runs
+    /// between two Netzbetreiber (the LPB communicates in the role NB), it is
+    /// not a Lieferantenwechsel, and its windows are day-granular Werktage
+    /// rather than the GPKE wall-clock instants.
+    Emob,
 }
 
 impl Family {
@@ -86,6 +94,7 @@ impl Family {
             Self::GeliGas => "geli-gas",
             Self::Wim => "wim",
             Self::WimGas => "wim-gas",
+            Self::Emob => "emob",
         }
     }
 }
@@ -1337,8 +1346,82 @@ pub fn wim_gas_abweichung(trigger_pid: u32) -> Option<(u32, &'static str)> {
         .map(|(_, wt, src)| (*wt, *src))
 }
 
+/// The VNB's window to answer an **Anmeldung in Modell 2** (55238 → 55239), in
+/// Werktagen (AWH „Zum Modell 2" V1.3 Kap. 2.1.2 Nr. 4).
+///
+/// **Seven, not three.** Kap. 2.1.2 numbers four actions and three of them
+/// carry a Frist, all „nach Eingang" of their own trigger: Nr. 2 the Beendigung
+/// der Zuordnung to the LF (3 WT), Nr. 3 the LF's answer to it (3 WT), Nr. 4
+/// this one (7 WT). Reading Nr. 2's three Werktage as the answer window is
+/// arithmetically impossible as well as wrong — the VNB may spend 3 WT sending
+/// the 55240 and the LF has 3 WT of its own, so `E_0510` Prüfschritt 1 („Ging
+/// innerhalb der Antwortfrist eine Ablehnung des Lieferanten ein?") cannot be
+/// decided before the 6th Werktag. Three would report a breach against a VNB
+/// still inside its window on every Anmeldung that reaches the LF leg.
+pub const MODELL_2_ANMELDUNG_ANTWORT_WT: u32 = 7;
+
+/// The window for both 3-Werktage legs of the Modellwechsel: the LF's answer to
+/// the Beendigung der Zuordnung (55240 → 55241, Kap. 2.1.2 Nr. 3) and the VNB's
+/// answer to an **Abmeldung** aus dem Modell 2 (55242 → 55243, Kap. 2.2.2
+/// Nr. 2).
+///
+/// The Abmeldung really is three: it has no LF leg to wait for.
+pub const MODELL_2_DREI_WERKTAGE: u32 = 3;
+
+// The VNB's answer window must strictly outlast the two legs it waits for: up
+// to 3 WT to send the 55240 and 3 WT for the LF to answer it. A build in which
+// it does not is a build where `E_0510` Prüfschritt 1 can never be decided in
+// time, so this is a compile error rather than a test.
+const _: () = assert!(
+    MODELL_2_ANMELDUNG_ANTWORT_WT > MODELL_2_DREI_WERKTAGE * 2,
+    "the Anmeldung answer window must survive a 3 WT Beendigung plus a 3 WT LF answer"
+);
+
+/// NZR-EMob / Modell 2 — the Modellwechsel answers (EBD 4.3 Kap. 17).
+///
+/// Both answers ride **one** Prüfidentifikator per direction rather than a
+/// Bestätigungs-/Ablehnungs-pair, so [`AntwortObligation::antwort_pids`] names
+/// the same PID twice: 55239 carries `E_0513` *and* `E_0510`, 55243 carries
+/// `E_0512`, and the agreement is in `SG4 STS+E01` DE 9013 with the tree in
+/// DE 1131.
+pub const EMOB: &[AntwortObligation] = &[
+    AntwortObligation {
+        trigger_pid: 55_238,
+        name: "Anmeldung einer Marktlokation in das Modell 2",
+        answered_by: "NB (VNB)",
+        antwort_pids: (55_239, 55_239),
+        ebd: Some("E_0510"),
+        frist: FristShape::EndOfWerktag(MODELL_2_ANMELDUNG_ANTWORT_WT),
+        family: Family::Emob,
+        source: "AWH \u{201e}Zum Modell 2\u{201c} V1.3 Kap. 2.1.2 Nr. 4 — unverzüglich, jedoch spätestens bis \
+                 zum Ablauf des 7. WT nach Eingang der Anmeldung in Modell 2",
+    },
+    AntwortObligation {
+        trigger_pid: 55_240,
+        name: "Beendigung der Zuordnung zur Marktlokation",
+        answered_by: "LF",
+        antwort_pids: (55_241, 55_241),
+        ebd: Some("E_0511"),
+        frist: FristShape::EndOfWerktag(MODELL_2_DREI_WERKTAGE),
+        family: Family::Emob,
+        source: "AWH \u{201e}Zum Modell 2\u{201c} V1.3 Kap. 2.1.2 Nr. 3 — unverzüglich, jedoch spätestens bis \
+                 zum Ablauf des 3. WT nach Eingang der Beendigung der Zuordnung zur MaLo",
+    },
+    AntwortObligation {
+        trigger_pid: 55_242,
+        name: "Abmeldung einer Marktlokation aus dem Modell 2",
+        answered_by: "NB (VNB)",
+        antwort_pids: (55_243, 55_243),
+        ebd: Some("E_0512"),
+        frist: FristShape::EndOfWerktag(MODELL_2_DREI_WERKTAGE),
+        family: Family::Emob,
+        source: "AWH \u{201e}Zum Modell 2\u{201c} V1.3 Kap. 2.2.2 Nr. 2 — unverzüglich, jedoch spätestens bis \
+                 zum Ablauf des 3. WT nach Eingang der Abmeldung aus Modell 2",
+    },
+];
+
 /// Every published obligation, in consult order.
-const TABLES: &[&[AntwortObligation]] = &[GPKE, GELI_GAS, WIM, WIM_GAS];
+const TABLES: &[&[AntwortObligation]] = &[GPKE, GELI_GAS, WIM, WIM_GAS, EMOB];
 
 /// Every published obligation across all families.
 pub fn all() -> impl Iterator<Item = &'static AntwortObligation> {
@@ -1454,6 +1537,49 @@ mod tests {
             Date::from_calendar_date(y, m, d).expect("valid date"),
             Time::from_hms(h, 0, 0).expect("valid time"),
         )
+    }
+
+    /// The Modell-2 windows are 7 WT for the Anmeldung and 3 WT for the other
+    /// two, and the difference is load-bearing.
+    ///
+    /// AWH Kap. 2.1.2 states three Fristen — Nr. 2 (Beendigung an den LF) 3 WT,
+    /// Nr. 3 (Antwort des LF) 3 WT, Nr. 4 (Antwort auf die Anmeldung) 7 WT.
+    /// Taking Nr. 2's three Werktage for the VNB's answer window is the easy
+    /// misreading and it cannot be right: the VNB may spend 3 WT sending the
+    /// 55240 and the LF then has 3 WT of its own, so `E_0510` Prüfschritt 1
+    /// („Ging innerhalb der Antwortfrist eine Ablehnung des Lieferanten ein?")
+    /// is undecidable before the 6th Werktag. Three would raise a breach
+    /// against every VNB still lawfully inside its window.
+    #[test]
+    fn modell_2_anmeldung_has_seven_werktage_and_the_others_three() {
+        assert_eq!(MODELL_2_ANMELDUNG_ANTWORT_WT, 7);
+        assert_eq!(MODELL_2_DREI_WERKTAGE, 3);
+
+        let anmeldung = antwort_obligation(55_238).expect("55238 is catalogued");
+        assert_eq!(anmeldung.frist, FristShape::EndOfWerktag(7));
+
+        for pid in [55_240, 55_242] {
+            let o = antwort_obligation(pid).expect("catalogued");
+            assert_eq!(o.frist, FristShape::EndOfWerktag(3), "PID {pid}");
+        }
+    }
+
+    /// Both Modell-2 answers ride one Prüfidentifikator, not a pair.
+    #[test]
+    fn modell_2_answers_carry_the_same_pid_in_both_clusters() {
+        for (trigger, answer) in [(55_238, 55_239), (55_240, 55_241), (55_242, 55_243)] {
+            let o = antwort_obligation(trigger).expect("catalogued");
+            assert_eq!(o.antwort_pids, (answer, answer), "PID {trigger}");
+            assert_eq!(o.family, Family::Emob);
+        }
+    }
+
+    /// The LF — not the VNB — owes the answer to the Beendigung der Zuordnung.
+    #[test]
+    fn the_beendigung_is_answered_by_the_lieferant() {
+        assert_eq!(antwort_obligation(55_240).unwrap().answered_by, "LF");
+        assert_eq!(antwort_obligation(55_238).unwrap().answered_by, "NB (VNB)");
+        assert_eq!(antwort_obligation(55_242).unwrap().answered_by, "NB (VNB)");
     }
 
     /// The Abmeldeanfrage branch is what actually binds on a

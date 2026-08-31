@@ -195,12 +195,14 @@ use mako_wim::{
 // One file per market-communication domain. Every registry fn is re-exported
 // here so the flat `crate::adapters::*_registry` paths keep working.
 
+mod emob;
 mod gabi_gas;
 mod geli_gas;
 mod gpke;
 mod mabis;
 mod wim;
 
+pub use emob::*;
 pub use gabi_gas::*;
 pub use geli_gas::*;
 pub use gpke::*;
@@ -708,6 +710,12 @@ macro_rules! coverage_table {
 }
 
 coverage_table! {
+    emob_abmeldung_antwort_registry,
+    emob_abmeldung_registry,
+    emob_anmeldung_antwort_registry,
+    emob_anmeldung_registry,
+    emob_zuordnungsende_antwort_registry,
+    emob_zuordnungsende_registry,
     esa_wertebestellung_registry,
     gabi_gas_allocation_registry,
     gabi_gas_comdis_registry,
@@ -1437,6 +1445,34 @@ pub fn extract_fernsteuerbarkeit(segs: &[OwnedSegment]) -> Option<bool> {
     }
 }
 
+/// Extract the **Abwicklungsmodell** of the Marktlokation (NZR-EMob).
+///
+/// `CCI+ZA2++ZE9` (Modell 1 — „Bilanzierung an der Marktlokation") /
+/// `CCI+ZA2++ZF0` (Modell 2 — „Bilanzierung im Bilanzierungsgebiet (BG) des
+/// LPB"), UTILMD AHB Strom 2.2. Returns the BO4E `Abwicklungsmodell` wire value
+/// for `Bilanzierung.abwicklungsmodell`.
+///
+/// **Not a Modellwechsel PID.** The Modellwechsel itself rides 55238–55243,
+/// which carry no `CCI+ZA2` at all; the Abwicklungsmodell is a *Stammdatum*,
+/// communicated on the Stammdatenänderung band (55616 / 55622 / 55628 / 55634)
+/// and on the WiM Anmeldungen (55042–55044, 55168–55170). Those are the
+/// messages that tell a receiving system a Marktlokation is balanced in an
+/// LPB's Bilanzierungsgebiet rather than at the MaLo — which is why reading it
+/// here, and not in `mako-emob`, is what puts the fact in `marktd`.
+///
+/// The Klassentyp is load-bearing and the reason this defers to
+/// [`mako_emob::wire::abwicklungsmodell_from_cci`] rather than matching DE 7037
+/// itself: `ZE9` is „Modell 1" under `ZA2` and „Quartalsweise" under another
+/// Klassentyp in the same AHB.
+pub fn extract_abwicklungsmodell(segs: &[OwnedSegment]) -> Option<&'static str> {
+    let merkmal = cci_merkmal_of_class(segs, mako_emob::wire::KLASSENTYP_ABWICKLUNGSMODELL)?;
+    mako_emob::wire::abwicklungsmodell_from_cci(
+        mako_emob::wire::KLASSENTYP_ABWICKLUNGSMODELL,
+        merkmal,
+    )
+    .map(mako_emob::uebergabestelle::Abwicklungsmodell::bo4e_wire)
+}
+
 /// Extract the §14a EnWG **Steuerkanal** presence (NeLo, Redispatch 2.0).
 ///
 /// `CCI+Z49++ZF3` (Steuerkanal vorhanden → `true`) / `CCI+Z49++ZF2` (Kein
@@ -1769,6 +1805,31 @@ mod fernsteuerbarkeit_tests {
 
         // Absent characteristic → None (COALESCE leaves the column unchanged).
         assert_eq!(extract_fernsteuerbarkeit(&[cci("Z50", "")]), None);
+    }
+
+    /// The NZR-EMob Abwicklungsmodell, and why the Klassentyp cannot be dropped.
+    #[test]
+    fn extracts_the_nzr_emob_abwicklungsmodell() {
+        // UTILMD AHB Strom 2.2 — CCI+ZA2++ZE9 / CCI+ZA2++ZF0.
+        assert_eq!(
+            extract_abwicklungsmodell(&[cci("ZA2", "ZE9")]),
+            Some("MODELL_1")
+        );
+        assert_eq!(
+            extract_abwicklungsmodell(&[cci("ZA2", "ZF0")]),
+            Some("MODELL_2")
+        );
+
+        // `ZE9` under another Klassentyp is „Quartalsweise" in the same AHB, so
+        // reading DE 7037 alone would book an unrelated characteristic as
+        // „Modell 1" and tell `marktd` the VNB still balances a MaLo it does
+        // not.
+        assert_eq!(extract_abwicklungsmodell(&[cci("Z17", "ZE9")]), None);
+
+        // Absent characteristic → None. Not `MODELL_1`: a message that says
+        // nothing about the Abwicklungsmodell must leave the column alone.
+        assert_eq!(extract_abwicklungsmodell(&[cci("Z24", "Z97")]), None);
+        assert_eq!(extract_abwicklungsmodell(&[]), None);
     }
 
     #[test]

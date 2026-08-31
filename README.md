@@ -94,6 +94,7 @@ flowchart LR
 | `mako-wim` | WiM workflows, **Strom und Gas** — MSB-Wechsel UTILMD (55039/55042/55051/55168 und die Gas-Zwillinge 44039/44042/44051/44168, beantwortet mit `SG4 STS+E01` aus `E_0200`…`E_0240` bzw. `E_2000`…`E_2006`, DE 1131 nennt die Codeliste `S_00xx`/`G_00xx`) + die IFTSTA-Gesamtvorgangsstrecke 21009–21013, die die Zuordnung konstitutiv macht (00:00 Uhr Strom, **06:00 Uhr** Gastag) + Geräteübernahme ORDERS 17001 → ORDRSP 19001/19002 und Gerätewechselabsicht 17009 → 19015/19016 + Weiterverpflichtung 17002 → 19003/19004 + Stammdaten + Preisanfrage REQOTE/QUOTES (35001/35002/35004/35005 → 15001/15002/15004/15005, vier verschiedene Fristen) + Preisliste PRICAT (27001–27003) + Technik-Änderung (17011/17118 → 19005/19006) + Rechnungsabwicklung über den LF (17005/17006 → 19009/19010) + INSRPT (23001–23012) + iMS Steuerungsauftrag + INVOIC (31009 MSB-Rechnung Strom, 31003 Abrechnung von Dienstleistungen in beiden Sparten, 31004 Storno). **WiM Teil 2 ESA Wertebestellung** (§34 MsbG) — ein `wim-wertebestellung`/`esa-wertebestellung`-Prozess spannt REQOTE **35003** → QUOTES 15003 → ORDERS 17007/17008 → ORDRSP 19011/19012 → ORDCHG 39002 Storno → ORDRSP 19013/19014, dazu MSCONS 13027 Werte-nach-Typ-2 |
 | `mako-geli-gas` | GeLi Gas 3.0 workflows — UTILMD G supplier-switch Gas (44001–44021) + **Stammdatenänderung** (44109–44182 — change families: Zustimmung/Ablehnung E15/E13/E17, Monatserster rule for bilanzierungsrelevante changes; Anfrage families G8–G10 auto-answer with a data-return of the requested MaLo master data) + INVOIC 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas) |
 | `mako-mabis` | MABIS workflows — PID 13003 (Bilanzkreisabrechnung Strom, BKV↔ÜNB) + PIDs 55065/55069/55070 (Clearingliste) |
+| `mako-emob` | **NZR-EMob / Modell 2** (BK6-20-160 Anlage 6, BK6-24-267) — the virtual Bilanzierungsgebiet a Ladepunktbetreiber runs to book each charging session into the customer's supplier's Bilanzkreis. Allocation engine holding the Anlage 6 §IV.1 conservation identity (`NGZ = Σ Zuordnungen + Deltamenge`, exact per ¼ h **and direction**), BG lifecycle, session→¼-h split with `Provenance`, versions on MaBiS `Datenstatus`. Three Modellwechsel-Workflows (`emob-anmeldung` 55238/55239, `emob-zuordnungsende` 55240/55241, `emob-abmeldung` 55242/55243) routed and rendered by `makod`; an unanswered leg **escalates** rather than confirming, because no published rule gives it a default outcome. Trees `E_0510`–`E_0513` in `mako-pruefung`, Antwortfristen in `mako-fristen`, UTILMD 55235–55243 AHB profiles in `edi-energy`. The Zuordnung des ZP der NGZ zur NZR (55235–55237) is **MaBiS**, not Modell 2, and rides `mako-mabis`'s ZP lifecycle |
 | `mako-gabi-gas` | GaBi Gas 2.1 (BK7-24-01-008) — INVOIC 31010/31007/31008 + MSCONS 13013 MMMA + DVGW ALOCAT/NOMINT/NOMRES (3 workflows); typed domain: `GasDay` (DST-aware 06:00 CET), `GasQuantity` (Decimal kWh_Hs), `GasBeschaffenheit` (Hs + Zustandszahl, DVGW G 685), `AllocationVersion` (Initial/Correction/Final), `GasMarketRole`, `GasPortfolioBalance` |
 | `mako-nbw` | Netzbetreiberwechsel — PARTIN bulk DSO concession handover (PIDs 37000–37014) — placeholder |
 | `mako-as4` | BDEW AS4-Profil v1.2 — `BdewAs4Profile`, `bdew_pmode()` (sign+encrypt, X509PKIPathv1, BrainpoolP256r1), `bdew_push_policy()` (require_encrypted_inbound), `BdewTestPki` + `MockAs4Endpoint::builder().with_decryption_key_pem(key)` (full encrypt round-trip, testing feature), per-partner encryption cert registry; asx-rs **v0.13** — SwA payload packaging with an empty SOAP Body (BDEW §2.2.3.2), synchronous receipt verification (`verify_sync_response` / `send_and_verify`: signature-bound, NRI-digest-verified Non-Repudiation of Receipt), `regulated_with_decryption_key()`, `with_signing_material()`, `As4HttpTransport::new_for_localhost_testing()`, partial `As4SendCredentials` fallback |
@@ -118,7 +119,7 @@ flowchart LR
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| `makod` | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 67+ GPKE/WiM/GeLi Gas/MaBiS/GaBi Gas workflows, AS4/REST/iMS, Cedar ABAC, OIDC/JWT, MCP server |
+| `makod` | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 70+ GPKE/WiM/GeLi Gas/MaBiS/GaBi Gas/NZR-EMob workflows, AS4/REST/iMS, Cedar ABAC, OIDC/JWT, MCP server |
 | `marktd` | `:8180` | All | Market Data Hub — MaLo/MeLo/contracts, VersorgungsStatus incl. Ersatz-/Grundversorgung, Grundversorger registry (§36 Abs. 2), the dated per-MeLo MSB timeline derived from IFTSTA 21012 and the Messstellenbetriebsverträge `E_0200` decides on, typed BO4E API, EventBus fan-out, MMMA monthly import worker |
 | `processd` | `:8580` | NB+LF+MSB | Process Decision Engine — Anmeldung STP ≥ 95%, EoG gap closure + §38 timer, LF answer automation (55007/55010), MSB-Wechsel STP against the WiM Entscheidungsbäume incl. the Mindestvorlaufzeit, MSB REQOTE auto-response, §14a Steuerungsauftrag |
 | `invoicd` | `:8280` | LF | INVOIC plausibility check — 10 billing PIDs through one table-driven pipeline (Strom + Gas NNE, MMM, MSB, AWH, Sparte-neutral Storno 31004); persist-before-dispatch § 147 AO receipts with a dead-letter queue for anything that cannot become one; PID-aware answer + operator re-dispatch; self-issued Mehrmengen-Rechnung 31006 via `settle_mmm`; leased ERP outbox + one-shot overdue notice; 7-tool read-only MCP server |
@@ -190,7 +191,7 @@ flowchart LR
 
 ### BO4E typed API (`marktd`)
 
-**87 active `rubo4e::current` types — every payload, in or out, crosses one four-stage gate**, decoded through `rubo4e`'s own depth-capped entry point.
+**88 active `rubo4e::current` types — every payload, in or out, crosses one four-stage gate**, decoded through `rubo4e`'s own depth-capped entry point.
 
 | Category | Detail |
 |---|---|
@@ -533,6 +534,8 @@ mako/
 │   ├── mako-wim/            # WiM domain, Strom + Gas (55039/55042/55051/55168 + 44039/44042/44051/44168/44183, INVOIC 31009/31003/31004, INSRPT 23001–23012)
 │   ├── mako-geli-gas/       # GeLi Gas 3.0 domain (44001–44024 incl. Stornierung; PARTIN Gas 37008–37014; INVOIC 31011)
 │   ├── mako-mabis/          # MABIS domain (13003 — Bilanzkreisabrechnung Strom)
+│   ├── mako-emob/           # NZR-EMob / Modell 2 — virtual Bilanzierungsgebiet, allocation engine
+│   │                        # (Anlage 6 §IV.1 conservation identity, ¼-h session split, BG lifecycle)
 │   ├── mako-gabi-gas/       # GaBi Gas 2.1 — INVOIC 31007/31008/31010 + MSCONS 13013 + DVGW ALOCAT/NOMINT/NOMRES; typed domain: GasDay/GasQuantity/GasBeschaffenheit/AllocationVersion/GasMarketRole/GasPortfolioBalance
 │   ├── mako-nbw/            # Netzbetreiberwechsel — PARTIN DSO handover (placeholder)
 │   ├── mako-as4/            # BDEW AS4-Profil v1.2: BdewAs4Profile, bdew_pmode (ECDSA+ECDH-ES, BrainpoolP256r1)
@@ -731,6 +734,10 @@ cargo xtask validate-profiles
 
 # Check that every Pruefidentifikator has a test fixture
 cargo xtask validate-pruefids
+
+# Hold every Antwortcode against the published Entscheidungsbaum PDF —
+# tree, code and Cluster (Zustimmung vs Ablehnung)
+cargo xtask validate-ebd-codes
 
 # Check that today's date is covered by a current profile
 cargo xtask check-release-coverage

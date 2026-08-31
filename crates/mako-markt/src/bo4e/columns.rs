@@ -21,8 +21,9 @@ use rubo4e::current::Marktlokation;
 /// Every field is `Option`: BO4E's schema makes every field optional, and a
 /// mako profile at the API boundary decides which ones an endpoint requires.
 ///
-/// Only fields `Marktlokation` declares appear here. `fallgruppe` (a
-/// `Bilanzierung` field) and `fernsteuerbar` (no BO4E field) are owned by
+/// Only fields `Marktlokation` declares appear here. `fallgruppe` and
+/// `abwicklungsmodell` (both `Bilanzierung` fields) and `fernsteuerbar` (no
+/// BO4E field) are owned by
 /// [`MaloStammdatenPatch`](crate::repository::MaloStammdatenPatch); an upsert
 /// leaves those columns alone.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -258,7 +259,8 @@ pub fn is_bo4e_preistyp(value: &str) -> bool {
 #[must_use]
 pub fn malo_enum_check_lists() -> Vec<(&'static str, Vec<&'static str>)> {
     use rubo4e::current::{
-        Bilanzierungsmethode, Energierichtung, Fallgruppenzuordnung, Gasqualitaet, Netzebene,
+        Abwicklungsmodell, Bilanzierungsmethode, Energierichtung, Fallgruppenzuordnung,
+        Gasqualitaet, Netzebene,
     };
     fn wires<T: rubo4e::Bo4eEnum + 'static>() -> Vec<&'static str> {
         T::VARIANTS.iter().map(rubo4e::Bo4eEnum::as_wire).collect()
@@ -269,6 +271,11 @@ pub fn malo_enum_check_lists() -> Vec<(&'static str, Vec<&'static str>)> {
         ("energierichtung", wires::<Energierichtung>()),
         ("bilanzierungsmethode", wires::<Bilanzierungsmethode>()),
         ("fallgruppe", wires::<Fallgruppenzuordnung>()),
+        // Not a shadow column — the Abwicklungsmodell is a `Bilanzierung` field
+        // written by the Stammdatenänderung patch, not derived from the
+        // `Marktlokation` payload. Its *vocabulary* is still BO4E's, so the
+        // CHECK is pinned here with the rest.
+        ("abwicklungsmodell", wires::<Abwicklungsmodell>()),
     ]
 }
 

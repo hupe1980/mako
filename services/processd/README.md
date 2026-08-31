@@ -175,11 +175,11 @@ A **ruhende** Marktlokation is not refused — Prüfschritt 30's own Hinweis nam
 only stillgelegte Marktlokationen and the Modell-2-Zuordnung, and Prüfschritte
 16–28 exist to check a ruhende one.
 
-Prüfschritt 70 is only decidable because `marktd` keeps the **first**
-announcement: `lf_mp_id_next` is written while ingesting the
-`process.initiated`, before the fan-out, so the Anmeldung under evaluation has
-already written its own marker and the check must compare MP-IDs rather than
-test for presence.
+Prüfschritt 70 is only decidable because `marktd` projects the assignments as a
+**list** and keeps every pending announcement: the Anmeldung under evaluation is
+written while ingesting the `process.initiated`, before the fan-out, so the
+check must look for an announcement by a supplier *other than* the requesting
+one rather than test for presence.
 
 **Strom, erzeugende Marktlokation** (220–830) picks between the **six**
 Vorlauffristen GPKE Teil 2 § 2.1.1 publishes, keyed on `(Geschäftsvorfall,

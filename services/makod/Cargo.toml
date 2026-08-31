@@ -30,12 +30,16 @@ mako-invoic      = { path = "../../crates/mako-invoic" }
 # Naming them is the point: they used to arrive only because `mako-wim` enables
 # them, so dropping that would have broken makod with an error pointing
 # somewhere else entirely.
-mako-pruefung      = { workspace = true, features = ["role-msb"] }
+mako-pruefung      = { workspace = true, features = ["role-msb", "role-emob"] }
 mako-wim         = { path = "../../crates/mako-wim" }
 mako-geli-gas    = { path = "../../crates/mako-geli-gas" }
 dvgw-edi         = { path = "../../crates/dvgw-edi" }
 mako-gabi-gas    = { path = "../../crates/mako-gabi-gas" }
 mako-mabis       = { path = "../../crates/mako-mabis" }
+# NZR-EMob / Modell 2 — the three UTILMD legs (55238–55243) that move a
+# Marktlokation into and out of the LPB's Bilanzierungsgebiet. Loaded for a
+# VNB, an LF and an LPB deployment alike: all three answer one of the legs.
+mako-emob        = { workspace = true }
 mako-redispatch  = { path = "../../crates/mako-redispatch" }
 # The format half of the Redispatch transport boundary — parses the nine
 # BDEW XML document types the AS4 leg carries (mirrors edi-energy for

@@ -109,14 +109,10 @@ fn pids_claimed_by_the_reference() -> BTreeSet<u32> {
 
 /// Every PID the compiled modules register, with all Marktrollen active.
 fn routed_pids() -> BTreeMap<u32, String> {
-    let modules: Vec<Box<dyn EngineModule>> = vec![
-        Box::new(mako_gpke::GpkeModule),
-        Box::new(mako_wim::WimModule),
-        Box::new(mako_geli_gas::GeliGasModule),
-        Box::new(mako_gabi_gas::GaBiGasModule),
-        Box::new(mako_mabis::MabisModule),
-        Box::new(mako_redispatch::RedispatchModule),
-    ];
+    // The one production list — see `makod::startup::production_modules`. Never
+    // restate the stack here: a guard with its own copy silently stops seeing a
+    // module the daemon registers.
+    let modules: Vec<Box<dyn EngineModule>> = makod::startup::production_modules();
     let roles = DeploymentRoles::all();
 
     let mut routed = BTreeMap::new();

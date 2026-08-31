@@ -8,6 +8,7 @@
 //! All methods are `async` (AFIT, stable since Rust 1.75).
 //! All methods return `Result<_, MdmError>` annotated `#[must_use]`.
 
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use time::Date;
 use uuid::Uuid;
@@ -182,6 +183,20 @@ pub struct MaloRecord {
     /// netzorientierte Steuerung of controllable consumption devices.
     #[serde(default)]
     pub fernsteuerbar: Option<bool>,
+    /// NZR-EMob **Abwicklungsmodell** — BO4E `Abwicklungsmodell` wire value
+    /// (`MODELL_1` | `MODELL_2`).
+    ///
+    /// Extracted from UTILMD SG10 `CCI+ZA2` DE 7037: `ZE9` („Bilanzierung an
+    /// der Marktlokation") → `MODELL_1`, `ZF0` („Bilanzierung im
+    /// Bilanzierungsgebiet (BG) des LPB") → `MODELL_2`. `None` when no
+    /// counterparty has stated one, which is **not** the same as `MODELL_1`:
+    /// the default is unknown, and a Modell-2 MaLo is no longer balanced by the
+    /// VNB at all (BK6-20-160 Anlage 6 §II).
+    ///
+    /// The Klassentyp `ZA2` is part of the read — `ZE9` under another
+    /// Klassentyp is „Quartalsweise" in the same AHB.
+    #[serde(default)]
+    pub abwicklungsmodell: Option<String>,
     pub version: i64,
     pub data: MaloPayload,
     /// Role assignments valid at the requested reference date.
@@ -435,6 +450,15 @@ pub struct MaloStammdatenPatch {
     /// §14a EnWG „Status der Fernsteuerbarkeit" (`CCI+7037` `Z97`→`true` /
     /// `Z96`→`false`).
     pub fernsteuerbar: Option<bool>,
+    /// NZR-EMob **Abwicklungsmodell** — BO4E `Abwicklungsmodell` wire value
+    /// (`MODELL_1` / `MODELL_2`), from `CCI+ZA2++ZE9`/`ZF0`.
+    ///
+    /// Says whether this Marktlokation is balanced at the MaLo or inside a
+    /// Ladepunktbetreiber's Bilanzierungsgebiet (BK6-20-160 Anlage 6). It
+    /// arrives on the Stammdatenänderung band and the WiM Anmeldungen, **not**
+    /// on the Modellwechsel PIDs 55238–55243 — those move the model, this
+    /// records the state a counterparty reports.
+    pub abwicklungsmodell: Option<String>,
 }
 
 impl MaloStammdatenPatch {
@@ -449,6 +473,7 @@ impl MaloStammdatenPatch {
             && self.regelzone.is_none()
             && self.fallgruppe.is_none()
             && self.fernsteuerbar.is_none()
+            && self.abwicklungsmodell.is_none()
     }
 }
 
@@ -1383,6 +1408,100 @@ impl std::str::FromStr for LieferStatus {
     }
 }
 
+/// Whether an LF-Zuordnung is announced or running.
+///
+/// The two states an assignment can be in between an Anmeldung and its
+/// Zuordnungsende. There is deliberately no `Beendet`: an assignment that has
+/// ended is removed from the live projection and survives only in the
+/// `versorgungsstatus_history` snapshot, which is what a point-in-time read
+/// resolves against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum ZuordnungsStatus {
+    /// The Anmeldung is in flight — a UTILMD 55001 / 55077 / 44001 has arrived
+    /// and the NB has neither confirmed nor refused it.
+    Angekuendigt,
+    /// The Zuordnung runs: the NB confirmed it and the Zuordnungsbeginn is
+    /// reached or passed.
+    Aktiv,
+}
+
+impl ZuordnungsStatus {
+    /// Wire form, matching the `lf_zuordnung.status` `CHECK`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Angekuendigt => "Angekuendigt",
+            Self::Aktiv => "Aktiv",
+        }
+    }
+}
+
+impl std::str::FromStr for ZuordnungsStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Angekuendigt" => Ok(Self::Angekuendigt),
+            "Aktiv" => Ok(Self::Aktiv),
+            other => Err(format!("unknown ZuordnungsStatus '{other}'")),
+        }
+    }
+}
+
+/// One supplier's hold on a Marktlokation.
+///
+/// A Marktlokation is **not** held by one Lieferant. A verbrauchende one
+/// normally is, at 100 %, but an erzeugende Marktlokation can be *tranchiert* —
+/// split into Tranchen that several LFA hold at once, each with its own
+/// Aufteilungsfaktor (GPKE Teil 1 Geschäftsvorfall 3). `E_0623` Prüfschritte
+/// 500–540 decide such an Anmeldung on the arithmetic over those shares rather
+/// than on one supplier's answer, so the assignment has to be a list before
+/// four of that tree's six outcomes are reachable at all.
+///
+/// The same list carries the second thing one slot could not express: an
+/// **LFZ** — a supplier whose *future* Zuordnung an incoming Anmeldung
+/// displaces — is simply a second [`ZuordnungsStatus::Angekuendigt`] row, which
+/// is what 55038 / 44038 „Aufhebung einer zukünftigen Zuordnung" addresses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LfZuordnung {
+    /// MP-ID of the Lieferant holding this share.
+    pub lf_mp_id: String,
+    /// The share of the Marktlokation, in percent. `100` for an untranchierte
+    /// Marktlokation; the Aufteilungsfaktor of the Tranchengröße product
+    /// (`9991000002090`) for a Tranche.
+    pub prozent: Decimal,
+    /// Tranchen-ID when the Marktlokation is tranchiert (`SG5 LOC+Z21`),
+    /// `None` for the single 100 % assignment of an untranchierte one.
+    pub tranche_id: Option<String>,
+    /// Announced or running.
+    pub status: ZuordnungsStatus,
+    /// Zuordnungsbeginn — the Lieferbeginn of this assignment.
+    #[serde(default, with = "date_iso::opt")]
+    pub zuordnungsbeginn: Option<Date>,
+    /// Zuordnungsende, once one is agreed.
+    #[serde(default, with = "date_iso::opt")]
+    pub zuordnungsende: Option<Date>,
+    /// `process_id` of the process that wrote this assignment.
+    pub process_id: Option<Uuid>,
+}
+
+impl LfZuordnung {
+    /// The whole Marktlokation, held by one supplier — the untranchierte case.
+    #[must_use]
+    pub fn ganz(lf_mp_id: impl Into<String>, status: ZuordnungsStatus) -> Self {
+        Self {
+            lf_mp_id: lf_mp_id.into(),
+            prozent: Decimal::ONE_HUNDRED,
+            tranche_id: None,
+            status,
+            zuordnungsbeginn: None,
+            zuordnungsende: None,
+            process_id: None,
+        }
+    }
+}
+
 /// Per-MaLo supply state record persisted in `marktd`.
 ///
 /// One row per `(malo_id, tenant)`. Upserted atomically on each relevant
@@ -1395,26 +1514,19 @@ pub struct VersorgungsStatusRecord {
     pub malo_id: MaloId,
     /// Current supply state.
     pub lieferstatus: LieferStatus,
-    /// GLN of the active Lieferant (set when `lieferstatus == Beliefert`).
-    pub lf_mp_id: Option<String>,
-    /// MP-ID of the announced future Lieferant (post UTILMD 55001/44001, pre confirmation).
+    /// Every Lieferant holding a share of this Marktlokation, announced or
+    /// running — the single source of truth for who supplies it.
     ///
-    /// At most ONE pending Lieferbeginn per MaLo at any time — the NB rejects a second
-    /// 55001 with GPKE rule A06 while `lf_mp_id_next IS NOT NULL`.
-    pub lf_mp_id_next: Option<String>,
-    /// Announced Lieferbeginn date of the future Lieferant — set together with `lf_mp_id_next`.
+    /// A list because two regulated cases carry more than one of each: a
+    /// **tranchierte** Marktlokation is held by several LFA at once (`E_0623`
+    /// Prüfschritte 500–540 decide on the arithmetic over their shares), and an
+    /// incoming Anmeldung can displace an **LFZ** whose future Zuordnung is a
+    /// second announced assignment (55038 / 44038).
     ///
-    /// Together these two fields form the complete "pending transition" record: WHO takes
-    /// over (`lf_mp_id_next`) and WHEN (`lf_next_lieferbeginn`).  Both are cleared atomically
-    /// when the transition is confirmed (55003/44003) or rejected (55004/44004).
-    ///
-    /// Used by the NB to schedule Ersatz/Grundversorgung gap-closure (§38 EnWG) and by
-    /// `netzbilanzd` for billing-period alignment.
-    #[serde(default, with = "date_iso::opt")]
-    pub lf_next_lieferbeginn: Option<Date>,
-    /// Agreed Lieferbeginn date (set when supply is confirmed).
-    #[serde(default, with = "date_iso::opt")]
-    pub lieferbeginn: Option<Date>,
+    /// [`Self::lf_mp_id`] and [`Self::lf_mp_id_next`] read the ordinary
+    /// one-supplier case back out of it.
+    #[serde(default)]
+    pub zuordnungen: Vec<LfZuordnung>,
     /// Agreed Lieferende date (set when termination is initiated).
     #[serde(default, with = "date_iso::opt")]
     pub lieferende: Option<Date>,
@@ -1450,6 +1562,84 @@ pub struct VersorgungsStatusRecord {
     pub version: i64,
 }
 
+impl VersorgungsStatusRecord {
+    /// Every running assignment.
+    pub fn aktive(&self) -> impl Iterator<Item = &LfZuordnung> {
+        self.zuordnungen
+            .iter()
+            .filter(|z| z.status == ZuordnungsStatus::Aktiv)
+    }
+
+    /// Every announced-but-unconfirmed assignment.
+    pub fn angekuendigte(&self) -> impl Iterator<Item = &LfZuordnung> {
+        self.zuordnungen
+            .iter()
+            .filter(|z| z.status == ZuordnungsStatus::Angekuendigt)
+    }
+
+    /// The active Lieferant of an **untranchierte** Marktlokation.
+    ///
+    /// `None` when nobody supplies it *and* when several do: a tranchierte
+    /// Marktlokation has no single supplier, and answering with an arbitrary
+    /// one of them would be worse than answering with nothing. Callers that
+    /// have to handle Tranchen read [`Self::aktive`].
+    #[must_use]
+    pub fn lf_mp_id(&self) -> Option<&str> {
+        let mut aktive = self.aktive();
+        let first = aktive.next()?;
+        aktive.next().is_none().then_some(first.lf_mp_id.as_str())
+    }
+
+    /// The announced future Lieferant, when exactly one Anmeldung is pending.
+    ///
+    /// `None` when several are — see [`Self::lf_mp_id`] for why that is not the
+    /// same as „the first one".
+    #[must_use]
+    pub fn lf_mp_id_next(&self) -> Option<&str> {
+        let mut pending = self.angekuendigte();
+        let first = pending.next()?;
+        pending.next().is_none().then_some(first.lf_mp_id.as_str())
+    }
+
+    /// Zuordnungsbeginn of the single running assignment.
+    #[must_use]
+    pub fn lieferbeginn(&self) -> Option<Date> {
+        let mut aktive = self.aktive();
+        let first = aktive.next()?;
+        aktive.next().is_none().then_some(first.zuordnungsbeginn)?
+    }
+
+    /// Announced Lieferbeginn of the single pending assignment.
+    #[must_use]
+    pub fn lf_next_lieferbeginn(&self) -> Option<Date> {
+        let mut pending = self.angekuendigte();
+        let first = pending.next()?;
+        pending.next().is_none().then_some(first.zuordnungsbeginn)?
+    }
+
+    /// Is this Marktlokation held in Tranchen?
+    ///
+    /// True as soon as any assignment names a Tranche or carries less than the
+    /// whole Marktlokation — the condition `E_0623` Prüfschritt 500 reads.
+    #[must_use]
+    pub fn ist_tranchiert(&self) -> bool {
+        self.zuordnungen
+            .iter()
+            .any(|z| z.tranche_id.is_some() || z.prozent < Decimal::ONE_HUNDRED)
+    }
+
+    /// Is an Anmeldung from `lf_mp_id` already pending on this Marktlokation?
+    ///
+    /// `E_0622` Prüfschritt 70 („Andere Anmeldung in Bearbeitung") asks about
+    /// an assignment announced by **someone else**: `marktd` writes the
+    /// Anmeldung under evaluation before the decision runs, so the requesting
+    /// supplier's own announcement must not refuse it.
+    #[must_use]
+    pub fn andere_anmeldung_in_bearbeitung(&self, lf_mp_id: &str) -> Option<&LfZuordnung> {
+        self.angekuendigte().find(|z| z.lf_mp_id != lf_mp_id)
+    }
+}
+
 /// Single entry in the supply-state change history of a MaLo.
 ///
 /// Populated by `VersorgungsStatusRepository::upsert` — each successful write
@@ -1463,12 +1653,14 @@ pub struct VersorgungsStatusHistoryRecord {
     pub malo_id: MaloId,
     pub tenant: String,
     pub lieferstatus: LieferStatus,
-    pub lf_mp_id: Option<String>,
-    pub lf_mp_id_next: Option<String>,
-    #[serde(default, with = "date_iso::opt")]
-    pub lf_next_lieferbeginn: Option<Date>,
-    #[serde(default, with = "date_iso::opt")]
-    pub lieferbeginn: Option<Date>,
+    /// The assignment list as it stood, snapshotted whole.
+    ///
+    /// Denormalised into the history row rather than versioned inside
+    /// `lf_zuordnung`, because a point-in-time read wants the state of the
+    /// Marktlokation at an instant, and reassembling that from per-assignment
+    /// validity would be a second temporal model for the same fact.
+    #[serde(default)]
+    pub zuordnungen: Vec<LfZuordnung>,
     #[serde(default, with = "date_iso::opt")]
     pub lieferende: Option<Date>,
     pub msb_mp_id: Option<String>,
@@ -1560,73 +1752,107 @@ pub trait VersorgungsStatusRepository: Send + Sync {
 
     /// Record an announced incoming Lieferant (partial update).
     ///
-    /// Called when a UTILMD 55001/44001 (`de.mako.process.initiated`, NB side)
-    /// is received.  Sets `lf_mp_id_next` and `lf_next_lieferbeginn` without
-    /// touching `lieferstatus`, `lf_mp_id`, `lieferbeginn`, or `lieferende`.
+    /// Called when a UTILMD 55001 / 55077 / 44001 (`de.mako.process.initiated`,
+    /// NB side) is received. Adds one [`ZuordnungsStatus::Angekuendigt`]
+    /// assignment without touching `lieferstatus` or any running one.
+    ///
+    /// `prozent` is the share the Anmeldung registers — `Decimal::ONE_HUNDRED`
+    /// for an untranchierte Marktlokation, the Aufteilungsfaktor of the
+    /// Tranchengröße product for a Tranche. `tranche_id` names the Tranche
+    /// (`SG5 LOC+Z21`) when there is one.
+    ///
+    /// **Several may be pending at once.** A second supplier announcing the
+    /// same Marktlokation is what `E_0622` Prüfschritt 70 refuses with `A06`
+    /// and what 55038 / 44038 addresses; the projection records it either way,
+    /// because a decision the projection has already discarded cannot be made.
+    ///
+    /// Re-announcing the same `(lf_mp_id, tranche_id)` updates that assignment
+    /// in place, so an at-least-once redelivery is idempotent.
     ///
     /// Inserts a new row as `Unbeliefert` if none exists yet for this MaLo.
     /// Appends to `versorgungsstatus_history` on every successful write.
     #[must_use]
+    #[allow(clippy::too_many_arguments)] // one assignment carries its full identity
     async fn announce_lf_next(
         &self,
         malo_id: &MaloId,
         tenant: &str,
         lf_mp_id_next: &str,
         lf_next_lieferbeginn: Option<Date>,
+        prozent: Decimal,
+        tranche_id: Option<&str>,
         nb_mp_id: &str,
         process_id: Option<Uuid>,
     ) -> Result<(), MdmError>;
 
-    /// Promote the announced future Lieferant to the active one.
+    /// Promote an announced assignment to a running one.
     ///
-    /// Called when UTILMD 55003/44003 (`de.mako.process.completed`, NB side)
-    /// is sent.  Atomically:
-    /// - `lf_mp_id = lf_mp_id_next`
-    /// - `lieferbeginn = lf_next_lieferbeginn`
-    /// - `lieferstatus = Beliefert`
-    /// - `lf_mp_id_next = NULL`, `lf_next_lieferbeginn = NULL`
+    /// Called when UTILMD 55002 / 55003 / 44002 (`de.mako.process.completed`,
+    /// NB side) confirms the Anmeldung. Sets that assignment to
+    /// [`ZuordnungsStatus::Aktiv`] and `lieferstatus = Beliefert`.
     ///
-    /// No-ops if `lf_mp_id_next` is already `NULL` (idempotent re-delivery).
+    /// `lf_mp_id` names **which** announcement is confirmed. `None` means „the
+    /// one that is pending", which is well defined exactly while there is one —
+    /// the ordinary case, and what a Bestätigung payload that names no supplier
+    /// can mean. A Marktlokation carrying several pending announcements is
+    /// **not** confirmed by an unnamed Bestätigung: picking one of them would
+    /// assign the Marktlokation to a supplier the message never mentioned.
+    ///
+    /// On a tranchierte Marktlokation the other running assignments stay: an
+    /// Anmeldung for a 25 % Tranche does not displace the LFA holding the other
+    /// 75 %. On an untranchierte one the displaced 100 % assignment is removed.
+    ///
+    /// No-ops when no such announcement exists (idempotent re-delivery).
     /// Appends to `versorgungsstatus_history` on every successful write.
     #[must_use]
     async fn confirm_supply(
         &self,
         malo_id: &MaloId,
         tenant: &str,
+        lf_mp_id: Option<&str>,
         process_id: Option<Uuid>,
     ) -> Result<(), MdmError>;
 
-    /// Mark a MaLo as `Unbeliefert` while preserving any pending announcement.
+    /// End a running assignment, preserving every pending announcement.
     ///
-    /// Called when UTILMD 55013/44013 (`de.mako.process.completed`) is processed.
-    /// The active LF has ended supply; clears `lf_mp_id` and `lieferbeginn` but
-    /// leaves `lf_mp_id_next` / `lf_next_lieferbeginn` intact so a pending future
-    /// Lieferant announcement is not lost.
+    /// Called when UTILMD 55013/44013 (`de.mako.process.completed`) is
+    /// processed. Removes the running assignments named by `lf_mp_id` — or
+    /// **all** of them when it is `None`, which is what an untranchierte
+    /// Marktlokation's Abmeldung means — and leaves the announced ones intact
+    /// so a pending supplier switch is not lost.
+    ///
+    /// `lieferstatus` becomes `Unbeliefert` only once no running assignment is
+    /// left: on a tranchierte Marktlokation one LFA leaving does not make the
+    /// Marktlokation unsupplied, and treating it as if it did would trigger a
+    /// §38 EnWG Ersatzversorgung for a Marktlokation that still has suppliers.
     ///
     /// The NB is responsible for activating Ersatz/Grundversorgung (§38 EnWG)
-    /// when `lieferstatus` becomes `Unbeliefert` and no `lf_mp_id_next` is set.
+    /// when `lieferstatus` becomes `Unbeliefert` and nothing is announced.
     /// Appends to `versorgungsstatus_history` on every successful write.
     #[must_use]
     async fn end_supply(
         &self,
         malo_id: &MaloId,
         tenant: &str,
+        lf_mp_id: Option<&str>,
         nb_mp_id: &str,
         process_id: Option<Uuid>,
     ) -> Result<(), MdmError>;
 
-    /// Clear a pending future-Lieferant announcement without touching the
-    /// active supply.
+    /// Drop a pending announcement without touching any running assignment.
     ///
-    /// Invoked when a Lieferbeginn is cancelled or rejected (GPKE 55004 /
-    /// GeLi Gas 44004): the previously announced `lf_mp_id_next` /
-    /// `lf_next_lieferbeginn` must be reset so downstream consumers do not act
-    /// on a supplier switch that will not happen. Idempotent: a no-op when no
-    /// pending announcement exists.
+    /// Invoked when a Lieferbeginn is cancelled or rejected (GPKE 55003 /
+    /// 55004, GeLi Gas 44003 / 44004), and by 55038 / 44038 „Aufhebung einer
+    /// zukünftigen Zuordnung" — which is the same operation addressed at an
+    /// **LFZ** rather than at the sender.
+    ///
+    /// `lf_mp_id` names whose announcement to drop; `None` drops every pending
+    /// one. Idempotent: a no-op when no such announcement exists.
     async fn clear_lf_next(
         &self,
         malo_id: &MaloId,
         tenant: &str,
+        lf_mp_id: Option<&str>,
         process_id: Option<Uuid>,
     ) -> Result<(), MdmError>;
 
@@ -1637,12 +1863,13 @@ pub trait VersorgungsStatusRepository: Send + Sync {
     /// of record. Atomically sets
     /// - `lieferstatus = Ersatzversorgung` or `Grundversorgung`
     ///   (`eog_status` must be one of the two; any other value is an error),
-    /// - `lf_mp_id = gv_mp_id`, `lieferbeginn = eog_seit`,
+    /// - the running assignment replaced by a single 100 % `gv_mp_id` one
+    ///   beginning at `eog_seit`,
     /// - `eog_seit = start of the fallback supply` (anchors the §38 Abs. 2
     ///   3-month maximum for `Ersatzversorgung`),
     ///
-    /// while preserving `lf_mp_id_next` / `lf_next_lieferbeginn` — a pending
-    /// regular supplier switch ends the fallback supply on confirmation.
+    /// while preserving every announced assignment — a pending regular supplier
+    /// switch ends the fallback supply on confirmation.
     /// Appends to `versorgungsstatus_history` on every successful write.
     #[must_use]
     #[allow(clippy::too_many_arguments)] // regulatory transition carries its full context

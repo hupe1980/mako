@@ -93,9 +93,25 @@ class TestTheThreeShapes:
 
 
 class TestTheTable:
-    def test_all_four_families_are_published(self):
+    def test_every_published_family_is_named(self):
+        """The set is pinned, not counted: a family appearing without a test
+        of its own is a window nothing here checks the arithmetic of."""
         families = {o.family for o in antwort_obligations()}
-        assert families == {"gpke", "geli-gas", "wim", "wim-gas"}
+        assert families == {"emob", "geli-gas", "gpke", "wim", "wim-gas"}
+
+    def test_the_modell_2_windows_are_seven_and_three_werktage(self):
+        """AWH „Zum Modell 2" V1.3: the Anmeldung answer is 7 WT (Kap. 2.1.2
+        Nr. 4), the Beendigung der Zuordnung and the Abmeldung 3 (Nr. 3,
+        Kap. 2.2.2 Nr. 2).
+
+        Seven, not three: `E_0510` Prüfschritt 1 asks whether the LF refused
+        *within its own window*, which cannot be known before the 6th Werktag.
+        """
+        anmeldung = antwort_obligation(55238)
+        assert anmeldung.family == "emob"
+        assert anmeldung.werktage == 7
+        for pid in (55240, 55242):
+            assert antwort_obligation(pid).werktage == 3
 
     def test_every_obligation_cites_its_fundstelle(self):
         """Every window is measured in Werktage; the wall-clock shapes add a time.

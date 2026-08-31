@@ -1794,7 +1794,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                     "transaktionsgrund": grund,
                     "antwort_code":      code.code,
                     "antwort_codeliste": codeliste,
-                    "antwort_ebd":       ebd,
+                    "antwort_tree":       ebd,
                 });
                 if let Some(ref vn) = data.vorgangsnummer {
                     payload["vorgangsnummer"] = serde_json::Value::String(vn.clone());
@@ -2473,7 +2473,7 @@ mod tests {
         assert_eq!(&*wire.message_type, "UTILMD");
         assert_eq!(wire.payload["pid"], 55_043);
         assert_eq!(wire.payload["antwort_code"], "E15");
-        assert_eq!(wire.payload["antwort_ebd"], "E_0201");
+        assert_eq!(wire.payload["antwort_tree"], "E_0201");
         assert_eq!(wire.payload["vorgangsnummer"], "VG-WIM-001");
         // The answer inverts the roles of the order it answers.
         assert_eq!(wire.payload["sender"], "9900357000004");

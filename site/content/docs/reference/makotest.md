@@ -202,7 +202,7 @@ o.bestaetigung_pid, o.ablehnung_pid, o.ebd   # 55002, 55003, 'E_0622'
 o.source        # 'BK6-24-174 GPKE Teil 2, SD Lieferbeginn Prozessschritte 5/6'
 o.due_at("2026-03-02T09:00:00Z")   # '2026-03-03T11:00:00+01:00'
 
-antwort_obligations()              # every published obligation, four families
+antwort_obligations()              # every published obligation, five families
 assert_deadline_is(response["deadline"], received=received, pid=55001)
 ```
 

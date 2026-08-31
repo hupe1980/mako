@@ -296,7 +296,7 @@ macro_rules! code {
 // inside this file. Gated to match, so a role-scoped build that leaves MaBiS
 // out does not carry an unused re-export — the role features exist precisely to
 // build a binary containing only one Marktrolle's trees.
-#[cfg(feature = "role-mabis")]
+#[cfg(any(feature = "role-mabis", feature = "role-emob"))]
 pub(crate) use code;
 
 // ── E_0609 — Abmeldung prüfen (Lieferende von NB an LF, 55007 → 55008/55009) ──
@@ -1082,6 +1082,45 @@ pub const E_0607_CODES: &[AntwortCode] = &[
         "Lieferende zum Abmeldedatum wurde aus gleichem Grund bereits bestätigt (Prüfschritt 130)"
     ),
     code!("A11", E_0607, Zustimmung, "Zustimmung (Prüfschritt 140)"),
+    // ── Erzeugende Marktlokation (Prüfschritte 500–620) ─────────────────────
+    //
+    // Prüfschritt 10 „nein" leaves the verbrauchend/ruhend branch above for a
+    // second one that shares **no** Antwortcode with it. Every question is
+    // asked twice in this tree, once per branch, and each has its own code —
+    // including the Zustimmung, which is `A27` here and `A11` there. Answering
+    // an erzeugende Abmeldung out of the codes above states a code that is
+    // valid for the tree and wrong for the Anwendungsfall.
+    code!(
+        "A21",
+        E_0607,
+        Ablehnung,
+        "Das Lieferende muss auf dem 1. eines Kalendermonats 00:00 Uhr liegen (Prüfschritt 500)"
+    ),
+    code!(
+        "A22",
+        E_0607,
+        Ablehnung,
+        "Vorlauffrist nicht eingehalten (Prüfschritt 520)"
+    ),
+    code!(
+        "A23",
+        E_0607,
+        Ablehnung,
+        "Die Aufhebung einer zukünftigen Zuordnung muss zu demselben Zeitpunkt angegeben werden, der im Lieferbeginn bestätigt wurde (Prüfschritt 570)"
+    ),
+    code!(
+        "A25",
+        E_0607,
+        Ablehnung,
+        "Lieferende zum Abmeldedatum wurde aus gleichem Grund bereits bestätigt (Prüfschritt 600)"
+    ),
+    code!(
+        "A26",
+        E_0607,
+        Ablehnung,
+        "Lieferende zum Abmeldedatum wurde aus gleichem Grund bereits bestätigt (Prüfschritt 610)"
+    ),
+    code!("A27", E_0607, Zustimmung, "Zustimmung (Prüfschritt 620)"),
     code!("A99", E_0607, Ablehnung, "Sonstiges", bemerkung),
 ];
 
@@ -2897,6 +2936,24 @@ pub const E_0207_CODES: &[AntwortCode] = &[
         E_0207,
         Ablehnung,
         "Das Entgelt wird über eine andere Marktlokation abgerechnet (Prüfschritt 8)"
+    ),
+    code!(
+        "A09",
+        E_0207,
+        Ablehnung,
+        "Die vereinbarte Rechnungsabwicklung für diese Marktlokation bleibt erhalten; für das Zeitintervall zwischen angefragtem Termin und vereinbarter Rechnungsabwicklung wird kein Messentgelt in Rechnung gestellt (Prüfschritt 10)"
+    ),
+    code!(
+        "A10",
+        E_0207,
+        Ablehnung,
+        "Der MSB erstellt zum angefragten Termin kein Angebot (Prüfschritt 10)"
+    ),
+    code!(
+        "A07",
+        E_0207,
+        Ablehnung,
+        "Das Beginndatum liegt in einem bereits abgerechneten Zeitraum und der LF hat nicht zum nächstmöglichen Termin angefragt (Prüfschritt 12)"
     ),
 ];
 

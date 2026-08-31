@@ -609,7 +609,7 @@ mod tests {
         let all = antwort_obligations();
         assert!(
             all.len() >= 20,
-            "expected the four families, got {}",
+            "expected every published family, got {}",
             all.len()
         );
         for o in &all {

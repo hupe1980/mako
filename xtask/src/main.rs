@@ -18,6 +18,7 @@ Commands:
   validate-extraction Measure how well extract-pdf drafts reproduce the curated profiles
   validate-pruefids   Check that every AHB Pruefidentifikator has a test fixture
   validate-release-codes  Verify that every profile's release code appears in a UNH 0057 fixture
+  validate-ebd-codes  Hold the mako-pruefung Antwortcode catalogue against the published EBD
   audit-ahb           Comprehensive AHB rule-coverage analysis for all profiles
   check-bo4e-coverage  Count distinct rubo4e::current types used across crates/ and services/ and
                         verify the count matches the claim in README.md exactly. A tolerance
@@ -151,6 +152,7 @@ mod import_codelists;
 mod import_xml_profiles;
 mod release_diff;
 mod sync_regulatories;
+mod validate_ebd_codes;
 mod validate_extraction;
 mod validate_profiles;
 mod validate_pruefids;
@@ -177,6 +179,7 @@ fn main() {
         Some("check-answer-commands") => check_answer_commands(),
         Some("check-tool-grants") => check_tool_grants(),
         Some("codegen") => codegen(),
+        Some("validate-ebd-codes") => validate_ebd_codes(),
         Some("validate-extraction") => validate_extraction::validate_extraction(),
         Some("validate-profiles") => validate_profiles(),
         Some("validate-pruefids") => validate_pruefids(),
@@ -495,6 +498,13 @@ fn validate_pruefids() {
         json_output,
     );
     if !ok {
+        std::process::exit(1);
+    }
+}
+
+fn validate_ebd_codes() {
+    let (workspace_root, _) = workspace_info();
+    if !validate_ebd_codes::run(&workspace_root) {
         std::process::exit(1);
     }
 }

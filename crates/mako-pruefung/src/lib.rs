@@ -92,6 +92,8 @@ pub mod error;
 
 pub mod rechnung;
 
+#[cfg(feature = "role-emob")]
+pub mod emob;
 #[cfg(feature = "role-esa")]
 pub mod esa;
 #[cfg(feature = "role-lf")]
@@ -141,8 +143,8 @@ pub use msb::{
 #[cfg(feature = "role-nb")]
 pub use nb::{
     Abmeldeanfrage, AbmeldungAnfrage, AnmeldungAnfrage, CODES_REQUIRING_DRITTER, LfaAntwort,
-    MaloGridRecord, Messtyp, NbEntscheidung, NetzCheckConfig, TranchenZuordnung, evaluate,
-    evaluate_abmeldung, evaluate_lieferbeginn,
+    MaloGridRecord, Messtyp, NbEntscheidung, NetzCheckConfig, TranchenAntwort, TranchenLage,
+    TranchenZuordnung, evaluate, evaluate_abmeldung, evaluate_lieferbeginn,
 };
 
 // ── Transaktionsgrund codes the trees branch on ───────────────────────────────

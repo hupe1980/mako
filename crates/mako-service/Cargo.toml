@@ -41,7 +41,6 @@ metrics = ["dep:prometheus"]
 rate-limit = ["dep:governor"]
 
 [dependencies]
-mako-events = { workspace = true }
 thiserror  = { workspace = true }
 anyhow     = { workspace = true }
 serde      = { workspace = true }
@@ -92,14 +91,15 @@ jsonwebtoken              = { workspace = true, optional = true }
 # Optional Prometheus dep — only compiled when feature=metrics is enabled
 prometheus                = { version = "0.14", default-features = false, features = ["process"], optional = true }
 
-# Operator event-bus extension point. Trait + registry only — no runtime cost
-# when a deployment registers no plugin (`WebhookBus` checks `is_empty` first).
-mako-plugin              = { workspace = true }
-
 # Optional governor dep — only compiled when feature=rate-limit is enabled
 governor                  = { version = "0.6", optional = true }
 
 [dev-dependencies]
+# Test-only: the CloudEvents envelope builder takes any `&str` `type`, and the
+# tests pass catalogue constants to show what a real caller sends. Nothing in
+# the crate's own code reaches for the catalogue, so it is not a dependency
+# this crate's consumers inherit.
+mako-events   = { workspace = true }
 tower         = { version = "0.5", features = ["util"] }
 tokio         = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net"] }
 # Real-PostgreSQL integration tests for the transactional outbox.

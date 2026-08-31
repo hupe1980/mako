@@ -315,7 +315,7 @@ impl Workflow for GpkeAbrechnungsdatenWorkflow {
                         "malo":         data.location_id.as_str(),
                         // `SG15 STS` — the E_0595 code and the tree it comes from.
                         "antwort_code": antwort_code,
-                        "antwort_ebd":  BESTELLUNG_EBD,
+                        "antwort_codeliste":  BESTELLUNG_EBD,
                         // „Änderung der Daten" means a Stammdatenänderung
                         // follows; the receiver needs to know one is coming.
                         "sendet_stammdatenaenderung": sendet_stammdatenaenderung,
@@ -460,7 +460,7 @@ mod tests {
             .expect("the answer must produce an outbound IFTSTA");
         assert_eq!(iftsta.payload["pid"], BEARBEITUNGSSTAND_PID);
         assert_eq!(iftsta.payload["antwort_code"], "A05");
-        assert_eq!(iftsta.payload["antwort_ebd"], "E_0595");
+        assert_eq!(iftsta.payload["antwort_codeliste"], "E_0595");
         assert_eq!(iftsta.payload["sendet_stammdatenaenderung"], true);
         // The answer goes back to the Lieferant that asked.
         assert_eq!(iftsta.payload["sender"], "9900357000004");

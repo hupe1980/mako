@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 /// One `abmeldeanfragen` row as the driver returns it, before it is named.
 ///
-/// Spelled out because both queries select the same seven columns and a tuple
+/// Spelled out because both queries select the same eight columns and a tuple
 /// of that width is unreadable at the call site.
 type PendingRow = (
     String,
@@ -25,16 +25,18 @@ type PendingRow = (
     i32,
     serde_json::Value,
     serde_json::Value,
+    serde_json::Value,
     OffsetDateTime,
 );
 
-/// The same seven columns with the primary key in front, for the listing query.
+/// The same eight columns with the primary key in front, for the listing query.
 type KeyedPendingRow = (
     Uuid,
     String,
     String,
     Vec<String>,
     i32,
+    serde_json::Value,
     serde_json::Value,
     serde_json::Value,
     OffsetDateTime,
@@ -78,6 +80,9 @@ pub struct AbmeldeanfrageRecord {
     /// LFA its Zuordnung ends (55037 / 44037) once the Anmeldung is confirmed.
     /// Not derivable from `anfrage`, which names no incumbent.
     pub meldung: serde_json::Value,
+    /// One answer per LFA, keyed by MP-ID. Empty until the first arrives; an
+    /// MP-ID missing when the row resolves answered with silence.
+    pub antworten: serde_json::Value,
     /// When the Anmeldung arrived — the anchor of its **own** 11:00 window,
     /// which is not the Anfrage's 09:00 one.
     pub received_at: OffsetDateTime,
@@ -198,27 +203,97 @@ impl PgAbmeldeanfrageRepository {
         let row: Option<PendingRow> = sqlx::query_as(
             "UPDATE abmeldeanfragen SET resolved_at = now() \
                  WHERE anmeldung_process_id = $1 AND tenant = $2 AND resolved_at IS NULL \
-                 RETURNING malo_id, lfn_mp_id, lfa_mp_ids, pid, anfrage, meldung, received_at",
+                 RETURNING malo_id, lfn_mp_id, lfa_mp_ids, pid, anfrage, meldung, \
+                           antworten, received_at",
         )
         .bind(anmeldung_process_id)
         .bind(tenant)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(
-            |(malo_id, lfn_mp_id, lfa_mp_ids, pid, anfrage, meldung, received_at)| {
-                AbmeldeanfrageRecord {
-                    anmeldung_process_id,
-                    malo_id,
-                    lfn_mp_id,
-                    lfa_mp_ids,
-                    pid,
-                    anfrage,
-                    meldung,
-                    received_at,
-                    tenant: tenant.to_owned(),
-                }
-            },
-        ))
+        Ok(row.map(Self::name_row(anmeldung_process_id, tenant)))
+    }
+
+    /// Record one LFA's answer and resolve the row **only once every LFA has
+    /// answered** — or immediately when `fristablauf`, where the ones that have
+    /// not are silence.
+    ///
+    /// A Geschäftsvorfall 3 asks every Tranchen-LFA and `E_0623` Prüfschritte
+    /// 510/520 count over all their answers, so resolving on the first arrival
+    /// would decide a tranchierte Marktlokation on one share of it. The
+    /// ordinary single-LFA case is the same rule over a one-element array and
+    /// still resolves on the first answer.
+    ///
+    /// Returns the record when this call resolved it, `None` while answers are
+    /// still outstanding — and `None` for a redelivered answer, because the
+    /// `WHERE resolved_at IS NULL` guard is what makes the Anmeldung answered
+    /// exactly once.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any `sqlx` failure.
+    pub async fn record_antwort(
+        &self,
+        anmeldung_process_id: Uuid,
+        tenant: &str,
+        lfa_mp_id: &str,
+        antwort: &serde_json::Value,
+        fristablauf: bool,
+    ) -> Result<Option<AbmeldeanfrageRecord>, sqlx::Error> {
+        // One statement: merge the answer in, and resolve in the same update
+        // when that completes the set. Splitting it would let two answers
+        // arriving together each see one outstanding and resolve neither.
+        let row: Option<PendingRow> = sqlx::query_as(
+            "UPDATE abmeldeanfragen AS a \
+                 SET antworten  = a.antworten || jsonb_build_object($3::text, $4::jsonb), \
+                     resolved_at = CASE \
+                         WHEN $5 THEN now() \
+                         WHEN NOT EXISTS ( \
+                             SELECT 1 FROM unnest(a.lfa_mp_ids) AS lfa \
+                             WHERE lfa <> $3::text \
+                               AND NOT (a.antworten ? lfa) \
+                         ) THEN now() \
+                         ELSE NULL END \
+                 WHERE a.anmeldung_process_id = $1 AND a.tenant = $2 AND a.resolved_at IS NULL \
+                 RETURNING malo_id, lfn_mp_id, lfa_mp_ids, pid, anfrage, meldung, \
+                           antworten, received_at",
+        )
+        .bind(anmeldung_process_id)
+        .bind(tenant)
+        .bind(lfa_mp_id)
+        .bind(antwort)
+        .bind(fristablauf)
+        .fetch_optional(&self.pool)
+        .await?;
+        // The update always returns the row it touched; only a row it also
+        // resolved is one this call may decide on.
+        let resolved = row.filter(|r| {
+            fristablauf
+                || r.2
+                    .iter()
+                    .all(|lfa| lfa == lfa_mp_id || r.6.get(lfa).is_some())
+        });
+        Ok(resolved.map(Self::name_row(anmeldung_process_id, tenant)))
+    }
+
+    /// Name the eight positional columns both queries select.
+    fn name_row(
+        anmeldung_process_id: Uuid,
+        tenant: &str,
+    ) -> impl FnOnce(PendingRow) -> AbmeldeanfrageRecord + use<'_> {
+        move |(malo_id, lfn_mp_id, lfa_mp_ids, pid, anfrage, meldung, antworten, received_at)| {
+            AbmeldeanfrageRecord {
+                anmeldung_process_id,
+                malo_id,
+                lfn_mp_id,
+                lfa_mp_ids,
+                pid,
+                anfrage,
+                meldung,
+                antworten,
+                received_at,
+                tenant: tenant.to_owned(),
+            }
+        }
     }
 
     /// Every Anmeldung still waiting on an LFA, newest first.
@@ -237,7 +312,7 @@ impl PgAbmeldeanfrageRepository {
     ) -> Result<Vec<AbmeldeanfrageRecord>, sqlx::Error> {
         let rows: Vec<KeyedPendingRow> = sqlx::query_as(
             "SELECT anmeldung_process_id, malo_id, lfn_mp_id, lfa_mp_ids, pid, anfrage, \
-                 meldung, received_at FROM abmeldeanfragen \
+                 meldung, antworten, received_at FROM abmeldeanfragen \
                  WHERE tenant = $1 AND resolved_at IS NULL \
                  ORDER BY received_at DESC LIMIT $2",
         )
@@ -248,7 +323,17 @@ impl PgAbmeldeanfrageRepository {
         Ok(rows
             .into_iter()
             .map(
-                |(id, malo_id, lfn_mp_id, lfa_mp_ids, pid, anfrage, meldung, received_at)| {
+                |(
+                    id,
+                    malo_id,
+                    lfn_mp_id,
+                    lfa_mp_ids,
+                    pid,
+                    anfrage,
+                    meldung,
+                    antworten,
+                    received_at,
+                )| {
                     AbmeldeanfrageRecord {
                         anmeldung_process_id: id,
                         malo_id,
@@ -257,6 +342,7 @@ impl PgAbmeldeanfrageRepository {
                         pid,
                         anfrage,
                         meldung,
+                        antworten,
                         received_at,
                         tenant: tenant.to_owned(),
                     }

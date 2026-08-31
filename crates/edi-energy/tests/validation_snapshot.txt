@@ -1,6 +1,6 @@
 # Validation verdict per fixture: <path>\t<severity>\t<rule id>.
 # Regenerate with BLESS_VALIDATION_SNAPSHOT=1; read the diff before committing.
-# 391 fixtures, 1199 lines.
+# 403 fixtures, 1212 lines.
 aperak/invalid/missing_acw_ref.edi	error	AHB-29001-ERC-M
 aperak/invalid/missing_acw_ref.edi	error	AHB-29001-RFF-M
 aperak/invalid/missing_acw_ref.edi	error	MIG-APERAK-MIG-2.1i-GROUP-SG2-RFF-CARD-MIN
@@ -1028,6 +1028,10 @@ utilmd/gen/pid_55611.gen.edi	error	AHB-55611-SG4-DTM-M
 utilmd/gen/pid_55611.gen.edi	error	AHB-55611-SG4-STS-M
 utilmd/gen/pid_55611.gen.edi	error	AHB-55611-STS-M
 utilmd/invalid/55036_ohne_sg12_altlieferant.edi	error	AHB-55036-SG12-PRESENT
+utilmd/invalid/55240_falsches_bgm.edi	error	AHB-55240-BGM-1001-Q
+utilmd/invalid/55240_unerlaubte_sg8.edi	error	AHB-55240-SEQ-N
+utilmd/invalid/55242_falscher_loc_qualifier.edi	error	AHB-55242-LOC-3227-Q
+utilmd/invalid/55242_falscher_loc_qualifier.edi	error	AHB-55242-SG5-LOC-3227-Q
 utilmd/invalid/bad_lokations_id.edi	error	AHB-55001-SG8-PRESENT
 utilmd/invalid/bad_lokations_id.edi	error	SEM-UTILMD-LOKATIONS-ID
 utilmd/valid/beispiel_44001_lieferbeginn_gas.edi	clean
@@ -1093,6 +1097,15 @@ utilmd/valid/pid_55109.edi	clean
 utilmd/valid/pid_55110.edi	clean
 utilmd/valid/pid_55136.edi	clean
 utilmd/valid/pid_55137.edi	clean
+utilmd/valid/pid_55235.edi	clean
+utilmd/valid/pid_55236.edi	clean
+utilmd/valid/pid_55237.edi	clean
+utilmd/valid/pid_55238.edi	clean
+utilmd/valid/pid_55239.edi	clean
+utilmd/valid/pid_55240.edi	clean
+utilmd/valid/pid_55241.edi	clean
+utilmd/valid/pid_55242.edi	clean
+utilmd/valid/pid_55243.edi	clean
 utilmd/valid/pid_55600.edi	clean
 utilmd/valid/pid_55601.edi	clean
 utilmd/valid/pid_55615.edi	clean

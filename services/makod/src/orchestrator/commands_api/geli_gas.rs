@@ -392,7 +392,7 @@ pub(super) async fn dispatch_geli_gas_stornierung_initiieren(
         pid,
         sender: MarktpartnerCode::new(state.sender_party_id.clone()),
         receiver: gnb_mp_id,
-        vorgang_id: malo_id.clone(),
+        malo: malo_id.clone(),
         bgm_qualifier,
     };
 

@@ -103,7 +103,7 @@ wrong; `ValueError` means the test is.
 
 ## A tour
 
-**Four families, four Frist shapes, and Gas differs on the wire too** — a Gas
+**Five families, four Frist shapes, and Gas differs on the wire too** — a Gas
 answer names no Codeliste in `SG4 STS+E01` DE 1131 where a GPKE answer names its
 EBD, and UTILMD runs a parallel `G…` release track on the same date as `S…`.
 

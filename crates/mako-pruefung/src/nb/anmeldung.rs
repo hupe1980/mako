@@ -728,28 +728,31 @@ fn anforderungen_nicht_erfuellt(
 /// „Liegt für diese Marktlokation bereits eine gerade in Arbeit befindliche und
 /// noch nicht beantwortete Anmeldung vor?"
 ///
-/// The MP-ID comparison is load-bearing, not a refinement: `marktd`'s event
-/// ingest calls `announce_lf_next` while ingesting the `process.initiated`
-/// CloudEvent — before it fans the event out — so by the time this runs the
-/// Anmeldung under evaluation has already written its own `lf_mp_id_next`. A
-/// bare `is_some()` test rejects every first-time Anmeldung against itself.
+/// The comparison against the requesting supplier is load-bearing, not a
+/// refinement: `marktd`'s event ingest records the announcement while ingesting
+/// the `process.initiated` CloudEvent — before it fans the event out — so by
+/// the time this runs the Anmeldung under evaluation is already in the
+/// projection. A bare „is anything pending?" test rejects every first-time
+/// Anmeldung against itself.
 fn andere_anmeldung_in_bearbeitung(
     anfrage: &AnmeldungAnfrage,
     versorgung: Option<&VersorgungsStatusRecord>,
 ) -> Option<String> {
     let vs = versorgung?;
-    if vs
-        .lf_mp_id_next
-        .as_deref()
-        .is_some_and(|next| next != anfrage.new_supplier_gln.as_str())
-    {
+    if let Some(rival) = vs.andere_anmeldung_in_bearbeitung(&anfrage.new_supplier_gln) {
         return Some(format!(
-            "MaLo {} already has a pending Lieferbeginn (lf_mp_id_next = {:?}).",
-            anfrage.malo_id, vs.lf_mp_id_next
+            "MaLo {} already has a pending Lieferbeginn from LF {} (Zuordnungsbeginn {:?}).",
+            anfrage.malo_id, rival.lf_mp_id, rival.zuordnungsbeginn
         ));
     }
+    // „Bereits beliefert" is per assignment, not per Marktlokation: on a
+    // tranchierte Marktlokation this supplier may already hold one Tranche and
+    // be registering a second, which is not a duplicate.
     if vs.lieferstatus == LieferStatus::Beliefert
-        && vs.lf_mp_id.as_deref() == Some(anfrage.new_supplier_gln.as_str())
+        && vs
+            .aktive()
+            .any(|z| z.lf_mp_id == anfrage.new_supplier_gln.as_str())
+        && !vs.ist_tranchiert()
     {
         return Some(format!(
             "MaLo {} is already supplied by LF {} (duplicate Anmeldung).",
@@ -832,22 +835,20 @@ fn g_0011(
 
     // Andere Anmeldung in Bearbeitung — ZC5; ein bereits bestätigter Vorgang — Z08.
     if let Some(vs) = versorgung {
-        if vs
-            .lf_mp_id_next
-            .as_deref()
-            .is_some_and(|next| next != anfrage.new_supplier_gln.as_str())
-        {
+        if let Some(rival) = vs.andere_anmeldung_in_bearbeitung(&anfrage.new_supplier_gln) {
             return gas(
                 "ZC5",
                 30,
                 format!(
-                    "MaLo {} already has a pending Lieferbeginn (lf_mp_id_next = {:?}).",
-                    anfrage.malo_id, vs.lf_mp_id_next
+                    "MaLo {} already has a pending Lieferbeginn from LF {}.",
+                    anfrage.malo_id, rival.lf_mp_id
                 ),
             );
         }
         if vs.lieferstatus == LieferStatus::Beliefert
-            && vs.lf_mp_id.as_deref() == Some(anfrage.new_supplier_gln.as_str())
+            && vs
+                .aktive()
+                .any(|z| z.lf_mp_id == anfrage.new_supplier_gln.as_str())
         {
             return gas(
                 "Z08",
@@ -961,7 +962,9 @@ fn gas_date_rule(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mako_markt::repository::{LieferStatus, VersorgungsStatusRecord};
+    use mako_markt::repository::{
+        LfZuordnung, LieferStatus, VersorgungsStatusRecord, ZuordnungsStatus,
+    };
     use time::{Date, Month, OffsetDateTime, macros::datetime};
     use uuid::Uuid;
 
@@ -1009,6 +1012,10 @@ mod tests {
             bestehende_veraeusserungsform: Some(bestehende),
             nicht_eeg_kwkg: false,
             ausfallverguetung: false,
+            // Untranchiert: the Anmeldung is for the whole Marktlokation.
+            gewuenschter_prozentsatz: None,
+            tranchen_prozent: std::collections::BTreeMap::new(),
+            direktvermarktungspflichtig: false,
         });
         a
     }
@@ -1030,10 +1037,13 @@ mod tests {
         VersorgungsStatusRecord {
             malo_id: "51238696012".parse().unwrap(),
             lieferstatus: status,
-            lf_mp_id,
-            lf_mp_id_next,
-            lf_next_lieferbeginn: None,
-            lieferbeginn: None,
+            zuordnungen: lf_mp_id
+                .map(|lf| LfZuordnung::ganz(lf, ZuordnungsStatus::Aktiv))
+                .into_iter()
+                .chain(
+                    lf_mp_id_next.map(|lf| LfZuordnung::ganz(lf, ZuordnungsStatus::Angekuendigt)),
+                )
+                .collect(),
             lieferende: None,
             msb_mp_id: None,
             nb_mp_id: "9900000000002".to_owned(),
