@@ -35,7 +35,7 @@ mako-wim         = { path = "../../crates/mako-wim" }
 mako-geli-gas    = { path = "../../crates/mako-geli-gas" }
 dvgw-edi         = { path = "../../crates/dvgw-edi" }
 mako-gabi-gas    = { path = "../../crates/mako-gabi-gas" }
-mako-mabis       = { path = "../../crates/mako-mabis" }
+mako-mabis       = { workspace = true }
 # NZR-EMob / Modell 2 — the three UTILMD legs (55238–55243) that move a
 # Marktlokation into and out of the LPB's Bilanzierungsgebiet. Loaded for a
 # VNB, an LF and an LPB deployment alike: all three answer one of the legs.

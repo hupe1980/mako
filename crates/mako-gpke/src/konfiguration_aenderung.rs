@@ -475,3 +475,77 @@ impl Workflow for GpkeKonfigurationAenderungWorkflow {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ORDERS_ANFRAGE_MSB_PIDS, ORDERS_ANFRAGE_NB_PIDS, ORDERS_ANFRAGE_PIDS, ORDERS_NB_MSB_PIDS,
+        ORDRSP_MSB_LF_PIDS, ORDRSP_NB_LF_PIDS, ORDRSP_PIDS,
+    };
+
+    /// The registration lists are the union of the per-direction ones.
+    ///
+    /// Two statements of the same PID set: the per-direction constants say who
+    /// sends what to whom, and the flat ones are what
+    /// `register_pids_with_roles` iterates. Nothing in the type system connects
+    /// them, so a PID added to one is silently absent from the other — added to
+    /// a direction list only, it never routes and every message carrying it is
+    /// dead-lettered as `UnknownPid`; added to the flat list only, it routes
+    /// while no direction claims it.
+    fn union(parts: &[&[u32]]) -> Vec<u32> {
+        let mut all: Vec<u32> = parts.iter().flat_map(|p| p.iter().copied()).collect();
+        all.sort_unstable();
+        all.dedup();
+        all
+    }
+
+    fn sorted(pids: &[u32]) -> Vec<u32> {
+        let mut v = pids.to_vec();
+        v.sort_unstable();
+        v
+    }
+
+    #[test]
+    fn the_orders_registration_list_is_the_union_of_its_directions() {
+        assert_eq!(
+            sorted(ORDERS_ANFRAGE_PIDS),
+            union(&[
+                ORDERS_ANFRAGE_NB_PIDS,
+                ORDERS_ANFRAGE_MSB_PIDS,
+                ORDERS_NB_MSB_PIDS,
+            ]),
+        );
+    }
+
+    #[test]
+    fn the_ordrsp_registration_list_is_the_union_of_its_directions() {
+        assert_eq!(
+            sorted(ORDRSP_PIDS),
+            union(&[ORDRSP_NB_LF_PIDS, ORDRSP_MSB_LF_PIDS]),
+        );
+    }
+
+    /// A Prüfidentifikator belongs to exactly one direction.
+    #[test]
+    fn no_pid_is_claimed_by_two_directions() {
+        for lists in [
+            [
+                ORDERS_ANFRAGE_NB_PIDS,
+                ORDERS_ANFRAGE_MSB_PIDS,
+                ORDERS_NB_MSB_PIDS,
+            ]
+            .as_slice(),
+            [ORDRSP_NB_LF_PIDS, ORDRSP_MSB_LF_PIDS].as_slice(),
+        ] {
+            let flat: Vec<u32> = lists.iter().flat_map(|p| p.iter().copied()).collect();
+            let mut unique = flat.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            assert_eq!(
+                flat.len(),
+                unique.len(),
+                "a PID appears in two direction lists: {flat:?}"
+            );
+        }
+    }
+}

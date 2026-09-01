@@ -428,6 +428,11 @@ jobs:
       # run `cargo xtask sync-regulatories --download`. It is wired in so the
       # step exists the moment the mirror is available to a runner.
       - run: cargo xtask validate-ebd-codes
+      # How much of the published Prüfidentifikator inventory the profiles
+      # carry. Unlike the step above this is a real gate here: the inventory is
+      # extracted into `crates/edi-energy/profiles/pid-overview.json`, so the
+      # check needs the repository and nothing else.
+      - run: cargo xtask check-pid-coverage
 
   validate-pruefids:
     name: Validate Pruefidentifikator coverage

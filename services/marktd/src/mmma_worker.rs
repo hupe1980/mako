@@ -512,15 +512,20 @@ pub fn spawn_mmma_worker(
                 }
             }
 
+            // Two clocks, and they answer different questions. The
+            // **Anwendungsmonat** the prices belong to is a German calendar
+            // month, so it is read off the Berlin date. **When to poll** is an
+            // operational knob matched to when THE publishes, which the operator
+            // states in UTC — so the early-in-the-month back-off reads the UTC
+            // hour. A poll that slips through the back-off costs one request:
+            // the loop keeps retrying for as long as the month is incomplete.
             let now = time::OffsetDateTime::now_utc();
-            // The publications describe the current application month, and are
-            // not there before `check_hour_utc` on its first day.
-            if now.day() == 1 && now.hour() < cfg.check_hour_utc {
+            let today = mako_fristen::heute();
+            if today.day() == 1 && now.hour() < cfg.check_hour_utc {
                 continue;
             }
-            let (year, month) = (now.year(), now.month() as u8);
-            let price_month =
-                time::Date::from_calendar_date(year, now.month(), 1).unwrap_or_else(|_| now.date());
+            let (year, month) = (today.year(), today.month() as u8);
+            let price_month = today.replace_day(1).unwrap_or(today);
 
             let gas_missing = !cfg.gas_url.is_empty()
                 && !matches!(gas_repo.find_gas(price_month, "THE").await, Ok(Some(_)));

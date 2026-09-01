@@ -76,6 +76,26 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
         }
     }
 
+    // Step 3: a member manifest that pins a sibling's version itself is invisible
+    // to steps 1 and 2, and the stale pin only surfaces as `failed to select a
+    // version` when that crate is published. Refuse the bump instead.
+    let strays = member_pins(workspace_root);
+    if !strays.is_empty() {
+        eprintln!(
+            "error: {} member manifest(s) pin an internal crate's version outside \
+             [workspace.dependencies], so the bump cannot reach them:",
+            strays.len()
+        );
+        for (path, line) in &strays {
+            eprintln!("  {path}  {line}");
+        }
+        eprintln!(
+            "\nDeclare the crate in [workspace.dependencies] and take it with \
+             `{{ workspace = true }}`."
+        );
+        return false;
+    }
+
     match std::fs::write(&cargo_toml_path, &updated) {
         Ok(()) => {}
         Err(e) => {
@@ -91,6 +111,47 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
         internal_deps.len()
     );
     true
+}
+
+/// Member manifests pinning an internal crate's version themselves.
+///
+/// Returns `(path, offending line)` pairs.
+fn member_pins(workspace_root: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for group in ["crates", "services"] {
+        let Ok(entries) = std::fs::read_dir(format!("{workspace_root}/{group}")) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let manifest = entry.path().join("Cargo.toml");
+            let Ok(src) = std::fs::read_to_string(&manifest) else {
+                continue;
+            };
+            for line in pinned_path_deps(&src) {
+                out.push((manifest.display().to_string(), line));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Lines declaring a `path` dependency that also states a `version`.
+///
+/// Split from the filesystem so the rule is testable against exact text.
+#[must_use]
+pub fn pinned_path_deps(manifest: &str) -> Vec<String> {
+    manifest
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            !trimmed.starts_with('#')
+                && trimmed.contains("path")
+                && trimmed.contains("version")
+                && trimmed.contains('=')
+        })
+        .map(|l| l.trim().to_owned())
+        .collect()
 }
 
 /// Replace the **first** line matching `version\s*=\s*"…"` (always the
@@ -255,6 +316,30 @@ serde            = { version = \"1\", features = [\"derive\"] }
             "{v4}"
         );
         assert!(v4.contains("serde            = { version = \"1\""));
+    }
+
+    /// A member pinning a sibling's version itself is what step 3 refuses: the
+    /// root bump cannot reach it, and the stale pin surfaces only at publish.
+    #[test]
+    fn a_member_pinning_a_sibling_version_is_reported() {
+        let manifest = "[dependencies]\n\
+             mako-engine  = { workspace = true }\n\
+             mako-mabis   = { path = \"../mako-mabis\", version = \"0.18\" }\n\
+             serde        = { version = \"1\" }\n";
+        let hits = super::pinned_path_deps(manifest);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(hits[0].starts_with("mako-mabis"));
+    }
+
+    /// A bare `path` (a service, never published) and a plain version are both
+    /// fine — only the two together are unreachable by the bump.
+    #[test]
+    fn a_bare_path_or_a_plain_version_is_not_a_pin() {
+        let manifest = "[dependencies]\n\
+             mako-mabis   = { path = \"../../crates/mako-mabis\" }\n\
+             serde        = { version = \"1\" }\n\
+             # mako-old   = { path = \"../old\", version = \"0.1\" }\n";
+        assert!(super::pinned_path_deps(manifest).is_empty());
     }
 
     #[test]

@@ -735,6 +735,14 @@ cargo xtask validate-profiles
 # Check that every Pruefidentifikator has a test fixture
 cargo xtask validate-pruefids
 
+# How much of the published Pruefidentifikator inventory the profiles carry, and
+# whether the PID reference names all of it. validate-profiles compares
+# consecutive releases, so it can prove nothing was lost and is blind to a PID
+# that was never imported; this is the other direction. The inventory is
+# extracted into crates/edi-energy/profiles/pid-overview.json, so this needs no
+# source document.
+cargo xtask check-pid-coverage
+
 # Hold every Antwortcode against the published Entscheidungsbaum PDF —
 # tree, code and Cluster (Zustimmung vs Ablehnung)
 cargo xtask validate-ebd-codes

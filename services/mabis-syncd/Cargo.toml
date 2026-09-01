@@ -26,7 +26,7 @@ futures          = "0.3"
 axum             = { version = "0.8" }
 mako-engine      = { workspace = true }
 mako-events      = { workspace = true }
-mako-mabis       = { path = "../../crates/mako-mabis" }
+mako-mabis       = { workspace = true }
 mako-service     = { workspace = true, features = ["otel", "oidc", "cedar"] }
 metering         = { workspace = true, features = ["serde"] }
 reqwest          = { version = "0.13", default-features = false, features = ["json", "rustls"] }

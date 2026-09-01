@@ -1530,8 +1530,10 @@ pub async fn get_tariff_zone(
             }
         }
     } else {
-        // Use current German local time (CET/CEST).
-        let now = time::OffsetDateTime::now_utc();
+        // Use current German local time (CET/CEST) — a Zählzeit/Schaltzeit
+        // boundary is a wall-clock time, so the UTC clock resolves the zone one
+        // or two hours early.
+        let now = mako_fristen::berlin_now();
         time::PrimitiveDateTime::new(now.date(), now.time())
     };
 

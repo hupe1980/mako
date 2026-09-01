@@ -14,7 +14,7 @@ categories   = ["data-structures"]
 [dependencies]
 mako-engine  = { workspace = true }
 mako-fristen = { workspace = true }
-mako-mabis   = { path = "../mako-mabis", version = "0.18" }
+mako-mabis   = { workspace = true }
 # The allocation identity `Σ allocated + residual = total` and the Decimal
 # arithmetic behind it. Reused rather than reimplemented: its residual is
 # exactly the NZR-EMob **Deltamenge**, and its own doc example is a

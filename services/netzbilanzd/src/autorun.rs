@@ -429,16 +429,17 @@ pub async fn kostenblatt_deadline_alert(pool: &PgPool, cfg: &NetzbilanzConfig) {
     if cfg.erp_webhook_url.is_none() {
         return;
     }
-    let now = time::OffsetDateTime::now_utc();
-    let day = now.day();
+    // The 15th and the Aktivierungsmonat are German calendar dates.
+    let today = mako_fristen::heute();
+    let day = today.day();
     // The submission is due on the 15th for the *previous* month's activations.
     if !(10..=14).contains(&day) {
         return;
     }
-    let (year, month) = if now.month() as u8 > 1 {
-        (now.year(), now.month() as u8 - 1)
+    let (year, month) = if today.month() as u8 > 1 {
+        (today.year(), today.month() as u8 - 1)
     } else {
-        (now.year() - 1, 12)
+        (today.year() - 1, 12)
     };
 
     let pending = match pg::list_kostenblatt(
@@ -476,7 +477,7 @@ pub async fn kostenblatt_deadline_alert(pool: &PgPool, cfg: &NetzbilanzConfig) {
             "period_month": month,
             "pending_count": pending.len(),
             "days_until_deadline": days_left,
-            "deadline": format!("{}-{:02}-15", now.year(), now.month() as u8),
+            "deadline": format!("{}-{:02}-15", today.year(), today.month() as u8),
             "action": format!("POST /api/v1/redispatch/kostenblatt/submit/{year}/{month}"),
         }),
     )

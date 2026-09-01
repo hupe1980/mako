@@ -274,7 +274,7 @@ examples:
         python3 -c "import json,sys; m=json.load(sys.stdin); [print(p['name'], t['name']) for p in m['packages'] for t in p['targets'] if 'example' in t['kind']]" | sort)
     exit $fail
 
-ci: check test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-wire-timestamps check-business-dates check-dep-versions check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci validate-release-codes validate-ebd-codes lint-makotest test-makotest
+ci: check test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-wire-timestamps check-business-dates check-pid-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci validate-release-codes validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -509,6 +509,17 @@ check-bo4e-examples:
 # `heute()` function.
 check-business-dates:
     cargo xtask check-business-dates
+
+# How much of the published Prüfidentifikator inventory the AHB profiles carry,
+# and whether the PID reference names all of it. `validate-profiles` compares one
+# release against the previous one, so it can prove nothing was lost and is blind
+# to a PID that was never imported. The inventory is extracted into
+# `crates/edi-energy/profiles/pid-overview.json`
+# (`cargo xtask import-pid-overview <Anwendungsübersicht.xlsx>`) so this runs
+# without the source documents — a guard that only runs where they are is a
+# guard that reports green from a skip.
+check-pid-coverage:
+    cargo xtask check-pid-coverage
 
 # The architecture page lists every external crate mako's domain rests on with
 # the version it is pinned to. A version in prose is a claim like any other:

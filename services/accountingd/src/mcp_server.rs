@@ -556,17 +556,11 @@ Regulatory: §40 Abs. 1 EnWG — Abschlag must reflect actual estimated consumpt
             }
             Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
         };
-        // The declared default — "previous calendar year" — was documented and
-        // never applied: `p.year` only ever reached the JSON echo, so an
-        // omitted year produced a settlement over no year at all.
-        let year = p
-            .year
-            .unwrap_or_else(|| time::OffsetDateTime::now_utc().year() - 1);
-        // The same arithmetic the REST endpoint commits, over the same source.
-        // This was a second implementation — the last 500 ledger rows, ABSCHLAG
-        // and RECHNUNG only, with no year filter at all — so the preview
-        // disagreed with the settlement it previews on any account carrying a
-        // chargeback, a direct payment, or more than 500 movements.
+        // Defaults to the previous German calendar year — the one a
+        // Jahresabschluss settles.
+        let year = p.year.unwrap_or_else(|| mako_fristen::heute().year() - 1);
+        // The same arithmetic the REST endpoint commits, over the same source,
+        // so the preview and the settlement it previews cannot disagree.
         let sums = match self
             .state
             .ledger

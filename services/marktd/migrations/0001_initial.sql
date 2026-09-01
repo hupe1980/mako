@@ -394,6 +394,59 @@ CREATE INDEX lf_zuordnung_malo ON lf_zuordnung (tenant, malo_id);
 -- query, and the one behind the §38 gap-closure sweep.
 CREATE INDEX lf_zuordnung_lf ON lf_zuordnung (tenant, lf_mp_id, status);
 
+-- ── Conservation: the Tranchen of a Marktlokation sum to at most the whole ────
+--
+-- `prozent > 0 AND prozent <= 100` bounds one assignment; nothing bounds the
+-- set. An over-allocated split is undetectable downstream: `E_0623` Prüfschritt
+-- 530 („verbleibt ein Anteil im Bilanzkreis des Netzbetreibers?") reads the
+-- remainder as a *fact*, and it reaches `netzbilanzd` as a balancing sum that is
+-- simply too large.
+--
+-- **`Aktiv` only.** Competing announcements are deliberately representable —
+-- `E_0622` Prüfschritt 70 refuses a second Anmeldung with `A06`, and 55038 /
+-- 44038 addresses such an LFZ — so two 100 % `Angekuendigt` rows are normal. An
+-- `Aktiv` row is deleted when the supply ends, so that set is what is in force.
+--
+-- `DEFERRABLE INITIALLY IMMEDIATE`: every write path either only grows the sum
+-- or shrinks it first, so a per-statement check names the offending row. A
+-- caller needing an over-allocated intermediate state (a 60/40 → 40/60 reshuffle
+-- as two UPDATEs) opts in with `SET CONSTRAINTS … DEFERRED`.
+CREATE OR REPLACE FUNCTION lf_zuordnung_conservation() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+DECLARE
+    ziel   RECORD;
+    anteil NUMERIC;
+BEGIN
+    -- An UPDATE can move a row between Marktlokationen, so both ends are
+    -- checked; DELETE has no NEW and INSERT has no OLD.
+    FOR ziel IN
+        SELECT DISTINCT t, m FROM (
+            SELECT CASE WHEN TG_OP <> 'DELETE' THEN NEW.tenant  END AS t,
+                   CASE WHEN TG_OP <> 'DELETE' THEN NEW.malo_id END AS m
+            UNION ALL
+            SELECT CASE WHEN TG_OP <> 'INSERT' THEN OLD.tenant  END,
+                   CASE WHEN TG_OP <> 'INSERT' THEN OLD.malo_id END
+        ) AS beruehrt WHERE t IS NOT NULL
+    LOOP
+        SELECT coalesce(sum(prozent), 0) INTO anteil
+          FROM lf_zuordnung
+         WHERE tenant = ziel.t AND malo_id = ziel.m AND status = 'Aktiv';
+        IF anteil > 100 THEN
+            RAISE EXCEPTION
+                'lf_zuordnung_sums_to_the_whole: Marktlokation % is allocated % %% across its active Tranchen',
+                ziel.m, anteil
+                USING ERRCODE = 'check_violation',
+                      CONSTRAINT = 'lf_zuordnung_sums_to_the_whole';
+        END IF;
+    END LOOP;
+    RETURN NULL;
+END $$;
+
+CREATE CONSTRAINT TRIGGER lf_zuordnung_sums_to_the_whole
+    AFTER INSERT OR UPDATE OR DELETE ON lf_zuordnung
+    DEFERRABLE INITIALLY IMMEDIATE
+    FOR EACH ROW EXECUTE FUNCTION lf_zuordnung_conservation();
+
 -- ── Grundversorger (§36 Abs. 2 EnWG) ──────────────────────────────────────────
 --
 -- The supplier with the most Haushaltskunden in the Netzgebiet, festgestellt
@@ -1335,7 +1388,7 @@ CREATE TABLE nb_energiemix (
     nb_mp_id        TEXT        NOT NULL,
     tenant          TEXT        NOT NULL,
     -- Calendar year this Energiemix is valid for (§42 EnWG annual disclosure).
-    gueltig_fuer    SMALLINT    NOT NULL DEFAULT extract(year FROM now()),
+    gueltig_fuer    SMALLINT    NOT NULL DEFAULT extract(year FROM heute()),
     -- rubo4e::current::Energiemix COM JSON (camelCase, validated on PUT).
     energiemix      JSONB       NOT NULL,
     -- Snapshot of total EEG feed-in kWh this year (optional, informational).

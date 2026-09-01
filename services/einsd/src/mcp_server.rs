@@ -961,7 +961,7 @@ impl EinsdMcpHandler {
             .map_err(|e| McpError::internal_error(e.message, None));
         }
 
-        let jahr = time::OffsetDateTime::now_utc().year();
+        let jahr = mako_fristen::heute().year();
         // The quota comes from the engine, in Decimal, against the §3 Nr. 6 hours
         // of *this* year — not a flat 8 760, which would disagree with the
         // settlement in every leap year and in a plant's first year.

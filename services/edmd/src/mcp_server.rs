@@ -1041,7 +1041,7 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
     ) -> Result<CallToolResult, McpError> {
         let year = p
             .campaign_year
-            .unwrap_or_else(|| time::OffsetDateTime::now_utc().year());
+            .unwrap_or_else(|| mako_fristen::heute().year());
         let dry_run = p.dry_run.unwrap_or(false);
         // Bounded so a large grid cannot exceed the client's request timeout.
         let max_malos = p.max_malos.unwrap_or(2_000).clamp(1, 10_000);

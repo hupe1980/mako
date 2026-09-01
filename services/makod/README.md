@@ -104,8 +104,8 @@ from the per-peer rate limiter — a throttled probe reads as a dead container.
 | `/health` | alias of `/health/ready` | as above | — |
 
 ```
-HTTP 200  {"status":"ok","instance_id":"mako-prod-01-12345","version":"0.18.0"}
-HTTP 503  {"status":"degraded","instance_id":"mako-prod-01-12345","version":"0.18.0",
+HTTP 200  {"status":"ok","instance_id":"mako-prod-01-12345","version":"0.19.0"}
+HTTP 503  {"status":"degraded","instance_id":"mako-prod-01-12345","version":"0.19.0",
            "reason":"worker_stale:deadline-scheduler"}
 ```
 

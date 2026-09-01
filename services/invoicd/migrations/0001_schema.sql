@@ -7,6 +7,20 @@
 --
 -- Supported PIDs: 31001 31002 31003 31004 31005 31006 31007 31008 31009 31011
 
+-- ── Business dates ───────────────────────────────────────────────────────────
+--
+-- Every date this schema compares against is a German calendar date — the day a
+-- Frist runs out, a validity window opens, an obligation falls due.
+-- PostgreSQL's own `current_date` answers the *session* time zone's date, which
+-- on a UTC server is still yesterday between 23:00 and midnight Berlin time
+-- (22:00 in summer). `heute()` states the conversion once, so it holds however
+-- the connection was opened. The Rust side reads the same date through
+-- `mako_fristen::heute`.
+CREATE OR REPLACE FUNCTION heute() RETURNS date
+    LANGUAGE sql STABLE
+    AS $$ SELECT (now() AT TIME ZONE 'Europe/Berlin')::date $$;
+
+
 CREATE TABLE invoic_receipts (
     id                      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
 

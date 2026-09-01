@@ -207,10 +207,13 @@ impl Daemon for Einsd {
             // Wait for startup before first run.
             tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
             loop {
-                let now = time::OffsetDateTime::now_utc();
-                if now.day() < from_day {
+                // The ÜNB Marktwert window opens on a German calendar day, so
+                // the day-of-month gate and the settlement period both read the
+                // Berlin date.
+                let today = mako_fristen::heute();
+                if today.day() < from_day {
                     tracing::debug!(
-                        day = now.day(),
+                        day = today.day(),
                         from_day,
                         "auto-settle worker: waiting for the ÜNB Marktwert window"
                     );
@@ -218,7 +221,7 @@ impl Daemon for Einsd {
                     continue;
                 }
                 for back in 1..=i32::from(catchup) {
-                    let (year, month) = month_offset(now.year(), now.month() as i32, -back);
+                    let (year, month) = month_offset(today.year(), today.month() as i32, -back);
                     auto_settle_period(&auto_pool, &auto_cfg, &auto_client, year, month).await;
                 }
 
@@ -245,12 +248,13 @@ impl Daemon for Einsd {
             tokio::spawn(async move {
                 tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
                 loop {
-                    let now = time::OffsetDateTime::now_utc();
-                    // Fetch for the previous month (published by ÜNB after month close).
-                    let (year, month) = if now.month() as u8 == 1 {
-                        (now.year() as i16 - 1, 12i16)
+                    // Fetch for the previous month (published by ÜNB after month
+                    // close). The month is a German calendar month.
+                    let today = mako_fristen::heute();
+                    let (year, month) = if today.month() as u8 == 1 {
+                        (today.year() as i16 - 1, 12i16)
                     } else {
-                        (now.year() as i16, now.month() as i16 - 1)
+                        (today.year() as i16, today.month() as i16 - 1)
                     };
 
                     let url = jmw_url_tpl

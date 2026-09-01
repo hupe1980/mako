@@ -203,11 +203,11 @@ pub enum ZpSerie {
 
 /// Last day the tägliche AAÜZ process exists — BK6-23-241 Tenorziffer 5 repeals
 /// MaBiS Anlage 1 Kap. 17.2 with the end of this day.
-pub const TAEGLICHE_AAUEZ_ENDE: time::Date =
-    match time::Date::from_calendar_date(2026, time::Month::September, 30) {
-        Ok(d) => d,
-        Err(_) => panic!("valid date"),
-    };
+///
+/// The tägliche AAÜZ **is** Kap. 17.2, so this is
+/// [`crate::zeitreihen::KAPITEL_17_2_ENDE`] under the name the Zählpunkt side
+/// asks for it by, not a second reading of the Tenor.
+pub const TAEGLICHE_AAUEZ_ENDE: time::Date = crate::zeitreihen::KAPITEL_17_2_ENDE;
 
 impl ZpSerie {
     /// Canonical BDEW name of the series, including its axis.

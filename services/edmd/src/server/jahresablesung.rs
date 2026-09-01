@@ -181,7 +181,7 @@ pub async fn run_jahresablesung_campaign(
 ) -> Result<CampaignOutcome, CampaignError> {
     let year = req
         .campaign_year
-        .unwrap_or_else(|| time::OffsetDateTime::now_utc().year());
+        .unwrap_or_else(|| mako_fristen::heute().year());
 
     // Default dates: geplant_am = Dec 31, ausfuehrt_bis = Jan 31 next year.
     let geplant_am = req.geplant_am.unwrap_or_else(|| {

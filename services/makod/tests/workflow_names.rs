@@ -184,3 +184,119 @@ fn every_spawned_workflow_name_is_a_declared_constant() {
         unknown.into_iter().collect::<Vec<_>>().join("\n  ")
     );
 }
+
+/// Where a `WORKFLOW_NAME` constant is declared, and how `makod` could name it.
+struct Declaration {
+    name: String,
+    /// Module file stem — the `mako_gpke::comdis::WORKFLOW_NAME` form.
+    module: String,
+    /// Enclosing `impl` type, when the constant is an associated one — the
+    /// `EmobAbmeldungWorkflow::WORKFLOW_NAME` form.
+    impl_type: Option<String>,
+    path: PathBuf,
+}
+
+/// Every `WORKFLOW_NAME` declaration, with the paths `makod` can reach it by.
+fn declarations(root: &Path) -> Vec<Declaration> {
+    let mut out = Vec::new();
+    for path in rust_sources(root, "crates") {
+        let Ok(src) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let module = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let mut impl_type: Option<String> = None;
+        for line in src.lines() {
+            let trimmed = line.trim();
+            // Track the innermost `impl X {` seen so far; an associated
+            // constant belongs to it.
+            if let Some(rest) = trimmed.strip_prefix("impl ")
+                && rest.ends_with('{')
+            {
+                impl_type = rest
+                    .trim_end_matches('{')
+                    .split_whitespace()
+                    .next_back()
+                    .map(str::to_owned);
+            }
+            let Some(rest) = trimmed.strip_prefix("pub const WORKFLOW_NAME") else {
+                continue;
+            };
+            let Some(open) = rest.find('"') else { continue };
+            let Some(close) = rest[open + 1..].find('"') else {
+                continue;
+            };
+            out.push(Declaration {
+                name: rest[open + 1..open + 1 + close].to_owned(),
+                module: module.clone(),
+                impl_type: impl_type.clone(),
+                path: path.clone(),
+            });
+        }
+    }
+    out
+}
+
+/// Every workflow a domain crate declares is reachable from `makod`.
+///
+/// Nothing about declaring a `WORKFLOW_NAME` connects it to a router. An
+/// unregistered workflow compiles, ships in the crate's public API, reads as a
+/// covered process, and can never run — no Prüfidentifikator resolves to it and
+/// no command moves it.
+///
+/// Three routers can reach one and the check does not care which
+/// (`EdifactIngestDispatcher`, `mako_redispatch::router`, the API-Webdienste
+/// REST channel). What it refuses is a name **no** part of `makod` mentions.
+#[test]
+fn every_declared_workflow_is_reachable_from_makod() {
+    let root = workspace_root();
+    let declared = declarations(&root);
+    assert!(
+        declared.len() > 40,
+        "the scanner found only {} WORKFLOW_NAME declarations — has the layout changed?",
+        declared.len()
+    );
+
+    let makod: String = rust_sources(&root, "services/makod/src")
+        .iter()
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .collect();
+
+    let names_it = |needle: &str| {
+        makod.match_indices(needle).any(|(i, _)| {
+            makod[..i]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_alphanumeric() && c != '_')
+        })
+    };
+
+    let stranded: Vec<String> = declared
+        .iter()
+        .filter(|d| {
+            let literal = format!("\"{}\"", d.name);
+            let by_module = format!("{}::WORKFLOW_NAME", d.module);
+            let by_type = d.impl_type.as_ref().map(|t| format!("{t}::WORKFLOW_NAME"));
+            !(makod.contains(&literal)
+                || names_it(&by_module)
+                || by_type.is_some_and(|t| names_it(&t)))
+        })
+        .map(|d| {
+            format!(
+                "{:?} ({})",
+                d.name,
+                d.path.strip_prefix(&root).unwrap_or(&d.path).display()
+            )
+        })
+        .collect();
+
+    assert!(
+        stranded.is_empty(),
+        "these workflows are declared but no router in makod can reach them, so they \
+         are unrunnable code shipped in a crate's public API — register them, or delete \
+         them:\n  {}",
+        stranded.join("\n  ")
+    );
+}

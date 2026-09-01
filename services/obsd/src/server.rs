@@ -530,9 +530,7 @@ async fn get_gleichbehandlung_report(
             .into_response();
     }
 
-    let year = params
-        .year
-        .unwrap_or_else(|| OffsetDateTime::now_utc().year());
+    let year = params.year.unwrap_or_else(|| mako_fristen::heute().year());
     let format = params.format.as_deref().unwrap_or("json");
 
     let rows: Vec<(i32, bool, i64, i64, i64, i64)> =

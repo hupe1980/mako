@@ -291,6 +291,7 @@ Before merging:
 - [ ] `valid_from` (Anwendungszeitpunkt) and `publikationsdatum` set on new profile
 - [ ] `cargo xtask codegen --prune-expired` run; expired profiles archived
 - [ ] `cargo xtask validate-profiles` exits 0
+- [ ] `cargo xtask import-pid-overview <Anwendungsübersicht.xlsx>` re-run when the release ships a new PID overview, and `cargo xtask check-pid-coverage` exits 0 — a Prüfidentifikator that is published and never imported is invisible to `validate-profiles`, which only compares consecutive releases
 - [ ] `cargo xtask codegen --check` exits 0
 - [ ] `cargo xtask validate-release-codes` exits 0 — every release code a counterparty can still send matches a UNH 0057 value in a fixture. Both sides of a cutover need one: the outgoing version stays receivable until its `valid_until`.
 - [ ] `cargo test --all-features` exits 0

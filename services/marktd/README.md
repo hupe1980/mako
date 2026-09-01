@@ -63,6 +63,11 @@ check looks for an announcement by a supplier **other than** the requesting one.
 supplier re-sending (a corrected date, an at-least-once redelivery) updates its own
 announcement rather than adding a second.
 
+A constraint trigger holds the `Aktiv` shares to at most 100 % — a 60/60 split is
+refused with `422`, a 60/30 one is not, because that remainder is what Prüfschritt 530
+(„verbleibt ein Anteil im Bilanzkreis des Netzbetreibers?") asks about. The bound is per
+`status`, so the announcements above are unaffected.
+
 `lf_mp_id` and `lf_mp_id_next` appear in the REST response and on
 `de.markt.versorgung.changed`, derived from the list for the ordinary one-supplier case.
 They are `null` when several suppliers hold the Marktlokation: there is no single supplier

@@ -320,29 +320,52 @@ Identifies a bundle of market locations affected by a DSO ownership transfer
 
 ## Check Digit Algorithms
 
-Two algorithms are used across all BDEW market identifiers.
+BDEW names two procedures, and they are the **same arithmetic** over different
+character sets. Weight the base by position, sum, and take the difference to the
+next multiple of ten.
 
-> **Source:** Identifikatoren V1.2 §8
+> **Source:** Identifikatoren V1.2 §8.1 and §8.2
 
-### Lok- und Waggon-Kennzeichnungsverfahren
+1. Map each character of the base to a number. Digits map to themselves;
+   under §8.2 an uppercase letter maps to its ASCII value (`A` = 65 … `Z` = 90).
+2. Sum the values at **odd** 1-indexed positions (1, 3, 5, …).
+3. Sum the values at **even** positions and multiply that sum by **2**.
+4. Check digit = the difference from (2) + (3) to the next multiple of ten —
+   `(10 - (total mod 10)) mod 10`, so a total that is already a multiple of ten
+   yields `0`.
 
-Used for: **BDEW-Code, DVGW-Code, MaLo-ID**
+| § | Name | Applies to | Base |
+|---|---|---|---|
+| 8.1 | Lok- und Waggon-Kennzeichnungsverfahren | BDEW-Code, DVGW-Code, MaLo-ID | numeric |
+| 8.2 | ASCII-Verfahren | NeLo-ID, NeBe-ID, Ressourcen-ID, Paket-ID | alphanumeric |
 
-1. Starting from the leftmost digit, alternately multiply each digit by **2** and **1**.
-2. If a product exceeds 9, subtract 9 (equivalent to summing the two digits of the product).
-3. Sum all weighted digits.
-4. Check digit = `(10 - (sum mod 10)) mod 10`
+**Not Luhn**, despite the wagon name: no "subtract 9" reduction, and the
+doubling falls on the even positions rather than alternating from the left.
 
-This is the same as the ISO 6346 (railway wagon numbering) check digit, also
-known as the Luhn-like BDEW variant.
+BDEW's two worked examples, which `rubo4e` asserts:
 
-### ASCII-Verfahren
+```text
+§8.1  4137355924  →  (4+3+3+5+2) + (1+7+5+9+4)*2 = 69  →  70−69 = 1  →  41373559241
+§8.2  A113735592  →  A = 65, same steps                            →  A1137355925
+```
 
-Used for: **NeLo-ID, NeBe-ID, Ressourcen-ID, Paket-ID**
+Never derive one by hand — `makotest` exposes `malo_from_base` and
+`mp_id_from_base` over the implementation the platform validates with.
 
-Each character is converted to its ASCII code value. The values are weighted by
-position and the check digit is computed using modulo arithmetic over the defined
-base. The exact weight and base tables are published in Identifikatoren V1.2 §8.2.
+### An MP-ID in a fixture is deliberately not check-digit-valid
+
+**A check-digit-valid MP-ID is an assigned one**: publication in the BDEW resp.
+DVGW code database is what makes an MP-ID usable (Identifikatoren V1.2 §2.1), so
+a valid code names a real company. Fixtures, demos and examples therefore use
+codes satisfying *neither* procedure — `makotest id 9900357000004` reports
+neither, which is the expected answer.
+
+Nothing in mako validates an MP-ID check digit: §2.3 defines two procedures and
+the prefix does not decide which applies, so `MarktpartnerId::new` checks
+thirteen decimal digits and stops. MaLo-IDs and EIC codes are the other case —
+`metering::MaloId` and `meterstore::encode::parse_malo` refuse a bad one at the
+parse, so `cargo xtask check-malo-ids` holds every literal valid. Enforce
+validity where something validates.
 
 ---
 
@@ -539,6 +562,10 @@ the same thing. Either one, used for a business date, is off by one for an hour
 every night — dating an invoice into the previous month, starting a Frist a day
 early, or selecting the outgoing Formatversion for an hour after a cutover.
 
+A calendar *component* off the clock is the same mistake, and the form it usually
+hides in: `now_utc().year()` for an Abrechnungsjahr, `now.day()` for the
+day-of-month cohort an Abschlagslauf raises. A binding in between changes nothing.
+
 `mako-fristen` is the one answer, and every service reads it from there:
 
 ```rust
@@ -558,7 +585,17 @@ CREATE OR REPLACE FUNCTION heute() RETURNS date
     AS $$ SELECT (now() AT TIME ZONE 'Europe/Berlin')::date $$;
 ```
 
-`just check-business-dates` refuses both UTC idioms across the workspace.
+`just check-business-dates` refuses the UTC idioms across the workspace — the
+inline reads, the ones that go through a local binding, and the SQL forms
+(`current_date`, `now()::date`, `extract(… FROM now())`, `to_char(now(), …)`).
+`now()` on its own is untouched: an instant is absolute, and `TIMESTAMPTZ NOT
+NULL DEFAULT now()` is how one is stamped.
+
+**A timestamp on the EDIFACT wire is not a business date** — Allgemeine
+Festlegungen §3 puts EDIFACT times in UTC (DTM format 303 fixes DE 2380 to
+`+00`), and the receiver converts to gesetzliche deutsche Zeit before counting a
+Frist. The modules encoding those values are exempt from the check by path;
+nothing else is.
 
 **A library does not read the clock.** `edi-energy` resolves a Formatversion
 against a date the *caller* states — `ParseConfig::with_reference_date`,

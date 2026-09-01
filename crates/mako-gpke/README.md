@@ -355,9 +355,10 @@ Allokationsliste, exchanged between LF and NB via ORDERS and answered with MSCON
 |-----------------------------|----------------------------------|---------------------------------------------------------------------|
 | `wechselprozesse`           | `gpke-supplier-change`           | PIDs 55001/55002/55016/55077/55557 (UTILMD supplier-switch + Kündigung, NB role) + IFTSTA Vollzugs-/Statusmeldungen 21024–21028/21033/21035 |
 | `stornierung`               | `gpke-stornierung`               | PIDs 55022–55024 (UTILMD Stornierung Zuordnungsprozess) + 55023/55024 derived |
+| `kuendigung`                | `gpke-kuendigung`                | PIDs 55016 → 55017/55018 (Kündigung, LFN → LFA — no NB in between), answered out of `E_0614` |
+| `zuordnungsmeldung`         | `gpke-zuordnungsmeldung`         | PIDs 55036/55037/55038 (Meldepflichten um den Lieferbeginn) + 55611 (Lieferende von NB an MSB/MSBZ); one-way, no Antwortnachricht |
 | `beendigung_zuordnung`      | `gpke-beendigung-zuordnung`      | PID 55010 (NB Abmeldeanfrage) + 55011/55012 derived responses |
 | `eog`                       | `gpke-eog`                       | PID 55013 (Anmeldung/Zuordnung EOG §36/§38 EnWG) + 55014/55015 derived |
-| `comdis`                    | `gpke-comdis`                    | PIDs 29001/29002 (COMDIS Kaufmännisch-Bilanzielle Ausgleichsprozesse) |
 | `lf_anmeldung`              | `gpke-lf-anmeldung`              | PIDs 55001/55004/55016/55077 (LF outbound) + 55002-55003/55005-55006/55017-55018/55078/55080 (LF-role receive NB ANTWORT) |
 | `lf_abmeldung`              | `gpke-lf-abmeldung`              | PID 55007 (Lieferende von NB an LF) + 55008/55009 derived     |
 | `stammdatenaenderung`       | `gpke-stammdatenaenderung`       | GPKE Teil 4 Stammdatenänderung 55615–55694, 55109/55110 — inbound MaLo change → apply to marktd + Rückmeldung A01/A02 (quality feedback, tacit acceptance after 2 WT) |

@@ -369,10 +369,10 @@ pub async fn put_preisblatt(
 
 // ── Helper ────────────────────────────────────────────────────────────────────
 
-/// Returns today's UTC date as `"YYYY-MM-DD"`.
+/// Today's German calendar date as `"YYYY-MM-DD"` — the day a Preisblatt
+/// validity window is measured against.
 fn today_iso() -> String {
-    let now = time::OffsetDateTime::now_utc();
-    let d = now.date();
+    let d = mako_fristen::heute();
     format!("{:04}-{:02}-{:02}", d.year(), d.month() as u8, d.day())
 }
 

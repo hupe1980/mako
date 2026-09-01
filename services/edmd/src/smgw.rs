@@ -865,7 +865,8 @@ pub async fn run_smgw_cert_expiry_sweep(
     erp_webhook_secret: Option<&str>,
 ) -> CertExpirySweepReport {
     let scanned_at = OffsetDateTime::now_utc();
-    let today = scanned_at.date();
+    // The tier boundaries are counted in German calendar days.
+    let today = mako_fristen::berlin_date(scanned_at);
     let client = mako_service::http::default_client();
 
     let rows = match sqlx::query("SELECT malo_id, session FROM smgw_sessions WHERE tenant = $1")

@@ -1487,9 +1487,10 @@ pub async fn get_billing_summary(
     Extension(cfg): Cfg,
     Query(q): Query<SummaryQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let now = time::OffsetDateTime::now_utc();
-    let year = q.year.unwrap_or_else(|| now.year());
-    let month = q.month.unwrap_or(now.month() as u8);
+    // The Abrechnungsmonat is a German calendar month.
+    let today = mako_fristen::heute();
+    let year = q.year.unwrap_or_else(|| today.year());
+    let month = q.month.unwrap_or(today.month() as u8);
     if !(1..=12).contains(&month) {
         return Err(ApiError::bad_request("month must be 1–12"));
     }

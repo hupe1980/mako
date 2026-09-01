@@ -445,8 +445,12 @@ impl Daemon for Accountingd {
                         tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600)).await;
                         continue;
                     };
-                    let now_utc = time::OffsetDateTime::now_utc();
-                    let today = now_utc.date();
+                    // The Abschlagstag is a German calendar day: `find_accounts_due`
+                    // matches it against the day-of-month each account agreed to,
+                    // and `periode` stamps the month the advance covers. The same
+                    // cycle run through the MCP tool reads `heute()`, so both paths
+                    // raise the same cohort for the same month.
+                    let today = mako_fristen::heute();
                     let day_of_month = today.day() as i16;
                     match accountingd::pg::find_accounts_due(&pool_bg, &tenant_bg, day_of_month)
                         .await

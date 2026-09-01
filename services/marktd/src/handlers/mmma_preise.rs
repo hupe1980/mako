@@ -358,9 +358,10 @@ pub async fn post_import_trigger(
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    let now = time::OffsetDateTime::now_utc();
-    let year = q.year.unwrap_or_else(|| now.year());
-    let month = q.month.unwrap_or_else(|| now.month() as u8);
+    // The Anwendungsmonat of the published series is a German calendar month.
+    let today = mako_fristen::heute();
+    let year = q.year.unwrap_or_else(|| today.year());
+    let month = q.month.unwrap_or_else(|| today.month() as u8);
 
     let results = crate::mmma_worker::run_import_cycle(
         year,

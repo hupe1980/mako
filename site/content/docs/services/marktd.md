@@ -1380,6 +1380,13 @@ tree's six outcomes exist only there. `lf_mp_id` and `lf_mp_id_next` are derived
 list and are **absent** when several suppliers hold it: there is no single supplier to name,
 and naming one arbitrarily would be worse than naming none.
 
+**Conservation.** A constraint trigger holds the `Aktiv` shares of one Marktlokation
+to at most 100 %, so a 60/60 split is refused with `422` rather than stored — `E_0623`
+Prüfschritt 530 („verbleibt ein Anteil im Bilanzkreis des Netzbetreibers?") reads the
+remainder as a *fact*, and cannot tell an over-allocation from a real one. A 60/30
+split is untouched: that remainder is what Prüfschritt 530 asks about. The bound is per
+`status`, so the competing `Angekuendigt` announcements above are unaffected.
+
 **Optimistic concurrency.** Every write uses `WHERE malo_id = $1 AND tenant = $2 AND version = $3`.
 Conflict → `412 Precondition Failed` → retry after re-read.
 

@@ -9,7 +9,10 @@
 //! ```
 
 use mako_markt::domain::MaloId;
-use mako_markt::repository::{LieferStatus, VersorgungsStatusRepository as _};
+use mako_markt::repository::{
+    LfZuordnung, LieferStatus, VersorgungsStatusRecord, VersorgungsStatusRepository as _,
+    ZuordnungsStatus,
+};
 use marktd::pg::PgVersorgungsStatusRepository;
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -1349,4 +1352,164 @@ async fn an_ordinary_confirmation_announces_no_gap() {
         );
     }
     tx.commit().await.expect("commit");
+}
+
+// ── Conservation: the Tranchen of a Marktlokation sum to at most the whole ────
+//
+// `prozent` is bounded per assignment; the *set* is bounded by a constraint
+// trigger, because nothing downstream can tell an over-allocated split from a
+// real one: `E_0623` Prüfschritt 530 („verbleibt ein Anteil im Bilanzkreis des
+// Netzbetreibers?") reads the remainder as a fact about the Marktlokation.
+
+/// One Tranche of a Marktlokation.
+fn tranche(lf: &str, prozent: &str, tranche_id: &str, status: ZuordnungsStatus) -> LfZuordnung {
+    LfZuordnung {
+        lf_mp_id: lf.to_owned(),
+        prozent: prozent.parse().expect("valid share"),
+        tranche_id: Some(tranche_id.to_owned()),
+        status,
+        zuordnungsbeginn: Some(date!(2026 - 10 - 01)),
+        zuordnungsende: None,
+        process_id: None,
+    }
+}
+
+/// A whole-Marktlokation record carrying exactly `zuordnungen`.
+fn record(zuordnungen: Vec<LfZuordnung>) -> VersorgungsStatusRecord {
+    VersorgungsStatusRecord {
+        malo_id: malo(),
+        lieferstatus: LieferStatus::Beliefert,
+        zuordnungen,
+        lieferende: None,
+        msb_mp_id: None,
+        nb_mp_id: NB.to_owned(),
+        eog_seit: None,
+        last_process_id: None,
+        updated_at: time::OffsetDateTime::now_utc(),
+        tenant: TENANT.to_owned(),
+        version: 0,
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_tranchen_split_beyond_the_whole_is_refused() {
+    let Some((pool, _pg)) = test_pool("tranchen_conservation").await else {
+        return;
+    };
+    let vs = PgVersorgungsStatusRepository::new(pool.clone());
+
+    let err = vs
+        .upsert(
+            record(vec![
+                tranche("9911111111111", "60", "T1", ZuordnungsStatus::Aktiv),
+                tranche("9922222222222", "60", "T2", ZuordnungsStatus::Aktiv),
+            ]),
+            None,
+        )
+        .await
+        .expect_err("120 % of a Marktlokation cannot be assigned");
+
+    // A bad request, not an outage: the caller has to see which invariant it
+    // broke, and a 500 would send an operator looking at the database instead.
+    assert!(
+        matches!(&err, mako_markt::error::MdmError::Unprocessable { reason }
+                 if reason.contains("lf_zuordnung_sums_to_the_whole")),
+        "the over-allocation must surface as an unprocessable request: {err:?}"
+    );
+
+    // And nothing was written: the refused statement took the whole
+    // transaction with it.
+    assert!(
+        vs.find(&malo(), TENANT).await.expect("find").is_none()
+            || vs
+                .find(&malo(), TENANT)
+                .await
+                .expect("find")
+                .expect("row")
+                .zuordnungen
+                .is_empty(),
+        "a refused split must leave no assignment behind"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn tranchen_up_to_the_whole_are_accepted() {
+    let Some((pool, _pg)) = test_pool("tranchen_exact").await else {
+        return;
+    };
+    let vs = PgVersorgungsStatusRepository::new(pool.clone());
+
+    vs.upsert(
+        record(vec![
+            tranche("9911111111111", "60", "T1", ZuordnungsStatus::Aktiv),
+            tranche("9922222222222", "40", "T2", ZuordnungsStatus::Aktiv),
+        ]),
+        None,
+    )
+    .await
+    .expect("a split that sums to the whole is the ordinary tranchierte case");
+
+    // The partial split is equally ordinary — the remainder is what `E_0623`
+    // Prüfschritt 530 leaves in the Bilanzkreis des Netzbetreibers, and it is a
+    // fact about the market rather than a missing assignment.
+    let v = vs
+        .find(&malo(), TENANT)
+        .await
+        .expect("find")
+        .expect("row")
+        .version;
+    vs.upsert(
+        record(vec![
+            tranche("9911111111111", "60", "T1", ZuordnungsStatus::Aktiv),
+            tranche("9922222222222", "30", "T2", ZuordnungsStatus::Aktiv),
+        ]),
+        Some(v),
+    )
+    .await
+    .expect("a remainder in the NB's Bilanzkreis is not an over-allocation");
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn competing_announcements_are_not_an_over_allocation() {
+    let Some((pool, _pg)) = test_pool("tranchen_announcements").await else {
+        return;
+    };
+    let vs = PgVersorgungsStatusRepository::new(pool.clone());
+
+    // Two suppliers have each announced the whole Marktlokation. That state is
+    // what `E_0622` Prüfschritt 70 refuses with `A06` „Andere Anmeldung in
+    // Bearbeitung" and what 55038 / 44038 „Aufhebung einer zukünftigen
+    // Zuordnung" addresses — both decisions need the competing announcement to
+    // exist, so the constraint must not reach across `status`.
+    vs.upsert(
+        record(vec![
+            LfZuordnung::ganz("9911111111111", ZuordnungsStatus::Angekuendigt),
+            LfZuordnung::ganz("9922222222222", ZuordnungsStatus::Angekuendigt),
+        ]),
+        None,
+    )
+    .await
+    .expect("two competing announcements are a normal state");
+
+    // The incumbent's running 100 % alongside them is normal too: a switch has
+    // one Aktiv and one Angekuendigt row throughout its whole window.
+    let v = vs
+        .find(&malo(), TENANT)
+        .await
+        .expect("find")
+        .expect("row")
+        .version;
+    vs.upsert(
+        record(vec![
+            LfZuordnung::ganz("9933333333333", ZuordnungsStatus::Aktiv),
+            LfZuordnung::ganz("9911111111111", ZuordnungsStatus::Angekuendigt),
+            LfZuordnung::ganz("9922222222222", ZuordnungsStatus::Angekuendigt),
+        ]),
+        Some(v),
+    )
+    .await
+    .expect("a running assignment beside two announcements is the switch itself");
 }

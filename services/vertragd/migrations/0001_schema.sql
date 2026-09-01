@@ -146,7 +146,7 @@ CREATE TABLE rahmenvertraege (
     -- invoice, Mahnung and support call quotes this number. Generated, so no
     -- contract can exist without one.
     rahmenvertrag_nr        TEXT        NOT NULL DEFAULT
-                                'RV-' || to_char(now(), 'YYYY') || '-' ||
+                                'RV-' || to_char(heute(), 'YYYY') || '-' ||
                                 lpad(nextval('rahmenvertrag_nr_seq')::TEXT, 8, '0'),
     status                  TEXT        NOT NULL DEFAULT 'AKTIV'
                             CHECK (status IN ('ENTWURF','AKTIV','GEKÜNDIGT','ABGELAUFEN')),
@@ -208,7 +208,7 @@ CREATE TABLE versorgungsvertraege (
     rahmenvertrag_id        UUID        REFERENCES rahmenvertraege(id),
     tenant                  TEXT        NOT NULL,
     vertrags_nr             TEXT        NOT NULL DEFAULT
-                                'VV-' || to_char(now(), 'YYYY') || '-' ||
+                                'VV-' || to_char(heute(), 'YYYY') || '-' ||
                                 lpad(nextval('vertrags_nr_seq')::TEXT, 8, '0'),
     -- Which supply regime governs this contract. Every notice period below
     -- branches on it, so it is a stored fact rather than a derived guess.

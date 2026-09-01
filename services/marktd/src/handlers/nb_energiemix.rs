@@ -163,9 +163,11 @@ pub async fn put_nb_energiemix(
         Err((status, body)) => return (status, Json(body)).into_response(),
     };
 
+    // The § 42 EnWG disclosure year is a German calendar year; the column
+    // default in the schema derives it the same way.
     let year = req
         .gueltig_fuer
-        .unwrap_or_else(|| OffsetDateTime::now_utc().year() as i16);
+        .unwrap_or_else(|| mako_fristen::heute().year() as i16);
 
     match sqlx::query(
         r"INSERT INTO nb_energiemix

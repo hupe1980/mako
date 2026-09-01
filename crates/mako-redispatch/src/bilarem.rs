@@ -30,52 +30,32 @@
 //! on **relative** deadlines (no calendar date in the Tenor); this module is
 //! deliberately wire-format-free — the seam the formats will plug into.
 
-use time::{Date, Month};
+use time::{Date, Month, macros::date};
 
 /// `BilAReM` rules apply to the ÜNB bilanzieller Ausgleich from this day
 /// (BK6-23-241 Tenor Ziff. 1).
-pub const BILAREM_WIRKSAM: Date = match Date::from_calendar_date(2026, Month::July, 1) {
-    Ok(d) => d,
-    Err(_) => panic!("valid date"),
-};
+pub const BILAREM_WIRKSAM: Date = date!(2026 - 07 - 01);
 
 /// `MaBiS` Anlage 1 Kap. 17 is revoked with the end of this day (Tenor Ziff. 5);
 /// surviving content continues as "Anlage zur `BilAReM`" from 01.10.2026.
-pub const MABIS_ANLAGE1_KAP17_ENDE: Date =
-    match Date::from_calendar_date(2026, Month::September, 30) {
-        Ok(d) => d,
-        Err(_) => panic!("valid date"),
-    };
+pub const MABIS_ANLAGE1_KAP17_ENDE: Date = date!(2026 - 09 - 30);
 
 /// Grandfathered Pauschal-Abrechnung ends with this day; from 01.01.2029 those
 /// TR fall into vereinfachte Spitzabrechnung unless Spitzabrechnung was
 /// elected by 30.11.2028 (`BilAReM` Kap. 3.2.1).
-pub const PAUSCHAL_ABRECHNUNG_ENDE: Date = match Date::from_calendar_date(2028, Month::December, 31)
-{
-    Ok(d) => d,
-    Err(_) => panic!("valid date"),
-};
+pub const PAUSCHAL_ABRECHNUNG_ENDE: Date = date!(2028 - 12 - 31);
 
 /// Election deadline for grandfathered TR choosing Spitzabrechnung over the
 /// vereinfachte Spitzabrechnung default.
-pub const SPITZ_WAHL_FRIST: Date = match Date::from_calendar_date(2028, Month::November, 30) {
-    Ok(d) => d,
-    Err(_) => panic!("valid date"),
-};
+pub const SPITZ_WAHL_FRIST: Date = date!(2028 - 11 - 30);
 
 /// Soll-target: SR that improve transmission-grid congestion-relief efficiency
 /// are to be in the Planwertmodell by this day.
-pub const MIGRATION_SOLL_ZIEL: Date = match Date::from_calendar_date(2031, Month::January, 1) {
-    Ok(d) => d,
-    Err(_) => panic!("valid date"),
-};
+pub const MIGRATION_SOLL_ZIEL: Date = date!(2031 - 01 - 01);
 
 /// End of the statutory Prognosemodell/BKV window (§14 Abs. 1 S. 3 `EnWG`,
 /// befristet bis 31.12.2031). From 2032 the NB performs the full Ausgleich.
-pub const PROGNOSEMODELL_ENDE: Date = match Date::from_calendar_date(2031, Month::December, 31) {
-    Ok(d) => d,
-    Err(_) => panic!("valid date"),
-};
+pub const PROGNOSEMODELL_ENDE: Date = date!(2031 - 12 - 31);
 
 /// Settlement model of a Steuerbare Ressource for the bilanzieller Ausgleich.
 ///

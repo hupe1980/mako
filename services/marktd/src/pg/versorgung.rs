@@ -48,6 +48,25 @@ fn internal(e: impl std::fmt::Display) -> MdmError {
     MdmError::Internal(e.to_string())
 }
 
+/// The schema's conservation trigger on `lf_zuordnung`.
+const CONSERVATION_CONSTRAINT: &str = "lf_zuordnung_sums_to_the_whole";
+
+/// Map a failed write to `lf_zuordnung` onto the caller's error.
+///
+/// A Marktlokation split beyond 100 % across its active Tranchen is a bad
+/// request, not an outage: it must reach the caller as `422` naming the
+/// over-allocation, not as a `500` that reads like the database is down.
+fn zuordnung_write(e: sqlx::Error) -> MdmError {
+    if let sqlx::Error::Database(db) = &e
+        && db.constraint() == Some(CONSERVATION_CONSTRAINT)
+    {
+        return MdmError::Unprocessable {
+            reason: db.message().to_owned(),
+        };
+    }
+    internal(e)
+}
+
 /// The assignment list of the `versorgungsstatus` row aliased `v`, as a JSONB
 /// array shaped like [`LfZuordnung`].
 ///
@@ -386,7 +405,7 @@ impl PgVersorgungsStatusRepository {
         .bind(process_id)
         .execute(&mut *conn)
         .await
-        .map_err(internal)?;
+        .map_err(zuordnung_write)?;
 
         if r.rows_affected() == 0 {
             return Ok(false);
@@ -460,7 +479,7 @@ impl PgVersorgungsStatusRepository {
         .bind(&lf_mp_id)
         .execute(&mut *conn)
         .await
-        .map_err(internal)?;
+        .map_err(zuordnung_write)?;
 
         let promoted = sqlx::query(
             r#"UPDATE lf_zuordnung
@@ -474,7 +493,7 @@ impl PgVersorgungsStatusRepository {
         .bind(process_id)
         .execute(&mut *conn)
         .await
-        .map_err(internal)?;
+        .map_err(zuordnung_write)?;
 
         if promoted.rows_affected() == 0 && displaced.rows_affected() == 0 {
             return Ok(false);
@@ -512,7 +531,7 @@ impl PgVersorgungsStatusRepository {
         .bind(lf_mp_id)
         .execute(&mut *conn)
         .await
-        .map_err(internal)?;
+        .map_err(zuordnung_write)?;
 
         resync_lieferstatus(&mut *conn, malo_id, tenant).await?;
         sqlx::query(
@@ -570,7 +589,7 @@ impl PgVersorgungsStatusRepository {
         .bind(tenant)
         .execute(&mut *conn)
         .await
-        .map_err(internal)?;
+        .map_err(zuordnung_write)?;
         sqlx::query(
             r#"INSERT INTO lf_zuordnung
                (malo_id, tenant, lf_mp_id, prozent, tranche_id, status,
@@ -584,7 +603,7 @@ impl PgVersorgungsStatusRepository {
         .bind(process_id)
         .execute(&mut *conn)
         .await
-        .map_err(internal)?;
+        .map_err(zuordnung_write)?;
 
         sqlx::query(
             r#"UPDATE versorgungsstatus
@@ -629,7 +648,7 @@ impl PgVersorgungsStatusRepository {
         .bind(lf_mp_id)
         .execute(&mut *conn)
         .await
-        .map_err(internal)?;
+        .map_err(zuordnung_write)?;
 
         if cleared.rows_affected() == 0 {
             return Ok(false);
@@ -652,7 +671,7 @@ async fn replace_zuordnungen(
         .bind(tenant)
         .execute(&mut *conn)
         .await
-        .map_err(internal)?;
+        .map_err(zuordnung_write)?;
     for z in zuordnungen {
         sqlx::query(
             r#"INSERT INTO lf_zuordnung
@@ -671,7 +690,7 @@ async fn replace_zuordnungen(
         .bind(z.process_id)
         .execute(&mut *conn)
         .await
-        .map_err(internal)?;
+        .map_err(zuordnung_write)?;
     }
     Ok(())
 }

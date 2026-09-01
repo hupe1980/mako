@@ -226,11 +226,7 @@ impl Familie {
 
 /// Last day MaBiS Anlage 1 Kap. 17.2 (tägliche AAÜZ) exists — BK6-23-241
 /// Tenorziffer 5.
-pub const KAPITEL_17_2_ENDE: time::Date =
-    match time::Date::from_calendar_date(2026, time::Month::September, 30) {
-        Ok(d) => d,
-        Err(_) => panic!("valid date"),
-    };
+pub const KAPITEL_17_2_ENDE: time::Date = time::macros::date!(2026 - 09 - 30);
 
 // ── Zeitreihe ────────────────────────────────────────────────────────────────
 

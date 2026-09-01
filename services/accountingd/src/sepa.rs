@@ -401,7 +401,6 @@ pub fn build_pain_008(
         "creditor",
     )?;
 
-    let today = time::OffsetDateTime::now_utc();
     let msg_id = format!(
         "DD-{}-{:02}-{:02}",
         collection_date.year(),
@@ -491,7 +490,16 @@ pub fn build_pain_008(
                         continue;
                     }
                 };
-                let description = format!("Abschlag {}-{:02}", today.year(), today.month() as u8);
+                // The Verwendungszweck names the month the Abschlag is
+                // *collected* for, which is the month the batch is dated into —
+                // not the month it happens to be generated in. A pre-notification
+                // runs ahead of its collection by `sepa_pre_notification_days`,
+                // so the two are routinely different months.
+                let description = format!(
+                    "Abschlag {}-{:02}",
+                    collection_date.year(),
+                    collection_date.month() as u8
+                );
                 let mut entry = DirectDebitEntry::new(
                     mandate.mandatsref.clone(),
                     signed_iso,
@@ -689,7 +697,9 @@ pub fn build_pain_001(
     let supports_address = schema.supports_postal_address();
     let debtor_address = address_for_schema(debtor.address, supports_address, "debtor")?;
 
-    let today = time::OffsetDateTime::now_utc();
+    // The MsgId carries the German calendar day the batch was raised on, the
+    // same day the pain.008 twin takes from its `collection_date`.
+    let today = mako_fristen::heute();
     let msg_id = format!(
         "CT-{}-{:02}-{:02}",
         today.year(),

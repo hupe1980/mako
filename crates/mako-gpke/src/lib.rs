@@ -197,7 +197,6 @@ pub mod anfrage_bestellung;
 pub mod ankuendigung_zuordnung_lf;
 pub mod antwortfrist;
 pub mod beendigung_zuordnung;
-pub mod comdis;
 pub mod datenabruf;
 pub mod eog;
 pub mod konfiguration;
@@ -254,10 +253,6 @@ pub use beendigung_zuordnung::{
     BEENDIGUNG_ZUORDNUNG_PIDS, BeendigungZuordnungCommand, BeendigungZuordnungData,
     BeendigungZuordnungEvent, BeendigungZuordnungState, GpkeBeendigungZuordnungWorkflow,
     NB_ANFRAGE_WINDOW_LABEL, WORKFLOW_NAME as BEENDIGUNG_ZUORDNUNG_WORKFLOW_NAME,
-};
-pub use comdis::{
-    COMDIS_APERAK_WINDOW_LABEL, COMDIS_PIDS, ComdisOutcome, GpkeComdisCommand, GpkeComdisData,
-    GpkeComdisEvent, GpkeComdisState, GpkeComdisWorkflow, WORKFLOW_NAME as COMDIS_WORKFLOW_NAME,
 };
 pub use datenabruf::{
     DatanabrufCommand, DatanabrufEvent, DatanabrufState, GpkeDatanabrufWorkflow,

@@ -3300,7 +3300,8 @@ pub async fn settle_jahresabschluss(
     q: &JahresabschlussQuery,
 ) -> Result<serde_json::Value, SettleError> {
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
-    let year = q.year.unwrap_or_else(|| OffsetDateTime::now_utc().year());
+    // The Abrechnungsjahr defaults to the current German calendar year.
+    let year = q.year.unwrap_or_else(|| mako_fristen::heute().year());
     let dry_run = q.dry_run.unwrap_or(false);
 
     // 1. Resolve account.
