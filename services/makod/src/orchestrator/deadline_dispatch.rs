@@ -45,9 +45,10 @@ use mako_gabi_gas::{
 };
 use mako_geli_gas::{
     GasSperrungLfCommand, GasSperrungNbCommand, GasSupplierChangeCommand, GeliGasDatanabrufCommand,
-    GeliGasDatanabrufWorkflow, GeliGasLfStornierungWorkflow, GeliGasSperrprozesseInvoicWorkflow,
-    GeliGasSperrungLfWorkflow, GeliGasSperrungNbWorkflow, GeliGasStornierungCommand,
-    GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow, LfStornierungCommand,
+    GeliGasDatanabrufWorkflow, GeliGasLfAnmeldungCommand, GeliGasLfAnmeldungWorkflow,
+    GeliGasLfStornierungWorkflow, GeliGasSperrprozesseInvoicWorkflow, GeliGasSperrungLfWorkflow,
+    GeliGasSperrungNbWorkflow, GeliGasStornierungCommand, GeliGasStornierungWorkflow,
+    GeliGasSupplierChangeWorkflow, LfStornierungCommand,
 };
 use mako_gpke::{
     AbrechnungsdatenCommand as GpkeAbrechnungsdatenCommand, AllokationslisteCommand,
@@ -199,6 +200,13 @@ deadline_dispatch! {
     "geli-gas-supplier-change" => GeliGasSupplierChangeWorkflow : GasSupplierChangeCommand::TimeoutExpired,
     "geli-gas-stornierung" => GeliGasStornierungWorkflow : GeliGasStornierungCommand::TimeoutExpired,
     "geli-gas-stornierung-lf" => GeliGasLfStornierungWorkflow : LfStornierungCommand::TimeoutExpired,
+    // The LFN's own Anmeldung awaits the GNB's answer within the window the
+    // outbound Prüfidentifikator publishes — 4 Werktage for a 44001 (GeLi Gas
+    // 3.0 Kap. 3.2.3), not the LFN's 10-Werktage Vorlauffrist. Without this arm
+    // the window fires into the scheduler's `unknown` branch and the Vorgang
+    // stays `Pending` with its Frist already lapsed.
+    mako_geli_gas::LF_ANMELDUNG_WORKFLOW_NAME
+        => GeliGasLfAnmeldungWorkflow : GeliGasLfAnmeldungCommand::TimeoutExpired,
     "geli-gas-datenabruf" => GeliGasDatanabrufWorkflow : GeliGasDatanabrufCommand::TimeoutExpired,
     "geli-gas-sperrung-lf" => GeliGasSperrungLfWorkflow : GasSperrungLfCommand::TimeoutExpired,
     "geli-gas-sperrung-nb" => GeliGasSperrungNbWorkflow : GasSperrungNbCommand::TimeoutExpired,
@@ -595,6 +603,38 @@ mod dispatch_table_tests {
                 super::DISPATCH_TABLE.contains(&name),
                 "{name} is classified receipt-only but is absent from DISPATCH_TABLE, \
                  so assert_dispatch_coverage would not catch its removal",
+            );
+        }
+    }
+
+    /// Every workflow that publishes an answer window must have a *timeout*
+    /// arm, not a `no_deadline` one.
+    ///
+    /// `assert_dispatch_coverage` only asks whether a name is in the table at
+    /// all, and the `no_deadline` group is in the table — so classifying a
+    /// workflow that does register a Frist as receipt-only passes the coverage
+    /// check while doing nothing when the Frist fires. These are the families
+    /// whose deadline is a counterparty's published answer window, which is the
+    /// case where firing into nothing means a lapsed regulatory obligation on a
+    /// process that still looks healthy.
+    #[test]
+    fn a_workflow_with_an_answer_window_is_not_classified_receipt_only() {
+        for name in [
+            mako_geli_gas::LF_ANMELDUNG_WORKFLOW_NAME,
+            super::LF_ANMELDUNG_WORKFLOW,
+            super::WIM_ERSTEINBAU_WORKFLOW,
+            "gpke-beendigung-zuordnung",
+            "gpke-kuendigung",
+        ] {
+            assert!(
+                super::DISPATCH_TABLE.contains(&name),
+                "{name} registers a published answer window and must be in DISPATCH_TABLE",
+            );
+            assert!(
+                !super::is_receipt_only(name),
+                "{name} registers a published answer window, so a receipt-only \
+                 classification would let the Frist fire into nothing while \
+                 assert_dispatch_coverage still passes",
             );
         }
     }

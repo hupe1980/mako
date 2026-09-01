@@ -219,21 +219,37 @@ pub trait EngineModule: Send + 'static {
         self.register_pids(router);
     }
 
-    /// Workflow names this module handles for deadline dispatch.
+    /// Every workflow this module owns, named.
     ///
-    /// Return the same name strings that [`register_pids`] maps PIDs to.
-    /// These names are stored in [`EngineContext::registered_workflows`] and
-    /// used to validate that every workflow that has deadlines scheduled is
-    /// covered by the deadline scheduler dispatch function at runtime.
+    /// These names are what [`EngineContext::registered_workflows`] collects,
+    /// and consumers build their deadline-dispatch coverage from that list — so
+    /// this declaration, not [`register_pids`], is what makes a workflow's
+    /// Fristen checkable.
     ///
-    /// The default implementation returns an empty slice. Override it to
-    /// declare all workflow names that may fire deadlines:
+    /// # The invariant
+    ///
+    /// **Every name [`register_pids`] routes to must appear here.**
+    /// [`EngineBuilder::build`] panics otherwise, per module. A workflow that
+    /// is routed but undeclared still runs — it just becomes invisible to every
+    /// check made over the declarations, so a deadline it registers is never
+    /// held against a dispatch arm and fires into nothing.
+    ///
+    /// The converse is deliberately allowed: a command-initiated workflow (one
+    /// an ERP starts over the command API) declares a name and routes no
+    /// inbound Prüfidentifikator.
+    ///
+    /// Prefer each module's own `WORKFLOW_NAME` constant over a string literal.
+    /// A literal here can disagree with the name `register_pids` routes to, and
+    /// the two are only compared at build time:
     ///
     /// ```rust,ignore
     /// fn workflow_names(&self) -> &'static [&'static str] {
-    ///     &["gpke-supplier-change", "gpke-abrechnung"]
+    ///     &[wechselprozesse::WORKFLOW_NAME, abrechnung::WORKFLOW_NAME]
     /// }
     /// ```
+    ///
+    /// The default implementation returns an empty slice, which is correct only
+    /// for a module that routes no PIDs at all.
     ///
     /// [`register_pids`]: EngineModule::register_pids
     /// [`EngineContext::registered_workflows`]: crate::builder::EngineContext::registered_workflows
@@ -1984,6 +2000,37 @@ where
             // for cross-module overlap detection (module-ownership level).
             let mut scratch = PidRouter::new();
             module.register_pids_with_roles(&mut scratch, &self.deployment_roles);
+
+            // A module names its workflows twice — once by routing a PID to a
+            // name, once by declaring the name — and only the declared list is
+            // reachable from `EngineContext::registered_workflows`. Consumers
+            // build their deadline-dispatch coverage from that list, so a
+            // routed-but-undeclared workflow runs while being invisible to
+            // every check made over the declarations: its Fristen fire into a
+            // scheduler arm that was never required to exist.
+            //
+            // The converse is legitimate and not checked — a command-initiated
+            // workflow declares a name and routes no inbound PID.
+            let declared: std::collections::HashSet<&str> =
+                module.workflow_names().iter().copied().collect();
+            let mut undeclared: Vec<&str> = scratch
+                .workflow_names()
+                .into_iter()
+                .filter(|name| !declared.contains(name))
+                .collect();
+            undeclared.sort_unstable();
+            undeclared.dedup();
+            assert!(
+                undeclared.is_empty(),
+                "EngineBuilder::build: module '{}' routes PIDs to workflows it does not \
+                 declare in `workflow_names()`: {}. A workflow missing from that list is \
+                 excluded from `EngineContext::registered_workflows`, so any deadline it \
+                 registers is never checked for a dispatch arm. Add each name to the \
+                 module's `workflow_names()`.",
+                module.name(),
+                undeclared.join(", "),
+            );
+
             for pid in scratch.registered_pids() {
                 if let Some(prev) = pid_owners.insert(pid, module.name()) {
                     if self.deployment_roles.is_all() {
@@ -2236,6 +2283,9 @@ mod tests {
             fn name(&self) -> &'static str {
                 "pid-module"
             }
+            fn workflow_names(&self) -> &'static [&'static str] {
+                &["gpke-supplier-change"]
+            }
             fn register_pids(&self, router: &mut PidRouter) {
                 router.register(55001, "gpke-supplier-change");
                 router.register(55002, "gpke-supplier-change");
@@ -2251,6 +2301,67 @@ mod tests {
         assert_eq!(ctx.pid_router().route(55002), Some("gpke-supplier-change"));
         assert!(ctx.pid_router().route(99999).is_none());
         assert_eq!(ctx.pid_router().len(), 2);
+    }
+
+    /// A workflow a module routes but does not declare is a build failure.
+    ///
+    /// The two lists are written independently — `register_pids` binds a PID to
+    /// a name, `workflow_names` declares it — and only the declared one reaches
+    /// [`EngineContext::registered_workflows`], which is where consumers build
+    /// their deadline-dispatch coverage from. An undeclared workflow therefore
+    /// runs while being exempt from every check made over the declarations, so
+    /// a Frist it registers can fire into a dispatch arm nobody required to
+    /// exist. Four workflows had drifted this way before the check existed.
+    #[test]
+    #[should_panic(expected = "routes PIDs to workflows it does not declare")]
+    fn a_routed_workflow_must_be_declared() {
+        struct Undeclaring;
+        impl EngineModule for Undeclaring {
+            fn name(&self) -> &'static str {
+                "undeclaring"
+            }
+            fn workflow_names(&self) -> &'static [&'static str] {
+                &["declared-workflow"]
+            }
+            fn register_pids(&self, router: &mut PidRouter) {
+                router.register(55_001, "declared-workflow");
+                router.register(55_002, "routed-but-undeclared");
+            }
+        }
+
+        let _ = EngineBuilder::new()
+            .with_event_store(InMemoryEventStore::new())
+            .register(Box::new(Undeclaring))
+            .build();
+    }
+
+    /// Declaring a workflow that routes no PID is legitimate and must build.
+    ///
+    /// A command-initiated workflow — one an ERP starts over the command API —
+    /// has no inbound Prüfidentifikator, so the containment only holds in one
+    /// direction. Checking the reverse would refuse every such workflow.
+    #[test]
+    fn a_declared_workflow_need_not_route_a_pid() {
+        struct CommandInitiated;
+        impl EngineModule for CommandInitiated {
+            fn name(&self) -> &'static str {
+                "command-initiated"
+            }
+            fn workflow_names(&self) -> &'static [&'static str] {
+                &["routed", "erp-initiated-only"]
+            }
+            fn register_pids(&self, router: &mut PidRouter) {
+                router.register(55_001, "routed");
+            }
+        }
+
+        let ctx = EngineBuilder::new()
+            .with_event_store(InMemoryEventStore::new())
+            .register(Box::new(CommandInitiated))
+            .build();
+
+        assert_eq!(ctx.registered_workflows().len(), 2);
+        assert_eq!(ctx.pid_router().workflow_names().len(), 1);
     }
 
     /// Verify that `register_pids_with_roles` gates PIDs behind role checks.
@@ -2275,6 +2386,9 @@ mod tests {
             fn name(&self) -> &'static str {
                 "module-a"
             }
+            fn workflow_names(&self) -> &'static [&'static str] {
+                &["workflow-a"]
+            }
             fn register_pids_with_roles(&self, router: &mut PidRouter, roles: &DeploymentRoles) {
                 if roles.contains(Marktrolle::Nb) {
                     router.register(19_001, "workflow-a");
@@ -2286,6 +2400,9 @@ mod tests {
         impl EngineModule for ModuleB {
             fn name(&self) -> &'static str {
                 "module-b"
+            }
+            fn workflow_names(&self) -> &'static [&'static str] {
+                &["workflow-b"]
             }
             fn register_pids_with_roles(&self, router: &mut PidRouter, roles: &DeploymentRoles) {
                 // Only fires on explicit Nmsb, not on all() (backward-compat sentinel).
@@ -2332,6 +2449,9 @@ mod tests {
             fn name(&self) -> &'static str {
                 "conflict-a"
             }
+            fn workflow_names(&self) -> &'static [&'static str] {
+                &["workflow-a"]
+            }
             fn register_pids_with_roles(&self, router: &mut PidRouter, roles: &DeploymentRoles) {
                 if roles.contains(Marktrolle::Nb) {
                     router.register(19_001, "workflow-a");
@@ -2343,6 +2463,9 @@ mod tests {
         impl EngineModule for ConflictB {
             fn name(&self) -> &'static str {
                 "conflict-b"
+            }
+            fn workflow_names(&self) -> &'static [&'static str] {
+                &["workflow-b"]
             }
             fn register_pids_with_roles(&self, router: &mut PidRouter, roles: &DeploymentRoles) {
                 if !roles.is_all() && roles.contains(Marktrolle::Nmsb) {

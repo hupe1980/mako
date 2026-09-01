@@ -164,11 +164,14 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
     }
 
     fn workflow_names(&self) -> &'static [&'static str] {
+        // Every entry is the owning module's own constant. A literal here can
+        // disagree with the name `register_pids` routes to, and the two are
+        // checked against each other only at `EngineBuilder::build`.
         &[
-            "gabi-gas-invoic",
-            "gabi-gas-nomination",
-            "gabi-gas-allocation",
-            "gabi-gas-mmma",
+            invoic::WORKFLOW_NAME,
+            nomination::WORKFLOW_NAME,
+            allocation::WORKFLOW_NAME,
+            mmma::WORKFLOW_NAME,
         ]
     }
 

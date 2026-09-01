@@ -228,18 +228,22 @@ impl mako_engine::builder::EngineModule for WimModule {
     }
 
     fn workflow_names(&self) -> &'static [&'static str] {
+        // Every entry is the owning module's own constant. A literal here can
+        // disagree with the name `register_pids` routes to, and the two are
+        // checked against each other only at `EngineBuilder::build`.
         &[
-            "wim-device-change",
-            "wim-geraeteubernahme",
-            "wim-stammdaten",
+            geraetewechsel::WORKFLOW_NAME,
+            geraeteubernahme::WORKFLOW_NAME,
+            ersteinbau::WORKFLOW_NAME,
+            stammdaten::WORKFLOW_NAME,
             wertebestellung::WORKFLOW_NAME,
             esa_wertebestellung::WORKFLOW_NAME,
-            "wim-steuerungsauftrag",
-            "wim-preisanfrage",
-            "wim-preisliste",
+            steuerungsauftrag::WORKFLOW_NAME,
+            preisanfrage::WORKFLOW_NAME,
+            preisliste::WORKFLOW_NAME,
             rechnungsabwicklung::WORKFLOW_NAME,
             weiterverpflichtung::WORKFLOW_NAME,
-            "wim-invoic",
+            invoic::WORKFLOW_NAME,
             insrpt::WORKFLOW_NAME,
             technik_aenderung::WORKFLOW_NAME,
         ]

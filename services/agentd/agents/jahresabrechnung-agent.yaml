@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
-# Annual Schlussabrechnung orchestrator (LF role). Fetches 12-month edmd data, retrieves Abschläge from billingd, generates Final invoice, verifies Zahlbetrag, and checks § 147 AO / GoBD completeness.
+# Annual Schlussabrechnung audit specialist (LF role). Reads metering, tariff, account and disclosure evidence and prepares a structured review.
 #
 # Every grant below is a tool this specialist's own procedure names, and every
 # tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
@@ -22,9 +22,8 @@ spec:
 
   identity:
     role: >-
-      Annual Schlussabrechnung orchestrator (LF role). Fetches 12-month edmd data,
-      retrieves Abschläge from billingd, generates Final invoice, verifies
-      Zahlbetrag, and checks § 147 AO / GoBD completeness.
+      Annual Schlussabrechnung audit specialist (LF role). Reads annual meter,
+      tariff, account and disclosure evidence and prepares a structured review.
     constraints: |
       You are the Jahresabrechnung specialist for the Lieferant (LF) role.
 
@@ -45,11 +44,12 @@ spec:
          tariff validity.
       2. Verify product is active for the full billing year.
 
-      ### Step 3 — Fetch Abschläge (advance payments)
-      1. Call billingd `list_billing_records` filtered by malo_id, year, type=ABSCHLAGSRECHNUNG.
-      2. Sum all Abschlag amounts (= total received from customer). Where a row is
-         ambiguous — a reversed Abschlag, a partial period — call billingd
-         `get_billing_record` for that one rather than guessing from the list.
+      ### Step 3 — Fetch Abschläge and payments
+      1. Call accountingd `list_ledger` for malo_id and identify ABSCHLAG,
+        ZAHLUNG, reversal and clearing movements in the billing year.
+      2. Call accountingd `get_balance` and reconcile the ledger window to the
+        authoritative open balance. A billed Abschlag is not proof of payment;
+        never derive cash received from billingd invoice records.
 
       ### Step 4 — Generate Schlussabrechnung
       1. **Prepare** the Final-invoice parameters — period 01-01 to 12-31, the meter
@@ -92,7 +92,9 @@ spec:
          resulting Kilowattstundenpreis — complete and in ordinary language.
       4. § 42 EnWG: call productd `get_product_energiemix` and check the Energieträgermix
          and the CO₂ figure reach the customer with the invoice.
-      5. § 147 AO / GoBD: if is_estimated=true, flag for operator sign-off before dispatch.
+      5. If `is_estimated=true`, report the estimation and its quality evidence
+        for operator review under § 40a and § 40 Abs. 2 Nr. 6 EnWG. This
+        advisory run cannot gate invoice dispatch.
 
   # What this agent is in a multi-agent arrangement.
   #
@@ -129,10 +131,6 @@ spec:
   # agent which cannot act: gating its answer would gate nothing while suspending
   # a run per finding.
   #
-  # Acting on a conclusion is a `planned` specialist's job — see
-  # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
-  # resolves itself, so the authority-bearing arguments keep the run input's own
-  # labels and a named human approves the call before it leaves.
 
   # Human-in-the-loop, beside the answer rather than in front of it.
   #
@@ -269,17 +267,17 @@ spec:
       description: >-
         PreisblattNetznutzung validity across the year.
 
-    - ref: tool://billingd/list_billing_records
+    - ref: tool://accountingd/list_ledger
       mutates: false
       max_sensitivity: internal
       description: >-
-        The Abschlagsrechnungen issued during the year.
+        Account movements proving billed advances, payments, reversals and clearings.
 
-    - ref: tool://billingd/get_billing_record
+    - ref: tool://accountingd/get_balance
       mutates: false
       max_sensitivity: internal
       description: >-
-        One Abschlag in full, where the list is not enough.
+        The authoritative current account balance used to reconcile the ledger window.
 
     - ref: tool://productd/get_product_energiemix
       mutates: false

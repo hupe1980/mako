@@ -22,6 +22,7 @@
 //! |---|---|
 //! | `POST /webhook` | CloudEvent ingest (Standard Webhooks-verified) |
 //! | `POST /api/v1/run` | Run a specialist by hand (OIDC + `api:run.start`; honours `Idempotency-Key`) |
+//! | `POST /api/v1/erasure` | Destroy a case key and/or forget a memory subject (OIDC + `api:erasure.execute`) |
 //! | `GET /api/v1/agents` | What this deployment activated (OIDC + `api:agent.list`) |
 //! | `GET /api/v1/agents/catalog` | Everything compiled in (OIDC + `api:agent.list`) |
 //! | `GET /.well-known/agents/{name}` | A2A Agent Card, derived from the manifest |
@@ -86,6 +87,13 @@ impl Daemon for Agentd {
     }
 
     async fn build(cfg: Arc<AgentdConfig>, ctx: ServiceContext) -> anyhow::Result<Router> {
+        cfg.validate()?;
+        if cfg.allow_insecure_no_auth {
+            warn!(
+                "agentd: allow_insecure_no_auth is set — API authentication and inbound webhook verification may be degraded (dev mode)"
+            );
+        }
+
         // Credentials first: an `env:VAR` placeholder that reached a driver
         // would be sent literally as a bearer token and come back as a 401 per
         // model call. The config itself stays as the runner handed it over —
@@ -133,9 +141,9 @@ impl Daemon for Agentd {
 
         // ── Durable state ────────────────────────────────────────────────
         //
-        // The journal is the § 147 AO / GoBD record for the agent layer, and the
-        // case layer beside it holds the matters, the obligations and the human
-        // tasks. One backend supplies both.
+        // The journal is durable, tamper-evident evidence for the agent layer;
+        // the case layer beside it holds matters, obligations and human tasks.
+        // Legal retention and audit-access policy remain deployment duties.
         //
         // `origin` names this plane's Merkle log and the store appends the
         // tenant, so checkpoints read `mako/agentd/<tenant>`. It is the one
@@ -496,6 +504,7 @@ impl Daemon for Agentd {
             .route("/webhook", post(handlers::webhook))
             // Manual trigger (OIDC-protected)
             .route("/api/v1/run", post(handlers::manual_run))
+            .route("/api/v1/erasure", post(handlers::erase))
             // What this deployment runs, and what it could run
             .route("/api/v1/agents", get(handlers::list_agents))
             .route("/api/v1/agents/catalog", get(handlers::agents_catalog))

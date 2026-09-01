@@ -68,7 +68,7 @@ spec:
       2. Determine gap severity (stale days).
       3. Report SECT41A_EPEX_MISSING and name the days uncovered: a dynamic
          product without day-ahead prices for the period cannot be billed on the
-         § 41a Abs. 1 basis it was sold on.
+         § 41a Abs. 2 basis it was sold on.
 
       ### Annual §42 Energiemix sweep (January cron)
       1. Call productd `get_comparison_feed` to list all active PUBLISHED products.
@@ -130,10 +130,6 @@ spec:
   # gate refuses a mutating sink with untrusted arguments. Declaring the grant
   # anyway would read as an ability this agent does not have.
   #
-  # Acting on a conclusion is a `planned` specialist's job — see
-  # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
-  # resolves itself, so the authority-bearing arguments keep the run input's own
-  # labels and a named human approves the call before it leaves.
 
   budgets:
     max_tokens: 200000

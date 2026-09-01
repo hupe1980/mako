@@ -60,5 +60,7 @@
 //! through the plane removes the choice.
 
 pub mod deadline;
+pub mod gabi;
 
 pub use deadline::DeadlineTriage;
+pub use gabi::GabiAllocationTriage;

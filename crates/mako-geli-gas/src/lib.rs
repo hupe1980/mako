@@ -248,10 +248,16 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
     }
 
     fn workflow_names(&self) -> &'static [&'static str] {
+        // Every entry is the owning module's own constant. A literal here can
+        // disagree with the name `register_pids` routes to, and the two are
+        // checked against each other only at `EngineBuilder::build`.
         &[
-            "geli-gas-supplier-change",
+            lieferbeginn::WORKFLOW_NAME,
+            // LFN-side Anmeldung: sends 44001/44004, awaits the GNB's answer
+            // within the window the outbound PID publishes (4 WT for a 44001).
+            lf_anmeldung::WORKFLOW_NAME,
             // GNB-side: receives 44022 from LFN/LFA, sends 44023/44024 response.
-            // Registered when Nb-only (no Msb/Nmsb). For all() and gMSB, WimGasModule owns these.
+            // Registered when Nb-only (no Msb/Nmsb). For all() and gMSB, `WimModule` owns these.
             stornierung::WORKFLOW_NAME,
             // LF-side: LFN/LFA sends 44022 outbound, receives 44023/44024 inbound.
             // Registered when Lf-only (no Msb/Nmsb). Outbound 44022 is ERP-initiated.
@@ -318,7 +324,7 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         // GeLi Gas Stammdatenänderung (44109–44182). Change families (G1–G7):
         // both the Änderung PIDs and their shared Antwort PIDs. Anfrage families
         // (G8–G10) are registered too, or they dead-letter. Excludes
-        // 44168–44170 (WiM Gas Verpflichtungsanfrage, WimGasModule) and 44183.
+        // 44168–44170 (WiM Gas Verpflichtungsanfrage, `WimModule`) and 44183.
         for &(aenderung_pid, antwort_pid, _) in stammdatenaenderung::STAMMDATEN_PAIRS {
             router.register(aenderung_pid, stammdatenaenderung::WORKFLOW_NAME);
             // Antwort PIDs are shared across directions — re-registering to the

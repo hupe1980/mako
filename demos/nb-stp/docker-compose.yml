@@ -9,7 +9,7 @@
 #
 # Excluded from demo (run separately when needed):
 #   sperrd   — Sperrung tracking (not needed for core NB STP flow)
-#   agentd   — LLM orchestration (requires external API key)
+#   agentd   — advisory agent plane (model-backed specialists require an API key)
 #
 # End-to-end flow:
 #   ERP       → PUT MaLo + preisblatt into marktd        (master data pre-load)

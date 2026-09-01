@@ -49,17 +49,20 @@ pub mod action {
     /// runs, and what it could run.
     ///
     /// In a role-scoped build the activated set *is* the deployment's Marktrolle
-    /// (§ 9 EnWG), so it is deployment detail rather than public capability
+    /// (§§ 6a, 7a EnWG), so it is deployment detail rather than public capability
     /// advertising. The A2A Agent Cards under `/.well-known/agents/{name}` stay
     /// open: a card is what an agent is, and carries no endpoint credential.
     pub const AGENT_LIST: &str = "api:agent.list";
+
+    /// `POST /api/v1/erasure` — destroy case keys and forget memory subjects.
+    pub const ERASURE_EXECUTE: &str = "api:erasure.execute";
 
     /// Every verb agentd's own surface asks about.
     ///
     /// Walked by a test against the policy set for the same reason agentplane
     /// publishes its own list: a verb granted to nobody is a permanent 403 on a
     /// route, behind a policy set that compiles clean.
-    pub const ALL: &[&str] = &[RUN_START, AGENT_LIST];
+    pub const ALL: &[&str] = &[RUN_START, AGENT_LIST, ERASURE_EXECUTE];
 }
 
 /// Whether this caller may perform `action` on agentd's own surface.
@@ -548,13 +551,24 @@ mod tests {
                 may(&["mako-operations"], action),
                 "{action}: operations cannot reach agentd's own door"
             );
-            // The two manual-only specialists exist because no CloudEvent marks
-            // "the reporting period ended", so a scheduler is a first-class
-            // caller of `POST /api/v1/run` rather than an exception to it.
-            assert!(
-                may(&["mako-service"], action),
-                "{action}: a scheduler cannot start the batch specialists it exists to start"
-            );
+            if *action == action::ERASURE_EXECUTE {
+                assert!(
+                    may(&["regulatory"], action),
+                    "privacy/compliance operations cannot execute erasure"
+                );
+                assert!(
+                    !may(&["mako-service"], action),
+                    "a scheduler must not hold irreversible erasure authority"
+                );
+            } else {
+                // The two manual-only specialists exist because no CloudEvent
+                // marks "the reporting period ended", so a scheduler is a
+                // first-class caller of the manual-run door.
+                assert!(
+                    may(&["mako-service"], action),
+                    "{action}: a scheduler cannot reach the run/inventory door"
+                );
+            }
             assert!(
                 !may(&[], action),
                 "{action}: a token with no roles was admitted — this is the whole finding"

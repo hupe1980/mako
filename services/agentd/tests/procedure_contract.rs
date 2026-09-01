@@ -194,15 +194,8 @@ async fn the_ask_matches_the_manifest_for_every_specialist() {
     )
     .expect("the plane assembles with every specialist");
 
-    // The planned specialist's ask is a *plan* request — a different contract,
-    // pinned end to end by the golden-run, oversight and regulatory suites.
-    const PLANNED: &[&str] = &["gabi-gas-agent"];
-
     let mut findings = Vec::new();
     for (name, manifest) in agentd::plane::manifests() {
-        if PLANNED.contains(&name.as_str()) {
-            continue;
-        }
         let Some(models) = manifest.spec.models.as_ref() else {
             continue;
         };

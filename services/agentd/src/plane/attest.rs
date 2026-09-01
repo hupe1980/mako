@@ -59,8 +59,8 @@ pub const UNATTESTED_WARNING: &str = "no [attestation] configured — journal re
      the chain says what happened and nothing says which workload wrote it. An auditor \
      can then check that the history is internally consistent but not that mako's plane \
      produced it, and no checkpoint can be submitted to a witness (a witness recognises \
-     a log by its signature). Configure [attestation], or accept that the § 147 AO \
-     argument stops at tamper-evidence.";
+    a log by its signature). Configure [attestation], or accept that audit evidence \
+    stops at an unattributed tamper-evident history.";
 
 /// Build the record signer a deployment configured, if any.
 ///

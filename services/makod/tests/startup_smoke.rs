@@ -238,7 +238,7 @@ fn the_landing_page_figures_match_the_registered_engine() {
     // The figure moves whenever a module registers or retires a PID; update it
     // together with the page rather than reasoning about the delta here.
     const LANDING_PAGE_PIDS: usize = 467;
-    const LANDING_PAGE_WORKFLOWS: usize = 66;
+    const LANDING_PAGE_WORKFLOWS: usize = 70;
 
     assert_eq!(
         pids, LANDING_PAGE_PIDS,

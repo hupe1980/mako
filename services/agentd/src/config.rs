@@ -39,6 +39,12 @@ pub struct AgentdConfig {
     pub port: u16,
     /// Operator tenant identifier.
     pub tenant: String,
+    /// Permit unauthenticated API and unsigned inbound webhooks for local development.
+    ///
+    /// Production startup fails closed without OIDC and inbound Standard
+    /// Webhooks verification unless this flag is set explicitly.
+    #[serde(default)]
+    pub allow_insecure_no_auth: bool,
     /// How this plane is reached from outside, for the A2A Agent Cards.
     ///
     /// A card states where an agent is; that is deployment wiring and not a
@@ -207,10 +213,11 @@ impl mako_service::service::ServiceConfig for AgentdConfig {
 
 /// Where the journal, the cases, the tasks, the timers and the events live.
 ///
-/// One backend holds all five. The journal is the § 147 AO / GoBD record for the
+/// One backend holds every state seam. The journal is durable evidence for the
 /// agent layer — every model call, tool call and human decision is written here
 /// before it happens — so it belongs on durable storage, not a container's
-/// ephemeral filesystem.
+/// ephemeral filesystem. Tax-record compliance additionally requires the
+/// deployment's retention, readability and audit-access policy.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "backend", rename_all = "lowercase", deny_unknown_fields)]
 pub enum JournalConfig {
@@ -295,7 +302,7 @@ pub struct BundledAgentsConfig {
     ///
     /// When `true`, `enable` is ignored. Note that a role-scoped build contains
     /// only its own role's specialists, so this never activates another
-    /// Marktrolle's agents (§ 9 EnWG).
+    /// Marktrolle's agents (§§ 6a, 7a EnWG).
     #[serde(default)]
     pub enable_all: bool,
 
@@ -533,6 +540,41 @@ pub struct Secrets {
 }
 
 impl AgentdConfig {
+    /// Validate security and worker invariants before opening any transport.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an implicitly insecure deployment, unsigned audit
+    /// delivery, or an interval that would panic its detached worker.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if !self.allow_insecure_no_auth && self.oidc.is_none() {
+            anyhow::bail!(
+                "refusing to start without [oidc]: manual runs and agent inventory would be unauthenticated. Configure [oidc] or set allow_insecure_no_auth = true (dev only)."
+            );
+        }
+        if !self.allow_insecure_no_auth && self.inbound_hmac_secret.is_none() {
+            anyhow::bail!(
+                "refusing to start without inbound_hmac_secret: unsigned CloudEvents could spend model budget and open operator tasks. Configure inbound_hmac_secret or set allow_insecure_no_auth = true (dev only)."
+            );
+        }
+        if self.audit_webhook_url.is_some() && self.audit_hmac_secret.is_none() {
+            anyhow::bail!(
+                "audit_webhook_url requires audit_hmac_secret so decision deliveries are authenticated"
+            );
+        }
+        anyhow::ensure!(
+            self.sweep_interval_secs > 0,
+            "sweep_interval_secs must be greater than zero"
+        );
+        if let Some(witness) = &self.witness {
+            anyhow::ensure!(
+                witness.interval_secs > 0,
+                "witness.interval_secs must be greater than zero"
+            );
+        }
+        Ok(())
+    }
+
     /// Resolve every `env:VAR` indirection in secret-bearing fields.
     ///
     /// Config values like `api_key = "env:OPENAI_API_KEY"` are placeholders,
@@ -661,6 +703,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn production_security_and_worker_intervals_fail_closed() {
+        let mut cfg = cfg_with_key("sk");
+        let error = cfg.validate().expect_err("OIDC is required").to_string();
+        assert!(error.contains("[oidc]"), "{error}");
+
+        cfg.allow_insecure_no_auth = true;
+        cfg.sweep_interval_secs = 0;
+        let error = cfg
+            .validate()
+            .expect_err("a zero sweep interval would panic the worker")
+            .to_string();
+        assert!(error.contains("sweep_interval_secs"), "{error}");
+    }
+
     /// The Postgres backend is chosen by name and carries its DSN.
     #[test]
     fn a_postgres_journal_parses() {
@@ -708,6 +765,8 @@ url = "postgres://localhost/agentd"
 
         let cfg: AgentdConfig = toml::from_str(block)
             .expect("the documented example config must be one an operator can copy");
+        cfg.validate()
+            .expect("the documented production config must pass startup security validation");
 
         // Spot-check the keys most likely to be swallowed by a table above
         // them — the ones that were.
@@ -722,6 +781,14 @@ url = "postgres://localhost/agentd"
             cfg.mcp_servers.contains_key("makod"),
             "the MCP table survived: {:?}",
             cfg.mcp_servers.keys().collect::<Vec<_>>()
+        );
+        let missing: Vec<_> = crate::plane::tools::servers_named_in_grants()
+            .into_iter()
+            .filter(|server| !cfg.mcp_servers.contains_key(server))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "enable_all requires every granted MCP server in the example: {missing:?}"
         );
         assert!(
             cfg.policy.path.is_none(),

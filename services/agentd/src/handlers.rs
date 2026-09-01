@@ -10,9 +10,9 @@
 //! `POST /api/v1/run` **waits**: an operator asked for an answer, so the request
 //! is held until every run concludes or suspends, under a wall-clock ceiling.
 //!
-//! ## Both human doors are authorized, not just authenticated
+//! ## Human doors are authorized, not just authenticated
 //!
-//! `POST /api/v1/run` and the two inventory reads ask the **same Cedar set** the
+//! `POST /api/v1/run`, `POST /api/v1/erasure` and the two inventory reads ask the **same Cedar set** the
 //! runtime checks every effect against, under agentd's own `api:` verbs. A
 //! `Claims` extractor on its own proves the realm knows the caller and says
 //! nothing about whether they may spend a run on a Marktlokation, so each of
@@ -391,6 +391,73 @@ pub async fn manual_run(
     (StatusCode::OK, Json(decisions)).into_response()
 }
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ErasureRequest {
+    pub case_id: Option<String>,
+    pub memory_subject: Option<String>,
+    pub reason: String,
+}
+
+/// Destroy a case wrapping key and/or forget a memory subject.
+pub async fn erase(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Json(request): Json<ErasureRequest>,
+) -> impl IntoResponse {
+    if let Some(refused) = refusal(
+        &state,
+        &claims,
+        crate::plane::policy::action::ERASURE_EXECUTE,
+    ) {
+        return refused;
+    }
+    let reason = request.reason.trim();
+    let subject = request
+        .memory_subject
+        .as_deref()
+        .map(str::trim)
+        .filter(|subject| !subject.is_empty());
+    if reason.is_empty() || (request.case_id.is_none() && subject.is_none()) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "a non-empty reason and at least one of case_id or memory_subject are required"
+            })),
+        )
+            .into_response();
+    }
+    let case = match request.case_id.as_deref() {
+        Some(raw) => match agentplane::core::CaseId::parse(raw) {
+            Ok(case) => Some(case),
+            Err(_) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({ "error": "case_id is invalid" })),
+                )
+                    .into_response();
+            }
+        },
+        None => None,
+    };
+    match state.plane.erase(case, subject, reason).await {
+        Ok(forgotten_memories) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "case_erased": request.case_id.is_some(),
+                "memory_subject": subject,
+                "forgotten_memories": forgotten_memories,
+            })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+    }
+}
+
 // ── GET /api/v1/agents ────────────────────────────────────────────────────────
 
 /// `GET /api/v1/agents` — the specialists this deployment activated.
@@ -400,7 +467,7 @@ pub async fn manual_run(
 ///
 /// Authorized, not merely authenticated: in a combined-role deployment the
 /// activated set names which arm's specialists this process runs, which is
-/// § 9 EnWG-relevant deployment detail rather than public capability
+/// §§ 6a and 7a EnWG-relevant deployment detail rather than public capability
 /// advertising, and a token is not a reason to be shown it. The Agent Cards
 /// under `/.well-known/agents/{name}` stay open — a card is what an agent *is*,
 /// and carries no endpoint credential.
@@ -419,7 +486,7 @@ pub async fn list_agents(claims: Claims, State(state): State<Arc<AppState>>) -> 
             // anything a counterparty wrote; tool-calling ones react turn by
             // turn. It decides what the agent is admitted with, so it is worth
             // showing an operator.
-            "execution": if r.plans { "planned" } else { "tool-calling" },
+            "execution": r.execution.as_str(),
         })).collect::<Vec<_>>(),
     }))
     .into_response()

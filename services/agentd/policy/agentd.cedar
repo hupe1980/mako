@@ -90,7 +90,7 @@ permit(principal, action == Action::"effect:perform", resource);
 // deployment-configured transport, so a mis-typed `[mcp_servers]` entry pointing
 // at somebody else's endpoint is a configuration error this refuses rather than
 // calls. `context.args.server` is what makes this expressible without naming the
-// 155 granted tools one by one.
+// 150 granted tools one by one.
 //
 // **This list must cover every server the manifests grant.** A granted server
 // missing from it is not a narrower policy — it is a specialist that boots, runs
@@ -201,6 +201,13 @@ when {
 // this route the record of what a matter missed leaves every listing at the
 // moment the matter is filed away, which is the moment people stop looking.
 permit(principal, action == Action::"api:obligation.list", resource)
+when {
+  ["mako-operations", "regulatory"].containsAny(context.roles)
+};
+
+// Cryptographic erasure is irreversible and belongs to privacy/compliance
+// operations, not to every role that may read a case.
+permit(principal, action == Action::"api:erasure.execute", resource)
 when {
   ["mako-operations", "regulatory"].containsAny(context.roles)
 };

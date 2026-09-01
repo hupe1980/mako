@@ -320,26 +320,6 @@ name    = "windows-link"
 version = "0.1"
 reason  = "Windows crate ecosystem version skew."
 
-[[bans.skip]]
-name    = "windows-core"
-version = "0.61"
-reason  = "Windows crate ecosystem version skew (slatedb 0.14.1 update added 0.62.2)."
-
-[[bans.skip]]
-name    = "windows-result"
-version = "0.3"
-reason  = "Windows crate ecosystem version skew (slatedb 0.14.1 update added 0.4.1)."
-
-[[bans.skip]]
-name    = "windows-strings"
-version = "0.4"
-reason  = "Windows crate ecosystem version skew (slatedb 0.14.1 update added 0.5.1)."
-
-[[bans.skip]]
-name    = "itertools"
-version = "0.14"
-reason  = "foyer-memory (via slatedb) depends on itertools 0.14.x while rest of workspace uses 0.15."
-
 # ── marktd new-dependency version skew ─────────────────────────────────────────
 # sqlx 0.8 / reqwest 0.13 bring in newer minor versions of crates already
 # present through the existing dependency tree.
@@ -515,6 +495,11 @@ reason  = "paired with darling 0.23 skip above."
 name    = "pem"
 version = "=3"
 reason  = "jsonwebtoken 11 (mako-service JWT/OIDC) pins pem 3; reqsign-azure-storage 3.2 (opendal → iceberg-storage-opendal → meterstore/edmd cold tier) pulls pem 4. Both only parse PEM at their own boundary — no shared key material. Resolve when jsonwebtoken bumps to pem 4."
+
+[[bans.skip]]
+name    = "itertools"
+version = "=0.10"
+reason  = "criterion 0.5 and prost-derive 0.14 retain itertools 0.10; runtime dependencies have converged on newer releases."
 
 [[bans.skip]]
 name    = "itertools"

@@ -7,7 +7,7 @@
 //! histories can be internally perfect and whoever controls the store controls
 //! every input to that check.
 //!
-//! That is the stated limit of the § 147 AO argument: a checkpoint that never
+//! That is the stated limit of the audit-evidence argument: a checkpoint that never
 //! leaves the operator's store is exactly as trustworthy as the operator.
 //!
 //! A witness breaks the symmetry by being somebody else. It remembers the last

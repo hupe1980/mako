@@ -59,7 +59,9 @@ use mako_engine::{
     version::WorkflowId,
 };
 use mako_gabi_gas::GaBiGasInvoicWorkflow;
-use mako_geli_gas::{GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow};
+use mako_geli_gas::{
+    GeliGasLfAnmeldungWorkflow, GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow,
+};
 use mako_gpke::{
     GpkeAbrechnungWorkflow, GpkeAbrechnungsdatenWorkflow, GpkeAnfrageBestellungWorkflow,
     GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow,
@@ -400,6 +402,18 @@ pub async fn dispatch_migrations(
                 store,
                 GeliGasSupplierChangeWorkflow,
                 "geli-gas-supplier-change",
+                from,
+                to
+            );
+            // The LFN's own Anmeldung waits out the GNB's answer window, so a
+            // process started before a cutover is routinely still open after
+            // it — the same reason `gpke-lf-anmeldung` carries an arm.
+            identity!(
+                report,
+                count,
+                store,
+                GeliGasLfAnmeldungWorkflow,
+                "geli-gas-lf-anmeldung",
                 from,
                 to
             );

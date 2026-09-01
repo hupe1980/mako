@@ -30,7 +30,7 @@ spec:
 
       ## TRIGGERED BY
       - `de.eeg.anlage.foerderung-auslaufend` — plant approaching end of 20-year EEG support
-      - `de.messwert.reading.direct.stored` — iMSys push (check if plant qualifies for §41a upgrade)
+      - `de.messwert.reading.direct.stored` — iMSys push (check post-EEG product options)
 
       ## FÖRDERUNG EXPIRY PROCEDURE
 
@@ -40,13 +40,13 @@ spec:
          one plant that ignores the other forty is a checklist nobody can plan against.
       3. Determine post-EEG path: PostEegSpot (default) → call productd
          `check_41a_epex_status` for day-ahead price coverage.
-      4. Check iMSys status: required for §41a dynamic tariffs post-EEG.
+      4. Check iMSys status when evaluating a contractually dynamic post-EEG product.
       5. Generate operator checklist.
 
       ## iMSys DETECTION (de.messwert.reading.direct.stored)
 
       1. Call edmd `get_device_history` for plant's recent reading history.
-      2. If readings are 15-min intervals (RLM/iMSys): plant may qualify for §41a upgrade.
+      2. If readings are 15-min intervals (RLM/iMSys): a dynamic post-EEG product may be technically available.
       3. Call einsd `get_plant` to check current settlement_model.
       4. If plant is on VERGUETUNG and has iMSys: recommend switching to MARKTPRAEMIE.
 
@@ -80,10 +80,6 @@ spec:
   # gate refuses a mutating sink with untrusted arguments. Declaring the grant
   # anyway would read as an ability this agent does not have.
   #
-  # Acting on a conclusion is a `planned` specialist's job — see
-  # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
-  # resolves itself, so the authority-bearing arguments keep the run input's own
-  # labels and a named human approves the call before it leaves.
 
   budgets:
     max_tokens: 200000
@@ -168,4 +164,4 @@ spec:
       mutates: false
       max_sensitivity: internal
       description: >-
-        Whether EPEX day-ahead prices exist for a post-EEG § 41a product.
+        Whether EPEX day-ahead prices exist for a contractually dynamic post-EEG product.

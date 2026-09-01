@@ -185,3 +185,83 @@ fn no_exemption_is_stale() {
         now_routed
     );
 }
+
+/// The workflow the reference names must be the workflow that routes the PID.
+///
+/// The check above asks only whether a PID is routed *at all*, so a row could
+/// name any workflow and still pass — and fifteen did, crediting
+/// `gpke-supplier-change` with the Kündigung that `gpke-kuendigung` handles and
+/// the GeLi Gas answers that `geli-gas-lf-anmeldung` receives. An operator
+/// reads the column to know which process to look at when a message arrives, so
+/// a wrong name sends them to the wrong event stream.
+///
+/// A row may name several workflows: a few PIDs are deliberately claimed by
+/// more than one family (the shared REMADV/COMDIS replies), and the engine
+/// resolves one owner. The routed owner must be among those named.
+#[test]
+fn the_reference_names_the_workflow_that_actually_routes_each_pid() {
+    use mako_engine::builder::EngineBuilder;
+    use mako_engine::event_store::InMemoryEventStore;
+    use std::sync::Arc;
+
+    // Resolve through a real engine build, not per-module routers: cross-module
+    // PID overlaps have an ownership rule, and a guard with its own resolution
+    // would disagree with the daemon.
+    let mut builder = EngineBuilder::new().with_event_store(Arc::new(InMemoryEventStore::new()));
+    for module in makod::startup::production_modules() {
+        builder = builder.register(module);
+    }
+    let ctx = builder.build();
+
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../site/content/docs/regulatory/pid-reference.md"
+    );
+    let src = std::fs::read_to_string(path).expect("pid-reference.md is readable");
+
+    let mut wrong: Vec<String> = Vec::new();
+    for line in src.lines() {
+        if !line.starts_with("| ") {
+            continue;
+        }
+        let cells: Vec<&str> = line
+            .trim()
+            .trim_matches('|')
+            .split('|')
+            .map(str::trim)
+            .collect();
+        if cells.len() < 10 {
+            continue;
+        }
+        let Ok(pid) = cells[0].parse::<u32>() else {
+            continue;
+        };
+        let last = cells[cells.len() - 1];
+        // Workflow names are the backticked segments containing a hyphen that
+        // are not crate names (`mako-gpke`, …).
+        let named: Vec<&str> = last
+            .split('`')
+            .skip(1)
+            .step_by(2)
+            .filter(|t| !t.starts_with("mako-") && t.contains('-'))
+            .collect();
+        if named.is_empty() {
+            continue;
+        }
+        let Some(actual) = ctx.pid_router().route(pid) else {
+            continue; // the routed/claimed check above owns this case
+        };
+        if !named.contains(&actual) {
+            wrong.push(format!(
+                "  {pid}: reference names {named:?}, router says `{actual}`"
+            ));
+        }
+    }
+
+    assert!(
+        wrong.is_empty(),
+        "these pid-reference rows credit a workflow that does not route the PID:\n{}\n\
+         Correct the last column to the workflow the router resolves.",
+        wrong.join("\n"),
+    );
+}

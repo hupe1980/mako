@@ -1,6 +1,6 @@
 [package]
 name        = "agentd"
-description = "Multi-agent LLM orchestration daemon for mako"
+description = "Auditable advisory agent plane for mako"
 version.workspace     = true
 authors.workspace     = true
 edition.workspace     = true
@@ -29,6 +29,7 @@ serde        = { workspace = true, features = ["derive"] }
 serde_json   = { workspace = true }
 time         = { workspace = true }
 uuid         = { workspace = true, features = ["v4", "serde"] }
+rubo4e       = { workspace = true }
 tracing      = "0.1"
 # The bridge from agentplane's instrument catalogue to `GET /metrics`.
 # agentplane emits every metric as a `tracing` event on its own target and picks
@@ -43,7 +44,7 @@ secrecy      = { version = "0.10", features = ["serde"] }
 # `openssl rand -base64 32` produces and the one C2SP `signed-note` uses on the
 # wire. Same version `mako-service` verifies Standard Webhooks signatures with.
 base64       = { version = "0.22" }
-agentplane = { version = "0.24", features = [
+agentplane = { version = "0.25", features = [
     # The declaration, and the wires that reach a model and a tool server.
     "manifest", "mcp", "providers",
     # Both journal backends: an embedded file, or one database several
@@ -76,14 +77,14 @@ async-trait = "0.1.91"
 [dev-dependencies]
 # testkit brings FakeProvider, Faulty and the replay assertions. It carries no
 # reqwest dependency, so it resolves independently of the provider drivers.
-agentplane = { version = "0.24", features = [
+agentplane = { version = "0.25", features = [
     "manifest", "mcp", "providers", "redb", "postgres", "cedar", "signing",
     "keyring", "keyring-vault", "http", "push", "witness-http", "testkit",
 ] }
 tokio = { version = "1", features = ["full"] }
 toml  = "0.9"
 
-# ── Role-isolation feature flags (§ 9 EnWG informatorisches Unbundling) ──────
+# ── Role-isolation feature flags (§§ 6a, 7a EnWG) ───────────────────────────
 #
 # Mirrors the flags every other daemon carries. An `role-lf` build compiles no
 # NB or MSB specialist and configures no NB or MSB MCP endpoint — structural

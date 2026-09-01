@@ -409,18 +409,23 @@ impl mako_engine::builder::EngineModule for GpkeModule {
     }
 
     fn workflow_names(&self) -> &'static [&'static str] {
+        // Every entry is the owning module's own constant. A literal here can
+        // disagree with the name `register_pids` routes to, and the two are
+        // checked against each other only at `EngineBuilder::build`.
         &[
-            "gpke-supplier-change",
+            wechselprozesse::WORKFLOW_NAME,
             eog::WORKFLOW_NAME,
+            kuendigung::WORKFLOW_NAME,
+            beendigung_zuordnung::WORKFLOW_NAME,
             stammdatenaenderung::WORKFLOW_NAME,
             lf_anmeldung::WORKFLOW_NAME,
             sperrung::WORKFLOW_NAME,
             sperrung_lf::WORKFLOW_NAME,
             anfrage_bestellung::WORKFLOW_NAME,
-            "gpke-abrechnung",
-            "gpke-konfiguration",
-            "gpke-neuanlage",
-            "gpke-lf-abmeldung",
+            abrechnung::WORKFLOW_NAME,
+            konfiguration::WORKFLOW_NAME,
+            neuanlage::WORKFLOW_NAME,
+            lf_abmeldung::WORKFLOW_NAME,
             ankuendigung_zuordnung_lf::WORKFLOW_NAME,
             stornierung::WORKFLOW_NAME,
             messwerte::WORKFLOW_NAME,

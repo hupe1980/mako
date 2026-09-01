@@ -12,15 +12,15 @@ human before it changes anything.
 | | |
 |---|---|
 | **HTTP port** | `:9580` |
-| **Specialists** | 28 manifests in [`agents/`](agents/) — 26 `tool-calling`, 1 `planned`, 1 model-free coded skill |
+| **Specialists** | 28 manifests in [`agents/`](agents/) — 26 `tool-calling`, 2 model-free coded skills |
 | **Runtime** | agentplane — journaled effects, strict replay, Cedar gate, sealed at rest |
 | **Model providers** | Anthropic · OpenAI · Gemini · any OpenAI-compatible endpoint (TGI, vLLM, Ollama, llama.cpp) · AWS Bedrock behind `--features bedrock` |
-| **Tool transport** | one MCP client per `[mcp_servers]` entry, routed by the server component of each `tool://` grant |
-| **Journal** | redb *or* Postgres — the § 147 AO / GoBD record, sealed by a Vault-held key, signed under the workload identity |
+| **Tool transport** | one MCP client per server granted by an activated manifest, routed by the server component of each `tool://` grant |
+| **Journal** | redb *or* Postgres — durable, tamper-evident evidence; optional sealing, workload signatures and independent witnessing |
 | **Witnessing** | checkpoints cosigned over C2SP `tlog-witness` — the one control that is not a check on ourselves |
 | **Case layer** | every run joins a case keyed on its MaLo/MeLo/process — the unit of approval, obligation and **erasure** |
 | **Oversight** | `/api/v1/oversight/*` — worklist, run views, case history, four-eyes decisions |
-| **Role scoping** | `role-lf` · `role-nb` · `role-msb` — a role build contains no other arm's specialists (§ 9 EnWG) |
+| **Role scoping** | `role-lf` · `role-nb` · `role-msb` — supports § 6a EnWG confidentiality and, where applicable, § 7a EnWG operational unbundling |
 
 ## How a run happens
 
@@ -72,33 +72,22 @@ Two properties decide how a specialist can be built:
   11 digits, MP-ID 13, PID 5. Everything else stays untrusted and carries the
   event it arrived on as its source. An 11-digit MaLo has no room for an
   instruction; that is what makes the promotion honest.
-- **Authority-bearing arguments are bound to trusted sources.**
-  `protected_fields` marks `/malo_id`, `/pid` and `/mp_id` as `require_trusted`,
-  so a value derived from counterparty free text cannot reach `submit_command`.
+- **Validation is semantic.** MaLo and market-participant check digits, EIC
+  check characters, UUID version 4 and real calendar dates are checked. The
+  tenant isolation key is never promoted as a market identifier.
 
-## Three execution shapes
+## Two execution shapes
 
-| | `tool-calling` (26) | `planned` (1) | coded skill (1) |
-|---|---|---|---|
-| Control flow | the model chooses each next call | fixed before untrusted input is read | Rust |
-| Input | whole payload, per-field labels | only re-validated identifiers | whole payload, per-field labels |
-| May dispatch a mutating tool | **no** | yes, after human approval | no grant declared |
-| Model spend | per event, up to the budget | one privileged call plus parses | none (`models: {}`) |
+| | `tool-calling` (26) | coded skill (2) |
+|---|---|---|
+| Control flow | the model chooses read-only evidence calls | Rust |
+| Input | whole payload, per-field labels | whole payload, per-field labels |
+| Mutating grants | none | none |
+| Model spend | per event, up to the budget | none (`models: {}`) |
 
-> A `tool-calling` agent **cannot** dispatch a mutating call. Its arguments come
-> out of a model completion, agentplane labels every completion `untrusted` by
-> construction, and the taint gate refuses a mutating sink with untrusted
-> arguments — even after a human approves. A `planned` agent can, because its
-> step arguments are `$input/…` references the runtime resolves itself: they
-> arrive carrying the run input's own labels, having never passed through a
-> model's context.
-
-So the 26 advisory specialists declare **no mutating grant and no approval**:
-both absences are the same fact, and `cargo xtask check-tool-grants` refuses a
-manifest that claims otherwise. Fourteen of them still declare `oversight` — for
-*triage*, which is a row beside a finished answer rather than a gate in front of
-a call, and is the only mode that fits an agent which cannot act. Regaining
-dispatch means converting a specialist to `planned`, not adding a grant.
+The active plane is advisory: all 150 grants are read-only. Model-backed
+specialists may investigate and file triage; they cannot dispatch market
+commands. Deterministic procedures are coded rather than expressed as prompts.
 
 The deterministic boundary is unchanged: **an agent may prepare and may wait,
 `makod` still dispatches.** An approved decision becomes an ordinary command
@@ -107,11 +96,10 @@ recorded command.
 
 ### The model-free specialist
 
-`deadline-alert-agent` declares `models: {}` — agentplane's spelling of *no
-inference, on purpose* — and no `execution` block, so its behaviour is a
-registered skill in [`src/skills/`](src/skills/). Its procedure is a subtraction
-and three comparisons; in Rust the severity bands are unit tests at every
-boundary rather than a threshold a model re-applies each time.
+`deadline-alert-agent` and `gabi-gas-agent` declare `models: {}` — agentplane's
+spelling of *no inference, on purpose* — and no `execution` block. Their
+behaviour is registered in [`src/skills/`](src/skills/): deadline severity and
+missing-final-ALOCAT triage are deterministic event transformations.
 
 Governance is identical: the tool call is still a journaled effect through the
 policy gate, the clock read is still an effect so a replay classifies against
@@ -154,7 +142,10 @@ refuses one the schema cannot hold. Codes the procedure only *reads* — billing
 risk findings, einsd's settlement state — are inputs and belong in no answer
 schema.
 
-## Two ways a human enters the loop
+## Human oversight
+
+The active manifests use triage only. Agentplane also supports approval before a
+mutating call, but agentd currently grants no mutating tool.
 
 | | **Approval** — in front of the answer | **Triage** — beside the answer |
 |---|---|---|
@@ -211,7 +202,8 @@ request and warns, but an approval is a signature on a regulated dispatch.
 Role scoping keeps a build from *containing* the other arm's specialists. A
 worklist row travels the other way: it carries the run's state, its justification
 and its case, so filing an NB finding on a supply-side desk is grid operational
-state reaching supply people — the boundary § 6a and § 9 EnWG draw — and in a
+state reaching supply people — the confidentiality and operational boundaries
+in §§ 6a and 7a EnWG — and in a
 role-scoped deployment that desk may not exist to answer it.
 
 Desks are classified by arm — supply, grid, metering, and the cross-cutting
@@ -221,21 +213,21 @@ desk cannot arrive and make the first one skip it.
 
 ## agentd's own doors are authorized too
 
-The three routes agentd serves itself ask the **same Cedar set** the runtime
-checks every effect against, under two verbs of mako's own:
+The four routes agentd serves itself ask the **same Cedar set** the runtime
+checks every effect against, under three verbs of mako's own:
 
 | Verb | Route | Audience |
 |---|---|---|
 | `api:run.start` | `POST /api/v1/run` | the operations union, plus `mako-service` |
 | `api:agent.list` | `GET /api/v1/agents`, `/api/v1/agents/catalog` | the same |
+| `api:erasure.execute` | `POST /api/v1/erasure` | `mako-operations`, `regulatory` |
 
 `mako-service` is on the list deliberately: the two manual-only specialists exist
 *because* no CloudEvent marks "the reporting period ended", so a scheduler is a
 first-class caller of that door.
 
 Cedar sees the door and not the specialist. Narrowing per agent belongs to the
-manifest's own controls — the ceilings, the protected fields, the approval in
-front of every mutating call — and putting it in two places would be two
+manifest's own controls — ceilings, grants and triage — and putting it in two places would be two
 audiences to keep in step. The deployment's tenant is pinned at extraction
 (`ExpectedTenant`), so a token the same realm signed for another operator is
 refused; agentplane's own surface resolves the plane from the caller's tenant and
@@ -330,7 +322,7 @@ disappear. Admit the target explicitly:
 | `cargo xtask check-prompt-tools` | A procedure instructing a call the manifest never granted — **and** a grant no procedure step mentions |
 | `cargo xtask check-wire-timestamps` | A `time` value reaching a JSON wire as its component array |
 | `plane::` unit tests | An unsubscribed specialist, an answer-schema object that names its fields and accepts others, **a finding code the procedure emits and the schema cannot carry**, a customer-pooling memory subject, a terminal finding no triage rule reports, a role the policy set does not admit, an oversight verb the policy set grants to nobody, a triage row that expires instead of escalating, a manifest on disk that nobody embedded, a manifest with no schema modeline, a model id nobody reviewed, a declaration that cannot name itself, an audience belonging to no known arm |
-| `plane::` unit tests, role builds | A specialist handing a finding to a desk in **another Marktrolle's arm** (§ 9 EnWG) — run by `just smoke-roles` against `role-lf`, `role-nb` and `role-msb`, where the compiled set *is* the arm |
+| `plane::` unit tests, role builds | A specialist handing a finding to a desk in **another Marktrolle's arm** (§§ 6a, 7a EnWG) — run by `just smoke-roles` against `role-lf`, `role-nb` and `role-msb`, where the compiled set *is* the arm |
 
 The prompt guard is the least obvious, and it runs in both directions because
 each direction fails differently.
@@ -345,7 +337,7 @@ specialist from holding a server's whole read surface: unreviewed reach no test
 can see, a model choosing between seventeen marktd tools where its procedure
 needs two, and a § 6a EnWG data boundary drawn wider than anything asked for. A
 grant the procedure never names is dropped, or the procedure says when the model
-should reach for it: 155 grants across 28 manifests.
+should reach for it: 150 grants across 28 manifests.
 
 ## Tests
 
@@ -355,8 +347,8 @@ the way the engine workflows are — deterministically, and for free.
 | Suite | What it pins |
 |---|---|
 | `plane_golden_run.rs` | The golden run and its **strict replay**, asserted with `assert_replay_was_not_backstopped()`; that the model is asked with the manifest's own procedure; where a step input lands; that a key ring seals personal data |
-| `oversight.rs` | Plan → suspend → approve → dispatch, end to end: the call lands **exactly once, after** the decision; a rejection stops it; an ineligible actor cannot decide |
-| `regulatory.rs` | Provenance refusal (a counterparty-shaped MaLo never reaches `submit_command`, even after approval) and in-doubt discipline (a `TimedOut` mutating call is attempted exactly once) |
+| `oversight.rs` | A missing final ALOCAT opens exactly one urgent gas-operations task; malformed events open none; ineligible roles cannot decide it |
+| `regulatory.rs` | Only the emitted GaBi event routes; deterministic triage has no model or tool authority; authority fields require semantic validation |
 | `durability.rs` | A journal append that commits while the caller sees an error duplicates no effect — model not re-asked, tool not re-dispatched, no second attempt recorded |
 | `specialist_smoke.rs` | **Every** specialist completes a run, answered from its own `output.schema` |
 | `procedure_contract.rs` | **What the model is actually asked**, for every specialist: the declared model answers, the tool surface offered is *exactly* the grants in their wire spelling, the requested schema is the manifest's, the procedure reaches the prompt, and the turn cannot ask for more output than the budget allows |
@@ -486,7 +478,18 @@ token   = "env:VAULT_TOKEN"
 [mcp_servers]
 makod       = "http://makod:8080/mcp"
 marktd      = "http://marktd:8180/mcp"
+processd    = "http://processd:8580/mcp"
+obsd        = "http://obsd:8480/mcp"
 billingd    = "http://billingd:9280/mcp"
+invoicd     = "http://invoicd:8280/mcp"
+accountingd = "http://accountingd:9380/mcp"
+edmd        = "http://edmd:8380/mcp"
+einsd       = "http://einsd:9180/mcp"
+netzbilanzd = "http://netzbilanzd:8680/mcp"
+portald     = "http://portald:9480/mcp"
+sperrd      = "http://sperrd:8780/mcp"
+productd    = "http://productd:9080/mcp"
+vertragd    = "http://vertragd:9780/mcp"
 mabis_syncd = "http://mabis-syncd:8880/mcp"
 ```
 
@@ -573,6 +576,11 @@ destroying one key — live store, replicas and backups at once — while the ha
 chain still verifies. Without a key ring the plane starts and says so loudly;
 `[keyring] required = true` turns that into a refusal to start.
 
+`POST /api/v1/erasure` operationalizes the two erasure scopes. Supply `case_id`
+to destroy the wrapping key, `memory_subject` to forget durable memories, or
+both, plus a mandatory `reason`. Case erasure refuses without `[keyring]`;
+deleting an index row cannot substitute for crypto-shredding.
+
 **Who wrote each record.** `[attestation]` signs every journal record under the
 workload identity, on the store and on the runtime from one key — so an auditor
 holding the public half can tell mako's plane from anything else that reached the
@@ -625,7 +633,7 @@ tool its own procedure names.
 | `invoice-reconciliation-agent` | `invoice.reconciliation` | `tool-calling` | 6 on accountingd, billingd, invoicd | `de.invoic.payment.overdue`, `de.invoic.receipt.*` |
 | `billing-anomaly-agent` | `billing.anomaly` | `tool-calling` | 6 on billingd, edmd | `de.billing.rechnung.erstellt` |
 | `billing-regulatory-guard-agent` | `billing.regulatory.guard` | `tool-calling` | 5 on billingd, marktd, productd, vertragd | `de.billing.rechnung.erstellt` |
-| `jahresabrechnung-agent` | `jahresabrechnung` | `tool-calling` | 7 on billingd, edmd, marktd, productd | _manual / scheduled_ |
+| `jahresabrechnung-agent` | `jahresabrechnung` | `tool-calling` | 7 on accountingd, edmd, marktd, productd | _manual / scheduled_ |
 | `eeg-agent` | `eeg` | `tool-calling` | 4 on edmd, einsd, productd | `de.eeg.anlage.foerderung-auslaufend`, `de.messwert.reading.direct.stored` |
 | `eeg-compliance-agent` | `eeg.compliance` | `tool-calling` | 5 on einsd | `de.eeg.anlage.*`, `de.eeg.verguetung.*`, `de.eeg.marktpraemie.*`, `de.eeg.compliance.*`, `de.eeg.veraeusserungsform.gewechselt` |
 | `payment-reconciliation-agent` | `payment.reconciliation` | `tool-calling` | 4 on accountingd | `de.accounting.payment.due`, `de.accounting.bankruecklast`, `de.accounting.sepa.collection-rejected`, `de.accounting.sperrandrohung`, `de.accounting.sperrankuendigung`, `de.accounting.abwendung.angeboten`, `de.accounting.abwendung.gebrochen` |
@@ -644,7 +652,7 @@ tool its own procedure names.
 | `mabis-syncd-agent` | `mabis.syncd` | `tool-calling` | 7 on edmd, mabis_syncd | `de.mabis.submission.failed`, `de.mabis.korrekturbedarf.opened`, `de.messwert.reading.quality.warning` |
 | `smgw-diagnostics-agent` | `smgw.diagnostics` | `tool-calling` | 5 on edmd, marktd | `de.messwert.cls.compliance-issue`, `de.messwert.smgw.cert.expiry-warning`, `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.initiated`, `de.markt.geraet.konfiguration.updated` |
 | `vpp-billing-agent` | `vpp.billing` | `tool-calling` | 3 on billingd, marktd | `de.vpp.dispatch.confirmed`, `de.vpp.settlement.berechnet` |
-| `gabi-gas-agent` | `gabi.gas.balancing` | **`planned`** | 5 on makod, marktd, netzbilanzd | `de.gabi.imbalance.*`, `de.gabi.alocat.missing`, `de.gabi.nomination.*` |
+| `gabi-gas-agent` | `gabi.gas.balancing` | coded | 0 | `de.gabi.alocat.missing` |
 | `einsd-batch-agent` | `einsd.batch` | `tool-calling` | 8 on edmd, einsd, productd | `de.eeg.settlement.batch-due`, `de.eeg.compliance.*`, `de.eeg.anlage.foerderung-auslaufend` |
 Two specialists carry no subscription on purpose: `jahresabrechnung-agent` and
 `regulatory-reporting-agent` are batch shapes an operator or scheduler starts,

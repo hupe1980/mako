@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 use agentd::plane::{Activation, Envelope, Plane, PlaneConfig, Stores};
 
 const AGENT: &str = "gabi-gas-agent";
-const EVENT_TYPE: &str = "de.gabi.imbalance.notified";
+const EVENT_TYPE: &str = mako_events::gabi::ALOCAT_MISSING;
 const TENANT: &str = "9900357000004";
 const KEY_ID: &str = "spiffe://mako/agentd";
 
@@ -102,9 +102,11 @@ fn plane(provider: &Arc<FakeProvider>, signer: Option<Arc<Ed25519Signer>>) -> Pl
 
 fn event() -> Value {
     json!({
-        "malo_id": "51238696012",
-        "bilanzkreis_id": "THE0BFH012345678",
         "gas_day": "2026-08-06",
+        "sender_eic": "11XRWENET-----1E",
+        "receiver_eic": "11YN00000000TH2M",
+        "deadline_label": "gabi-final-allocation",
+        "synthetic_pid": "13013",
     })
 }
 
@@ -121,26 +123,22 @@ fn completion(structured: Value) -> Completion {
 }
 
 fn script(provider: &FakeProvider) {
-    let imbalance = ToolId::new("netzbilanzd", "get_gas_imbalance").wire_name();
+    let deadlines = ToolId::new("makod", "list_overdue_deadlines").wire_name();
     provider.will_answer(completion(json!({
         "steps": [
-            { "tool": imbalance, "args": {
-                "bilanzkreis": "$input/bilanzkreis_id",
-                "gas_day": "$input/gas_day"
-            }},
+            { "tool": deadlines, "args": {} },
             { "parse": { "from": "$step0", "schema": {
                 "type": "object",
                 "required": [
-                    "gas_day", "imbalance_status", "allocation_version",
-                    "deadline_compliant", "action", "legal_basis"
+                    "gas_day", "status", "sender_eic", "receiver_eic", "action", "legal_basis"
                 ],
                 "properties": {
-                    "gas_day":            { "type": "string" },
-                    "imbalance_status":   { "type": "string" },
-                    "allocation_version": { "type": "string" },
-                    "deadline_compliant": { "type": "boolean" },
-                    "action":             { "type": "string" },
-                    "legal_basis":        { "type": "string" }
+                    "gas_day":      { "type": "string" },
+                    "status":       { "type": "string" },
+                    "sender_eic":   { "type": "string" },
+                    "receiver_eic": { "type": "string" },
+                    "action":       { "type": "string" },
+                    "legal_basis":  { "type": "string" }
                 }
             }}}
         ],
@@ -148,10 +146,10 @@ fn script(provider: &FakeProvider) {
     })));
     provider.will_answer(completion(json!({
         "gas_day": "2026-08-06",
-        "imbalance_status": "MINDER",
-        "allocation_version": "Initial",
-        "deadline_compliant": true,
-        "action": "REQUEST_CORRECTION",
+        "status": "EVENT_NOT_CONFIRMED",
+        "sender_eic": "11XRWENET-----1E",
+        "receiver_eic": "11YN00000000TH2M",
+        "action": "VERIFY_EVENT",
         "legal_basis": "KoV §6.4 Abs. 3",
         "have_enough_information": true
     })));
@@ -335,13 +333,18 @@ async fn a_failed_runs_delivery_carries_the_reason_it_failed() {
     use agentplane::journal::RecordKind;
     use agentplane::push::{Projection as _, RunCompleted};
 
-    // No scripted answers: the privileged call has nothing to return, so the
-    // run fails with a reason rather than an empty conclusion.
+    // The event is missing a required deterministic field, so the coded skill
+    // fails with a reason rather than an empty conclusion.
     let provider = FakeProvider::new();
     let plane = plane(&provider, None);
+    let mut malformed = event();
+    malformed
+        .as_object_mut()
+        .expect("object")
+        .remove("deadline_label");
 
     let decision = plane
-        .dispatch_one(AGENT, ce("ce-failed"), event())
+        .dispatch_one(AGENT, ce("ce-failed"), malformed)
         .await
         .expect("dispatched");
     assert_eq!(decision.outcome, "failed", "{decision:#?}");

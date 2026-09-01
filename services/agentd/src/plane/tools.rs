@@ -38,7 +38,7 @@ use secrecy::ExposeSecret as _;
 /// `manifests![]` embedding itself is not role-gated: a `role-lf` binary still
 /// carries the NB manifests as data. Without the filter, an LF deployment would
 /// be required to wire `sperrd`'s MCP endpoint — a server only the NB Sperrung
-/// specialist grants — which is exactly the cross-arm configuration § 9 EnWG
+/// specialist grants — which is exactly the cross-arm configuration §§ 6a and 7a EnWG
 /// role scoping exists to make impossible.
 #[must_use]
 pub fn servers_named_in_grants() -> BTreeSet<String> {

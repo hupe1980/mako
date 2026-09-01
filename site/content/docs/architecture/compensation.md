@@ -63,8 +63,8 @@ Deadline scheduler (makod/src/deadline_dispatch.rs)
 
 Deadlines fall into two kinds, and they are retired differently.
 
-A **process-response window** waits on the counterparty (*did they answer within
-24 h?*). It is meant to fire; `Workflow::on_deadline` inspects process state and
+A **process-response window** waits on the counterparty (*did they answer inside
+the Frist their Prüfidentifikator publishes?*). It is meant to fire; `Workflow::on_deadline` inspects process state and
 returns `None` when the answer already arrived, which is why deadline dispatch
 should route through `Process::execute_timeout_with_retry` rather than
 constructing a `TimeoutExpired` command directly.

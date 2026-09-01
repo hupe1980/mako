@@ -1,6 +1,6 @@
 # makod
 
-`makod` is the production daemon that assembles the full `mako` process engine stack into a deployable binary. It wires together all domain modules (GPKE, WiM, GeLi Gas, WiM Gas, MaBiS, GaBi Gas, Redispatch 2.0), connects them to a durable [SlateDB](https://github.com/slatedb/slatedb) event store, and exposes three independent server ports.
+`makod` is the production daemon that assembles the full `mako` process engine stack into a deployable binary. It wires together all domain modules (GPKE, WiM — Strom und Gas, GeLi Gas, MaBiS, GaBi Gas, NZR-EMob, Redispatch 2.0), connects them to a durable [SlateDB](https://github.com/slatedb/slatedb) event store, and exposes three independent server ports.
 
 For the complete operator reference — including persistence configuration, AS4 transport setup, Kubernetes deployment, and all CLI flags — see the **[`makod` Operator Guide](https://hupe1980.github.io/mako/docs/services/makod/)**.
 
@@ -20,15 +20,19 @@ All three ports are optional and independently enabled via CLI flags or environm
 
 ## Domain modules
 
+Seven modules, **70 workflows** over 467 Prüfidentifikatoren. `startup_smoke`
+holds both figures against the registered engine, so a module added or dropped
+without updating this table fails the build.
+
 | Module | Domain | Key PIDs |
 |---|---|---|
-| `GpkeModule` | GPKE — 16 workflows: Lieferbeginn/-ende Strom (LF+NB), Neuanlage, Abmeldung LF, Ankündigung ZuordnungLF, Sperrung (NB+LF-Antwort), Abrechnung, Datenabruf, Allokationsliste, Messwerte, Konfiguration, Anfrage Bestellung, Ankündigung, UTILTS, PARTIN Strom | 55001–55018/55022–55024/55555/55600–55609, ORDERS 17xxx, INVOIC 31001–31006, PARTIN 37000–37006 |
-| `WimModule` | WiM Strom — 11 workflows: MSB-Wechsel, Geräteübernahme, Stammdaten, Technik-Änderung, Preisanfrage/Preisliste, Abrechnung, INSRPT, Stornierung, Wertebestellung, iMS-Steuerungsauftrag | 55039/55042/55051/55168, ORDERS 17001–17133, INVOIC 31009, INSRPT 23001–23012 |
-| `GeliGasModule` | GeLi Gas 3.0 — 9 workflows: UTILMD G Lieferantenwechsel, Stornierung (LF+GNB), Sperrung (LF+GNB), MSCONS Messdaten, Datenabruf, INVOIC 31011 (AWH), PARTIN Gas | 44001–44024, 17103/17104, MSCONS 13002/13007–13009, ORDERS 17115–17117 (Gas), INVOIC 31011, PARTIN 37008–37014 |
-| `WimGasModule` | WiM Gas — MSB-Wechsel Gas, Stornierung WiM Gas, INVOIC Gas billing, INSRPT Gas | 44022–44024, 44039–44053, 44168–44170, INVOIC 31003/31004, INSRPT 23005/23009 |
-| `MabisModule` | MaBiS — 5 workflows: Bilanzkreisabrechnung Strom (BKV↔ÜNB), Clearingliste, ZP-Lifecycle (Aktivierung/Deaktivierung MaBiS-ZP, Zuordnungsermächtigung, AAÜZ/LF-AASZR), Anforderungen, Listenabgleich | MSCONS 13003/13010–13012, IFTSTA 21000–21005, UTILMD 55062–55064/55071–55072/55195–55196/55197–55214/55223–55224, 55065/55069/55070, ORDERS 17201–17208 |
+| `GpkeModule` | GPKE — 23 workflows: Lieferbeginn/-ende Strom (LF+NB), EoG, Kündigung, Beendigung Zuordnung, Neuanlage, Abmeldung LF, Ankündigung Zuordnung LF, Zuordnungsmeldung, Sperrung (NB+LF-Antwort), Abrechnung, Abrechnungsdaten, Datenabruf, Allokationsliste, Messwerte, Konfiguration (+Änderung), Anfrage Bestellung, Stammdatenänderung, Stornierung, UTILTS, PARTIN Strom | 55001–55018/55022–55024/55555/55600–55609, ORDERS 17xxx, INVOIC 31001–31006, PARTIN 37000–37006 |
+| `WimModule` | WiM — 14 workflows, **Strom und Gas** in one module: MSB-Wechsel, Geräteübernahme, Gerätewechsel, Ersteinbau iMS, Weiterverpflichtung, Stammdaten, Technik-Änderung, Preisanfrage/Preisliste, Rechnungsabwicklung, INVOIC, INSRPT, iMS-Steuerungsauftrag, Wertebestellung (WiM + ESA) | 55039/55042/55051/55168 und die Gas-Zwillinge 44039/44042/44051/44168/44183, ORDERS 17001–17133, INVOIC 31003/31004/31009, INSRPT 23001–23012 |
+| `GeliGasModule` | GeLi Gas 3.0 — 12 workflows: UTILMD G Lieferantenwechsel, LFN-Anmeldung, Stornierung (LF+GNB), Sperrung (LF+GNB), Stammdatenänderung, Zuordnungsmeldung, MSCONS Messdaten, Datenabruf, INVOIC 31011 (AWH), PARTIN Gas | 44001–44024, 17103/17104, MSCONS 13002/13007–13009, ORDERS 17115–17117 (Gas), INVOIC 31011, PARTIN 37008–37014 |
+| `MabisModule` | MaBiS — 6 workflows: Bilanzkreisabrechnung Strom (BKV↔ÜNB), Profile, Clearingliste, Listenabgleich, ZP-Lifecycle (Aktivierung/Deaktivierung MaBiS-ZP, Zuordnungsermächtigung, AAÜZ/LF-AASZR), Anforderungen | MSCONS 13003/13010–13012, IFTSTA 21000–21005, UTILMD 55062–55064/55071–55072/55195–55196/55197–55214/55223–55224, 55065/55069/55070, ORDERS 17201–17208 |
 | `GaBiGasModule` | GaBi Gas — 4 workflows: INVOIC 31007/31008/31010, MSCONS 13013 (Allokationsliste MMMA), ALOCAT, NOMINT/NOMRES | INVOIC 31007/31008/31010, REMADV 33001, COMDIS 29001, ORDERS 17110, MSCONS 13013, DVGW 70001–70023 (ALOCAT) / 70030–70039 (NOMINT/NOMRES) |
-| `RedispatchModule` | Redispatch 2.0 — congestion management (§§ 13/13a/14 EnWG) | 21037/21038 (NB/ÜNB/ANB roles only) |
+| `EmobModule` | NZR-EMob / Modell 2 — 3 Modellwechsel-Workflows: Anmeldung, Zuordnungsende, Abmeldung | 55238/55239, 55240/55241, 55242/55243 |
+| `RedispatchModule` | Redispatch 2.0 — congestion management (§§ 13/13a/14 EnWG); 8 workflows, XML document-type routing plus the IFTSTA/MSCONS/ORDERS legs | 21037/21038, MSCONS 13021/13022, ORDERS 17209 (NB/ÜNB/ANB roles only) |
 
 ---
 
@@ -183,7 +187,7 @@ principal — suitable for single-tenant deployments.
 
 A Cedar request is allowed when any `permit` matches and no `forbid` does, so an
 added `permit` cannot narrow that baseline — only `forbid` can. For a
-least-privilege deployment (and for §9 EnWG role separation in a combined-role
+least-privilege deployment (and for §§6a/7a EnWG role separation in a combined-role
 VIU install) pass `--cedar-no-default-policy`, which drops the baseline and makes
 `--cedar-policy-dir` the only source of access. `conservative.cedar` ships as a
 starting point. The flag requires a policy directory; without one `makod` refuses

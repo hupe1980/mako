@@ -95,26 +95,37 @@ Quick reference across all process families. Each row is a top-level domain.
 | **GPKE UTILTS** | ⚡ | `mako-gpke` `gpke-utilts` | UTILTS 25001/25004–25010 | nicht quantifiziert | BK6-24-174 |
 | **GPKE Konfiguration** | ⚡ | `mako-gpke` `gpke-konfiguration` | ORDERS 17134/17135 → ORDRSP 19001/19002 | nicht quantifiziert | BK6-24-174 Teil 3 |
 | **GPKE Konfiguration Änderung** | ⚡ | `mako-gpke` `gpke-konfiguration-aenderung` | ORDERS/ORDRSP config changes | nicht quantifiziert | BK6-24-174 Teil 3 |
+| **GPKE Beendigung der Zuordnung** | ⚡ | `mako-gpke` `gpke-beendigung-zuordnung` | UTILMD 55010 → 55011/55012 | **09:00 Uhr des 1. WT** nach dem ÜT (`E_0624`) | BK6-24-174 Teil 2 |
+| **GPKE Kündigung** | ⚡ | `mako-gpke` `gpke-kuendigung` | UTILMD 55016 → 55017/55018 | Ablauf des **1. WT** nach dem ÜT | BK6-24-174 Teil 2 |
+| **GPKE Stornierung** | ⚡ | `mako-gpke` `gpke-stornierung` | UTILMD 55022 → 55023/55024 | — **keine Festlegung nennt ein Antwortfenster** | GPKE Teil 4 Kap. 5 |
+| **GPKE Stammdatenänderung** | ⚡ | `mako-gpke` `gpke-stammdatenaenderung` | UTILMD 55615–55694, 55109/55110 → 55137 | **2 WT** Rückmeldung · **10 WT** Bestellung | BK6-24-174 Teil 4 |
+| **GPKE Abrechnungsdaten** | ⚡ | `mako-gpke` `gpke-abrechnungsdaten` | UTILMD 55156/55220/55673 → IFTSTA 21047 | **2 WT** | BK6-24-174 Teil 2 § 3.1 |
+| **GPKE Zuordnungs-Meldungen** | ⚡ | `mako-gpke` `gpke-zuordnungsmeldung` | UTILMD 55036/55037/55038 | — Meldepflicht, **keine Antwortnachricht** (Sendefrist in `mako_fristen::meldung`) | BK6-24-174 Teil 2 |
 | **PARTIN Strom Kommunikationsdaten** | ⚡ | `mako-gpke` `gpke-partin` | PARTIN 37000–37006 | — | PARTIN AHB 1.0f |
 | **WiM MSB-Wechsel** | ⚡ 🔥 | `mako-wim` `wim-device-change` | UTILMD 55039/55042/55051/55168 resp. 44039/44042/44051/44168 (out+in) und ihre Antworten | 3/5/7/1 WT — see below | BK6-22-024 · AWH WiM Gas 2.0 |
 | **WiM Geräteübernahme** | ⚡ 🔥 | `mako-wim` `wim-geraeteubernahme` | ORDERS 17001 · 17002 · 17009 · ORDRSP 19001/19002 · 19003/19004 · 19015/19016 | 4 WT Angebot · 2 WT Bestellung · 2 WT vor dem Gerätewechseltermin | BK6-22-024 Kap. 3.1.2 / 3.2.2 |
 | **WiM Abrechnung** | ⚡ 🔥 | `mako-wim` `wim-invoic` | INVOIC 31009 · 31003 · 31004 · REMADV 33001–33004 · COMDIS 29001 | zum Zahlungsziel; NB bei 31009: 4. WT davor | BK6-22-024 Kap. 3.6.3.8 / 3.7 / 6 |
 | **WiM Rechnungsabwicklung MSB über LF** | ⚡ | `mako-wim` `wim-rechnungsabwicklung` | REQOTE 35002 → QUOTES 15002 · ORDERS 17005/17006 · ORDRSP 19009/19010 | 5 WT Angebot · **8 WT** Antwort/Beendigung | BK6-22-024 Kap. 3.6.3.4–3.6.3.7 |
+| **WiM Stammdaten** | ⚡🔥 | `mako-wim` `wim-stammdaten` | UTILMD Stammdaten beider Sparten | per PID, `mako_fristen::antwort` | BK6-22-024 · AWH WiM Gas 2.0 |
+| **WiM Weiterverpflichtung** | ⚡🔥 | `mako-wim` `wim-weiterverpflichtung` | ORDERS 17002 → ORDRSP 19003/19004 | **1 WT** (MSBA antwortet) | BK6-22-024 |
 | **WiM INSRPT Störungsbehebung** | ⚡ 🔥 | `mako-wim` `wim-insrpt` | INSRPT 23001 · 23003/23004 · 23005 · 23008 · 23009 · 23011/23012 | 3/1 WT je Messtechnik · Ergebnisbericht 7/4/2 WT · Weiterleitung 1 WT | BK6-22-024 Anlage 2b Kap. 1.2 |
 | **MaBiS Bilanzkreisabrechnung** | ⚡ | `mako-mabis` `mabis-billing` | MSCONS 13003; IFTSTA 21000–21005 | 1 WT (§13.8) | BK6-24-174 |
 | **MaBiS Clearingliste** | ⚡ | `mako-mabis` `mabis-clearingliste` | UTILMD 55065/55069/55070 | — | BK6-24-174 |
 | **MaBiS-ZP Lifecycle** | ⚡ | `mako-mabis` `mabis-zp-lifecycle` | UTILMD 55062–55064, 55071/55072, 55197–55200, 55203–55214 | — | BK6-24-174 |
 | **MaBiS Anforderungen** | ⚡ | `mako-mabis` `mabis-anforderung` | ORDERS 17201–17208 | — | BK6-24-174 |
 | **MaBiS Listenabgleich** | ⚡ | `mako-mabis` `mabis-listenabgleich` | UTILMD 55065/55066, 55195/55196, 55201/55202, 55223/55224 | — | BK6-24-174 |
-| **GeLi Gas Lieferantenwechsel** | 🔥 | `mako-geli-gas` `geli-gas-supplier-change` | UTILMD G 44001–44021 | 10 WT | BK7-24-01-009 |
-| **GeLi Gas Lieferbeginn (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-lf-anmeldung` | UTILMD G 44001 (out) · 44002/44003 (in) | 10 WT | BK7-24-01-009 |
-| **GeLi Gas Stornierung (GNB-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-stornierung` | UTILMD G 44022 (Nb-only inbound) | 10 WT | BK7-24-01-009 |
-| **GeLi Gas Stornierung (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-stornierung-lf` | UTILMD G 44023/44024 (Lf-only inbound) | 10 WT | BK7-24-01-009 |
-| **GeLi Gas Sperrung (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-sperrung-lf` | ORDERS 17115/17117 · ORDCHG 39000 | 10 WT | BK7-24-01-009 |
-| **GeLi Gas Sperrung (GNB-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-sperrung-nb` | ORDERS 17115–17117 · ORDCHG 39000/39001 · ORDRSP 19118/19119 | 10 WT | BK7-24-01-009 |
+| **MaBiS Profile** | ⚡ | `mako-mabis` `mabis-profile` | MSCONS Profilübermittlung | — die 10/12-WT-Lieferfristen sind die **des NB** (Kap. 6.5.3); dies ist die Empfangsseite | BK6-24-174 Anlage 3 |
+| **GeLi Gas Lieferantenwechsel** | 🔥 | `mako-geli-gas` `geli-gas-supplier-change` | UTILMD G 44001–44021 | Ablauf des **4. WT** (44001) · **3. WT** (44004/44007/44010/44016) · **2. WT** (44013) | BK7-24-01-009 Kap. 3.1–3.3 |
+| **GeLi Gas Lieferbeginn (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-lf-anmeldung` | UTILMD G 44001 (out) · 44002/44003 (in) | Ablauf des **4. WT** (der GNB antwortet) | BK7-24-01-009 Kap. 3.2.3 |
+| **GeLi Gas Stornierung (GNB-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-stornierung` | UTILMD G 44022 (Nb-only inbound) | — **keine Festlegung quantifiziert sie**; Betreiberkonvention | GeLi Gas 2.0 Kap. 1.8 |
+| **GeLi Gas Stornierung (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-stornierung-lf` | UTILMD G 44023/44024 (Lf-only inbound) | — (der GNB antwortet) | GeLi Gas 2.0 Kap. 1.8 |
+| **GeLi Gas Sperrung (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-sperrung-lf` | ORDERS 17115/17117 · ORDCHG 39000 | **1 WT** (Sparte-neutrale 17115/17117-Zeile) | BK6-24-174 GPKE Teil 2 § 3.5 |
+| **GeLi Gas Sperrung (GNB-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-sperrung-nb` | ORDERS 17115–17117 · ORDCHG 39000/39001 · ORDRSP 19118/19119 | **1 WT** (17115/17117/39000) · **3 WT** (17116) | BK6-24-174 GPKE Teil 2 § 3.5 |
 | **GeLi Gas AWH-Abrechnung** | 🔥 | `mako-geli-gas` `geli-gas-sperrprozesse-invoic` | INVOIC 31011 | — | BK7-24-01-009 |
 | **GeLi Gas Messdaten (MSCONS)** | 🔥 | `mako-geli-gas` `geli-gas-mscons` | MSCONS 13002/13007/13008/13009 | — | BK7-24-01-009 |
-| **GeLi Gas Datenabruf** | 🔥 | `mako-geli-gas` `geli-gas-datenabruf` | ORDERS 17103/17104 → ORDRSP 19103/19104 | 10 WT | BK7-24-01-009 |
+| **GeLi Gas Datenabruf** | 🔥 | `mako-geli-gas` `geli-gas-datenabruf` | ORDERS 17103/17104 → ORDRSP 19103/19104 | **10 WT** — hier ist die Zehn echt (AWH § 5.12), nicht die Vorlauffrist | AWH GeLi Gas § 5.12 |
+| **GeLi Gas Stammdatenänderung** | 🔥 | `mako-geli-gas` `geli-gas-stammdatenaenderung` | UTILMD G 44109–44182 | Ablauf des **10. WT** — hier echt: Gas gibt eine Zustimmung/Ablehnung, Strom nur Qualitätsrückmeldung | AWH GeLi Gas § 4.3.2 |
+| **GeLi Gas Zuordnungs-Meldungen** | 🔥 | `mako-geli-gas` `geli-gas-zuordnungsmeldung` | UTILMD G 44036/44037/44038 | — Meldepflicht, **keine Antwortnachricht** | AWH GeLi Gas |
 | **PARTIN Gas Kommunikationsdaten** | 🔥 | `mako-geli-gas` `geli-gas-partin` | PARTIN 37008–37014 | — | PARTIN AHB 1.0f |
 | **WiM Gas MSB-Wechsel** | 🔥 | `mako-wim` `wim-device-change` | UTILMD G 44039–44044/44051–44053/44168/44169/44183 | 3 / 5 / 7 / 1 WT | AWH WiM Gas 2.0 |
 | **WiM Gas INSRPT** | 🔥 | `mako-wim` `wim-insrpt` | INSRPT 23005/23009 (Gas-only) | 3 WT Antwort · 7 WT Ergebnis | AWH WiM Gas 2.0 Kap. 4.3 |
@@ -123,7 +134,17 @@ Quick reference across all process families. Each row is a top-level domain.
 | **GaBi Gas Allokationsliste (MMMA)** | 🔥 | `mako-gabi-gas` `gabi-gas-mmma` | MSCONS 13013 (ORDERS 17110 / ORDRSP 19110 routed via `mako-gpke` `gpke-allokationsliste`) | — | BK7-24-01-008 |
 | **GaBi Gas ALOCAT** | 🔥 | `mako-gabi-gas` `gabi-gas-allocation` | PIDs 70001–70023 | — | DVGW ALOCAT 5.11a |
 | **GaBi Gas NOMINT/NOMRES** | 🔥 | `mako-gabi-gas` `gabi-gas-nomination` | PIDs 70030–70039 | — | DVGW NOMINT 4.6 / NOMRES 4.7 |
+| **NZR-EMob / Modell 2** | ⚡ | `mako-emob` `emob-anmeldung` · `emob-zuordnungsende` · `emob-abmeldung` | UTILMD 55238/55239 · 55240/55241 · 55242/55243 | Ablauf des **7. WT** (55238) · **3. WT** (55240/55242) | BK6-20-160 Anlage 6 · BK6-24-267 |
 | **Redispatch 2.0** | ⚡ | `mako-redispatch` | IFTSTA 21037/21038; XML documents | — | BK6-20-059/060/061 |
+
+> **Zehn Werktage ist bei GeLi Gas fast immer die falsche Zahl.** „Mindestens
+> 10 Werktage vor Aufnahme der Belieferung" (GeLi Gas 3.0 Kap. 3.2.3) ist die
+> **Vorlauffrist des Lieferanten** — wie weit im Voraus er senden muss — und
+> nicht das Antwortfenster des Netzbetreibers, das 4 / 3 / 2 Werktage je nach
+> Geschäftsvorfall beträgt. Die beiden zu verwechseln meldet eine abgelaufene
+> Frist als noch laufend. `mako_fristen::antwort` hält die Unterscheidung in
+> `TEN_WERKTAGE_IS_THE_SUPPLIERS_VORLAUFFRIST` fest; der Datenabruf (AWH
+> § 5.12) ist der eine Fall, in dem die Zehn wirklich das Antwortfenster ist.
 
 ---
 
@@ -161,8 +182,9 @@ Quick reference across all process families. Each row is a top-level domain.
    - [WiM Gas — INSRPT Störungsmeldungen](#wim-gas-insrpt-storungsmeldungen)
 6. [GaBi Gas — Kapazitätsabrechnung Gas](#gabi-gas-kapazitatsabrechnung-gas)
 7. [PARTIN — Stammdaten Marktpartner](#partin-stammdaten-marktpartner)
-8. [Redispatch 2.0](#redispatch-2-0)
-9. [DVGW — Gas Transport](#dvgw-gas-transport)
+8. [NZR-EMob — Modell 2](#nzr-emob-modell-2)
+9. [Redispatch 2.0](#redispatch-2-0)
+10. [DVGW — Gas Transport](#dvgw-gas-transport)
 
 ---
 
@@ -1526,6 +1548,47 @@ The AS4 endpoint URL is carried in the `COM` segment with qualifier `"AK"`
 | `PUT` | `/admin/partners/{mp_id}` | Create or update a partner record |
 | `DELETE` | `/admin/partners/{mp_id}` | Remove a partner record |
 | `POST` | `/admin/partners/import` | Bulk-import from a raw PARTIN interchange |
+
+---
+
+## NZR-EMob — Modell 2
+
+**Regulatory basis:** BNetzA **BK6-20-160 Anlage 6** und **BK6-24-267**;
+Prozessbeschreibung AWH „Zum Modell 2" V1.3. Crate: `mako-emob`
+(`EmobModule`).
+
+Modell 2 is the virtual Bilanzierungsgebiet a **Ladepunktbetreiber** (LPB) runs
+so that each charging session is booked into the *customer's own* supplier's
+Bilanzkreis rather than the site operator's. Moving a Marktlokation into or out
+of that Bilanzierungsgebiet is what these three processes do.
+
+| Leg | Anfrage | Antwort | Antwortpflichtig | Frist | EBD |
+|---|---|---|---|---|---|
+| Anmeldung in Modell 2 | UTILMD **55238** | **55239** | NB (VNB) | Ablauf des **7. WT** | `E_0510` · `E_0513` |
+| Beendigung der Zuordnung zur MaLo | UTILMD **55240** | **55241** | LF | Ablauf des **3. WT** | `E_0511` |
+| Abmeldung aus Modell 2 | UTILMD **55242** | **55243** | NB (VNB) | Ablauf des **3. WT** | `E_0512` |
+
+Two details separate this family from every other UTILMD process:
+
+**One Prüfidentifikator carries both outcomes.** There is no
+Bestätigungs-/Ablehnungs-pair — 55239 answers a 55238 whether it agrees or not,
+and the verdict lives in `SG4 STS+E01` DE 9013 with the deciding tree named in
+DE 1131. The code alone is not readable: `A01` is an *Ablehnung* in `E_0510` and
+a *Zustimmung* in `E_0511` and `E_0512`, so only the pair (tree, code) means
+anything.
+
+**Silence is not consent.** Where a GPKE Beendigung der Zuordnung confirms on an
+expired window, neither Anlage 6 nor the AWH gives an unanswered Modell-2 leg a
+default outcome — so the timer **escalates** instead. Moving a Marktlokation
+between Bilanzierungsgebieten on no one's say-so is the one thing the model must
+not do.
+
+A Bestätigung of an Anmeldung must also carry the Zählpunktbezeichnung of the
+ZP der Netzgangzeitreihe (`SG5 LOC+Z15`, AHB Bedingung `[663]`); without it the
+LPB cannot receive the series it has just won the right to.
+
+> The Zuordnung des ZP der NGZ zur NZR (**55235–55237**) looks adjacent but is
+> **MaBiS**, not Modell 2, and rides `mako-mabis`'s Zählpunkt lifecycle.
 
 ---
 

@@ -85,17 +85,28 @@ spec:
     max_delegation_depth: 0
     max_sensitivity_journaled: internal
 
-  # No `oversight` block, and no mutating tool grant: this specialist reads and
+  # No approval mode and no mutating tool grant: this specialist reads and
   # reports. Both absences are the same fact — a `tool-calling` agent cannot
   # dispatch a mutating call at all, because the arguments come from a model
   # completion, which agentplane labels untrusted by construction, and its taint
   # gate refuses a mutating sink with untrusted arguments. Declaring the grant
   # anyway would read as an ability this agent does not have.
   #
-  # Acting on a conclusion is a `planned` specialist's job — see
-  # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
-  # resolves itself, so the authority-bearing arguments keep the run input's own
-  # labels and a named human approves the call before it leaves.
+
+  oversight:
+    approval: none
+    deadline: { name: mako-incident-review, kind: working-days, params: { n: 1 } }
+    on_expiry: escalate
+    escalate_to: [mako-operations]
+    triage:
+      - name: mako-escalation
+        audience: [marktkommunikation]
+        priority: urgent
+        summary: A MaKo incident could not be resolved automatically.
+        when:
+          - path: /status
+            in: [ESCALATED]
+        deadline: { name: mako-incident-review, kind: working-days, params: { n: 1 } }
 
   budgets:
     max_tokens: 200000

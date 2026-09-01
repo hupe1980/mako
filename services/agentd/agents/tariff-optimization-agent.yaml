@@ -46,7 +46,7 @@ spec:
       5. Compare the expected §41a cost against the current fixed tariff with billingd
          `preview_billing` on the same consumption.
 
-      ## UPGRADE CONDITIONS (§41a Abs. 1 EnWG)
+      ## UPGRADE CONDITIONS (§41a Abs. 2 EnWG)
       - MeteringMode=iMSys (BSI TR-03109 SMGW active) REQUIRED
       - EPEX price data available in productd for billing period
 
@@ -80,10 +80,6 @@ spec:
   # gate refuses a mutating sink with untrusted arguments. Declaring the grant
   # anyway would read as an ability this agent does not have.
   #
-  # Acting on a conclusion is a `planned` specialist's job — see
-  # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
-  # resolves itself, so the authority-bearing arguments keep the run input's own
-  # labels and a named human approves the call before it leaves.
 
   budgets:
     max_tokens: 200000
@@ -158,7 +154,7 @@ spec:
       mutates: false
       max_sensitivity: internal
       description: >-
-        Whether 15-minute readings exist — the § 41a Abs. 1 EnWG iMSys
+        Whether 15-minute readings exist — the § 41a Abs. 2 EnWG iMSys
         precondition.
 
     - ref: tool://productd/check_41a_epex_status

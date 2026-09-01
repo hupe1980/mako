@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
-# § 60 Abs. 2 MsbG Ersatzwertbildung orchestrator. Selects and applies the correct substitute-value method (linear/prior-period/profile) for missing meter intervals, with full audit trail.
+# § 60 Abs. 2 MsbG Ersatzwertbildung review specialist. Assesses gaps and recommends a substitute-value method with an audit trail.
 #
 # Every grant below is a tool this specialist's own procedure names, and every
 # tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
@@ -9,7 +9,7 @@
 # there are no mutating grants here at all: a `tool-calling` agent cannot
 # dispatch one, so declaring it would read as an ability this agent does not
 # have. See the note above `budgets`.
-# Role: NB. Compiled only into a `role-nb` build (and the default all-roles build).
+# Role: MSB. Compiled only into a `role-msb` build (and the default all-roles build).
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
@@ -22,9 +22,8 @@ spec:
 
   identity:
     role: >-
-      § 60 Abs. 2 MsbG Ersatzwertbildung orchestrator. Selects and applies the
-      correct substitute-value method (linear/prior-period/profile) for missing
-      meter intervals, with full audit trail.
+      § 60 Abs. 2 MsbG Ersatzwertbildung review specialist. Assesses missing
+      intervals and recommends the method the MSB should apply, with an audit trail.
     constraints: |
       You are the § 60 Abs. 2 MsbG Ersatzwertbildung specialist.
 
@@ -109,17 +108,22 @@ spec:
     max_delegation_depth: 0
     max_sensitivity_journaled: internal
 
-  # No `oversight` block, and no mutating tool grant: this specialist reads and
-  # reports. Both absences are the same fact — a `tool-calling` agent cannot
-  # dispatch a mutating call at all, because the arguments come from a model
-  # completion, which agentplane labels untrusted by construction, and its taint
-  # gate refuses a mutating sink with untrusted arguments. Declaring the grant
-  # anyway would read as an ability this agent does not have.
-  #
-  # Acting on a conclusion is a `planned` specialist's job — see
-  # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
-  # resolves itself, so the authority-bearing arguments keep the run input's own
-  # labels and a named human approves the call before it leaves.
+  # Read-only evidence and recommendations. Terminal outcomes open MSB triage.
+
+  oversight:
+    approval: none
+    deadline: { name: replacement-value-review, kind: working-days, params: { n: 1 } }
+    on_expiry: escalate
+    escalate_to: [mako-operations]
+    triage:
+      - name: replacement-value-escalation
+        audience: [metering]
+        priority: urgent
+        summary: Ersatzwertbildung needs metering-operations review.
+        when:
+          - path: /substitution_status
+            in: [PENDING_REVIEW, ESCALATED]
+        deadline: { name: replacement-value-review, kind: working-days, params: { n: 1 } }
 
   budgets:
     max_tokens: 200000
@@ -142,7 +146,7 @@ spec:
         substitution_status:
           type: string
           enum:
-            - APPLIED
+            - RECOMMENDED
             - PENDING_REVIEW
             - ESCALATED
         gap_hours_total:
@@ -150,10 +154,10 @@ spec:
         method_applied:
           type: string
           enum:
-            - V1
-            - V2
-            - V3
-            - V4
+            - LINEAR_INTERPOLATION
+            - PRIOR_PERIOD_AVERAGE
+            - LAST_VALUE_CARRY_FORWARD
+            - ZERO_FILL
             - NONE
         audit_trail:
           type: string

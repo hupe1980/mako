@@ -165,13 +165,16 @@ impl mako_engine::builder::EngineModule for MabisModule {
     }
 
     fn workflow_names(&self) -> &'static [&'static str] {
+        // Every entry is the owning module's own constant. A literal here can
+        // disagree with the name `register_pids` routes to, and the two are
+        // checked against each other only at `EngineBuilder::build`.
         &[
-            "mabis-billing",
-            "mabis-profile",
-            "mabis-clearingliste",
-            "mabis-zp-lifecycle",
-            "mabis-anforderung",
-            "mabis-listenabgleich",
+            bilanzkreisabrechnung::WORKFLOW_NAME,
+            profile::WORKFLOW_NAME,
+            clearingliste::WORKFLOW_NAME,
+            zp_lifecycle::WORKFLOW_NAME,
+            anforderung::WORKFLOW_NAME,
+            listenabgleich::WORKFLOW_NAME,
         ]
     }
 

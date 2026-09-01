@@ -69,6 +69,11 @@ struct Finding {
 /// allowlist covers both families this guard checks — MaLo-IDs and EIC codes.
 const DELIBERATE: &[(&str, &str)] = &[
     (
+        "11XRWENET-----1X",
+        "`agentd` verifies that a malformed EIC cannot become a trusted routing \
+         authority field; the valid neighbouring fixture ends in `E`",
+    ),
+    (
         "51238696782",
         "the refusal fixture: `crates/mako-markt`, `crates/energy-api` and \
          `services/productd` assert that a wrong check digit is rejected. It fails \

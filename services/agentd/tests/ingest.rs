@@ -30,7 +30,7 @@ use serde_json::{Value, json};
 use agentd::plane::{Activation, Envelope, Plane, PlaneConfig, Reception, Stores};
 
 const AGENT: &str = "gabi-gas-agent";
-const EVENT_TYPE: &str = "de.gabi.imbalance.notified";
+const EVENT_TYPE: &str = mako_events::gabi::ALOCAT_MISSING;
 const SOURCE: &str = "urn:mako:test:tenant:9900357000004";
 
 fn ce(id: &str) -> Envelope<'_> {
@@ -93,9 +93,11 @@ fn plane(provider: &Arc<FakeProvider>) -> Plane {
 
 fn event() -> Value {
     json!({
-        "malo_id": "51238696012",
-        "bilanzkreis_id": "THE0BFH012345678",
         "gas_day": "2026-08-06",
+        "sender_eic": "11XRWENET-----1E",
+        "receiver_eic": "11YN00000000TH2M",
+        "deadline_label": "gabi-final-allocation",
+        "synthetic_pid": "13013",
     })
 }
 
@@ -115,26 +117,22 @@ fn completion(structured: Value) -> Completion {
 /// redelivery test must not fail because the script ran out rather than because
 /// a second run started.
 fn script(provider: &FakeProvider) {
-    let imbalance = ToolId::new("netzbilanzd", "get_gas_imbalance").wire_name();
+    let deadlines = ToolId::new("makod", "list_overdue_deadlines").wire_name();
     let plan = json!({
         "steps": [
-            { "tool": imbalance, "args": {
-                "bilanzkreis": "$input/bilanzkreis_id",
-                "gas_day": "$input/gas_day"
-            }},
+            { "tool": deadlines, "args": {} },
             { "parse": { "from": "$step0", "schema": {
                 "type": "object",
                 "required": [
-                    "gas_day", "imbalance_status", "allocation_version",
-                    "deadline_compliant", "action", "legal_basis"
+                    "gas_day", "status", "sender_eic", "receiver_eic", "action", "legal_basis"
                 ],
                 "properties": {
-                    "gas_day":            { "type": "string" },
-                    "imbalance_status":   { "type": "string" },
-                    "allocation_version": { "type": "string" },
-                    "deadline_compliant": { "type": "boolean" },
-                    "action":             { "type": "string" },
-                    "legal_basis":        { "type": "string" }
+                    "gas_day":      { "type": "string" },
+                    "status":       { "type": "string" },
+                    "sender_eic":   { "type": "string" },
+                    "receiver_eic": { "type": "string" },
+                    "action":       { "type": "string" },
+                    "legal_basis":  { "type": "string" }
                 }
             }}}
         ],
@@ -142,10 +140,10 @@ fn script(provider: &FakeProvider) {
     });
     let parsed = json!({
         "gas_day": "2026-08-06",
-        "imbalance_status": "MINDER",
-        "allocation_version": "Initial",
-        "deadline_compliant": true,
-        "action": "REQUEST_CORRECTION",
+        "status": "EVENT_NOT_CONFIRMED",
+        "sender_eic": "11XRWENET-----1E",
+        "receiver_eic": "11YN00000000TH2M",
+        "action": "VERIFY_EVENT",
         "legal_basis": "KoV §6.4 Abs. 3",
         "have_enough_information": true
     });
@@ -239,43 +237,32 @@ async fn two_distinct_events_get_two_runs() {
     );
 }
 
-/// A payload a `planned` specialist cannot plan from is refused, not admitted.
+/// A malformed live event is still admitted exactly once.
 ///
-/// And the refusal spends no admission key, so a corrected redelivery of the
-/// same event id is admitted rather than answered with the refusal — which is
-/// the difference between a bad payload and a poisoned message.
+/// Validation belongs to the coded skill and its failure is journaled. A
+/// redelivery must resolve to that failed run rather than creating a second
+/// incident with the same CloudEvent identity.
 #[tokio::test]
-async fn a_planned_specialist_with_no_trusted_input_is_refused_and_keeps_the_key_free() {
+async fn a_malformed_coded_event_is_deduplicated_to_its_original_run() {
     let provider = FakeProvider::new();
-    script(&provider);
     let plane = plane(&provider);
+    let mut malformed = event();
+    malformed
+        .as_object_mut()
+        .expect("object")
+        .remove("deadline_label");
 
-    let refused = plane
-        .accept(ce("ce-untrusted"), json!({ "note": "no identifier here" }))
-        .await;
-    assert!(refused[0].refused.is_some(), "nothing to plan from");
-    assert!(refused[0].run_id.is_empty(), "nothing was admitted");
-    // **Permanent, not back-pressure.** The same bytes will carry no identifier
-    // next time either, so the webhook answers `422` — which mako's emitter
-    // dead-letters immediately, putting it where an operator sees it today
-    // rather than after a retry schedule that could never have changed it.
+    let first = plane.accept(ce("ce-malformed"), malformed.clone()).await;
+    let second = plane.accept(ce("ce-malformed"), malformed).await;
     assert!(
-        !refused[0].retryable,
-        "resending identical bytes cannot help"
+        first[0].fresh,
+        "the malformed event still has a journaled run"
     );
-    assert_eq!(
-        Plane::reception(&refused),
-        Reception::Unprocessable,
-        "an all-refused fan-out with nothing retryable must not be answered 429 — that \
-         burns the emitter's whole retry schedule to reach the same dead letter"
-    );
-
-    // Same event id, corrected payload.
-    let corrected = plane.accept(ce("ce-untrusted"), event()).await;
     assert!(
-        corrected[0].fresh,
-        "a refusal must not claim the key — a corrected redelivery has to be admissible"
+        !second[0].fresh,
+        "redelivery must not open a second failed incident"
     );
+    assert_eq!(first[0].run_id, second[0].run_id);
 }
 
 /// An event nothing subscribes to accepts nothing, rather than everything.

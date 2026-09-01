@@ -41,7 +41,7 @@ fn ce<'a>(id: &'a str, event_type: &'a str) -> Envelope<'a> {
 }
 
 const AGENT: &str = "gabi-gas-agent";
-const EVENT_TYPE: &str = "de.gabi.imbalance.notified";
+const EVENT_TYPE: &str = mako_events::gabi::ALOCAT_MISSING;
 
 #[derive(Debug, Default)]
 struct CountingTools {
@@ -141,16 +141,15 @@ fn result_schema() -> Value {
     json!({
         "type": "object",
         "required": [
-            "gas_day", "imbalance_status", "allocation_version",
-            "deadline_compliant", "action", "legal_basis"
+            "gas_day", "status", "sender_eic", "receiver_eic", "action", "legal_basis"
         ],
         "properties": {
-            "gas_day":            { "type": "string" },
-            "imbalance_status":   { "type": "string" },
-            "allocation_version": { "type": "string" },
-            "deadline_compliant": { "type": "boolean" },
-            "action":             { "type": "string" },
-            "legal_basis":        { "type": "string" }
+            "gas_day":     { "type": "string" },
+            "status":      { "type": "string" },
+            "sender_eic":  { "type": "string" },
+            "receiver_eic": { "type": "string" },
+            "action":      { "type": "string" },
+            "legal_basis": { "type": "string" }
         }
     })
 }
@@ -158,10 +157,10 @@ fn result_schema() -> Value {
 fn parsed_answer() -> Completion {
     completion(json!({
         "gas_day": "2026-08-06",
-        "imbalance_status": "MINDER",
-        "allocation_version": "Initial",
-        "deadline_compliant": true,
-        "action": "NONE",
+        "status": "EVENT_NOT_CONFIRMED",
+        "sender_eic": "11XRWENET-----1E",
+        "receiver_eic": "11YN00000000TH2M",
+        "action": "VERIFY_EVENT",
         "legal_basis": "KoV §6.4",
         "have_enough_information": true
     }))
@@ -181,10 +180,11 @@ fn completion(structured: Value) -> Completion {
 
 fn event() -> Value {
     json!({
-        "malo_id": "51238696012",
-        "pid": "13013",
-        "mp_id": "9900357000004",
         "gas_day": "2026-08-06",
+        "sender_eic": "11XRWENET-----1E",
+        "receiver_eic": "11YN00000000TH2M",
+        "deadline_label": "gabi-final-allocation",
+        "synthetic_pid": "13013",
     })
 }
 
@@ -209,21 +209,19 @@ async fn a_quiet_schedule_changes_nothing() {
         faulty.injected().is_empty(),
         "a quiet schedule injects nothing"
     );
-    assert_eq!(tools.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(provider.calls(), 0, "coded triage must not call a model");
+    assert_eq!(
+        tools.calls.load(Ordering::SeqCst),
+        0,
+        "coded triage has no tool grant"
+    );
 }
 
 /// An append that commits while the caller sees an error duplicates nothing.
 ///
-/// The fault lands on the first batch carrying an `EffectDone` — the record of
-/// the plan model call having succeeded. The record is durably present; the
-/// runtime was told it is not. Whatever the runtime concludes, three things
-/// must hold, and each catches a different wrong reaction:
-///
-/// * the model was asked at most twice (plan + parse) — a third ask means the
-///   landed call was re-executed;
-/// * the tool ran at most once — re-running the plan re-dispatches it;
-/// * the journal holds no second attempt of any effect — retrying the append
-///   would write two records claiming the same position in history.
+/// The fault lands on the first batch carrying an `EffectDone` from the coded
+/// note/deadline/task path. The record is durably present while the runtime was
+/// told it is not. The journal must contain no second attempt of that effect.
 #[tokio::test]
 async fn a_committed_then_lost_append_duplicates_no_effect() {
     let provider = FakeProvider::new();
@@ -251,15 +249,11 @@ async fn a_committed_then_lost_append_duplicates_no_effect() {
         "the schedule never fired — the test proved nothing"
     );
 
-    assert!(
-        provider.calls() <= 2,
-        "the landed model call was re-executed after its record was already \
-         durable: {} calls",
-        provider.calls()
-    );
-    assert!(
-        tools.calls.load(Ordering::SeqCst) <= 1,
-        "re-running the plan re-dispatched the tool call"
+    assert_eq!(provider.calls(), 0, "coded triage must not call a model");
+    assert_eq!(
+        tools.calls.load(Ordering::SeqCst),
+        0,
+        "coded triage has no tool grant"
     );
 
     // The journal agrees: no effect has a second attempt.

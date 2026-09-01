@@ -28,18 +28,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-/// Tools that no server exposes *yet*, and why that is known rather than a typo.
-///
-/// Nothing else may be absent. An entry here is a promise that the gap is
-/// tracked in `concepts/ROADMAP.md`, not a way to silence the check.
-const PLANNED_TOOLS: &[(&str, &str)] = &[(
-    "netzbilanzd/get_gas_imbalance",
-    "GaBi Gas imbalance has no daemon yet — tracked in concepts/ROADMAP.md under the \
-     `de.gabi.*` emitters. `gabi-gas-agent` subscribes to the imbalance globs, but they \
-     stay dark until IMBNOT dispatch lands; the grant is kept so the manifest still \
-     describes the intended reach.",
-)];
-
 /// Check every grant in every specialist manifest.
 ///
 /// Returns `true` when all of them resolve and agree.
@@ -109,9 +97,7 @@ pub fn run(workspace_root: &Path) -> bool {
             // fall back to the hyphen spelling before calling a grant missing.
             let dir_key = format!("{}/{}", grant.server.replace('_', "-"), grant.tool);
             let Some(read_only) = tools.get(&key).or_else(|| tools.get(&dir_key)) else {
-                if !PLANNED_TOOLS.iter().any(|(t, _)| *t == key) {
-                    missing.push(format!("{name}: tool://{key} — no MCP server declares it"));
-                }
+                missing.push(format!("{name}: tool://{key} — no MCP server declares it"));
                 continue;
             };
             let mutating = !read_only;
@@ -144,9 +130,6 @@ pub fn run(workspace_root: &Path) -> bool {
             "check-tool-grants: {grants} grants across the specialist manifests resolve and \
              agree with the servers' own read-only hints"
         );
-        for (tool, why) in PLANNED_TOOLS {
-            println!("  (planned, not yet served: tool://{tool} — {why})");
-        }
         return true;
     }
 
@@ -636,13 +619,10 @@ fn inventory_matches_the_docs(workspace_root: &Path, tools: &BTreeMap<String, bo
         // Nothing made them edit the twelve sentences that also state it.
         (
             "README.md",
-            format!("governed consumer: {agents} declarative specialists"),
+            format!("governed consumer: {agents} specialists"),
         ),
-        ("README.md", format!("agentd<br/>{agents} LLM specialists")),
-        (
-            "README.md",
-            format!("**{agents} declarative specialist manifests**"),
-        ),
+        ("README.md", format!("agentd<br/>{agents} specialists")),
+        ("README.md", format!("**{agents} specialist manifests**")),
         ("README.md", format!("agent plane — {agents} specialists")),
         (
             "site/templates/index.html",

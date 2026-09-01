@@ -221,7 +221,7 @@ and `agentd`, which is the MCP *host* that calls the others.
 
 | Daemon | Port | Role | Config file |
 |--------|------|------|-------------|
-| `makod` | `:8080` / `:4080` / `:8090` | Protocol gateway — EDIFACT ↔ BO4E, 66 workflows, AS4 ingest, deadlines | `makod.toml` |
+| `makod` | `:8080` / `:4080` / `:8090` | Protocol gateway — EDIFACT ↔ BO4E, 70 workflows, AS4 ingest, deadlines | `makod.toml` |
 | `marktd` | `:8180` | Market Data Hub — MaLo/MeLo/NeLo/TR/SR, Lokationszuordnung graph, preisblaetter, VersorgungsStatus, `event_log` replay, durable fan-out; **Geraet** typed konfigurationen sub-resource (16-variant `Konfigurationsparameter` enum, GIN-indexed); **Zaehlzeitdefinition** typed endpoint; ZaehlzeitRegister auto-population from WiM Stammdaten | `marktd.toml` |
 | `processd` | `:8580` | Process decision engine — NB STP (`mako-pruefung`), LF answers to the NB-initiated GPKE processes, MSB REQOTE/ORDRSP, EoG gap closure; role-gated binaries (§ 7 EnWG) | `processd.toml` |
 | `invoicd` | `:8280` | INVOIC plausibility — REMADV, selbstausstellen, overdue-REMADV, § 147 AO / GoBD audit | `invoicd.toml` |
@@ -319,7 +319,7 @@ makes automated decisions within regulatory deadlines.
 - STP improves when the `malo_grid` record is present (provisioned via marktd's NB-role `PUT /api/v1/malos/{malo_id}/grid` endpoint — manual/ERP provisioning)
 
 **LF module** (`--features lf-only` or `integrated`):
-- Answers the NB-initiated GPKE processes (inbound 55007 and 55010) within their 24 h business Frist
+- Answers the NB-initiated GPKE processes (inbound 55007 and 55010) within their published Frist — a clock time on the 1. Werktag nach dem ÜT, resolved per PID from `mako_fristen::antwort`, never a flat 24 h
 - Auto-consents clean Abmeldungen; auto-rejects Einzug (A32) scenarios
 - Queues ambiguous cases in `approval_queue` for ERP operator review
 

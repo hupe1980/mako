@@ -31,7 +31,7 @@ graph TB
     ext["BDEW Counterparty<br/>(NB · LF · MSB · BKV)"]
 
     subgraph protocol ["Protocol & Market Data"]
-        makod[":8080 makod<br/>EDIFACT runtime · 66 workflows<br/>AS4 · SlateDB · MCP"]
+        makod[":8080 makod<br/>EDIFACT runtime · 70 workflows<br/>AS4 · SlateDB · MCP"]
         marktd[":8180 marktd<br/>MaLo/MeLo/NeLo · contracts<br/>VersorgungsStatus · fan-out"]
         processd[":8580 processd<br/>Anmeldung STP ≥95%<br/>LF answers · §14a"]
     end

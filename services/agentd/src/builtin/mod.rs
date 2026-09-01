@@ -55,7 +55,7 @@ pub struct Specialist {
 /// Returned by [`all()`] and looked up by [`find(name)`].
 /// Every built-in specialist compiled into this binary.
 ///
-/// # Role scoping (§ 9 EnWG informatorisches Unbundling)
+/// # Role scoping (§§ 6a, 7a EnWG)
 ///
 /// Entries are gated by the same `role-*` features every other daemon uses. An
 /// `role-lf` build contains no NB or MSB specialist at all — not a specialist
@@ -161,7 +161,7 @@ static BUILTIN_AGENTS: &[Specialist] = &[
     REGULATORY_REPORTING_AGENT,
     #[cfg(any(
         not(any(feature = "role-lf", feature = "role-nb", feature = "role-msb")),
-        feature = "role-nb",
+        feature = "role-msb",
     ))]
     REPLACEMENT_VALUE_AGENT,
     #[cfg(any(
@@ -458,7 +458,7 @@ const REGULATORY_REPORTING_AGENT: Specialist = Specialist {
 
 #[cfg(any(
     not(any(feature = "role-lf", feature = "role-nb", feature = "role-msb")),
-    feature = "role-nb",
+    feature = "role-msb",
 ))]
 const REPLACEMENT_VALUE_AGENT: Specialist = Specialist {
     name: "replacement-value-agent",
@@ -515,11 +515,7 @@ const VPP_BILLING_AGENT: Specialist = Specialist {
 ))]
 const GABI_GAS_AGENT: Specialist = Specialist {
     name: "gabi-gas-agent",
-    trigger_patterns: &[
-        "de.gabi.imbalance.*",
-        mako_events::gabi::ALOCAT_MISSING,
-        "de.gabi.nomination.*",
-    ],
+    trigger_patterns: &[mako_events::gabi::ALOCAT_MISSING],
 };
 
 #[cfg(any(
@@ -537,7 +533,7 @@ const EINSD_BATCH_AGENT: Specialist = Specialist {
 
 /// Every specialist compiled into this binary, in declaration order.
 ///
-/// A role-scoped build yields only its own role's specialists (§ 9 EnWG).
+/// A role-scoped build yields only its own role's specialists (§§ 6a, 7a EnWG).
 pub fn all() -> impl Iterator<Item = &'static Specialist> {
     BUILTIN_AGENTS.iter()
 }
@@ -569,7 +565,7 @@ mod trigger_contract_tests {
         );
     }
 
-    /// § 9 EnWG: a role-scoped build contains no other arm's specialists.
+    /// §§ 6a, 7a EnWG: a role-scoped build contains no other arm's specialists.
     ///
     /// `agentd` is the one service that reaches all the others, so in a
     /// combined-role deployment it is the component that cannot be split by

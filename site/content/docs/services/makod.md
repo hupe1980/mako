@@ -771,7 +771,7 @@ RUN cargo build -p makod --release \
 
 Selecting no role at all is refused at startup rather than silently producing an
 all-roles binary. Each role build registers a strict subset of the default's
-**66 workflows over 467 Prüfidentifikatoren**, and the startup log records both
+**70 workflows over 467 Prüfidentifikatoren**, and the startup log records both
 counts for whichever roles were compiled, so the binary's scope is evidence for a
 BNetzA audit.
 
@@ -1437,7 +1437,7 @@ When a client connects, `makod` returns dynamic server instructions that include
 
 - The instance's tenant ID and configured Marktrollen
 - A filtered command list (only commands relevant to the configured roles)
-- A regulatory deadline table (GPKE 24 h, WiM Strom 3/5/7/1 Werktage per PID, GeLi Gas 10 Werktage; MaBiS has no response Frist — see `mako_mabis::fristen`)
+- A regulatory deadline table, keyed per Prüfidentifikator by `mako_fristen::antwort` (GPKE clock times on the 1. Werktag, WiM Strom 3/5/7/1 Werktage, GeLi Gas 4/3/2 Werktage; MaBiS has no response Frist — see `mako_mabis::fristen`)
 - Machine-readable error prefix glossary
 
 This means the LLM always has full operational context without additional configuration.
@@ -2037,7 +2037,7 @@ curl -X POST http://localhost:8080/api/v1/commands \
   }'
 
 # NB reports that execution failed — `reason` is mandatory, so the LF learns why
-# instead of waiting out the 24-hour deadline:
+# instead of waiting out the answer window:
 curl -X POST http://localhost:8080/api/v1/commands \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \

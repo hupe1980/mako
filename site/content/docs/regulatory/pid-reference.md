@@ -176,9 +176,9 @@ section on this page.
 | PID | Beschreibung | Prozess | Von → An | Reaktion | ⚡ | 🔥 | 3.3 | 4.0 | Crate / Workflow |
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
 | 55001 | Anmeldung verb. MaLo | GPKE Teil 2 | LFN → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
-| 55002 | Bestätigung Anmeldung verb. MaLo | GPKE Teil 2 | NB → LFN | 55001 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
+| 55002 | Bestätigung Anmeldung verb. MaLo | GPKE Teil 2 | NB → LFN | 55001 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-lf-anmeldung` |
 | 55003 | Ablehnung Anmeldung verb. MaLo | GPKE Teil 2 | NB → LFN | 55001 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-lf-anmeldung` |
-| 55004 | Abmeldung | GPKE Teil 2 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-lf-anmeldung` |
+| 55004 | Abmeldung | GPKE Teil 2 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
 | 55005 | Bestätigung Abmeldung | GPKE Teil 2 | NB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-lf-anmeldung` |
 | 55006 | Ablehnung Abmeldung | GPKE Teil 2 | NB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-lf-anmeldung` |
 | 55007 | Abmeldung / Beendigung der Zuordnung | GPKE Teil 2 | NB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-lf-abmeldung` |
@@ -199,7 +199,7 @@ section on this page.
 > acceptance (Frist: 2. Werktag). The rows above are the highest-volume MaLo
 > examples; 55557/55559 (MSB-Abr.-Daten) stay on `gpke-supplier-change` and
 > 21047 (Bearbeitungsstand) on the IFTSTA route.
-| 55016 | Kündigung | GPKE Teil 2 | LFN → LFA | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
+| 55016 | Kündigung | GPKE Teil 2 | LFN → LFA | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-kuendigung` |
 | 55017 | Bestätigung Kündigung | GPKE Teil 2 | LFA → LFN | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-lf-anmeldung` |
 | 55018 | Ablehnung Kündigung | GPKE Teil 2 | LFA → LFN | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-lf-anmeldung` |
 | 55022 | Anfrage nach Stornierung | GPKE Teil 4 | orig. → orig. | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-stornierung` |
@@ -290,7 +290,7 @@ section on this page.
 | 55243 | Antwort auf Abmeldung | AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | VNB → NB | 55242 | ✅ | — | ✅ | ✅ | `mako-emob` `emob-abmeldung` |
 | 55553 | Daten auf individuelle Bestellung | GPKE Teil 4 | MSB → NB · MSB → LF · MSB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55555 | Anfrage Daten der individuellen Bestellung | GPKE Teil 4 | NB → MSB · LF → MSB · MSB → MSB | 55553 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-anfrage-bestellung` |
-| 55557 | Änderung MSB-Abr.-Daten der MaLo | GPKE Teil 4 | MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
+| 55557 | Änderung MSB-Abr.-Daten der MaLo | GPKE Teil 4 | MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-stammdatenaenderung` |
 | 55559 | Rückmeldung/Anfrage MSB-Abr.-Daten der MaLo | GPKE Teil 4 | NB → MSB | 55557 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55600 | Anmeldung neuer verb. MaLo | GPKE Teil 2 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-neuanlage` |
 | 55601 | Anmeldung neuer erz. MaLo | GPKE Teil 2 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-neuanlage` |
@@ -389,11 +389,11 @@ section on this page.
 | PID | Beschreibung | Prozess | Von → An | Reaktion | ⚡ | 🔥 | 3.3 | 4.0 | Crate / Workflow |
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
 | 44001 | Anmeldung NN | GeLi Gas 2.0 | LFN → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
-| 44002 | Bestätigung Anmeldung | GeLi Gas 2.0 | NB → LFN | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
-| 44003 | Ablehnung Anmeldung | GeLi Gas 2.0 | NB → LFN | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
+| 44002 | Bestätigung Anmeldung | GeLi Gas 2.0 | NB → LFN | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-lf-anmeldung` |
+| 44003 | Ablehnung Anmeldung | GeLi Gas 2.0 | NB → LFN | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-lf-anmeldung` |
 | 44004 | Abmeldung NN | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
-| 44005 | Bestätigung Abmeldung | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
-| 44006 | Ablehnung Abmeldung | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
+| 44005 | Bestätigung Abmeldung | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-lf-anmeldung` |
+| 44006 | Ablehnung Abmeldung | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-lf-anmeldung` |
 | 44007 | Abmeldung NN vom NB | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
 | 44008 | Bestätigung Abmeldung vom NB | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
 | 44009 | Ablehnung Abmeldung vom NB | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
@@ -404,14 +404,14 @@ section on this page.
 | 44014 | Bestätigung EoG Anmeldung | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
 | 44015 | Ablehnung EoG Anmeldung | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
 | 44016 | Kündigung beim alten Lieferanten | GeLi Gas 2.0 | LFN → LFA | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
-| 44017 | Bestätigung Kündigung | GeLi Gas 2.0 | LFA → LFN | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
-| 44018 | Ablehnung Kündigung | GeLi Gas 2.0 | LFA → LFN | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
+| 44017 | Bestätigung Kündigung | GeLi Gas 2.0 | LFA → LFN | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-lf-anmeldung` |
+| 44018 | Ablehnung Kündigung | GeLi Gas 2.0 | LFA → LFN | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-lf-anmeldung` |
 | 44019 | Bestandsliste zugeordnete Marktlokationen | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
 | 44020 | Änderungsmeldung zur Bestandsliste | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
 | 44021 | Antwort auf Änderungsmeldung zur Bestandsliste | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
 | 44022 | Anfrage nach Stornierung | WiM Gas / GeLi Gas 2.0 | Sender → Empf. · orig. → orig. | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-stornierung` |
-| 44023 | Bestätigung Anfrage Stornierung | WiM Gas / GeLi Gas 2.0 | Empf. → Sender | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-stornierung` |
-| 44024 | Ablehnung Anfrage Stornierung | WiM Gas / GeLi Gas 2.0 | Empf. → Sender | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-stornierung` |
+| 44023 | Bestätigung Anfrage Stornierung | WiM Gas / GeLi Gas 2.0 | Empf. → Sender | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-stornierung-lf` |
+| 44024 | Ablehnung Anfrage Stornierung | WiM Gas / GeLi Gas 2.0 | Empf. → Sender | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-stornierung-lf` |
 | 44035 | Antwort auf die Geschäftsdatenanfrage | GeLi Gas 2.0 | NB → LF | 17101 | — | ✅ | ✅ | ✅ | — |
 | 44036 | Informationsmeldung über existierende Zuordnung | GeLi Gas 2.0 | NB → LFN | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-zuordnungsmeldung` |
 | 44037 | Informationsmeldung zur Beendigung der Zuordnung | GeLi Gas 2.0 | NB → LFA | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-zuordnungsmeldung` |
@@ -620,7 +620,7 @@ section on this page.
 | 21043 | Bestellungsantwort / -mitteilung | GPKE Teil 3 | NB → LF · MSB → MSB · MSB → NB · MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 21044 | Bestellungsbeendigung | GPKE Teil 3 | MSB → NB · MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 21045 | EnFG Informationen | GPKE Teil 4 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
-| 21047 | Bearbeitungsstandsmeldung | GPKE Teil 2 / GPKE Teil 4 | NB → LF · NB → ÜNB · NB → MSB · LF → NB · LF → MSB · MSB → NB · MSB → LF · MSB → MSB · MSB → ÜNB | 55156, 55220, 55673 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-abrechnungsdaten` |
+| 21047 | Bearbeitungsstandsmeldung | GPKE Teil 2 / GPKE Teil 4 | NB → LF · NB → ÜNB · NB → MSB · LF → NB · LF → MSB · MSB → NB · MSB → LF · MSB → MSB · MSB → ÜNB | 55156, 55220, 55673 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
 
 ## MSCONS AHB
 
@@ -674,8 +674,8 @@ section on this page.
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
 | 33001 | Bestätigung | WiM Gas / Kapazitätsabrechnung / MMM Strom/Gas / AWH Sperrprozesse Gas / GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik / GeLi Gas 2.0 | NB → MSBA · MSBN → MSBA · KN → NB · LF → NB · MGV → NB · NB → MSB · LF → MSB · MSBN/gMSB → MSBA · ESA → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` · `mako-wim` `wim-invoic` |
 | 33002 | Abweisung | WiM Gas / Kapazitätsabrechnung / MMM Strom/Gas / AWH Sperrprozesse Gas / GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik / GeLi Gas 2.0 | NB → MSBA · MSBN → MSBA · KN → NB · LF → NB · MGV → NB · NB → MSB · LF → MSB · MSBN/gMSB → MSBA · ESA → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` · `mako-wim` `wim-invoic` |
-| 33003 | Strom Abweisung Kopf und Summe | GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik | LF → NB · NB → MSB · LF → MSB · MSBN/gMSB → MSBA · ESA → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` |
-| 33004 | Strom Abweisung Position | GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik | LF → NB · NB → MSB · LF → MSB · MSBN/gMSB → MSBA · ESA → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` |
+| 33003 | Strom Abweisung Kopf und Summe | GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik | LF → NB · NB → MSB · LF → MSB · MSBN/gMSB → MSBA · ESA → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-invoic` |
+| 33004 | Strom Abweisung Position | GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik | LF → NB · NB → MSB · LF → MSB · MSBN/gMSB → MSBA · ESA → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-invoic` |
 
 ## PARTIN AHB
 

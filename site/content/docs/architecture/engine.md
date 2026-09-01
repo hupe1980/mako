@@ -256,7 +256,9 @@ store.reschedule(message_id, next_attempt_at).await?;
 Time-indexed store for regulatory Fristen:
 
 ```rust
-// Register a deadline (GPKE 24h, WiM Strom per PID, GeLi Gas 10 Werktage):
+// Register a deadline. Every window comes from `mako_fristen::antwort`, keyed
+// by Prüfidentifikator — GPKE clock times on the 1. Werktag, WiM Strom
+// 3/5/7/1 Werktage, GeLi Gas 4/3/2 Werktage. There is no flat 24 h window.
 store.register(&deadline).await?;
 
 // Poll deadlines due now (returns a DueNowResult with a truncation flag):
@@ -487,6 +489,38 @@ Partners are managed at runtime via the REST admin API — see
 | `mako-geli-gas` | GeLi Gas — Lieferbeginn/-ende Gas, Stornierung (44022–44024, beide Use-Cases), Gas Sperrung (LF role), Gas Datenabruf, INVOIC 31011 | 44001–44024, 17103, 17104, 19103, 19104, 19116, 19117, 19128, 19129, 31011 | per PID, from `mako_fristen::antwort` |
 | `mako-mabis` | MABIS — Bilanzkreisabrechnung | 13003 (MSCONS Summenzeitreihe, IFTSTA 21000–21005) | n/a (batch, not saga) |
 | `mako-gabi-gas` | GaBi Gas 2.1 — allocation and nomination (ALOCAT/NOMINT/NOMRES) + Kapazitäts-/Mehr-Mindermengen-INVOIC | INVOIC 31007/31008/31010, ORDERS 17110, ORDRSP 19110, MSCONS 13013, DVGW 70001–70039 | KoV deadlines (GasDay D-1 14:00 etc.) |
+| `mako-emob` | NZR-EMob / Modell 2 — the three Modellwechsel legs (Anmeldung, Zuordnungsende, Abmeldung) | 55238/55239, 55240/55241, 55242/55243 | 7 / 3 Werktage, per PID; an unanswered leg **escalates** rather than confirming |
+| `mako-redispatch` | Redispatch 2.0 — activation, Stammdaten and the six acknowledge-and-forward document families | XML document types; IFTSTA 21037/21038, MSCONS 13021/13022, ORDERS 17209 | 3 min ACK (FB 1.0g); the rest are operator-set |
+
+### The module contract
+
+A domain crate reaches the engine as an `EngineModule`, and it names its
+workflows **twice** — once by routing a Prüfidentifikator to a name, once by
+declaring the name:
+
+```rust
+impl EngineModule for GpkeModule {
+    fn workflow_names(&self) -> &'static [&'static str] {
+        &[wechselprozesse::WORKFLOW_NAME, eog::WORKFLOW_NAME, /* … */]
+    }
+
+    fn register_pids(&self, router: &mut PidRouter) {
+        router.register(55001, wechselprozesse::WORKFLOW_NAME);
+        // …
+    }
+}
+```
+
+The declaration is the load-bearing one. `EngineContext::registered_workflows`
+collects it, and three of `makod`'s startup checks read only that list: whether
+a workflow has a deadline-dispatch arm, whether it has a format-version
+migration decision, and the workflow count it reports. So **every name
+`register_pids` routes to must also be declared** — `EngineBuilder::build`
+panics per module otherwise, because a routed but undeclared workflow runs while
+being exempt from all three.
+
+The converse is allowed and not checked: a command-initiated workflow, started
+by an ERP over the command API, declares a name and routes no inbound PID.
 
 ### MABIS architecture note
 

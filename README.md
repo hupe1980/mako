@@ -25,8 +25,8 @@ The workspace covers the full BDEW MaKo stack across five layers:
 | **Protocol** | `edi-energy` EDIFACT · `dvgw-edi` DVGW gas · `redispatch-xml` Redispatch 2.0 · `mako-engine` event-sourced process runtime · `makod` daemon |
 | **Market data** | `mako-markt` library · `marktd` Market Data Hub (PostgreSQL, CloudEvents, OIDC/JWT, EventBus) |
 | **Settlement & billing** | `grid-billing` + `netzbilanzd` NNE/MMM/MSB settlement · `eeg-billing` + `einsd` EEG/KWKG · `energy-billing` + `billingd` retail billing |
-| **Customer management** | `accountingd` FI-CA ledger · `portald` customer portal · `outputd` customer documents · `vertragd` contracts · `productd` tariff catalog · `agentd` AI orchestration |
-| **Agent surface** | 15 of the 17 services expose an MCP server — **163 tools** — and `agentd` is the governed consumer: 28 declarative specialists on the [agentplane](https://github.com/hupe1980/agentplane) durable runtime, every model and tool call a journaled effect, four-eyes before anything acts |
+| **Customer management** | `accountingd` FI-CA ledger · `portald` customer portal · `outputd` customer documents · `vertragd` contracts · `productd` tariff catalog · `agentd` advisory automation |
+| **Agent surface** | 15 of the 17 services expose an MCP server — **163 tools** — and `agentd` is the governed consumer: 28 specialists (26 read-only model-backed plus 2 coded) on [agentplane](https://github.com/hupe1980/agentplane), with journaled effects and durable human triage |
 | **Testing** | `makotest` — Python toolkit over the same Rust core: BDEW identifier check digits, the published answer-Frist table, the Entscheidungsbaum Antwortcodes, AHB-validated EDIFACT, counterparties that answer in EDIFACT, seeded EPEX curves, and a `pytest` plugin ([README](makotest/README.md)) |
 
 ---
@@ -62,7 +62,7 @@ flowchart LR
         OUTPUTD["outputd<br/>customer documents<br/>+ delivery"]
         PORTALD["portald<br/>customer portal"]
         OBSD["obsd<br/>BNetzA KPIs"]
-        AGENTD["agentd<br/>28 LLM specialists"]
+        AGENTD["agentd<br/>28 specialists<br/>26 model-backed + 2 coded"]
         ERP["ERP / operator systems"]
     end
 
@@ -119,7 +119,7 @@ flowchart LR
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| `makod` | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 70+ GPKE/WiM/GeLi Gas/MaBiS/GaBi Gas/NZR-EMob workflows, AS4/REST/iMS, Cedar ABAC, OIDC/JWT, MCP server |
+| `makod` | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 66 GPKE/WiM/GeLi Gas/MaBiS/GaBi Gas/NZR-EMob/Redispatch workflows over 467 Prüfidentifikatoren, AS4/REST/iMS, Cedar ABAC, OIDC/JWT, MCP server |
 | `marktd` | `:8180` | All | Market Data Hub — MaLo/MeLo/contracts, VersorgungsStatus incl. Ersatz-/Grundversorgung, Grundversorger registry (§36 Abs. 2), the dated per-MeLo MSB timeline derived from IFTSTA 21012 and the Messstellenbetriebsverträge `E_0200` decides on, typed BO4E API, EventBus fan-out, MMMA monthly import worker |
 | `processd` | `:8580` | NB+LF+MSB | Process Decision Engine — Anmeldung STP ≥ 95%, EoG gap closure + §38 timer, LF answer automation (55007/55010), MSB-Wechsel STP against the WiM Entscheidungsbäume incl. the Mindestvorlaufzeit, MSB REQOTE auto-response, §14a Steuerungsauftrag |
 | `invoicd` | `:8280` | LF | INVOIC plausibility check — 10 billing PIDs through one table-driven pipeline (Strom + Gas NNE, MMM, MSB, AWH, Sparte-neutral Storno 31004); persist-before-dispatch § 147 AO receipts with a dead-letter queue for anything that cannot become one; PID-aware answer + operator re-dispatch; self-issued Mehrmengen-Rechnung 31006 via `settle_mmm`; leased ERP outbox + one-shot overdue notice; 7-tool read-only MCP server |
@@ -135,7 +135,7 @@ flowchart LR
 | `accountingd` | `:9380` | LF | Massenkontokorrent / Customer Account Ledger — **tamper-evident double-entry ledger** on the `doubleentry` crate (append-only BLAKE3 Merkle log, `O(log n)` inclusion proofs, period seals for GoBD/§146 AO **Festschreibung**, store-level idempotent CE ingest); per-MaLo Kontokorrent + GL contras; **Abschläge as receivables** (`ABSCHLAG` debit against Erhaltene Anzahlungen, discharged by an `ABSCHLAG_VERRECHNUNG` when the settling invoice deducts them, with a register carrying each advance's § 14 Abs. 5 Satz 2 UStG rate); **FIFO open-item clearing**; **Summen- und Saldenliste** §238 HGB; aging analysis; Verzugszinsen §288 BGB; Zahlungsvereinbarung (payment plans); pain.008 single-message multi-group (mandatory Gläubiger-ID EPC AT-02) with per-mandate collection tracking; **pain.007 creditor reversals**; **pain.002 ingestion incl. Verification of Payee**; camt.052/053/054 XML and flat-export dedup import (booked entries only) with an IBAN → EndToEndId → remittance-token payment-resolution ladder; ISO 20022 structured postal addresses (EPC cut-over 2026-11-15); keyed-BLAKE3 IBAN hash; OIDC/JWT + inbound HMAC; auto-Mahnwesen that **renders and delivers each case as a MAHNUNG through `outputd`**; §40b Abs. 1 EnWG Jahresabschluss on demand or from the annual worker |
 | `portald` | `:9480` | LF | Customer Portal read-model gateway — stateless aggregation of Lastgang/invoices/ledger/VersorgungsStatus/EEG plus the §41 EnWG self-service writes and the **document inbox** (what was actually issued and sent, served out of `outputd`, with the portal read receipt recorded on open); **every route resolves customer ownership through `vertragd`** and object ownership is re-checked on every download; notice periods and IBAN validation stay in the services that own them; 8-tool operator MCP server |
 | `vertragd` | `:9780` | LF + MSB | Contract & Customer Management — every contract with a Kunde on one side: Kunden (B2C + B2B), Rahmenverträge (cascade Kündigung, `angebot_id` CPQ traceability), Versorgungsverträge, §§ 9/10 MsbG Messstellenverträge (read by `processd` to answer a WiM Kündigung out of `E_0200`), §41e Aggregatorverträge; OIDC/JWT auth; Preisgarantie guard (§41 EnWG); **§ 41 Abs. 5 Preisänderungsanzeige** rendered and delivered through `outputd`, refused when the Tarifwechsel states no Umfang; `widerruf-kuendigung`; dispatch retry (3×); proactive expiry notifications; GDPR Art. 15/17/20; OIDC→MaLo authorization gateway; **17-tool MCP server + 4 prompts** |
-| `agentd` | `:9580` | All | Multi-agent LLM orchestration — **28 declarative specialist manifests** run on the [agentplane](https://github.com/hupe1980/agentplane) durable runtime; every model and tool call is a journaled effect; four-eyes worklist for mutating calls; per-MaLo cases as the erasure unit; A2A agent cards derived from the manifests; Anthropic, OpenAI, Gemini, self-hosted (TGI/vLLM/Ollama), AWS Bedrock |
+| `agentd` | `:9580` | All | Advisory agent plane — **28 specialist manifests** on [agentplane](https://github.com/hupe1980/agentplane): 26 read-only model-backed investigations plus 2 deterministic coded triage skills; journaled effects, structured results, durable worklists, role-scoped builds and A2A agent cards |
 
 
 
@@ -183,7 +183,7 @@ flowchart LR
 | Category | Detail |
 |---|---|
 | 🆔 **Validated domain IDs** | `MaloId` (11-digit BDEW check-digit), `MeloId` (DE+31-char), `MarktpartnerId` (13-digit; auto-derives NAD DE3055 agency code `293`/`332`/`9` from prefix) |
-| 🗂️ **29 repository traits** | One trait per aggregate — `MaloRepository`, `MeloRepository`, `ContractRepository`, `PartnerRepository`, `LokationszuordnungRepository`, `TechnischeRessourceRepository`, `SteuerbareRessourceRepository`, `CorrelationIndex`, … — AFIT, no `dyn Trait` overhead |
+| 🗂️ **30 repository traits** | One trait per aggregate — `MaloRepository`, `MeloRepository`, `NbContractRepository`, `PartnerRepository`, `LokationszuordnungRepository`, `TechnischeRessourceRepository`, `SteuerbareRessourceRepository`, `CorrelationIndex`, … — AFIT, no `dyn Trait` overhead |
 | ⏳ **Temporal role assignments** | `Rollenzuordnung` with `valid_from`/`valid_to` — evaluated against CET/CEST German calendar date at query time |
 | 📨 **CloudEvents 1.0** | Outbound events (`MarktEvent`) with HMAC-SHA256 signing; `InboundMakoEvent` for receiving `makod` lifecycle events |
 | 🧪 **`testing` feature** | `InMemory*` test doubles for every repository trait — no PostgreSQL required in unit tests |
@@ -218,7 +218,7 @@ flowchart LR
 |---|---|
 | ♻️ **Event-sourced processes** | Optimistic-concurrency event append with SlateDB-backed storage |
 | ⚛️ **Atomic dual-write** | Events and outbox messages written in a single `WriteBatch` via `AtomicAppend` |
-| ⏰ **Regulatory deadlines** | `DeadlineStore` with GPKE 24h / WiM 5-Werktage / GeLi Gas 10-Werktage Fristen |
+| ⏰ **Regulatory deadlines** | `DeadlineStore` over the windows `mako-fristen` publishes per Prüfidentifikator — GPKE clock times on the 1. Werktag (11:00/06:00/05:00), WiM Strom 3/5/7/1 Werktage, GeLi Gas 4/3/2 Werktage. **Never a flat 24 h**, and the GeLi Gas „10 Werktage“ is the *supplier’s* Vorlauffrist, not an answer window |
 | 📨 **AS4 inbound transport** | `makod` receives BDEW AS4 pushes via `asx-rs`, deduplicates with `SlateDbInboxStore`, routes by Pruefidentifikator |
 | 🔐 **Cedar ABAC authorization** | All HTTP endpoints gated by [Cedar](https://cedarpolicy.com) attribute-based access control; built-in default policy with custom policy overlay via `--cedar-policy-dir` |
 | 🪪 **OIDC / JWT + API-key auth** | JWT bearer tokens from Azure AD, Keycloak, Okta, Kubernetes workload identity; RS256/ES256/PS256 families only; JWKS cached with background refresh; coexists with named API keys |

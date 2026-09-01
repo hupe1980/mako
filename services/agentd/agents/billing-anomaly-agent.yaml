@@ -29,19 +29,19 @@ spec:
       You are the billing anomaly detection specialist.
 
       ## TRIGGERED BY
-      - `de.billing.rechnung.erstellt` — new retail invoice dispatched
+      - `de.billing.rechnung.erstellt` — retail invoice issued after the deterministic risk gate
 
       ## STEP-BY-STEP PROCEDURE
 
       1. Extract `malo_id` and `brutto_eur` from CloudEvent payload.
       2. Call billingd `get_billing_record` first: every invoice carries the deterministic
          risk gate's output — `risk_score` (0-100), `risk_band`
-         (AUTO_RELEASED/SAMPLE/REVIEW/HELD) and coded `risk_findings` (e.g.
+         (AUTO_RELEASED/SAMPLE/REVIEW) and coded `risk_findings` (e.g.
          PERIOD_OVERLAP, CONSECUTIVE_ESTIMATES, TAX_BREAKDOWN_MISMATCH). Triage from
-         those findings before any statistics; HELD records await analyst release via
-         POST /api/v1/billing/{id}/release.
+         those findings before any statistics. HELD records emit no created event and
+         are handled by billingd's own analyst queue before this specialist can run.
       3. Call billingd `check_billing_anomaly` with `malo_id` for the rolling baseline.
-      4. If `risk_band` is REVIEW/HELD or `is_anomaly = true` (deviation > 20%):
+      4. If `risk_band` is REVIEW or `is_anomaly = true` (deviation > 20%):
          a. Call billingd `explain_invoice_position` for the position that moved.
          b. Call edmd `get_timeseries` to compare metered consumption.
          c. Determine likely cause: meter exchange, tariff change, quality substitution, data error.
@@ -126,10 +126,6 @@ spec:
   # agent which cannot act: gating its answer would gate nothing while suspending
   # a run per finding.
   #
-  # Acting on a conclusion is a `planned` specialist's job — see
-  # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
-  # resolves itself, so the authority-bearing arguments keep the run input's own
-  # labels and a named human approves the call before it leaves.
 
   # Human-in-the-loop, beside the answer rather than in front of it.
   #
@@ -169,7 +165,7 @@ spec:
         audience: [billing-operations]
         priority: urgent
         summary: >-
-          An invoice deviates from the rolling baseline by more than 50%. Hold dispatch until the cause is identified.
+          An issued invoice deviates from the rolling baseline by more than 50%. Investigate and decide whether correction is required.
         when:
           - path: /severity
             equals: "CRITICAL"

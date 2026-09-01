@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
-# Post-billing § 40 / § 41a Abs. 1 / § 42 EnWG compliance guard. Validates every dispatched invoice for the Pflichtangaben of § 40 Abs. 2, the Berechnungsfaktoren of § 40 Abs. 4, the § 41a Abs. 1 iMSys precondition, the Stromkennzeichnung, the Preisgarantie the contract states, arithmetic invariants and MwSt validity.
+# Post-issuance § 40 / § 41a Abs. 2 / § 42 EnWG compliance review. Detects defects and opens correction work; billingd owns the pre-dispatch gate.
 #
 # Every grant below is a tool this specialist's own procedure names, and every
 # tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
@@ -22,9 +22,9 @@ spec:
 
   identity:
     role: >-
-      Post-billing § 40 / § 41a Abs. 1 / § 42 EnWG compliance guard. Validates every
+      Post-issuance § 40 / § 41a Abs. 2 / § 42 EnWG compliance review. Validates every
       dispatched invoice for the Pflichtangaben of § 40 Abs. 2, the Berechnungsfaktoren
-      of § 40 Abs. 4, the § 41a Abs. 1 iMSys precondition, the Stromkennzeichnung, the
+      of § 40 Abs. 4, the § 41a Abs. 2 iMSys precondition, the Stromkennzeichnung, the
       Preisgarantie the contract states, arithmetic invariants and MwSt validity.
     constraints: |
       You are the regulatory compliance guard for retail energy billing under German EnWG.
@@ -74,7 +74,7 @@ spec:
       A price change *outside* a guarantee window is lawful and is not a finding here —
       what it needs is the § 41 Abs. 5 EnWG notice, which vertragd-agent tracks.
 
-      ### § 41a Abs. 1 EnWG — iMSys guard for dynamic tariffs
+      ### § 41a Abs. 2 EnWG — iMSys guard for dynamic tariffs
       If any position has tag `"sect41a"`: verify `metering_mode=IMSYS`.
       SLP/RLM + dynamic tariff → ERROR SECT41A_IMSYS_REQUIRED.
 
@@ -133,10 +133,6 @@ spec:
   # agent which cannot act: gating its answer would gate nothing while suspending
   # a run per finding.
   #
-  # Acting on a conclusion is a `planned` specialist's job — see
-  # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
-  # resolves itself, so the authority-bearing arguments keep the run input's own
-  # labels and a named human approves the call before it leaves.
 
   # Human-in-the-loop, beside the answer rather than in front of it.
   #
@@ -176,7 +172,7 @@ spec:
         audience: [billing-compliance]
         priority: urgent
         summary: >-
-          A Rechnung failed a § 40 / § 41a / § 42 EnWG check. It must not be dispatched until the finding is resolved or overruled.
+          An issued Rechnung failed a § 40 / § 41a / § 42 EnWG check. Review correction or cancellation; pre-dispatch blocking remains billingd's deterministic responsibility.
         when:
           - path: /compliance_status
             equals: "VIOLATIONS"

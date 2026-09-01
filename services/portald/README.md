@@ -92,7 +92,7 @@ api_key = "env:PORTALD_MCP_API_KEY"
 whoever can call `/mcp` can read every customer in the tenant. Gate it with
 `[mcp]` and keep it off the public ingress.
 
-## Informatorisches Unbundling (§ 9 EnWG)
+## Information separation (§§ 6a, 7a EnWG)
 
 An LF-role service. It reads `marktd` only for VersorgungsStatus — the LF's own
 supply records — never NB grid topology or NB billing data. `netzbilanzd` and

@@ -173,20 +173,24 @@ where
     //
     // Event → action mapping (GPKE BK6-24-174 + GeLi Gas 3.0 (BK7-24-01-009)):
     //
+    // Supply is a list of `lf_zuordnung` rows carrying a `status`, not a pair of
+    // columns: a tranchierte MaLo has several `Aktiv` suppliers at once. The
+    // transitions below move rows between `Angekuendigt` and `Aktiv`.
+    //
     //   process.initiated  + PID 55001/55077/44001
-    //     → announce_lf_next: set lf_mp_id_next + lf_next_lieferbeginn
+    //     → announce_lf_next: insert an `Angekuendigt` row
     //       (NB side: new_supplier + process_date from ProcessInitiated payload).
     //       The *first* announcement wins — see announce_lf_next_tx.
     //
     //   process.completed  + PID 55002/55078/44002 (Bestätigung Anmeldung)
-    //     → confirm_supply: promote lf_mp_id_next → lf_mp_id (atomic SQL)
+    //     → confirm_supply: the `Angekuendigt` row becomes `Aktiv`
     //
     //   process.completed  + PID 55003/55080/44003 (Ablehnung Anmeldung)
-    //     → clear_lf_next: drop the announced future Lieferant
+    //     → clear_lf_next: delete the `Angekuendigt` rows
     //
     //   process.completed  + PID 55005/44005 (Bestätigung Lieferende)
-    //     → end_supply: lieferstatus = Unbeliefert, clear lf_mp_id
-    //       (preserves lf_mp_id_next / lf_next_lieferbeginn for pending transition);
+    //     → end_supply: delete the `Aktiv` rows, lieferstatus = Unbeliefert
+    //       (any `Angekuendigt` row survives for the pending transition);
     //       when no successor is announced, emit de.markt.versorgung.gap-detected
     //       — the §38 EnWG gap-closure trigger consumed by processd
     //

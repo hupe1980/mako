@@ -16,172 +16,59 @@
 
 use std::sync::Arc;
 
+use agentplane::core::CorrelationKey;
 use agentplane::journal::JournalStore;
-use agentplane::model::{Completion, Usage};
-use agentplane::runtime::{Agent, RunStatus, Runtime};
+use agentplane::runtime::{Admission, Agent, RunOutcome, RunStatus, Runtime};
 use agentplane::store::RedbStore;
 use agentplane::testkit::FakeProvider;
-use agentplane::tools::{ToolCatalog, ToolClient, ToolError, ToolId, ToolSafety};
 use serde_json::{Value, json};
 
-use agentd::plane::find_manifest;
+use agentd::plane::{Envelope, find_manifest};
 
-/// The one privileged call a `planned` agent makes: it returns a **plan**.
-///
-/// Not the answer. This is the shape the conversion bought — control flow is
-/// decided here, from the trusted routing envelope alone, before a single
-/// counterparty-authored value has been read. `$step0/...` is a reference the
-/// runtime resolves with labels intact; the planner never sees what the tool
-/// returned, so a hostile ALOCAT cannot steer the steps that follow it.
-fn gabi_plan() -> Completion {
-    // Derived, not spelled: a wire name escapes the separator byte, so
-    // `get_gas_imbalance` is not `get_gas_imbalance` on the wire. Hand-writing
-    // it produced a plan whose every step was refused as ungranted, which is a
-    // test bug that reads exactly like a policy finding.
-    let imbalance = ToolId::new("netzbilanzd", "get_gas_imbalance").wire_name();
-    let deadlines = ToolId::new("makod", "list_overdue_deadlines").wire_name();
-
-    completion(json!({
-        "steps": [
-            { "tool": imbalance,
-              "args": { "bilanzkreis": "$input/bilanzkreis_id", "gas_day": "$input/gas_day" } },
-            { "tool": deadlines, "args": {} },
-            // The dual-model step. The tool output above is counterparty-derived
-            // — a Bilanzkreis allocation the MGV computed from data the shipper
-            // sent — and this is where a model reads it. It runs on the
-            // **quarantined** model under a declared schema, and the only thing
-            // it can say out of band is *not enough information*, which fails
-            // the step. Nothing it returns becomes trusted.
-            { "parse": { "from": "$step0", "schema": result_schema() } }
-        ],
-        "answer": "$step2"
-    }))
-}
-
-/// The shape a parse step must return: the manifest's own result contract.
-fn result_schema() -> Value {
-    json!({
-        "type": "object",
-        "required": [
-            "gas_day", "imbalance_status", "allocation_version",
-            "deadline_compliant", "action", "legal_basis"
-        ],
-        "properties": {
-            "gas_day":             { "type": "string" },
-            "bilanzkreis":         { "type": ["string", "null"] },
-            "imbalance_status":    { "type": "string" },
-            "imbalance_kwh_hs":    { "type": ["number", "null"] },
-            "allocation_version":  { "type": "string" },
-            "deadline_compliant":  { "type": "boolean" },
-            "action":              { "type": "string" },
-            "legal_basis":         { "type": "string" }
-        }
-    })
-}
-
-/// A `Completion` carrying a structured value and nothing else.
-fn completion(structured: Value) -> Completion {
-    Completion {
-        text: String::new(),
-        structured: Some(structured),
-        tool_calls: Vec::new(),
-        usage: Usage::default(),
-        stop_reason: Some("end_turn".to_owned()),
-        truncated: false,
-        continuation: None,
-    }
-}
-
-/// What the plane admits a planned specialist with: re-validated identifiers.
-///
-/// Built through `plane::label`, not hand-written, so the test exercises the
-/// same promotion rule production uses.
+/// What the plane admits a coded specialist with: per-field trust labels.
 fn gabi_envelope() -> agentplane::core::Tainted<Value> {
-    agentd::plane::label::routing_envelope(&imbnot_event())
-        .expect("the event carries a re-validated Bilanzkreis and gas day")
+    agentd::plane::label::admit(mako_events::gabi::ALOCAT_MISSING, alocat_missing_event())
 }
 
-/// The tools the manifest grants, as the operator's catalogue.
-///
-/// This is the § 4 point made concrete: the catalogue is what the operator
-/// declares, not what a server advertises. A tool absent here cannot be called
-/// even if `makod` offers it.
-fn catalog() -> Arc<ToolCatalog> {
-    use agentplane::core::Sensitivity;
-    Arc::new(
-        ToolCatalog::new()
-            .allow(
-                ToolId::new("makod", "list_overdue_deadlines"),
-                ToolSafety::read_only().max_sensitivity(Sensitivity::Internal),
-            )
-            .allow(
-                ToolId::new("netzbilanzd", "get_gas_imbalance"),
-                ToolSafety::read_only().max_sensitivity(Sensitivity::Internal),
-            ),
-    )
-}
-
-/// Stands in for the mako MCP servers. Returns canned answers so the run is
-/// deterministic; the real client is `agentplane::tools::McpClient` over rmcp.
-#[derive(Debug, Default)]
-struct StubTools;
-
-#[async_trait::async_trait]
-impl ToolClient for StubTools {
-    async fn call(
-        &self,
-        tool: &ToolId,
-        _arguments: &Value,
-        _provenance: Option<&agentplane::core::Provenance>,
-    ) -> Result<Value, ToolError> {
-        Ok(match tool.tool.as_str() {
-            "get_gas_imbalance" => json!({
-                "bilanzkreis": "THE0BFH012345678",
-                "saldo": "MINDER",
-                "kwh_hs": "-18450.75",
-                "allocation_version": "Initial"
-            }),
-            _ => json!({ "items": [] }),
-        })
+async fn run_gabi(
+    runtime: &Runtime,
+    input: agentplane::core::Tainted<Value>,
+    event_id: &str,
+) -> RunOutcome {
+    let event = Envelope {
+        id: event_id,
+        source: "urn:mako:test:tenant:9900357000004",
+        event_type: mako_events::gabi::ALOCAT_MISSING,
+    };
+    let keys = [CorrelationKey::new("event", event_id)];
+    match runtime
+        .run_correlated_once(
+            "gabi.gas.balancing",
+            input,
+            "gabi-allocation",
+            &keys,
+            &event.admission_key("gabi-gas-agent"),
+        )
+        .await
+        .expect("correlated run")
+    {
+        Admission::Fresh(outcome) => outcome,
+        other => panic!("a fresh test event was not freshly admitted: {other:?}"),
     }
 }
 
 /// A payload shaped like the CloudEvent a GaBi Gas specialist really receives,
 /// carrying the identifiers that make it personal data under GDPR.
-fn imbnot_event() -> serde_json::Value {
+fn alocat_missing_event() -> serde_json::Value {
     json!({
-        "bilanzkreis_id": "THE0BFH012345678",
         "gas_day": "2026-08-06",
-        "imbalance_kwh": "-18450.75",
+        "sender_eic": "11XRWENET-----1E",
+        "receiver_eic": "11YN00000000TH2M",
+        "deadline_label": "gabi-final-allocation",
+        "synthetic_pid": "13013",
         "malo_id": "51238696012",
         "anschlussnutzer": "Musterbäckerei Schmidt GmbH",
         "adresse": "Mühlenweg 14, 26121 Oldenburg",
-    })
-}
-
-/// The quarantined model's reply to the parse step.
-///
-/// `have_enough_information` is the one thing a parse may say out of band, and
-/// it is a **bit rather than a message** — a message would be untrusted text
-/// steering the plan. `false` fails the step rather than letting a guess stand.
-/// The runtime strips the flag before the value moves on.
-fn parsed_answer() -> Completion {
-    let mut value = scripted_answer();
-    value["have_enough_information"] = json!(true);
-    completion(value)
-}
-
-/// What a competent answer looks like, scripted so the run is deterministic.
-fn scripted_answer() -> serde_json::Value {
-    json!({
-        "gas_day": "2026-08-06",
-        "bilanzkreis": "THE0BFH012345678",
-        "imbalance_status": "MINDER",
-        "imbalance_kwh_hs": -18450.75,
-        "allocation_version": "Initial",
-        "deadline_compliant": true,
-        "action": "REQUEST_CORRECTION",
-        "legal_basis": "KoV §6.4 Abs. 3"
     })
 }
 
@@ -194,8 +81,6 @@ async fn the_gabi_specialist_runs_and_replays_deterministically() {
             .clone(),
     );
     let provider = FakeProvider::new();
-    provider.will_answer(gabi_plan());
-    provider.will_answer(parsed_answer());
 
     let store = Arc::new(RedbStore::open_in_memory().expect("store"));
     let runtime = Runtime::builder(Arc::clone(&store) as Arc<dyn JournalStore>)
@@ -205,27 +90,24 @@ async fn the_gabi_specialist_runs_and_replays_deterministically() {
         .cases(Arc::clone(&store) as Arc<dyn agentplane::case::CaseStore>)
         .tasks(Arc::clone(&store) as Arc<dyn agentplane::case::TaskStore>)
         .owner("agentd-test")
+        .calendar(Arc::new(agentd::plane::calendar::MakoCalendar))
         // The manifest names `anthropic`; the driver is registered under that
         // name. Declarative agent — no Rust skill, the runtime drives the turn.
         .provider(
             "anthropic",
             Arc::clone(&provider) as Arc<dyn agentplane::model::ModelProvider>,
         )
-        .tools(catalog(), Arc::new(StubTools) as Arc<dyn ToolClient>)
-        .agent(Agent::new(&manifest))
+        .agent(Agent::new(&manifest).skill(agentd::skills::GabiAllocationTriage::new()))
         .build();
 
-    let out = runtime
-        .run("gabi.gas.balancing", gabi_envelope())
-        .await
-        .expect("the run completes");
+    let out = run_gabi(&runtime, gabi_envelope(), "golden-run").await;
     assert_eq!(out.status, RunStatus::Succeeded, "run status");
 
     let answer = out.output.clone().expect("an answer");
     let answer = answer.peek();
-    assert_eq!(answer["action"], "REQUEST_CORRECTION");
+    assert_eq!(answer["action"], "OPEN_CLEARING_CASE");
     assert_eq!(
-        answer["imbalance_status"], "MINDER",
+        answer["status"], "MISSING_FINAL_ALLOCATION",
         "the declared enum is what came back"
     );
 
@@ -242,20 +124,15 @@ async fn the_gabi_specialist_runs_and_replays_deterministically() {
     assert_eq!(replayed.expect("replay").status, RunStatus::Succeeded);
 }
 
-/// The prompt the model is asked with is the manifest's, not the binary's.
-///
-/// This is the property that makes a manifest worth having: if a procedure edit
-/// did not reach the model, the digest coverage would be decorative.
+/// Deterministic event translation must not invoke a model.
 #[tokio::test]
-async fn the_model_is_asked_with_the_manifests_own_procedure() {
+async fn the_coded_specialist_asks_no_model() {
     let manifest = Arc::new(
         find_manifest("gabi-gas-agent")
             .expect("the GaBi Gas specialist is compiled in")
             .clone(),
     );
     let provider = FakeProvider::new();
-    provider.will_answer(gabi_plan());
-    provider.will_answer(parsed_answer());
 
     let store = Arc::new(RedbStore::open_in_memory().expect("store"));
     let runtime = Runtime::builder(Arc::clone(&store) as Arc<dyn JournalStore>)
@@ -265,32 +142,22 @@ async fn the_model_is_asked_with_the_manifests_own_procedure() {
         .cases(Arc::clone(&store) as Arc<dyn agentplane::case::CaseStore>)
         .tasks(Arc::clone(&store) as Arc<dyn agentplane::case::TaskStore>)
         .owner("agentd-test")
+        .calendar(Arc::new(agentd::plane::calendar::MakoCalendar))
         // The manifest names `anthropic`; the driver is registered under that
         // name. Declarative agent — no Rust skill, the runtime drives the turn.
         .provider(
             "anthropic",
             Arc::clone(&provider) as Arc<dyn agentplane::model::ModelProvider>,
         )
-        .tools(catalog(), Arc::new(StubTools) as Arc<dyn ToolClient>)
-        .agent(Agent::new(&manifest))
+        .agent(Agent::new(&manifest).skill(agentd::skills::GabiAllocationTriage::new()))
         .build();
 
-    runtime
-        .run("gabi.gas.balancing", gabi_envelope())
-        .await
-        .expect("run");
+    let _out = run_gabi(&runtime, gabi_envelope(), "prompt-run").await;
 
     let asks = provider.asked();
-    assert!(!asks.is_empty(), "the model was asked at least once");
-    let assembled = format!("{:?}", asks);
-
     assert!(
-        assembled.contains("kWh_Hs"),
-        "the DVGW G 685 unit rule from the manifest procedure must reach the model"
-    );
-    assert!(
-        assembled.contains("KoV"),
-        "the KoV allocation-version rules must reach the model"
+        asks.is_empty(),
+        "coded GaBi triage must spend no model call"
     );
 }
 
@@ -312,7 +179,7 @@ async fn the_model_is_asked_with_the_manifests_own_procedure() {
 /// below — a change in our favour should not pass silently.
 #[tokio::test]
 async fn personal_data_in_a_step_input_reaches_the_journal() {
-    let dumped = run_and_dump_journal(imbnot_event()).await;
+    let dumped = run_and_dump_journal(alocat_missing_event()).await;
 
     assert!(
         dumped.contains("Musterbäckerei Schmidt") && dumped.contains("Mühlenweg 14"),
@@ -331,9 +198,11 @@ async fn personal_data_in_a_step_input_reaches_the_journal() {
 #[tokio::test]
 async fn a_reference_only_event_keeps_personal_data_out_of_the_journal() {
     let reference_only = json!({
-        "bilanzkreis_id": "THE0BFH012345678",
         "gas_day": "2026-08-06",
-        "imbalance_kwh": "-18450.75",
+        "sender_eic": "11XRWENET-----1E",
+        "receiver_eic": "11YN00000000TH2M",
+        "deadline_label": "gabi-final-allocation",
+        "synthetic_pid": "13013",
         "malo_id": "51238696012",
     });
     let dumped = run_and_dump_journal(reference_only).await;
@@ -365,8 +234,6 @@ async fn run_and_dump_journal(event: serde_json::Value) -> String {
             .clone(),
     );
     let provider = FakeProvider::new();
-    provider.will_answer(gabi_plan());
-    provider.will_answer(parsed_answer());
 
     let store = Arc::new(RedbStore::open_in_memory().expect("store"));
     let runtime = Runtime::builder(Arc::clone(&store) as Arc<dyn JournalStore>)
@@ -376,15 +243,15 @@ async fn run_and_dump_journal(event: serde_json::Value) -> String {
         .cases(Arc::clone(&store) as Arc<dyn agentplane::case::CaseStore>)
         .tasks(Arc::clone(&store) as Arc<dyn agentplane::case::TaskStore>)
         .owner("agentd-test")
+        .calendar(Arc::new(agentd::plane::calendar::MakoCalendar))
         .provider(
             "anthropic",
             Arc::clone(&provider) as Arc<dyn agentplane::model::ModelProvider>,
         )
-        .tools(catalog(), Arc::new(StubTools) as Arc<dyn ToolClient>)
-        .agent(Agent::new(&manifest))
+        .agent(Agent::new(&manifest).skill(agentd::skills::GabiAllocationTriage::new()))
         .build();
 
-    let out = runtime.run("gabi.gas.balancing", event).await.expect("run");
+    let out = run_gabi(&runtime, event, "journal-placement").await;
 
     let records = store.read(out.run_id, 0).await.expect("journal records");
     records
@@ -494,8 +361,6 @@ async fn a_key_ring_seals_personal_data_in_the_journal() {
             .clone(),
     );
     let provider = FakeProvider::new();
-    provider.will_answer(gabi_plan());
-    provider.will_answer(parsed_answer());
 
     let store = Arc::new(RedbStore::open_in_memory().expect("store"));
     let runtime = Runtime::builder(Arc::clone(&store) as Arc<dyn JournalStore>)
@@ -505,19 +370,16 @@ async fn a_key_ring_seals_personal_data_in_the_journal() {
         .cases(Arc::clone(&store) as Arc<dyn agentplane::case::CaseStore>)
         .tasks(Arc::clone(&store) as Arc<dyn agentplane::case::TaskStore>)
         .owner("agentd-test")
+        .calendar(Arc::new(agentd::plane::calendar::MakoCalendar))
         .keyring(Arc::new(MemoryKeyRing::new()) as Arc<dyn agentplane::keyring::KeyRing>)
         .provider(
             "anthropic",
             Arc::clone(&provider) as Arc<dyn agentplane::model::ModelProvider>,
         )
-        .tools(catalog(), Arc::new(StubTools) as Arc<dyn ToolClient>)
-        .agent(Agent::new(&manifest))
+        .agent(Agent::new(&manifest).skill(agentd::skills::GabiAllocationTriage::new()))
         .build();
 
-    let out = runtime
-        .run("gabi.gas.balancing", gabi_envelope())
-        .await
-        .expect("run");
+    let out = run_gabi(&runtime, gabi_envelope(), "sealed-run").await;
 
     // Read the *raw* store, behind the sealing decorator.
     let records = store.read(out.run_id, 0).await.expect("journal records");

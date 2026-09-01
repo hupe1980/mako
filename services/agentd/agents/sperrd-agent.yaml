@@ -123,10 +123,6 @@ spec:
   # agent which cannot act: gating its answer would gate nothing while suspending
   # a run per finding.
   #
-  # Acting on a conclusion is a `planned` specialist's job — see
-  # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
-  # resolves itself, so the authority-bearing arguments keep the run input's own
-  # labels and a named human approves the call before it leaves.
 
   # Human-in-the-loop, beside the answer rather than in front of it.
   #
@@ -157,7 +153,7 @@ spec:
         # notice sequence is the *Lieferant's* and is credit-control's business
         # (payment-reconciliation-agent files that row); what breaches here is
         # the NB's own GPKE execution and IFTSTA obligation. Routing an NB
-        # finding to a supply-side desk is also the § 9 EnWG boundary crossed by
+        # finding to a supply-side desk also crosses the §§ 6a and 7a EnWG boundary
         # a worklist row, in a build that may not contain that desk at all.
         audience: [grid-operations]
         priority: urgent

@@ -227,7 +227,10 @@ mod tests {
         // The specialists whose conduct is Rust. Adding one means adding its
         // registration in `Plane::new`, and this list is what keeps the two
         // from drifting apart.
-        const CODED: &[&str] = &[crate::skills::DeadlineTriage::NAME];
+        const CODED: &[&str] = &[
+            crate::skills::DeadlineTriage::NAME,
+            crate::skills::GabiAllocationTriage::NAME,
+        ];
 
         for embedded in manifests() {
             let (name, m) = (embedded.0.as_str(), embedded.1);
@@ -426,10 +429,14 @@ mod tests {
     /// changes.
     #[test]
     fn specialists_grant_the_knowledge_their_service_publishes() {
-        // The two whose procedure is code or a plan need no prompt: one has no
-        // model to read it, the other's control flow is fixed before anything
-        // untrusted is read.
-        const NO_PROMPT_NEEDED: &[&str] = &["deadline-alert-agent", "gabi-gas-agent"];
+        // Coded specialists have no model to read a prompt. Billingd currently
+        // publishes no VPP-specific prompt; importing its EEG prompt is worse
+        // than keeping the VPP procedure explicit and was removed by audit.
+        const NO_PROMPT_NEEDED: &[&str] = &[
+            "deadline-alert-agent",
+            "gabi-gas-agent",
+            "vpp-billing-agent",
+        ];
 
         let mut ungranted = Vec::new();
         for embedded in manifests() {
@@ -570,6 +577,12 @@ mod tests {
             "SPERR",
             "CRITICAL",
             "BREACH",
+            "ESCALATED",
+            "VALID_DISPUTE",
+            "NB_ERROR",
+            "CONFLICT",
+            "ESCALATE_MISSING_DATA",
+            "ESCALATE_MISSING_RATE",
         ];
 
         let mut silent = Vec::new();
@@ -595,7 +608,10 @@ mod tests {
             // not do it: `deadline-alert-agent` could report `BREACH` and told
             // nobody. `CODED_TRIAGE` is the list of coded specialists whose Rust
             // *does* open a row, asserted below rather than assumed.
-            const CODED_TRIAGE: &[&str] = &[crate::skills::DeadlineTriage::NAME];
+            const CODED_TRIAGE: &[&str] = &[
+                crate::skills::DeadlineTriage::NAME,
+                crate::skills::GabiAllocationTriage::NAME,
+            ];
             let coded = m.spec.execution.is_none() && CODED_TRIAGE.contains(&name.as_str());
             if !triaged && !coded {
                 silent.push(name.as_str());
@@ -624,6 +640,8 @@ mod tests {
         for role in [
             crate::skills::DeadlineTriage::TRIAGE_AUDIENCE,
             crate::skills::DeadlineTriage::TRIAGE_ESCALATION,
+            crate::skills::GabiAllocationTriage::TRIAGE_AUDIENCE,
+            crate::skills::GabiAllocationTriage::TRIAGE_ESCALATION,
         ] {
             let context = serde_json::json!({ "roles": [role], "tenant": "9900357000004" });
             let decision = engine.authorize(&PolicyRequest {
@@ -761,7 +779,7 @@ mod tests {
         );
     }
 
-    /// **A role build's worklist rows stay inside its own arm (§ 9 EnWG).**
+    /// **A role build's worklist rows stay inside its own arm (§§ 6a, 7a EnWG).**
     ///
     /// The structural half is asserted elsewhere: a `role-lf` binary does not
     /// *contain* the NB specialists and does not require their MCP endpoints.
@@ -770,7 +788,7 @@ mod tests {
     ///
     /// A worklist row carries the finding, the justification and the run it came
     /// from, so filing an NB one on a supply desk is grid operational state
-    /// reaching supply people — the boundary § 6a and § 9 EnWG draw — and in a
+    /// reaching supply people — the boundaries §§ 6a and 7a EnWG draw — and in a
     /// role build that desk may not exist to answer it.
     ///
     /// Compiled only where **exactly one** role feature is on, because that is
@@ -860,7 +878,7 @@ mod tests {
     /// Every desk a manifest names is classified by the check above.
     ///
     /// Runs in the default build, where every specialist is present, so a new
-    /// audience cannot arrive unclassified — which would make the § 9 EnWG check
+    /// audience cannot arrive unclassified — which would make the §§ 6a and 7a EnWG check
     /// silently skip it rather than fail.
     #[test]
     fn every_audience_a_manifest_names_belongs_to_a_known_arm() {
@@ -901,7 +919,7 @@ mod tests {
         }
         assert!(
             unclassified.is_empty(),
-            "these audiences belong to no arm this codebase knows, so the § 9 EnWG check \
+            "these audiences belong to no arm this codebase knows, so the §§ 6a and 7a EnWG check \
              cannot decide whether a role build may name them: {unclassified:#?}. Add the \
              desk to its arm in `role_scoped_worklist_audiences_stay_inside_the_arm`, \
              deliberately."
@@ -1123,7 +1141,7 @@ mod tests {
     }
 
     #[test]
-    fn the_gabi_manifest_parses_and_declares_what_the_skill_reads() {
+    fn the_gabi_manifest_is_live_model_free_and_triaged_in_code() {
         let m = find_manifest("gabi-gas-agent").expect("the GaBi Gas specialist is compiled in");
 
         assert_eq!(m.metadata.name, "gabi-gas-agent");
@@ -1131,19 +1149,26 @@ mod tests {
         let identity = m.spec.identity.as_ref().expect("identity declared");
         let prompt = agentplane::manifest::Identity::system_prompt(identity);
         assert!(
-            prompt.contains("kWh_Hs"),
-            "the procedure must reach the prompt — it is the unit rule that DVGW G 685 turns on"
+            prompt.contains("de.gabi.alocat.missing")
+                && prompt.contains("does not ask a model")
+                && prompt.contains("cannot dispatch"),
+            "the declaration must describe the emitted event and deterministic hard cut"
+        );
+
+        assert!(
+            m.spec.execution.is_none(),
+            "conduct is the registered Rust skill"
+        );
+        assert!(
+            m.spec.tools.is_empty(),
+            "the deterministic event needs no evidence lookup"
         );
 
         let models = m.spec.models.as_ref().expect("models declared");
+        assert!(models.privileged.is_none() && models.quarantined.is_none());
         assert!(
-            models.privileged.is_some(),
-            "a privileged model is required"
-        );
-        assert!(
-            models.quarantined.is_some(),
-            "the quarantined model is the point: counterparty text must be read by a model \
-             that cannot call a tool"
+            m.spec.oversight.is_none(),
+            "the coded skill opens its own task"
         );
 
         assert!(

@@ -28,9 +28,10 @@
 use std::sync::Arc;
 
 use agentplane::case::{CaseStore, EventStore, TaskStore, TimerStore};
-use agentplane::core::{PolicyEngine, TenantId};
+use agentplane::core::{CaseId, PolicyEngine, TenantId};
 use agentplane::journal::JournalStore;
 use agentplane::keyring::KeyRing;
+use agentplane::memory::MemoryStore;
 use agentplane::runtime::{Admission, Agent, RunStatus, Runtime};
 use serde_json::Value;
 use tracing::{info, warn};
@@ -101,13 +102,27 @@ pub struct Route {
     pub capability: String,
     /// CloudEvent type globs this specialist subscribes to.
     pub triggers: &'static [&'static str],
-    /// Whether the manifest declares `execution.kind: planned`.
-    ///
-    /// It decides how the payload is admitted, so it is read once at startup
-    /// rather than re-parsed per event: a planned agent receives only the
-    /// re-validated routing envelope, a tool-calling one the whole payload with
-    /// per-field labels.
-    pub plans: bool,
+    /// How this specialist executes, read once from its manifest.
+    pub execution: RouteExecution,
+}
+
+/// Execution shape exposed by the activated-agent inventory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteExecution {
+    ToolCalling,
+    Planned,
+    Coded,
+}
+
+impl RouteExecution {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ToolCalling => "tool-calling",
+            Self::Planned => "planned",
+            Self::Coded => "coded",
+        }
+    }
 }
 
 /// Event type → specialists.
@@ -155,10 +170,13 @@ impl Router {
                     name: def.name,
                     capability: cap.to_string(),
                     triggers: def.trigger_patterns,
-                    plans: matches!(
-                        m.spec.execution.as_ref().map(|e| e.kind),
-                        Some(agentplane::manifest::ExecutionKind::Planned)
-                    ),
+                    execution: match m.spec.execution.as_ref().map(|e| e.kind) {
+                        Some(agentplane::manifest::ExecutionKind::Planned) => {
+                            RouteExecution::Planned
+                        }
+                        Some(_) => RouteExecution::ToolCalling,
+                        None => RouteExecution::Coded,
+                    },
                 }),
                 None => problems.push(format!("{}: manifest provides no capability", def.name)),
             }
@@ -525,6 +543,9 @@ pub struct PlaneConfig<'a> {
 pub struct Plane {
     runtime: Arc<Runtime>,
     router: Router,
+    tenant: TenantId,
+    keyring: Option<Arc<dyn KeyRing>>,
+    memory: Arc<dyn MemoryStore>,
 }
 
 impl std::fmt::Debug for Plane {
@@ -562,6 +583,9 @@ impl Plane {
     /// run.
     pub fn new(stores: Stores, cfg: PlaneConfig<'_>) -> Result<Self, String> {
         let router = Router::build(cfg.activated)?;
+        let tenant = cfg.tenant.clone();
+        let keyring = cfg.keyring.clone();
+        let memory = Arc::clone(&stores.memory);
 
         let mut builder = Runtime::builder(stores.journal)
             .owner(cfg.owner.to_owned())
@@ -626,7 +650,7 @@ impl Plane {
         // `manifests![]` embedding is not role-gated, so without it an
         // `enable_all` deployment of a `role-lf` binary would register the NB
         // and MSB specialists as addressable capabilities — unrouted, but
-        // declared, with their grants counted as required wiring (§ 9 EnWG).
+        // declared, with their grants counted as required wiring (§§ 6a, 7a EnWG).
         for (name, declaration) in manifests().iter().filter(|(name, _)| {
             crate::builtin::find(name).is_some() && cfg.activated.includes(name)
         }) {
@@ -643,6 +667,8 @@ impl Plane {
                 // and checked against them. A skill that carried its own could
                 // grant itself reach the declaration never described.
                 agent = agent.skill(crate::skills::DeadlineTriage::new());
+            } else if name == crate::skills::GabiAllocationTriage::NAME {
+                agent = agent.skill(crate::skills::GabiAllocationTriage::new());
             }
             builder = builder.agent(agent);
         }
@@ -654,7 +680,13 @@ impl Plane {
             .try_build()
             .map_err(|e| format!("assemble the agent runtime: {e}"))?;
 
-        Ok(Self { runtime, router })
+        Ok(Self {
+            runtime,
+            router,
+            tenant,
+            keyring,
+            memory,
+        })
     }
 
     /// Routing table, for health and inventory endpoints.
@@ -671,6 +703,39 @@ impl Plane {
     #[must_use]
     pub fn runtime(&self) -> Arc<Runtime> {
         Arc::clone(&self.runtime)
+    }
+
+    /// Destroy a case's wrapping key and/or forget one memory subject.
+    ///
+    /// # Errors
+    ///
+    /// Refuses case erasure when no key ring is configured and propagates key
+    /// service or memory-store failures.
+    pub async fn erase(
+        &self,
+        case: Option<CaseId>,
+        memory_subject: Option<&str>,
+        reason: &str,
+    ) -> Result<usize, String> {
+        if let Some(case) = case {
+            let keyring = self
+                .keyring
+                .as_ref()
+                .ok_or_else(|| "case erasure requires a configured key ring".to_owned())?;
+            let scope = agentplane::keyring::scope(&self.tenant, &case.to_string());
+            keyring
+                .destroy(&scope, time::OffsetDateTime::now_utc(), reason)
+                .await
+                .map_err(|error| format!("destroy case wrapping key: {error}"))?;
+        }
+        match memory_subject {
+            Some(subject) => self
+                .memory
+                .forget_subject(subject)
+                .await
+                .map_err(|error| format!("forget memory subject: {error}")),
+            None => Ok(0),
+        }
     }
 
     // Inbound-message delivery — waking a run suspended on `await_event` — is
@@ -728,26 +793,23 @@ impl Plane {
 
     /// What to tell the emitter about a whole fan-out.
     ///
-    /// Partial success is success: if any specialist was admitted, a retry is
-    /// answered with the runs already holding those keys, so nothing is
-    /// duplicated and nothing is lost. An empty fan-out — nothing subscribes —
-    /// is also [`Admitted`](Reception::Admitted), because a message nobody wants
-    /// must not be retried forever; the door answers it `204` before ever
-    /// reaching here.
+    /// Any retryable refusal keeps the whole message retryable. Runs already
+    /// admitted hold their `(source, id, specialist)` keys, so a redelivery
+    /// returns those same runs while giving the refused specialist another
+    /// admission attempt. A permanent refusal does not poison successful work.
     ///
-    /// When *nothing* was admitted, **any** retryable refusal makes the whole
-    /// message retryable: a resend would re-attempt that specialist, and the
-    /// permanent ones cost nothing but a second identical refusal.
+    /// An empty fan-out — nothing subscribes — is
+    /// [`Admitted`](Reception::Admitted), because a message nobody wants must
+    /// not be retried forever; the door answers it `204` before reaching here.
     #[must_use]
     pub fn reception(accepted: &[Accepted]) -> Reception {
+        if accepted.iter().any(|a| a.retryable) {
+            return Reception::Retry;
+        }
         if accepted.iter().any(|a| a.refused.is_none()) || accepted.is_empty() {
             return Reception::Admitted;
         }
-        if accepted.iter().any(|a| a.retryable) {
-            Reception::Retry
-        } else {
-            Reception::Unprocessable
-        }
+        Reception::Unprocessable
     }
 
     async fn accept_one(&self, route: &Route, event: Envelope<'_>, payload: Value) -> Accepted {
@@ -923,7 +985,7 @@ impl Plane {
         // door takes a `Tainted<Value>`. Almost nothing in a CloudEvent payload
         // is trusted — a MaLo came out of a counterparty's UTILMD, a `reference`
         // is text they wrote — so `plane::label` carries the real labels in.
-        let input = match route.plans {
+        let input = match route.execution == RouteExecution::Planned {
             // A `planned` agent refuses untrusted input — the plan it compiles
             // is the authorization graph. It gets the re-validated identifiers
             // and reaches the rest through its granted tools.
@@ -1143,18 +1205,22 @@ mod tests {
         }
     }
 
-    /// **Partial success is success.**
+    /// **Partial success with a transient refusal is retried.**
     ///
-    /// One specialist refused while another was admitted must not ask the
-    /// emitter to resend: a resend is answered with the run already holding the
-    /// admitted specialist's key, so the retry buys a second refusal for the
-    /// one that failed and nothing else.
+    /// The admitted specialist's key makes redelivery idempotent, while the
+    /// refused specialist needs the redelivery to get another admission attempt.
     #[test]
-    fn a_fan_out_with_any_admission_is_accepted() {
+    fn a_fan_out_with_a_retryable_refusal_asks_for_a_resend() {
         assert_eq!(
             Plane::reception(&[refused("a", true), admitted("b")]),
-            Reception::Admitted
+            Reception::Retry
         );
+    }
+
+    /// A permanent refusal cannot become admissible when the same bytes are
+    /// delivered again, so it does not hold back specialists that did start.
+    #[test]
+    fn a_fan_out_with_only_permanent_refusals_and_an_admission_is_accepted() {
         assert_eq!(
             Plane::reception(&[refused("a", false), admitted("b")]),
             Reception::Admitted
@@ -1225,6 +1291,63 @@ mod tests {
         assert!(
             router.routes().iter().all(|r| !r.capability.is_empty()),
             "a route with no capability would run nothing"
+        );
+    }
+
+    #[test]
+    fn coded_specialists_are_reported_as_coded() {
+        let router = Router::build(&Activation::all()).expect("routes");
+        for name in [
+            crate::skills::DeadlineTriage::NAME,
+            crate::skills::GabiAllocationTriage::NAME,
+        ] {
+            let route = router
+                .routes()
+                .iter()
+                .find(|route| route.name == name)
+                .expect("coded route");
+            assert_eq!(route.execution, RouteExecution::Coded, "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn erasing_a_case_destroys_its_wrapping_key() {
+        let tenant = TenantId::new("9900357000004").expect("tenant");
+        let case = CaseId::generate();
+        let keyring = Arc::new(agentplane::testkit::MemoryKeyRing::new());
+        let scope = agentplane::keyring::scope(&tenant, &case.to_string());
+        let (_data_key, wrapped) = keyring.data_key(&scope).await.expect("data key");
+        let policy =
+            crate::plane::policy::engine(crate::plane::policy::DEFAULT_POLICY).expect("policy");
+        let plane = Plane::new(
+            Stores::redb(
+                agentplane::store::RedbStore::open_in_memory().expect("store"),
+                &tenant,
+            ),
+            PlaneConfig {
+                owner: "erasure-test",
+                tenant: &tenant,
+                activated: &Activation::named(vec![
+                    crate::skills::GabiAllocationTriage::NAME.to_owned(),
+                ]),
+                providers: Vec::new(),
+                tool_servers: Vec::new(),
+                policy,
+                keyring: Some(Arc::clone(&keyring) as Arc<dyn KeyRing>),
+                outbox: None,
+                signer: None,
+                quota: agentplane::quota::TenantQuota::default(),
+            },
+        )
+        .expect("plane");
+
+        plane
+            .erase(Some(case), None, "GDPR Art. 17 request")
+            .await
+            .expect("erasure");
+        assert!(
+            keyring.open(&wrapped).await.is_err(),
+            "the case key still opens after erasure"
         );
     }
 

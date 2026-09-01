@@ -105,10 +105,6 @@ spec:
   # gate refuses a mutating sink with untrusted arguments. Declaring the grant
   # anyway would read as an ability this agent does not have.
   #
-  # Acting on a conclusion is a `planned` specialist's job — see
-  # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
-  # resolves itself, so the authority-bearing arguments keep the run input's own
-  # labels and a named human approves the call before it leaves.
 
   budgets:
     max_tokens: 200000
