@@ -77,10 +77,9 @@ fn rendered_13027() -> String {
 /// The message `makod` itself emits satisfies the AHB rules for 13027.
 ///
 /// MSCONS AHB 3.1g §11.2 makes `SG9 LIN`, `SG9 PIA` and both `SG1 RFF` groups
-/// *Muss*; the profile used to call all three optional, with a note claiming
-/// "no AHB constraint for PID 13027". A 13027 arriving without `PIA` — hence
-/// without an OBIS code — validated clean, which would have masked half of
-/// this fix.
+/// *Muss*, so the profile carries them as such. Calling them optional would let
+/// a 13027 with no `PIA` — hence no OBIS code — validate clean, and the reading
+/// would have nothing to say which register it belongs to.
 #[test]
 fn the_rendered_13027_passes_its_own_ahb_rules() {
     let wire = rendered_13027();

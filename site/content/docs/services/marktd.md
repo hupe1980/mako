@@ -1795,7 +1795,7 @@ WHERE geraet_konfigurationen @> '[{"parameter":"SMGW_CERT_ABLAUFDATUM"}]'
 | `INBETRIEBNAHMEDATUM` | ISO date | § 13 StromNZV | Commissioning date |
 | `LETZTE_WARTUNG` | ISO date | § 13 StromNZV | Last maintenance date |
 | `NAECHSTE_WARTUNG` | ISO date | § 13 StromNZV | Next scheduled maintenance date |
-| `AUSLESEE_PROTOKOLL` | enum string | — | Readout protocol: `"SML"` / `"DLMS"` / `"IEC62056"` |
+| `AUSLESE_PROTOKOLL` | enum string | — | Readout protocol: `"SML"` / `"DLMS"` / `"IEC62056"` |
 | `MSB_VERTRAGSNUMMER` | string | MsbG §23 | MSB contract number for this device |
 | `SONSTIGES` | string | — | Custom parameter — use `notiz` for the actual key name |
 

@@ -910,17 +910,21 @@ CREATE TABLE ecb_base_rates (
 );
 
 COMMENT ON TABLE ecb_base_rates IS
-    'ECB Basiszinssatz history per §247 BGB. '
-    'Updated twice per year (Jan 1 + Jul 1). '
-    'Used for §288 BGB Verzugszinsen calculation. '
-    'Seed with current rates from Bundesbank / BAnz AT.';
+    'Basiszinssatz history per §247 BGB, as announced by the Deutsche Bundesbank '
+    '(derived from the ECB main refinancing rate, but a distinct German figure). '
+    'Announced twice per year (Jan 1 + Jul 1); it may hold rather than move. '
+    'Used for §288 BGB Verzugszinsen. An unseeded period charges no interest '
+    'rather than falling back to a guessed rate.';
 
--- Seed current rates (as of 2026-07-01; update as ECB changes rates)
+-- The Basiszinssatz as the Deutsche Bundesbank has announced it. It moves only
+-- on 1 January and 1 July, and it does not move every time: it held at 1.27 %
+-- across the 2026-01-01 Stichtag and then rose. Seeding a smooth series instead
+-- of the announced one bills Verzugszinsen nobody owes.
 INSERT INTO ecb_base_rates (valid_from, rate_pct, source) VALUES
-    ('2025-01-01', 3.15, 'BAnz AT 2025-01-02'),
-    ('2025-07-01', 2.65, 'BAnz AT 2025-07-01'),
-    ('2026-01-01', 2.15, 'BAnz AT 2026-01-02'),
-    ('2026-07-01', 1.65, 'BAnz AT 2026-07-01');
+    ('2025-01-01', 2.27, 'Deutsche Bundesbank, Bekanntgabe zum 01.01.2025'),
+    ('2025-07-01', 1.27, 'Deutsche Bundesbank, Bekanntgabe zum 01.07.2025'),
+    ('2026-01-01', 1.27, 'Deutsche Bundesbank, Bekanntgabe zum 01.01.2026 (unverändert)'),
+    ('2026-07-01', 1.52, 'Deutsche Bundesbank, Bekanntgabe zum 01.07.2026');
 
 -- ── Payment plans / Zahlungsvereinbarung ──────────────────────────────────────
 --

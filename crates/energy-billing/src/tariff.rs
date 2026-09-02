@@ -302,9 +302,11 @@ pub struct ControllableLoadProduct {
     /// carried here as the resulting per-kWh credit (ct/kWh).
     ///
     /// The reduction attaches to the controllable device's own metered energy,
-    /// which is why Modul 2 requires separate metering. **Mutually exclusive
-    /// with Modul 3** — both re-price the Arbeitspreis, and holding both would
-    /// reduce the network usage twice (`MODUL2_AND_MODUL3`).
+    /// which is why Modul 2 requires separate metering. It is the **alternative
+    /// form of the base module**, so it excludes Modul 1
+    /// (`MODUL1_AND_MODUL2`), and it takes no Modul 3
+    /// (`MODUL2_AND_MODUL3`) — each pairing would reduce the same network usage
+    /// twice.
     #[serde(default)]
     pub sect14a_modul2_nne_reduktion_ct_per_kwh: Option<Decimal>,
 

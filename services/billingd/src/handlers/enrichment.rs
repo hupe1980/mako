@@ -302,9 +302,9 @@ pub(crate) fn nehs_overlay_applies(category: &str, cfg: &BillingdConfig) -> bool
 /// (`period_from.year()`) for the year-table fallback — so market overlay and
 /// fallback cannot diverge on which side of a boundary they bill.
 ///
-/// The EUR/t → ct/kWh conversion uses the configured CO₂ factor
-/// (`[rates] behg_co2_factor_kg_per_kwh`, e.g. 0.20140 for an L-Gas
-/// deployment); unset means the H-Gas default 0.20160.
+/// The EUR/t → ct/kWh conversion uses the delivery year's EBeV Emissionsfaktor.
+/// § 3 Abs. 2 CO2KostAufG requires the BEHG Standardwerte and the ordinance
+/// publishes one Erdgas row, so only the certificate price is the operator's.
 pub(crate) async fn apply_nehs_market_price(
     rates: &mut energy_billing::RegulatoryRates,
     category: &str,
@@ -317,8 +317,14 @@ pub(crate) async fn apply_nehs_market_price(
     }
     match productd.get_latest_nehs_price(period_from).await {
         Ok(Some(eur_per_t)) => {
-            rates.behg_gas_ct_per_kwh =
-                energy_billing::behg_ct_per_kwh_from_price(eur_per_t, cfg.behg_co2_factor());
+            // The Emissionsfaktor is the delivery year's EBeV Standardwert —
+            // § 3 Abs. 2 CO2KostAufG allows no other. Only the certificate
+            // price is the operator's, and that is what the series carries.
+            if let Some(ct) =
+                energy_billing::behg_ct_per_kwh_from_price(eur_per_t, period_from.year())
+            {
+                rates.behg_gas_ct_per_kwh = ct;
+            }
         }
         Ok(None) => {} // no series data — year-table fallback stands
         Err(e) => {
@@ -618,24 +624,22 @@ mod nehs_overlay_tests {
         }
     }
 
-    /// The configured CO₂ factor reaches the EUR/t → ct/kWh conversion: an
-    /// L-Gas deployment (0.20140) prices the same certificate lower than the
-    /// H-Gas default (0.20160).
+    /// Only the certificate price is the operator's. § 3 Abs. 2 CO2KostAufG
+    /// requires the BEHG Standardwerte, and the EBeV publishes one Erdgas row,
+    /// so the Emissionsfaktor is the delivery year's and nothing configures it.
     #[test]
-    fn configured_l_gas_factor_threads_into_the_conversion() {
-        let l_gas = cfg(serde_json::json!({ "behg_co2_factor_kg_per_kwh": "0.20140" }));
-        assert_eq!(l_gas.behg_co2_factor(), Some(dec!(0.20140)));
-        let ct = energy_billing::behg_ct_per_kwh_from_price(dec!(65), l_gas.behg_co2_factor());
-        assert_eq!(ct, dec!(65) * dec!(0.20140) / dec!(10));
-
-        // Unset factor → None → H-Gas default inside the conversion.
-        let default = cfg(serde_json::Value::Null);
-        assert_eq!(default.behg_co2_factor(), None);
-        let ct_h = energy_billing::behg_ct_per_kwh_from_price(dec!(65), default.behg_co2_factor());
-        assert_eq!(ct_h, dec!(1.3104));
-        assert!(
-            ct < ct_h,
-            "L-Gas factor must yield a lower ct/kWh than H-Gas"
+    fn the_market_price_meets_the_years_statutory_factor() {
+        assert_eq!(
+            energy_billing::behg_ct_per_kwh_from_price(dec!(65), 2026),
+            Some(dec!(65) * dec!(0.18139464) / dec!(10))
         );
+        // The factor steps with the ordinance, so the same price prices
+        // differently either side of the EBeV 2022 / EBeV 2030 boundary.
+        assert_ne!(
+            energy_billing::behg_ct_per_kwh_from_price(dec!(30), 2022),
+            energy_billing::behg_ct_per_kwh_from_price(dec!(30), 2023)
+        );
+        // Beyond the tabled years the overlay declines rather than guessing.
+        assert!(energy_billing::behg_ct_per_kwh_from_price(dec!(65), 2031).is_none());
     }
 }

@@ -175,7 +175,7 @@ fn golden_strom_slp_eintarif_jan_2026() {
     let rates = RegulatoryRates {
         stromsteuer_ct_per_kwh: dec!(2.05),
         energiesteuer_gas_ct_per_kwh: dec!(0.55),
-        behg_gas_ct_per_kwh: dec!(1.3104),
+        behg_gas_ct_per_kwh: dec!(1.17906516),
         mwst_rate: dec!(0.19),
         mwst_rate_reduced: dec!(0.07),
     };
@@ -256,7 +256,7 @@ fn golden_strom_reverse_charge_13b_charges_no_vat() {
     let rates = RegulatoryRates {
         stromsteuer_ct_per_kwh: dec!(2.05),
         energiesteuer_gas_ct_per_kwh: dec!(0.55),
-        behg_gas_ct_per_kwh: dec!(1.3104),
+        behg_gas_ct_per_kwh: dec!(1.17906516),
         mwst_rate: dec!(0.19),
         mwst_rate_reduced: dec!(0.07),
     };
@@ -315,7 +315,7 @@ fn golden_strom_reverse_charge_13b_charges_no_vat() {
 /// - Arbeitspreis: 7.50 ct/kWh_Hs
 /// - Grundpreis: 5.00 ct/day
 /// - Energiesteuer: 0.55 ct/kWh (§2 EnergieStG)
-/// - BEHG CO₂ (2026): 65 EUR/t × 0.20160 kg/kWh ÷ 10 = 1.3104 ct/kWh
+/// - BEHG CO₂ (2026): 65 EUR/t × 0.18139464 kg/kWh_Hs ÷ 10 = 1.17906516 ct/kWh
 /// - MwSt: 19%
 ///
 /// ## Consumption
@@ -326,10 +326,10 @@ fn golden_strom_reverse_charge_13b_charges_no_vat() {
 /// Arbeitspreis Gas:   500 × 7.50 ct = 37.50 EUR
 /// Grundpreis Gas:     31 × 0.0500 = 1.55 EUR
 /// Energiesteuer:      500 × 0.55 ct = 2.75 EUR
-/// BEHG CO₂:           500 × 1.3104 ct = 6.552 EUR
-/// Netto:              37.50 + 1.55 + 2.75 + 6.552 = 48.352 EUR
-/// MwSt 19%:           48.352 × 0.19 = 9.18688 EUR
-/// Brutto:             ≈ 57.54 EUR
+/// BEHG CO₂:           500 × 1.17906516 ct = 5.8953258 EUR
+/// Netto:              37.50 + 1.55 + 2.75 + 5.8953258 = 47.6953258 EUR
+/// MwSt 19%:           47.6953258 × 0.19 = 9.0621119 EUR
+/// Brutto:             ≈ 56.76 EUR
 /// ```
 #[test]
 fn golden_gas_with_levies_jan_2026() {
@@ -345,7 +345,7 @@ fn golden_gas_with_levies_jan_2026() {
     let rates = RegulatoryRates {
         stromsteuer_ct_per_kwh: dec!(2.05),
         energiesteuer_gas_ct_per_kwh: dec!(0.55),
-        behg_gas_ct_per_kwh: dec!(1.3104),
+        behg_gas_ct_per_kwh: dec!(1.17906516),
         mwst_rate: dec!(0.19),
         mwst_rate_reduced: dec!(0.07),
     };
@@ -404,25 +404,25 @@ fn golden_gas_with_levies_jan_2026() {
         "Energiesteuer golden"
     );
 
-    // BEHG: 500 × 0.013104 = 6.552
+    // BEHG: 500 × 0.0117906516 = 5.8953258
     let behg = invoice.total_by_tag("behg");
     assert!(
-        (behg - dec!(6.552)).abs() < dec!(0.01),
-        "BEHG golden: expected ~6.552, got {}",
+        (behg - dec!(5.8953258)).abs() < dec!(0.01),
+        "BEHG golden: expected ~5.8953, got {}",
         behg
     );
 
-    // Netto: ~48.352
+    // Netto: ~47.6953
     assert!(
-        (invoice.netto_eur - dec!(48.352)).abs() < dec!(0.05),
-        "Gas netto golden: expected ~48.35, got {}",
+        (invoice.netto_eur - dec!(47.6953258)).abs() < dec!(0.05),
+        "Gas netto golden: expected ~47.70, got {}",
         invoice.netto_eur
     );
 
-    // Brutto: ~57.54
+    // Brutto: ~56.76
     assert!(
-        (invoice.brutto_eur - dec!(57.54)).abs() < dec!(0.05),
-        "Gas brutto golden: expected ~57.54, got {}",
+        (invoice.brutto_eur - dec!(56.7574377)).abs() < dec!(0.05),
+        "Gas brutto golden: expected ~56.76, got {}",
         invoice.brutto_eur
     );
 }
@@ -563,7 +563,7 @@ fn golden_rlm_demand_charge() {
     let rates = RegulatoryRates {
         stromsteuer_ct_per_kwh: dec!(2.05),
         energiesteuer_gas_ct_per_kwh: dec!(0.55),
-        behg_gas_ct_per_kwh: dec!(1.3104),
+        behg_gas_ct_per_kwh: dec!(1.17906516),
         mwst_rate: dec!(0.19),
         mwst_rate_reduced: dec!(0.07),
     };
@@ -644,7 +644,7 @@ fn golden_rlm_demand_charge() {
 /// ## Tariff
 /// - Gas Arbeitspreis: 8.00 ct/kWh_Hs
 /// - Energiesteuer: Regelsatz 0.55 ct/kWh_Hs + § 53a Entlastungshinweis
-/// - BEHG: 1.3104 ct/kWh_Hs
+/// - BEHG: 1.17906516 ct/kWh_Hs
 /// - MwSt: 19%
 ///
 /// ## Consumption
@@ -653,7 +653,7 @@ fn golden_rlm_demand_charge() {
 /// ## Expected
 /// - Energiesteuer billed in full: 50 000 × 0.55 ct = 275.00 EUR
 /// - One § 53a Entlastungshinweis naming that figure
-/// - BEHG applies: 50 000 × 1.3104 ct / 100 = 655.20 EUR
+/// - BEHG applies: 50 000 × 1.17906516 ct / 100 = 589.53 EUR
 #[test]
 fn golden_gas_kwk_is_billed_the_full_energiesteuer_with_a_53a_note() {
     let tariff: Product = serde_json::from_str(
@@ -668,7 +668,7 @@ fn golden_gas_kwk_is_billed_the_full_energiesteuer_with_a_53a_note() {
     let rates = RegulatoryRates {
         stromsteuer_ct_per_kwh: dec!(2.05),
         energiesteuer_gas_ct_per_kwh: dec!(0.55),
-        behg_gas_ct_per_kwh: dec!(1.3104),
+        behg_gas_ct_per_kwh: dec!(1.17906516),
         mwst_rate: dec!(0.19),
         mwst_rate_reduced: dec!(0.07),
     };
@@ -720,13 +720,13 @@ fn golden_gas_kwk_is_billed_the_full_energiesteuer_with_a_53a_note() {
         Some("\u{a7} 53a EnergieStG")
     );
 
-    // BEHG still applies: 50 000 × 1.3104 ct / 100 = 655.20 EUR
+    // BEHG still applies: 50 000 × 1.17906516 ct / 100 = 589.53 EUR
     let behg = invoice
         .positions
         .iter()
         .find(|p| p.tags.iter().any(|t| t == "behg"))
         .expect("BEHG position must exist even for KWK gas");
-    let expected_behg = dec!(50000) * dec!(1.3104) / dec!(100);
+    let expected_behg = dec!(50000) * dec!(1.17906516) / dec!(100);
     let diff = (behg.net_eur - expected_behg).abs();
     assert!(
         diff < dec!(0.01),
@@ -1198,7 +1198,7 @@ fn emitted_invoices() -> Vec<(&'static str, energy_billing::Invoice)> {
     let rates = RegulatoryRates {
         stromsteuer_ct_per_kwh: dec!(2.05),
         energiesteuer_gas_ct_per_kwh: dec!(0.55),
-        behg_gas_ct_per_kwh: dec!(1.3104),
+        behg_gas_ct_per_kwh: dec!(1.17906516),
         mwst_rate: dec!(0.19),
         mwst_rate_reduced: dec!(0.07),
     };

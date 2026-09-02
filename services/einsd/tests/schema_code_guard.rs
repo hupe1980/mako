@@ -546,7 +546,7 @@ fn sect52_violations_are_derived_in_one_place() {
     }
     let sect52 = code_only(SECT52);
     for typ in [
-        "FernsteuerbarkeitmFehlend",
+        "FernsteuerbarkeitFehlend",
         "DirektvermarktungspflichtVerletzt",
         "AusfallverguetungHoechstdauerUeberschritten",
         "ZuordnungsWechselNichtGemeldet",

@@ -863,14 +863,14 @@ pub async fn delete_energiemix_handler(
 /// | NNE (Netzentgelt Grundpreis) | 5–10 % | `marktd.PreisblattNetznutzung` |
 /// | Konzessionsabgabe | 2–3 % | `marktd.PreisblattKonzessionsabgabe` |
 /// | Stromsteuer / Energiesteuer | 5–10 % | statutory (§3 StromStG, §2 EnergieStG) |
-/// | BEHG (Gas only) | ~2 % | statutory (2025: 1.109 ct/kWh_Hs) |
+/// | BEHG (Gas only) | ~2 % | statutory (2025: 0.99767 ct/kWh_Hs) |
 /// | MwSt 19 % | 19 % | statutory |
 ///
 /// NNE + statutory components are taken from the position-level overrides when
 /// provided.  Statutory defaults apply when the override is `None`:
 /// - Stromsteuer: 2.05 ct/kWh (§3 StromStG)
 /// - Energiesteuer Gas: 0.55 ct/kWh (§2 EnergieStG)
-/// - BEHG Gas: 1.109 ct/kWh (55 EUR/t CO₂ × 0.20160 kg/kWh, 2025)
+/// - BEHG Gas: 0.99767 ct/kWh (55 EUR/t CO₂ × 0.18139464 kg/kWh_Hs, 2025)
 ///
 /// NNE is NOT auto-fetched from `marktd` — the caller must supply it via
 /// `nne_arbeitspreis_ct_per_kwh` + `nne_grundpreis_eur_per_year` in the
@@ -1011,7 +1011,8 @@ fn compute_cost_breakdown(
     let is_gas = sparte_upper.contains("GAS");
     let levies_eur = if is_gas {
         let energiesteuer = pos.energiesteuer_gas_ct_per_kwh.unwrap_or(dec!(0.55));
-        let behg = pos.behg_gas_ct_per_kwh.unwrap_or(dec!(1.109));
+        // 55 EUR/t (2025, BEHG §10) × 0.18139464 kg CO₂/kWh_Hs ÷ 10.
+        let behg = pos.behg_gas_ct_per_kwh.unwrap_or(dec!(0.99767));
         (energiesteuer + behg) * pos.jahresverbrauch_kwh / Decimal::ONE_HUNDRED
     } else {
         let stromsteuer = pos.stromsteuer_ct_per_kwh.unwrap_or(dec!(2.05));

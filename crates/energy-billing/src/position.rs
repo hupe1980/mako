@@ -600,6 +600,69 @@ pub(crate) fn arbeitspreis_position(
 }
 
 /// Build a per-unit levy position (quantity × rate in ct/unit).
+/// The § 3 Abs. 1 CO2KostAufG disclosures that accompany a CO₂ cost position.
+///
+/// The statute lists six items a Brennstoff- or Wärmelieferant must show
+/// „in allgemeinverständlicher Form". Nr. 2 — the Preisbestandteil — is the
+/// levy position itself; this builds the informational ones that surround it:
+///
+/// | Nr. | What | Unit |
+/// |---|---|---|
+/// | 1 | Brennstoffemissionen der Lieferung | kg CO₂ |
+/// | 3 | heizwertbezogener Emissionsfaktor | kg CO₂/kWh |
+/// | 4 | Energiegehalt der Brennstoffmenge | kWh |
+/// | 5 | Hinweis auf die Erstattungsansprüche | — |
+///
+/// Nr. 6 is conditional on the building being a vermietetes Wohngebäude with a
+/// § 43 GEG Heizungsanlage. That is a fact about the Vermieter's building, not
+/// about the supply, and no party to a Liefervertrag reports it here — so it is
+/// not emitted and the Vermieter's own Abrechnung carries it.
+///
+/// `emissionsfaktor_kg_per_kwh` is the ordinance's Standardwert (§ 3 Abs. 2
+/// permits no other), and the emissions follow from it and the billed quantity
+/// rather than being supplied separately — one figure cannot then contradict
+/// the other.
+pub(crate) fn co2kostaufg_disclosures(
+    menge_kwh: Decimal,
+    unit: &'static str,
+    emissionsfaktor_kg_per_kwh: Decimal,
+    tag: &'static str,
+) -> Vec<BillingPosition> {
+    let emissionen_kg = (menge_kwh * emissionsfaktor_kg_per_kwh).round_dp(2);
+    let info = |description: String, legal: &'static str| BillingPosition {
+        description,
+        legal_basis: Some(legal.to_owned()),
+        quantity: menge_kwh,
+        unit: unit.to_owned(),
+        unit_price_eur: Decimal::ZERO,
+        net_eur: Decimal::ZERO,
+        category: PositionCategory::Info,
+        tags: vec!["co2kostaufg".to_owned(), tag.to_owned()],
+        applicable_tax_rate: None,
+        trace: PositionTrace::default(),
+    };
+    vec![
+        info(
+            format!("Brennstoffemissionen der Lieferung: {emissionen_kg} kg CO₂"),
+            "CO2KostAufG § 3 Abs. 1 Nr. 1",
+        ),
+        info(
+            format!("Heizwertbezogener Emissionsfaktor: {emissionsfaktor_kg_per_kwh} kg CO₂/kWh"),
+            "CO2KostAufG § 3 Abs. 1 Nr. 3",
+        ),
+        info(
+            format!("Energiegehalt der Lieferung: {menge_kwh} {unit}"),
+            "CO2KostAufG § 3 Abs. 1 Nr. 4",
+        ),
+        info(
+            "Erstattungsansprüche nach § 6 Absatz 2 und § 8 Absatz 2 CO2KostAufG \
+             können gegenüber dem Vermieter bzw. Verpächter geltend gemacht werden."
+                .to_owned(),
+            "CO2KostAufG § 3 Abs. 1 Nr. 5",
+        ),
+    ]
+}
+
 pub(crate) fn levy_position(
     label: impl Into<String>,
     quantity: Decimal,

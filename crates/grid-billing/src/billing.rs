@@ -665,10 +665,41 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
     // billed per Entnahmestelle at the rate its Letztverbrauchergruppe carries.
     // A missing tabled rate is a warning rather than a silent zero: billing a
     // levy at nothing understates the invoice by an amount the ÜNB will reclaim.
+    //
+    // The §19 Aufschlag is the one levy published as an explicit A′/B′/C′
+    // schedule, and B′/C′ apply „für Strommengen über 1 000 000 kWh" — so a
+    // privileged Entnahmestelle carries A′ on the year's first Gigawattstunde
+    // and its own rate above it, which is two positions rather than one. The
+    // Offshore- and KWKG-Umlage are published only as the non-privileged rate:
+    // a Begrenzung there is granted per Entnahmestelle and arrives as the
+    // caller's override, so they stay one position at one rate.
     let umlage_base_kwh = input.arbeitspreis.menge_kwh();
     if input.sparte == Sparte::Strom {
         let year = input.period.from().year();
         let gruppe = input.letztverbrauchergruppe;
+        let aufteilung = crate::umlagen::aufteilung(
+            gruppe,
+            umlage_base_kwh,
+            input.enfg_jahresvorverbrauch_kwh.unwrap_or(Decimal::ZERO),
+        );
+        if input.enfg_jahresvorverbrauch_kwh.is_none()
+            && matches!(
+                gruppe,
+                crate::umlagen::Letztverbrauchergruppe::B
+                    | crate::umlagen::Letztverbrauchergruppe::C
+            )
+        {
+            warnings.push(SettlementWarning {
+                severity: WarningSeverity::Warning,
+                code: "ENFG_VORVERBRAUCH_MISSING",
+                message: format!(
+                    "{gruppe:?}′ is privileged only above 1 GWh a year and no \
+                     Jahresvorverbrauch was supplied — this period is billed as though \
+                     it opened the year, so the first 1 GWh of it carries the full \
+                     A′ rate"
+                ),
+            });
+        }
         let levies: [(&str, BillingPositionKind, Option<Decimal>, LegalReference); 3] = [
             (
                 "Aufschlag für besondere Netznutzung (§19 StromNEV)",
@@ -718,33 +749,80 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                 // §21 EnFG exempts entirely; a zero line adds nothing.
                 continue;
             }
-            let price_eur = ct_to_eur(rate_ct);
-            let net_eur = pos_net(umlage_base_kwh, price_eur);
-            total += net_eur;
-            positions.push(SettlementPosition {
-                text: label.to_owned(),
-                kind,
-                quantity: umlage_base_kwh.round_dp(3),
-                unit: QuantityUnit::Kwh,
-                unit_price_eur: price_eur.round_dp(6),
-                net_eur,        spot_price_formula: None,
 
-                trace: CalculationTrace {
-                    explanation: format!(
-                        "{umlage_base_kwh:.3} kWh × {price_eur:.6} EUR/kWh = {:.5} EUR ({gruppe:?})",
-                        (umlage_base_kwh * price_eur).round_dp(5),
-                    ),
-                    input_quantity: umlage_base_kwh,
-                    input_unit_price_eur: price_eur,
-                    gross_eur: umlage_base_kwh * price_eur,
-                    legal_refs: vec![legal, LegalReference::EnFG {
-                        paragraph: "§§21 ff.",
-                    }],
-                    tariff_source: None,
-                    regulatory_reduction_factor: None,
-                    rounding_note: None,
-                },
-            });
+            // Only the §19 Aufschlag has a published privileged rate to split
+            // against, and only where the caller has not overridden it outright.
+            // Either tranche may be empty — a period wholly inside the year's
+            // first Gigawattstunde carries A′ on all of it, one wholly past the
+            // boundary carries the group's rate on all of it — so the empty side
+            // is dropped rather than billed as a zero line.
+            let privilegiert = kind == BillingPositionKind::Sect19StromNevUmlage
+                && input.sect19_umlage_ct_per_kwh.is_none()
+                && matches!(
+                    gruppe,
+                    crate::umlagen::Letztverbrauchergruppe::B
+                        | crate::umlagen::Letztverbrauchergruppe::C
+                );
+
+            let tranchen: Vec<(Decimal, Decimal, &str)> = if privilegiert {
+                let voll = crate::umlagen::sect19_stromnev_ct_per_kwh(
+                    year,
+                    crate::umlagen::Letztverbrauchergruppe::A,
+                )
+                .unwrap_or(rate_ct);
+                [
+                    (aufteilung.voller_satz_kwh, voll, "erste GWh des Jahres, A′"),
+                    (aufteilung.privilegiert_kwh, rate_ct, "über 1 GWh"),
+                ]
+                .into_iter()
+                .filter(|(menge, ..)| *menge > Decimal::ZERO)
+                .collect()
+            } else {
+                vec![(umlage_base_kwh, rate_ct, "")]
+            };
+
+            for (menge_kwh, tranche_ct, tranche_label) in tranchen {
+                let price_eur = ct_to_eur(tranche_ct);
+                let net_eur = pos_net(menge_kwh, price_eur);
+                total += net_eur;
+                let text = if tranche_label.is_empty() {
+                    label.to_owned()
+                } else {
+                    format!("{label} — {tranche_label}")
+                };
+                let anteil = if tranche_label.is_empty() {
+                    format!("{gruppe:?}")
+                } else {
+                    format!("{gruppe:?}, {tranche_label}")
+                };
+                positions.push(SettlementPosition {
+                    text,
+                    kind,
+                    quantity: menge_kwh.round_dp(3),
+                    unit: QuantityUnit::Kwh,
+                    unit_price_eur: price_eur.round_dp(6),
+                    net_eur,
+                    spot_price_formula: None,
+                    trace: CalculationTrace {
+                        explanation: format!(
+                            "{menge_kwh:.3} kWh × {price_eur:.6} EUR/kWh = {:.5} EUR ({anteil})",
+                            (menge_kwh * price_eur).round_dp(5),
+                        ),
+                        input_quantity: menge_kwh,
+                        input_unit_price_eur: price_eur,
+                        gross_eur: menge_kwh * price_eur,
+                        legal_refs: vec![
+                            legal.clone(),
+                            LegalReference::EnFG {
+                                paragraph: "§§21 ff.",
+                            },
+                        ],
+                        tariff_source: None,
+                        regulatory_reduction_factor: None,
+                        rounding_note: None,
+                    },
+                });
+            }
         }
     }
 
@@ -958,6 +1036,18 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
     // outside the basis entirely, leaving a Modul-3 customer with a 10 %
     // agreement billed as though they had none.
     if let Some(v) = &input.sect19 {
+        v.pruefe_prozentsatz()?;
+        if v.genehmigung.is_none() {
+            warnings.push(SettlementWarning {
+                severity: WarningSeverity::Warning,
+                code: "SECT19_OHNE_GENEHMIGUNG",
+                message: "the §19 Abs. 2 agreement names neither a Genehmigung (Satz 5) \
+                          nor an Anzeige (Satz 7) — one of the two is what makes an \
+                          individuelles Netzentgelt effective, and the invoice cannot \
+                          cite what it was billed under"
+                    .to_owned(),
+            });
+        }
         let floor = match v.art {
             crate::sect19::Sect19Art::AtypischeNetznutzung => {
                 Some(crate::sect19::ATYPISCH_MINDESTENTGELT)
@@ -976,9 +1066,9 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
             None => warnings.push(SettlementWarning {
                 severity: WarningSeverity::Warning,
                 code: "SECT19_BANDLAST_CRITERIA_NOT_MET",
-                message: "a §19 Abs. 2 Satz 2 agreement needs at least 7 000 \
-                          Benutzungsstunden and 10 GWh a year — the utilisation data \
-                          supplied does not qualify (or is missing)"
+                message: "a §19 Abs. 2 Satz 2 agreement needs a Benutzungsstundenzahl \
+                          reaching 7 000 h and a Stromverbrauch exceeding 10 GWh a year \
+                          — the utilisation data supplied does not qualify (or is missing)"
                     .to_owned(),
             }),
             Some(f) if v.vereinbarter_prozentsatz < f => warnings.push(SettlementWarning {
@@ -1882,6 +1972,7 @@ mod tests {
             }),
             leistungspreis: None,
             letztverbrauchergruppe: Default::default(),
+            enfg_jahresvorverbrauch_kwh: None,
             sect19_umlage_ct_per_kwh: None,
             offshore_umlage_ct_per_kwh: None,
             kwkg_umlage_ct_per_kwh: None,
@@ -2212,9 +2303,9 @@ mod tests {
         use crate::sect19::{Sect19Art, Sect19Vereinbarung};
 
         let mut i = base_nne();
-        // 10 GWh at ~1408 kW → 7102 h: the 20 % tier.
-        i.jahresarbeit_kwh = Some(d("10000000"));
-        i.jahreshoechstleistung_kw = Some(d("1408"));
+        // 10.1 GWh at ~1422 kW → 7102 h: the 20 % tier.
+        i.jahresarbeit_kwh = Some(d("10100000"));
+        i.jahreshoechstleistung_kw = Some(d("1422"));
         i.sect19 = Some(Sect19Vereinbarung {
             art: Sect19Art::IntensiveNetznutzung,
             vereinbarter_prozentsatz: d("0.10"),
@@ -2228,6 +2319,85 @@ mod tests {
             "10 % agreed where the floor is 20 %: {:?}",
             r.warnings
         );
+    }
+
+    /// Satz 2 asks whether the Stromverbrauch *übersteigt* ten Gigawattstunden,
+    /// so an Abnahmestelle at exactly 10 GWh has no Satz 2 agreement available
+    /// however high its utilisation.
+    #[test]
+    fn exactly_ten_gigawatt_hours_does_not_qualify_for_satz_two() {
+        use crate::sect19::{Sect19Art, Sect19Vereinbarung};
+
+        let mut i = base_nne();
+        i.jahresarbeit_kwh = Some(d("10000000"));
+        i.jahreshoechstleistung_kw = Some(d("1250")); // 8000 h
+        i.sect19 = Some(Sect19Vereinbarung {
+            art: Sect19Art::IntensiveNetznutzung,
+            vereinbarter_prozentsatz: d("0.10"),
+            genehmigung: None,
+        });
+        let r = settle_nne(&i).expect("settles");
+        assert!(
+            r.warnings
+                .iter()
+                .any(|w| w.code == "SECT19_BANDLAST_CRITERIA_NOT_MET"),
+            "{:?}",
+            r.warnings
+        );
+    }
+
+    /// §19 Abs. 2 Satz 5 / Satz 7 — a Vereinbarung is effective on a Genehmigung
+    /// or, under a §29 Abs. 1 EnWG Festlegung, an Anzeige. An agreement naming
+    /// neither is reported.
+    #[test]
+    fn a_sect19_agreement_with_no_regulatory_reference_is_reported() {
+        use crate::sect19::{Sect19Art, Sect19Vereinbarung};
+
+        let mut i = base_nne();
+        i.sect19 = Some(Sect19Vereinbarung {
+            art: Sect19Art::AtypischeNetznutzung,
+            vereinbarter_prozentsatz: d("0.20"),
+            genehmigung: None,
+        });
+        let r = settle_nne(&i).unwrap();
+        assert!(
+            r.warnings
+                .iter()
+                .any(|w| w.code == "SECT19_OHNE_GENEHMIGUNG"),
+            "{:?}",
+            r.warnings
+        );
+
+        i.sect19.as_mut().unwrap().genehmigung = Some("BK4-22-089, Anzeige vom 12.01.2026".into());
+        let r = settle_nne(&i).unwrap();
+        assert!(
+            !r.warnings
+                .iter()
+                .any(|w| w.code == "SECT19_OHNE_GENEHMIGUNG"),
+            "{:?}",
+            r.warnings
+        );
+    }
+
+    /// The agreed fraction is a *reduction* of the published Netzentgelt, so
+    /// anything outside (0, 1] is refused rather than settled. The value reaches
+    /// the engine from a settlement request, so nothing upstream bounds it.
+    #[test]
+    fn an_agreed_fraction_outside_the_unit_interval_is_refused() {
+        use crate::sect19::{Sect19Art, Sect19Vereinbarung};
+
+        for pct in ["1.5", "0", "-0.25"] {
+            let mut i = base_nne();
+            i.sect19 = Some(Sect19Vereinbarung {
+                art: Sect19Art::AtypischeNetznutzung,
+                vereinbarter_prozentsatz: d(pct),
+                genehmigung: None,
+            });
+            assert!(
+                matches!(settle_nne(&i), Err(BillingError::InvalidInput { .. })),
+                "{pct} must be refused"
+            );
+        }
     }
 
     /// A gas capacity charge is pro-rated by calendar days over the year.
@@ -2524,13 +2694,16 @@ mod tests {
     /// only that the fee is non-negative catches neither.
     #[test]
     fn a_metering_charge_above_the_msbg_ceiling_is_reported() {
-        use crate::msbg::{Entgeltschuldner, MessstellenKategorie, PflichtBand};
+        use crate::msbg::{Entgeltschuldner, MessstellenKategorie, PflichtEinstufung};
 
         let mut i = base_msb();
-        i.messstellen_kategorie = Some(MessstellenKategorie::Pflichteinbau(PflichtBand::Bis10000));
+        i.messstellen_kategorie = Some(MessstellenKategorie::Pflichteinbau(PflichtEinstufung {
+            jahresverbrauch_kwh: Some(d("9000")),
+            ..PflichtEinstufung::default()
+        }));
         i.entgeltschuldner = Some(Entgeltschuldner::Letztverbraucher);
 
-        // 40 EUR/a is the ceiling for this band; 5 EUR/month is 60 EUR/a.
+        // 9 000 kWh is §30 Abs. 1 Nr. 5; 40 EUR/a is its ceiling, 5 EUR/month is 60 EUR/a.
         i.grundgebuehr_eur_per_month = d("5.00");
         let over = settle_msb(&i).expect("settles");
         assert!(
@@ -2558,12 +2731,15 @@ mod tests {
     /// instalments does not raise the cap.
     #[test]
     fn the_ceiling_is_compared_against_the_annualised_charge() {
-        use crate::msbg::{Entgeltschuldner, MessstellenKategorie, PflichtBand};
+        use crate::msbg::{Entgeltschuldner, MessstellenKategorie, PflichtEinstufung};
 
         let mut i = base_msb();
-        i.messstellen_kategorie = Some(MessstellenKategorie::Pflichteinbau(PflichtBand::Bis100000));
+        i.messstellen_kategorie = Some(MessstellenKategorie::Pflichteinbau(PflichtEinstufung {
+            jahresverbrauch_kwh: Some(d("80000")),
+            ..PflichtEinstufung::default()
+        }));
         i.entgeltschuldner = Some(Entgeltschuldner::Letztverbraucher);
-        // 140 EUR/a ceiling. 12 EUR/month = 144 EUR/a — over, even though a
+        // 80 000 kWh is Nr. 2 — a 140 EUR/a ceiling. 12 EUR/month = 144 EUR/a — over, even though a
         // single month is far below the annual figure.
         i.grundgebuehr_eur_per_month = d("12.00");
         let r = settle_msb(&i).expect("settles");
@@ -2669,6 +2845,114 @@ mod tests {
         };
         let r = settle_nne(&i).unwrap();
         assert_eq!(r.positions[1].net_eur, Decimal::ZERO);
+    }
+
+    /// B′ is published „für Strommengen über 1 000 000 kWh", so a privileged
+    /// Entnahmestelle carries A′ on the year's first Gigawattstunde and B′ only
+    /// above it. Billing the whole quantity at B′ would understate the
+    /// §19-Aufschlag by 1 GWh × (A′ − B′).
+    #[test]
+    fn a_privileged_entnahmestelle_pays_the_full_rate_on_the_first_gigawatt_hour() {
+        let mut i = base_nne();
+        i.period = SettlementPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap();
+        i.letztverbrauchergruppe = crate::umlagen::Letztverbrauchergruppe::B;
+        i.arbeitspreis = ArbeitspreisModell::Einheitlich(MengePreis {
+            menge_kwh: d("2500000"),
+            preis_ct_per_kwh: d("3.5"),
+        });
+        // The year opens with this period.
+        i.enfg_jahresvorverbrauch_kwh = Some(Decimal::ZERO);
+
+        let r = settle_nne(&i).unwrap();
+        let sect19: Vec<_> = r
+            .positions
+            .iter()
+            .filter(|p| p.kind == BillingPositionKind::Sect19StromNevUmlage)
+            .collect();
+        assert_eq!(sect19.len(), 2, "one tranche each side of the boundary");
+        // 1 000 000 kWh × 1.559 ct = 15 590.00 EUR
+        assert_eq!(sect19[0].quantity, d("1000000.000"));
+        assert_eq!(sect19[0].net_eur, d("15590.00000"));
+        // 1 500 000 kWh × 0.050 ct = 750.00 EUR
+        assert_eq!(sect19[1].quantity, d("1500000.000"));
+        assert_eq!(sect19[1].net_eur, d("750.00000"));
+
+        // The other two levies stay one position at the non-privileged rate.
+        for kind in [
+            BillingPositionKind::OffshoreNetzumlage,
+            BillingPositionKind::KwkgUmlage,
+        ] {
+            assert_eq!(
+                r.positions.iter().filter(|p| p.kind == kind).count(),
+                1,
+                "{kind:?}"
+            );
+        }
+    }
+
+    /// A period wholly inside the year's first Gigawattstunde carries A′ on all
+    /// of it. A privileged group is not a privileged rate — the tranche is.
+    #[test]
+    fn a_privileged_period_inside_the_first_gigawatt_hour_is_billed_at_the_full_rate() {
+        let mut i = base_nne();
+        i.period = SettlementPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap();
+        i.letztverbrauchergruppe = crate::umlagen::Letztverbrauchergruppe::B;
+        i.arbeitspreis = ArbeitspreisModell::Einheitlich(MengePreis {
+            menge_kwh: d("300000"),
+            preis_ct_per_kwh: d("3.5"),
+        });
+        i.enfg_jahresvorverbrauch_kwh = Some(d("200000"));
+
+        let r = settle_nne(&i).unwrap();
+        let sect19: Vec<_> = r
+            .positions
+            .iter()
+            .filter(|p| p.kind == BillingPositionKind::Sect19StromNevUmlage)
+            .collect();
+        assert_eq!(sect19.len(), 1, "one tranche, and it is the A′ one");
+        // 300 000 kWh × 1.559 ct = 4 677.00 EUR, not 300 000 × 0.050 = 150.00.
+        assert_eq!(sect19[0].net_eur, d("4677.00000"));
+    }
+
+    /// Once the year's allowance is spent the whole period is privileged, and
+    /// the levy is one position again.
+    #[test]
+    fn a_privileged_entnahmestelle_past_the_threshold_bills_one_tranche() {
+        let mut i = base_nne();
+        i.period = SettlementPeriod::new(date!(2026 - 06 - 01), date!(2026 - 06 - 30)).unwrap();
+        i.letztverbrauchergruppe = crate::umlagen::Letztverbrauchergruppe::B;
+        i.arbeitspreis = ArbeitspreisModell::Einheitlich(MengePreis {
+            menge_kwh: d("400000"),
+            preis_ct_per_kwh: d("3.5"),
+        });
+        i.enfg_jahresvorverbrauch_kwh = Some(d("4000000"));
+
+        let r = settle_nne(&i).unwrap();
+        let sect19: Vec<_> = r
+            .positions
+            .iter()
+            .filter(|p| p.kind == BillingPositionKind::Sect19StromNevUmlage)
+            .collect();
+        assert_eq!(sect19.len(), 1);
+        assert_eq!(sect19[0].net_eur, d("200.00000"));
+    }
+
+    /// Without a Jahresvorverbrauch the period is billed as though it opened the
+    /// year — the over-billing direction — and says so.
+    #[test]
+    fn a_privileged_entnahmestelle_without_a_vorverbrauch_is_reported() {
+        let mut i = base_nne();
+        i.period = SettlementPeriod::new(date!(2026 - 06 - 01), date!(2026 - 06 - 30)).unwrap();
+        i.letztverbrauchergruppe = crate::umlagen::Letztverbrauchergruppe::C;
+        i.enfg_jahresvorverbrauch_kwh = None;
+        let r = settle_nne(&i).unwrap();
+        assert!(
+            r.warnings
+                .iter()
+                .any(|w| w.code == "ENFG_VORVERBRAUCH_MISSING"),
+            "{:?}",
+            r.warnings
+        );
     }
 
     /// A Strom NNE invoice for a covered year carries all three network levies.
@@ -3446,6 +3730,7 @@ mod proptests {
             }),
             leistungspreis: None,
                 letztverbrauchergruppe: Default::default(),
+                enfg_jahresvorverbrauch_kwh: None,
             sect19_umlage_ct_per_kwh: None,
             offshore_umlage_ct_per_kwh: None,
             kwkg_umlage_ct_per_kwh: None,
@@ -3488,6 +3773,7 @@ mod proptests {
             }),
             leistungspreis: None,
                 letztverbrauchergruppe: Default::default(),
+                enfg_jahresvorverbrauch_kwh: None,
             sect19_umlage_ct_per_kwh: None,
             offshore_umlage_ct_per_kwh: None,
             kwkg_umlage_ct_per_kwh: None,
@@ -3554,6 +3840,7 @@ mod modul3_tests {
             }),
             leistungspreis: None,
             letztverbrauchergruppe: Default::default(),
+            enfg_jahresvorverbrauch_kwh: None,
             sect19_umlage_ct_per_kwh: None,
             offshore_umlage_ct_per_kwh: None,
             kwkg_umlage_ct_per_kwh: None,

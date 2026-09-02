@@ -137,14 +137,46 @@ settlement:
 | KWKG-Umlage | 0.446 ct/kWh | §26 KWKG |
 
 The §19 StromNEV levy is published as an explicit A′/B′/C′ schedule — B′ is capped at
-0.050 ct/kWh and C′ at 0.025 ct/kWh for consumption above 1 GWh/a at one Entnahmestelle.
-Set `letztverbrauchergruppe` on the settlement to bill a privileged band. The Offshore- and
-KWKG-Umlage are published as the non-privileged rate only; a privilege under §§ 21 ff. EnFG
-is granted per Entnahmestelle, so supply the granted rate through
-`offshore_umlage_ct_per_kwh` / `kwkg_umlage_ct_per_kwh` where one applies.
+0.050 ct/kWh and C′ at 0.025 ct/kWh. Set `letztverbrauchergruppe` on the settlement to bill
+a privileged band. The Offshore- and KWKG-Umlage are published as the non-privileged rate
+only; a privilege under §§ 21 ff. EnFG is granted per Entnahmestelle, so supply the granted
+rate through `offshore_umlage_ct_per_kwh` / `kwkg_umlage_ct_per_kwh` where one applies.
+
+**The privilege is a tranche, not a rate.** B′ and C′ are published „für Strommengen
+über 1 000 000 kWh" at one Entnahmestelle, so the year's first Gigawattstunde carries A′
+whatever the group. The threshold is annual and a settlement covers one period, so supply
+`enfg_jahresvorverbrauch_kwh` — the kWh already consumed there earlier in the same year.
+A period straddling the boundary then bills **two** §19 positions. Omit the field and the
+period is billed as though it opened the year — the over-billing direction — with
+`ENFG_VORVERBRAUCH_MISSING`.
 
 A levy with no published rate for the delivery year is **omitted with a warning**, never
 billed at zero silently — an understated invoice is one the ÜNB reclaims later.
+
+### The §30 MsbG Preisobergrenze is derived, not asserted
+
+§30 Abs. 1 MsbG states five Nummern, each a disjunction over facts about the metering
+point — Jahresstromverbrauch, installierte Leistung, and whether a §14a EnWG Vereinbarung
+covers a steuerbare Verbrauchseinrichtung there. `messstellen_kategorie` therefore carries
+those **facts**, not a band:
+
+```json
+{
+  "messstellen_kategorie": {
+    "Pflichteinbau": {
+      "jahresverbrauch_kwh": "18000",
+      "steuerbare_verbrauchseinrichtung": true
+    }
+  },
+  "entgeltschuldner": "Letztverbraucher"
+}
+```
+
+The engine walks the Nummern top down, so a point meeting several takes the highest and
+a request cannot pick its own ceiling. `{"OptionalerEinbau": null}` is the §30 Abs. 3
+case — 30 EUR each side, regardless of consumption. With no fact supplied the tightest
+ceiling applies: a Pflichteinbaufall exists only above 6 000 kWh (§29 Abs. 1), so Nr. 5
+is the catalogue's floor rather than a guess.
 
 ### Umsatzsteuer
 
@@ -340,6 +372,7 @@ is refused, so a request body carrying `5` cannot multiply the Arbeitspreis by f
 | NNE | Arbeit (flat, or one per §14a module) · Leistung (RLM) · Gas Grundpreis (§14 GasNEV) · Gas Kapazitätsentgelt (§15 GasNEV, pro-rated by calendar days over the actual year length) · Konzessionsabgabe · the three EnFG levies (Strom only) · Blindmehrarbeit |
 | MMM | Mehrmengen (Gutschrift, negated) · Mindermengen |
 | MSB | Grundgebühr Messstellenbetrieb · Messdienstleistung, both checked against the §30 MsbG Preisobergrenze when `messstellen_kategorie` is supplied |
+| NNE (privileged) | the §19 Aufschlag splits into two positions where the period straddles the EnFG 1-GWh boundary |
 | Gas AWH | one per chargeable action: `anzahl × preis_eur` |
 
 ---

@@ -293,7 +293,7 @@ proptest! {
         use eeg_billing::{Pflichtverstoss, SanktionsTyp};
 
         let violation = Pflichtverstoss {
-            typ: SanktionsTyp::FernsteuerbarkeitmFehlend,
+            typ: SanktionsTyp::FernsteuerbarkeitFehlend,
             leistung_kw: leistung,
             monate_des_verstosses: months,
             nachtraeglich_erfuellt: fulfilled,

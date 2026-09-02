@@ -197,11 +197,12 @@ primary = true
     );
 }
 
-// ── Preflight: configuration errors the check used to miss ───────────────────
+// ── Preflight: configuration errors that must fail the check ─────────────────
 //
-// Each case below exited 0 under `--check` and then killed the real boot. The
-// unit tests in `core::preflight` cover the rules; these cover the contract the
-// pipeline actually reads — the process exit code.
+// Each case below is a configuration that boots and then dies. `--check` has to
+// catch it, and catching it means a non-zero exit: the unit tests in
+// `core::preflight` cover the rules, these cover the contract the pipeline
+// actually reads.
 
 /// A registered AS4 partner with no encryption certificate cannot deliver a
 /// single message (BDEW AS4-Profil v1.2 §2.2.6.2.2).
@@ -455,10 +456,9 @@ allow_unencrypted_as4 = true   # not a field — the real name is allow_unencryp
 /// # Why this is a test
 ///
 /// Pipelines run `--check` against the live configuration, which names the live
-/// `--data-dir`. The check used to run the process-registry reconciliation —
-/// the only startup step that writes domain state — *before* its exit, so
-/// validating a configuration mutated the store it was validating. That step is
-/// now sequenced after the check exit.
+/// `--data-dir`. The process-registry reconciliation is the one startup step
+/// that writes domain state, so it has to be sequenced *after* the check exit —
+/// otherwise validating a configuration mutates the store it is validating.
 ///
 /// The reconciliation logs unconditionally, including when it finds nothing, so
 /// the absence of that line is what proves it did not run. Diffing the data

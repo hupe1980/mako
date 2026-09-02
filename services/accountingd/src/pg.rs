@@ -3699,9 +3699,17 @@ pub struct InterestChargeRow {
     pub created_at: OffsetDateTime,
 }
 
-/// Fetch the current ECB Basiszinssatz (§247 BGB) from the `ecb_base_rates` table.
+/// Fetch the Basiszinssatz (§247 BGB) in force on a date, from `ecb_base_rates`.
 ///
 /// Returns the rate valid on the given `reference_date` (or today if None).
+///
+/// # Errors
+///
+/// Fails when no announced rate covers the date. The Basiszinssatz is a figure
+/// the Deutsche Bundesbank announces — it cannot be estimated, and §288 BGB
+/// interest computed on a guessed one is money charged to a customer on a basis
+/// that does not exist. Refusing leaves the receivable unchanged; seed the
+/// announced rate and the charge succeeds.
 pub async fn fetch_ecb_base_rate(
     pool: &PgPool,
     reference_date: Option<time::Date>,
@@ -3717,13 +3725,11 @@ pub async fn fetch_ecb_base_rate(
 
     match row {
         Some(r) => Ok(r.try_get("rate_pct")?),
-        None => {
-            // Fallback to a conservative estimate if no rates are seeded
-            tracing::warn!(
-                "accountingd: no ECB base rate found — using 2.00% fallback. Seed ecb_base_rates table."
-            );
-            Ok(rust_decimal::Decimal::new(200, 2)) // 2.00%
-        }
+        None => anyhow::bail!(
+            "no Basiszinssatz (\u{a7}247 BGB) announced for {date} in ecb_base_rates \u{2014} \
+             \u{a7}288 BGB interest cannot be computed without it. Seed the Deutsche \
+             Bundesbank rate for the period."
+        ),
     }
 }
 

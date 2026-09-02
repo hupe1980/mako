@@ -797,7 +797,7 @@ charge may be netted against it (Abs. 6).
 
 | `SanktionsTyp` | Nr. | Rate | Retroactively reducible? | Derived by `einsd`? |
 |---|---|---|---|---|
-| `FernsteuerbarkeitmFehlend` | Nr. 1 | €10/kW/month | Yes → €2 on fulfilment | **yes** |
+| `FernsteuerbarkeitFehlend` | Nr. 1 | €10/kW/month | Yes → €2 on fulfilment | **yes** |
 | `SpeicherAnforderungNichtErfuellt` | Nr. 2 | €10/kW/month | No | no |
 | `IMssAnforderungNichtErfuellt` | Nr. 3 | €10/kW/month | Yes → €2 | no |
 | `DirektvermarktungspflichtVerletzt` | Nr. 4 | €10/kW/month | Yes → €2 | **yes** |
@@ -1394,7 +1394,7 @@ One row per Technische Ressource. PK: `(tr_id, tenant)`.
 | `einspeiser_id` | TEXT | The plant's Anlagenbetreiber (FK → `einspeiser`, `NOT NULL`). The VAT status and the payout account live there, not here |
 | `status` | TEXT | `aktiv`, `foerderung_beendet`, `abgemeldet` |
 | `inbetriebnahme_typ` | TEXT? | `ERSTINBETRIEBNAHME`, `REPOWERING`, `ERWEITERUNG`, … |
-| `solar_montage` | TEXT? | `GEBAEUDE`, `FREIFLAECHE`, `AGRI_PV`, `STECKER_PV`, … |
+| `solar_montage` | TEXT? | `AN_GEBAEUDE_ODER_LAERMSCHUTZWAND`, `FREIFLAECHE`, `SONSTIGE` — the §24 Abs. 1 Satz 3/4 distinction, not the technology |
 | `wind_guetegrad` | NUMERIC? | §36h Gütegrad (e.g. `0.85` = 85% of reference yield) |
 | `wind_korrekturfaktor` | NUMERIC? | §36h initial certified Korrekturfaktor |
 | `wind_guetefaktor_reevaluations` | JSONB | §36h Abs. 2 re-evaluations (year 6/11/16) — the effective Korrekturfaktor per billing period is derived from these |

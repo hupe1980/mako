@@ -967,7 +967,8 @@ and §252 HGB Abs. 1 Nr. 4 Vorsichtsprinzip assessments.
 
 When a customer invoice remains unpaid past its due date, the creditor is entitled to
 statutory default interest per §288 BGB. `accountingd` calculates and books interest
-as a `MAHNGEBUEHR` ledger entry:
+as a `VERZUGSZINSEN` ledger entry — §275 HGB reports *Zinsen und ähnliche Erträge* on
+their own line, so it does not share the `MAHNGEBUEHR` account:
 
 ```bash
 curl -X POST "http://accountingd:9380/api/v1/accounts/51238696012/interest-charges" \
@@ -984,11 +985,20 @@ curl -X POST "http://accountingd:9380/api/v1/accounts/51238696012/interest-charg
 
 | Rate type | Formula | Legal basis |
 |---|---|---|
-| B2C | ECB Basiszinssatz + **5 pp** | §288 Abs. 1 BGB |
-| B2B | ECB Basiszinssatz + **9 pp** | §288 Abs. 2 BGB |
+| B2C | Basiszinssatz + **5 pp** | §288 Abs. 1 BGB |
+| B2B (kein Verbraucher beteiligt) | Basiszinssatz + **9 pp** | §288 Abs. 2 BGB |
 
-The current ECB Basiszinssatz is read from the `ecb_base_rates` table, which is
-pre-seeded and updated twice per year (1 January + 1 July) per §247 BGB.
+The **Basiszinssatz** is the §247 BGB figure the *Deutsche Bundesbank* announces — it
+derives from the ECB main refinancing rate but is a distinct German number. It is read
+from `ecb_base_rates` for the date the interest period starts.
+
+It is announced on 1 January and 1 July, and it does **not** move every time: it held
+at 1.27 % across 01.01.2026 before rising to 1.52 % on 01.07.2026. Seed the announced
+series, not an interpolated one.
+
+A period with no announced rate seeded **fails the request** rather than falling back
+to an estimate. Interest computed on a guessed Basiszinssatz is money charged to a
+customer on a basis that does not exist; refusing leaves the receivable untouched.
 
 Formula: `interest_ct = principal_ct × rate × days / 36500` (no float arithmetic).
 

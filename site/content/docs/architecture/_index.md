@@ -124,7 +124,7 @@ Each is independently testable and suitable for crates.io publication.
 | `mako-pruefung` | The published **Antwortcode** decision trees, executable | `nb`/`lf`/`msb`/`mabis` modules behind `role-*` features; `codes::lookup` resolves a code **within** its EBD; `Cluster` (8 variants incl. MaBiS `Abweisung` / list / `Reklamation`) picks the answer PID; unknown facts escalate, never guess |
 | `mako-obs` | Process observability types | `ProcessProjection`, `KpiReport`, `DeadlineRisk` |
 | `mako-service` | **Service SDK** — cross-cutting infrastructure for all 17 daemons | `load_config`, `DatabaseConfig`, `HttpConfig`, `shutdown::token/serve`, `OidcConfig::build_verifier`, `McpAuth`, `McpAuthConfig`, `init_tracing_from_env`, `CedarEnforcer`, `outbox`, `ServiceBuilder` |
-| `mako-plugin` | Operator CloudEvent extension point | `CloudEventPlugin`, `PluginRegistry`, re-exported by `mako-service`. No daemon runs a registry today — it is an integration seam, not an active hook |
+| `mako-plugin` | Operator CloudEvent extension point | `CloudEventPlugin`, `PluginRegistry`. No mako crate depends on it and no daemon builds a registry — a deployment runs the chain over the payload ahead of its own publish call |
 
 ### Billing crate hierarchy
 

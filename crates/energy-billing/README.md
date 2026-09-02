@@ -33,10 +33,11 @@ the invoice and shared with the NB-side `grid-billing` engine:
 | **2** | *prozentuale Reduzierung des Arbeitspreises* — attaches to the device's **separately metered** energy | `sect14a_modul2_nne_reduktion_ct_per_kwh` |
 | **3** | *zeitvariable Netzentgelte* (from 01.04.2025) — **three** Tarifstufen HT/ST/NT, requires an iMSys | `sect14a_modul3_nne_*` + `Sect14aModul3Verbrauch` |
 
-**Modul 2 and Modul 3 are mutually exclusive.** Both re-price the Arbeitspreis, so
-holding both reduces the same network usage twice; configuring both raises the
-Error-severity `MODUL2_AND_MODUL3` and the run is refused. Modul 1 composes with
-either.
+**`Modul 1 + Modul 3` is the only pair BK6-22-300 offers.** Modul 1 and Modul 2 are
+the two forms the base module takes and the Anschlussnutzer picks one; configuring
+both raises the Error-severity `MODUL1_AND_MODUL2` and the run is refused. Modul 2 and
+Modul 3 both re-price the Arbeitspreis, so holding both reduces the same network usage
+twice; configuring both raises `MODUL2_AND_MODUL3`.
 
 The Modul 3 bands *replace* the flat NNE Arbeitspreis; setting both raises
 `MODUL3_AND_FLAT_NNE` for the same reason.
@@ -80,6 +81,14 @@ here — where every position still carries its own VAT category and rate — so
 BG-25 line keeps a correct BT-151/152, and the BG-23 breakdown plus BG-22 totals
 are derived from the rounded line amounts so BR-CO-10/13 and BR-S-08 reconcile.
 E-invoicing does not round-trip through BO4E.
+
+**Statutory disclosures become BG-1 notes.** An `Info` position charges nothing —
+the CO2KostAufG § 3 figures, the § 53a Entlastungshinweis, the § 40 Abs. 2 Nr. 6
+Energieträgermix, the § 14 WPG share, the § 41a Abs. 6 comparison — so it is no
+BG-25 line. The law requires each *auf der Rechnung* and the XRechnung **is** the
+invoice a B2G/B2B recipient receives, so each becomes its own BT-22 note. The legal
+basis is appended only when it reads as a citation, because the Gasqualität position
+stores its value in `legal_basis` for `to_rechnung_json`.
 
 **Both mappings emit net supply lines only.** `Tax` and `Abschlag` positions
 live in this crate's flat position vector so one pass can compute everything,
@@ -334,7 +343,7 @@ Each category has its own struct with only the relevant fields — no silent fie
 | `Waermepumpe(ControllableLoadProduct)` | `WAERMEPUMPE` | `ControllableLoadProvider` | §14a Modul 1/2/3 |
 | `Wallbox(ControllableLoadProduct)` | `WALLBOX` | `ControllableLoadProvider` | §14a Modul 1/2/3 |
 | `Gas(GasProduct)` | `GAS` | `GasProvider` | Brennwertkorrektur; Energiesteuer; BEHG CO₂ |
-| `Waerme(HeatProduct)` | `WAERME` | `HeatProvider` | Fernwärme; standard-rated (19 %); AVBFernwärmeV §24 Preisgleitklausel; CO2KostAufG § 3 CO₂-Kosten + § 14 WPG Anteil |
+| `Waerme(HeatProduct)` | `WAERME` | `HeatProvider` | Fernwärme; standard-rated (19 %); AVBFernwärmeV §24 Preisgleitklausel; the CO2KostAufG § 3 Abs. 1 statement + § 14 WPG Anteil |
 | `Wasser(WaterProduct)` | `WASSER` | `WaterProvider` | Trinkwasser 7 % USt; gesplittete Abwassergebühr (Schmutzwasser − Absetzungen, Niederschlagswasser m²); public-law fee is EN 16931 `O`, not `Z` |
 | `Solar(SolarProduct)` | `SOLAR` | `SolarProvider` | §42b EnWG GGV; Mieterstrom mit § 42a Abs. 4 EnWG 90 %-Deckel; Stromsteuer per § 9 Abs. 1 Nr. 3 StromStG, **stated** not omitted; 0 % USt if Kleinunternehmer (§19 UStG) |
 | `Eeg(EegProduct)` | `EEG` | `EegProvider` | LF-side Gutschrift; `eeg` feature for §51/§52 |
@@ -743,7 +752,7 @@ if invoice.has_errors() {
 | § 42a Abs. 4 EnWG | Mieterstrom price capped at 90 % of the Grundversorgung — refused above it, and the ceiling stated on the page |
 | § 9 Abs. 1 Nr. 3 StromStG | A rooftop Mieterstrom/GGV supply is exempt (≤ 2 MW, räumlicher Zusammenhang) — the **default**, and the ground reaches the invoice |
 | §42b EnWG | Gemeinschaftliche Gebäudeversorgung (PV/grid hybrid split) |
-| CO2KostAufG § 3 / § 14 WPG | Fernwärme CO₂-Kosten pass-through, specific emissions and renewable share |
+| CO2KostAufG § 3 Abs. 1 / § 14 WPG | The five-item CO₂ statement on every Gas and Fernwärme invoice, plus the Wärme renewable share |
 | §42c EnWG | Energiegemeinschaft sharing credit via `SharingProduct` |
 | §51 EEG 2023 | Negativpreisregel (contractual LF feature via `eeg` feature) |
 
@@ -763,5 +772,5 @@ Coverage spans six suites:
 | `calculator_tests` | All 13 categories (incl. WASSER), §14a/§41a/§41a Abs. 1, GGV, seasonal, indexed, prosumer, block tariffs, RLM demand charge, multi-rate MwSt, cancellation, BO4E JSON, pro-rata, Tarifwechsel, `bill_batch`, `validate` |
 | `golden_scenarios` | Golden master: SLP electricity; gas + levies; EEG Gutschrift; RLM demand charge; §54 KWK exemption; historic rates 2022 (heating gas constant 0.55, 7 % gas-USt window); §41a Abs. 1 rejection; §40 ct/kWh; §40 mandatory fields; §42c sharing; §9 exemption |
 | `proptest_invoice` | Property-based: `brutto == netto + mwst`, cancellation sign, 0% MwSt, gas arithmetic, demand charge non-negative, StromStG year table |
-| `en16931_conformance` | `Invoice::to_en16931` passes the real EN 16931 rule engine (per-line VAT + BG-23 reconcile) |
+| `en16931_conformance` | `Invoice::to_en16931` passes the real EN 16931 rule engine (per-line VAT + BG-23 reconcile), and the statutory `Info` disclosures reach BT-22 |
 | Doc tests | Inline usage examples |

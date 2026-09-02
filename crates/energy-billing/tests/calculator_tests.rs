@@ -5532,6 +5532,40 @@ fn sect14a_modul2_and_modul3_together_are_refused() {
     assert!(msg.contains("mutually exclusive"), "{msg}");
 }
 
+/// Modul 1 and Modul 2 are the two forms of the BK6-22-300 base module and the
+/// Anschlussnutzer holds one. Billing both grants the same Steuerbarkeit a
+/// pauschale reduction *and* a percentage off the Arbeitspreis.
+#[test]
+fn sect14a_modul1_and_modul2_together_are_refused() {
+    let product: Product = serde_json::from_value(serde_json::json!({
+        "category": "WAERMEPUMPE",
+        "arbeitspreis_ct_per_kwh": "28.0",
+        "grundpreis_ct_per_day": "10.0",
+        "sect14a_modul1_pauschale_eur_per_kw_year": "110.0",
+        "sect14a_modul2_nne_reduktion_ct_per_kwh": "3.0",
+    }))
+    .unwrap();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(600),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let err = product
+        .build_engine(&Default::default(), &ctx.regulatory_rates)
+        .bill(ctx, &quantities)
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("MODUL1_AND_MODUL2"), "{msg}");
+    assert!(msg.contains("alternative base modules"), "{msg}");
+}
+
 /// Modul 1 is a flat reduction needing no metering, so it composes with the
 /// time-variable Modul 3 — the combination BK6-22-300 explicitly allows.
 #[test]
@@ -5992,9 +6026,74 @@ fn fernwaerme_without_stated_months_bills_the_billed_period() {
     assert_eq!(gp.net_eur.round_dp(2), dec!(300.00));
 }
 
-/// CO2KostAufG § 3 obliges a heat supplier to state the CO₂ cost it bore.
-/// `HeatProvider` billed none at all, while the platform documented BEHG
-/// coverage for "Gas and Wärme".
+/// A Gas invoice carries the whole § 3 Abs. 1 CO2KostAufG statement, not only
+/// the cost line.
+///
+/// Gas is the paradigm Brennstofflieferung the section addresses: the levy
+/// position is Nr. 2, and Nr. 1, 3, 4 and 5 accompany it. Nr. 3 is the delivery
+/// year's EBeV Standardwert on the **Brennwert** basis the invoice bills.
+#[test]
+fn a_gas_invoice_carries_the_full_co2kostaufg_statement() {
+    let tariff = j(r#"{"category":"GAS","gas_grundpreis_ct_per_day":"0",
+             "gas_arbeitspreis_ct_per_kwh_hs":"7.5"}"#);
+    let r = bill(
+        &tariff,
+        Quantities {
+            gas: Some(GasMeterInput {
+                kwh_hs: Some(dec!(1000)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+
+    for nr in [1, 3, 4, 5] {
+        let basis = format!("CO2KostAufG § 3 Abs. 1 Nr. {nr}");
+        assert!(
+            r.positions
+                .iter()
+                .any(|p| p.legal_basis.as_deref() == Some(basis.as_str())),
+            "missing {basis} — positions: {:?}",
+            r.positions
+                .iter()
+                .map(|p| &p.description)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // Nr. 1 — 1000 kWh_Hs × 0.18139464 kg/kWh_Hs = 181.39 kg CO₂.
+    let emissionen = r
+        .positions
+        .iter()
+        .find(|p| p.legal_basis.as_deref() == Some("CO2KostAufG § 3 Abs. 1 Nr. 1"))
+        .expect("Nr. 1");
+    assert!(
+        emissionen.description.contains("181.39 kg CO₂"),
+        "{}",
+        emissionen.description
+    );
+
+    // Nr. 3 — the EBeV Standardwert, Brennwert-based.
+    let faktor = r
+        .positions
+        .iter()
+        .find(|p| p.legal_basis.as_deref() == Some("CO2KostAufG § 3 Abs. 1 Nr. 3"))
+        .expect("Nr. 3");
+    assert!(
+        faktor.description.contains("0.18139464 kg CO₂/kWh"),
+        "{}",
+        faktor.description
+    );
+
+    // The statement is informational — it moves no money.
+    for p in r.positions.iter().filter(|p| p.has_tag("co2kostaufg")) {
+        assert_eq!(p.net_eur, rust_decimal::Decimal::ZERO, "{}", p.description);
+    }
+}
+
+/// CO2KostAufG § 3 obliges a heat supplier to state the CO₂ cost it bore, and
+/// four further figures beside it. Nr. 3 asks for kg CO₂/kWh, so a product
+/// stating 180 g/kWh is disclosed as 0.18 kg/kWh.
 #[test]
 fn fernwaerme_passes_through_its_co2_cost_and_states_the_emissions() {
     let tariff = j(
@@ -6020,8 +6119,44 @@ fn fernwaerme_passes_through_its_co2_cost_and_states_the_emissions() {
         .expect("CO₂ position");
     assert_eq!(co2.net_eur.round_dp(2), dec!(9.00)); // 1000 × 0,9 ct
     assert_eq!(co2.legal_basis.as_deref(), Some("CO2KostAufG § 3"));
-    assert!(r.positions.iter().any(|p| p.has_tag("co2_emission")));
     assert!(r.positions.iter().any(|p| p.has_tag("erneuerbar_anteil")));
+
+    // The four informational items § 3 Abs. 1 requires beside the cost.
+    for nr in [1, 3, 4, 5] {
+        let basis = format!("CO2KostAufG § 3 Abs. 1 Nr. {nr}");
+        assert!(
+            r.positions
+                .iter()
+                .any(|p| p.legal_basis.as_deref() == Some(basis.as_str())),
+            "missing {basis}"
+        );
+    }
+    // Nr. 1 — 1000 kWh_th × 0.180 kg/kWh = 180.00 kg CO₂.
+    let emissionen = r
+        .positions
+        .iter()
+        .find(|p| p.legal_basis.as_deref() == Some("CO2KostAufG § 3 Abs. 1 Nr. 1"))
+        .expect("Nr. 1");
+    assert!(
+        emissionen.description.contains("180.00 kg CO₂"),
+        "{}",
+        emissionen.description
+    );
+    // Nr. 3 — the ordinance's unit, not the product's g/kWh.
+    let faktor = r
+        .positions
+        .iter()
+        .find(|p| p.legal_basis.as_deref() == Some("CO2KostAufG § 3 Abs. 1 Nr. 3"))
+        .expect("Nr. 3");
+    assert!(
+        faktor.description.contains("0.18 kg CO₂/kWh"),
+        "{}",
+        faktor.description
+    );
+    // The disclosures state figures, never money.
+    for p in r.positions.iter().filter(|p| p.has_tag("co2kostaufg")) {
+        assert_eq!(p.net_eur, rust_decimal::Decimal::ZERO, "{}", p.description);
+    }
 }
 
 /// An indexed B2B tariff whose index value has not arrived cannot be priced.

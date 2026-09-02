@@ -1138,7 +1138,7 @@ fn pflichtzahlung_fernsteuerbarkeit_10_eur_per_kw_per_month() {
         },
         einspeisemenge_kwh: Some(dec!(1000)),
         pflichtverstoss: vec![Pflichtverstoss {
-            typ: SanktionsTyp::FernsteuerbarkeitmFehlend,
+            typ: SanktionsTyp::FernsteuerbarkeitFehlend,
             leistung_kw: dec!(200),   // 200 kW plant
             monate_des_verstosses: 3, // 3 months of violation
             nachtraeglich_erfuellt: false,
@@ -1162,7 +1162,7 @@ fn pflichtzahlung_retroactively_reduced_to_2_eur_when_fulfilled() {
         },
         einspeisemenge_kwh: Some(dec!(100)),
         pflichtverstoss: vec![Pflichtverstoss {
-            typ: SanktionsTyp::FernsteuerbarkeitmFehlend,
+            typ: SanktionsTyp::FernsteuerbarkeitFehlend,
             leistung_kw: dec!(100),
             monate_des_verstosses: 4,
             nachtraeglich_erfuellt: true,

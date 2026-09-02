@@ -14,7 +14,7 @@ no customer management. It pulls product definitions from `productd`, consumptio
 | **Categories** | 13: STROM, GAS, WAERME, WASSER, SOLAR, EEG, EINSPEISUNG, WAERMEPUMPE, WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, SHARING |
 | **§41a EPEX dynamic** | 15-min Lastgang × 15-min EPEX day-ahead (SDAC MTU) → `STROM` dynamic category |
 | **§41a iMSys guard** | Hard error when `dynamic_epex=true` and `MeteringMode != Imsys` — reachable now that the dynamic path resolves the meter reading |
-| **§14a discount** | `ControllableLoadProvider` — Modul 1 (pauschale Reduzierung), Modul 2 (prozentuale Arbeitspreisreduzierung), Modul 3 (zeitvariable Netzentgelte, three Tarifstufen). Modul 2 and 3 are mutually exclusive per BK6-22-300 |
+| **§14a discount** | `ControllableLoadProvider` — Modul 1 (pauschale Reduzierung), Modul 2 (prozentuale Arbeitspreisreduzierung), Modul 3 (zeitvariable Netzentgelte, three Tarifstufen). Modul 1 and Modul 2 are the two forms of the base module and exclude each other; Modul 3 adds to Modul 1 only, per BK6-22-300 |
 | **§42b EnWG GGV** | `POST /api/v1/billing/ggv/{ggv_id}` — Gebäudestromnutzung: Aufteilungsschlüssel per Abs. 2 Nr. 1, residual grid supply per Abs. 3, whole run in one transaction |
 | **§42c Sharing** | `Product::Sharing(SharingProduct)` — community energy allocation credit via `EnergyShareProvider` |
 | **Gas H2-blend** | `gasqualitaet` field on `GasMeterInput` — annotates Rechnung as `ZusatzAttribut` (per DVGW G 260, measured Brennwert already reflects blend) |
@@ -217,8 +217,8 @@ billingd's half of the boundary is everything about what the document *says*:
 No handler assembles BO4E invoice JSON by hand:
 
 - **VPP** (webhook auto-billing and `POST /billing/vpp/:id`): positions plus
-  the engine's tax provider plus `to_rechnung_json`. The previous inline VAT
-  block hardcoded `UST_19` even when the contract overrode the rate.
+  the engine's tax provider plus `to_rechnung_json`, so a contract that
+  overrides the VAT rate is billed at the rate it names.
 - **GGV and Sammelrechnung aggregates** (`build_aggregate_invoice`): the
   per-MaLo engine runs stay stored as calculation records; the consolidated
   document strips their tax positions and recomputes VAT **once** over the
@@ -396,7 +396,7 @@ url = "postgresql://billingd:secret@db:5432/billingd"
 [rates]
 stromsteuer_ct_per_kwh        = 2.05   # §3 StromStG
 energiesteuer_gas_ct_per_kwh  = 0.55   # § 2 Abs. 3 S. 1 Nr. 4 EnergieStG (constant since 2003)
-behg_gas_ct_per_kwh           = 1.310  # BEHG §10, 65 EUR/t × 0.20160 kg/kWh (2026)
+behg_gas_ct_per_kwh           = 1.179  # BEHG §10, 65 EUR/t × 0.18139464 kg/kWh_Hs (2026)
 mwst_rate                     = 0.19   # § 12 Abs. 1 UStG
 mwst_rate_reduced             = 0.07   # § 12 Abs. 2 UStG — Trinkwasser (Anlage 2 Nr. 34)
 

@@ -206,7 +206,7 @@ pub enum Sect14aModule {
     /// A flat reduction applied for the whole billing period, published by the
     /// NB either as an annual EUR amount or as a factor on the rate. It needs no
     /// additional metering, which is why it is the default where the connection
-    /// holder makes no choice. It may be **combined with Modul 3**.
+    /// holder makes no choice. It is the one base module Modul 3 may be added to.
     Modul1,
     /// Modul 2 — **prozentuale Reduzierung des Arbeitspreises**.
     ///
@@ -214,7 +214,8 @@ pub enum Sect14aModule {
     /// controllable device, which therefore needs its **own metering** — the
     /// reduction attaches to that device's energy, not to the whole connection.
     ///
-    /// **Mutually exclusive with Modul 3** (see [`Sect14aModule::combinable_with`]).
+    /// An **alternative to Modul 1**, not an addition to it, and it takes no
+    /// Modul 3 (see [`Sect14aModule::combinable_with`]).
     Modul2,
     /// Modul 3 — **zeitvariable Netzentgelte**, available from 01.04.2025.
     ///
@@ -232,17 +233,22 @@ impl Sect14aModule {
         "BK6-22-300"
     }
 
-    /// Whether two modules may be held at once.
+    /// Whether two **different** modules may be held at once.
     ///
-    /// Modul 1 is a flat reduction that needs no metering, so it composes with
-    /// the time-variable Modul 3. Modul 2 and Modul 3 both re-price the
-    /// Arbeitspreis and cannot both apply — a connection holding both would have
-    /// its network usage reduced twice.
+    /// BK6-22-300 offers one base module and one optional addition. Modul 1 and
+    /// Modul 2 are the two forms the base takes — a pauschale reduction needing
+    /// no metering, or a percentage on the device's own Arbeitspreis — and the
+    /// Anschlussnutzer picks one. Modul 3 re-prices the Arbeitspreis over time,
+    /// so it composes with the pauschale Modul 1 and not with Modul 2, which
+    /// would reduce the same Arbeitspreis twice.
+    ///
+    /// `Modul 1 + Modul 3` is therefore the only pair, in either order. A module
+    /// paired with itself is not a combination and answers `false`.
     #[must_use]
     pub fn combinable_with(self, other: Self) -> bool {
-        !matches!(
+        matches!(
             (self, other),
-            (Self::Modul2, Self::Modul3) | (Self::Modul3, Self::Modul2)
+            (Self::Modul1, Self::Modul3) | (Self::Modul3, Self::Modul1)
         )
     }
 
@@ -1529,6 +1535,19 @@ pub struct NneInput {
     /// applies at this Entnahmestelle.
     pub letztverbrauchergruppe: crate::umlagen::Letztverbrauchergruppe,
 
+    /// kWh already consumed at this Entnahmestelle earlier in the same calendar
+    /// year, for the EnFG 1-GWh boundary.
+    ///
+    /// The B′/C′ rates are published for quantities *über* 1 000 000 kWh a year,
+    /// so a settlement covering one period of that year cannot tell which side
+    /// of the boundary its quantity falls on without knowing what came before.
+    /// `None` is read as zero — the start of the year — which puts the first
+    /// Gigawattstunde on the full rate. That is the direction that over-bills
+    /// rather than under-bills, and the settlement says so in a warning.
+    ///
+    /// Ignored for groups A′ and Befreit, which have no boundary.
+    pub enfg_jahresvorverbrauch_kwh: Option<Decimal>,
+
     /// §19 StromNEV-Umlage in ct/kWh, overriding the tabled rate.
     ///
     /// `None` uses the statutory rate for the delivery year and group. Set it
@@ -2329,17 +2348,28 @@ mod input_model_tests {
         assert!(M::Modul3.label().contains("zeitvariable Netzentgelte"));
     }
 
-    /// Modul 2 and Modul 3 both re-price the Arbeitspreis, so a connection
-    /// cannot hold both — it would have its network usage reduced twice. Modul 1
-    /// is a flat reduction needing no metering and composes with Modul 3.
+    /// `Modul 1 + Modul 3` is the only pair BK6-22-300 offers.
+    ///
+    /// Modul 1 and Modul 2 are the two forms of the *base* module and the
+    /// Anschlussnutzer picks one; Modul 3 adds to the pauschale Modul 1 and not
+    /// to Modul 2, which re-prices the same Arbeitspreis.
     #[test]
-    fn modul_2_and_modul_3_are_mutually_exclusive() {
+    fn modul_1_and_modul_3_are_the_only_combination() {
         use Sect14aModule as M;
-        assert!(!M::Modul2.combinable_with(M::Modul3));
-        assert!(!M::Modul3.combinable_with(M::Modul2));
         assert!(M::Modul1.combinable_with(M::Modul3));
         assert!(M::Modul3.combinable_with(M::Modul1));
-        assert!(M::Modul1.combinable_with(M::Modul2));
+
+        assert!(!M::Modul2.combinable_with(M::Modul3));
+        assert!(!M::Modul3.combinable_with(M::Modul2));
+        assert!(
+            !M::Modul1.combinable_with(M::Modul2),
+            "Modul 2 is an alternative to Modul 1, not an addition to it"
+        );
+        assert!(!M::Modul2.combinable_with(M::Modul1));
+
+        for m in [M::Modul1, M::Modul2, M::Modul3] {
+            assert!(!m.combinable_with(m), "{m:?} with itself is not a pair");
+        }
     }
 
     /// A period is ordered by construction; a single day is valid.

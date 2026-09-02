@@ -501,7 +501,7 @@ pub fn berlin_midnight(date: Date) -> OffsetDateTime {
 ///
 /// Panics if the timezone database cannot resolve `at` on `date`. `at` must not
 /// fall inside the 02:00–03:00 Europe/Berlin DST gap; every Frist clock time in
-/// the rulebook (05:00, 06:00, 09:00, 11:00, 12:00, 17:00, 23:59:59) is outside
+/// the rulebook (05:00, 06:00, 09:00, 11:00, 12:00, 17:00, end-of-day) is outside
 /// it.
 #[must_use]
 pub fn berlin_at(date: Date, at: Time) -> OffsetDateTime {
@@ -541,12 +541,20 @@ fn noon_berlin(date: Date) -> OffsetDateTime {
 /// end-of-business hour. Sizing such a Frist at 17:00 expires it seven hours
 /// early and reports a met obligation as a missed one.
 ///
+/// „Ablauf des Tages" is the last instant of it, so the Frist carries to the
+/// final nanosecond rather than to 23:59:59.0. The difference is the last
+/// second of every such day, and it falls the way that reports a met obligation
+/// as a breach — the same direction, and the same argument, as the 17:00 case.
+///
 /// # Panics
 ///
 /// Panics under the same conditions as [`berlin_at`].
 #[must_use]
 pub fn end_of_day_berlin(date: Date) -> OffsetDateTime {
-    berlin_at(date, Time::from_hms(23, 59, 59).expect("23:59:59 is valid"))
+    berlin_at(
+        date,
+        Time::from_hms_nano(23, 59, 59, 999_999_999).expect("the last instant of a day is valid"),
+    )
 }
 
 /// „… Uhr des 1. Werktags nach dem ÜT" — the dominant answer-Frist shape in
@@ -1905,5 +1913,22 @@ mod tests {
         );
         assert_eq!(winter.to_offset(time::UtcOffset::UTC).hour(), 10);
         assert_eq!(summer.to_offset(time::UtcOffset::UTC).hour(), 9);
+    }
+
+    /// „Ablauf des Tages" runs to the last instant of it. A deadline stopping
+    /// at 23:59:59.0 reports a message received in the final second of the day
+    /// as a breach.
+    #[test]
+    fn the_end_of_a_day_is_its_last_instant() {
+        let d = time::macros::date!(2026 - 03 - 17);
+        let end = end_of_day_berlin(d);
+        let last_second = berlin_at(d, Time::from_hms(23, 59, 59).unwrap());
+        assert!(
+            end > last_second,
+            "the Frist must outlast 23:59:59.0 itself"
+        );
+        let next_midnight = berlin_at(d.next_day().unwrap(), Time::MIDNIGHT);
+        assert!(end < next_midnight, "and must not reach the next day");
+        assert_eq!(next_midnight - end, Duration::nanoseconds(1));
     }
 }

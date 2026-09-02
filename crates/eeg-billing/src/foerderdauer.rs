@@ -418,67 +418,39 @@ pub fn effektives_foerderende(
 
 /// Compute the §52 EEG 2023 penalty payment owed by the plant operator to the NB.
 ///
-/// ## §52 Abs. 2 — Base rate: **€10/kW/month**
+/// Returns the EUR amount for one violation over `monate_des_verstosses`.
 ///
-/// For each calendar month in which a compliance violation (§52 Abs. 1) is wholly
-/// or partially in effect.
+/// ## The rate — §52 Abs. 2 and Abs. 3
 ///
-/// ## §52 Abs. 3 — Reduced rate: **€2/kW/month** (retroactive)
-///
-/// When the obligation is subsequently fulfilled (`nachtraeglich_erfuellt = true`),
-/// the penalty is retroactively reduced to €2/kW/month for violation types
-/// Nr. 1 (Fernsteuerbarkeit), Nr. 3 (iMSys), Nr. 4 (Direktvermarktung), Nr. 11 (MaStR).
-///
-/// ## §52 Abs. 5 — Cap: €10/kW/month total
-///
-/// When multiple simultaneous violations exist, the total penalty is capped at
-/// €10/kW/month. Callers with multiple violations should call this function
-/// once per violation and cap the sum externally.
-///
-/// ## Bestandsschutz (§100 Abs. 3 EEG 2023)
-///
-/// Old plants commissioned before 01.01.2023 retain Bestandsschutz for the
-/// Fernsteuerbarkeit obligation: legacy equipment (full-shutdown only, no modulation)
-/// is treated as compliant until iMSys is installed and tested. For these plants,
-/// `FernsteuerbarkeitmFehlend` should NOT be flagged if legacy equipment is present.
-///
-/// ## Return
-///
-/// EUR amount the operator owes the NB for the specified violation period.
-///
-/// ## §52 Abs. 2 EEG 2023 — Base rate
-///
-/// The base rate is **€10/kW/month** for all violations in §52 Abs. 1.
-///
-/// ## §52 Abs. 3 EEG 2023 — Rate reductions
+/// The base rate is **€10/kW/month** for every violation in §52 Abs. 1, for each
+/// calendar month the violation is wholly or partly in effect. Abs. 3 reduces it:
 ///
 /// | Rule | Violation types | Rate |
 /// |---|---|---|
-/// | Abs. 3 Nr. 1: retroactive on fulfillment | Nr. 1 (Fernsteuerbarkeit), Nr. 3 (iMSys), Nr. 4 (Direktverm.), Nr. 11 (MaStR) | €10 → **€2** retroactively |
-/// | Abs. 3 Nr. 2: always €2 | Nr. 9a (§37 Abs. 1a/§48 post-commissioning), Nr. 10 (Volleinspeisung) | **€2** always |
-/// | All other types | Nr. 2, 5, 6, 7, 8, 9, 12 | **€10** (not reducible) |
+/// | Abs. 3 Nr. 1 — retroactive on fulfilment | Nr. 1 (Fernsteuerbarkeit), Nr. 3 (iMSys), Nr. 4 (Direktverm.), Nr. 11 (MaStR) | €10 → **€2** retroactively |
+/// | Abs. 3 Nr. 2 — always | Nr. 9a (§37 Abs. 1a / §48), Nr. 10 (Volleinspeisung) | **€2** |
+/// | otherwise | Nr. 2, 5, 6, 7, 8, 9, 12 | **€10**, not reducible |
 ///
-/// ## §52 Abs. 3 Satz 2 — Defect grace (from 01.01.2024)
+/// ## What the caller must supply
 ///
-/// For violations Nr. 1, 3, 4, 8 caused by a **technical defect**, the payment is
-/// waived for the month the defect occurs and the following month. The operator
-/// must demonstrate the defect (Darlegungs- und Beweislast).
-/// Track this by excluding those months from `monate_des_verstosses`.
+/// Three rules act on the *months*, not the rate, so they are the caller's to
+/// fold into `monate_des_verstosses`:
 ///
-/// ## §52 Abs. 4 — Additional months beyond the violation period
+/// - **Abs. 3 Satz 2 (from 01.01.2024)** — for Nr. 1, 3, 4, 8 caused by a
+///   technical defect, the month of the defect and the following one are waived.
+///   The operator carries the Darlegungs- und Beweislast, so exclude those months.
+/// - **Abs. 4** — some violations run past the violation itself: Nr. 7
+///   (§21b Abs. 2) +3 months, Nr. 9 (§21b/§21c notification) +1, Nr. 12 (§80) +6,
+///   and Nr. 10 (Volleinspeisung) covers every calendar month of the year.
+/// - **Abs. 5** — concurrent violations are capped at **€10/kW/month in total**.
+///   This function prices one violation, so cap the sum outside it.
 ///
-/// Some violations extend the payment obligation beyond when the violation ends:
-/// - Nr. 7 (§21b Abs. 2): +3 additional months after violation ends
-/// - Nr. 9 (§21b/§21c notification): +1 additional month
-/// - Nr. 10 (Volleinspeisung): payment for ALL calendar months of the year
-/// - Nr. 12 (§80 violation): +6 additional months
+/// ## Bestandsschutz (§100 Abs. 3 EEG 2023)
 ///
-/// Include these extra months in `monate_des_verstosses` when calling this function.
-///
-/// ## §52 Abs. 5 — Monthly cap
-///
-/// When multiple violations occur in the same calendar month, the **total is capped
-/// at €10/kW/month**. Apply this cap in the billing system when aggregating violations.
+/// A plant commissioned before 01.01.2023 keeps Bestandsschutz for the
+/// Fernsteuerbarkeit obligation: legacy equipment (full shutdown only, no
+/// modulation) counts as compliant until an iMSys is installed and tested, so
+/// `FernsteuerbarkeitFehlend` does not apply to it.
 ///
 /// # Example
 ///
@@ -532,7 +504,7 @@ pub fn calculate_pflichtzahlung(violation: &crate::model::Pflichtverstoss) -> De
     // Only for violations occurring after 31 December 2023.
     let defect_grace_eligible = matches!(
         violation.typ,
-        SanktionsTyp::FernsteuerbarkeitmFehlend
+        SanktionsTyp::FernsteuerbarkeitFehlend
             | SanktionsTyp::IMssAnforderungNichtErfuellt
             | SanktionsTyp::DirektvermarktungspflichtVerletzt
             | SanktionsTyp::VeraeusserungsformNachweispflichtVerletzt
@@ -550,7 +522,7 @@ pub fn calculate_pflichtzahlung(violation: &crate::model::Pflichtverstoss) -> De
     // §52 Abs. 3 Nr. 1 — retroactively reduces to €2/kW when obligation is fulfilled
     let reduction_eligible = matches!(
         violation.typ,
-        SanktionsTyp::FernsteuerbarkeitmFehlend
+        SanktionsTyp::FernsteuerbarkeitFehlend
             | SanktionsTyp::IMssAnforderungNichtErfuellt
             | SanktionsTyp::DirektvermarktungspflichtVerletzt
             | SanktionsTyp::MastrNichtRegistriert

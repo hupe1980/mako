@@ -5,20 +5,19 @@
 //! Anmeldung. That is a normal GPKE flow, not a retry — and it has to be
 //! allowed.
 //!
-//! The duplicate guard used to refuse it. `register_correlated` writes an entry
-//! to the correlation index when a process spawns, nothing ever calls
-//! `remove_correlated`, and the guard refused on the mere *presence* of an
-//! entry. So the index — which is append-only — permanently recorded that this
-//! MaLo had "an active Anmeldung", and every later attempt was answered with
-//! `409 duplicate_process` naming a process that had already terminated.
+//! The correlation index cannot answer that on its own. `register_correlated`
+//! writes an entry when a process spawns and nothing ever calls
+//! `remove_correlated`, so the index is append-only: an entry for this MaLo
+//! proves a process *existed*, never that one is still running. A duplicate
+//! guard keyed on the mere presence of an entry would block the MaLo for the
+//! lifetime of the store.
 //!
-//! Callers treat `duplicate_process` as an idempotent success (see
-//! `mako_markt::makod_client::classify_conflict`), so the failure was silent in
-//! the worst way: `vertragd` marked the contract component `ANGEMELDET` against
-//! the dead process id and no UTILMD ever went out.
-//!
-//! The guard now rehydrates each candidate and blocks only on `Pending` or
-//! `Active`.
+//! So the guard rehydrates each candidate and blocks only on `Pending` or
+//! `Active`. Getting this wrong is silent rather than loud: callers treat
+//! `409 duplicate_process` as an idempotent success (see
+//! `mako_markt::makod_client::classify_conflict`), so `vertragd` would mark the
+//! contract component `ANGEMELDET` against a dead process id with no UTILMD
+//! ever going out.
 
 use std::sync::Arc;
 
@@ -181,8 +180,8 @@ async fn a_rejected_anmeldung_does_not_block_the_malo_forever() {
     }
 
     // ── Corrected Anmeldung ───────────────────────────────────────────────────
-    // The defect: this used to fail with DuplicateProcess naming `first_id`,
-    // permanently, because the correlation entry outlives the process.
+    // `first_id`'s correlation entry outlives the process, so accepting this
+    // depends on the guard reading the process state rather than the index.
     let second = dispatch_command(&state, "gpke.lieferbeginn.anmelden", &payload)
         .await
         .expect(

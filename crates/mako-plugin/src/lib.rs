@@ -26,13 +26,18 @@
 //! registry.register_cloud_event(Box::new(MyEnricher));
 //! ```
 //!
-//! Hand the registry to the bus with `WebhookBus::with_plugins` (in
-//! `mako-service`); every `EventBus::publish` then runs the chain in
-//! registration order. A plugin that returns `Err` is logged and skipped — the
-//! event is still delivered, because an operator customisation must not be able
-//! to stop a regulated market notification.
+//! [`PluginRegistry::run_cloud_event_plugins`] applies the chain in registration order.
+//! A plugin that returns `Err` is logged and skipped — the event is still
+//! delivered, because an operator customisation must not be able to stop a
+//! regulated market notification.
 //!
 //! # Scope
+//!
+//! **No mako daemon builds a registry.** The outbound path is
+//! `mako_service::cloudevent::post_ce_with_retry`, a free function over an
+//! already-serialised envelope, and nothing calls into this crate before it. A
+//! deployment that wants the seam runs the chain over the payload itself, ahead
+//! of the publish call. That is the current state, not a description of a hook.
 //!
 //! Plugins are compiled into the daemon. There is deliberately no dynamic
 //! loading tier: mako daemons ship as distroless images built per deployment,

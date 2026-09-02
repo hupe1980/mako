@@ -313,6 +313,7 @@ pub async fn post_ggv_nne(
                 blindarbeit: None,
                 gas_kapazitaet: None,
                 letztverbrauchergruppe: grid_billing::umlagen::Letztverbrauchergruppe::default(),
+                enfg_jahresvorverbrauch_kwh: None,
                 sect19_umlage_ct_per_kwh: None,
                 offshore_umlage_ct_per_kwh: None,
                 kwkg_umlage_ct_per_kwh: None,

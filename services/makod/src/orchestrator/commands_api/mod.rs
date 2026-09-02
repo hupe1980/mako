@@ -109,40 +109,33 @@
 //! }
 //! ```
 //!
-//! ## Payload schemas per command
-//!
-//! Each command defines its own required payload fields.  The BO4E object is
-//! always embedded under a named key (e.g. `malo`, `zaehler`, `vertrag`), not
-//! at the top level, so additional process fields can sit alongside it cleanly.
-//!
-//! ## What the ERP must supply vs. what the engine derives
+//! ## What the ERP supplies vs. what the engine derives
 //!
 //! | Source | Fields |
 //! |--------|--------|
 //! | **ERP supplies** | BO4E master data object, process dates, process-specific hints |
 //! | **Engine derives** | sender MP-ID (tenant config), receiver MP-ID (MaLo cache / partner registry), PID (command name), message ref (generated) |
 //!
-//! The receiver MP-ID (NB, GNB, MSB) is looked up from the MaLo cache using the
-//! `marktlokationsId`.  If the MaLo is not yet in the cache, the engine returns
-//! `422 Unprocessable Entity` with `"error": "malo_not_found"` and the ERP must
-//! first seed the MaLo via `PUT /admin/malo/{malo_id}`.
+//! The engine resolves these from the MaLo cache, keyed by `marktlokationsId`:
 //!
-//! ## Payload schemas per command
-//!
-//! Only fields the ERP genuinely owns are listed here.  MP-IDs resolved by the
-//! engine (sender, receiver) are intentionally absent.
-//!//! ### What the ERP sends vs. what the engine resolves from the MaLo cache
-//!
-//! | Resolved by engine (from MaLo cache) | Field |
+//! | MaLo cache field | Resolves |
 //! |--------------------------------------|-------|
 //! | `data_market_location_network_operators` | NB / GNB MP-ID (receiver) |
 //! | `data_market_location_measuring_point_operators` | MSB MP-ID |
 //! | `data_meter_locations` | MeLo IDs for UTILMD transactions |
 //!
-//! The MaLo cache is populated by the ERP via `PUT /admin/malo/{malo_id}` using
-//! the NB's `MaloIdentResultPositive` response.  If the MaLo is not in the cache
-//! yet, the engine returns `422 malo_not_found`.
-//!//! | Command | ERP-supplied payload fields |
+//! The ERP populates that cache via `PUT /admin/malo/{malo_id}` from the NB's
+//! `MaloIdentResultPositive`. Until it does, the engine answers
+//! `422 Unprocessable Entity` with `"error": "malo_not_found"`.
+//!
+//! ## Payload schemas per command
+//!
+//! Each command defines its own required fields, and the BO4E object is embedded
+//! under a named key (`malo`, `zaehler`, `vertrag`) rather than at the top level
+//! so process fields can sit beside it. Only fields the ERP genuinely owns are
+//! listed — the MP-IDs the engine resolves are deliberately absent.
+//!
+//! | Command | ERP-supplied payload fields |
 //! |---------|----------------------------|
 //! | `gpke.lieferbeginn.anmelden` | `malo_id`, `lieferbeginn_datum` |
 //! | `gpke.lieferende.anmelden` | `malo_id`, `lieferende_datum` |

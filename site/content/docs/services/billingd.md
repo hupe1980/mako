@@ -213,11 +213,38 @@ the year-table default. Resolution order: explicit `[rates]` override →
 `GET /api/v1/nehs-prices/latest?date={period_from}` (start-of-period basis,
 consistent with `regulatory_rates_for_period`; converted via
 `energy_billing::behg_ct_per_kwh_from_price`) → year-table fallback. The
-EUR/t→ct/kWh conversion uses the H-Gas CO₂ factor (0.20160 kg/kWh) unless
-`[rates] behg_co2_factor_kg_per_kwh` overrides it (L-Gas: 0.20140).
+EUR/t→ct/kWh uses the **delivery year's EBeV Emissionsfaktor**; nothing configures
+it. § 3 Abs. 2 CO2KostAufG requires the BEHG Standardwerte and the EBeV publishes
+one Erdgas row for the whole market, so only the certificate price is the operator's.
+
+The factor is **Brennwert-based**, because kWh_Hs is what the invoice bills. Anlage 2
+EBeV 2030 Nr. 6 pairs an Umrechnungsfaktor of `3,2508 GJ/MWh` (= 3,6 · 0,903) with
+`0,0558 t CO₂/GJ` → **0.18139464 kg CO₂/kWh_Hs**. EBeV 2022 gives `0,056` →
+0.18204480 for 2021–2022.
 Historical XRechnung re-renders keep the stored record's rates
 (CO2KostAufG §3: the pass-through follows the supplier's actual CO₂ costs at
 billing time).
+
+### The § 3 Abs. 1 statement
+
+§ 3 Abs. 1 CO2KostAufG asks for **six** figures, not just the cost. The levy position
+is Nr. 2; four informational positions accompany it on every Gas and Fernwärme
+invoice, tagged `co2kostaufg` and carrying no money:
+
+| Nr. | Position | Unit |
+|---|---|---|
+| 1 | Brennstoffemissionen der Lieferung | kg CO₂ |
+| 2 | Preisbestandteil der CO₂-Kosten — *the levy line itself* | ct/kWh |
+| 3 | Heizwertbezogener Emissionsfaktor | kg CO₂/kWh |
+| 4 | Energiegehalt der Lieferung | kWh |
+| 5 | Hinweis auf die Erstattungsansprüche nach § 6 Abs. 2 / § 8 Abs. 2 | — |
+
+Nr. 1 is derived from the quantity and the Nr. 3 factor, so the two cannot
+contradict. A Wärmeprodukt states its factor in g/kWh; the Nr. 3 line converts it to
+the statute's kg/kWh.
+
+**Nr. 6 is not emitted** — it is a fact about the Vermieter's building (§ 43 GEG),
+not about the supply, and belongs in their Betriebskostenabrechnung.
 
 **Historic statutory rates:** For retroactive correction invoices, the year tables in
 `energy_billing::rates` apply the correct historical defaults: `effective_stromsteuer_for_year()`,
@@ -371,10 +398,12 @@ on the invoice and shared with the NB-side `grid-billing` engine:
 | **2** | *prozentuale Reduzierung des Arbeitspreises* — attaches to the device's **separately metered** energy | `sect14a_modul2_nne_reduktion_ct_per_kwh` |
 | **3** | *zeitvariable Netzentgelte* (from 01.04.2025) — three Tarifstufen HT/ST/NT, requires an iMSys | `sect14a_modul3_nne_ht/st/nt_ct_per_kwh` + `sect14a_modul3` quantities |
 
-**Modul 2 and Modul 3 are mutually exclusive** — both re-price the Arbeitspreis, so
-holding both would reduce the same network usage twice. Configuring both is refused
-with `MODUL2_AND_MODUL3`. Modul 1 composes with either. Setting the Modul 3 bands
-alongside a flat NNE Arbeitspreis is refused with `MODUL3_AND_FLAT_NNE`, for the
+**`Modul 1 + Modul 3` is the only pair.** Modul 1 and Modul 2 are the two forms the
+base module takes and the Anschlussnutzer picks one, so configuring both is refused
+with `MODUL1_AND_MODUL2`. Modul 3 adds to the pauschale Modul 1 alone: it and Modul 2
+both re-price the Arbeitspreis, so holding both would reduce the same network usage
+twice, and configuring both is refused with `MODUL2_AND_MODUL3`. Setting the Modul 3
+bands alongside a flat NNE Arbeitspreis is refused with `MODUL3_AND_FLAT_NNE`, for the
 same double-charging reason.
 
 A **Steuerungsentschädigung** (`sect14a_steuerungsentschaedigung_ct_per_kwh` /
@@ -429,9 +458,10 @@ let invoice = engine.bill(ctx, &quantities)?;
 | `stromsteuer_tarif` → Befreiung (levy dropped) or Ermäßigung (reduced rate) | § 9 Abs. 1 / Abs. 2 / Abs. 3 StromStG |
 | `steuerentlastungen` → informational note, levy billed in full | § 9a/9b/9c StromStG, §§ 53a, 54 EnergieStG |
 | `grundversorgung_arbeitspreis_ct_per_kwh` → Mieterstrom capped at 90 % | § 42a Abs. 4 EnWG |
-| `waerme_co2_kosten_ct_per_kwh` → CO₂ cost line + emissions disclosure | CO2KostAufG § 3 |
+| `waerme_co2_kosten_ct_per_kwh` → CO₂ cost line + the four-item § 3 Abs. 1 statement | CO2KostAufG § 3 |
 | `settlement_form` → Endrechnung (BT-113 paid) or Restrechnung (BG-20 allowance per rate) | § 14 Abs. 5 Satz 2 UStG; BMF 15.10.2024 Rn. 48 |
 | `en16931_blocked` → `MODEL_NOT_REPRESENTABLE` instead of an invalid e-invoice | EN 16931 BR-O-11 ff. |
+| statutory `Info` disclosures → repeatable BT-22 notes on the e-invoice | CO2KostAufG § 3 · § 53a EnergieStG · § 40 Abs. 2 Nr. 6 EnWG · § 14 WPG · § 41a Abs. 6 EnWG |
 | `ablesungsart` → how the reading was obtained, beside the readings | § 40 Abs. 2 Nr. 6 EnWG |
 | `ZWEITARIF_OHNE_HT_NT_AUFTEILUNG` / `HT_NT_SUMME_WEICHT_AB` → refused, not under-billed | § 41 EnWG |
 | `preisgarantie_bis` → disclosure on invoice | §41 Abs. 1 Nr. 4 EnWG |
@@ -1535,8 +1565,7 @@ Each auto-settled dispatch generates a Gutschrift with:
 - The `tx_id` cross-references the originating `WimSteuerungsauftrag` in `makod`
 
 VAT runs through the engine's `MwStProvider` like every other document, so the
-`mwst_rate_override` on the Aggregatorvertrag reaches the Steuerkennzeichen
-instead of being contradicted by a hardcoded `UST_19`.
+`mwst_rate_override` on the Aggregatorvertrag reaches the Steuerkennzeichen.
 
 ### Manual settlement, and why it shares the ledger
 

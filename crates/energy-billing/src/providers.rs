@@ -839,10 +839,32 @@ impl BillingProvider for ControllableLoadProvider {
         let base = ElectricityProvider::new(self.product.base.clone(), self.grid.clone());
         let mut w = base.validate_warnings(ctx, quantities);
 
-        // BK6-22-300 lets a connection hold Modul 1 together with Modul 3, but
-        // never Modul 2 and Modul 3: both re-price the Arbeitspreis, so holding
-        // both reduces the same network usage twice. Modul 1 is a flat
-        // reduction needing no metering and composes with either.
+        // BK6-22-300 offers one base module and one optional addition. Modul 1
+        // and Modul 2 are the two forms the base takes and the Anschlussnutzer
+        // picks one; Modul 3 adds to Modul 1 alone. So `Modul 1 + Modul 3` is
+        // the only pair, and the three other pairings each reduce the same
+        // network usage twice.
+        if self
+            .product
+            .sect14a_modul1_pauschale_eur_per_kw_year
+            .is_some()
+            && self
+                .product
+                .sect14a_modul2_nne_reduktion_ct_per_kwh
+                .is_some()
+        {
+            w.push(BillingWarning {
+                code: "MODUL1_AND_MODUL2",
+                severity: WarningSeverity::Error,
+                message: "§14a EnWG Modul 1 (pauschale Reduzierung) and Modul 2 \
+                          (prozentuale Arbeitspreisreduzierung) are both configured — \
+                          BK6-22-300 offers them as alternative base modules, so the \
+                          Anschlussnutzer holds one. Billing both grants the same \
+                          Steuerbarkeit two reductions."
+                    .to_owned(),
+            });
+        }
+
         if self
             .product
             .sect14a_modul2_nne_reduktion_ct_per_kwh
@@ -1457,6 +1479,16 @@ impl BillingProvider for GasProvider {
                     )
                     .with_tag("gas"),
                 );
+                // The levy line is § 3 Abs. 1 Nr. 2. The statute asks for five
+                // more figures beside it; Nr. 6 is the Vermieter's building
+                // fact and belongs to their Abrechnung, not to this supply.
+                if let Some(faktor) =
+                    crate::rates::erdgas_emissionsfaktor_kg_per_kwh(ctx.period_from().year())
+                {
+                    positions.extend(crate::position::co2kostaufg_disclosures(
+                        kwh_hs, "kWh_Hs", faktor, "gas",
+                    ));
+                }
             }
         }
 
@@ -1764,24 +1796,21 @@ impl BillingProvider for HeatProvider {
                 .with_tag("waerme"),
             );
         }
-        // § 3 Abs. 2 CO2KostAufG — the specific emissions the cost derives from.
-        // Stated even where the cost is zero: that is the statement a fully
-        // renewable network owes its customers.
+        // § 3 Abs. 1 CO2KostAufG — the five figures that accompany the cost.
+        //
+        // The product states the Emissionsfaktor in g/kWh, which is how heat
+        // networks publish it; Nr. 3 asks for kg CO₂/kWh, so it is converted
+        // for the statement rather than restated in the wrong unit.
+        //
+        // Emitted even where the cost is zero: a fully renewable network still
+        // owes its customers the statement.
         if let Some(g_per_kwh) = product.waerme_co2_emission_g_per_kwh {
-            positions.push(BillingPosition {
-                description: format!(
-                    "CO₂-Emissionen der gelieferten Wärme: {g_per_kwh:.1}\u{202f}g/kWh"
-                ),
-                legal_basis: Some("CO2KostAufG § 3 Abs. 2".to_owned()),
-                quantity: meter.kwh_waerme,
-                unit: "kWh_th".to_owned(),
-                unit_price_eur: Decimal::ZERO,
-                net_eur: Decimal::ZERO,
-                category: PositionCategory::Info,
-                tags: vec!["co2_emission".to_owned(), "waerme".to_owned()],
-                applicable_tax_rate: None,
-                trace: crate::position::PositionTrace::default(),
-            });
+            positions.extend(crate::position::co2kostaufg_disclosures(
+                meter.kwh_waerme,
+                "kWh_th",
+                g_per_kwh / dec!(1000),
+                "waerme",
+            ));
         }
         // § 14 WPG — the renewable share of the delivered heat.
         if let Some(pct) = product.waerme_erneuerbar_anteil_pct {

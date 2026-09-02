@@ -543,7 +543,10 @@ INSERT INTO eeg_verguetungssaetze (erzeugungsart, leistung_min_kwp, leistung_max
 ('SOLAR_AUFDACH',  40,  100, 'UEBERSCHUSS',   5.74, '2024-05-01', NULL, 2023, 'Solarpaket I §48 Abs. 1 Nr. 1c, >40–100 kWp'),
 ('SOLAR_AUFDACH', 100,  400, 'UEBERSCHUSS',   4.30, '2024-05-01', NULL, 2023, 'Solarpaket I §48 Abs. 1 Nr. 1d, >100–400 kWp'),
 ('SOLAR_AUFDACH', 400, 1000, 'UEBERSCHUSS',   3.14, '2024-05-01', NULL, 2023, 'Solarpaket I §48 Abs. 1 Nr. 1e, >400 kWp–1 MWp'),
--- Solar Aufdach — Volleinspeisung (§48 Abs. 2a EEG 2023, +4.8 ct/kWh bonus)
+-- Solar Aufdach — Volleinspeisung (§48 Abs. 2a EEG 2023). The Zuschlag is not one
+-- figure: these rows carry +4.8 ct/kWh over the Überschuss rate up to 10 kWp and
+-- +3.8 ct/kWh above it (12.91-8.11, 10.83-7.03, 9.54-5.74). A new band takes the
+-- step its size falls in, not the first one.
 ('SOLAR_AUFDACH',   0,   10, 'VOLLEINSPEISUNG', 12.91, '2024-05-01', NULL, 2023, 'Solarpaket I §48 Abs. 2a, ≤10 kWp'),
 ('SOLAR_AUFDACH',  10,   40, 'VOLLEINSPEISUNG', 10.83, '2024-05-01', NULL, 2023, 'Solarpaket I §48 Abs. 2a, >10–40 kWp'),
 ('SOLAR_AUFDACH',  40,  100, 'VOLLEINSPEISUNG',  9.54, '2024-05-01', NULL, 2023, 'Solarpaket I §48 Abs. 2a, >40–100 kWp'),

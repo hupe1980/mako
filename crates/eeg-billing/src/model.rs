@@ -89,7 +89,7 @@ pub enum SanktionsTyp {
     /// Plant ≥25 kW does not have remote control capability installed.
     /// Obligation fulfilled → reduced to €2/kW/month retroactively.
     /// Technical defect grace: 2 months waived.
-    FernsteuerbarkeitmFehlend,
+    FernsteuerbarkeitFehlend,
 
     /// §52 Abs. 1 Nr. 2 — Missing Speicher / §9 Abs. 5 violation.
     ///
@@ -222,7 +222,7 @@ pub enum SanktionsTyp {
 ///
 /// // Missing Fernsteuerbarkeit for 3 months, 500 kW plant, obligation not yet fulfilled
 /// let violation = Pflichtverstoss {
-///     typ: SanktionsTyp::FernsteuerbarkeitmFehlend,
+///     typ: SanktionsTyp::FernsteuerbarkeitFehlend,
 ///     leistung_kw: dec!(500),
 ///     monate_des_verstosses: 3,
 ///     nachtraeglich_erfuellt: false,
@@ -430,7 +430,7 @@ pub struct SettleInput {
     ///
     /// | `SanktionsTyp` | §52 Abs. 1 Nr. | Trigger |
     /// |---|---|---|
-    /// | `FernsteuerbarkeitmFehlend` | Nr. 1 | §9 Abs. 1/2: no remote-control equipment |
+    /// | `FernsteuerbarkeitFehlend` | Nr. 1 | §9 Abs. 1/2: no remote-control equipment |
     /// | `SpeicherAnforderungNichtErfuellt` | Nr. 2 | §9 Abs. 5: missing storage requirement |
     /// | `MastrNichtRegistriert` | Nr. 11 | Plant not registered in MaStR |
     ///

@@ -138,9 +138,10 @@ async fn a_settled_process_does_not_block_the_malo_on_the_ingest_path() {
     );
 
     // ── Second Sperrauftrag for the same MaLo ─────────────────────────────────
-    // The defect: this was executed on the settled process, which rejects
-    // `ReceiveSperrung` outside `New` — so the MaLo could never be locked or
-    // unlocked again for the lifetime of the store.
+    // It has to spawn a fresh process. Routed onto the settled one it would hit
+    // `ReceiveSperrung`, which the aggregate rejects outside `New` — and the
+    // MaLo could never be locked or unlocked again for the lifetime of the
+    // store.
     let outcome = ingest(&dispatcher, "SPERR-002").await;
     let IngestOutcome::Spawned {
         process_id: second, ..

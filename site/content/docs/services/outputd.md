@@ -190,7 +190,7 @@ the editor the operator is writing the template in:
 |---|---|---|
 | `UNKNOWN_TEMPLATE_KIND`, `INVALID_DATE`, `EMPTY_SOURCE` | 400 | a malformed request |
 | `FORBIDDEN` | 403 | the Cedar policy denied the action |
-| `TEMPLATE_NOT_FOUND`, `NO_CURRENT_TEMPLATE`, `NO_REFERENCE_TEMPLATE` | 404 | nothing of this tenant answers to that |
+| `TEMPLATE_NOT_FOUND`, `NO_CURRENT_TEMPLATE` | 404 | nothing of this tenant answers to that |
 | `TEMPLATE_IDENTITY_TAKEN` | 409 | you have already published this exact source under another kind |
 | `TEMPLATE_DID_NOT_COMPILE`, `TEMPLATE_REJECTED_BY_GATE` | 422 | with `diagnostics` |
 | `TEMPLATE_WRONG_KIND`, `SUBJECT_MUST_BE_A_MODEL`, `SUBJECT_MUST_BE_A_VIEW` | 422 | the render's parts do not agree |

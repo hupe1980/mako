@@ -26,6 +26,10 @@ bo4e = ["dep:rubo4e", "dep:serde_json"]
 
 [dev-dependencies]
 proptest            = "1"
+# The unit tests assert the serde shape of the settlement value objects, which
+# the `bo4e` feature otherwise supplies. As a dev-dependency the test suite
+# builds with default features too, not only under `--all-features`.
+serde_json          = { workspace = true }
 # Test-only: the BO4E gate, so every Rechnung this crate emits is asserted
 # against the same rules mako applies to one it receives. A dev-dependency
 # keeps the shipped engine as rubo4e-light as the `bo4e` feature makes it.

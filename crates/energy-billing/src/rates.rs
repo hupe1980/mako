@@ -49,21 +49,15 @@ impl RoundMoney for Decimal {
 /// BEHG §10 CO₂ price in EUR/t by calendar year.
 ///
 /// Source: Brennstoffemissionshandelsgesetz §10 BEHG (BGBl. I 2021 Nr. 37).
-/// CO₂ conversion factor for H-Erdgas: 0.20160 kg CO₂/kWh_Hs (DVGW G 685).
-///
-/// ## ct/kWh_Hs formula
-///
-/// `BEHG_ct/kWh = EUR/t × 0.20160 kg/kWh × 10^-3 t/kg × 100 ct/EUR`
-/// `           = EUR/t × 0.020160`
 ///
 /// | Year | EUR/t | ct/kWh_Hs |
 /// |---|---|---|
-/// | 2021 | 25   | 0.504 |
-/// | 2022 | 30   | 0.605 |
-/// | 2023 | 30   | 0.605 |
-/// | 2024 | 45   | 0.907 |
-/// | 2025 | 55   | 1.109 |
-/// | 2026 | 65   | 1.3104 |
+/// | 2021 | 25   | 0.4551 |
+/// | 2022 | 30   | 0.5461 |
+/// | 2023 | 30   | 0.5442 |
+/// | 2024 | 45   | 0.8163 |
+/// | 2025 | 55   | 0.9977 |
+/// | 2026 | 65   | 1.1791 |
 const BEHG_EUR_PER_T: &[(i32, u32)] = &[
     (2021, 25),
     (2022, 30),
@@ -73,15 +67,63 @@ const BEHG_EUR_PER_T: &[(i32, u32)] = &[
     (2026, 65),
 ];
 
-/// CO₂ conversion factor for H-Erdgas (kg CO₂/kWh_Hs), DVGW G 685.
-pub const BEHG_CO2_FACTOR_H_GAS: Decimal = dec!(0.20160);
+// ── Erdgas emission factor (EBeV Anlage) ─────────────────────────────────────
+//
+// German gas is metered and billed in **kWh_Hs** (Brennwert), while the EBeV
+// emission factor is *heizwertbezogen* (Hi). The ordinance closes that gap in
+// its own Umrechnungsfaktor column rather than leaving it to the reader:
+// Anlage 2 EBeV 2030 Nr. 6 gives Erdgas as `3,2508 GJ/MWh`, and states the
+// derivation — „3,6 GJ/MWh · 0,903 GJ/GJ". Taking the bare 3,6 instead treats a
+// billed Brennwert quantity as if it were a Heizwert one and overstates the
+// CO₂ component by about 11 %.
 
-/// CO₂ conversion factor for L-Erdgas (kg CO₂/kWh_Hs), DVGW G 685.
+/// Umrechnungsfaktor Erdgas — GJ (Hi) per MWh as billed (Hs).
 ///
-/// L-Gas has a slightly lower Brennwert than H-Gas but similar specific CO₂
-/// content. The DVGW G 685 reference value for L-Gas is approximately 0.2014 kg/kWh_Hs.
-/// Use this constant for supply points in the L-Gas area (primarily NW Germany).
-pub const BEHG_CO2_FACTOR_L_GAS: Decimal = dec!(0.20140);
+/// Anlage 2 EBeV 2030 Nr. 6 Spalte 4, and identically Anlage 1 Teil 4 EBeV 2022.
+/// `3,6 GJ/MWh · 0,903 GJ/GJ`, so the Brennwert→Heizwert step is already in it.
+pub const ERDGAS_UMRECHNUNGSFAKTOR_GJ_PER_MWH: Decimal = dec!(3.2508);
+
+/// Heizwertbezogener Emissionsfaktor für Erdgas in t CO₂/GJ, by calendar year.
+///
+/// EBeV 2022 Anlage 1 Teil 4 for 2021–2022, EBeV 2030 Anlage 2 Nr. 6 from 2023.
+/// The ordinance publishes **one** Erdgas row — there is no separate H-Gas and
+/// L-Gas Standardwert, and § 3 Abs. 2 CO2KostAufG requires the BEHG
+/// Standardwerte, so a network-specific factor has no place in this disclosure.
+const ERDGAS_EMISSIONSFAKTOR_T_PER_GJ: &[(i32, Decimal)] = &[
+    (2021, dec!(0.056)),
+    (2022, dec!(0.056)),
+    (2023, dec!(0.0558)),
+    (2024, dec!(0.0558)),
+    (2025, dec!(0.0558)),
+    (2026, dec!(0.0558)),
+    (2027, dec!(0.0558)),
+    (2028, dec!(0.0558)),
+    (2029, dec!(0.0558)),
+    (2030, dec!(0.0558)),
+];
+
+/// The Erdgas emission factor for a year, in **kg CO₂ per kWh_Hs** — the unit
+/// § 3 Abs. 1 Nr. 3 CO2KostAufG asks for, against the quantity the invoice bills.
+///
+/// `kg/kWh_Hs = Umrechnungsfaktor GJ/MWh × Emissionsfaktor t/GJ`, the t/kg and
+/// MWh/kWh factors of 1 000 cancelling.
+///
+/// Returns `None` for a year outside the EBeV tables; EBeV 2030 runs to 2030.
+///
+/// # Example
+/// ```rust
+/// use energy_billing::rates::erdgas_emissionsfaktor_kg_per_kwh;
+/// use rust_decimal::dec;
+/// // 3,2508 GJ/MWh × 0,0558 t CO₂/GJ
+/// assert_eq!(erdgas_emissionsfaktor_kg_per_kwh(2026), Some(dec!(0.18139464)));
+/// ```
+#[must_use]
+pub fn erdgas_emissionsfaktor_kg_per_kwh(year: i32) -> Option<Decimal> {
+    ERDGAS_EMISSIONSFAKTOR_T_PER_GJ
+        .iter()
+        .find(|(y, _)| *y == year)
+        .map(|(_, t_per_gj)| ERDGAS_UMRECHNUNGSFAKTOR_GJ_PER_MWH * t_per_gj)
+}
 
 // ── Stromsteuer (§ 3 StromStG) ───────────────────────────────────────────────
 
@@ -146,26 +188,27 @@ pub fn energiesteuer_gas_for_year(year: i32) -> Option<Decimal> {
 
 /// Compute BEHG ct/kWh_Hs for a given calendar year.
 ///
-/// Returns `None` when no statutory rate is known for the year (caller should
-/// fall back to `RegulatoryRates::behg_gas_ct_per_kwh`).
+/// Returns `None` when the year has no §10 BEHG price or no EBeV emission
+/// factor (caller should fall back to `RegulatoryRates::behg_gas_ct_per_kwh`).
 ///
 /// # Example
 /// ```rust
 /// use energy_billing::rates::behg_ct_per_kwh_for_year;
-/// // 2024: 45 EUR/t × 0.20160 kg/kWh = 0.9072 ct/kWh
+/// // 2024: 45 EUR/t × 0.18139464 kg/kWh_Hs ÷ 10
 /// let ct = behg_ct_per_kwh_for_year(2024).unwrap();
-/// assert!(ct > rust_decimal::dec!(0.90) && ct < rust_decimal::dec!(0.92));
+/// assert!(ct > rust_decimal::dec!(0.81) && ct < rust_decimal::dec!(0.82));
 /// ```
 #[must_use]
 pub fn behg_ct_per_kwh_for_year(year: i32) -> Option<Decimal> {
-    BEHG_EUR_PER_T
+    let eur_per_t = BEHG_EUR_PER_T
         .iter()
         .find(|(y, _)| *y == year)
-        .map(|(_, eur_per_t)| behg_ct_per_kwh_from_price(Decimal::from(*eur_per_t), None))
+        .map(|(_, eur_per_t)| Decimal::from(*eur_per_t))?;
+    behg_ct_per_kwh_from_price(eur_per_t, year)
 }
 
 /// Convert an nEHS certificate price (EUR/t CO₂) into the Gas CO₂ cost
-/// component in ct/kWh.
+/// component in ct/kWh_Hs, at the year's EBeV emission factor.
 ///
 /// Since 2026 nEHS certificates are **auctioned** (§10 Abs. 1 BEHG: weekly EEX
 /// auctions from 01.07.2026 inside the 55–65 EUR/t corridor of §10 Abs. 2,
@@ -173,12 +216,18 @@ pub fn behg_ct_per_kwh_for_year(year: i32) -> Option<Decimal> {
 /// market-formed rather than a statutory fixed price. Callers supply the
 /// supplier's actual acquisition price (CO2KostAufG §3 passes through the
 /// **tatsächlich aufgewendete** CO₂ costs) — e.g. from a dated market-price
-/// series — and optionally an L-Gas factor via `factor`.
+/// series.
 ///
-/// `ct/kWh = EUR/t × CO₂-factor kg/kWh ÷ 10`
+/// The factor is the year's, not the caller's: § 3 Abs. 2 CO2KostAufG requires
+/// the BEHG Standardwerte, and the EBeV publishes one Erdgas row for the whole
+/// market.
+///
+/// `ct/kWh_Hs = EUR/t × Emissionsfaktor kg/kWh_Hs ÷ 10`
+///
+/// Returns `None` for a year outside the EBeV tables.
 #[must_use]
-pub fn behg_ct_per_kwh_from_price(eur_per_t: Decimal, factor: Option<Decimal>) -> Decimal {
-    eur_per_t * factor.unwrap_or(BEHG_CO2_FACTOR_H_GAS) / dec!(10)
+pub fn behg_ct_per_kwh_from_price(eur_per_t: Decimal, year: i32) -> Option<Decimal> {
+    erdgas_emissionsfaktor_kg_per_kwh(year).map(|factor| eur_per_t * factor / dec!(10))
 }
 
 // ── RegulatoryRates ───────────────────────────────────────────────────────────
@@ -196,7 +245,8 @@ pub struct RegulatoryRates {
     /// ct/kWh_Hs (current: 0.55 ct/kWh = 5,50 EUR/MWh).
     pub energiesteuer_gas_ct_per_kwh: Decimal,
     /// BEHG CO₂ levy for Erdgas H — ct/kWh_Hs.
-    /// = CO₂-Preis EUR/t × 0.20160 kg_CO₂/kWh_Hs ÷ 10
+    /// = CO₂-Preis EUR/t × Emissionsfaktor kg_CO₂/kWh_Hs ÷ 10
+    /// (see [`erdgas_emissionsfaktor_kg_per_kwh`])
     pub behg_gas_ct_per_kwh: Decimal,
     /// Standard MwSt rate (fraction, e.g. `0.19`).
     pub mwst_rate: Decimal,
@@ -219,7 +269,8 @@ impl Default for RegulatoryRates {
         Self {
             stromsteuer_ct_per_kwh: dec!(2.05),
             energiesteuer_gas_ct_per_kwh: dec!(0.55),
-            behg_gas_ct_per_kwh: dec!(1.3104), // 65 EUR/t × 0.20160 kg_CO₂/kWh_Hs ÷ 10 (2026, BEHG §10)
+            // 65 EUR/t (2026, BEHG §10) × 0.18139464 kg_CO₂/kWh_Hs ÷ 10
+            behg_gas_ct_per_kwh: dec!(1.17906516),
             mwst_rate: dec!(0.19),
             mwst_rate_reduced: dec!(0.07),
         }
@@ -342,36 +393,71 @@ mod tests {
     #[test]
     fn behg_year_table_2026_matches_expected() {
         let ct = behg_ct_per_kwh_for_year(2026).unwrap();
-        // 65 EUR/t × 0.20160 = 13.104 → ÷ 10 = 1.3104 ct/kWh
-        let expected = dec!(65) * dec!(0.20160) / dec!(10);
+        // 65 EUR/t × 0.18139464 kg/kWh_Hs ÷ 10 = 1.17906516 ct/kWh
+        let expected = dec!(65) * dec!(0.18139464) / dec!(10);
         assert_eq!(ct, expected);
+        assert_eq!(ct, dec!(1.17906516));
     }
 
     #[test]
     fn behg_year_table_2024_matches_expected() {
         let ct = behg_ct_per_kwh_for_year(2024).unwrap();
-        // 45 EUR/t × 0.20160 = 9.072 → ÷ 10 = 0.9072 ct/kWh
-        let expected = dec!(45) * dec!(0.20160) / dec!(10);
+        // 45 EUR/t × 0.18139464 kg/kWh_Hs ÷ 10 = 0.81627588 ct/kWh
+        let expected = dec!(45) * dec!(0.18139464) / dec!(10);
         assert_eq!(ct, expected);
     }
 
     #[test]
     fn behg_unknown_year_returns_none() {
         assert!(behg_ct_per_kwh_for_year(2020).is_none());
-        assert!(behg_ct_per_kwh_for_year(2030).is_none());
+        assert!(behg_ct_per_kwh_for_year(2031).is_none());
     }
 
+    /// The EBeV factor is heizwertbezogen while the invoice bills Brennwert, so
+    /// the ordinance's own Umrechnungsfaktor carries the conversion. Using the
+    /// bare 3,6 GJ/MWh instead of 3,2508 overstates the component by ~11 %.
     #[test]
-    fn behg_from_price_uses_explicit_l_gas_factor() {
-        // L-Gas deployment: 65 EUR/t × 0.20140 kg/kWh ÷ 10 = 1.3091 ct/kWh
-        let ct = behg_ct_per_kwh_from_price(dec!(65), Some(BEHG_CO2_FACTOR_L_GAS));
-        assert_eq!(ct, dec!(65) * dec!(0.20140) / dec!(10));
-        // Distinct from the H-Gas default path
-        assert_ne!(ct, behg_ct_per_kwh_from_price(dec!(65), None));
-        assert_eq!(
-            behg_ct_per_kwh_from_price(dec!(65), None),
-            dec!(65) * BEHG_CO2_FACTOR_H_GAS / dec!(10)
+    fn the_emission_factor_is_brennwert_based() {
+        let f = erdgas_emissionsfaktor_kg_per_kwh(2026).expect("2026 is tabled");
+        assert_eq!(f, dec!(3.2508) * dec!(0.0558));
+        assert_eq!(f, dec!(0.18139464));
+
+        let heizwert_basis = dec!(3.6) * dec!(0.0558);
+        assert!(
+            heizwert_basis > f,
+            "the Heizwert basis is the larger number — it is not what is billed"
         );
+    }
+
+    /// EBeV 2022 and EBeV 2030 differ in the Emissionsfaktor, not the
+    /// Umrechnungsfaktor, so the step falls at the 2022/2023 boundary.
+    #[test]
+    fn the_factor_steps_when_the_ordinance_does() {
+        assert_eq!(
+            erdgas_emissionsfaktor_kg_per_kwh(2022),
+            Some(dec!(3.2508) * dec!(0.056))
+        );
+        assert_eq!(
+            erdgas_emissionsfaktor_kg_per_kwh(2023),
+            Some(dec!(3.2508) * dec!(0.0558))
+        );
+        assert_ne!(
+            erdgas_emissionsfaktor_kg_per_kwh(2022),
+            erdgas_emissionsfaktor_kg_per_kwh(2023)
+        );
+        // EBeV 2030 runs to 2030; nothing is tabled beyond it.
+        assert!(erdgas_emissionsfaktor_kg_per_kwh(2031).is_none());
+    }
+
+    /// The EBeV publishes one Erdgas row, so an L-Gas supply point is priced on
+    /// the same Standardwert as an H-Gas one.
+    #[test]
+    fn there_is_one_erdgas_factor_for_the_whole_market() {
+        assert_eq!(
+            behg_ct_per_kwh_from_price(dec!(65), 2026),
+            Some(dec!(65) * dec!(0.18139464) / dec!(10))
+        );
+        assert!(behg_ct_per_kwh_from_price(dec!(65), 2031).is_none());
     }
 
     #[test]
@@ -383,7 +469,7 @@ mod tests {
         );
         // Without override, uses statutory year rate
         let ct = rates.effective_behg_gas_for_year(None, 2024);
-        assert!(ct > dec!(0.90) && ct < dec!(0.92));
+        assert_eq!(ct, dec!(45) * dec!(0.18139464) / dec!(10));
     }
 }
 

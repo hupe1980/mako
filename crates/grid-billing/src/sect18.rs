@@ -44,12 +44,26 @@ use crate::types::{
 
 /// First day of the first cut (Tenorziffer 2 Satz 2 lit. a).
 const STUFE_A: Date = time::macros::date!(2026 - 07 - 01);
-/// First day of the second cut (lit. b) — restates the 50 % level for 2027.
+/// First day of the second cut (lit. b).
 const STUFE_B: Date = time::macros::date!(2027 - 01 - 01);
 /// First day of the third cut (lit. c).
 const STUFE_C: Date = time::macros::date!(2028 - 01 - 01);
 /// First day with no payment at all.
 const ENDE: Date = time::macros::date!(2029 - 01 - 01);
+
+/// The Tenorziffer 2 schedule: each step's first day and the factor from it.
+///
+/// Written as the Tenor writes it — one row per lit., in order — so lit. b
+/// carrying the same factor as lit. a is visible rather than inferred. That is
+/// the non-compounding reading Satz 3 forces („eine jährliche Abschmelzung von
+/// 25 %"); compounding would put 2027 at 0.25 and the annual averages at
+/// 0.75 / 0.25 / 0.125.
+const ABSCHMELZUNG: [(Date, Decimal); 4] = [
+    (STUFE_A, dec!(0.50)),
+    (STUFE_B, dec!(0.50)),
+    (STUFE_C, dec!(0.25)),
+    (ENDE, Decimal::ZERO),
+];
 
 /// The fraction of the vermiedene Kosten still payable on a given day.
 ///
@@ -59,15 +73,11 @@ const ENDE: Date = time::macros::date!(2029 - 01 - 01);
 /// averaging across the step.
 #[must_use]
 pub fn abschmelzfaktor(tag: Date) -> Decimal {
-    if tag >= ENDE {
-        Decimal::ZERO
-    } else if tag >= STUFE_C {
-        dec!(0.25)
-    } else if tag >= STUFE_B || tag >= STUFE_A {
-        dec!(0.50)
-    } else {
-        Decimal::ONE
-    }
+    ABSCHMELZUNG
+        .iter()
+        .rev()
+        .find(|(ab, _)| tag >= *ab)
+        .map_or(Decimal::ONE, |(_, faktor)| *faktor)
 }
 
 /// `true` when the factor changes inside the period.
@@ -360,5 +370,21 @@ mod tests {
         assert!(r.positions.is_empty());
         assert_eq!(r.total_eur, Decimal::ZERO);
         assert!(r.warnings.iter().any(|w| w.code == "SECT18_ABGESCHMOLZEN"));
+    }
+
+    /// Tenorziffer 2 Satz 3 states the effect as „eine jährliche Abschmelzung
+    /// von 25 %", which only holds if lit. b restates the level lit. a reached
+    /// instead of compounding onto it. Compounding would put 2027 at 0.25 and
+    /// the annual averages at 0.75 / 0.25 / 0.125.
+    #[test]
+    fn the_second_fifty_percent_step_restates_rather_than_compounds() {
+        assert_eq!(abschmelzfaktor(STUFE_A), dec!(0.50));
+        assert_eq!(
+            abschmelzfaktor(STUFE_B),
+            abschmelzfaktor(STUFE_A),
+            "lit. b is the same level as lit. a"
+        );
+        assert_eq!(abschmelzfaktor(STUFE_C), dec!(0.25));
+        assert_eq!(abschmelzfaktor(ENDE), Decimal::ZERO);
     }
 }

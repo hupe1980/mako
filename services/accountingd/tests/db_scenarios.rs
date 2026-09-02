@@ -2398,7 +2398,7 @@ async fn the_dunning_case_and_its_announcement_are_atomic() {
 
 /// A second interest charge for the same period must not duplicate the row.
 ///
-/// The MAHNGEBUEHR ledger entry is idempotent on `interest:{malo}:{from}:{to}`,
+/// The VERZUGSZINSEN ledger entry is idempotent on `interest:{malo}:{from}:{to}`,
 /// so a retry leaves the ledger correct whatever happens beside it. Idempotency
 /// therefore has to be the table's too — otherwise `interest_charges` grows a
 /// second row and `GET /interest-charges` shows the customer the same

@@ -1612,7 +1612,7 @@ fn s52_alt_reduziert_rounding() {
 // §52 EEG 2023 — Pflichtzahlung (new regime, separate from Vergütung)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// §52 EEG 2023 — FernsteuerbarkeitmFehlend: €10/kW × 3 months.
+/// §52 EEG 2023 — FernsteuerbarkeitFehlend: €10/kW × 3 months.
 /// Plant still receives full Vergütung; penalty is separate obligation.
 #[test]
 fn s52_2023_pflichtzahlung_fernsteuerbarkeit_fehlend() {
@@ -1620,7 +1620,7 @@ fn s52_2023_pflichtzahlung_fernsteuerbarkeit_fehlend() {
     use eeg_billing::{Pflichtverstoss, SanktionsTyp};
 
     let violation = Pflichtverstoss {
-        typ: SanktionsTyp::FernsteuerbarkeitmFehlend,
+        typ: SanktionsTyp::FernsteuerbarkeitFehlend,
         leistung_kw: d("500"),
         monate_des_verstosses: 3,
         nachtraeglich_erfuellt: false,
@@ -2106,7 +2106,7 @@ fn s52_abs5_multiple_violations_capped_at_10eur_per_kw() {
                 technischer_defekt: false,
             },
             Pflichtverstoss {
-                typ: SanktionsTyp::FernsteuerbarkeitmFehlend,
+                typ: SanktionsTyp::FernsteuerbarkeitFehlend,
                 leistung_kw: d("100"),
                 monate_des_verstosses: 1,
                 nachtraeglich_erfuellt: false,
@@ -2142,7 +2142,7 @@ fn s52_multiple_violations_independent_computation() {
                 technischer_defekt: false,
             },
             Pflichtverstoss {
-                typ: SanktionsTyp::FernsteuerbarkeitmFehlend,
+                typ: SanktionsTyp::FernsteuerbarkeitFehlend,
                 leistung_kw: d("50"),
                 monate_des_verstosses: 1,
                 nachtraeglich_erfuellt: false,
@@ -2956,7 +2956,7 @@ fn sect52_two_simultaneous_violations_pflichtzahlung() {
                 technischer_defekt: false,
             },
             Pflichtverstoss {
-                typ: SanktionsTyp::FernsteuerbarkeitmFehlend,
+                typ: SanktionsTyp::FernsteuerbarkeitFehlend,
                 leistung_kw: d("50"),
                 monate_des_verstosses: 1,
                 nachtraeglich_erfuellt: false,

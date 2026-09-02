@@ -29,6 +29,19 @@
 //! Entnahmestelle under §§ 21 ff. EnFG. [`Letztverbrauchergruppe`] therefore
 //! carries the group and the caller supplies the privileged rate where one has
 //! been granted.
+//!
+//! ## The privilege is a tranche, not a rate
+//!
+//! B′ and C′ are published „für Strommengen **über** 1 000 000 kWh" at one
+//! Entnahmestelle. The first Gigawattstunde of the calendar year is billed at
+//! A′ whatever the group, and only the excess carries the reduced rate.
+//! [`aufteilung`] splits a settlement period's quantity across that boundary,
+//! which is why it needs the Jahresvorverbrauch: the threshold is annual and
+//! per Entnahmestelle, while a settlement covers one period of the year.
+//!
+//! Applying B′ to the whole quantity would understate a B′ Entnahmestelle's
+//! §19-Aufschlag by the first Gigawattstunde times the difference between the
+//! two rates — roughly 15 000 EUR a year at the 2026 schedule.
 
 use rust_decimal::Decimal;
 use rust_decimal::dec;
@@ -59,7 +72,52 @@ pub enum Letztverbrauchergruppe {
 pub const ERSTES_ERFASSTES_JAHR: i32 = 2026;
 
 /// The threshold separating A′ from B′/C′, per Entnahmestelle and year.
+///
+/// The reduced rate is published for quantities *über* this figure, so the
+/// Gigawattstunde itself is billed at A′.
 pub const ENFG_SCHWELLE_KWH: Decimal = dec!(1_000_000);
+
+/// How one settlement period's quantity splits across the EnFG 1-GWh boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Umlagenaufteilung {
+    /// kWh of this period that fall in the year's first Gigawattstunde and so
+    /// carry the A′ rate.
+    pub voller_satz_kwh: Decimal,
+    /// kWh of this period above the year's first Gigawattstunde, carrying the
+    /// group's reduced rate.
+    pub privilegiert_kwh: Decimal,
+}
+
+/// Split a period's quantity across the EnFG 1-GWh boundary.
+///
+/// `jahresvorverbrauch_kwh` is what this Entnahmestelle has already consumed in
+/// the same calendar year *before* this period. The threshold is annual, so a
+/// monthly settlement cannot tell which side of it the period falls on without
+/// that figure.
+///
+/// Groups A′ and Befreit have no boundary — one rate covers the whole quantity,
+/// and for Befreit that rate is zero. Their split puts everything on the
+/// `voller_satz_kwh` side.
+#[must_use]
+pub fn aufteilung(
+    gruppe: Letztverbrauchergruppe,
+    menge_kwh: Decimal,
+    jahresvorverbrauch_kwh: Decimal,
+) -> Umlagenaufteilung {
+    use Letztverbrauchergruppe as G;
+    if matches!(gruppe, G::A | G::Befreit) {
+        return Umlagenaufteilung {
+            voller_satz_kwh: menge_kwh,
+            privilegiert_kwh: Decimal::ZERO,
+        };
+    }
+    let rest = (ENFG_SCHWELLE_KWH - jahresvorverbrauch_kwh).max(Decimal::ZERO);
+    let voller_satz_kwh = menge_kwh.min(rest);
+    Umlagenaufteilung {
+        voller_satz_kwh,
+        privilegiert_kwh: menge_kwh - voller_satz_kwh,
+    }
+}
 
 /// §19 StromNEV-Umlage by year and Letztverbrauchergruppe, in ct/kWh.
 ///
@@ -185,5 +243,60 @@ mod tests {
         let c = sect19_stromnev_ct_per_kwh(2026, G::C).unwrap();
         assert!(b < a, "B′ must be below A′");
         assert!(c < b, "C′ must be below B′");
+    }
+
+    /// A′ and Befreit have no boundary — everything sits on the full-rate side.
+    #[test]
+    fn an_unprivileged_group_is_never_split() {
+        use Letztverbrauchergruppe as G;
+        for g in [G::A, G::Befreit] {
+            let a = aufteilung(g, dec!(5_000_000), dec!(3_000_000));
+            assert_eq!(a.voller_satz_kwh, dec!(5_000_000), "{g:?}");
+            assert_eq!(a.privilegiert_kwh, Decimal::ZERO, "{g:?}");
+        }
+    }
+
+    /// The reduced rate is published „für Strommengen über 1 000 000 kWh", so
+    /// the first Gigawattstunde of the year carries A′ even for a B′ customer.
+    #[test]
+    fn the_first_gigawatt_hour_of_the_year_is_never_privileged() {
+        let a = aufteilung(Letztverbrauchergruppe::B, dec!(2_500_000), Decimal::ZERO);
+        assert_eq!(a.voller_satz_kwh, ENFG_SCHWELLE_KWH);
+        assert_eq!(a.privilegiert_kwh, dec!(1_500_000));
+    }
+
+    /// Once the year's allowance is used up, the whole period is privileged.
+    #[test]
+    fn a_period_past_the_threshold_is_wholly_privileged() {
+        let a = aufteilung(Letztverbrauchergruppe::C, dec!(400_000), dec!(1_000_000));
+        assert_eq!(a.voller_satz_kwh, Decimal::ZERO);
+        assert_eq!(a.privilegiert_kwh, dec!(400_000));
+    }
+
+    /// A period straddling the boundary splits at it, not before or after.
+    #[test]
+    fn a_straddling_period_splits_at_the_boundary() {
+        let a = aufteilung(Letztverbrauchergruppe::B, dec!(300_000), dec!(900_000));
+        assert_eq!(a.voller_satz_kwh, dec!(100_000));
+        assert_eq!(a.privilegiert_kwh, dec!(200_000));
+    }
+
+    /// The split conserves the quantity, wherever the year stands.
+    #[test]
+    fn the_split_conserves_the_quantity() {
+        use Letztverbrauchergruppe as G;
+        for g in [G::A, G::B, G::C, G::Befreit] {
+            for vor in [dec!(0), dec!(999_999), dec!(1_000_000), dec!(9_000_000)] {
+                let menge = dec!(750_000);
+                let a = aufteilung(g, menge, vor);
+                assert_eq!(
+                    a.voller_satz_kwh + a.privilegiert_kwh,
+                    menge,
+                    "{g:?} after {vor}"
+                );
+                assert!(a.voller_satz_kwh >= Decimal::ZERO);
+                assert!(a.privilegiert_kwh >= Decimal::ZERO);
+            }
+        }
     }
 }

@@ -409,6 +409,7 @@ mod tests {
             }),
             leistungspreis: None,
             letztverbrauchergruppe: Default::default(),
+            enfg_jahresvorverbrauch_kwh: None,
             sect19_umlage_ct_per_kwh: None,
             offshore_umlage_ct_per_kwh: None,
             kwkg_umlage_ct_per_kwh: None,

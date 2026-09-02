@@ -182,6 +182,15 @@ pub struct NneRequest {
     /// the full levy — because that is what applies absent a granted privilege.
     #[serde(default)]
     pub letztverbrauchergruppe: umlagen::Letztverbrauchergruppe,
+    /// kWh already consumed at this Entnahmestelle earlier in the same calendar
+    /// year, for the EnFG 1-GWh boundary.
+    ///
+    /// The B′/C′ §19-Aufschlag applies only above 1 000 000 kWh a year, so a
+    /// period settlement needs the year to date to place its quantity. Omitted,
+    /// the period is billed as though it opened the year and the settlement
+    /// warns. Ignored for groups A′ and Befreit.
+    #[serde(default)]
+    pub enfg_jahresvorverbrauch_kwh: Option<Decimal>,
     /// Override the tabled §19 StromNEV rate for the delivery year, in ct/kWh.
     #[serde(default)]
     pub sect19_umlage_ct_per_kwh: Option<Decimal>,

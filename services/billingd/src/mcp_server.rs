@@ -941,7 +941,7 @@ unpriced intervals would silently under-bill.",
                 | Rate | Default | Legal basis |\n\
                 |---|---|---|\n\
                 | Energiesteuer | 0.55 ct/kWh_Hs | §2 Abs. 3 Nr. 4 EnergieStG |\n\
-                | BEHG CO₂ | 1.3104 ct/kWh_Hs | 65 EUR/t CO₂ × 0.20160 kg/kWh (2026 default); \
+                | BEHG CO₂ | 1.17906516 ct/kWh_Hs | 65 EUR/t CO₂ × 0.18139464 kg/kWh_Hs (2026 default); \
                 since 07/2026 the price is EEX-auctioned inside the §10 Abs. 2 BEHG corridor, so \
                 billingd prefers productd's `nehs_prices` series over this table |\n\
                 | MwSt | 19% | Gas and Fernwärme are standard-rated. The 7% window was \

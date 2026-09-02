@@ -560,8 +560,8 @@ fn bench_validate_fixture_file(c: &mut Criterion) {
             })
         });
 
-        // Gas fixture — `beispiel_44001_lieferbeginn_gas.edi` declares G1.1
-        // (FV2026-04-01), not the FV2025-10-01 this comment used to claim.
+        // Gas fixture — `beispiel_44001_lieferbeginn_gas.edi` declares G1.1,
+        // which is FV2026-04-01.
         let gas_date = in_force_date(edi_energy::MessageType::Utilmd, "G1.1");
         let gas_msg = Platform::with_all_profiles()
             .parse(UTILMD_44001_GAS_FIXTURE)

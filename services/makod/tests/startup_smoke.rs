@@ -239,6 +239,29 @@ fn the_landing_page_figures_match_the_registered_engine() {
     // together with the page rather than reasoning about the delta here.
     const LANDING_PAGE_PIDS: usize = 467;
     const LANDING_PAGE_WORKFLOWS: usize = 70;
+    // The page's other two counts, derived the same way rather than trusted.
+    const LANDING_PAGE_MESSAGE_TYPES: usize = 17;
+    const LANDING_PAGE_SERVICES: usize = 17;
+
+    assert_eq!(
+        edi_energy::MessageType::ALL.len(),
+        LANDING_PAGE_MESSAGE_TYPES,
+        "site/templates/index.html advertises {LANDING_PAGE_MESSAGE_TYPES} EDIFACT \
+         message types, `MessageType::ALL` has {} — update the page",
+        edi_energy::MessageType::ALL.len()
+    );
+
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml");
+    let services = std::fs::read_to_string(&workspace)
+        .expect("the workspace manifest")
+        .lines()
+        .filter(|l| l.trim_start().starts_with("\"services/"))
+        .count();
+    assert_eq!(
+        services, LANDING_PAGE_SERVICES,
+        "site/templates/index.html advertises {LANDING_PAGE_SERVICES} services, the \
+         workspace has {services} — update the page"
+    );
 
     assert_eq!(
         pids, LANDING_PAGE_PIDS,

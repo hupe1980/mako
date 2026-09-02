@@ -189,6 +189,35 @@ impl Invoice {
             builder = builder.credit_note();
         }
 
+        // ── BG-1 notes: the statutory statements that are not billable lines ──
+        //
+        // An `Info` position carries a disclosure the law requires *auf der
+        // Rechnung* — the CO2KostAufG § 3 figures, the § 53a EnergieStG
+        // Entlastungshinweis, the § 40 Abs. 2 Nr. 6 Energieträgermix, the § 14
+        // WPG renewable share, the § 41a Abs. 6 price comparison. It charges
+        // nothing, so it is not a BG-25 line and is skipped by the loop below —
+        // but dropping it here would mean the electronic invoice states less
+        // than the rendered one, and it is the electronic invoice a B2G or B2B
+        // recipient receives.
+        //
+        // BT-22 is repeatable, so each becomes its own note. The legal basis is
+        // appended only when it reads as a citation: the Gasqualität position
+        // stores its *value* in `legal_basis` for `to_rechnung_json`, and
+        // "H-Gas (§…)" would be nonsense.
+        for p in self
+            .positions
+            .iter()
+            .filter(|p| p.category == PositionCategory::Info)
+        {
+            let note = match p.legal_basis.as_deref() {
+                Some(basis) if basis.contains('\u{a7}') => {
+                    format!("{} ({basis})", p.description)
+                }
+                _ => p.description.clone(),
+            };
+            builder = builder.note(note);
+        }
+
         // ── BG-25 lines: one per billable net position, its own BT-151/152 VAT ──
         // The line net is rounded to 2 dp; `en16931::reconcile` then derives the
         // BG-23 breakdown and BG-22 totals from the lines (grouping per the

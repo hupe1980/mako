@@ -186,7 +186,7 @@ pub enum StateTransitionReason {
     /// MaStR registration confirmed → suspending sanction lifted.
     MastrRegistered,
     /// §9 EEG Fernsteuerbarkeit installed.
-    FernsteuerbarkeitmInstalled,
+    FernsteuerbarkeitInstalled,
     /// Direktvermarktung started (§20 / §21 EEG).
     DirektvermarktungStarted,
     /// Direktvermarktung ended, switched back to Einspeisevergütung.
@@ -481,10 +481,10 @@ mod tests {
 
 /// How a plant satisfies the §9 EEG technical requirements.
 ///
-/// §9 is **staged by installed capacity**, not a single threshold. Treating it as
-/// "≥ 25 kW must have Fernsteuerbarkeit" charged a §52 Abs. 1 Nr. 1 Pflichtzahlung
-/// of 10 €/kW/month to every compliant 25–100 kW plant that took the
-/// 60-%-Leistungsbegrenzung route the statute explicitly offers it.
+/// §9 Abs. 2 is **staged by installed capacity**, not a single threshold, and the
+/// middle band is a genuine choice: a 25–100 kW plant on the
+/// 60-%-Leistungsbegrenzung route the statute offers it is compliant, so no
+/// §52 Abs. 1 Nr. 1 Pflichtzahlung is owed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
@@ -505,7 +505,11 @@ pub enum Sect9Erfuellung {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
 pub enum Sect9Pflicht {
-    /// Steckersolargerät below 2 kW / 800 VA — §9 does not reach it.
+    /// Steckersolargerät up to 2 kW — §9 Abs. 2 Satz 2 lifts Nr. 3 for it.
+    ///
+    /// Abs. 2 Satz 2 conditions the exemption on the installed capacity alone.
+    /// The 800-VA Wechselrichter limit belongs to the separate Abs. 1 Satz 3
+    /// exemption and to §24 Abs. 1 Satz 5 Nr. 2, not here.
     Keine,
     /// Below 25 kW: the 60 % Leistungsbegrenzung only.
     Leistungsbegrenzung60,
@@ -519,14 +523,16 @@ pub enum Sect9Pflicht {
 ///
 /// | Installed capacity | Obligation | Basis |
 /// |---|---|---|
-/// | Steckersolargerät < 2 kW (≤ 800 VA) | none | §9 Abs. 1 Satz 2 |
+/// | Steckersolargerät ≤ 2 kW | none | §9 Abs. 2 Satz 2 |
 /// | < 25 kW | 60 % Leistungsbegrenzung | §9 Abs. 2 Nr. 3 |
 /// | 25 kW – < 100 kW | Fernsteuerbarkeit **or** 60 % | §9 Abs. 2 Nr. 2 |
 /// | ≥ 100 kW | Fernsteuerbarkeit | §9 Abs. 2 Nr. 1 |
 #[must_use]
 pub fn sect9_pflicht(leistung_kwp: Decimal, art: Option<ErzeugungsArt>) -> Sect9Pflicht {
     use rust_decimal::dec;
-    if art == Some(ErzeugungsArt::SolarStecker) && leistung_kwp < dec!(2) {
+    // „bis zu 2 Kilowatt" — inclusive. A 2 kWp module string behind an 800-VA
+    // inverter is the standard Steckersolar build, so the boundary is the case.
+    if art == Some(ErzeugungsArt::SolarStecker) && leistung_kwp <= dec!(2) {
         return Sect9Pflicht::Keine;
     }
     if leistung_kwp >= dec!(100) {
@@ -559,8 +565,8 @@ mod sect9_tests {
     use super::*;
     use rust_decimal::dec;
 
-    /// The 25–100 kW band may choose either route. Charging the Nr. 1
-    /// Pflichtzahlung to a plant that took the 60 % route invents a violation.
+    /// §9 Abs. 2 Nr. 2 states the middle band as a choice — „ab 25 Kilowatt und
+    /// von weniger als 100 Kilowatt" is satisfied by either route.
     #[test]
     fn the_middle_band_may_take_either_route() {
         for e in [
@@ -587,8 +593,8 @@ mod sect9_tests {
         ));
     }
 
-    /// Below 25 kW the 60 % Leistungsbegrenzung is enough. A flat „≥ 25 kW must
-    /// have Fernsteuerbarkeit" charges nothing here and everything just above.
+    /// Below 25 kW the 60 % Leistungsbegrenzung is the whole obligation
+    /// (§9 Abs. 2 Nr. 3) — nothing else is owed, and having nothing is a breach.
     #[test]
     fn below_25_kw_the_sixty_percent_cap_is_enough() {
         assert!(!sect9_verletzt(
@@ -599,19 +605,44 @@ mod sect9_tests {
         assert!(sect9_verletzt(dec!(10), None, Sect9Erfuellung::Keine));
     }
 
-    /// §9 Abs. 1 Satz 2 — a Steckersolargerät below 2 kW is out of scope.
+    /// §9 Abs. 2 Satz 2 — a Steckersolargerät „bis zu 2 Kilowatt" is out of scope.
+    ///
+    /// The boundary is the ordinary case, not an edge: 2 kWp of modules behind an
+    /// 800-VA inverter is the standard build, and it is exempt.
     #[test]
-    fn a_steckersolargeraet_is_exempt() {
-        assert!(!sect9_verletzt(
-            dec!(0.8),
-            Some(ErzeugungsArt::SolarStecker),
-            Sect9Erfuellung::Keine
-        ));
-        // A larger Stecker-PV plant is not.
+    fn a_steckersolargeraet_is_exempt_up_to_and_including_two_kilowatt() {
+        for kwp in [dec!(0.8), dec!(2)] {
+            assert!(
+                !sect9_verletzt(
+                    kwp,
+                    Some(ErzeugungsArt::SolarStecker),
+                    Sect9Erfuellung::Keine
+                ),
+                "{kwp} kWp"
+            );
+            assert_eq!(
+                sect9_pflicht(kwp, Some(ErzeugungsArt::SolarStecker)),
+                Sect9Pflicht::Keine
+            );
+        }
+        // Above 2 kW the exemption stops and Nr. 3 applies again.
         assert!(sect9_verletzt(
-            dec!(2),
+            dec!(2.01),
             Some(ErzeugungsArt::SolarStecker),
             Sect9Erfuellung::Keine
         ));
+        assert_eq!(
+            sect9_pflicht(dec!(2.01), Some(ErzeugungsArt::SolarStecker)),
+            Sect9Pflicht::Leistungsbegrenzung60
+        );
+    }
+
+    /// The exemption is for Steckersolargeräte only — a 2 kWp roof array is not one.
+    #[test]
+    fn the_exemption_does_not_reach_an_ordinary_small_plant() {
+        assert_eq!(
+            sect9_pflicht(dec!(2), None),
+            Sect9Pflicht::Leistungsbegrenzung60
+        );
     }
 }

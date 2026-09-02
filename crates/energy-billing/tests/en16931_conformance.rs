@@ -408,3 +408,76 @@ fn both_settlement_forms_render_and_agree_on_what_is_due() {
         en_rest.totals.due.into_decimal(),
     );
 }
+
+/// The statutory statements survive into the electronic invoice.
+///
+/// An `Info` position charges nothing, so it is not a BG-25 line — but the law
+/// requires the disclosure *auf der Rechnung*, and for a B2G or B2B recipient
+/// the XRechnung **is** the invoice. Each becomes its own BT-22 note.
+///
+/// A Gas supply is the case that carries the most of them: the CO2KostAufG § 3
+/// Abs. 1 figures beside the levy line it prices.
+#[test]
+fn the_statutory_disclosures_reach_bt22_notes() {
+    use energy_billing::GasMeterInput;
+
+    let gas: Product = serde_json::from_str(
+        r#"{"category":"GAS","gas_grundpreis_ct_per_day":"0",
+             "gas_arbeitspreis_ct_per_kwh_hs":"7.5"}"#,
+    )
+    .unwrap();
+
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        lf_mp_id: "9900000000001".to_owned(),
+        rechnungsnummer: "R-EN16931-CO2".to_owned(),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: RegulatoryRates::default(),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        gas: Some(GasMeterInput {
+            kwh_hs: Some(dec!(1000)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let invoice = gas
+        .build_engine(&GridInput::default(), &ctx.regulatory_rates)
+        .bill(ctx, &quantities)
+        .expect("a gas invoice");
+
+    // The disclosures are on the mako invoice…
+    assert!(
+        invoice.positions.iter().any(|p| p.has_tag("co2kostaufg")),
+        "the § 3 statement must be billed"
+    );
+
+    let en = invoice
+        .to_en16931(
+            XRECHNUNG_SPEC_ID,
+            party("Stadtwerke Musterstadt GmbH", "9900000000001"),
+            party("Kunde", "51238696781"),
+        )
+        .expect("a gas invoice renders");
+
+    // …and they must survive into the semantic model.
+    let notes: Vec<&str> = en.notes.iter().filter_map(|n| n.note.as_deref()).collect();
+    for nr in [1, 3, 4, 5] {
+        let basis = format!("CO2KostAufG \u{a7} 3 Abs. 1 Nr. {nr}");
+        assert!(
+            notes.iter().any(|n| n.contains(&basis)),
+            "BT-22 must carry {basis}; notes: {notes:?}"
+        );
+    }
+
+    // Adding notes must not disturb the arithmetic the rule engine checks.
+    let report = validate(&en);
+    assert!(
+        report.is_valid(),
+        "en16931 findings: {:?}",
+        report.fatal().map(|f| &f.rule).collect::<Vec<_>>()
+    );
+}

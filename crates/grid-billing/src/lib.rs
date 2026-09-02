@@ -57,6 +57,8 @@
 //!     }),
 //!     leistungspreis: None,
 //!     letztverbrauchergruppe: Default::default(),
+//!     // A′ has no EnFG 1-GWh boundary, so the year to date does not place it.
+//!     enfg_jahresvorverbrauch_kwh: None,
 //!     sect19_umlage_ct_per_kwh: None,
 //!     offshore_umlage_ct_per_kwh: None,
 //!     kwkg_umlage_ct_per_kwh: None,

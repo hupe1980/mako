@@ -5994,9 +5994,11 @@ pub struct CreateInterestChargeRequest {
 
 /// `POST /api/v1/accounts/{malo_id}/interest-charges` — calculate and book Verzugszinsen.
 ///
-/// Calculates interest per §288 BGB using the current ECB Basiszinssatz from
-/// `ecb_base_rates` table.  Creates a `MAHNGEBUEHR` ledger entry and records
-/// the charge in `interest_charges` for audit.
+/// Calculates interest per §288 BGB against the §247 BGB Basiszinssatz in force
+/// on `period_from`, read from `ecb_base_rates`. Creates a `VERZUGSZINSEN`
+/// ledger entry — §275 HGB reports Zinsen on their own line — and records the
+/// charge in `interest_charges` for audit. Fails when no Basiszinssatz is
+/// seeded for the period: the rate is announced, not estimated.
 pub async fn post_interest_charge(
     Extension(pool): Extension<PgPool>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,

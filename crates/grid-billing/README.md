@@ -35,6 +35,14 @@ The charge is **annualised before comparison** — billing a year in monthly
 instalments does not raise the cap. A charge above the ceiling raises
 `MSB_ABOVE_MSBG_POG`.
 
+The band is **derived, not named**. Each §30 Abs. 1 Nummer is a disjunction over
+facts about the metering point, so `MessstellenKategorie::Pflichteinbau` carries
+`PflichtEinstufung { jahresverbrauch_kwh, installierte_leistung_kw,
+steuerbare_verbrauchseinrichtung }` and `PflichtEinstufung::band` walks the Nummern
+top down — a point meeting several takes the highest, and a settlement cannot pick
+its own ceiling. With no fact at all the tightest applies: a Pflichteinbaufall
+exists only above 6 000 kWh (§29 Abs. 1), so Nr. 5 is the catalogue's floor.
+
 ### §17 StromNEV — Netzebene and Benutzungsstundenzahl
 
 `Netzebene` covers the seven levels, distinguishing network levels from
@@ -59,7 +67,7 @@ text itself, not only in the BK4-22-089 methodology:
 | Form | Qualification | Mindestentgelt |
 |---|---|---|
 | Atypische Netznutzung (Satz 1) | peak in the low-load windows (BNetzA-approved) | 20 % |
-| Intensive Netznutzung (Satz 2) | ≥ 7 000 h **and** ≥ 10 GWh | 20 % |
+| Intensive Netznutzung (Satz 2) | ≥ 7 000 h **and** > 10 GWh | 20 % |
 | | ≥ 7 500 h | 15 % |
 | | ≥ 8 000 h | 10 % |
 
@@ -68,7 +76,15 @@ reduction over the Arbeits- and Leistungspreis positions **only** — the
 Konzessionsabgabe and the levies are untouched, because the Netzbetreiber's lost
 revenue is recovered through the §19-Umlage billed separately. An agreement
 below the floor raises `SECT19_BELOW_MINDESTENTGELT`; a Satz 2 agreement whose
-utilisation data does not qualify raises `SECT19_BANDLAST_CRITERIA_NOT_MET`.
+utilisation data does not qualify raises `SECT19_BANDLAST_CRITERIA_NOT_MET`; one
+naming neither a Genehmigung (Satz 5) nor an Anzeige (Satz 7) raises
+`SECT19_OHNE_GENEHMIGUNG`.
+
+The two Satz 2 thresholds read differently: the Benutzungsstundenzahl must
+*„mindestens 7 000 Stunden im Jahr erreichen"*, the Stromverbrauch must *„zehn
+Gigawattstunden übersteigen"* — so exactly 10 GWh does not qualify. The agreed
+fraction is a reduction, and outside `(0, 1]` it is refused as
+`BillingError::InvalidInput`.
 
 ### §18 StromNEV — Entgelte für dezentrale Erzeugung, under Abschmelzung
 
@@ -104,7 +120,7 @@ could forget:
 | Rule | Enforced by |
 |---|---|
 | Exactly one Arbeitspreis form (einheitlich, Modul 1 pauschal, Modul 2 prozentual, Modul 3 zeitvariabel, or spot-linked) | `ArbeitspreisModell` — one variant at a time; each replaces the flat position, so the same energy is never billed twice |
-| Modul 2 and Modul 3 are mutually exclusive (BK6-22-300) | `ArbeitspreisModell` holds one variant at a time. Note this also blocks the Modul 1 + Modul 3 combination the Festlegung *permits* — see `Sect14aModule::combinable_with` |
+| `Modul 1 + Modul 3` is the only combination BK6-22-300 offers | `ArbeitspreisModell` holds one variant at a time, so every pair is unrepresentable — which is right for Modul 1/Modul 2 (alternative base modules) and for Modul 2/Modul 3, and is a limitation for the Modul 1 + Modul 3 pair the Festlegung permits. See `Sect14aModule::combinable_with` |
 | Reduction factors in `(0, 1]` | `Reduktionsfaktor` enforces the range at construction |
 | Leistungspreis needs both peak and rate | `Leistungspreis` — a pair |
 | Grundpreis needs both rate and months | `Grundpreis` — a pair |
@@ -201,6 +217,13 @@ NNE invoice carries all three:
 | Aufschlag für besondere Netznutzung (§19 StromNEV-Umlage) | §19 Abs. 2 StromNEV | A′ 1.559 · B′ 0.050 · C′ 0.025 ct/kWh |
 | Offshore-Netzumlage | §17f EnWG | 0.941 ct/kWh |
 | KWKG-Umlage | §26 KWKG | 0.446 ct/kWh |
+
+B′ and C′ are published „für Strommengen über 1 000 000 kWh" at one Entnahmestelle,
+so they are a **tranche, not a rate**: the year's first Gigawattstunde carries A′
+whatever the group. `NneInput::enfg_jahresvorverbrauch_kwh` places the period against
+that annual boundary, and one straddling it bills two §19-Aufschlag positions.
+Omitted, the period is billed as though it opened the year — the over-billing
+direction — with `ENFG_VORVERBRAUCH_MISSING`.
 
 Rates are set annually by the ÜNB and published by 25 October for the following
 year. They are held as a year-indexed series in [`umlagen`](src/umlagen.rs) so a
@@ -705,6 +728,8 @@ let settlement = settle_nne(&NneInput {
     period: SettlementPeriod::new(date!(2026-01-01), date!(2026-01-31)).unwrap(),
     // Letztverbrauchergruppe drives the network-levy rates (EnFG §§21 ff.).
     letztverbrauchergruppe: Letztverbrauchergruppe::A,
+    // A′ has no EnFG 1-GWh boundary, so the year to date does not place it.
+    enfg_jahresvorverbrauch_kwh: None,
     // Exactly one Arbeitspreis form — here a single flat rate.
     arbeitspreis: ArbeitspreisModell::Einheitlich(MengePreis {
         menge_kwh: d("1500"),

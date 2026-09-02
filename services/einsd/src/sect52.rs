@@ -112,7 +112,7 @@ pub fn derive_pflichtverstoesse(anlage: &AnlageRow, ctx: Sect52Context) -> Vec<P
     // every compliant plant that had taken the route the statute offers it.
     if eeg_billing::settlement_state::sect9_verletzt(leistung_kw, art, anlage.sect9_erfuellung()) {
         push(
-            SanktionsTyp::FernsteuerbarkeitmFehlend,
+            SanktionsTyp::FernsteuerbarkeitFehlend,
             anlage.fernsteuerbarkeit_violation_start,
         );
     }
