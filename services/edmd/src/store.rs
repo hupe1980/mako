@@ -55,13 +55,13 @@ use crate::domain::{
 /// Map a `meterstore` failure onto edmd's error type, **keeping whether a retry
 /// could ever work**.
 ///
-/// meterstore 0.6 splits the two: `IntegrityViolation` is a refused delivery —
+/// `meterstore` separates the two: `IntegrityViolation` is a refused delivery —
 /// an overlapping span, a restated value, a second network operator on one
 /// reading — and no retry changes it, because the message has to change.
 /// Everything transient (`Storage`, `LockTimeout`, an object store that could
-/// not be reached) is retryable. Flattening both into one variant made every
-/// ingest door answer `5xx` to a delivery that could never be stored, so the
-/// fan-out redelivered it for as long as its retry budget allowed.
+/// not be reached) is retryable. Flattening both into one variant would make an
+/// ingest door answer `5xx` to a delivery that can never be stored, and the
+/// fan-out would redeliver it for as long as its retry budget allows.
 fn store_err(e: meterstore::Error) -> EdmError {
     if e.is_retryable() {
         return EdmError::Database(e.to_string());

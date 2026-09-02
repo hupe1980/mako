@@ -169,6 +169,10 @@ pub enum Versorgungsart {
 ///
 /// Belongs to the Transaktionsgrund code space of the 55013/55014/55015 and the
 /// 55004/55005/55006, **not** to the Versorgungsart in `SG10 CCI+Z36`.
+///
+/// Restated here rather than imported: `edi-energy` is a dev-dependency of this
+/// crate on purpose, and one string is not worth a production dependency on the
+/// whole wire library. `the_code_matches_the_wire_table` holds the two together.
 pub const UEBERGANGSVERSORGUNG: &str = "ZZD";
 
 impl Versorgungsart {
@@ -1417,5 +1421,15 @@ mod tests {
         )
         .unwrap();
         assert!(out.events.is_empty());
+    }
+
+    /// One wire code, one spelling. `edi-energy` carries the DE 9013 table this
+    /// crate restates a single value from, and the two must not drift.
+    #[test]
+    fn the_code_matches_the_wire_table() {
+        assert_eq!(
+            super::UEBERGANGSVERSORGUNG,
+            edi_energy::utilmd_codes::transaktionsgrund::UEBERGANGSVERSORGUNG
+        );
     }
 }

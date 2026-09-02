@@ -21,7 +21,6 @@ members = [
     "crates/mako-events",
     "crates/mako-obs",
     "crates/mako-service",
-    "crates/mako-plugin",
     "crates/invoic-checker",
     "crates/mako-invoic",
     "crates/mako-pruefung",
@@ -126,7 +125,7 @@ mako-wim         = { path = "crates/mako-wim",         version = "0.19" }
 mako-gpke        = { path = "crates/mako-gpke",        version = "0.19" }
 # The INVOIC settle/dispute state machine, shared by every billing family.
 # GPKE, WiM, GaBi Gas and GeLi Gas register a family against it rather than
-# re-implementing the process — four copies had already drifted apart.
+# re-implementing the process, so the four cannot drift apart.
 mako-invoic      = { path = "crates/mako-invoic",      version = "0.19" }
 mako-geli-gas    = { path = "crates/mako-geli-gas",    version = "0.19" }
 # Every Frist in one leaf crate: BDEW Werktage, the MaKo holiday calendar, and
@@ -138,7 +137,6 @@ mako-fristen     = { path = "crates/mako-fristen",     version = "0.19" }
 # versions in one build.
 asx-rs           = { version = "0.13" }
 mako-service     = { path = "crates/mako-service",     version = "0.19" }
-mako-plugin      = { path = "crates/mako-plugin",      version = "0.19" }
 invoic-checker   = { path = "crates/invoic-checker",   version = "0.19" }
 # `default-features = false` on purpose: the crate's defaults are *every*
 # Marktrolle's Entscheidungsbäume. A member that inherits this dependency names

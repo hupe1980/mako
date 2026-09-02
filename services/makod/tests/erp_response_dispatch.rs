@@ -90,6 +90,7 @@ async fn spawn_supplier_change(
             transaktionsgrund: None,
             transaktionsgrund_ergaenzung: None,
             veraeusserungsform: None,
+            tranchengroesse_prozent: None,
             vorgangsnummer: None,
             kunde_name: None,
             kunde_namensformat: None,

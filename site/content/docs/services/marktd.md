@@ -1311,7 +1311,7 @@ VersorgungsStatusRecord
 ├── lieferstatus         — Beliefert | Unbeliefert | Grundversorgung | Ersatzversorgung | Ruhend | Stillgelegt
 ├── zuordnungen[]        — who supplies it, as a list (see below)
 │   ├── lf_mp_id         — Lieferant MP-ID
-│   ├── prozent          — share of the Marktlokation (100 for an untranchierte one)
+│   ├── prozent          — share of the Marktlokation (100 untranchiert, 0 < p < 100 per Tranche)
 │   ├── tranche_id       — Tranchen-ID (`SG5 LOC+Z21`), null when untranchiert
 │   ├── status           — Angekuendigt | Aktiv
 │   ├── zuordnungsbeginn — Lieferbeginn of this assignment
@@ -1386,6 +1386,16 @@ Prüfschritt 530 („verbleibt ein Anteil im Bilanzkreis des Netzbetreibers?") r
 remainder as a *fact*, and cannot tell an over-allocation from a real one. A 60/30
 split is untouched: that remainder is what Prüfschritt 530 asks about. The bound is per
 `status`, so the competing `Angekuendigt` announcements above are unaffected.
+
+**A Tranche is never the whole.** GPKE Teil 1 § 3.2.1.5: „Eine Tranche umfasst folglich
+stets weniger als 100 % der aus einer Marktlokation eingespeisten Energiemenge. Der
+Prozentsatz einer Tranche ist immer größer 0% und kleiner als 100%." A row naming a
+`tranche_id` at 100 % is Geschäftsvorfall 1 wearing a Tranchen-ID, and is refused. The
+untranchierte case — no `tranche_id`, 100 % — is the ordinary one and unaffected.
+
+Every one of these arrives as a `422` naming the constraint it broke: the mapping is on
+the SQLSTATE, so a rule added to the schema is classified as a bad request without being
+listed in the service.
 
 **Optimistic concurrency.** Every write uses `WHERE malo_id = $1 AND tenant = $2 AND version = $3`.
 Conflict → `412 Precondition Failed` → retry after re-read.

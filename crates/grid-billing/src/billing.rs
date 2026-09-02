@@ -20,6 +20,7 @@
 //! This enables AI-assisted invoice explainability and regulator audits without
 //! re-running the calculation.
 
+use crate::rounding::RoundMoney;
 use crate::EuroAmount;
 use rust_decimal::Decimal;
 
@@ -41,7 +42,7 @@ fn ct_to_eur(ct: Decimal) -> Decimal {
 }
 
 fn pos_net(qty: Decimal, unit_price_eur: Decimal) -> Decimal {
-    (qty * unit_price_eur).round_dp(5)
+    (qty * unit_price_eur).round_kfm(5)
 }
 
 fn kwh_pos_traced(
@@ -56,9 +57,9 @@ fn kwh_pos_traced(
     SettlementPosition {
         text: text.to_owned(),
         kind,
-        quantity: kwh.round_dp(3),
+        quantity: kwh.round_kfm(3),
         unit: QuantityUnit::Kwh,
-        unit_price_eur: unit_price_eur.round_dp(6),
+        unit_price_eur: unit_price_eur.round_kfm(6),
         net_eur: pos_net(kwh, unit_price_eur),
         spot_price_formula: None,
 
@@ -66,7 +67,7 @@ fn kwh_pos_traced(
             explanation: format!(
                 "{kwh:.3} kWh × {:.6} EUR/kWh = {:.5} EUR",
                 unit_price_eur,
-                gross_eur.round_dp(5)
+                gross_eur.round_kfm(5)
             ),
             input_quantity: kwh,
             input_unit_price_eur: unit_price_eur,
@@ -91,9 +92,9 @@ fn kw_pos_traced(
     SettlementPosition {
         text: text.to_owned(),
         kind,
-        quantity: kw.round_dp(3),
+        quantity: kw.round_kfm(3),
         unit: QuantityUnit::Kw,
-        unit_price_eur: unit_price_eur.round_dp(6),
+        unit_price_eur: unit_price_eur.round_kfm(6),
         net_eur: pos_net(kw, unit_price_eur),
         spot_price_formula: None,
 
@@ -101,7 +102,7 @@ fn kw_pos_traced(
             explanation: format!(
                 "{kw:.3} kW × {:.6} EUR/kW = {:.5} EUR",
                 unit_price_eur,
-                gross_eur.round_dp(5)
+                gross_eur.round_kfm(5)
             ),
             input_quantity: kw,
             input_unit_price_eur: unit_price_eur,
@@ -126,9 +127,9 @@ fn monat_pos_traced(
     SettlementPosition {
         text: text.to_owned(),
         kind,
-        quantity: months.round_dp(3),
+        quantity: months.round_kfm(3),
         unit: QuantityUnit::Monat,
-        unit_price_eur: unit_price_eur.round_dp(6),
+        unit_price_eur: unit_price_eur.round_kfm(6),
         net_eur: pos_net(months, unit_price_eur),
         spot_price_formula: None,
 
@@ -136,7 +137,7 @@ fn monat_pos_traced(
             explanation: format!(
                 "{months} Monate × {:.6} EUR/Monat = {:.5} EUR",
                 unit_price_eur,
-                gross_eur.round_dp(5)
+                gross_eur.round_kfm(5)
             ),
             input_quantity: months,
             input_unit_price_eur: unit_price_eur,
@@ -404,8 +405,8 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
             let jahrestage = Decimal::from(time::util::days_in_year(input.period.from().year()));
             let tage = Decimal::from(input.period.days());
             let anteil = tage / jahrestage;
-            let price_eur = (kap.entgelt_eur_per_kwh_h_a * anteil).round_dp(6);
-            let net_eur = (kap.bestellte_kapazitaet_kwh_h * price_eur).round_dp(5);
+            let price_eur = (kap.entgelt_eur_per_kwh_h_a * anteil).round_kfm(6);
+            let net_eur = (kap.bestellte_kapazitaet_kwh_h * price_eur).round_kfm(5);
             let stufe = kap
                 .druckstufe
                 .map(|d| format!(", {}", d.label()))
@@ -413,7 +414,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
             let p = SettlementPosition {
                 text: format!("Kapazitätsentgelt Gas ({}{stufe})", kap.produkt.label()),
                 kind: BillingPositionKind::GasKapazitaetsentgelt,
-                quantity: kap.bestellte_kapazitaet_kwh_h.round_dp(3),
+                quantity: kap.bestellte_kapazitaet_kwh_h.round_kfm(3),
                 unit: QuantityUnit::Kw,
                 unit_price_eur: price_eur,
                 net_eur,
@@ -525,14 +526,14 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
             total += p.net_eur;
             positions.push(p);
 
-            let credit_eur = -(*pauschale_eur_pro_jahr * *jahresanteil).round_dp(6);
+            let credit_eur = -(*pauschale_eur_pro_jahr * *jahresanteil).round_kfm(6);
             let c = SettlementPosition {
                 text: "§14a Modul 1 pauschale Reduzierung".to_owned(),
                 kind: BillingPositionKind::NneArbeitModul1,
-                quantity: jahresanteil.round_dp(6),
+                quantity: jahresanteil.round_kfm(6),
                 unit: QuantityUnit::Monat,
                 unit_price_eur: credit_eur,
-                net_eur: credit_eur.round_dp(5),
+                net_eur: credit_eur.round_kfm(5),
                 spot_price_formula: None,
                 trace: CalculationTrace {
                     explanation: format!(
@@ -566,7 +567,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
         ArbeitspreisModell::Modul2ProzentualeReduzierung { basis, reduktion } => {
             let base_eur = ct_to_eur(basis.preis_ct_per_kwh);
             let factor = reduktion.get();
-            let reduced_eur = (base_eur * factor).round_dp(6);
+            let reduced_eur = (base_eur * factor).round_kfm(6);
             let gross = basis.menge_kwh * reduced_eur;
             let p = SettlementPosition {
                 text: format!(
@@ -574,7 +575,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                     (Decimal::ONE - factor) * HUNDRED
                 ),
                 kind: BillingPositionKind::NneArbeitModul2,
-                quantity: basis.menge_kwh.round_dp(3),
+                quantity: basis.menge_kwh.round_kfm(3),
                 unit: QuantityUnit::Kwh,
                 unit_price_eur: reduced_eur,
                 net_eur: pos_net(basis.menge_kwh, reduced_eur),
@@ -585,7 +586,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                         basis.menge_kwh,
                         reduced_eur,
                         base_eur,
-                        gross.round_dp(5)
+                        gross.round_kfm(5)
                     ),
                     input_quantity: basis.menge_kwh,
                     input_unit_price_eur: reduced_eur,
@@ -798,15 +799,15 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                 positions.push(SettlementPosition {
                     text,
                     kind,
-                    quantity: menge_kwh.round_dp(3),
+                    quantity: menge_kwh.round_kfm(3),
                     unit: QuantityUnit::Kwh,
-                    unit_price_eur: price_eur.round_dp(6),
+                    unit_price_eur: price_eur.round_kfm(6),
                     net_eur,
                     spot_price_formula: None,
                     trace: CalculationTrace {
                         explanation: format!(
                             "{menge_kwh:.3} kWh × {price_eur:.6} EUR/kWh = {:.5} EUR ({anteil})",
-                            (menge_kwh * price_eur).round_dp(5),
+                            (menge_kwh * price_eur).round_kfm(5),
                         ),
                         input_quantity: menge_kwh,
                         input_unit_price_eur: price_eur,
@@ -842,7 +843,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
             let p = SettlementPosition {
                 text: "Blindmehrarbeit".to_owned(),
                 kind: BillingPositionKind::Blindmehrarbeit,
-                quantity: mehrarbeit.round_dp(3),
+                quantity: mehrarbeit.round_kfm(3),
                 unit: QuantityUnit::Kvarh,
                 unit_price_eur: preis_eur,
                 net_eur: pos_net(mehrarbeit, preis_eur),
@@ -852,12 +853,12 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                         "{:.3} kvarh bezogen − {:.3} kvarh frei ({:.3} kWh × {}) \
                          = {:.3} kvarh × {:.6} EUR/kvarh = {:.5} EUR",
                         blind.blindarbeit_kvarh,
-                        (wirkarbeit_kwh * blind.freigrenze_anteil).round_dp(3),
+                        (wirkarbeit_kwh * blind.freigrenze_anteil).round_kfm(3),
                         wirkarbeit_kwh,
                         blind.freigrenze_anteil,
                         mehrarbeit,
                         preis_eur,
-                        gross.round_dp(5)
+                        gross.round_kfm(5)
                     ),
                     input_quantity: mehrarbeit,
                     input_unit_price_eur: preis_eur,
@@ -917,16 +918,16 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
         let p = SettlementPosition {
             text: format!("Konzessionsabgabe{ka_klasse_note}"),
             kind: BillingPositionKind::Konzessionsabgabe,
-            quantity: ka_base_kwh.round_dp(3),
+            quantity: ka_base_kwh.round_kfm(3),
             unit: QuantityUnit::Kwh,
-            unit_price_eur: ct_to_eur(ka_ct).round_dp(6),
+            unit_price_eur: ct_to_eur(ka_ct).round_kfm(6),
             net_eur: pos_net(ka_base_kwh, ct_to_eur(ka_ct)),
             spot_price_formula: None,
             trace: CalculationTrace {
                 explanation: format!(
                     "{ka_base_kwh:.3} kWh × {:.6} EUR/kWh = {:.5} EUR{ka_klasse_note}",
                     ct_to_eur(ka_ct),
-                    (ka_base_kwh * ct_to_eur(ka_ct)).round_dp(5),
+                    (ka_base_kwh * ct_to_eur(ka_ct)).round_kfm(5),
                 ),
                 input_quantity: ka_base_kwh,
                 input_unit_price_eur: ct_to_eur(ka_ct),
@@ -996,9 +997,9 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
         let p = SettlementPosition {
             text: label,
             kind: BillingPositionKind::NneArbeitModul3,
-            quantity: interval.menge_kwh.round_dp(3),
+            quantity: interval.menge_kwh.round_kfm(3),
             unit: QuantityUnit::Kwh,
-            unit_price_eur: rate_eur.round_dp(6),
+            unit_price_eur: rate_eur.round_kfm(6),
             net_eur: net,
             spot_price_formula: Some(formula),
             trace: CalculationTrace {
@@ -1101,7 +1102,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
             })
             .map(|p| p.net_eur)
             .sum();
-        let reduction = -(nne_basis * (Decimal::ONE - v.vereinbarter_prozentsatz)).round_dp(5);
+        let reduction = -(nne_basis * (Decimal::ONE - v.vereinbarter_prozentsatz)).round_kfm(5);
         if !reduction.is_zero() {
             let art_label = match v.art {
                 crate::sect19::Sect19Art::AtypischeNetznutzung => "atypische Netznutzung",
@@ -1150,7 +1151,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
         }
     }
 
-    let total_eur = total.round_dp(2);
+    let total_eur = total.round_kfm(2);
     ensure_representable_eur(total_eur)?;
 
     // Netznutzung is a sonstige Leistung: UStAE 13b.3a excludes it from §13b by
@@ -1293,9 +1294,9 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
     let p1 = SettlementPosition {
         text: "Mehrmengen (Gutschrift)".to_owned(),
         kind: BillingPositionKind::Mehrmenge,
-        quantity: mehr_kwh.round_dp(3),
+        quantity: mehr_kwh.round_kfm(3),
         unit: QuantityUnit::Kwh,
-        unit_price_eur: mehr_eur.round_dp(6),
+        unit_price_eur: mehr_eur.round_kfm(6),
         net_eur: mehr_net,
         spot_price_formula: None,
 
@@ -1303,7 +1304,7 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
             explanation: format!(
                 "{mehr_kwh:.3} kWh × {:.6} EUR/kWh = {:.5} EUR (Gutschrift, negiert)",
                 mehr_eur,
-                mehr_gross.round_dp(5)
+                mehr_gross.round_kfm(5)
             ),
             input_quantity: mehr_kwh,
             input_unit_price_eur: mehr_eur,
@@ -1325,9 +1326,9 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
     let p2 = SettlementPosition {
         text: "Mindermengen".to_owned(),
         kind: BillingPositionKind::Mindermenge,
-        quantity: minder_kwh.round_dp(3),
+        quantity: minder_kwh.round_kfm(3),
         unit: QuantityUnit::Kwh,
-        unit_price_eur: minder_eur.round_dp(6),
+        unit_price_eur: minder_eur.round_kfm(6),
         net_eur: minder_net,
         spot_price_formula: None,
 
@@ -1335,7 +1336,7 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
             explanation: format!(
                 "{minder_kwh:.3} kWh × {:.6} EUR/kWh = {:.5} EUR",
                 minder_eur,
-                minder_gross.round_dp(5)
+                minder_gross.round_kfm(5)
             ),
             input_quantity: minder_kwh,
             input_unit_price_eur: minder_eur,
@@ -1347,7 +1348,7 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
         },
     };
 
-    let total_eur = (p1.net_eur + p2.net_eur).round_dp(2);
+    let total_eur = (p1.net_eur + p2.net_eur).round_kfm(2);
     ensure_representable_eur(total_eur.abs())?;
 
     // A Mehr-/Mindermenge is a **Lieferung** of the commodity, not a network
@@ -1422,7 +1423,7 @@ pub fn settle_abschlag(input: &AbschlagInput) -> Result<SettlementResult, Billin
     let mut warnings: Vec<SettlementWarning> = Vec::new();
     warn_if_straddles_turnover(input.period.from(), input.period.to(), &mut warnings);
 
-    let betrag = input.betrag_netto_eur.round_dp(2);
+    let betrag = input.betrag_netto_eur.round_kfm(2);
     ensure_representable_eur(betrag)?;
 
     let position = SettlementPosition {
@@ -1592,7 +1593,7 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
     positions.push(p);
 
     if let Some(msl_eur) = input.messdienstleistung_eur {
-        let msl: Decimal = msl_eur.round_dp(5);
+        let msl: Decimal = msl_eur.round_kfm(5);
         let p = SettlementPosition {
             text: "Messdienstleistung".to_owned(),
             kind: BillingPositionKind::Messdienstleistung,
@@ -1619,7 +1620,7 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
         positions.push(p);
     }
 
-    let total_eur = total.round_dp(2);
+    let total_eur = total.round_kfm(2);
     ensure_representable_eur(total_eur)?;
 
     Ok(SettlementResult {
@@ -1868,7 +1869,7 @@ pub fn settle_gas_awh(input: &GasAwhInput) -> Result<SettlementResult, BillingEr
             kind: BillingPositionKind::GasAwhSonstige, // service layer refines if artikel_id present
             quantity: qty,
             unit: QuantityUnit::Monat, // AWH positions have no standard EDIFACT unit; Monat placeholder
-            unit_price_eur: awh.preis_eur.round_dp(6),
+            unit_price_eur: awh.preis_eur.round_kfm(6),
             net_eur: net,
             spot_price_formula: None,
 
@@ -1877,7 +1878,7 @@ pub fn settle_gas_awh(input: &GasAwhInput) -> Result<SettlementResult, BillingEr
                     "{} × {:.5} EUR = {:.5} EUR",
                     awh.anzahl,
                     awh.preis_eur,
-                    gross.round_dp(5)
+                    gross.round_kfm(5)
                 ),
                 input_quantity: qty,
                 input_unit_price_eur: awh.preis_eur,
@@ -1891,7 +1892,7 @@ pub fn settle_gas_awh(input: &GasAwhInput) -> Result<SettlementResult, BillingEr
         total += net;
     }
 
-    let total_eur = total.round_dp(2);
+    let total_eur = total.round_kfm(2);
     ensure_representable_eur(total_eur)?;
 
     let result = SettlementResult {
@@ -2981,7 +2982,7 @@ mod tests {
         assert_eq!(levies.len(), 3, "all three levies must appear");
 
         let levy_total: Decimal = levies.iter().map(|p| p.net_eur).sum();
-        assert_eq!(levy_total.round_dp(2), dec!(44.19));
+        assert_eq!(levy_total.round_kfm(2), dec!(44.19));
         assert!(r.is_clean(), "a covered year must raise no warning");
     }
 
@@ -3033,7 +3034,7 @@ mod tests {
             .find(|p| p.kind == BillingPositionKind::Sect19StromNevUmlage)
             .expect("§19 position");
         // 1500 kWh × 0.100 ct/kWh = 1.50 EUR, not the tabled 23.39.
-        assert_eq!(sect19.net_eur.round_dp(2), dec!(1.50));
+        assert_eq!(sect19.net_eur.round_kfm(2), dec!(1.50));
     }
 
     #[test]
@@ -3795,8 +3796,8 @@ mod proptests {
                         preis_ct_per_kwh: ct,
                     },
                     // Any non-negative pauschale is a credit, so the total can
-                    // only move down — that is the invariant, and it no longer
-                    // depends on consumption the way a rate factor did.
+                    // only move down — the invariant, and it holds independently
+                    // of consumption.
                     pauschale_eur_pro_jahr: (Decimal::ONE - factor)
                         * Decimal::from(1200u32),
                     jahresanteil: Decimal::ONE / Decimal::from(12u32),

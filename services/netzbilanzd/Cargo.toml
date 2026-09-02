@@ -21,6 +21,9 @@ path = "src/main.rs"
 mako-fristen = { workspace = true }
 mako-events = { workspace = true }
 grid-billing    = { workspace = true, features = ["bo4e"] }
+# The arithmetic core, for `proportional_split` — a GGV share vector has to
+# add to exactly 100 %, which per-share rounding does not give.
+billing = { workspace = true }
 mako-redispatch = { path = "../../crates/mako-redispatch" }
 mako-markt      = { workspace = true, features = ["makod-client", "marktd-client"] }
 mako-service    = { workspace = true, features = ["oidc", "cedar", "otel"] }

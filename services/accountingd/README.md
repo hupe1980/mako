@@ -10,14 +10,14 @@ no SEPA collection.
 | **Database** | PostgreSQL (sqlx 0.8) — customer/SEPA satellites in `public`, the ledger in the `doubleentry` schema of the same database |
 | **Auth** | OIDC/JWT **+ Cedar ABAC** on every endpoint, read and write, plus inbound webhook HMAC-SHA256. Reads split three ways — `read-account` (one customer), `read-banking` (IBANs, mandates, pain.001), `read-books` (trial balance, aging, seals). `tests/authorization_guard.rs` fails the build if a handler loses its `Claims` extractor or its Cedar check |
 | **Ledger** | The [`doubleentry`](https://github.com/hupe1980/doubleentry) crate: an **immutable, tamper-evident double-entry engine** — balanced by construction, an append-only Merkle log with inclusion/consistency proofs, period seals (GoBD/§ 146 AO), open-item clearing, and store-level idempotency. accountingd owns the chart of accounts (`ledger::Chart`) and the `entry_type → postings` mapping; every money movement flows through `pg::post_entry` → `ledger.post`. |
-| **Double-entry** | Each Buchungsart is one balanced entry: the per-MaLo **Kontokorrent** (SKR 1400 subledger, an Asset leaf whose signed net *is* the balance) against a GL contra leaf (Bank 1200 / Erlöse 4000 / Mahnerlöse 4003 / EEG-Aufwand / Erstattungen). Soll = Haben is enforced in-engine **and** by a deferred DB trigger; §238 HGB. `accounts.balance_ct` is a ledger-derived read cache (set absolutely from the ledger net — never incremented, so it cannot drift) backing the portfolio SUM queries. |
+| **Double-entry** | Each Buchungsart is one balanced entry — the per-MaLo Kontokorrent (SKR 1400) against a GL contra leaf. Soll = Haben is enforced in-engine *and* by a deferred DB trigger (§ 238 HGB) |
 | **Vorauszahlung** | `PUT/GET /api/v1/accounts/{malo_id}/vorauszahlung` — typed `rubo4e::current::Vorauszahlung` (§40 Abs. 1 EnWG) |
 | **Aging analysis** | `GET /api/v1/aging` — receivables by 0–30d / 31–60d / 61–90d / >90d |
 | **Verzugszinsen** | `GET/POST /api/v1/accounts/{malo_id}/interest-charges` — §288 BGB, §247 BGB Basiszinssatz + 5 pp (B2C) / + 9 pp (B2B). Own `VERZUGSZINSEN` Buchungsart booking to a **Zinsertrag** GL account, because §275 HGB reports *Zinsen und ähnliche Erträge* on their own line. A period with no announced Basiszinssatz seeded is refused rather than estimated |
 | **Payment plans** | `GET/POST /api/v1/accounts/{malo_id}/payment-plans` — Zahlungsvereinbarung |
 | **SEPA mandates** | IBAN validated via **ISO 13616 mod-97 + the SWIFT registry's per-country BBAN structure** on PUT (mod-97 alone misses an `O` typed for a `0` about 99 % of the time it is the only error); `sepa_mandates` table (UNIQUE per tenant) |
 | **CORE vs B2B** | The scheme lives on the mandate **and** on every collection entry (a pain.007 restates the original as submitted), and one `PmtInf` group carries exactly one scheme. Different rulebooks: a CORE debtor has an unconditional 8-week refund right, a B2B debtor has none and their bank must hold the mandate |
-| **36-month dormancy** | EPC SDD Core Rulebook: a mandate not presented for 36 consecutive months must be cancelled by the creditor, and the clock resets on every **presentation** — including collections later rejected or refunded — so `last_presented_at` is stamped when the collection is written into a run, not when it settles. Dormant mandates drop out of collection runs and surface at `GET /api/v1/sepa/mandates/dormant`. The debtor banks do not enforce this; the creditor must |
+| **36-month dormancy** | EPC SDD Core Rulebook — a mandate unpresented for 36 months must be cancelled by the creditor. The clock resets on **presentation**, so `last_presented_at` is stamped when the collection enters a run |
 | **SEPA scheduler** | Background worker generates **one pain.008 message per collection date** (one `PmtInf` group per scheme × SequenceType, mandatory Gläubiger-ID); persisted in `sepa_collection_runs` **with one `sepa_collection_entries` row per collected mandate**. Pre-notification runs **14 calendar days** ahead per the EPC rulebook (`sepa_pre_notification_days`) |
 | **SEPA Gläubiger-ID** | `creditor_id` config field (EPC AT-02); validated via `sepa::validate_creditor_id`; included as `<CdtrSchmeId>` |
 | **Structured `PstlAdr`** | ISO 20022 postal addresses on creditor **and** debtor, ahead of the EPC cut-over on **15 Nov 2026**; half-filled addresses are refused, `Ctry` is checked against ISO 3166, legacy DK schemas drop it rather than emit an XSD violation |
@@ -29,10 +29,10 @@ no SEPA collection.
 | **pain.002 ingestion** | `POST /api/v1/sepa/pain002` — applies the bank's status report to payouts *and* collections, including **Verification of Payee** (mandatory since 9 Oct 2025), which is stored on its own axis rather than mistaken for an acceptance |
 | **pain.007 reversal** | `POST /api/v1/sepa/reversals` — the creditor gives a settled collection back; `OrgnlTxRef` is restated from stored data (the DK subset makes it mandatory), one reversal per collection, `SEPA_STORNO` re-opens the receivable |
 | **IBAN encryption ready** | `iban_hash` is an app-computed **keyed BLAKE3** lookup key (no pgcrypto); `iban_encrypted` flag; CAMT.054 matching uses the hash even when the IBAN is ciphertext |
-| **Abschlag model** | An advance is a **receivable**, not a receipt: `ABSCHLAG` debits the Kontokorrent against Erhaltene Anzahlungen when the demand is raised, the payment credits it, and `ABSCHLAG_VERRECHNUNG` discharges what the settling invoice deducts. An unpaid advance therefore reaches the Verzug and the Mahnwesen, and one payment is booked once. `abschlag_forderungen` carries each advance's § 14 Abs. 5 Satz 2 UStG rate |
+| **Abschlag model** | An advance is a **receivable**, not a receipt: `ABSCHLAG` debits the Kontokorrent when the demand is raised, so an unpaid advance reaches the Verzug and the Mahnwesen |
 | **Mahnwesen** | Mahnstufe 1→2→3; auto-dunning worker (advisory-locked, opt-in). Every step re-checks the **live** receivable, and a case whose arrears are settled is closed rather than escalated. Each open case is rendered and delivered as a MAHNUNG through `outputd` (recipient from `vertragd`), and a case that cannot be addressed is not documented |
 | **Sperr-Sequenz (§§41f/41g EnWG)** | Four phases, every one applying the same § 41f Abs. 3 gates: **Sperrandrohung** (Abs. 1, 4 Wochen) → **Sperrankündigung** (Abs. 5, 8 Werktage brieflich) → **Sperrauftrag** (ORDERS **17115** via `makod`) → **Entsperrauftrag** (Abs. 7, ORDERS **17117**, once the grounds are gone). Both notices carry the Grund, the voraussichtlichen Unterbrechungs-/Wiederherstellungskosten (Abs. 6) and the avoidance options (Abs. 4) |
-| **Mahnsperren** | Every §§41f/41g halt is a row in `dunning_locks` with a **ground, a citation, a validity period and the operator who set it** — Abwendungsvereinbarung (§41g Abs. 1 S. 10), Schutzbedürftigkeit (§41f Abs. 2), Zahlungsaussicht (§41f Abs. 1 S. 2), or an operator decision. Lifting is an act with its own reason; lifting for `vereinbarung_gebrochen` applies §41g Abs. 1 S. 11 by clearing the Ankündigung, so the sequence resumes at a *fresh* 8-Werktage announcement. Open-ended locks are listed by `GET /api/v1/dunning/locks/review` |
+| **Mahnsperren** | Every §§ 41f/41g halt is a row in `dunning_locks` with a ground, a citation, a validity period and the operator who set it; lifting is an act with its own reason |
 | **§41f Abs. 3 arrears** | `accounts.verzug_ct` — a second ledger-derived cache beside `balance_ct`, deliberately a different number: **open debit residuals** after FIFO clearing (so an unallocated credit cannot net an unpaid invoice out of sight), **less Verzugsschaden** (Mahngebühren and Verzugszinsen arise *because* of the default and must not fee a customer over the 100 EUR floor), **less open Forderungseinwände** |
 | **Forderungseinwände (§41f Abs. 3 S. 3–5)** | Amounts that stay out of the Verzug: a claim disputed form- und fristgerecht, a disputed price increase, a claim before a §111b Schlichtung, instalments not yet due. Not halts — they reduce what the threshold is measured against, and the sequence stops by itself when what remains falls below it |
 | **Business partner** | `kunden_nr` links accounts to `vertragd.kunden`; `GET /api/v1/business-partners/{kunden_nr}/{accounts,balance}` aggregate cross-MaLo |
@@ -40,14 +40,44 @@ no SEPA collection.
 | **Metrics** | `GET /metrics` — Prometheus gauges (open receivables, credit balances, dunning by Mahnstufe, pending SEPA runs) |
 | **Worker safety** | Abschlag/dunning workers hold a PostgreSQL advisory lock; all money workers are idempotent (per-run guards) |
 | **Jahresabschluss** | Annual settlement (§40 EnWG); idempotent per year via `jahresabschluss_runs`; the settlement is the year's **whole** Kontokorrent movement, never a hand-picked subset of Buchungsarten; recalibrates the monthly Abschlag from supply billing alone. On demand, or from the § 40b Abs. 1 worker (`jahresabschluss_auto_enabled`) |
-| **Festschreibung** | `POST /api/v1/periods/{id}/seal` closes + seals a period (GoBD / § 146 AO / § 239 HGB), committing to its closing balances folded by **booking date**. Sealing sets a watermark: every date at or before the latest sealed period end is closed, whether or not a period covers it — a gap below a seal is not an opening to book through, and it survives a restart. `GET /api/v1/periods/seals` lists the chained seals, verifies the chain, and reports `sealed_through` |
-| **Audit proofs** | Three `O(log n)` questions, all verifiable without this service: `GET /api/v1/entries/{id}/proof` — is this booking in the books; `GET /api/v1/periods/{id}/balance-proof?malo_id=…&lf_mp_id=…` — what did this customer's Kontokorrent close at (§ 147 AO), as a balance proof plus the account-binding proof that says whose handle it was; `GET /api/v1/entries/consistency-proof?since=<tree_size>` — has the journal only been appended to since an archived head (`since=0` is refused: every log extends the empty tree, so a proof from it would verify against any root of the right size and report success from a check that examined nothing). Every root is published with the tree size it belongs to, because a proof checked against a bare root can be replayed against a different tree. The balance answer carries the whole `sealed_balance` bundle verbatim, so a recipient re-verifies it without this service; when there is nothing to prove it says which of the two reasons applies (`not_yet_registered` vs `no_row`), neither of which is a balance of zero |
+| **Festschreibung** | `POST /api/v1/periods/{id}/seal` closes and seals a period (GoBD / § 146 AO / § 239 HGB), committing to its closing balances folded by **booking date** |
+| **Audit proofs** | Three `O(log n)` questions, verifiable without this service — inclusion, sealed balance, consistency. See [Audit proofs](#audit-proofs) |
 | **Offene-Posten (OP-Verwaltung)** | Authoritative open items via recorded **FIFO Zahlungszuordnung** (doubleentry clearing) — every post matches open credits against the oldest open debits, so `GET .../open-items` shows real residuals (§ 252 HGB). `POST .../clear` re-runs matching; `POST /api/v1/clearings/{id}/reset` releases a mis-assignment |
 | **Summen- und Saldenliste** | `GET /api/v1/trial-balance` — GL trial balance (§ 238 HGB): gross Soll/Haben turnover + Saldo per account, Σ debits = Σ credits (Kontokorrent leaves aggregated into one Debitoren line) |
 | **MCP** | 13 tools at `/mcp` (issuing a reversal is deliberately not one — `list_sepa_collections` is read-only, the reversal is an operator decision) |
 | **Metrics** | `accountingd_sepa_collections{status}` and `_open_ct` expose the collection lifecycle: a submitted count that only grows means bank replies are not arriving at all, which looks identical to "everything settled" from the ledger alone |
 | **Tests** | pure unit + integration tests + DB-backed scenario tests (`tests/db_scenarios.rs`, `just test-accountingd-db` — idempotency, netting, reconcile, **period seal + backdate rejection**, **Merkle inclusion proof against Postgres**) |
 | **Health** | `GET /health/live`, `GET /health/ready` |
+
+
+## Audit proofs
+
+Three questions, each answered in `O(log n)` and each verifiable by a recipient
+who does not have this service:
+
+| Endpoint | Question |
+|---|---|
+| `GET /api/v1/entries/{id}/proof` | Is this booking in the books? |
+| `GET /api/v1/periods/{id}/balance-proof?malo_id=…&lf_mp_id=…` | What did this customer's Kontokorrent close at (§ 147 AO)? |
+| `GET /api/v1/entries/consistency-proof?since=<tree_size>` | Has the journal only been appended to since an archived head? |
+
+The balance answer carries the account-binding proof that says whose handle the
+Kontokorrent was, and the whole `sealed_balance` bundle verbatim so a recipient
+re-verifies without calling back. Where there is nothing to prove it says which
+of the two reasons applies — `not_yet_registered` or `no_row` — neither of which
+is a balance of zero.
+
+Every root is published with the tree size it belongs to: a proof checked against
+a bare root can be replayed against a different tree. `since=0` is refused for
+the same reason — every log extends the empty tree, so such a proof verifies
+against any root of the right size and reports success from a check that examined
+nothing.
+
+**Sealing sets a watermark.** Every date at or before the latest sealed period
+end is closed, whether or not a period covers it, so a gap below a seal is not an
+opening to book through — and it survives a restart.
+`GET /api/v1/periods/seals` lists the chained seals, verifies the chain and
+reports `sealed_through`.
 
 ## Security
 

@@ -1,5 +1,6 @@
 //! Pure settlement formula — [`calculate_settlement`].
 
+use crate::rounding::RoundMoney;
 use crate::EuroAmount;
 use rust_decimal::Decimal;
 use rust_decimal::dec;
@@ -178,16 +179,62 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
     let mut positions: Vec<SettlePosition> = Vec::new();
     let mut total_eligible = Decimal::ZERO;
 
+    // §24 makes the blocks **one** plant, so the metered Einspeisemenge is split
+    // across them by installed capacity — and the parts have to add back up to
+    // it. Computing each block from its own rounded share does not: three equal
+    // blocks of 1500 kWh each take 500.000 and the plant is settled for a
+    // quantity it never fed in. `proportional_split` allocates by largest
+    // remainder, so the parts sum to the total exactly at kWh scale 3.
+    //
+    // Expired blocks are allocated and then dropped rather than excluded from
+    // the split: their capacity still counts towards the plant, and the energy
+    // that falls to them is simply no longer eligible.
+    //
+    // The shares are kept at full `Decimal` precision — `proportional_split`
+    // requires them to sum to 1, and rounding them first is what breaks that.
+    let shares: Vec<Decimal> = std::iter::once(primary_kwp)
+        .chain(input.capacity_blocks.iter().map(|b| b.leistung_kwp))
+        .map(|kwp| kwp / total_kwp)
+        .collect();
+    let split = |quantity: Decimal| billing::proportional_split(quantity, &shares, 3);
+    let (Ok(block_kwh_split), Ok(negative_kwh_split)) = (
+        split(total_kwh),
+        input
+            .kwh_during_negative_epex
+            .map_or_else(|| Ok(vec![Decimal::ZERO; shares.len()]), split),
+    ) else {
+        // `primary_kwp > 0` and the shares are derived from it, so the only
+        // input that reaches here is a negative Einspeisemenge — which is not a
+        // settleable figure, and paying every block zero for it would settle
+        // nothing without saying so.
+        return SettleOutput {
+            settlement_eur: None,
+            eligible_kwh: None,
+            positions: vec![crate::model::SettlePosition {
+                description: format!(
+                    "§24 Anlagenerweiterung: {total_kwh} kWh lassen sich nicht \
+                     verteilungsgenau auf die Leistungsblöcke aufteilen"
+                ),
+                legal_basis: "§24 EEG 2023".to_owned(),
+                kwh: Decimal::ZERO,
+                rate_ct_kwh: Decimal::ZERO,
+                eur: Decimal::ZERO,
+            }],
+            status: SettlementStatus::NoData,
+            pflichtzahlung_eur: None,
+            pflichtzahlung_faelligkeitsdatum: None,
+            verlaengerungsanspruch_qh: 0,
+            dezentrale_einspeisung_anspruch_verloren: false,
+            billing_days_fraction_applied: None,
+            faelligkeitsdatum: None,
+        };
+    };
+
     // ── Primary block ────────────────────────────────────────────────────────
     let primary_expired =
         billing_date.is_some_and(|d| input.foerderendedatum.is_some_and(|fed| d > fed));
     if !primary_expired {
-        let share = if total_kwp.is_zero() {
-            Decimal::ONE
-        } else {
-            (primary_kwp / total_kwp).round_dp(6)
-        };
-        let mut block_kwh = (total_kwh * share).round_dp(3);
+        let mut block_kwh = block_kwh_split[0];
 
         // §51 Negativpreisregel — the size test runs on the aggregated plant
         // (§51 Abs. 2 Satz 2 i.V.m. §24), the deduction on this block's share.
@@ -199,11 +246,9 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
             input.has_imesys,
             input.ist_pilotwindanlage,
         ) {
-            // Proportional share of negative kWh for this block
-            let neg_share = input
-                .kwh_during_negative_epex
-                .map(|n| (n * share).round_dp(3))
-                .unwrap_or(Decimal::ZERO);
+            // This block's share of the negative-price hours, split the same
+            // way the energy is.
+            let neg_share = negative_kwh_split[0];
             block_kwh = apply_negativpreis(block_kwh, neg_share);
         }
 
@@ -228,12 +273,7 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
         if block_expired {
             continue;
         }
-        let share = if total_kwp.is_zero() {
-            Decimal::ZERO
-        } else {
-            (block.leistung_kwp / total_kwp).round_dp(6)
-        };
-        let mut block_kwh = (total_kwh * share).round_dp(3);
+        let mut block_kwh = block_kwh_split[idx + 1];
 
         // §51 per-block: each block carries its own commissioning date, and the
         // §51 regime is keyed on that date — a block added after the
@@ -246,10 +286,7 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
             input.has_imesys,
             input.ist_pilotwindanlage,
         ) {
-            let neg_share = input
-                .kwh_during_negative_epex
-                .map(|n| (n * share).round_dp(3))
-                .unwrap_or(Decimal::ZERO);
+            let neg_share = negative_kwh_split[idx + 1];
             block_kwh = apply_negativpreis(block_kwh, neg_share);
         }
 
@@ -527,12 +564,12 @@ pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
             result.settlement_eur = Some(validated_eur(eur * fraction));
         }
         if let Some(kwh) = result.eligible_kwh {
-            result.eligible_kwh = Some((kwh * fraction).round_dp(3));
+            result.eligible_kwh = Some((kwh * fraction).round_kfm(3));
         }
         // Annotate all positions with the fraction
         for p in &mut result.positions {
             p.eur = validated_eur(p.eur * fraction);
-            p.kwh = (p.kwh * fraction).round_dp(3);
+            p.kwh = (p.kwh * fraction).round_kfm(3);
         }
     }
 
@@ -570,7 +607,7 @@ pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
                 if let Some(k) =
                     resolve_wind_korrekturfaktor(*wind_korrekturfaktor, wind_standort.as_ref())
                 {
-                    (raw_aw * k).round_dp(5)
+                    (raw_aw * k).round_kfm(5)
                 } else {
                     raw_aw
                 }
@@ -633,7 +670,7 @@ pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
             }
             for p in &mut result.positions {
                 p.eur = validated_eur(p.eur * ratio);
-                p.kwh = (p.kwh * ratio).round_dp(3);
+                p.kwh = (p.kwh * ratio).round_kfm(3);
             }
 
             // Add excess position per scheme
@@ -762,7 +799,7 @@ fn calculate_settlement_inner(input: &SettleInput) -> SettleOutput {
             // "wobei das Ergebnis auf zwei Stellen nach dem Komma gerundet wird"
             // Compute normal settlement without sanction, then apply -20% with 2dp rounding.
             let base = settle_normal_body(input);
-            let reduced_eur = base.settlement_eur.map(|e| (e * dec!(0.80)).round_dp(2));
+            let reduced_eur = base.settlement_eur.map(|e| (e * dec!(0.80)).round_kfm(2));
             return SettleOutput {
                 settlement_eur: reduced_eur,
                 eligible_kwh: base.eligible_kwh,
@@ -1010,7 +1047,7 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             // statute allows, on the one scheme that exists because the
             // operator's Direktvermarkter dropped out.
             let rate_ct = if ist_ausfallverguetung {
-                (rate_ct * dec!(0.8)).round_dp(2)
+                (rate_ct * dec!(0.8)).round_kfm(2)
             } else {
                 rate_ct
             };
@@ -1205,7 +1242,7 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             let aw_ct = if let Some(k) =
                 resolve_wind_korrekturfaktor(*wind_korrekturfaktor, wind_standort.as_ref())
             {
-                (raw_aw_ct * k).round_dp(5)
+                (raw_aw_ct * k).round_kfm(5)
             } else {
                 raw_aw_ct
             };

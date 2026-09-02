@@ -437,16 +437,22 @@ pub enum SupplierChangeCommand {
         /// retroactive Lieferbeginn for Ein-/Auszug but not for a regular
         /// Wechsel. Propagated into the `ProcessInitiated` outbox payload.
         transaktionsgrund: Option<String>,
-        /// SG4 `STS+7` DE 9013 **element 3** — the Transaktionsgrundergänzung
-        /// (`ZW4` verbrauchende, `ZW3` erzeugende, `ZAP` ruhende Marktlokation).
+        /// SG4 `STS+7` DE 9013 **element 3** — the Transaktionsgrundergänzung.
         ///
         /// It is a *different composite* from the Anmeldegrund in element 2, not
-        /// a second `STS+7` segment: `STS+7++E03:ZW3` carries both. Scanning the
-        /// parsed `Sts` list for a `reason_code == "ZW3"` therefore never
-        /// matched, which is why this is the raw Ergänzung and not a boolean.
+        /// a second `STS+7` segment: `STS+7++E03:ZW3` carries both, so this is
+        /// the raw Ergänzung rather than anything derived from element 2.
         ///
-        /// `processd` maps it onto `mako_pruefung::Marktlokationsart`, which
-        /// decides which of `E_0622`'s two disjoint code spaces answers.
+        /// The element holds **two disjoint code spaces** and the
+        /// Prüfidentifikator decides which one applies (UTILMD AHB Strom 2.2):
+        ///
+        /// - the *object* — `ZW4` verbrauchende, `ZW3` erzeugende, `ZW5`
+        ///   Tranche, `ZAP` ruhende Marktlokation — which `processd` maps onto
+        ///   `mako_pruefung::Marktlokationsart`, deciding which of `E_0622`'s
+        ///   two code spaces answers;
+        /// - the *Geschäftsvorfall* — `ZW0`/`ZW1`/`ZW2` on 55077/55078, which
+        ///   `E_0622` Prüfschritte 300/310 branch on and which makes the `SG8`
+        ///   Tranchengröße mandatory on Geschäftsvorfall 3.
         transaktionsgrund_ergaenzung: Option<String>,
         /// SG10 `CCI+Z22` DE 7037 — the Veräußerungsform of an erzeugende
         /// Marktlokation (`Z90` Einspeise-/Ausfallvergütung, `Z91` Marktprämie,
@@ -456,6 +462,15 @@ pub enum SupplierChangeCommand {
         /// Vorlauffrist from; the other (the *bestehende* Veräußerungsform) is
         /// the NB's own register.
         veraeusserungsform: Option<String>,
+        /// `SG8` **Tranchengröße** as a percentage — Produkt-Code
+        /// `9991000002090` with the Produkteigenschaft „prozentuale Aufteilung".
+        ///
+        /// Muss on a Geschäftsvorfall 3 (`STS+7++xxx+ZW2`), which is the
+        /// Anmeldung that forms a new Tranche, and the share `E_0623`
+        /// Prüfschritte 510–530 measure the freed Tranchen against. Verbatim
+        /// off the wire: the Aufteilungsfaktor and Technische-Ressourcen forms
+        /// of the same product are not percentages and arrive as `None`.
+        tranchengroesse_prozent: Option<String>,
         /// `SG4 IDE+24` DE 7402 — the sender's **Vorgangsnummer** for this
         /// Anmeldung.
         ///
@@ -824,6 +839,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 transaktionsgrund,
                 transaktionsgrund_ergaenzung,
                 veraeusserungsform,
+                tranchengroesse_prozent,
                 vorgangsnummer,
                 kunde_name,
                 kunde_namensformat,
@@ -908,6 +924,11 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                                 // Vorlauffristen.
                                 "transaktionsgrund_ergaenzung": transaktionsgrund_ergaenzung,
                                 "veraeusserungsform":    veraeusserungsform,
+                                // `SG8` Produkt-Code 9991000002090 — the share
+                                // the LFN registers. `E_0623` Prüfschritt 520
+                                // measures the freed Tranchen against it, and
+                                // there is no safe default for it.
+                                "tranchengroesse_prozent": tranchengroesse_prozent,
                                 // `SG4 IDE+24` DE 7402 — what `SG6 RFF+TN` on
                                 // the NB's 55036 Meldepflicht must echo.
                                 "vorgangsnummer":        vorgangsnummer,

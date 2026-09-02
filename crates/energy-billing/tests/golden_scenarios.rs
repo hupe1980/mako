@@ -29,6 +29,7 @@
 //! the expected values in this file. Each test documents the full calculation
 //! path so the expected values can be verified by hand.
 
+use energy_billing::RoundMoney;
 use energy_billing::{
     BillingContext, BillingPeriod, GasMeterInput, GridInput, InvoiceType, MeterInput,
     PositionCategory, Product, Quantities, RegulatoryRates,
@@ -207,18 +208,18 @@ fn golden_strom_slp_eintarif_jan_2026() {
 
     // Arbeitspreis: 320 × 0.2850 = 91.20
     let arbeit = invoice.total_by_tag("arbeitspreis");
-    assert_eq!(arbeit.round_dp(2), dec!(91.20), "Arbeitspreis golden");
+    assert_eq!(arbeit.round_kfm(2), dec!(91.20), "Arbeitspreis golden");
 
     // Grundpreis: 31 × 0.08 = 2.48
     let grund = invoice.total_by_tag("grundpreis");
-    assert_eq!(grund.round_dp(2), dec!(2.48), "Grundpreis golden");
+    assert_eq!(grund.round_kfm(2), dec!(2.48), "Grundpreis golden");
 
     // Stromsteuer: 320 × 0.0205 = 6.56
     let stromst = invoice.total_by_tag("stromsteuer");
-    assert_eq!(stromst.round_dp(2), dec!(6.56), "Stromsteuer golden");
+    assert_eq!(stromst.round_kfm(2), dec!(6.56), "Stromsteuer golden");
 
     // Netto: 91.20 + 2.48 + 6.56 = 100.24
-    assert_eq!(invoice.netto_eur.round_dp(2), dec!(100.24), "Netto golden");
+    assert_eq!(invoice.netto_eur.round_kfm(2), dec!(100.24), "Netto golden");
 
     // MwSt 19%: 100.24 × 0.19 = 19.0456 → rounded in MwSt position
     assert!(
@@ -289,14 +290,14 @@ fn golden_strom_reverse_charge_13b_charges_no_vat() {
 
     // Net base is unchanged from the standard-rated golden (91.20 + 2.48 + 6.56).
     assert_eq!(
-        invoice.netto_eur.round_dp(2),
+        invoice.netto_eur.round_kfm(2),
         dec!(100.24),
         "Netto unchanged"
     );
     // But the supplier charges no VAT under §13b — the recipient owes it.
     assert_eq!(invoice.mwst_eur, dec!(0), "§13b: supplier charges no VAT");
     assert_eq!(
-        invoice.brutto_eur.round_dp(2),
+        invoice.brutto_eur.round_kfm(2),
         dec!(100.24),
         "§13b: brutto == netto (no VAT added)"
     );
@@ -385,21 +386,21 @@ fn golden_gas_with_levies_jan_2026() {
         .map(|p| p.net_eur)
         .sum();
     assert_eq!(
-        gas_arbeit.round_dp(2),
+        gas_arbeit.round_kfm(2),
         dec!(37.50),
         "Gas Arbeitspreis golden"
     );
 
     // Grundpreis gas: 31 × 0.05 = 1.55
     assert_eq!(
-        invoice.total_by_tag("grundpreis").round_dp(2),
+        invoice.total_by_tag("grundpreis").round_kfm(2),
         dec!(1.55),
         "Gas Grundpreis golden"
     );
 
     // Energiesteuer: 500 × 0.0055 = 2.75
     assert_eq!(
-        invoice.total_by_tag("energiesteuer_gas").round_dp(2),
+        invoice.total_by_tag("energiesteuer_gas").round_kfm(2),
         dec!(2.75),
         "Energiesteuer golden"
     );
@@ -493,14 +494,14 @@ fn golden_eeg_gutschrift_kleinunternehmer_jan_2026() {
 
     // Vergütung: 280 × 0.0820 = 22.96 EUR
     let verguetung = invoice.total_by_tag("eeg_verguetung");
-    assert_eq!(verguetung.round_dp(2), dec!(22.96), "EEG Vergütung golden");
+    assert_eq!(verguetung.round_kfm(2), dec!(22.96), "EEG Vergütung golden");
 
     // §19 UStG Kleinunternehmer → 0% on the feed-in Gutschrift
     assert_eq!(invoice.mwst_eur, dec!(0), "EEG ≤30 kWp: MwSt must be 0");
 
     // Brutto equals netto for 0% MwSt
     assert_eq!(
-        invoice.brutto_eur.round_dp(2),
+        invoice.brutto_eur.round_kfm(2),
         dec!(22.96),
         "EEG brutto golden"
     );
@@ -699,7 +700,7 @@ fn golden_gas_kwk_is_billed_the_full_energiesteuer_with_a_53a_note() {
     // The levy is billed in full: 50 000 × 0.55 ct = 275.00 EUR
     let energiesteuer = invoice.total_by_tag("energiesteuer_gas");
     assert_eq!(
-        energiesteuer.round_dp(2),
+        energiesteuer.round_kfm(2),
         dec!(275.00),
         "a § 53a Entlastung does not reduce what the supplier invoices"
     );
@@ -1124,7 +1125,7 @@ fn an_industrial_customer_is_billed_the_full_stromsteuer_and_told_about_9b() {
 
     // 50 000 kWh × 2,05 ct = 1 025,00 EUR, invoiced.
     assert_eq!(
-        invoice.total_by_tag("stromsteuer").round_dp(2),
+        invoice.total_by_tag("stromsteuer").round_kfm(2),
         dec!(1025.00)
     );
     assert!(
@@ -1363,25 +1364,25 @@ fn golden_sect41a_dynamic_day_reconciles_to_the_cent() {
     invoice.assert_valid();
 
     // The energy leg, to the 10⁻⁵ EUR the engine works in.
-    assert_eq!(invoice.total_by_tag("§41a").round_dp(5), dec!(0.60500));
+    assert_eq!(invoice.total_by_tag("§41a").round_kfm(5), dec!(0.60500));
     // …and each pass-through on the same 2,5 kWh.
     assert_eq!(
-        invoice.total_by_tag("nne_arbeitspreis").round_dp(5),
+        invoice.total_by_tag("nne_arbeitspreis").round_kfm(5),
         dec!(0.18750)
     );
     assert_eq!(
-        invoice.total_by_tag("konzessionsabgabe").round_dp(5),
+        invoice.total_by_tag("konzessionsabgabe").round_kfm(5),
         dec!(0.03300)
     );
     assert_eq!(
-        invoice.total_by_tag("stromsteuer").round_dp(5),
+        invoice.total_by_tag("stromsteuer").round_kfm(5),
         dec!(0.05125)
     );
-    assert_eq!(invoice.total_by_tag("grundpreis").round_dp(2), dec!(9.30));
+    assert_eq!(invoice.total_by_tag("grundpreis").round_kfm(2), dec!(9.30));
 
-    assert_eq!(invoice.netto_eur.round_dp(5), dec!(10.17675));
-    assert_eq!(invoice.mwst_eur.round_dp(2), dec!(1.93));
-    assert_eq!(invoice.brutto_eur.round_dp(5), dec!(12.10675));
+    assert_eq!(invoice.netto_eur.round_kfm(5), dec!(10.17675));
+    assert_eq!(invoice.mwst_eur.round_kfm(2), dec!(1.93));
+    assert_eq!(invoice.brutto_eur.round_kfm(5), dec!(12.10675));
 }
 
 /// The Arbeitspreis line states a **weighted-average** ct/kWh, and it has to be
@@ -1443,10 +1444,10 @@ fn golden_sect41a_average_price_matches_the_amount() {
         .find(|p| p.has_tag("§41a"))
         .expect("Arbeitspreis position");
     // (3 × 12 + 1 × 32) ct = 68 ct over 4 kWh = 17 ct/kWh.
-    assert_eq!(ap.net_eur.round_dp(5), dec!(0.68000));
+    assert_eq!(ap.net_eur.round_kfm(5), dec!(0.68000));
     assert_eq!(ap.quantity, dec!(4));
     assert_eq!(
-        (ap.net_eur / ap.quantity * dec!(100)).round_dp(4),
+        (ap.net_eur / ap.quantity * dec!(100)).round_kfm(4),
         dec!(17.0000)
     );
     assert!(
@@ -1525,7 +1526,7 @@ fn golden_sect41a_prices_every_mtu_of_a_dst_day() {
         // Every quarter-hour reached the bill: mtus kWh × 10 ct.
         let expected = rust_decimal::Decimal::from(mtus) / dec!(10);
         assert_eq!(
-            invoice.total_by_tag("§41a").round_dp(5),
+            invoice.total_by_tag("§41a").round_kfm(5),
             expected,
             "{label}"
         );
@@ -1582,7 +1583,7 @@ fn golden_sect41a_only_an_unpriced_kwh_blocks_the_run() {
 
     // Nothing consumed in the unpriced quarter-hour: bill the rest.
     let ok = run(dec!(0)).expect("an unpriced empty interval is harmless");
-    assert_eq!(ok.total_by_tag("§41a").round_dp(5), dec!(0.50000));
+    assert_eq!(ok.total_by_tag("§41a").round_kfm(5), dec!(0.50000));
 
     // One watt-hour in it, and the invoice would silently under-bill.
     let err = run(dec!(0.001)).expect_err("consumption without a price cannot be billed");
@@ -1648,12 +1649,12 @@ fn golden_mieterstrom_invoice_reconciles_and_states_its_ceiling() {
     invoice.assert_valid();
 
     assert_eq!(
-        invoice.total_by_tag("arbeitspreis").round_dp(2),
+        invoice.total_by_tag("arbeitspreis").round_kfm(2),
         dec!(60.00)
     );
-    assert_eq!(invoice.netto_eur.round_dp(2), dec!(60.00));
-    assert_eq!(invoice.mwst_eur.round_dp(2), dec!(11.40));
-    assert_eq!(invoice.brutto_eur.round_dp(2), dec!(71.40));
+    assert_eq!(invoice.netto_eur.round_kfm(2), dec!(60.00));
+    assert_eq!(invoice.mwst_eur.round_kfm(2), dec!(11.40));
+    assert_eq!(invoice.brutto_eur.round_kfm(2), dec!(71.40));
 
     // No Stromsteuer — and the ground is on the page, not merely absent.
     assert_eq!(invoice.total_by_tag("stromsteuer"), dec!(0));
@@ -1757,7 +1758,7 @@ fn golden_mieterstrom_without_a_reference_tariff_bills_unchecked() {
             },
         )
         .expect("no reference tariff, no comparison");
-    assert_eq!(invoice.netto_eur.round_dp(2), dec!(35.00));
+    assert_eq!(invoice.netto_eur.round_kfm(2), dec!(35.00));
     assert!(
         !invoice
             .positions
@@ -1799,10 +1800,10 @@ fn golden_mieterstrom_outside_the_exemption_is_taxed() {
         .unwrap();
     // 250 kWh × 2,05 ct = 5,125 EUR of Stromsteuer, on top of the 60,00 supply.
     assert_eq!(
-        invoice.total_by_tag("stromsteuer").round_dp(5),
+        invoice.total_by_tag("stromsteuer").round_kfm(5),
         dec!(5.12500)
     );
-    assert_eq!(invoice.netto_eur.round_dp(5), dec!(65.12500));
+    assert_eq!(invoice.netto_eur.round_kfm(5), dec!(65.12500));
     assert_eq!(invoice.positions_by_tag("stromsteuer_befreiung").count(), 0);
 }
 
@@ -1853,13 +1854,13 @@ fn golden_ggv_splits_pv_and_grid_and_taxes_only_the_grid() {
         .unwrap();
     invoice.assert_valid();
 
-    assert_eq!(invoice.total_by_tag("ggv_pv").round_dp(2), dec!(63.00));
-    assert_eq!(invoice.total_by_tag("ggv_grid").round_dp(2), dec!(34.05));
-    assert_eq!(invoice.netto_eur.round_dp(2), dec!(97.05));
+    assert_eq!(invoice.total_by_tag("ggv_pv").round_kfm(2), dec!(63.00));
+    assert_eq!(invoice.total_by_tag("ggv_grid").round_kfm(2), dec!(34.05));
+    assert_eq!(invoice.netto_eur.round_kfm(2), dec!(97.05));
 
     // The PV portion is exempt and says so; the grid portion is taxed.
     assert_eq!(
-        invoice.total_by_tag("stromsteuer").round_dp(5),
+        invoice.total_by_tag("stromsteuer").round_kfm(5),
         dec!(2.05000)
     );
     assert_eq!(invoice.positions_by_tag("stromsteuer_befreiung").count(), 1);

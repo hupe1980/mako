@@ -32,6 +32,7 @@ Commands:
   check-bo4e-examples  Refuse a documented BO4E example using a field BO4E does not define
   check-malo-ids       Refuse a MaLo-ID literal whose BDEW check digit is wrong
   check-business-dates   Refuse a business date read in UTC rather than in Europe/Berlin
+  check-rounding         Refuse banker's rounding — money rounds kaufmännisch (DIN 1333)
   check-pid-coverage     Compare the shipped AHB profiles against the published
                         Prüfidentifikator inventory (no source documents needed)
   import-pid-overview    Extract that inventory from the BDEW Anwendungsübersicht .xlsx
@@ -139,6 +140,7 @@ mod check_bo4e_attributes;
 mod check_bo4e_discriminants;
 mod check_bo4e_examples;
 mod check_business_dates;
+mod check_rounding;
 mod check_dep_versions;
 mod check_malo_ids;
 mod check_prompt_tools;
@@ -178,6 +180,7 @@ fn main() {
         Some("check-malo-ids") => check_malo_ids(),
         Some("sync-regulatories") => sync_regulatories(),
         Some("check-business-dates") => check_business_dates(),
+        Some("check-rounding") => check_rounding(),
         Some("check-pid-coverage") => check_pid_coverage(),
         Some("import-pid-overview") => import_pid_overview(),
         Some("check-dep-versions") => check_dep_versions(),
@@ -289,6 +292,13 @@ fn check_malo_ids() {
 fn check_business_dates() {
     let (workspace_root, _) = workspace_info();
     if !check_business_dates::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_rounding() {
+    let (workspace_root, _) = workspace_info();
+    if !check_rounding::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }

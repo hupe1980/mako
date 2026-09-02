@@ -4,12 +4,11 @@
 //! its last column for each Prüfidentifikator it considers implemented. An
 //! operator reads that as "an inbound message with this PID is handled".
 //!
-//! One column was doing two jobs. It did not distinguish a PID mako *receives*
-//! from one it only *sends*, so an outbound-only response PID and a genuinely
-//! unimplemented one looked identical — and the table claimed 426 PIDs while the
-//! router registered 418. A message carrying one of the difference is
-//! dead-lettered as `UnknownPid`, which is audited and alertable, but the
-//! documentation says otherwise.
+//! The column cannot distinguish a PID mako *receives* from one it only
+//! *sends*, so an outbound-only response PID and a genuinely unimplemented one
+//! read the same. A message carrying an unrouted PID is dead-lettered as
+//! `UnknownPid` — audited and alertable — while the documentation says it is
+//! handled.
 //!
 //! This test pins the two sets together. Every PID the reference credits to a
 //! workflow must either be routed, or appear in [`NOT_ROUTED_BY_DESIGN`] with a
@@ -188,12 +187,11 @@ fn no_exemption_is_stale() {
 
 /// The workflow the reference names must be the workflow that routes the PID.
 ///
-/// The check above asks only whether a PID is routed *at all*, so a row could
-/// name any workflow and still pass — and fifteen did, crediting
-/// `gpke-supplier-change` with the Kündigung that `gpke-kuendigung` handles and
-/// the GeLi Gas answers that `geli-gas-lf-anmeldung` receives. An operator
-/// reads the column to know which process to look at when a message arrives, so
-/// a wrong name sends them to the wrong event stream.
+/// The check above asks only whether a PID is routed *at all*, so a row naming
+/// any workflow would pass it. An operator reads the column to know which
+/// process to look at when a message arrives, so a wrong name sends them to the
+/// wrong event stream — `gpke-supplier-change` for a Kündigung that
+/// `gpke-kuendigung` handles, say.
 ///
 /// A row may name several workflows: a few PIDs are deliberately claimed by
 /// more than one family (the shared REMADV/COMDIS replies), and the engine

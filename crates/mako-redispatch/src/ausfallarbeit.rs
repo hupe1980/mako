@@ -240,7 +240,10 @@ pub fn wind_pauschal(
 /// multiples of 0,5 m/s per DIN EN 61400-12-1).
 #[must_use]
 pub fn wind_bin_index(windgeschwindigkeit_ms: Decimal) -> i64 {
-    let idx = (windgeschwindigkeit_ms / WIND_BIN_BREITE_MS).round();
+    // A speed exactly on a bin boundary goes to the outer bin — `Decimal::round`
+    // would send it to the even one, which is the workspace's banker's-rounding
+    // trap in a place that is not money.
+    let idx = (windgeschwindigkeit_ms / WIND_BIN_BREITE_MS).round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero);
     idx.try_into().unwrap_or(i64::MAX)
 }
 

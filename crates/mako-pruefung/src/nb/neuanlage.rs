@@ -565,7 +565,7 @@ mod tests {
             // Untranchiert: the Anmeldung is for the whole Marktlokation.
             gewuenschter_prozentsatz: None,
             tranchen_prozent: std::collections::BTreeMap::new(),
-            direktvermarktungspflichtig: false,
+            direktvermarktungspflichtig: None,
         });
         let r = evaluate_neuanlage(
             &a,
@@ -602,7 +602,7 @@ mod tests {
             // Untranchiert: the Anmeldung is for the whole Marktlokation.
             gewuenschter_prozentsatz: None,
             tranchen_prozent: std::collections::BTreeMap::new(),
-            direktvermarktungspflichtig: false,
+            direktvermarktungspflichtig: None,
         });
         let r = evaluate_neuanlage(
             &late_erz,
@@ -628,7 +628,7 @@ mod tests {
             // Untranchiert: the Anmeldung is for the whole Marktlokation.
             gewuenschter_prozentsatz: None,
             tranchen_prozent: std::collections::BTreeMap::new(),
-            direktvermarktungspflichtig: false,
+            direktvermarktungspflichtig: None,
         });
         let r = evaluate_neuanlage(
             &a,
@@ -730,7 +730,7 @@ mod tests {
             // Untranchiert: the Anmeldung is for the whole Marktlokation.
             gewuenschter_prozentsatz: None,
             tranchen_prozent: std::collections::BTreeMap::new(),
-            direktvermarktungspflichtig: false,
+            direktvermarktungspflichtig: None,
         });
         let letzter = mako_fristen::add_werktage(
             a.uebertragungstag,
@@ -833,7 +833,7 @@ mod tests {
             // Untranchiert: the Anmeldung is for the whole Marktlokation.
             gewuenschter_prozentsatz: None,
             tranchen_prozent: std::collections::BTreeMap::new(),
-            direktvermarktungspflichtig: false,
+            direktvermarktungspflichtig: None,
         });
         let r = evaluate_neuanlage(&a, &eindeutig(), Some(&b), d(2026, Month::March, 4), &cfg());
         assert_eq!(r.antwortcode(), Some("A19"), "{r:?}");

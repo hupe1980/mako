@@ -93,6 +93,10 @@ mako-events = { workspace = true }
 mako-markt    = { workspace = true, features = ["makod-client", "marktd-client"] }
 # The GPKE / GeLi Gas answer-Frist tables. The operator queue must expire on the
 # same instant makod registers on the process, so both read one table.
+# The UTILMD wire-code tables. `mako-gpke` already pulls it in, and the NB
+# module reads `SG4 STS+7` DE 9013 directly, so it is named rather than
+# re-spelled as string literals beside the ones edi-energy defines.
+edi-energy    = { workspace = true }
 mako-gpke     = { path = "../../crates/mako-gpke" }
 mako-geli-gas = { path = "../../crates/mako-geli-gas" }
 mako-wim      = { workspace = true }

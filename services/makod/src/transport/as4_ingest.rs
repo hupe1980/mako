@@ -64,9 +64,8 @@ use crate::edifact_api::{EdifactApiState, MessageStatus};
 /// Adapts [`SlateDbInboxStore`] to the async [`asx_rs::storage::DedupStorage`]
 /// interface required by the AS4 receive pipeline.
 ///
-/// In asx-rs 0.2, `DedupStorage::first_seen` returns a `BoxFuture`, so
-/// `InboxStore::accept` can be called directly without `block_in_place` /
-/// `block_on` boilerplate.
+/// `DedupStorage::first_seen` returns a `BoxFuture`, so `InboxStore::accept` is
+/// called directly, without `block_in_place` / `block_on` boilerplate.
 ///
 /// # Cluster safety
 ///

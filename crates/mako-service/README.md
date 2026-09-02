@@ -13,7 +13,7 @@ code focuses on domain logic instead of plumbing.
              │                                                              │
              │  config   shutdown  oidc       mcp_auth   telemetry           │
              │  health   http      cedar      metrics    outbox              │
-             │  webhook  builder   rate_limit cloudevent mako-plugin         │
+             │  webhook  builder   rate_limit cloudevent                     │
              └──────────────────────────────────────────────────────────────┘
                   ↑            ↑             ↑           ↑
                makod        marktd        invoicd     processd  … (all 16)

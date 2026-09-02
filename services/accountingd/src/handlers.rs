@@ -535,7 +535,7 @@ pub async fn ingest_webhook(
                     .and_then(|s| Decimal::from_str(s).ok())
                     .map(|d| {
                         (d * Decimal::from(100))
-                            .round()
+                            .round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
                             .to_string()
                             .parse::<i64>()
                             .unwrap_or(0)
@@ -671,7 +671,7 @@ pub async fn ingest_webhook(
                     // Positive settlement_eur = NB received payment → ZAHLUNG credit for customer.
                     Decimal::from_str(s).ok().map(|d| {
                         -(d * Decimal::from(100))
-                            .round()
+                            .round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
                             .to_string()
                             .parse::<i64>()
                             .unwrap_or(0)
@@ -755,7 +755,7 @@ pub async fn ingest_webhook(
                     use std::str::FromStr;
                     Decimal::from_str(s).ok().map(|d| {
                         -(d * Decimal::from(100))
-                            .round()
+                            .round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
                             .to_string()
                             .parse::<i64>()
                             .unwrap_or(0)
@@ -894,7 +894,7 @@ pub async fn ingest_webhook(
                     use std::str::FromStr;
                     Decimal::from_str(s).ok().map(|d| {
                         -(d * Decimal::from(100))
-                            .round()
+                            .round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
                             .to_string()
                             .parse::<i64>()
                             .unwrap_or(0)
@@ -1980,7 +1980,7 @@ pub async fn get_offene_posten(
             use std::str::FromStr;
             Decimal::from_str(s).ok().map(|d| {
                 use rust_decimal::prelude::ToPrimitive as _;
-                (d * Decimal::from(100)).round().to_i64().unwrap_or(1)
+                (d * Decimal::from(100)).round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero).to_i64().unwrap_or(1)
             })
         })
         .unwrap_or(1);
@@ -2861,7 +2861,7 @@ pub async fn put_vorauszahlung(
             .map(|eur: Decimal| {
                 use rust_decimal::prelude::ToPrimitive as _;
                 let ct = eur * Decimal::from(100);
-                ct.round().to_i64().unwrap_or(0)
+                ct.round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero).to_i64().unwrap_or(0)
             });
 
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);

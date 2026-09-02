@@ -17,6 +17,7 @@
 //!
 //! Every test provisions its own schema, so they leave nothing behind.
 
+use eeg_billing::RoundMoney;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use sqlx::PgPool;
@@ -487,7 +488,7 @@ async fn the_operators_ust_status_drives_the_gutschrift_vat_for_all_its_plants()
     for tr_id in ["P-A", "P-B"] {
         let steuer = settle_and_read_steuer(&app, tr_id, 7).await;
         assert_eq!(
-            steuer.round_dp(2),
+            steuer.round_kfm(2),
             rust_decimal::Decimal::new(770, 2),
             "{tr_id}: Regelbesteuerung bills 19 %"
         );

@@ -494,13 +494,11 @@ pub fn spawn_mmma_worker(
     tokio::spawn(async move {
         // Wake hourly and import whatever the current month is still missing.
         //
-        // The previous schedule fired only *on the 1st* at or after
-        // `check_hour_utc`, so a deployment that was down for that one day
-        // never imported that month at all — and its idempotency check looked
-        // only at Gas, so a month where Gas succeeded and Strom failed was
-        // treated as complete and Strom stayed missing until someone noticed a
-        // billing run refusing. Both are now per-commodity "is it there yet"
-        // checks that keep retrying for as long as the month is incomplete.
+        // Hourly rather than once on the 1st: a deployment down for that one day
+        // would otherwise never import the month at all. The "is it there yet"
+        // check is **per commodity**, because a month where Gas succeeded and
+        // Strom failed is not complete — and a single check would report it as
+        // such, leaving Strom missing until a billing run refuses.
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3_600));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {

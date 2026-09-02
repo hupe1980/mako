@@ -11,27 +11,27 @@ use serde::{Deserialize, Serialize};
 ///
 /// German commercial practice — and the EN 16931 / XRechnung validation
 /// ecosystem — expect half-up rounding, while `Decimal::round_dp` defaults
-/// to banker's rounding (MidpointNearestEven). Every monetary and quantity
-/// rounding in this crate goes through this one helper so the mode cannot
-/// drift between call sites. Away-from-zero (not literal half-up) keeps
-/// credit notes and Stornorechnungen symmetric to their originals:
-/// round(-0.005) = -0.01 mirrors round(0.005) = 0.01.
+/// to banker's rounding (MidpointNearestEven). The two agree everywhere except
+/// exact midpoints, which is where a price quoted in ct with three decimals
+/// lands, so the wrong mode misstates a cent without failing any test written
+/// against ordinary numbers. `cargo xtask check-rounding` refuses a bare
+/// `round_dp` workspace-wide for that reason.
 ///
-/// The mode itself is **not defined here**: it is
-/// [`billing::RoundingStrategy::MidpointAwayFromZero`] — the same strategy
-/// the `billing` arithmetic core applies inside every `Amount` conversion,
-/// multiplication and division. One authority, two call styles: typed
-/// fixed-point via `billing::Amount` where the precision is statutory, and
-/// this helper where a runtime `dp` is needed on a raw `Decimal`.
+/// Away-from-zero (not literal half-up) keeps credit notes and Stornorechnungen
+/// symmetric to their originals: round(-0.005) = -0.01 mirrors
+/// round(0.005) = 0.01.
+///
+/// The mode itself is [`billing::RoundingStrategy::MidpointAwayFromZero`] — the
+/// same strategy the `billing` arithmetic core applies inside every `Amount`
+/// conversion, multiplication and division. One authority, two call styles:
+/// typed fixed-point via `billing::Amount` where the precision is statutory,
+/// and this helper where a runtime `dp` is needed on a raw `Decimal`.
 #[must_use]
 pub fn round_money(value: Decimal, dp: u32) -> Decimal {
     value.round_dp_with_strategy(dp, billing::RoundingStrategy::MidpointAwayFromZero.into())
 }
 
 /// Method-call form of [`round_money`] — `x.round_kfm(2)`.
-///
-/// Named after *kaufmännisches Runden* so a grep for `round_dp(` finding
-/// nothing is the invariant: no call site silently falls back to banker's.
 pub trait RoundMoney {
     /// Round to `dp` decimal places, half away from zero (DIN 1333).
     #[must_use]

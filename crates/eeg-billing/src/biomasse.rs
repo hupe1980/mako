@@ -19,6 +19,7 @@
 //! There is no § 42a EEG, and the EEG 2023 imposes no Holzbiomasse restriction —
 //! the sustainability rules for solid biomass sit outside it.
 
+use crate::rounding::RoundMoney;
 use rust_decimal::Decimal;
 
 // ── BiomassBrennstoff ─────────────────────────────────────────────────────────
@@ -250,7 +251,7 @@ pub fn sect44b_jahreskontingent_kwh(
     use rust_decimal::dec;
     let stunden =
         bemessungsleistung_stunden(kalenderjahr, erstmalige_erzeugung).unwrap_or(dec!(8760));
-    (leistung_kw * dec!(0.45) * stunden).round_dp(3)
+    (leistung_kw * dec!(0.45) * stunden).round_kfm(3)
 }
 
 #[cfg(test)]

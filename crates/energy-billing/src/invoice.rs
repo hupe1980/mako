@@ -315,7 +315,7 @@ impl Invoice {
     /// ```rust,ignore
     /// // 500 kWh total, brutto EUR 198.50 → 39.70 ct/kWh
     /// let ct = invoice.kilowattstundenpreis_brutto_ct(dec!(500)).unwrap();
-    /// assert_eq!(ct.round_dp(2), dec!(39.70));
+    /// assert_eq!(ct.round_kfm(2), dec!(39.70));
     /// ```
     #[must_use]
     pub fn kilowattstundenpreis_brutto_ct(&self, total_kwh: Decimal) -> Option<Decimal> {

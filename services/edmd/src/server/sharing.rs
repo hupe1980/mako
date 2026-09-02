@@ -190,8 +190,8 @@ pub(crate) async fn get_sharing_allocation(
         // allocated + net_grid_draw` holds exactly in every interval, and the
         // §42b Abs. 5 `Pos()` cap is reported rather than inferred. Recovering
         // `allocated` by subtracting the net draw from a re-projected
-        // consumption series made this endpoint restate arithmetic the engine
-        // had already done, on a series it had to read twice.
+        // consumption series would restate the engine's own arithmetic, on a
+        // series this endpoint would have to read twice.
         let allocation = match metering::compute_ggv_allocation(rule, &series) {
             Ok(intervals) => intervals,
             Err(e) => {
@@ -563,9 +563,8 @@ pub(crate) async fn get_sharing_readiness(
             messtyp: messtyp.map(|m| format!("{m:?}").to_uppercase()),
             coverage_pct,
             reading_count,
-            // `assess_delivery` returns typed `Finding`s since metering 0.17,
-            // where it returned free text. The API keeps emitting strings, so
-            // they are rendered here — one place, one vocabulary, instead of
+            // `assess_delivery` returns typed `Finding`s; the API emits strings,
+            // so they are rendered here — one place, one vocabulary, instead of
             // prose composed inside the crate.
             reasons: reasons.iter().map(|f| format!("{f:?}")).collect(),
             required_action: required_action.to_owned(),

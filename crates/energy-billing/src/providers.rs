@@ -4069,11 +4069,10 @@ impl BillingProvider for EnergyShareProvider {
         .with_basis("Energiegemeinschaft-Liefervertrag");
         positions.push(pos);
 
-        // The three transparency terms the input carries. Each was documented
-        // as reaching the invoice and reached nothing: the provider read
-        // `allocated_kwh` and dropped the rest. A participant cannot check an
-        // allocation without the total it came out of and the fraction it was
-        // taken at — the two figures whose product is the credited quantity.
+        // The three transparency terms the input carries. A participant cannot
+        // check an allocation without the total it came out of and the fraction
+        // it was taken at — the two figures whose product is the credited
+        // quantity — so all three reach the invoice, not `allocated_kwh` alone.
         let share = quantities.energy_share.as_ref();
         if let Some(id) = share.and_then(|s| s.gemeinschaft_id.as_deref()) {
             positions.push(info_position(

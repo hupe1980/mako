@@ -98,14 +98,40 @@ pub struct UtilmdSequence {
     /// `SEQ` — DE 1245 (`Z79` Produktpaket, `ZH0` Priorisierung, …) and the
     /// Folgenummer.
     pub seq: Seq,
-    /// SG8 `PIA+5` — the Produkt-Codes required in this Produktpaket.
-    pub products: Vec<Pia>,
+    /// SG8 `PIA+5` — the products of this Produktpaket, each with the `SG10`
+    /// Merkmale that follow it.
+    pub products: Vec<UtilmdProduct>,
     /// SG8 `RFF` — references scoped to this group.
     pub references: Vec<Rff>,
     /// SG9/SG10 `QTY` — quantities scoped to this group.
     pub quantities: Vec<crate::messages::segments::Qty>,
     /// SG10 `CCI` with the `CAV` values that follow each one, in wire order.
     pub characteristics: Vec<UtilmdCharacteristic>,
+}
+
+/// One `SG8 PIA+5` product of a Produktpaket.
+///
+/// A Produktpaket carries several products — a Geschäftsvorfall 3 Anmeldung has
+/// the Bilanzkreis *and* the Tranchengröße in the same package — and each is
+/// followed by its own `CCI+Z66` / `CAV+ZH9` / `CAV+ZV4` block. Reading a value
+/// off the group as a whole would answer with whichever product happened to be
+/// emitted first, so the block boundary is recorded here.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct UtilmdProduct {
+    /// The `PIA+5` segment. DE 7140 is the Produkt-Code.
+    pub pia: Pia,
+    /// Where this product's `SG10` block starts in the group's
+    /// `characteristics`; it runs to the next product's start.
+    first_characteristic: usize,
+}
+
+impl UtilmdProduct {
+    /// The Produkt-Code, `PIA` DE 7140.
+    #[must_use]
+    pub fn produkt_code(&self) -> Option<&str> {
+        self.pia.item_number.as_deref()
+    }
 }
 
 /// One `SG10` Merkmal: a `CCI` and every `CAV` that follows it.
@@ -121,12 +147,40 @@ pub struct UtilmdCharacteristic {
 impl UtilmdSequence {
     /// The value of the first `CAV` whose DE 7111 matches, across every `CCI`
     /// in this group.
+    ///
+    /// Group-wide: on a Produktpaket with more than one product this answers
+    /// with whichever came first on the wire. Use [`Self::product_value`] where
+    /// the value belongs to a named Produkt-Code.
     #[must_use]
     pub fn value(&self, code: &str) -> Option<&str> {
         self.characteristics
             .iter()
             .flat_map(|c| c.values.iter())
             .find(|v| v.value_code.as_deref() == Some(code))
+            .and_then(|v| v.value.as_deref())
+    }
+
+    /// The `CAV` value of `cav_code` that belongs to the product `produkt_code`.
+    ///
+    /// Scoped to that product's own `SG10` block — the segments between its
+    /// `PIA` and the next one — so a Produktpaket carrying both the Bilanzkreis
+    /// and the Tranchengröße answers each from its own `CAV+ZV4`.
+    #[must_use]
+    pub fn product_value(&self, produkt_code: &str, cav_code: &str) -> Option<&str> {
+        let idx = self
+            .products
+            .iter()
+            .position(|p| p.produkt_code() == Some(produkt_code))?;
+        let from = self.products[idx].first_characteristic;
+        let to = self
+            .products
+            .get(idx + 1)
+            .map_or(self.characteristics.len(), |p| p.first_characteristic);
+        self.characteristics
+            .get(from..to)?
+            .iter()
+            .flat_map(|c| c.values.iter())
+            .find(|v| v.value_code.as_deref() == Some(cav_code))
             .and_then(|v| v.value.as_deref())
     }
 }
@@ -222,17 +276,14 @@ impl UtilmdTransaction {
     pub fn bilanzkreis(&self) -> Option<&str> {
         use crate::utilmd_codes::produkt;
 
-        // Strom: the Produktpaket whose PIA names the Bilanzkreis product.
+        // Strom: the Bilanzkreis product's own `CAV+ZV4`, not the package's
+        // first — a Geschäftsvorfall 3 Anmeldung carries the Tranchengröße in
+        // the same Produktpaket and its value would otherwise win on wire order.
         let strom = self
             .sequences
             .iter()
-            .filter(|g| {
-                g.seq.action.as_deref() == Some(produkt::SEQ_PRODUKTPAKET)
-                    && g.products
-                        .iter()
-                        .any(|p| p.item_number.as_deref() == Some(produkt::BILANZKREIS))
-            })
-            .find_map(|g| g.value(produkt::CAV_WERT));
+            .filter(|g| g.seq.action.as_deref() == Some(produkt::SEQ_PRODUKTPAKET))
+            .find_map(|g| g.product_value(produkt::BILANZKREIS, produkt::CAV_WERT));
         if strom.is_some() {
             return strom;
         }
@@ -243,6 +294,35 @@ impl UtilmdTransaction {
             .flat_map(|g| g.characteristics.iter())
             .find(|c| c.cci.category.as_deref() == Some(produkt::CCI_BILANZKREIS_GAS))
             .and_then(|c| c.cci.characteristic_id.as_deref())
+    }
+
+    /// The **Tranchengröße** this Vorgang registers, as it stands on the wire.
+    ///
+    /// `SG8 SEQ+Z79` with `PIA+5+9991000002090:Z11`, the Produkteigenschaft in
+    /// `CAV+ZH9` and the value in `CAV+ZV4` (Codeliste der Konfigurationen 1.4
+    /// Kap. 6.1.1). The AHB makes the product **Muss** on a Geschäftsvorfall 3
+    /// („`STS+7++xxx+ZW2`"), which is the Anmeldung that forms a new Tranche.
+    ///
+    /// Three Produkteigenschaften share the product, and they are not
+    /// interchangeable — a percentage and an Aufteilungsfaktor are different
+    /// quantities — so the Eigenschaft travels with the value rather than being
+    /// assumed. See [`Tranchengroesse`](crate::utilmd_codes::Tranchengroesse).
+    #[must_use]
+    pub fn tranchengroesse(&self) -> Option<crate::utilmd_codes::Tranchengroesse> {
+        use crate::utilmd_codes::produkt;
+
+        self.sequences
+            .iter()
+            .filter(|g| g.seq.action.as_deref() == Some(produkt::SEQ_PRODUKTPAKET))
+            .find_map(|g| {
+                let wert = g.product_value(produkt::TRANCHENGROESSE, produkt::CAV_WERT)?;
+                Some(crate::utilmd_codes::Tranchengroesse {
+                    eigenschaft: g
+                        .product_value(produkt::TRANCHENGROESSE, produkt::CAV_EIGENSCHAFT)
+                        .map(ToOwned::to_owned),
+                    wert: wert.to_owned(),
+                })
+            })
     }
 
     /// The first `SG12 NAD` with the given DE 3035 qualifier.
@@ -589,7 +669,14 @@ fn collect_sg4_segment(seg: &edifact_rs::Segment<'_>, ctx: &mut Sg4Acc) {
         "PIA" => {
             if let (Some(group), Some(p)) = (ctx.sequences.last_mut(), try_deserialize::<Pia>(seg))
             {
-                group.products.push(p);
+                // Where this product's `SG10` block begins. A Produktpaket with
+                // two products has two `CAV+ZV4` values, and only the wire order
+                // says which belongs to which.
+                let first_characteristic = group.characteristics.len();
+                group.products.push(UtilmdProduct {
+                    pia: p,
+                    first_characteristic,
+                });
             }
         }
         "QTY" => {

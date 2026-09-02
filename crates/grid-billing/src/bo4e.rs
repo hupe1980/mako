@@ -9,6 +9,7 @@
 //! - settlement-level `mako:legal_references` and (when present)
 //!   `mako:settlement_warnings` ZusatzAttribute
 
+use crate::rounding::RoundMoney;
 use crate::{InvoiceDocument, QuantityUnit, SettlementResult};
 use rubo4e::current::{
     Betrag, Menge, Mengeneinheit, NetznutzungRechnungsart, NetznutzungRechnungstyp, Preis,
@@ -159,8 +160,8 @@ pub fn into_rechnung(document: &InvoiceDocument) -> Rechnung {
                 // how it is coded.
                 .lieferungszeitraum(lz.clone())
                 .positions_menge(Menge::builder().wert(p.quantity).einheit(einheit).build())
-                .einzelpreis(Preis::builder().wert(p.unit_price_eur.round_dp(6)).build())
-                .gesamtpreis(Betrag::builder().wert(p.net_eur.round_dp(5)).build())
+                .einzelpreis(Preis::builder().wert(p.unit_price_eur.round_kfm(6)).build())
+                .gesamtpreis(Betrag::builder().wert(p.net_eur.round_kfm(5)).build())
                 // The calculation trace travels with the position it explains.
                 // grid-billing computes why each amount is what it is — the
                 // inputs, the applied paragraphs, the tariff source — and that
@@ -441,7 +442,7 @@ mod tests {
         assert_eq!(
             steuer,
             (netto * rust_decimal::Decimal::from(19) / rust_decimal::Decimal::from(100))
-                .round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
+                .round_kfm(2)
         );
         assert_eq!(wert(&rechnung.gesamtbrutto), netto + steuer);
         assert_eq!(

@@ -33,6 +33,7 @@
 //! `register-eeg-plant`, `settle-monthly`, `check-foerderung-expiry`,
 //! `ausschreibung-workflow`, `post-eeg-transition`, `anlagenerweiterung`
 
+use rust_decimal::RoundingStrategy;
 use std::sync::Arc;
 
 use axum::{
@@ -995,7 +996,7 @@ impl EinsdMcpHandler {
             "annual_quota_kwh": kontingent.to_string(),
             "ytd_fed_in_kwh": ytd.to_string(),
             "remaining_quota_kwh": verbleibend.to_string(),
-            "exhaustion_pct": ausschoepfung.round_dp(1).to_string(),
+            "exhaustion_pct": ausschoepfung.round_dp_with_strategy(1, RoundingStrategy::MidpointAwayFromZero).to_string(),
             "alert": if ausschoepfung >= Decimal::from(90) {
                 "CRITICAL: the quota is over 90 % used — further kWh are paid at the Marktwert, or nothing at all on a Marktprämie"
             } else if ausschoepfung >= Decimal::from(75) {

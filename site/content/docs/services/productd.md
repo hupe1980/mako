@@ -68,6 +68,11 @@ graph LR
 | `PUT` | `/api/v1/nehs-prices/{date}` | Import a dated nEHS certificate price (EUR/t CO₂) — EEX auction clearing (weekly from 01.07.2026, §10 BEHG corridor 55–65 €/t), Verkaufsphase (68 €) or manual. `source` ∈ `auktion`/`verkaufsphase`/`nachkauf`/`manual` (CHECK-constrained; anything else → 422) |
 | `GET` | `/api/v1/nehs-prices/latest?date=` | Most recent nEHS price at or before `date` — used by `billingd` for the Gas CO₂ component (CO2KostAufG §3) |
 | `POST/GET` | `/api/v1/angebote` | B2B Angebot (quotation) — ANGELEGT→VERSANDT→ANGENOMMEN/ABGELEHNT/ABGELAUFEN |
+| `GET` | `/api/v1/angebote/{id}` | One Angebot |
+| `GET` | `/api/v1/angebote/{id}/comparison` | Prices the scenarios and persists the BO4E `Angebot` to `angebote.bo4e` |
+| `POST` | `/api/v1/angebote/{id}/versenden` | ANGELEGT → VERSANDT |
+| `POST` | `/api/v1/angebote/{id}/annehmen` · `/ablehnen` | VERSANDT → ANGENOMMEN / ABGELEHNT |
+| `POST` | `/api/v1/angebote/expire` | Sweeps VERSANDT Angebote past `gueltig_bis` to ABGELAUFEN |
 | `GET` | `/health` | Liveness |
 | `GET` | `/health/ready` | Readiness |
 

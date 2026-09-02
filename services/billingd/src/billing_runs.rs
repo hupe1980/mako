@@ -204,10 +204,9 @@ pub fn spawn_billing_run_worker(
 /// One daily sweep: bill everything due, deliver monthly infos, log the run.
 async fn sweep(deps: &Arc<BillingDeps>, pool: &PgPool, today: Date) {
     let cfg = &deps.cfg;
-    // One id for this sweep. Every invoice it produces carries it as
-    // `billingRunId`, so an ERP can ask "did all of last night's run arrive?" —
-    // which is what the attribute was documented for and, while it was a fresh
-    // UUID per invoice, could not answer.
+    // One id for this sweep, not one per invoice. Every invoice it produces
+    // carries it as `billingRunId`, which is what lets an ERP ask "did all of
+    // last night's run arrive?".
     let run_id = uuid::Uuid::new_v4().to_string();
     let candidates = match deps.vertragd.get_billing_candidates().await {
         Ok(c) => c,

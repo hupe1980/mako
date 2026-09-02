@@ -222,6 +222,27 @@ pub fn validate_extraction() {
                     covered * 100 / total.max(1),
                 );
             }
+            // A subset or a `differs` is the quiet verdict — the draft marks
+            // *fewer* segments mandatory than the AHB, so promoting it accepts
+            // messages the AHB refuses. Naming them is the whole point: a count
+            // says a PID needs review without saying which one.
+            if !t.subset.is_empty() {
+                t.subset.sort_unstable();
+                println!(
+                    "    subset ({} — the draft under-marks; promoting accepts invalid \
+                     messages): {}",
+                    plural(t.subset.len()),
+                    codes(&t.subset),
+                );
+            }
+            if !t.differs.is_empty() {
+                t.differs.sort_unstable();
+                println!(
+                    "    differs ({} — over- and under-marked at once): {}",
+                    plural(t.differs.len()),
+                    codes(&t.differs),
+                );
+            }
         }
     }
 
@@ -239,4 +260,21 @@ pub fn validate_extraction() {
              reject valid messages; the extraction is not ready to author unreviewed PIDs."
         );
     }
+}
+
+/// „1 PID" / „3 PIDs".
+fn plural(n: usize) -> String {
+    if n == 1 {
+        "1 PID".to_owned()
+    } else {
+        format!("{n} PIDs")
+    }
+}
+
+/// A PID list as a comma-separated string.
+fn codes(pids: &[u32]) -> String {
+    pids.iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }

@@ -80,7 +80,7 @@ graph TB
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [makod](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 69 GPKE/WiM/GeLi Gas/MaBiS/GaBi Gas workflows, AS4/REST/iMS |
+| [makod](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 70 workflows over 467 Prüfidentifikatoren, AS4/REST/iMS |
 | [marktd](@/docs/services/marktd.md) | `:8180` | All | Market Data Hub — MaLo/MeLo/contracts, VersorgungsStatus, typed BO4E API, durable fan-out, MMMA monthly import worker |
 | [processd](@/docs/services/processd.md) | `:8580` | NB + LF + MSB | Process Decision Engine — Anmeldung STP ≥95%, LF answers to the NB-initiated GPKE processes, MSB REQOTE auto-response, §14a Steuerungsauftrag produktcode check; role-gated binaries (§ 7 EnWG) |
 

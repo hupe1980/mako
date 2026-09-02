@@ -63,9 +63,8 @@ pub const PROFILE_VERSION: &str = "2.0.0";
 pub fn bdew_push_policy(decryption_key_pem: Option<Vec<u8>>) -> As4PushPolicy {
     match decryption_key_pem {
         // BDEW AS4-Profil v1.2 §2.2.6.2.2 requires every inbound message to be
-        // encrypted. `regulated_with_decryption_key` (asx-rs 0.11) sets the key and
-        // `require_encrypted_inbound` together, so the invariant can no longer be
-        // split across two calls.
+        // encrypted. `regulated_with_decryption_key` sets the key and
+        // `require_encrypted_inbound` in one call, so the two cannot be set apart.
         Some(key) => As4PushPolicy::regulated_with_decryption_key(key),
         // Sign-only (development / before the BDEW PKI certs arrive).
         None => As4PushPolicy::regulated(),
@@ -74,7 +73,7 @@ pub fn bdew_push_policy(decryption_key_pem: Option<Vec<u8>>) -> As4PushPolicy {
     // `UserMessage` only, and `RequireAuthenticatedScope` (the strict default) is
     // consulted for *fragmented* messages only — a `None` scope is already safe,
     // and switching to `UseSoapSenderId` would only weaken the policy if a fragment
-    // ever arrived (asx-rs 0.11 clarified this).
+    // ever arrived.
 }
 
 /// Creates a [`ProfileStack`] pre-configured for BDEW MaKo AS4 compliance.
@@ -537,8 +536,8 @@ mod tests {
     #[test]
     fn profile_stack_no_as2_mic() {
         let stack = bdew_mako_profile_stack();
-        // Since asx-rs 0.11 the AS2 MIC knob lives in a separate As2ValidationPolicy,
-        // not the AS4 ValidationPolicy; an AS4 profile keeps it disabled.
+        // The AS2 MIC knob lives in `As2ValidationPolicy`, not the AS4
+        // `ValidationPolicy`; an AS4 profile keeps it disabled.
         assert!(
             !stack.base.as2_validation.require_mic,
             "AS2 MIC must not be required in an AS4 profile"

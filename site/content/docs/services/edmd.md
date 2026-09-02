@@ -1191,10 +1191,9 @@ Nothing in edmd enumerates the rules — findings are stored by their own
 ### V12 needs a number edmd does not hold
 
 `ValidationConfig::max_plant_power_kw` is the ceiling an average power is
-*impossible* against, and `QualityConfig::for_sparte` sets none — so V12 was
-documented, surfaced as `spike_intervals`, and could not fire on any path. edmd
-owns interval data and no master data, so the ceiling comes from the caller that
-does. Every ingest body takes an optional `max_plant_power_kw`:
+*impossible* against, and `QualityConfig::for_sparte` sets none — edmd owns
+interval data and no master data. The ceiling therefore comes from the caller
+that does, and every ingest body takes an optional `max_plant_power_kw`:
 
 ```json
 {

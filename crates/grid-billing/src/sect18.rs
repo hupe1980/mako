@@ -32,6 +32,7 @@
 //! warned — the payment would be unlawful, and unlike a ceiling breach there is
 //! no legitimate reading under which it goes out anyway.
 
+use crate::rounding::RoundMoney;
 use rust_decimal::Decimal;
 use rust_decimal::dec;
 use time::Date;
@@ -159,9 +160,9 @@ pub fn settle_dezentrale_einspeisung(
 
     let faktor = abschmelzfaktor(input.period.from());
     let base_eur = input.vermiedene_kosten_ct_per_kwh / dec!(100);
-    let reduced_eur = (base_eur * faktor).round_dp(6);
+    let reduced_eur = (base_eur * faktor).round_kfm(6);
     // Negative: the NB pays out.
-    let net_eur = -(input.einspeisung_kwh * reduced_eur).round_dp(5);
+    let net_eur = -(input.einspeisung_kwh * reduced_eur).round_kfm(5);
 
     let mut positions = Vec::new();
     let mut warnings = Vec::new();
@@ -190,7 +191,7 @@ pub fn settle_dezentrale_einspeisung(
                 (faktor * dec!(100)).normalize()
             ),
             kind: BillingPositionKind::DezentraleEinspeisung,
-            quantity: input.einspeisung_kwh.round_dp(3),
+            quantity: input.einspeisung_kwh.round_kfm(3),
             unit: crate::types::QuantityUnit::Kwh,
             unit_price_eur: reduced_eur,
             net_eur,
@@ -240,7 +241,7 @@ pub fn settle_dezentrale_einspeisung(
             .iter()
             .map(|p| p.net_eur)
             .sum::<Decimal>()
-            .round_dp(2),
+            .round_kfm(2),
         // The Entgelt für dezentrale Einspeisung is consideration for a service
         // the Anlagenbetreiber renders to the network (§18 StromNEV), settled by
         // Gutschrift. It is not a supply of energy, so §13b never reaches it.
@@ -249,7 +250,7 @@ pub fn settle_dezentrale_einspeisung(
                 .iter()
                 .map(|p| p.net_eur)
                 .sum::<Decimal>()
-                .round_dp(2),
+                .round_kfm(2),
             crate::umsatzsteuer::Leistungsart::SonstigeLeistung,
             crate::umsatzsteuer::Wiederverkaeuferstatus::KEINER,
             input.period,

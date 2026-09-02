@@ -274,7 +274,7 @@ examples:
         python3 -c "import json,sys; m=json.load(sys.stdin); [print(p['name'], t['name']) for p in m['packages'] for t in p['targets'] if 'example' in t['kind']]" | sort)
     exit $fail
 
-ci: check test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-wire-timestamps check-business-dates check-pid-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci validate-release-codes validate-ebd-codes lint-makotest test-makotest
+ci: check test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-wire-timestamps check-business-dates check-rounding check-pid-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci validate-release-codes validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -518,6 +518,14 @@ check-business-dates:
 # (`cargo xtask import-pid-overview <Anwendungsübersicht.xlsx>`) so this runs
 # without the source documents — a guard that only runs where they are is a
 # guard that reports green from a skip.
+# Refuse banker's rounding. `Decimal::round_dp` rounds half to even; German
+# commercial practice, EN 16931/XRechnung and every BDEW settlement figure round
+# half away from zero (DIN 1333). The modes differ only on exact midpoints — the
+# values a ct price with three decimals produces — so the wrong one misstates a
+# cent without failing a test written against ordinary numbers.
+check-rounding:
+    cargo xtask check-rounding
+
 check-pid-coverage:
     cargo xtask check-pid-coverage
 

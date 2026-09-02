@@ -146,25 +146,32 @@ It also reports **how far off** each PID is, because that is what decides where
 review starts:
 
 ```text
-utilmd/fv20261001   exact 2/104 (1%)  superset 102  subset 0  differs 0
-    superset: 102 PIDs, 443 excess mandatory segments in total (median +4)
-      review first (≤2 excess, 16 PIDs): 55005 (+1), 55011 (+1), …
-      worst: 55601 (+8), 55600 (+8), …
+utilmd/fv20261001   exact 12/123 (9%)  superset 110  subset 1  differs 0
+    superset: 110 PIDs, 451 excess mandatory segments in total (median +4)
+      review first (≤2 excess, 22 PIDs): 55005 (+1), 55009 (+1), …
+      worst: 55070 (+8), 55069 (+8), …
+    subset (1 PID — the draft under-marks; promoting accepts invalid messages): 55235
 ```
 
-and which **segments** drive it:
+A `subset` is the quieter verdict and the one to read first: the draft marks
+*fewer* segments mandatory than the AHB, so promoting it accepts messages the
+AHB refuses rather than refusing valid ones. Both verdicts name their PIDs, so a
+count is never the end of the report.
+
+The report also says which **segments** drive the excess:
 
 ```text
-      by segment (12 distinct tags): STS 88 (19%), SEQ 84 (18%), CCI 72 (16%),
-                                     CAV 68 (15%), PIA 42 (9%)  -> top 5 = 79%
+      by segment (12 distinct tags): STS 88 (19%), SEQ 81 (17%), CCI 73 (16%),
+                                     CAV 70 (15%), PIA 43 (9%)  -> top 5 = 78%
 ```
 
 That last line is the one to act on. The excess is not one judgement per PID —
 the same few tags recur, because `segment_rules` is flat and a tag that is `Muss`
 in one segment group and optional in another must still be given a single mark.
 The extractor keeps the strongest, which over-marks; keeping the weakest instead
-under-marks (measured: 443 → 305 excess, but 21 PIDs then *lose* segments the AHB
-requires).
+under-marks: it cuts the excess by roughly a third, and 21 PIDs then *lose*
+segments the AHB requires — a `subset` verdict, which is worse than a superset
+because nothing rejects the messages it lets through.
 
 Drafts emit `group_rules`, so the `(group, tag)` scoping need not be re-derived by
 hand — but that relocates marks rather than correcting them, and leaves the totals

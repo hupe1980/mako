@@ -129,8 +129,10 @@ pub const EEG_VERKUERZTER_WECHSEL_WT: u32 = 5;
 /// The UTILMD `SG4 STS+7` DE 9013 Transaktionsgrundergänzung marking an
 /// **erzeugende Marktlokation**, verified against `UTILMD_AHB_Strom_2.2` Kap. 3.
 ///
-/// The caller maps it — together with PID 55077, which *is* the Anwendungsfall
-/// „Anmeldung erzeugende Marktlokation" — onto
+/// One of the element's *object* codes. It does not appear on 55077, where the
+/// same element carries the Geschäftsvorfall (`ZW0`/`ZW1`/`ZW2`) and the
+/// Prüfidentifikator is itself the Anwendungsfall „Anmeldung erzeugende
+/// Marktlokation"; the caller maps either onto
 /// [`Marktlokationsart::Erzeugend`](super::types::Marktlokationsart::Erzeugend).
 pub const EEG_ERZEUGENDE_MARKTLOKATION_CODE: &str = "ZW3";
 
@@ -1015,7 +1017,7 @@ mod tests {
             // Untranchiert: the Anmeldung is for the whole Marktlokation.
             gewuenschter_prozentsatz: None,
             tranchen_prozent: std::collections::BTreeMap::new(),
-            direktvermarktungspflichtig: false,
+            direktvermarktungspflichtig: None,
         });
         a
     }

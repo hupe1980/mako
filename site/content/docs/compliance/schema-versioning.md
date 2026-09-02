@@ -69,7 +69,7 @@ alters its semantics in a way that requires all profiles to be updated.
 
 Profiles have an optional `valid_until` date (ISO 8601, e.g. `"2026-09-30"`).
 Once a profile's `valid_until` has passed — plus whatever receive tolerance the
-deployment configures — it should no longer be compiled by default.
+deployment configures — it is not compiled by default.
 
 A profile moves through three compilation states over its lifetime:
 
@@ -98,8 +98,8 @@ Default grace period: **90 days** after `valid_until`.
 
 - `mod.rs` gates it behind `#[cfg(any(feature = "{type}-archive", feature = "archive"))]`
   instead of the plain `#[cfg(feature = "{type}")]`.
-- Users who only enable `mscons` will no longer compile expired MSCONS profiles.
-- Users who need historical validation enable `mscons-archive` (or `archive` for all types).
+- A build enabling only `mscons` compiles no expired MSCONS profile.
+- Historical validation enables `mscons-archive`, or `archive` for every type.
 
 ### Why use an explicit JSON flag (not a date comparison at codegen time)?
 

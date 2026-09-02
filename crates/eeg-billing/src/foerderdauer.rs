@@ -21,6 +21,7 @@
 //! For >2 MW plants the Förderdauer is tracked in kWh:
 //! `kwk_max_kwh = leistung_kW_el × kwk_foerderdauer_h`
 
+use crate::rounding::RoundMoney;
 use rust_decimal::Decimal;
 use time::Date;
 use time::error::ComponentRange;
@@ -582,7 +583,7 @@ pub fn wind_onshore_korrekturfaktor_corrected_aw(
     base_aw_ct_kwh: Decimal,
     korrekturfaktor: Decimal,
 ) -> Decimal {
-    (base_aw_ct_kwh * korrekturfaktor).round_dp(5)
+    (base_aw_ct_kwh * korrekturfaktor).round_kfm(5)
 }
 
 // ── §52a Netztrennung ─────────────────────────────────────────────────────────

@@ -73,6 +73,7 @@ graph LR
 6. [EDIFACT Encoding](#edifact-encoding)
 7. [Rust API](#rust-api)
 8. [Quantities and money on the wire](#quantities-and-money-on-the-wire)
+   - [Rounding is kaufmännisch (DIN 1333)](#rounding-is-kaufmannisch-din-1333)
 9. [Dates and days](#dates-and-days)
 
 ---
@@ -536,6 +537,39 @@ Two deliberate exceptions, both on inbound-only surfaces:
 |---|---|---|
 | MCP tool arguments (`DecimalArg`) | string **or** number | A model emits a number; the value is re-read from the number's own digits, not through `f64` |
 | BO4E payloads (`rubo4e`) | string **or** number | BO4E-python writes `"119.00"`, go-bo4e writes `119.00`; the standard settles neither. mako always **emits** the string |
+
+### Rounding is kaufmännisch (DIN 1333)
+
+`rust_decimal::Decimal::round_dp` rounds half **to even**, and so does
+`Decimal::round`. German commercial practice, the EN 16931 / XRechnung
+validation ecosystem and every BDEW settlement figure round half **away from
+zero** (DIN 1333) — the strategy
+`RoundingStrategy::MidpointAwayFromZero` names, and the one every
+`billing::Amount` operation already applies internally.
+
+The two modes agree everywhere except exact midpoints. That sounds rare and is
+not: a unit price quoted in ct with three decimals against a whole-kWh quantity
+lands on a half-cent routinely, so the wrong mode misstates a cent on a real
+invoice while passing every test written against ordinary numbers. It also
+propagates — a document's stated total and a consumer recomputing it from the
+positions must round the same way, or a correct document fails its own
+conformance check.
+
+```rust
+dec!(12.345).round_dp(2)   // 12.34 — half to even
+dec!(12.345).round_kfm(2)  // 12.35 — half away from zero
+```
+
+Away from zero rather than literal half-up, so a Storno reverses to the same
+magnitude it booked: `round(-0.005) = -0.01` mirrors `round(0.005) = 0.01`.
+
+`cargo xtask check-rounding` refuses a bare `round_dp(`, a bare
+`Decimal::round()` — which rounds to an integer the same way, and is how a EUR
+amount reaches the ledger as cents — and any `RoundingStrategy` other than
+`MidpointAwayFromZero`, workspace-wide, tests included. `f64::round` is half
+away from zero already and is left alone. The billing crates define a local
+`RoundMoney::round_kfm(dp)` over the explicit form; everywhere else states the
+strategy inline.
 
 ## Dates and days
 

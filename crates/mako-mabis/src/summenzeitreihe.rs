@@ -667,9 +667,9 @@ mod identifier_tests {
     /// other wrong shape fail at `MabisZaehlpunktId::new`, which `Deserialize`
     /// also runs.
     ///
-    /// This is the difference between the type and the runtime guard it
-    /// replaced: the earlier version could only refuse a bad value *after* a
-    /// caller had already put it in a Summenzeitreihe.
+    /// The refusal is in the constructor rather than in a check over an
+    /// assembled Summenzeitreihe, so a bad value has no window in which it is
+    /// already inside one.
     #[test]
     fn a_malformed_meldepunkt_cannot_reach_a_summenzeitreihe() {
         assert!(MabisZaehlpunktId::new("11XSWISSGRIDBGX8").is_err());

@@ -154,6 +154,13 @@ is GPKE Teil 2 § 2.1.2 Nr. 6's „der NB gibt zusätzlich den Grund der Ablehnu
 des LFA an". `processd` puts it on the `ablehnen` command and `makod` refuses to
 render the message without it.
 
+Which Geschäftsvorfall an Anmeldung is, is **on the wire**: `SG4 STS+7` DE 9013
+element 3 carries `ZW0` (1 — die ganze Marktlokation), `ZW1` (2 — eine
+bestehende Tranche) or `ZW2` (3 — eine neu zu bildende Tranche), and the AHB
+marks exactly those three on 55077/55078. `E_0622` Prüfschritte 300/310 send the
+three to different subtrees, so a message carrying none of them escalates rather
+than being read as the common case.
+
 Geschäftsvorfall 3 decides on **arithmetic**, not on one LFA's answer. A
 tranchierte Marktlokation is held by several LFA at once, so the NB asks all of
 them („im Fall von Geschäftsvorfall 3 allen LFA"), and Prüfschritte 500–540 count
@@ -162,6 +169,13 @@ what came free: at least one release (510 → `A53`), enough percentage (520 →
 direktvermarktungspflichtige Marktlokation (530/540 → `A55` against `A56`, the
 trigger for „Herstellung einer 100 % LF-Zuordnung"). Four of the tree's six
 outcomes exist only here.
+
+The share the LFN registers rides the Produktpaket beside the Bilanzkreis —
+`SG8` Produkt-Code `9991000002090` with the Produkteigenschaft „prozentuale
+Aufteilung", which the AHB makes Muss on a Geschäftsvorfall 3. The same product
+also carries an Aufteilungsfaktor and an Aufteilung auf Technische Ressourcen;
+neither is a share Prüfschritte 510–530 can add up, so an Anmeldung stating one
+escalates instead of being measured against a number that means something else.
 
 `marktd` projects the assignments as a list with a share per LFA, and the waiting
 Anmeldung collects **one answer per Tranchen-LFA** before deciding — resolving on
@@ -453,7 +467,9 @@ inferred: `SG4 STS+7` DE 9013 element 3 carries `ZW8` (Fall 1) to `ZX1`
 (Fall 4), and UTILMD AHB Strom 2.2 Bedingungen [161]–[164] map the four onto
 `E_0603`–`E_0606` in DE 1131 of the answer. That is a *different code space*
 from the `ZW3`/`ZW4`/`ZW5`/`ZAP` Lokationsart every other LF-answered Vorgang
-puts in the same element.
+puts in the same element — and from the `ZW0`/`ZW1`/`ZW2` Geschäftsvorfall the
+Anmeldung erzeugende Marktlokation puts there. One element, three code spaces,
+and the Prüfidentifikator decides which one applies.
 
 The Bilanzkreis itself rides the Produktpaket — `SG8 SEQ+Z79` with Produkt-Code
 `9991000002082`, Merkmalswert in `SG10 CAV+ZV4` — because the UTILMD AHB admits
@@ -466,6 +482,8 @@ consulted, and both come from the message itself:
   `ZW3` erzeugende, `ZW4` verbrauchende, `ZW5` Tranche, `ZAP` ruhende
   Marktlokation. The two halves of `E_0609` and `E_0624` answer from *different
   code ranges*, so a missing Ergänzung is an escalation rather than a default.
+  On 55077 the same element carries the Geschäftsvorfall instead, and the PID
+  is what says the Marktlokation is erzeugend.
 - **Was the Vorlauffrist kept?** (`E_0609` Prüfschritt 40, `E_3002` `E17`.)
   Arithmetic on the Übertragungstag and the Zuordnungsende, resolved by
   `mako_fristen::abmeldung` against GPKE Teil 2 § 2.5.2 Nr. 1. The window is a

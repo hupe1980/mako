@@ -5,6 +5,7 @@
 //! No HTTP, no database, no external services.
 //! Run: `cargo test -p energy-billing --test calculator_tests`
 
+use energy_billing::RoundMoney;
 use energy_billing::{
     AbschlagDeduction, Absetzung, AbsetzungsGrund, BillingContext, BillingEngine, BillingPeriod,
     DynamicInterval, EegMeterInput, ElectricityProvider, EmobilityMeterInput, GasMeterInput,
@@ -542,7 +543,7 @@ fn waerme_preisgleitklausel_resolves_and_overrides_static_arbeitspreis() {
         .find(|p| p.description.contains("Arbeitspreis Fernwärme"))
         .expect("Fernwärme Arbeitspreis position");
     // 100 kWh × 12 ct = 12.00 EUR net (not 6.00 from the static price).
-    assert_eq!(ap.net_eur.round_dp(2), dec!(12.00), "indexed price wins");
+    assert_eq!(ap.net_eur.round_kfm(2), dec!(12.00), "indexed price wins");
     assert!(
         ap.trace
             .regulatory_basis
@@ -573,7 +574,7 @@ fn sofortbonus_reduces_net_and_vat_as_entgeltminderung() {
     assert_eq!(bonus_pos.net_eur, dec!(-50), "bonus is a EUR 50 credit");
     // Entgeltminderung: netto drops by exactly 50, and the VAT drops with it.
     assert_eq!(
-        (r_plain.netto_eur - r_bonus.netto_eur).round_dp(2),
+        (r_plain.netto_eur - r_bonus.netto_eur).round_kfm(2),
         dec!(50.00),
         "bonus reduces the net base"
     );
@@ -2312,7 +2313,7 @@ fn sect40_kilowattstundenpreis_computed_correctly() {
         .kilowattstundenpreis_brutto_ct(kwh)
         .expect("kwh > 0");
     let expected = invoice.brutto_eur / kwh * dec!(100);
-    assert_eq!(ct, expected.round_dp(4));
+    assert_eq!(ct, expected.round_kfm(4));
     // Must be higher than raw commodity rate (includes Stromsteuer + MwSt)
     assert!(
         ct > dec!(30.0),
@@ -2489,7 +2490,7 @@ fn billing_context_prorata_mid_month_start() {
     let frac = ctx_half.billing_days_fraction().expect("should be Some");
     // 16 days (Jan 16..31) / 31 days total
     let expected = rust_decimal::Decimal::from(16) / rust_decimal::Decimal::from(31);
-    assert_eq!(frac, expected.round_dp(6));
+    assert_eq!(frac, expected.round_kfm(6));
     assert!(frac < dec!(1), "fraction must be < 1");
 }
 
@@ -3151,7 +3152,7 @@ fn waerme_reduced_mwst_7pct_produces_correct_tax() {
     let expected_mwst = dec!(60) * dec!(0.07);
     assert_eq!(
         tax_pos[0].net_eur,
-        expected_mwst.round_dp(5),
+        expected_mwst.round_kfm(5),
         "7% tax amount incorrect"
     );
 }
@@ -3218,7 +3219,7 @@ fn multi_rate_mwst_electricity_and_heat_on_same_invoice() {
     let expected_heat_brutto = heat_netto * dec!(1.07);
     assert_eq!(
         heat_invoice.brutto_eur,
-        expected_heat_brutto.round_dp(5),
+        expected_heat_brutto.round_kfm(5),
         "7% heat brutto incorrect"
     );
 
@@ -4549,8 +4550,8 @@ fn a_produzierendes_gewerbe_is_billed_the_full_stromsteuer() {
     // The levy is billed in full: 1000 kWh × 2,05 ct = 20,50 EUR.
     let levy: Vec<_> = invoice.positions_by_tag("stromsteuer").collect();
     assert_eq!(levy.len(), 1, "the Stromsteuer stays on the invoice");
-    assert_eq!(levy[0].net_eur.round_dp(2), dec!(20.50));
-    assert_eq!(invoice.netto_eur.round_dp(2), dec!(200.50));
+    assert_eq!(levy[0].net_eur.round_kfm(2), dec!(20.50));
+    assert_eq!(invoice.netto_eur.round_kfm(2), dec!(200.50));
 
     // …and the customer is told what they may reclaim, and on what.
     let hinweis: Vec<_> = invoice.positions_by_tag("steuerentlastung").collect();
@@ -4598,7 +4599,7 @@ fn fahrstrom_is_billed_at_the_reduced_rate() {
     let levy: Vec<_> = invoice.positions_by_tag("stromsteuer").collect();
     assert_eq!(levy.len(), 1);
     // 1000 kWh × 1,142 ct = 11,42 EUR
-    assert_eq!(levy[0].net_eur.round_dp(2), dec!(11.42));
+    assert_eq!(levy[0].net_eur.round_kfm(2), dec!(11.42));
 }
 
 /// § 9 Abs. 1 Nr. 3 StromStG — a genuine exemption still removes the levy.
@@ -4633,7 +4634,7 @@ fn a_kleinanlage_exemption_removes_the_levy() {
         .unwrap();
     assert_eq!(invoice.positions_by_tag("stromsteuer").count(), 0);
     assert_eq!(invoice.positions_by_tag("stromsteuer_befreiung").count(), 1);
-    assert_eq!(invoice.netto_eur.round_dp(2), dec!(180.00));
+    assert_eq!(invoice.netto_eur.round_kfm(2), dec!(180.00));
 }
 
 #[test]
@@ -4940,7 +4941,7 @@ fn tou_pricing_ht_nt_matches_manual_calculation() {
     let ht: Vec<_> = invoice.positions_by_tag("ht").collect();
     assert_eq!(ht.len(), 1, "Must have one HT position");
     assert_eq!(
-        ht[0].net_eur.round_dp(2),
+        ht[0].net_eur.round_kfm(2),
         dec!(96.00),
         "HT: 300 × 0.32 = 96.00"
     );
@@ -4949,7 +4950,7 @@ fn tou_pricing_ht_nt_matches_manual_calculation() {
     let nt: Vec<_> = invoice.positions_by_tag("nt").collect();
     assert_eq!(nt.len(), 1, "Must have one NT position");
     assert_eq!(
-        nt[0].net_eur.round_dp(2),
+        nt[0].net_eur.round_kfm(2),
         dec!(36.00),
         "NT: 200 × 0.18 = 36.00"
     );
@@ -4960,7 +4961,7 @@ fn tou_pricing_ht_nt_matches_manual_calculation() {
         .filter(|p| p.category == PositionCategory::Commodity)
         .map(|p| p.net_eur)
         .sum();
-    assert_eq!(commodity.round_dp(2), dec!(132.00), "HT + NT total");
+    assert_eq!(commodity.round_kfm(2), dec!(132.00), "HT + NT total");
 }
 
 #[test]
@@ -5027,7 +5028,7 @@ fn grundpreis_prorated_for_partial_period() {
     let grund: Decimal = invoice.total_by_tag("grundpreis");
     // 16 days × 0.10 EUR/day = 1.60 EUR
     assert_eq!(
-        grund.round_dp(2),
+        grund.round_kfm(2),
         dec!(1.60),
         "Grundpreis must be prorated to 16 days"
     );
@@ -5104,8 +5105,8 @@ fn invoice_merge_combines_positions_and_recalculates_totals() {
 
     // Totals are the sum of both sub-invoices
     assert_eq!(
-        merged.netto_eur.round_dp(2),
-        (netto_a + netto_b).round_dp(2),
+        merged.netto_eur.round_kfm(2),
+        (netto_a + netto_b).round_kfm(2),
         "Merged netto must equal sum of sub-invoice nettos"
     );
 }
@@ -5968,9 +5969,9 @@ fn a_monthly_rabatt_reduces_the_invoice() {
         base.netto_eur
     );
     // January is exactly one month, so the deduction is the full 5 EUR.
-    assert_eq!((base.netto_eur - rabatt.netto_eur).round_dp(2), dec!(5.00));
+    assert_eq!((base.netto_eur - rabatt.netto_eur).round_kfm(2), dec!(5.00));
     assert_eq!(
-        (aufschlag.netto_eur - base.netto_eur).round_dp(2),
+        (aufschlag.netto_eur - base.netto_eur).round_kfm(2),
         dec!(5.00)
     );
 
@@ -6023,7 +6024,7 @@ fn fernwaerme_without_stated_months_bills_the_billed_period() {
         .find(|p| p.description.starts_with("Grundpreis"))
         .expect("Grundpreis");
     assert_eq!(gp.quantity, dec!(12), "twelve months, not one");
-    assert_eq!(gp.net_eur.round_dp(2), dec!(300.00));
+    assert_eq!(gp.net_eur.round_kfm(2), dec!(300.00));
 }
 
 /// A Gas invoice carries the whole § 3 Abs. 1 CO2KostAufG statement, not only
@@ -6117,7 +6118,7 @@ fn fernwaerme_passes_through_its_co2_cost_and_states_the_emissions() {
         .iter()
         .find(|p| p.has_tag("behg"))
         .expect("CO₂ position");
-    assert_eq!(co2.net_eur.round_dp(2), dec!(9.00)); // 1000 × 0,9 ct
+    assert_eq!(co2.net_eur.round_kfm(2), dec!(9.00)); // 1000 × 0,9 ct
     assert_eq!(co2.legal_basis.as_deref(), Some("CO2KostAufG § 3"));
     assert!(r.positions.iter().any(|p| p.has_tag("erneuerbar_anteil")));
 
@@ -6193,7 +6194,7 @@ fn an_indexed_tariff_outranks_the_static_arbeitspreis() {
         .find(|p| p.has_tag("indexed_price"))
         .expect("indexed Arbeitspreis");
     // 5 + 1 + 80 × 0.1 = 14 ct/kWh
-    assert_eq!(ap.net_eur.round_dp(2), dec!(140.00));
+    assert_eq!(ap.net_eur.round_kfm(2), dec!(140.00));
     assert_eq!(
         r.positions
             .iter()
@@ -6349,12 +6350,12 @@ fn a_minimum_invoice_topup_reaches_the_minimum_at_the_agreed_rate() {
 
     // Unstated → the standard rate, and the minimum is met exactly.
     let standard = bill_at(None);
-    assert_eq!(standard.brutto_eur.round_dp(2), dec!(100.00));
+    assert_eq!(standard.brutto_eur.round_kfm(2), dec!(100.00));
 
     // Agreed at the reduced rate → still exactly the minimum, and the top-up
     // sits in the 7 % bucket rather than the 19 % one.
     let reduced = bill_at(Some(dec!(0.07)));
-    assert_eq!(reduced.brutto_eur.round_dp(2), dec!(100.00));
+    assert_eq!(reduced.brutto_eur.round_kfm(2), dec!(100.00));
     let topup = reduced
         .positions
         .iter()
@@ -6450,7 +6451,7 @@ fn a_sharing_credit_shows_what_it_was_derived_from() {
         .iter()
         .find(|p| p.has_tag("sharing") && p.net_eur != Decimal::ZERO)
         .expect("sharing credit");
-    assert_eq!(credit.net_eur.round_dp(2), dec!(-12.00));
+    assert_eq!(credit.net_eur.round_kfm(2), dec!(-12.00));
 
     // …and what it was derived from, on the page and costing nothing.
     let id = r
@@ -6506,7 +6507,7 @@ fn a_zweitarif_product_without_an_ht_nt_split_is_refused() {
             ..Default::default()
         },
     );
-    assert_eq!(r.total_by_tag("arbeitspreis").round_dp(2), dec!(260.00));
+    assert_eq!(r.total_by_tag("arbeitspreis").round_kfm(2), dec!(260.00));
 }
 
 /// The HT/NT registers alone are a complete statement of consumption — the
@@ -6530,9 +6531,9 @@ fn ht_and_nt_alone_are_enough_to_bill() {
             ..Default::default()
         },
     );
-    assert_eq!(r.total_by_tag("arbeitspreis").round_dp(2), dec!(260.00));
+    assert_eq!(r.total_by_tag("arbeitspreis").round_kfm(2), dec!(260.00));
     // …and the levy is charged on the same 1000 kWh, not on zero.
-    assert_eq!(r.total_by_tag("stromsteuer").round_dp(2), dec!(20.50));
+    assert_eq!(r.total_by_tag("stromsteuer").round_kfm(2), dec!(20.50));
 }
 
 /// An HT/NT split that does not add up to the stated total prices one of the
@@ -6583,8 +6584,8 @@ fn an_eintarif_product_bills_a_two_register_meter_on_its_total() {
             ..Default::default()
         },
     );
-    assert_eq!(r.total_by_tag("arbeitspreis").round_dp(2), dec!(300.00));
-    assert_eq!(r.total_by_tag("stromsteuer").round_dp(2), dec!(20.50));
+    assert_eq!(r.total_by_tag("arbeitspreis").round_kfm(2), dec!(300.00));
+    assert_eq!(r.total_by_tag("stromsteuer").round_kfm(2), dec!(20.50));
 }
 
 /// Half a Zweitarif — one band priced, the other not — has no sensible reading:
@@ -6626,7 +6627,7 @@ fn half_a_zweitarif_is_refused_as_a_product_defect() {
         ),
         q,
     );
-    assert_eq!(ok.total_by_tag("arbeitspreis").round_dp(2), dec!(260.00));
+    assert_eq!(ok.total_by_tag("arbeitspreis").round_kfm(2), dec!(260.00));
 }
 
 /// A Korrekturrechnung is built by negating the stored JSON field by field, so

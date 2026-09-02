@@ -251,8 +251,7 @@ const KNOWN_UNCARRIED: &[(&str, &str, &str)] = &[
         "E_0406",
         "*",
         "the Netznutzungsabrechnung tree has 205 Prüfschritte and mako answers with three \
-         codes; closing it is a ROADMAP item („`E_0406` is answered with three codes out of \
-         eighty-seven“), not an oversight",
+         codes — a deliberate partial walk, not an oversight",
     ),
 ];
 

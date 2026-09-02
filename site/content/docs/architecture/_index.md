@@ -23,14 +23,56 @@ infrastructure library they build on.
 | Principle | Consequence |
 |---|---|
 | **Protocol processor, not a business system** | `makod` handles EDIFACT, BDEW rules, AS4 delivery, and regulatory deadlines. Contract data and billing logic live in your ERP. |
-| **`Workflow::handle` and `Workflow::apply` are pure functions** | All I/O, parsing, and clock access happens at the transport boundary before a command is constructed. This makes processes deterministic, replayable, and trivially testable. |
-| **Atomic dual-write** | Events and outbox entries are written in a single `WriteBatch` via `AtomicAppend::append_with_outbox`. There is no two-phase commit, no compensation path for a lost APERAK. |
-| **Event sourcing** | State is rebuilt by replaying the append-only event log. Audit trails, bug reproductions, and format-version migrations are a consequence of the model, not bolt-ons. |
-| **Format-version coexistence** | `FV2025-10-01` and `FV2026-10-01` coexist in the same running instance. A process started under the old format version continues under those rules until it completes. |
-| **Persist before dispatch** | Every event-emitting service writes the outbound CloudEvent in the **same transaction** as the business row that produced it, then a background worker delivers it (at-least-once, retried, dead-lettered). `makod` does this with a SlateDB `WriteBatch`; the PostgreSQL services (`billingd`, `einsd`, `accountingd`, `netzbilanzd`, `vertragd`, `invoicd`) share one implementation — `mako_service::outbox` (`enqueue(&mut tx, &ce)` + `OutboxWorker`). A crash between persist and dispatch is therefore never a data-loss event; the receiver dedups the duplicates on the CloudEvent `id`. |
-| **One deployment, one operator** | A mako deployment serves a single market operator; isolation between operators is per-deployment (separate processes, databases, and AS4 identities), not row-level SaaS tenancy. Where a `tenant` column or `TenantId` appears (`mako-engine` streams, `edmd`, `productd`), it carries the operator's own MP-ID — it scopes data to the configured party (e.g. multiple LF brands sharing one `productd`), it does not implement cross-operator multi-tenancy. Provisioning for managed hosting is a control-plane concern of the hosted offering. |
-| **Capabilities are grouped by regulatory domain, not by generic function** | There is no `notificationd`, `documentd`, `forecastd` or `anomalyd`, and their absence is deliberate. Forecasting (§ 40a Abs. 2 EnWG Verbrauchsschätzung) and anomaly detection (Hampel scoring, V01–V09/V11/V12) live in `edmd` because both operate on the same metering series under the same legal basis; payments (SEPA pain.008/pain.001, camt.05x) live in `accountingd` because they are one side of the Kontokorrent. Documents are split along the same seam rather than against it: document *content* — the amounts, the VAT breakdown, the legal basis, the EN 16931 CII/UBL payload — stays with the billing service that computes it and answers for it, while document *rendering* — the template store, the ZUGFeRD PDF/A-3 carrier, the Textform proofs — is `outputd`, because one brand has one template store and a logo change must reach the invoice *and* the Mahnung alike. Splitting a capability out by technical function anywhere else would put one regulated obligation across two services and force a distributed transaction where today there is a row and an outbox entry. Notification is not a service at all — it is `mako_service::webhook` plus marktd's durable CloudEvents fan-out. |
-| **No API gateway; each service owns its port and its policy** | Every daemon terminates its own OIDC/JWT and evaluates its own Cedar decision against a resource it fully understands (`MaKo::Command` carries `marktrolle` and `pid`; `MaKo::ProcessRecord` carries `workflow`). A gateway would have to re-derive that domain context to make the same decisions, and would become a second place where authorisation can be wrong. Cross-cutting concerns that genuinely belong at the edge — TLS termination, rate limiting beyond the per-peer GCRA each port already applies, IP allowlisting — are the deployment's ingress to provide. |
+| **`Workflow::handle` and `Workflow::apply` are pure functions** | All I/O, parsing and clock access happens at the transport boundary, before a command is constructed — so processes are deterministic, replayable and trivially testable |
+| **Atomic dual-write** | Events and outbox entries go into one `WriteBatch` via `AtomicAppend::append_with_outbox`. No two-phase commit, no compensation path for a lost APERAK |
+| **Event sourcing** | State is rebuilt by replaying the append-only log, so audit trails, bug reproductions and format-version migrations fall out of the model |
+| **Format-version coexistence** | Two Formatversionen run in one instance; a process started under the old one finishes under its rules |
+| **Persist before dispatch** | The outbound CloudEvent is written in the same transaction as the business row, and a worker delivers it afterwards |
+| **One deployment, one operator** | Isolation between market operators is per-deployment, not row-level SaaS tenancy |
+| **Capabilities grouped by regulatory domain** | No `notificationd`, `documentd`, `forecastd` or `anomalyd` — a capability sits with the obligation it answers for |
+| **No API gateway** | Each daemon terminates its own OIDC/JWT and evaluates its own Cedar decision |
+
+### Persist before dispatch
+
+`makod` writes the event and its outbox entry in one SlateDB `WriteBatch`; the
+PostgreSQL services share `mako_service::outbox` (`enqueue(&mut tx, &ce)` plus
+`OutboxWorker`). Delivery is at-least-once, retried and dead-lettered, so a crash
+between persisting and dispatching is never a data-loss event — the receiver
+dedups on the CloudEvent `id`.
+
+### One deployment, one operator
+
+Where a `tenant` column or `TenantId` appears, it carries the operator's own
+MP-ID. It scopes data to the configured party — several LF brands may share one
+`productd` — but it does not implement cross-operator multi-tenancy. Isolation
+between operators means separate processes, databases and AS4 identities.
+
+### Capabilities grouped by regulatory domain
+
+Forecasting (§ 40a Abs. 2 EnWG) and anomaly detection live in `edmd` because both
+operate on the same metering series under the same legal basis; payments live in
+`accountingd` because they are one side of the Kontokorrent.
+
+Documents split along that seam rather than against it. The *content* — amounts,
+VAT breakdown, legal basis, the EN 16931 payload — stays with the billing service
+that computes it and answers for it. The *rendering* — template store, ZUGFeRD
+carrier, Textform proofs — is `outputd`, because one brand has one template store
+and a logo change must reach the invoice and the Mahnung alike.
+
+Splitting by technical function instead would put one regulated obligation across
+two services and force a distributed transaction where today there is a row and
+an outbox entry. Notification is not a service at all: it is
+`mako_service::webhook` plus marktd's durable fan-out.
+
+### No API gateway
+
+Every daemon evaluates Cedar against a resource it fully understands —
+`MaKo::Command` carries `marktrolle` and `pid`, `MaKo::ProcessRecord` carries
+`workflow`. A gateway would have to re-derive that domain context to make the
+same decisions, and would become a second place where authorisation can be
+wrong. What genuinely belongs at the edge — TLS termination, rate limiting beyond
+the per-peer GCRA each port already applies, IP allowlisting — is the
+deployment's ingress to provide.
 
 ---
 
@@ -124,7 +166,6 @@ Each is independently testable and suitable for crates.io publication.
 | `mako-pruefung` | The published **Antwortcode** decision trees, executable | `nb`/`lf`/`msb`/`mabis` modules behind `role-*` features; `codes::lookup` resolves a code **within** its EBD; `Cluster` (8 variants incl. MaBiS `Abweisung` / list / `Reklamation`) picks the answer PID; unknown facts escalate, never guess |
 | `mako-obs` | Process observability types | `ProcessProjection`, `KpiReport`, `DeadlineRisk` |
 | `mako-service` | **Service SDK** — cross-cutting infrastructure for all 17 daemons | `load_config`, `DatabaseConfig`, `HttpConfig`, `shutdown::token/serve`, `OidcConfig::build_verifier`, `McpAuth`, `McpAuthConfig`, `init_tracing_from_env`, `CedarEnforcer`, `outbox`, `ServiceBuilder` |
-| `mako-plugin` | Operator CloudEvent extension point | `CloudEventPlugin`, `PluginRegistry`. No mako crate depends on it and no daemon builds a registry — a deployment runs the chain over the payload ahead of its own publish call |
 
 ### Billing crate hierarchy
 
@@ -198,12 +239,16 @@ Pass 5  Cancellation sign reversal   (Stornorechnung)
 
 | Crate | Version | Purpose |
 |---|---|---|
-| [`billing`](https://crates.io/crates/billing) | `0.14` | Generic billing engine — `PricingModel` document assembly (one trait; a usage-free model sets `type Usage = ()`), graduated/volume/block/capacity pricing (`RateSchedule`), HT/NT (`TimeOfUsePricing`), EPEX intervals (`DynamicPricing`), typed `Quantity`/`UnitPrice`, exact `Amount<P>` money (`checked_from_decimal`), VAT breakdown (EN 16931 BG-23) with `FixedRateTax::exempt`/`zero_rated`, `AmountScale::EN16931`, `AdvancePayment`, `prorate`/`merge_period_documents`; the shared money engine under `energy-billing`, `grid-billing` and `eeg-billing` |
-| [`sepa`](https://crates.io/crates/sepa) | `0.6` | SEPA payment utilities — IBAN (ISO 13616, full 89-entry registry, BBAN structure checks), BIC (SEPA pattern + country validation), `CreditorId` (EPC AT-02, correct EPC262-08 check digits), typed `IsoDate`/`IsoDateTime`, pain.008 SDD CORE+B2B (`Pain008Builder` + `DirectDebitGroup`, multi-`PmtInf` messages, mandatory `CdtrSchmeId`), pain.001 SCT+SCT Instant (`Pain001Builder` + `CreditTransferGroup`), config-selectable schema version (`DirectDebitSchema` / `CreditTransferSchema`), pain.002 parser, camt.052/053/054 XML + simplified-JSON parsers (shared `CashEntry` model, `signed_ct()`), EPC217-08 transliteration, located `build()`/`validate()` errors; used by `accountingd` and `vertragd` |
-| [`metering`](https://crates.io/crates/metering) | `0.22` | German energy metering domain — `MeterInterval`, `aggregate`, `fill_gaps_with_config` (§ 60 Abs. 2 MsbG), `gas_m3_to_kwh_hs` and `conversion::zustandszahl` (§ 25 Nr. 4 MessEV / DVGW G 685-3), `score_intervals` (Hampel A/B/C/F), the V01–V12 validation engine with a `RuleSet` saying which rules actually ran and a `DayBoundary` so a daily **gas** series is measured against the Gastag, `compute_ggv_allocation` over the `allocation` primitive (§ 42b share, cap and residual, with `Σ allocated + residual = total` exact), `ObisCode::direction` as the one implementation of value group C, check-digit-validated `MaloId`/`MeloId`/`BdewCode`, SLP/RLM/iMSys classification, BDEW 2025 load profiles; timestamps travel as RFC 3339 in a human-readable format; pure computation, no storage — used by `edmd`, `marktd`, `mabis-syncd`, `mako-gabi-gas` and `mako-mabis` |
-| [`meterstore`](https://crates.io/crates/meterstore) | `0.9` | Metering time-series store — the persistence layer beneath `edmd`: PostgreSQL hot window + Apache Iceberg/S3 settled history, version-resolved reads, `as_known_at` transaction-time reads across both tiers (what backs `edmd`'s `?as_of=` snapshots), `append_authoritative` for values the operator authors rather than receives, `scoped` sessions — and `MeterCatalog::scoped`, which confines every table at once so a cross-table join still plans — that enforce an identity predicate below the projection, the only way to confine caller-supplied SQL, `checked_column` declarations that parse an EIC, MaLo-ID, MeLo-ID or Marktpartner-ID at the write path and in the hot table's own `CHECK`, and a completeness report that counts the balancing days a range holds, so a channel that stopped mid-month is reported short rather than complete |
-| [`doubleentry`](https://crates.io/crates/doubleentry) | `0.7` | General-purpose double-entry ledger — append-only BLAKE3 Merkle log with `O(log n)` inclusion, consistency and balance proofs (all verified against a tree head, never a bare root), period seals over the journal, the trial balance and the account bindings; deliberately domain-neutral, with the energy and SEPA specifics kept in `accountingd` |
-| [`rubo4e`](https://crates.io/crates/rubo4e) | `0.13` | BO4E business-object types — the `rubo4e::current` versioned schema, validated at every read/write boundary; `Bo4eTyped` carries each schema's `_typ` and release as associated constants, over Geschäftsobjekte and components alike; `Bo4eExtensions` reports fields BO4E does not define, which is what the outbound gate refuses |
+| [`billing`](https://crates.io/crates/billing) | `0.14` | Generic billing engine — fixed-point `Amount`, pricing models, document assembly, sum-exact allocation |
+| [`en16931`](https://crates.io/crates/en16931) | `0.6` | EN 16931 semantic invoice model and business-rule validation; `en16931-formats` renders XRechnung/CII and PEPPOL UBL |
+| [`sepa`](https://crates.io/crates/sepa) | `0.6` | SEPA payment utilities — IBAN/BIC validation, pain.001/008/007 generation, camt.05x and pain.002 parsing |
+| [`metering`](https://crates.io/crates/metering) | `0.22` | German energy metering domain — intervals, aggregation, gap filling, quality scoring, GGV allocation |
+| [`meterstore`](https://crates.io/crates/meterstore) | `0.9` | Metering time-series store beneath `edmd` — hot PostgreSQL window, settled Iceberg V2 history, version resolution |
+| [`doubleentry`](https://crates.io/crates/doubleentry) | `0.7` | Double-entry ledger — append-only BLAKE3 Merkle log, inclusion and consistency proofs, period seals |
+| [`rubo4e`](https://crates.io/crates/rubo4e) | `0.13` | BO4E business-object types — the `rubo4e::current` versioned schema with validation |
+| [`agentplane`](https://crates.io/crates/agentplane) | `0.25` | Durable agent runtime behind `agentd` — journaled effects, typed manifests, human triage |
+| [`asx-rs`](https://crates.io/crates/asx-rs) | `0.13` | AS4/ebMS3 stack under the BDEW MaKo profile |
+| [`edifact-rs`](https://crates.io/crates/edifact-rs) | `~0.17` | EDIFACT syntax layer beneath `edi-energy` — parse, serialise, directory validation |
 
 ---
 
@@ -221,23 +266,23 @@ and `agentd`, which is the MCP *host* that calls the others.
 
 | Daemon | Port | Role | Config file |
 |--------|------|------|-------------|
-| `makod` | `:8080` / `:4080` / `:8090` | Protocol gateway — EDIFACT ↔ BO4E, 70 workflows, AS4 ingest, deadlines | `makod.toml` |
-| `marktd` | `:8180` | Market Data Hub — MaLo/MeLo/NeLo/TR/SR, Lokationszuordnung graph, preisblaetter, VersorgungsStatus, `event_log` replay, durable fan-out; **Geraet** typed konfigurationen sub-resource (16-variant `Konfigurationsparameter` enum, GIN-indexed); **Zaehlzeitdefinition** typed endpoint; ZaehlzeitRegister auto-population from WiM Stammdaten | `marktd.toml` |
-| `processd` | `:8580` | Process decision engine — NB STP (`mako-pruefung`), LF answers to the NB-initiated GPKE processes, MSB REQOTE/ORDRSP, EoG gap closure; role-gated binaries (§ 7 EnWG) | `processd.toml` |
-| `invoicd` | `:8280` | INVOIC plausibility — REMADV, selbstausstellen, overdue-REMADV, § 147 AO / GoBD audit | `invoicd.toml` |
-| `netzbilanzd` | `:8680` | NNE/KA/MMM billing daemon (NB role) — generates INVOIC 31002 (NN-Rechnung) / 31005 (MMM) / 31009 (MSB) / 31011 (AWH), invoice draft lifecycle | `netzbilanzd.toml` |
-| `sperrd` | `:8780` | Sperr-/Entsperrauftrag execution queue (NB role) — ORDERS 17115/17117 ingest, field dispatch, IFTSTA 21039 with a retry queue | `sperrd.toml` |
-| `edmd` | `:8380` | Energy data management — MSCONS meter readings, BO4E `Energiemenge` deliveries, `Lastgang` + `Zeitreihe` time-series, `MeterBillingPeriod`; **§14a SMGW compliance** (MsbG §21c): `smgw_sessions` + `cls_compliance_log` tables, daily `check_session_compliance()` sweep, `de.messwert.cls.compliance-issue` CloudEvents | `edmd.toml` |
-| `obsd` | `:8480` | Process observability — KPI reports, deadline-risk alerts, §20 EnWG parity | `obsd.toml` |
-| `einsd` | `:9180` | Einspeiser Registry + EEG/KWKG Settlement (NB/LF role) — **10 settlement schemes** (Vergütung, Mieterstrom §21 Abs. 3 EEG, Direktvermarktung MarketPremium, sonstige Direktvermarktung, Ausschreibung, Post-EEG Spot, Eigenverbrauch, KWKG-Zuschlag §7 KWKG 2023, Flexibilitätsprämie §50 EEG, Flexibilitätszuschlag §50b EEG); Repowering §22 EEG; KWKG Förderdauer; built-in rate table EEG 2000–2023 + KWKG 2023; **§14 UStG Gutschrift** issued per billable settlement (Gutschriftverfahren — NB issues the document; BO4E `Rechnung` in `rechnung_json`, VAT breakdown per plant tax status); CloudEvents `de.eeg.verguetung.berechnet` (net + USt + brutto) + `de.eeg.marktpraemie.berechnet` + `de.eeg.anlage.foerderung-auslaufend` | `einsd.toml` |
-| `productd` | `:9080` | Product & Tariff Catalog (LF role) — user-defined energy products (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE); all prices in `Tarifpreisblatt` JSONB; version history; MaLo→product assignment; EPEX Spot for §41a | `productd.toml` |
-| `billingd` | `:9280` | Energy Billing Engine (LF role) — all prices user-defined in `productd`; 13 categories (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE/VPP); §41a dynamic; VPP auto-billing webhook (`de.vpp.dispatch.confirmed` → `Rechnung`); `/preview` dry-run; EN 16931 e-invoicing (XRechnung 3.0 CII / PEPPOL UBL); ZUGFeRD PDF via `outputd`, template hash pinned per issued invoice; `de.billing.rechnung.erstellt` | `billingd.toml` |
-| `outputd` | `:9880` | Customer Communications — operator-owned Typst templates in a no-I/O sandbox (content-addressed, append-only store; publish gated by proof); ZUGFeRD PDF/A-3 carrier (Factur-X XMP by incremental update) around the caller's CII payload; Textform kinds (MAHNUNG § 126b BGB render-proven; PREISANPASSUNG parse-only — it has no render view); `POST /api/v1/render/{kind}` → PDF + `X-Mako-Template-Hash` | `outputd.toml` |
-| `accountingd` | `:9380` | Customer Account Ledger (LF role) — **tamper-evident double-entry ledger** on the `doubleentry` crate (Merkle inclusion proofs, period seals for GoBD/§146 AO **Festschreibung**, store-level idempotent CE ingest); per-MaLo Kontokorrent + GL contras; **FIFO open-item clearing** (`/open-items`); **Summen- und Saldenliste** §238 HGB (`/trial-balance`); camt.052/053/054 XML + flat-export import (booked entries only, IBAN → EndToEndId → remittance-token resolution ladder); SEPA pain.008 XML (multi-group single message, hard `creditor_iban`/`creditor_id` validation, ISO 20022 `Purp/Cd` per Sparte, structured `PstlAdr` for the EPC 2026-11-15 cut-over); pain.001 SCT credit-transfer; **pain.007 creditor reversal**; **pain.002 status ingest incl. Verification of Payee**; **auto-dunning rule engine** (Mahnstufe 1–3, background worker); **balance reconciliation** (`/reconcile`); keyed-BLAKE3 IBAN hash; **GDPR Art. 17 pseudonymization** (`/anonymize`) | `accountingd.toml` |
-| `portald` | `:9480` | Customer Portal read-model gateway (LF role, stateless) — aggregates Lastgang, invoices, account ledger, VersorgungsStatus, EEG settlement and the §41 EnWG self-service writes; `/dashboard` fetches every upstream concurrently; every route resolves customer ownership through `vertragd` | `portald.toml` |
-| `vertragd` | `:9780` | Contract & Customer Management (LF role) — Kunden (B2C + B2B), portal identities, Rahmen- and Versorgungsverträge, the valid-time MaLo→product assignment, and the statutory Kündigungs-/Preisanpassungsfristen as pure rules. OIDC → MaLo authorization gateway for `portald`; DSGVO Art. 15/17 | `vertragd.toml` |
-| `mabis-syncd` | `:8880` | MaBiS synchronisation daemon (ÜNB/NB role) — aggregates per-MaLo quarter-hourly Lastgang from `edmd` via `mako-mabis::SummenzeitreiheBuilder`, submits Summenzeitreihen to the BIKO as MSCONS PID 13003 through `makod`; ascending version per (Bilanzierungsgebiet, Bilanzierungsmonat) and BIKO-assigned Datenstatus per BK6-24-174 Anlage 3; submits on the 10. Werktag (Erstaufschlag); `submission_runs`, `submission_malo_log` and `pruefmitteilung` tables | `mabis-syncd.toml` |
-| `agentd` | `:9580` | Multi-agent LLM orchestration daemon — **28 declarative manifests** run on the agentplane durable runtime (journaled effects, strict replay, Cedar gate, sealed at rest, four-eyes worklist at `/api/v1/oversight`); Anthropic / OpenAI / Gemini / self-hosted (TGI, vLLM, Ollama) / AWS Bedrock; MCP tool calls across the production services; **28 bundled specialists** incl. `billing-regulatory-guard-agent` (§41/§41a compliance), `jahresabrechnung-agent` (annual settlement), `replacement-value-agent` (§ 60 Abs. 2 MsbG), `mabis-syncd-agent` (UTILTS deadlines), `smgw-diagnostics-agent` (BSI TR-03109 + §14a CLS) | [agentd guide](@/docs/services/agentd.md) |
+| [`makod`](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | Protocol gateway — EDIFACT ↔ BO4E, 70 workflows, AS4 ingest, deadlines | `makod.toml` |
+| [`marktd`](@/docs/services/marktd.md) | `:8180` | Market data hub — locations, registries, Versorgungsstatus, durable fan-out | `marktd.toml` |
+| [`processd`](@/docs/services/processd.md) | `:8580` | Process decision engine — the published Entscheidungsbäume, NB · LF · MSB · ESA | `processd.toml` |
+| [`edmd`](@/docs/services/edmd.md) | `:8380` | Energy data management — MSCONS, Zählerstandsgang, quality, Ablesesteuerung | `edmd.toml` |
+| [`vertragd`](@/docs/services/vertragd.md) | `:9780` | Contracts and customers — Kunden, Rahmen- and Versorgungsverträge, portal identities | `vertragd.toml` |
+| [`productd`](@/docs/services/productd.md) | `:9080` | Product and tariff catalogue — 14 categories, Angebot lifecycle, price series | `productd.toml` |
+| [`netzbilanzd`](@/docs/services/netzbilanzd.md) | `:8680` | Grid settlement runs (NB) — NNE, KA, MMM, MSB, AWH | `netzbilanzd.toml` |
+| [`einsd`](@/docs/services/einsd.md) | `:9180` | Einspeiser registry and EEG/KWKG settlement | `einsd.toml` |
+| [`mabis-syncd`](@/docs/services/mabis-syncd.md) | `:8880` | MaBiS Summenzeitreihen — one filing per Bilanzierungsgebiet | `mabis-syncd.toml` |
+| [`invoicd`](@/docs/services/invoicd.md) | `:8280` | INVOIC plausibility and the REMADV/COMDIS lifecycle | `invoicd.toml` |
+| [`billingd`](@/docs/services/billingd.md) | `:9280` | Retail billing (LF) — §§ 40, 40b EnWG, EN 16931, Abschlagspläne | `billingd.toml` |
+| [`accountingd`](@/docs/services/accountingd.md) | `:9380` | Massenkontokorrent — double-entry ledger, SEPA, Mahnwesen | `accountingd.toml` |
+| [`outputd`](@/docs/services/outputd.md) | `:9880` | Customer communications — Typst rendering and per-channel delivery | `outputd.toml` |
+| [`portald`](@/docs/services/portald.md) | `:9480` | Customer portal read-model gateway and § 41 EnWG self-service | `portald.toml` |
+| [`sperrd`](@/docs/services/sperrd.md) | `:8780` | Sperr-/Entsperrauftrag execution queue (NB) | `sperrd.toml` |
+| [`obsd`](@/docs/services/obsd.md) | `:8480` | Process observability — KPIs, deadline risk, § 20 EnWG parity | `obsd.toml` |
+| [`agentd`](@/docs/services/agentd.md) | `:9580` | Advisory agent plane — 28 manifests on agentplane, journaled and human-gated | `agentd.toml` |
 
 ### `marktd` — Market Data Hub (`:8180`)
 

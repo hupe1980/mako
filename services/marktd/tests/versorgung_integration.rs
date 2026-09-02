@@ -1433,6 +1433,62 @@ async fn a_tranchen_split_beyond_the_whole_is_refused() {
     );
 }
 
+/// GPKE Teil 1 § 3.2.1.5: „Der Prozentsatz einer Tranche ist immer größer 0%
+/// und kleiner als 100%." A named Tranche holding the whole Marktlokation is
+/// Geschäftsvorfall 1 wearing a Tranchen-ID, and it makes `E_0623` Prüfschritt
+/// 530 read a remainder of zero on a Marktlokation that was never split.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_tranche_holding_the_whole_marktlokation_is_refused() {
+    let Some((pool, _pg)) = test_pool("tranche_at_hundred").await else {
+        return;
+    };
+    let vs = PgVersorgungsStatusRepository::new(pool.clone());
+
+    let err = vs
+        .upsert(
+            record(vec![tranche(
+                "9911111111111",
+                "100",
+                "T1",
+                ZuordnungsStatus::Aktiv,
+            )]),
+            None,
+        )
+        .await
+        .expect_err("a Tranche is always less than the whole Marktlokation");
+    assert!(
+        matches!(&err, mako_markt::error::MdmError::Unprocessable { reason }
+                 if reason.contains("lf_zuordnung_tranche_unter_100")),
+        "the refusal must name the invariant: {err:?}"
+    );
+}
+
+/// The untranchierte case is the 100 % one, and it stays writable.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_untranchierte_marktlokation_still_holds_the_whole() {
+    let Some((pool, _pg)) = test_pool("untranchiert_hundred").await else {
+        return;
+    };
+    let vs = PgVersorgungsStatusRepository::new(pool.clone());
+
+    vs.upsert(
+        record(vec![LfZuordnung {
+            lf_mp_id: "9911111111111".to_owned(),
+            prozent: "100".parse().expect("valid share"),
+            tranche_id: None,
+            status: ZuordnungsStatus::Aktiv,
+            zuordnungsbeginn: Some(date!(2026 - 10 - 01)),
+            zuordnungsende: None,
+            process_id: None,
+        }]),
+        None,
+    )
+    .await
+    .expect("an untranchierte Marktlokation is held in full");
+}
+
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn tranchen_up_to_the_whole_are_accepted() {

@@ -1050,8 +1050,8 @@ fn into_rechnung(doc: &InvoiceDocument) -> Rechnung {
                                     .and_then(|name| name.parse().ok()),
             lieferungszeitraum: Some(lz.clone()),
             positions_menge: Some(Menge { wert: Some(p.quantity), einheit, ..Default::default() }),
-            einzelpreis:  Some(Preis  { wert: Some(p.unit_price_eur.round_dp(6)), ..Default::default() }),
-            gesamtpreis:  Some(Betrag { wert: Some(p.net_eur.round_dp(5)), ..Default::default() }),
+            einzelpreis:  Some(Preis  { wert: Some(p.unit_price_eur.round_kfm(6)), ..Default::default() }),
+            gesamtpreis:  Some(Betrag { wert: Some(p.net_eur.round_kfm(5)), ..Default::default() }),
             ..Default::default()
         }
     }).collect();

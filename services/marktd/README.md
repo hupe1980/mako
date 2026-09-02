@@ -55,6 +55,15 @@ a supplier change.
   supersedes. That is simply a second `Angekuendigt` row, and it is what 55038 / 44038
   „Aufhebung einer zukünftigen Zuordnung" addresses.
 
+The shares are bounded by the schema, not by the writer. GPKE Teil 1 § 3.2.1.5
+fixes a Tranche at „immer größer 0% und kleiner als 100%", so a named Tranche
+holding the whole Marktlokation is refused; the active assignments of one
+Marktlokation may not sum past 100 %, which a constraint trigger enforces across
+the set rather than per row. Both reach the caller as `422` naming the
+constraint — an over-allocated split is a bad request, and nothing downstream
+can tell one from a real one: `E_0623` Prüfschritt 530 reads the remainder as a
+fact and `netzbilanzd` balances it.
+
 Both announcements are therefore kept, which is what makes EBD `E_0622` Prüfschritt 70
 („Andere Anmeldung in Bearbeitung", `A06`) decidable at all: `marktd` records the
 announcement while ingesting the `process.initiated`, *before* fanning the event out, so

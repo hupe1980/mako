@@ -179,14 +179,16 @@ async fn every_routed_pid_has_ahb_rules() {
         }
     }
 
-    // `site/templates/index.html` states this next to the routed count. The two
-    // describe the same catalogue from different sides, so a PID gaining rules
-    // moves the page — update it to the number this reports.
-    const LANDING_PAGE_PIDS_WITH_RULES: usize = 358;
+    // `site/templates/index.html` states this next to the routed count, and the
+    // figure is read out of the page rather than restated here: a constant
+    // claiming what the page says drifts the moment the page is edited alone.
+    // The two describe the same catalogue from different sides, so a PID gaining
+    // rules moves the page.
+    let advertised = landing_page_pids_with_rules();
     assert_eq!(
-        with_rules, LANDING_PAGE_PIDS_WITH_RULES,
-        "site/templates/index.html says {LANDING_PAGE_PIDS_WITH_RULES} routed PIDs carry \
-         AHB rules, the engine has {with_rules} — update the page"
+        with_rules, advertised,
+        "site/templates/index.html says {advertised} routed PIDs carry AHB rules, \
+         the engine has {with_rules} — update the page"
     );
 
     assert!(
@@ -204,4 +206,26 @@ async fn every_routed_pid_has_ahb_rules() {
          RULELESS_BY_DESIGN with the reason.",
         gaps.join("\n")
     );
+}
+
+/// The landing page's „N additionally carry validated AHB segment rules" figure.
+///
+/// Read out of `site/templates/index.html`, because a constant restating it is a
+/// claim rather than a check.
+fn landing_page_pids_with_rules() -> usize {
+    const SENTENCE: &str = "additionally carry";
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../site/templates/index.html");
+    let html = std::fs::read_to_string(&path).expect("the landing page template");
+    let (before, _) = html
+        .split_once(SENTENCE)
+        .unwrap_or_else(|| panic!("{} no longer says \"{SENTENCE}\"", path.display()));
+    let (_, number) = before
+        .rsplit_once("<strong>")
+        .and_then(|(_, tail)| tail.split_once("</strong>").map(|(n, r)| (r, n)))
+        .unwrap_or_else(|| panic!("no <strong>N</strong> before \"{SENTENCE}\""));
+    number
+        .trim()
+        .parse()
+        .unwrap_or_else(|e| panic!("{number:?} is not a count: {e}"))
 }

@@ -943,8 +943,8 @@ impl SettlePosition {
         use billing::{LineItem, Quantity, RoundingStrategy, UnitPrice};
 
         let rate_eur = self.rate_ct_kwh / rust_decimal::Decimal::from(100);
-        // Typed `Quantity`/`UnitPrice` replace the old seven-argument
-        // `for_usage_rounded` — the two unit labels can no longer be transposed.
+        // Typed `Quantity`/`UnitPrice` keep the two unit labels apart, so a
+        // quantity unit cannot be passed where a price unit belongs.
         // `.with_code("KWH")` stamps EN 16931 BT-130 (UN/ECE Rec 20), so the
         // `billing::BillingDocument` is a complete EN-16931 source rather than
         // leaving a downstream mapper to guess the unit code from "kWh".

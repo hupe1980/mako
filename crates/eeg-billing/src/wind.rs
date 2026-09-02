@@ -18,6 +18,7 @@
 //! Anlage 2 Nummer 7 — Anlage 2 Nummer 7 only defines how the Standortertrag
 //! that feeds the Gütefaktor is measured. See [`KORREKTURFAKTOR_STUETZWERTE`].
 
+use crate::rounding::RoundMoney;
 use rust_decimal::Decimal;
 use rust_decimal::dec;
 use time::Date;
@@ -85,7 +86,7 @@ impl WindStandort {
     /// ```
     #[must_use]
     pub fn effective_aw(&self, base_aw_ct_kwh: Decimal) -> Decimal {
-        (base_aw_ct_kwh * self.korrekturfaktor).round_dp(5)
+        (base_aw_ct_kwh * self.korrekturfaktor).round_kfm(5)
     }
 
     /// Construct from the certified Gütefaktor via the §36h Abs. 1 Satz 2 table.
@@ -172,7 +173,7 @@ pub fn korrekturfaktor_fuer_guetefaktor(guetefaktor: Decimal, suedregion: bool) 
         .unwrap_or(KORREKTURFAKTOR_STUETZWERTE.len() - 1);
     let (gf_lo, kf_lo) = KORREKTURFAKTOR_STUETZWERTE[upper - 1];
     let (gf_hi, kf_hi) = KORREKTURFAKTOR_STUETZWERTE[upper];
-    (kf_lo + (kf_hi - kf_lo) * (guetefaktor - gf_lo) / (gf_hi - gf_lo)).round_dp(5)
+    (kf_lo + (kf_hi - kf_lo) * (guetefaktor - gf_lo) / (gf_hi - gf_lo)).round_kfm(5)
 }
 
 // ── §36h Abs. 2 EEG 2023 — Standortgüte re-evaluation (year 6/11/16) ─────────

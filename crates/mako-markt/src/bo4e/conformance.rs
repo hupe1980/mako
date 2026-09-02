@@ -27,6 +27,7 @@
 //! unwired from `.validate()` for the same reason, and mako calls it by name on
 //! the outbound path.
 
+use rust_decimal::RoundingStrategy;
 use rubo4e::validation::ValidationFailure;
 use rust_decimal::Decimal;
 
@@ -113,7 +114,11 @@ no_residual_rules![
 /// every document in circulation. Two decimals is the unit invoices settle in.
 fn agrees(computed: Decimal, stated: Decimal) -> bool {
     let scale = stated.scale().max(2);
-    computed.round_dp(scale) == stated.round_dp(scale)
+    // Kaufmännisch, not `round_dp`'s banker's rounding: the producer states
+    // 12.35 for a raw 12.345, and rounding the recomputed figure half-to-even
+    // would answer 12.34 and refuse a document whose own arithmetic is right.
+    let kfm = |d: Decimal| d.round_dp_with_strategy(scale, RoundingStrategy::MidpointAwayFromZero);
+    kfm(computed) == kfm(stated)
 }
 
 impl Bo4eConformance for rubo4e::current::Rechnung {
@@ -410,5 +415,42 @@ mod tests {
             r.validate().is_err(),
             "an inverted Zeitraum on a position is reported by rubo4e's own dive"
         );
+    }
+
+    /// The positions sum to an exact half-cent and the document states the
+    /// kaufmännisch total. Comparing with `Decimal::round_dp` would round the
+    /// recomputed sum half-to-even, answer 12.34 against a stated 12.35, and
+    /// refuse a document whose own arithmetic is right.
+    #[test]
+    fn a_half_cent_sum_agrees_with_the_kaufmaennisch_total() {
+        let r = Rechnung {
+            gesamtnetto: Some(eur(dec!(12.35))),
+            rechnungspositionen: Some(vec![
+                Rechnungsposition {
+                    gesamtpreis: Some(eur(dec!(6.1725))),
+                    ..Default::default()
+                },
+                Rechnungsposition {
+                    gesamtpreis: Some(eur(dec!(6.1725))),
+                    ..Default::default()
+                },
+            ]),
+            ..Default::default()
+        };
+        assert!(r.residual_rules().is_empty(), "{:?}", r.residual_rules());
+    }
+
+    /// The same guard still catches a total that is actually wrong.
+    #[test]
+    fn a_total_off_by_a_cent_is_still_refused() {
+        let r = Rechnung {
+            gesamtnetto: Some(eur(dec!(12.36))),
+            rechnungspositionen: Some(vec![Rechnungsposition {
+                gesamtpreis: Some(eur(dec!(12.345))),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        assert_eq!(r.residual_rules().len(), 1);
     }
 }

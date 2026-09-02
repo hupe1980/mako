@@ -155,13 +155,26 @@ pub struct AnmeldungPayload {
     /// SG4 STS Transaktionsgrund (DE9013) — e.g. `E01` Ein-/Auszug,
     /// `E03` Lieferantenwechsel. Drives the date-plausibility rules.
     pub transaktionsgrund: Option<String>,
-    /// `SG4 STS+7` DE 9013 **element 3** — the Transaktionsgrundergänzung
-    /// (`ZW4` verbrauchende, `ZW3` erzeugende, `ZW5` Tranche, `ZAP` ruhende
-    /// Marktlokation). Decides which `E_0622` code space answers.
+    /// `SG4 STS+7` DE 9013 **element 3** — the Transaktionsgrundergänzung.
+    ///
+    /// Two disjoint code spaces in one element, and the Prüfidentifikator
+    /// decides which: the *object* (`ZW4` verbrauchende, `ZW3` erzeugende,
+    /// `ZW5` Tranche, `ZAP` ruhende Marktlokation), which picks the `E_0622`
+    /// code space, or the *Geschäftsvorfall* (`ZW0`/`ZW1`/`ZW2`) on 55077,
+    /// which `E_0622` Prüfschritte 300/310 branch on.
     pub transaktionsgrund_ergaenzung: Option<String>,
     /// `SG10 CCI+Z22` DE 7037 — the angemeldete Veräußerungsform of an
     /// erzeugende Marktlokation (`Z90`/`Z91`/`Z92`/`Z94`).
     pub veraeusserungsform: Option<String>,
+    /// `SG8` Produkt-Code `9991000002090` — the Tranchengröße the LFN
+    /// registers, as a percentage.
+    ///
+    /// Muss on a Geschäftsvorfall 3, and the share `E_0623` Prüfschritt 520
+    /// measures the freed Tranchen against. `None` where the message carried
+    /// the Aufteilungsfaktor or the Technische-Ressourcen form instead — those
+    /// are not shares, and the arithmetic escalates rather than inventing one —
+    /// or a percentage outside GPKE Teil 1 § 3.2.1.5's „> 0 % und < 100 %".
+    pub tranchengroesse_prozent: Option<Decimal>,
     /// Bilanzierungsmethode from UTILMD TM+EM (`SLP` | `RLM` | `IMS`).
     pub bilanzierungsmethode: Option<String>,
     /// `SG4 IDE+24` DE 7402 — the LFN's Vorgangsnummer for this Anmeldung.
@@ -229,6 +242,17 @@ impl AnmeldungPayload {
             .get("veraeusserungsform")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
+        // GPKE Teil 1 § 3.2.1.5: „Der Prozentsatz einer Tranche ist immer größer
+        // 0% und kleiner als 100%" — both bounds exclusive, because a share of
+        // the whole Marktlokation is not a Tranche but Geschäftsvorfall 1.
+        // A value outside that is not a Tranchengröße, and settling Prüfschritt
+        // 520 against it would measure the released shares against a number the
+        // Festlegung does not admit.
+        let tranchengroesse_prozent = data
+            .get("tranchengroesse_prozent")
+            .and_then(|v| v.as_str())
+            .and_then(|v| v.parse::<Decimal>().ok())
+            .filter(|p| *p > Decimal::ZERO && *p < Decimal::ONE_HUNDRED);
         let bilanzierungsmethode = data
             .get("bilanzierungsmethode")
             .and_then(|v| v.as_str())
@@ -261,6 +285,7 @@ impl AnmeldungPayload {
             transaktionsgrund,
             transaktionsgrund_ergaenzung,
             veraeusserungsform,
+            tranchengroesse_prozent,
             bilanzierungsmethode,
             vorgangsnummer,
             kunde_name,
@@ -278,6 +303,7 @@ impl AnmeldungPayload {
                 erzeugung_of(
                     self.transaktionsgrund_ergaenzung.as_deref(),
                     self.veraeusserungsform.as_deref(),
+                    self.tranchengroesse_prozent,
                 )
             })
             .flatten();
@@ -311,24 +337,27 @@ impl AnmeldungPayload {
 /// Which `E_0622` / `E_0607` branch an inbound message belongs to.
 ///
 /// PID 55077 **is** the Anwendungsfall „Anmeldung erzeugende Marktlokation", so
-/// it decides the branch on its own; otherwise the `SG4 STS+7` DE 9013 element 3
-/// Transaktionsgrundergänzung does. `ZW4` (verbrauchende Marktlokation) is the
-/// default the AHB marks Muss on every GPKE core process.
+/// it decides the branch on its own — and it has to, because on that PID the
+/// `SG4 STS+7` DE 9013 element 3 carries the *Geschäftsvorfall* (`ZW0`…`ZW2`)
+/// rather than an object code. Everywhere else the element names the object,
+/// and `ZW4` (verbrauchende Marktlokation) is the default the AHB marks Muss on
+/// every GPKE core process.
 fn marktlokationsart_of(pid: u32, ergaenzung: Option<&str>) -> Marktlokationsart {
+    use edi_energy::utilmd_codes::ergaenzung as code;
     if pid == 55_077 {
         return Marktlokationsart::Erzeugend;
     }
     match ergaenzung {
-        Some("ZW3" | "ZW5") => Marktlokationsart::Erzeugend,
-        Some("ZAP") => Marktlokationsart::Ruhend,
+        Some(code::ERZEUGENDE_MALO | code::TRANCHE) => Marktlokationsart::Erzeugend,
+        Some(code::RUHENDE_MALO) => Marktlokationsart::Ruhend,
         _ => Marktlokationsart::Verbrauchend,
     }
 }
 
 /// Build the erzeugende-Marktlokation facts from what the message carries.
 ///
-/// Returns `None` when the Veräußerungsform is absent or unknown — `evaluate`
-/// then escalates, which is the § 20 EnWG-safe answer.
+/// Returns `None` when the Veräußerungsform or the Geschäftsvorfall is absent or
+/// unknown — `evaluate` then escalates, which is the § 20 EnWG-safe answer.
 ///
 /// **`bestehende_veraeusserungsform` is deliberately `None` here.** It is the
 /// NB's own EEG-/KWKG-Register, not a wire fact, and `processd` has no reader
@@ -337,15 +366,16 @@ fn marktlokationsart_of(pid: u32, ergaenzung: Option<&str>) -> Marktlokationsart
 fn erzeugung_of(
     ergaenzung: Option<&str>,
     veraeusserungsform: Option<&str>,
+    tranchengroesse_prozent: Option<Decimal>,
 ) -> Option<ErzeugungsAnmeldung> {
     let angemeldete = Veraeusserungsform::from_wire_code(veraeusserungsform?)?;
-    // `ZW5` marks a Tranche, which is Geschäftsvorfall 2 or 3; the two differ by
-    // whether the Tranche already exists, which the message does not say. Only
-    // the non-tranchierte case (`ZW3`) resolves to a Geschäftsvorfall here.
-    let geschaeftsvorfall = match ergaenzung {
-        Some("ZW5") => return None,
-        _ => Geschaeftsvorfall::Eins,
-    };
+    // `SG4 STS+7` DE 9013 element 3 names the Geschäftsvorfall outright on
+    // 55077/55601 — the AHB marks `ZW0`/`ZW1`/`ZW2` there and no object code.
+    // `ZW3`/`ZW5` are the *object* space of the same element and appear on other
+    // Prüfidentifikatoren, so reading one as a Geschäftsvorfall would answer a
+    // question the message did not ask. Anything else escalates: `E_0622`
+    // Prüfschritt 300/310 sends the three to different subtrees.
+    let geschaeftsvorfall = geschaeftsvorfall_of(ergaenzung?)?;
     Some(ErzeugungsAnmeldung {
         geschaeftsvorfall,
         angemeldete_veraeusserungsform: angemeldete,
@@ -356,13 +386,28 @@ fn erzeugung_of(
         // sonstige Direktvermarktung, still an EEG plant.
         nicht_eeg_kwkg: false,
         ausfallverguetung: false,
-        // The Tranchen facts belong to Geschäftsvorfall 3, which `ZW5` returns
-        // before reaching here. They are filled in by the caller once the
-        // Tranchengröße and the assignment list are read.
-        gewuenschter_prozentsatz: None,
+        // `SG8` Produkt-Code 9991000002090, off the wire. The assignment list
+        // it is measured against is filled in by the caller from `marktd`.
+        gewuenschter_prozentsatz: tranchengroesse_prozent,
         tranchen_prozent: std::collections::BTreeMap::new(),
-        direktvermarktungspflichtig: false,
+        direktvermarktungspflichtig: None,
     })
+}
+
+/// `SG4 STS+7` DE 9013 element 3 → the Geschäftsvorfall it names.
+///
+/// The element carries two disjoint code spaces and the AHB decides which one a
+/// Prüfidentifikator uses; on 55077/55078 and 55601/55603 it is this one. An
+/// object code (`ZW3`, `ZW5`, …) reaching here means the message is not one of
+/// those, and `None` escalates rather than picking a subtree.
+fn geschaeftsvorfall_of(ergaenzung: &str) -> Option<Geschaeftsvorfall> {
+    use edi_energy::utilmd_codes::ergaenzung as code;
+    match ergaenzung {
+        code::GESCHAEFTSVORFALL_1 => Some(Geschaeftsvorfall::Eins),
+        code::GESCHAEFTSVORFALL_2 => Some(Geschaeftsvorfall::Zwei),
+        code::GESCHAEFTSVORFALL_3 => Some(Geschaeftsvorfall::Drei),
+        _ => None,
+    }
 }
 
 // ── evaluate_and_decide ───────────────────────────────────────────────────────
@@ -926,6 +971,15 @@ fn tranchen_lage(
     if erz.geschaeftsvorfall != mako_pruefung::nb::types::Geschaeftsvorfall::Drei {
         return None;
     }
+    // Prüfschritt 520 compares what came free against the share the LFN
+    // registered, and 540 reads the Direktvermarktungspflicht out of the NB's
+    // EEG-Register. Neither has a safe default: assuming 100 % refuses every
+    // partial Tranchen-Anmeldung with `A54`, and assuming „nicht
+    // direktvermarktungspflichtig" makes `A55` unreachable. Without both the
+    // arithmetic is not runnable, and `evaluate_lieferbeginn` escalates on a
+    // missing `TranchenLage` — which is the § 20 EnWG-safe answer.
+    let gewuenschter_prozentsatz = erz.gewuenschter_prozentsatz?;
+    let direktvermarktungspflichtig = erz.direktvermarktungspflichtig?;
     let tranchen = waiting
         .lfa_mp_ids
         .iter()
@@ -941,8 +995,8 @@ fn tranchen_lage(
         .collect();
     Some(mako_pruefung::TranchenLage {
         tranchen,
-        gewuenschter_prozentsatz: erz.gewuenschter_prozentsatz.unwrap_or(Decimal::ONE_HUNDRED),
-        direktvermarktungspflichtig: erz.direktvermarktungspflichtig,
+        gewuenschter_prozentsatz,
+        direktvermarktungspflichtig,
     })
 }
 
@@ -2363,7 +2417,8 @@ mod tests {
                 "grid_operator": "9900000000001",
                 "process_date": "20261101",
                 "transaktionsgrund": "E03",
-                "transaktionsgrund_ergaenzung": "ZW3",
+                // 55077 carries the Geschäftsvorfall here, not an object code.
+                "transaktionsgrund_ergaenzung": "ZW0",
                 "veraeusserungsform": "Z91"
             }
         });
@@ -2623,5 +2678,194 @@ mod tests {
             initiator_is_affiliate,
             "affiliate must be detected when new_supplier == own_mp_id"
         );
+    }
+
+    // ── Geschäftsvorfall 3: unread facts escalate, they do not default ───────
+
+    fn waiting_record(lfa: &[&str]) -> AbmeldeanfrageRecord {
+        AbmeldeanfrageRecord {
+            anmeldung_process_id: Uuid::nil(),
+            malo_id: "51238696781".to_owned(),
+            lfn_mp_id: "9900555000005".to_owned(),
+            lfa_mp_ids: lfa.iter().map(|s| (*s).to_owned()).collect(),
+            pid: 55_077,
+            anfrage: serde_json::json!({}),
+            meldung: serde_json::json!({}),
+            antworten: serde_json::json!({}),
+            received_at: OffsetDateTime::now_utc(),
+            tenant: "t".to_owned(),
+        }
+    }
+
+    fn gv3(
+        prozentsatz: Option<rust_decimal::Decimal>,
+        dv_pflicht: Option<bool>,
+    ) -> AnmeldungAnfrage {
+        let mut a = anmeldung(Marktlokationsart::Erzeugend);
+        a.erzeugung = Some(mako_pruefung::nb::types::ErzeugungsAnmeldung {
+            geschaeftsvorfall: mako_pruefung::nb::types::Geschaeftsvorfall::Drei,
+            angemeldete_veraeusserungsform:
+                mako_pruefung::nb::types::Veraeusserungsform::Marktpraemie,
+            bestehende_veraeusserungsform: None,
+            nicht_eeg_kwkg: false,
+            ausfallverguetung: false,
+            gewuenschter_prozentsatz: prozentsatz,
+            tranchen_prozent: [("9900111000006".to_owned(), rust_decimal::Decimal::from(40))]
+                .into_iter()
+                .collect(),
+            direktvermarktungspflichtig: dv_pflicht,
+        });
+        a
+    }
+
+    /// The Tranchengröße `9991000002090` is not parsed off the wire yet. A
+    /// default of 100 % would make Prüfschritt 520 demand that *every* Tranche
+    /// come free and refuse each partial Anmeldung with `A54`, so the facts
+    /// stay incomplete and the tree escalates instead.
+    #[test]
+    fn a_missing_tranchengroesse_escalates_rather_than_claiming_the_whole_malo() {
+        let a = gv3(None, Some(false));
+        let lage = tranchen_lage(&waiting_record(&["9900111000006"]), &a);
+        assert!(lage.is_none(), "an unread Tranchengröße is not 100 %");
+        assert!(mako_pruefung::evaluate_lieferbeginn(&a, lage.as_ref()).is_escalate());
+    }
+
+    /// Prüfschritt 540 reads the NB's EEG-Register. Defaulting it to „nein"
+    /// settles the step for every Anmeldung and makes `A55` — the trigger for
+    /// „Herstellung einer 100 % LF-Zuordnung" — unreachable.
+    #[test]
+    fn an_unread_direktvermarktungspflicht_escalates_rather_than_answering_a56() {
+        let a = gv3(Some(rust_decimal::Decimal::from(40)), None);
+        let lage = tranchen_lage(&waiting_record(&["9900111000006"]), &a);
+        assert!(lage.is_none(), "an unread §21b answer is not „nein\"");
+        assert!(mako_pruefung::evaluate_lieferbeginn(&a, lage.as_ref()).is_escalate());
+    }
+
+    /// With both facts read, the arithmetic runs.
+    #[test]
+    fn both_facts_read_builds_the_tranchen_lage() {
+        let a = gv3(Some(rust_decimal::Decimal::from(40)), Some(true));
+        let lage = tranchen_lage(&waiting_record(&["9900111000006"]), &a)
+            .expect("complete facts build a TranchenLage");
+        assert_eq!(lage.gewuenschter_prozentsatz, rust_decimal::Decimal::from(40));
+        assert!(lage.direktvermarktungspflichtig);
+        assert_eq!(lage.tranchen.len(), 1);
+    }
+
+    // ── SG4 STS+7 DE 9013 element 3 ──────────────────────────────────────────
+
+    /// The element names the Geschäftsvorfall outright on 55077: UTILMD MIG
+    /// Strom S2.2 defines `ZW0`/`ZW1`/`ZW2` as Geschäftsvorfall 1/2/3, and the
+    /// AHB marks exactly those three on the Anmeldung erzeugende Marktlokation.
+    #[test]
+    fn the_geschaeftsvorfall_is_read_off_the_wire() {
+        use mako_pruefung::nb::types::Geschaeftsvorfall as G;
+        for (code, expected) in [("ZW0", G::Eins), ("ZW1", G::Zwei), ("ZW2", G::Drei)] {
+            let erz = erzeugung_of(Some(code), Some("Z91"), None)
+                .unwrap_or_else(|| panic!("{code} names a Geschäftsvorfall"));
+            assert_eq!(erz.geschaeftsvorfall, expected, "{code}");
+        }
+    }
+
+    /// The same element carries a second, disjoint code space — which *object*
+    /// the Vorgang is about. Reading one of those as a Geschäftsvorfall would
+    /// answer a question the message did not ask, so it escalates instead.
+    #[test]
+    fn an_object_code_is_not_a_geschaeftsvorfall() {
+        for code in ["ZW3", "ZW4", "ZW5", "ZAP", "ZZB"] {
+            assert!(
+                erzeugung_of(Some(code), Some("Z91"), None).is_none(),
+                "{code} is an object code, not a Geschäftsvorfall"
+            );
+        }
+        assert!(erzeugung_of(None, Some("Z91"), None).is_none());
+    }
+
+    /// Geschäftsvorfall 3 reaches the Tranchen-Prüfschritte rather than being
+    /// turned away upstream — `E_0623` 500–540 decide it once the Tranchengröße
+    /// and the assignment list are read.
+    #[test]
+    fn geschaeftsvorfall_3_reaches_the_tranchen_pruefschritte() {
+        let erz = erzeugung_of(Some("ZW2"), Some("Z91"), Some(rust_decimal::Decimal::from(40)))
+            .expect("a Geschäftsvorfall 3");
+        assert_eq!(
+            erz.geschaeftsvorfall,
+            mako_pruefung::nb::types::Geschaeftsvorfall::Drei
+        );
+        assert_eq!(
+            erz.gewuenschter_prozentsatz,
+            Some(rust_decimal::Decimal::from(40))
+        );
+        assert!(erz.direktvermarktungspflichtig.is_none());
+    }
+
+    /// 55077 is the Anwendungsfall itself, so the object code never appears on
+    /// it and the PID has to decide the Marktlokationsart.
+    #[test]
+    fn pid_55077_is_erzeugend_whatever_the_ergaenzung_says() {
+        for code in [Some("ZW0"), Some("ZW2"), None] {
+            assert_eq!(
+                marktlokationsart_of(55_077, code),
+                Marktlokationsart::Erzeugend,
+                "{code:?}"
+            );
+        }
+        assert_eq!(
+            marktlokationsart_of(55_001, Some("ZW4")),
+            Marktlokationsart::Verbrauchend
+        );
+        assert_eq!(
+            marktlokationsart_of(55_001, Some("ZAP")),
+            Marktlokationsart::Ruhend
+        );
+    }
+
+    /// The Tranchengröße is `SG8` Produkt-Code `9991000002090`, and GPKE Teil 1
+    /// § 3.2.1.5 fixes its range: „immer größer 0% und kleiner als 100%".
+    /// Both bounds are exclusive — 100 % of a Marktlokation is not a Tranche —
+    /// so a value outside them escalates rather than being measured against.
+    #[test]
+    fn only_a_share_in_range_reaches_the_tranchen_arithmetic() {
+        let payload = |wert: serde_json::Value| {
+            serde_json::json!({
+                "makopid": 55_077,
+                "subject": "550e8400-e29b-41d4-a716-446655440031",
+                "data": {
+                    "malo_id": "51238696012",
+                    "new_supplier": "9900357000004",
+                    "grid_operator": "9900000000001",
+                    "process_date": "20261101",
+                    "transaktionsgrund": "E03",
+                    "transaktionsgrund_ergaenzung": "ZW2",
+                    "veraeusserungsform": "Z91",
+                    "tranchengroesse_prozent": wert
+                }
+            })
+        };
+        let share = |wert: serde_json::Value| {
+            AnmeldungPayload::parse(&payload(wert))
+                .expect("parses")
+                .into_anfrage()
+                .erzeugung
+                .expect("Geschäftsvorfall 3")
+                .gewuenschter_prozentsatz
+        };
+        assert_eq!(
+            share(serde_json::json!("40")),
+            Some(rust_decimal::Decimal::from(40))
+        );
+        assert_eq!(
+            share(serde_json::json!("99.99")),
+            Some(rust_decimal::Decimal::new(9999, 2))
+        );
+        // 100 % is the whole Marktlokation — Geschäftsvorfall 1, not a Tranche.
+        for outside in ["0", "-10", "100", "100.01", "nonsense", ""] {
+            assert_eq!(
+                share(serde_json::json!(outside)),
+                None,
+                "{outside} is not a Tranchengröße"
+            );
+        }
+        assert_eq!(share(serde_json::Value::Null), None);
     }
 }

@@ -1,5 +1,6 @@
 //! HTTP handlers for `productd`.
 
+use crate::rounding::RoundMoney;
 use axum::{
     Extension, Json,
     extract::{Path, Query},
@@ -1032,18 +1033,18 @@ fn compute_cost_breakdown(
         nb_mp_id: pos.nb_mp_id.clone(),
         standort_bezeichnung: pos.standort_bezeichnung.clone(),
         jahresverbrauch_kwh: pos.jahresverbrauch_kwh,
-        supply_netto_eur: supply_netto_eur.round_dp(2),
-        nne_netto_eur: nne_netto_eur.round_dp(2),
-        ka_eur: ka_eur.round_dp(2),
-        levies_eur: levies_eur.round_dp(2),
-        total_netto_eur: total_netto_eur.round_dp(2),
-        total_brutto_eur: total_brutto_eur.round_dp(2),
+        supply_netto_eur: supply_netto_eur.round_kfm(2),
+        nne_netto_eur: nne_netto_eur.round_kfm(2),
+        ka_eur: ka_eur.round_kfm(2),
+        levies_eur: levies_eur.round_kfm(2),
+        total_netto_eur: total_netto_eur.round_kfm(2),
+        total_brutto_eur: total_brutto_eur.round_kfm(2),
         arbeitspreis_ct_per_kwh: arbeitspreis_ct.map(|ct| {
             (ct * rabatt)
-                .round_dp_with_strategy(4, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
+                .round_kfm(4)
         }),
         grundpreis_eur_per_year: grundpreis_ct
-            .map(|gp| (gp * Decimal::from(365) / Decimal::ONE_HUNDRED).round_dp(2)),
+            .map(|gp| (gp * Decimal::from(365) / Decimal::ONE_HUNDRED).round_kfm(2)),
     })
 }
 
@@ -1484,14 +1485,14 @@ pub async fn get_angebot_comparison(
             }
         }
 
-        let total_brutto = (total_netto * mwst).round_dp(2);
+        let total_brutto = (total_netto * mwst).round_kfm(2);
         ScenarioCostBreakdown {
             label,
             laufzeit_monate: laufzeit,
             ist_basis,
             variante_index,
             rabatt_pct,
-            jahreskosten_netto_eur: total_netto.round_dp(2),
+            jahreskosten_netto_eur: total_netto.round_kfm(2),
             jahreskosten_brutto_eur: total_brutto,
             ersparnis_vs_basis_eur: None, // filled below
             positionen_detail: pos_details,
@@ -1522,7 +1523,7 @@ pub async fn get_angebot_comparison(
             v.rabatt_pct,
             v.product_codes_override.as_ref(),
         );
-        s.ersparnis_vs_basis_eur = Some((base_total - s.jahreskosten_netto_eur).round_dp(2));
+        s.ersparnis_vs_basis_eur = Some((base_total - s.jahreskosten_netto_eur).round_kfm(2));
         szenarien.push(s);
     }
 
@@ -2476,9 +2477,9 @@ pub async fn get_comparison_feed(
             let netto = compute_jahreskosten_supply_netto(&preise, verbrauch_kwh);
             let brutto = netto.map(|n| {
                 use rust_decimal::dec;
-                (n * dec!(1.19)).round_dp(2)
+                (n * dec!(1.19)).round_kfm(2)
             });
-            let netto = netto.map(|n| n.round_dp(2));
+            let netto = netto.map(|n| n.round_kfm(2));
 
             Ok(crate::pg::ComparisonFeedEntry {
                 product_code: row.product_code.clone(),

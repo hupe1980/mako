@@ -140,6 +140,17 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                 // SG10 `CCI+Z22` DE 7037 — the Veräußerungsform of an
                 // erzeugende Marktlokation.
                 veraeusserungsform: extract_veraeusserungsform(u.segments()),
+                // `SG8` Produkt-Code 9991000002090 — Muss on a Geschäftsvorfall
+                // 3, and the share `E_0623` Prüfschritt 520 measures the freed
+                // Tranchen against. Only the „prozentuale Aufteilung"
+                // Produkteigenschaft yields one; the Aufteilungsfaktor and the
+                // Technische-Ressourcen forms are different quantities and
+                // arrive as `None` rather than as a number that is not a share.
+                tranchengroesse_prozent: u
+                    .transactions()
+                    .first()
+                    .and_then(|t| t.tranchengroesse())
+                    .and_then(|t| t.prozent_wert().map(ToOwned::to_owned)),
                 message_ref: MessageRef::new(msg.message_ref()),
                 received_at: time::OffsetDateTime::now_utc(),
                 validation_passed,

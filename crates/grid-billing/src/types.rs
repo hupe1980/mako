@@ -22,6 +22,7 @@
 //! newtype provides overflow-safe EUR arithmetic. No `f32`/`f64` appears anywhere
 //! in settlement calculations.
 
+use crate::rounding::RoundMoney;
 use rust_decimal::Decimal;
 
 // ── Sparte ────────────────────────────────────────────────────────────────────
@@ -803,7 +804,7 @@ pub enum BillingPositionKind {
 /// Carries raw numbers for the service layer to map into the required format
 /// (BO4E `Rechnungsposition`, EN16931 UBL, etc.).
 ///
-/// Invariant: `net_eur == (quantity × unit_price_eur).round_dp(5)`.
+/// Invariant: `net_eur == (quantity × unit_price_eur).round_kfm(5)`.
 /// The pricing formula behind a §14a Modul 3 spot-priced position.
 ///
 /// Modelled as a value object rather than a serialised BO4E document. The engine
@@ -1219,10 +1220,8 @@ pub struct Konzessionsabgabe {
 
 /// The delivery period a settlement covers.
 ///
-/// A validated pair rather than two loose dates. Every input struct previously
-/// carried `period_from` and `period_to` independently, and every calculation
-/// re-checked their ordering — five copies of the same guard, each able to be
-/// forgotten. Constructing this type is the check.
+/// A validated pair rather than two loose dates: constructing the type is the
+/// ordering check, so no calculation carries its own copy of it.
 ///
 /// Both bounds are inclusive: a monthly period runs from the 1st to the last day
 /// of the month, matching how Netzentgelte are published and billed.
@@ -1490,7 +1489,7 @@ impl SettlementResult {
             .iter()
             .map(|p| p.net_eur)
             .sum::<Decimal>()
-            .round_dp(2)
+            .round_kfm(2)
     }
 }
 

@@ -48,17 +48,25 @@ fn internal(e: impl std::fmt::Display) -> MdmError {
     MdmError::Internal(e.to_string())
 }
 
-/// The schema's conservation trigger on `lf_zuordnung`.
-const CONSERVATION_CONSTRAINT: &str = "lf_zuordnung_sums_to_the_whole";
+/// PostgreSQL `check_violation`. The column bounds on `prozent`, the GPKE
+/// Teil 1 Tranchen bound and the conservation trigger — which raises with this
+/// `ERRCODE` on purpose — all arrive as this one code.
+const CHECK_VIOLATION: &str = "23514";
 
 /// Map a failed write to `lf_zuordnung` onto the caller's error.
 ///
-/// A Marktlokation split beyond 100 % across its active Tranchen is a bad
-/// request, not an outage: it must reach the caller as `422` naming the
-/// over-allocation, not as a `500` that reads like the database is down.
+/// Every invariant this table carries states something about the *request*: a
+/// share outside „> 0 % und < 100 %", a Marktlokation split beyond the whole,
+/// a Tranche holding all of it. None of them is an outage, so they reach the
+/// caller as `422` naming the constraint rather than as a `500` that reads like
+/// the database is down.
+///
+/// Matched on the SQLSTATE rather than on a constraint name, so a constraint
+/// added to the schema is classified correctly without being listed here — the
+/// failure mode of a name list is that the newest rule is the one it misses.
 fn zuordnung_write(e: sqlx::Error) -> MdmError {
     if let sqlx::Error::Database(db) = &e
-        && db.constraint() == Some(CONSERVATION_CONSTRAINT)
+        && db.code().as_deref() == Some(CHECK_VIOLATION)
     {
         return MdmError::Unprocessable {
             reason: db.message().to_owned(),

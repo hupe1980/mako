@@ -628,7 +628,7 @@ pub(crate) fn co2kostaufg_disclosures(
     emissionsfaktor_kg_per_kwh: Decimal,
     tag: &'static str,
 ) -> Vec<BillingPosition> {
-    let emissionen_kg = (menge_kwh * emissionsfaktor_kg_per_kwh).round_dp(2);
+    let emissionen_kg = (menge_kwh * emissionsfaktor_kg_per_kwh).round_kfm(2);
     let info = |description: String, legal: &'static str| BillingPosition {
         description,
         legal_basis: Some(legal.to_owned()),

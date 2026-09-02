@@ -307,19 +307,22 @@ fn to_anfrage(fall: &NeuanlageFall) -> NeuanlageAnfrage {
                 .as_deref()
                 .and_then(Veraeusserungsform::from_wire_code)
                 .map(|v| ErzeugungsAnmeldung {
-                    // A Neuanlage creates the assignment, so it is always the
-                    // non-tranchierte Geschäftsvorfall 1 unless the message
-                    // named a Tranche — which `E_0608` does not branch on.
+                    // Not read on this path. `E_0608` splits at Prüfschritt 10
+                    // on verbrauchend vs erzeugend and nowhere on the
+                    // Geschäftsvorfall, so the Neuanlage case stores no
+                    // `SG4 STS+7` Ergänzung to resolve — a 55601 carries `ZW0`
+                    // or `ZW2` (AHB Bedingungen [560]/[561], „Geschäftsvorfall
+                    // A"/„B"), and neither changes the answer.
                     geschaeftsvorfall: Geschaeftsvorfall::Eins,
                     angemeldete_veraeusserungsform: v,
                     bestehende_veraeusserungsform: None,
                     nicht_eeg_kwkg: false,
                     ausfallverguetung: false,
-                    // Always the whole Marktlokation: a Neuanlage creates the
-                    // assignment, so there is no Tranche to share it with.
+                    // Unread for the same reason as the Geschäftsvorfall: the
+                    // Tranchen-Prüfschritte are `E_0623`'s, not `E_0608`'s.
                     gewuenschter_prozentsatz: None,
                     tranchen_prozent: std::collections::BTreeMap::new(),
-                    direktvermarktungspflichtig: false,
+                    direktvermarktungspflichtig: None,
                 })
         })
         .flatten();

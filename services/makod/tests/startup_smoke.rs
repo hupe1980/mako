@@ -197,19 +197,54 @@ fn party_registry_rejects_duplicate_role() {
 // that all registered workflows have coverage, since the EngineBuilder panics at build()
 // time for any workflow lacking a profile.
 
+/// The `<strong>N</strong><span>label</span>` figures in the landing page's
+/// stats band, as `label -> N`.
+///
+/// Reading the page is the point: a constant restating what it says is a claim,
+/// not a check, and drifts the moment the page is edited on its own.
+fn landing_page_stats() -> std::collections::HashMap<String, usize> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../site/templates/index.html");
+    let html = std::fs::read_to_string(&path).expect("the landing page template");
+    let mut out = std::collections::HashMap::new();
+    for chunk in html.split("<strong>").skip(1) {
+        let Some((number, rest)) = chunk.split_once("</strong>") else {
+            continue;
+        };
+        let Ok(n) = number.trim().parse::<usize>() else {
+            continue;
+        };
+        // Only the stats band pairs a number with its own `<span>` label; the
+        // prose figures are picked up by their sentence instead.
+        let Some(label) = rest
+            .strip_prefix("<span>")
+            .and_then(|r| r.split_once("</span>"))
+            .map(|(l, _)| l.trim())
+        else {
+            continue;
+        };
+        out.insert(label.to_owned(), n);
+    }
+    assert!(
+        !out.is_empty(),
+        "no <strong>N</strong><span>label</span> stats found in {}",
+        path.display()
+    );
+    out
+}
+
 /// Pin the headline figures the project's landing page advertises.
 ///
-/// `site/templates/index.html` states a PID count and a workflow count. Those
-/// are the first numbers a reader sees, and nothing connected them to the code —
-/// so adding a module or a PID moved the truth and left the page behind, with no
-/// signal. This test is that signal.
+/// The figures are **read out of `site/templates/index.html`**, not restated
+/// here: a constant in the test claims what the page says without checking it,
+/// so editing the page alone would keep CI green on a number nothing backs.
 ///
 /// The counts are taken over the **full** module stack, which is what the page
 /// describes: a deployment holding every market role. A role-limited deployment
 /// registers fewer.
 ///
-/// When this fails, the fix is to update `index.html` to the number the
-/// assertion reports — not to loosen the assertion.
+/// When this fails, the fix is to change whichever side is wrong — usually the
+/// page — not to loosen the assertion.
 #[test]
 fn the_landing_page_figures_match_the_registered_engine() {
     let mut builder = EngineBuilder::new()
@@ -228,25 +263,26 @@ fn the_landing_page_figures_match_the_registered_engine() {
     let pids = ctx.pid_router().len();
     let workflows = ctx.registered_workflows().len();
 
-    // Deliberately explicit so a diff shows the number, not just a symbol.
-    //
-    // `LANDING_PAGE_PIDS` counts PIDs the engine *routes* (`PidRouter::table` is
-    // keyed by PID). The page states a second, smaller figure beside it — how
-    // many of those also carry AHB rules — which `e2e_ahb_rule_coverage_guard`
-    // pins; the gap between them is the deliberate `KNOWN_PROFILE_GAPS` set.
-    // Both are correct and measure different things; do not "harmonise" them.
-    // The figure moves whenever a module registers or retires a PID; update it
-    // together with the page rather than reasoning about the delta here.
-    const LANDING_PAGE_PIDS: usize = 467;
-    const LANDING_PAGE_WORKFLOWS: usize = 70;
-    // The page's other two counts, derived the same way rather than trusted.
-    const LANDING_PAGE_MESSAGE_TYPES: usize = 17;
-    const LANDING_PAGE_SERVICES: usize = 17;
+    // The page's own numbers. It states a second, smaller PID figure beside the
+    // routed one — how many also carry AHB rules — which
+    // `e2e_ahb_rule_coverage_guard` pins; the gap between them is the deliberate
+    // `KNOWN_PROFILE_GAPS` set. Both are correct and measure different things;
+    // do not "harmonise" them.
+    let page = landing_page_stats();
+    let stat = |label: &str| -> usize {
+        *page
+            .get(label)
+            .unwrap_or_else(|| panic!("site/templates/index.html has no \"{label}\" stat"))
+    };
+    let landing_page_pids = stat("Prüfidentifikatoren routed");
+    let landing_page_workflows = stat("MaKo workflows");
+    let landing_page_message_types = stat("EDIFACT message types");
+    let landing_page_services = stat("services");
 
     assert_eq!(
         edi_energy::MessageType::ALL.len(),
-        LANDING_PAGE_MESSAGE_TYPES,
-        "site/templates/index.html advertises {LANDING_PAGE_MESSAGE_TYPES} EDIFACT \
+        landing_page_message_types,
+        "site/templates/index.html advertises {landing_page_message_types} EDIFACT \
          message types, `MessageType::ALL` has {} — update the page",
         edi_energy::MessageType::ALL.len()
     );
@@ -258,27 +294,26 @@ fn the_landing_page_figures_match_the_registered_engine() {
         .filter(|l| l.trim_start().starts_with("\"services/"))
         .count();
     assert_eq!(
-        services, LANDING_PAGE_SERVICES,
-        "site/templates/index.html advertises {LANDING_PAGE_SERVICES} services, the \
+        services, landing_page_services,
+        "site/templates/index.html advertises {landing_page_services} services, the \
          workspace has {services} — update the page"
     );
 
     assert_eq!(
-        pids, LANDING_PAGE_PIDS,
-        "site/templates/index.html advertises {LANDING_PAGE_PIDS} Prüfidentifikatoren, \
+        pids, landing_page_pids,
+        "site/templates/index.html advertises {landing_page_pids} Prüfidentifikatoren, \
          the engine registers {pids} — update the page"
     );
     assert_eq!(
-        workflows, LANDING_PAGE_WORKFLOWS,
-        "site/templates/index.html advertises {LANDING_PAGE_WORKFLOWS} MaKo workflows, \
+        workflows, landing_page_workflows,
+        "site/templates/index.html advertises {landing_page_workflows} MaKo workflows, \
          the engine registers {workflows} — update the page"
     );
 
     // The landing page is not the only place that states these figures. Prose
     // elsewhere restates them to explain what a role-scoped build is a subset
-    // *of*, and a sentence naming a number nothing checks goes stale on its own
-    // — the two service-overview mentions below drifted to a figure that never
-    // matched any build, precisely because they were not listed here.
+    // *of*, and a sentence naming a number nothing checks goes stale on its own,
+    // so every such sentence is listed here.
     //
     // A doc that names only the workflow count is listed too: the pair and the
     // lone number go stale the same way, and the diagram labels are where a
@@ -306,6 +341,14 @@ fn the_landing_page_figures_match_the_registered_engine() {
         (
             "../../site/content/docs/services/_index.md",
             format!("EDIFACT runtime · {workflows} workflows"),
+        ),
+        (
+            "../../site/content/docs/services/_index.md",
+            format!("{workflows} workflows over {pids} Prüfidentifikatoren"),
+        ),
+        (
+            "../../services/makod/README.md",
+            format!("**{workflows} workflows** over {pids} Prüfidentifikatoren"),
         ),
     ] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(doc);

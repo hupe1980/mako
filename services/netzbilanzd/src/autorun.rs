@@ -270,21 +270,25 @@ pub async fn post_ggv_nne(
         .unwrap_or_else(|| invoice_date.saturating_add(time::Duration::days(30)));
 
     let total_kwh: Decimal = req.tenant_consumption.values().copied().sum();
-    let mut positions: Vec<BillingPositionRequest> = Vec::new();
-    let mut attribution = Vec::new();
-
     for (tenant_malo, kwh) in &req.tenant_consumption {
         if *kwh < Decimal::ZERO {
             return Err(ApiError::unprocessable(format!(
                 "tenant {tenant_malo}: consumption {kwh} kWh is negative"
             )));
         }
-        // The share is of the sum actually supplied, so it always adds to 100 %.
-        let share_pct = if total_kwh.is_zero() {
-            Decimal::ZERO
-        } else {
-            (*kwh / total_kwh * Decimal::from(100)).round_dp(4)
-        };
+    }
+
+    // The shares are of the sum actually supplied, so they describe the whole of
+    // it and have to add to exactly 100 %. Rounding each one on its own does not
+    // give that: three equal tenants take 33.3333 % each and the statement
+    // accounts for 99.9999 % of the supply. `proportional_split` allocates the
+    // hundred by largest remainder instead.
+    let share_pct = ggv_shares(&req.tenant_consumption, total_kwh);
+
+    let mut positions: Vec<BillingPositionRequest> = Vec::new();
+    let mut attribution = Vec::new();
+
+    for ((tenant_malo, kwh), share_pct) in req.tenant_consumption.iter().zip(share_pct) {
         attribution.push(serde_json::json!({
             "tenant_malo": tenant_malo,
             "kwh": kwh.to_string(),
@@ -485,6 +489,23 @@ pub async fn kostenblatt_deadline_alert(pool: &PgPool, cfg: &NetzbilanzConfig) {
     .await;
 }
 
+
+/// Each tenant's share of the supplied energy in percent, summing to exactly 100.
+///
+/// Ordered the way the map iterates, so the caller can zip it back onto the
+/// tenants. An empty supply has no shares to state and answers zero for each.
+fn ggv_shares(
+    consumption: &std::collections::BTreeMap<String, Decimal>,
+    total_kwh: Decimal,
+) -> Vec<Decimal> {
+    if total_kwh.is_zero() {
+        return vec![Decimal::ZERO; consumption.len()];
+    }
+    let fractions: Vec<Decimal> = consumption.values().map(|kwh| kwh / total_kwh).collect();
+    billing::proportional_split(Decimal::from(100), &fractions, 4)
+        .unwrap_or_else(|_| vec![Decimal::ZERO; consumption.len()])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -509,16 +530,49 @@ mod tests {
         assert!(month_end(2026, 0).is_err());
     }
 
+    fn consumption(kwh: &[Decimal]) -> std::collections::BTreeMap<String, Decimal> {
+        kwh.iter()
+            .enumerate()
+            .map(|(i, k)| (format!("tenant-{i}"), *k))
+            .collect()
+    }
+
     /// GGV shares are of the sum actually supplied, so they add to 100 %.
     #[test]
     fn ggv_shares_add_to_one_hundred_percent() {
-        let consumption = [dec!(1200), dec!(800), dec!(2000)];
-        let total: Decimal = consumption.iter().sum();
-        let shares: Vec<Decimal> = consumption
-            .iter()
-            .map(|kwh| (kwh / total * Decimal::from(100)).round_dp(4))
-            .collect();
-        assert_eq!(shares, vec![dec!(30.0), dec!(20.0), dec!(50.0)]);
-        assert_eq!(shares.iter().sum::<Decimal>(), dec!(100.0));
+        let c = consumption(&[dec!(1200), dec!(800), dec!(2000)]);
+        let total: Decimal = c.values().copied().sum();
+        assert_eq!(
+            super::ggv_shares(&c, total),
+            vec![dec!(30.0), dec!(20.0), dec!(50.0)]
+        );
+    }
+
+    /// The case per-share rounding gets wrong: three equal tenants each take a
+    /// third, which no 4-dp figure represents, so one of them carries the
+    /// remainder rather than the statement losing it.
+    #[test]
+    fn ggv_shares_of_equal_tenants_still_add_to_one_hundred() {
+        for n in 3..=7u32 {
+            let c = consumption(&vec![dec!(1000); n as usize]);
+            let total: Decimal = c.values().copied().sum();
+            let shares = super::ggv_shares(&c, total);
+            assert_eq!(shares.len(), n as usize);
+            assert_eq!(
+                shares.iter().sum::<Decimal>(),
+                Decimal::from(100),
+                "{n} equal tenants"
+            );
+        }
+    }
+
+    /// Nothing supplied is no shares to state, not a division by zero.
+    #[test]
+    fn no_supply_states_no_shares() {
+        let c = consumption(&[Decimal::ZERO, Decimal::ZERO]);
+        assert_eq!(
+            super::ggv_shares(&c, Decimal::ZERO),
+            vec![Decimal::ZERO, Decimal::ZERO]
+        );
     }
 }

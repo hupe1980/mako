@@ -35,6 +35,7 @@
 //! gives the recipient no Vorsteuerabzug, because the recipient still owes it
 //! under §13b.
 
+use crate::rounding::RoundMoney;
 use rust_decimal::{Decimal, dec};
 
 use crate::error::BillingError;
@@ -226,7 +227,7 @@ pub fn steuerausweis(
         // Kaufmännisch to the cent: the tax is a monetary amount on the
         // invoice, not an intermediate.
         steuer_eur: (netto_eur * satz / dec!(100))
-            .round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero),
+            .round_kfm(2),
         hinweis: None,
         rechtsgrundlage: "§12 Abs. 1 UStG",
     })

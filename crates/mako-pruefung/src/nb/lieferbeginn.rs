@@ -486,7 +486,7 @@ mod tests {
                 // Untranchiert: the Anmeldung is for the whole Marktlokation.
                 gewuenschter_prozentsatz: None,
                 tranchen_prozent: std::collections::BTreeMap::new(),
-                direktvermarktungspflichtig: false,
+                direktvermarktungspflichtig: None,
             }),
             abmeldeanfrage,
         }

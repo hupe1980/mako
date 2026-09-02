@@ -48,6 +48,7 @@
 
 #![forbid(unsafe_code)]
 
+use rust_decimal::RoundingStrategy;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
@@ -993,8 +994,8 @@ fn remadv_outbox(
                     (false, false) => "380",
                 },
                 "rechnungsnummer": r.rechnungsnummer.clone().unwrap_or_default(),
-                "faelliger_betrag": faellig.round_dp(2).to_string(),
-                "ueberweisungsbetrag": ueberweisung.round_dp(2).to_string(),
+                "faelliger_betrag": faellig.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero).to_string(),
+                "ueberweisungsbetrag": ueberweisung.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero).to_string(),
                 "rechnungsdatum": r
                     .rechnungsdatum
                     .map(|d| d.date().to_string())

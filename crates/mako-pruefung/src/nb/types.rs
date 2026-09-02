@@ -165,8 +165,13 @@ pub struct ErzeugungsAnmeldung {
     pub tranchen_prozent: std::collections::BTreeMap<String, Decimal>,
     /// Prüfschritt 540 — „Handelt es sich um eine direktvermarktungspflichtige
     /// Marktlokation?" (§ 21b EEG), from the NB's EEG-Register.
+    ///
+    /// `None` means *unread*, not „nein": the answer follows from the Anlage's
+    /// registration and installed capacity, which no message carries. Reading it
+    /// as „nein" would settle Prüfschritt 540 for every Anmeldung and make `A55`
+    /// — the „Herstellung einer 100 % LF-Zuordnung" trigger — unreachable.
     #[serde(default)]
-    pub direktvermarktungspflichtig: bool,
+    pub direktvermarktungspflichtig: Option<bool>,
 }
 
 impl ErzeugungsAnmeldung {
@@ -410,6 +415,11 @@ pub struct TranchenLage {
     /// Supplied rather than derived: it follows from the Anlage's registration
     /// and installed capacity (§ 21b EEG), which is the NB's EEG-Register and
     /// not anything the assignment list can answer.
+    ///
+    /// [`TranchenLage`] carries only resolved facts: a caller that cannot read
+    /// this one passes no `TranchenLage` at all, and
+    /// [`super::lieferbeginn::evaluate_lieferbeginn`] escalates rather than
+    /// choosing between `A55` and `A56`.
     pub direktvermarktungspflichtig: bool,
 }
 

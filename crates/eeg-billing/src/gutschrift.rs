@@ -15,6 +15,7 @@
 //! `energy-billing::Invoice::to_rechnung` and `grid_billing::bo4e::into_rechnung`
 //! already follow.
 
+use crate::rounding::RoundMoney;
 use billing::{BillingDocument, BillingError, DocumentMeta, LineItem, PricingModel, TaxCategory};
 use rubo4e::current as bo;
 use rust_decimal::Decimal;
@@ -84,8 +85,8 @@ fn document_to_rechnung(doc: &BillingDocument) -> Result<bo::Rechnung, BillingEr
             // BT-116 / BT-117 are document-level amounts: EN 16931 BR-DEC-19 and
             // BR-DEC-20 cap them at two decimals, and a third of a cent is not
             // bankable in any case.
-            basiswert: Some(e.taxable_base.into_decimal().round_dp(2)),
-            steuerwert: Some(e.tax_amount.into_decimal().round_dp(2)),
+            basiswert: Some(e.taxable_base.into_decimal().round_kfm(2)),
+            steuerwert: Some(e.tax_amount.into_decimal().round_kfm(2)),
             // BO4E carries the rate as a percentage (BT-119); billing stores a fraction.
             steuersatz: Some(e.rate * Decimal::ONE_HUNDRED),
             steuerart: Some(match e.category {
@@ -101,12 +102,12 @@ fn document_to_rechnung(doc: &BillingDocument) -> Result<bo::Rechnung, BillingEr
     // decimals. 81.10 net at 19 % is 15.409 EUR of VAT — a figure no bank can
     // move — so the cent rounding happens here, once, and the gross is the sum of
     // the two rounded parts rather than a third independently rounded number.
-    let taxable_total = doc.taxable_total()?.into_decimal().round_dp(2);
-    let vat_total = doc.vat_total()?.into_decimal().round_dp(2);
+    let taxable_total = doc.taxable_total()?.into_decimal().round_kfm(2);
+    let vat_total = doc.vat_total()?.into_decimal().round_kfm(2);
     let non_vat_total = (doc.gross_total().into_decimal()
         - doc.taxable_total()?.into_decimal()
         - doc.vat_total()?.into_decimal())
-    .round_dp(2);
+    .round_kfm(2);
 
     let mut rechnung = bo::Rechnung {
         typ: Some(bo::BoTyp::Rechnung),

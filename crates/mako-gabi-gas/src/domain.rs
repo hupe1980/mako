@@ -42,6 +42,7 @@
 //! - **GaBi Gas 2.1 (BK7-24-01-008)**: Balancing group accounting
 //! - **BNetzA BK7-24-01-008**: GaBi Gas 2.1 ruling
 
+use rust_decimal::RoundingStrategy;
 use rust_decimal::Decimal;
 use time::{Date, Duration, OffsetDateTime, Time, Weekday};
 
@@ -143,7 +144,7 @@ impl GasBeschaffenheit {
     #[must_use]
     pub fn to_kwh_hs(&self, volume_m3: Decimal) -> Decimal {
         let result = volume_m3 * self.brennwert_hs_kwh_per_m3 * self.zustandszahl;
-        result.round_dp(3)
+        result.round_dp_with_strategy(3, RoundingStrategy::MidpointAwayFromZero)
     }
 
     /// `true` when these parameters are valid on the given date.

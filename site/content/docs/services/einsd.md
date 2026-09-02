@@ -1254,6 +1254,24 @@ On a permitted merge the child becomes `abgemeldet`, the parent's
 settlements run on the parent alone. Update `verguetungssatz_ct` if the combined
 capacity crosses a rate band boundary. A refused merge changes nothing.
 
+### The blocks share one meter reading
+
+A fused plant keeps a rate per block — an extension commissioned later carries
+its own degression step — but the grid operator meters the whole of it once. The
+settlement therefore splits the metered Einspeisemenge across the blocks by
+installed capacity, and the parts have to add back up to what was metered.
+
+Each block's own rounded share does not do that: three equal blocks of a
+1000 kWh month take 333.333 kWh each and the plant is settled for 999.999 kWh.
+The split is by **largest remainder** instead, so one block carries the
+remaining thousandth and the block quantities sum to the reading exactly. The
+hours during negative EPEX prices (§ 51) are split the same way.
+
+A block whose Förderdauer has ended is allocated and then dropped rather than
+excluded from the split: its capacity still counts towards the plant, so the
+energy that falls to it is no longer eligible rather than redistributed to the
+blocks that remain.
+
 ---
 
 ## EPEX Monthly Price

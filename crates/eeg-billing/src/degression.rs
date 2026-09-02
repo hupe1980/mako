@@ -24,6 +24,7 @@
 //! The window series this produces reproduces the Bundesnetzagentur's published
 //! "Anzulegende Werte für Solaranlagen" spreadsheet exactly — see the tests.
 
+use crate::rounding::RoundMoney;
 use rust_decimal::Decimal;
 use rust_decimal::dec;
 use time::{Date, Month};
@@ -112,7 +113,7 @@ pub fn abgesenkter_wert(basiswert_ct: Decimal, stufen: u32) -> Decimal {
     // the published 7,43. `round_dp` alone would round half-to-even and give
     // 7,42 — a cent per kWh, for twenty years, on every ≤ 40 kW plant.
     abgesenkter_wert_ungerundet(basiswert_ct, stufen)
-        .round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
+        .round_kfm(2)
 }
 
 /// The unrounded §49 chain — the basis every further step is computed from
@@ -218,7 +219,7 @@ impl JaehrlicheAbsenkung {
         let faktor = Decimal::ONE - self.satz;
         (0..self.stufen(inbetriebnahme))
             .fold(basiswert_ct, |acc, _| acc * faktor)
-            .round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
+            .round_kfm(2)
     }
 }
 

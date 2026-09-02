@@ -246,22 +246,103 @@ pub mod transaktionsgrund {
     pub const ABRECHNUNGSDATEN_BK_ERZEUGEND: &str = "ZX2";
     /// `ZX3` — Abrechnungsdaten BK-Abrechnung verbrauchender `MaLo`.
     pub const ABRECHNUNGSDATEN_BK_VERBRAUCHEND: &str = "ZX3";
+    /// `ZX4` — Abrechnungsdaten `NNA`.
+    pub const ABRECHNUNGSDATEN_NNA: &str = "ZX4";
+    /// `ZX5` — Änderung Blindabrechnungsdaten der `NeLo`.
+    pub const AENDERUNG_BLINDABRECHNUNGSDATEN_NELO: &str = "ZX5";
+    /// `ZX6` — Änderung Daten der `MaLo`.
+    pub const AENDERUNG_DATEN_MALO: &str = "ZX6";
+    /// `ZX7` — Änderung Daten der `MeLo`.
+    pub const AENDERUNG_DATEN_MELO: &str = "ZX7";
+    /// `ZX8` — Änderung Daten der `NeLo`.
+    pub const AENDERUNG_DATEN_NELO: &str = "ZX8";
+    /// `ZX9` — Änderung Daten der `SR` (Steuerbare Ressource).
+    pub const AENDERUNG_DATEN_SR: &str = "ZX9";
+    /// `ZY0` — Änderung Daten der `TR` (Technische Ressource).
+    pub const AENDERUNG_DATEN_TR: &str = "ZY0";
+    /// `ZY1` — Änderung Daten der Tranche.
+    pub const AENDERUNG_DATEN_TRANCHE: &str = "ZY1";
+    /// `ZY2` — Änderung der Lokationsbündelstruktur.
+    pub const AENDERUNG_LOKATIONSBUENDELSTRUKTUR: &str = "ZY2";
+    /// `ZY4` — Antwort auf `GDA` an `MSB`.
+    pub const ANTWORT_GDA_MSB: &str = "ZY4";
+    /// `ZY5` — Antwort auf `GDA` (Strom an Gas).
+    pub const ANTWORT_GDA_STROM_AN_GAS: &str = "ZY5";
+    /// `ZY6` — Antwort auf `GDA` erzeugende `MaLo`.
+    pub const ANTWORT_GDA_ERZEUGENDE_MALO: &str = "ZY6";
+    /// `ZY7` — Antwort auf `GDA` verbrauchende `MaLo`.
+    pub const ANTWORT_GDA_VERBRAUCHENDE_MALO: &str = "ZY7";
+    /// `ZY9` — Daten auf individuelle Bestellung.
+    pub const DATEN_INDIVIDUELLE_BESTELLUNG: &str = "ZY9";
+    /// `ZAM` — Stammdaten `BK`-Treue.
+    pub const STAMMDATEN_BK_TREUE: &str = "ZAM";
+    /// `ZAN` — Korrektur Abrechnungsdaten BK-Abrechnung verbrauchender `MaLo`.
+    pub const KORREKTUR_ABRECHNUNGSDATEN_BK_VERBRAUCHEND: &str = "ZAN";
+    /// `ZAO` — Korrektur Abrechnungsdaten BK-Abrechnung erzeugender `MaLo`.
+    pub const KORREKTUR_ABRECHNUNGSDATEN_BK_ERZEUGEND: &str = "ZAO";
+    /// `ZZA` — Änderung Paket-ID der `MaLo`.
+    pub const AENDERUNG_PAKET_ID_MALO: &str = "ZZA";
+    /// `ZZD` — Übergangsversorgung.
+    ///
+    /// „Übergangsversorgung gibt es nur bei Marktlokationen, die unter
+    /// § 38a `EnWG` fallen. Grundlage ist eine bilaterale Vereinbarung."
+    ///
+    /// A Transaktionsgrund, not a Versorgungsart — the `CCI+Z36` code space it
+    /// is mistaken for names how a Marktlokation is supplied, and § 38a names
+    /// why.
+    pub const UEBERGANGSVERSORGUNG: &str = "ZZD";
 }
 
 /// `SG4 STS+7` DE 9013 (element 3) — Transaktionsgrundergänzung.
 ///
-/// This is the element that says which *kind of object* the Vorgang is about,
-/// and therefore which branch of `E_0609` / `E_0624` applies. Without it an
-/// LFA cannot tell a verbrauchende Marktlokation from a Tranche.
+/// One element carrying **two disjoint code spaces**, and which one applies
+/// follows from the Prüfidentifikator (UTILMD MIG Strom S2.2, `SG4 STS` DE 9013;
+/// UTILMD AHB Strom 2.2):
+///
+/// - **Which kind of object** the Vorgang is about — `ZW3`…`ZW7`, `ZAP`,
+///   `ZZB`/`ZZC` — which is the branch of `E_0609` / `E_0624` that applies.
+///   Without it an LFA cannot tell a verbrauchende Marktlokation from a Tranche.
+/// - **Which Geschäftsvorfall** a Lieferbeginn an einer erzeugenden
+///   Marktlokation is — `ZW0`/`ZW1`/`ZW2`, the element `E_0622` Prüfschritte
+///   300/310 branch on. The AHB marks these on 55077/55078 and 55601/55603; the
+///   object codes do not appear there.
+///
+/// The `ZW8`…`ZX1` Zuordnungsfälle are a third space in the same element and
+/// live in [`zuordnungsfall`].
 pub mod ergaenzung {
+    /// `ZW0` — Geschäftsvorfall 1 (Anmeldung 100 %).
+    ///
+    /// „Der LFN wird einer Marktlokation vollständig zugeordnet (vollständige
+    /// (100%ige) Zuordnung)." Also the code for turning a tranchierte
+    /// Marktlokation back into a nicht-tranchierte one.
+    pub const GESCHAEFTSVORFALL_1: &str = "ZW0";
+    /// `ZW1` — Geschäftsvorfall 2.
+    ///
+    /// „Der LFN wird einer **bestehenden** Tranche vollständig zugeordnet",
+    /// at a direct handover that keeps the Tranche.
+    pub const GESCHAEFTSVORFALL_2: &str = "ZW1";
+    /// `ZW2` — Geschäftsvorfall 3.
+    ///
+    /// „Der LFN wird einer **neu zu bildenden** Tranche zugeordnet (anteiliger
+    /// Zuordnungsvorgang unter Bildung neuer Tranchen)." This is the code that
+    /// makes the `SG8` Tranchengröße (`9991000002090`) mandatory.
+    pub const GESCHAEFTSVORFALL_3: &str = "ZW2";
     /// `ZW3` — Erzeugende Marktlokation.
     pub const ERZEUGENDE_MALO: &str = "ZW3";
     /// `ZW4` — Verbrauchende Marktlokation.
     pub const VERBRAUCHENDE_MALO: &str = "ZW4";
     /// `ZW5` — Tranche.
     pub const TRANCHE: &str = "ZW5";
+    /// `ZW6` — Pauschale Marktlokation.
+    pub const PAUSCHALE_MALO: &str = "ZW6";
+    /// `ZW7` — Gemessene Marktlokation.
+    pub const GEMESSENE_MALO: &str = "ZW7";
     /// `ZAP` — Ruhende Marktlokation.
     pub const RUHENDE_MALO: &str = "ZAP";
+    /// `ZZB` — Stilllegung **inkl.** Stilllegung der `MaLo`.
+    pub const STILLLEGUNG_INKL_MALO: &str = "ZZB";
+    /// `ZZC` — Stilllegung **exkl.** Stilllegung der `MaLo`.
+    pub const STILLLEGUNG_EXKL_MALO: &str = "ZZC";
 }
 
 /// `SG4 STS+7` DE 9013 (element 3) on the **Ankündigung Zuordnung LF**.
@@ -350,8 +431,25 @@ pub mod produkt {
     /// Produkt-Code `9991000002082` — **Bilanzkreis**, format `an..17`
     /// (Bedingung `[970]`).
     pub const BILANZKREIS: &str = "9991000002082";
-    /// Produkt-Code `9991000002090` — Tranchengröße.
+    /// Produkt-Code `9991000002090` — **Tranchengröße**.
+    ///
+    /// Muss in Geschäftsvorfall 3 of an Anmeldung einer Zuordnung des LFN
+    /// („`STS+7++xxx+ZW2`"), bestellbar over 55077 and 55601, max. once per
+    /// Produktpaket-ID (Codeliste der Konfigurationen 1.4 Kap. 6.1.1).
     pub const TRANCHENGROESSE: &str = "9991000002090";
+    /// `CAV+ZH9` — Tranchengröße als **prozentuale Aufteilung**.
+    ///
+    /// The Wertedetails are then Muss, and Bedingung `[914]` fixes the range:
+    /// „Möglicher Wert: > 0".
+    pub const TRANCHE_PROZENTUALE_AUFTEILUNG: &str = "9991000003014";
+    /// `CAV+ZH9` — Tranchengröße als **Aufteilungsfaktor** auf Basis von
+    /// Referenzträger bzw. installierter Leistung.
+    pub const TRANCHE_AUFTEILUNGSFAKTOR: &str = "9991000003022";
+    /// `CAV+ZH9` — Tranchengröße als **Aufteilung auf Technische Ressourcen**.
+    ///
+    /// The Wertedetails then name every Technische Ressource to assign, so the
+    /// value is not a single number.
+    pub const TRANCHE_AUFTEILUNG_TR: &str = "9991000003220";
     /// `SG10 CCI` DE 7059 — **Bilanzkreis**, the `GeLi` Gas shape.
     ///
     /// `GeLi` Gas has no Produktpaket: UTILMD AHB Gas 1.2 marks `SG10 CCI+Z19`
@@ -404,6 +502,38 @@ impl Produkt {
             eigenschaft: None,
             wert: Some(bk.into()),
         }
+    }
+}
+
+/// The `SG8` **Tranchengröße** of a Geschäftsvorfall 3, as it stands on the wire.
+///
+/// Three Produkteigenschaften share the Produkt-Code `9991000002090` and they
+/// are not interchangeable (Codeliste der Konfigurationen 1.4 Kap. 6.1.1):
+/// a percentage, an Aufteilungsfaktor on a Referenzträger or the installierte
+/// Leistung, and a list of Technische Ressourcen. Only the first is a share
+/// `E_0623` Prüfschritte 510–530 can add up, so the Eigenschaft travels with
+/// the value instead of being assumed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tranchengroesse {
+    /// `SG10 CAV+ZH9` DE 7110 — the Code der Produkteigenschaft, where stated.
+    pub eigenschaft: Option<String>,
+    /// `SG10 CAV+ZV4` DE 7110 — the Merkmalswert, verbatim.
+    pub wert: String,
+}
+
+impl Tranchengroesse {
+    /// The value, but only where the Eigenschaft says it is a **percentage**.
+    ///
+    /// `None` for the Aufteilungsfaktor and the Technische-Ressourcen forms:
+    /// neither is a share `E_0623` Prüfschritte 510–530 can add up, and reading
+    /// one as one would put a fabricated percentage into the Tranchen
+    /// arithmetic. Returned verbatim — the range Bedingung `[914]` fixes
+    /// („Möglicher Wert: > 0") is the reader's to enforce, since this crate
+    /// carries no decimal arithmetic.
+    #[must_use]
+    pub fn prozent_wert(&self) -> Option<&str> {
+        (self.eigenschaft.as_deref() == Some(produkt::TRANCHE_PROZENTUALE_AUFTEILUNG))
+            .then_some(self.wert.as_str())
     }
 }
 
@@ -674,5 +804,124 @@ mod tests {
         assert_eq!(IDE_VORGANG, "24");
         assert_eq!(loc::STEUERBARE_RESSOURCE, "Z19");
         assert_ne!(IDE_VORGANG, loc::MARKTLOKATION);
+    }
+}
+
+#[cfg(test)]
+mod de9013_tests {
+    /// `SG4 STS+7` DE 9013 has three composites, and each is its own code
+    /// space. The tables below are the whole of what UTILMD MIG Strom S2.2
+    /// publishes for elements 2 and 3, so a re-import that drops a code fails
+    /// here rather than at a counterparty.
+    ///
+    /// A code missing from element 2 is a Geschäftsvorfall mako cannot name; a
+    /// code missing from element 3 is one it reads as „not stated", which on
+    /// 55077 turns a decidable Anmeldung into an escalation.
+    #[test]
+    fn the_de9013_tables_are_the_mig_tables() {
+        // Element 2 — Transaktionsgrund.
+        const GRUND: &[&str] = &[
+            "E01", "E02", "E03", "E05", "E06", "Z02", "Z15", "Z26", "Z33", "Z36", "Z37", "Z39",
+            "Z41", "ZAM", "ZAN", "ZAO", "ZC6", "ZC7", "ZC8", "ZD9", "ZE3", "ZG5", "ZG6", "ZG9",
+            "ZH0", "ZH1", "ZH2", "ZJ4", "ZP3", "ZP4", "ZQ7", "ZR9", "ZT0", "ZT4", "ZT5", "ZT6",
+            "ZT7", "ZU1", "ZX2", "ZX3", "ZX4", "ZX5", "ZX6", "ZX7", "ZX8", "ZX9", "ZY0", "ZY1",
+            "ZY2", "ZY4", "ZY5", "ZY6", "ZY7", "ZY9", "ZZA", "ZZD",
+        ];
+        // Element 3 — Transaktionsgrundergänzung. `ZW8`…`ZX1` are the
+        // Zuordnungsfälle and live in their own module; the element is one space
+        // on the wire, so they belong in this count.
+        const ERGAENZUNG: &[&str] = &[
+            "ZAP", "ZW0", "ZW1", "ZW2", "ZW3", "ZW4", "ZW5", "ZW6", "ZW7", "ZW8", "ZW9", "ZX0",
+            "ZX1", "ZZB", "ZZC",
+        ];
+
+        use super::{ergaenzung as e, transaktionsgrund as g, zuordnungsfall as z};
+        let shipped_grund = [
+            g::EIN_AUSZUG,
+            g::EINZUG_NEUANLAGE,
+            g::WECHSEL,
+            g::STORNIERUNG,
+            g::ERSATZBELIEFERUNG,
+            g::KUENDIGUNG_LRV,
+            g::INFO_EXISTIERENDE_ZUORDNUNG,
+            g::AUSZUG_STILLLEGUNG,
+            g::EOG_UMZUG,
+            g::EOG_NEUANLAGE,
+            g::EOG_VORUEBERGEHEND,
+            g::ESV_ENDE_OHNE_FOLGE,
+            g::EOG_BK_SCHLIESSUNG,
+            g::EOG_ZUORDNUNGSERMAECHTIGUNG,
+            g::BEENDIGUNG_ZUORDNUNG,
+            g::BEENDIGUNG_RUECKZUORDNUNG,
+            g::AUFHEBUNG_EEG38,
+            g::BEENDIGUNG_EEG38,
+            g::AUFHEBUNG_AUSZUG,
+            g::AUFHEBUNG_FRUEHERE_ANMELDUNG,
+            g::AUFHEBUNG_STILLLEGUNG,
+            g::AUFHEBUNG_VERTRAGSVERHAELTNIS,
+            g::ZUSAETZLICHER_DATENSATZ,
+            g::STAMMDATENAENDERUNG,
+            g::UEBERNAHME_KEIN_IMS,
+            g::STAMMDATEN,
+            g::WERTE,
+            g::ABMELDUNG_FEHLENDE_ZUORDNUNGSERMAECHTIGUNG,
+            g::KUENDIGUNG_ANSCHLUSSNEHMER,
+            g::ABMELDUNG_FEHLENDE_ZE_ZRT,
+            g::ENDE_KUENDIGUNG_LF,
+            g::ENDE_KUENDIGUNG_KUNDE,
+            g::EOG_KUENDIGUNG_LF,
+            g::EOG_KUENDIGUNG_KUNDE,
+            g::AENDERUNG_MSB_ABRECHNUNGSDATEN,
+            g::ABRECHNUNGSDATEN_BK_ERZEUGEND,
+            g::ABRECHNUNGSDATEN_BK_VERBRAUCHEND,
+            g::ABRECHNUNGSDATEN_NNA,
+            g::AENDERUNG_BLINDABRECHNUNGSDATEN_NELO,
+            g::AENDERUNG_DATEN_MALO,
+            g::AENDERUNG_DATEN_MELO,
+            g::AENDERUNG_DATEN_NELO,
+            g::AENDERUNG_DATEN_SR,
+            g::AENDERUNG_DATEN_TR,
+            g::AENDERUNG_DATEN_TRANCHE,
+            g::AENDERUNG_LOKATIONSBUENDELSTRUKTUR,
+            g::ANTWORT_GDA_MSB,
+            g::ANTWORT_GDA_STROM_AN_GAS,
+            g::ANTWORT_GDA_ERZEUGENDE_MALO,
+            g::ANTWORT_GDA_VERBRAUCHENDE_MALO,
+            g::DATEN_INDIVIDUELLE_BESTELLUNG,
+            g::STAMMDATEN_BK_TREUE,
+            g::KORREKTUR_ABRECHNUNGSDATEN_BK_VERBRAUCHEND,
+            g::KORREKTUR_ABRECHNUNGSDATEN_BK_ERZEUGEND,
+            g::AENDERUNG_PAKET_ID_MALO,
+            g::UEBERGANGSVERSORGUNG,
+        ];
+        let shipped_ergaenzung = [
+            e::GESCHAEFTSVORFALL_1,
+            e::GESCHAEFTSVORFALL_2,
+            e::GESCHAEFTSVORFALL_3,
+            e::ERZEUGENDE_MALO,
+            e::VERBRAUCHENDE_MALO,
+            e::TRANCHE,
+            e::PAUSCHALE_MALO,
+            e::GEMESSENE_MALO,
+            e::RUHENDE_MALO,
+            e::STILLLEGUNG_INKL_MALO,
+            e::STILLLEGUNG_EXKL_MALO,
+            z::FALL_1,
+            z::FALL_2,
+            z::FALL_3,
+            z::FALL_4,
+        ];
+
+        for (name, shipped, published) in [
+            ("element 2", &shipped_grund[..], GRUND),
+            ("element 3", &shipped_ergaenzung[..], ERGAENZUNG),
+        ] {
+            let mut have: Vec<&str> = shipped.to_vec();
+            have.sort_unstable();
+            have.dedup();
+            let mut want: Vec<&str> = published.to_vec();
+            want.sort_unstable();
+            assert_eq!(have, want, "{name} drifted from UTILMD MIG Strom S2.2");
+        }
     }
 }

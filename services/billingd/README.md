@@ -598,15 +598,17 @@ the transactional outbox and are HMAC-signed with `erp_hmac_secret`
 ## Rounding
 
 All monetary rounding uses **kaufmännisches Runden** (DIN 1333, half away
-from zero), and the mode has a single authority: the `billing` arithmetic
-core's `RoundingStrategy::MidpointAwayFromZero` — the same strategy every
-`billing::Amount` conversion, multiplication and division applies
-internally. `energy_billing::round_money` / `.round_kfm(dp)` delegate to it
-for runtime-precision rounding on raw `Decimal`s; statutory precisions go
-through the typed core (`EuroAmount = Amount<5>` for unit prices,
-`Amount<2>` for cents). `Decimal::round_dp` (banker's rounding) is not used
-anywhere in the billing path; a grep for `round_dp(` finding only the
-helper is the invariant.
+from zero) — `RoundingStrategy::MidpointAwayFromZero`, the same strategy every
+`billing::Amount` conversion, multiplication and division applies internally.
+`energy_billing::round_money` / `.round_kfm(dp)` apply it to raw `Decimal`s
+where the precision is a runtime argument; statutory precisions go through the
+typed core (`EuroAmount = Amount<5>` for unit prices, `Amount<2>` for cents).
+
+`Decimal::round_dp` and `Decimal::round` are banker's rounding (half to even)
+and are refused workspace-wide by `cargo xtask check-rounding`, which also
+refuses any other `RoundingStrategy`. The two modes agree everywhere except exact midpoints —
+which is where a price quoted in ct with three decimals lands — so the wrong one
+misstates a cent without failing a test written against ordinary numbers.
 
 Sum-exact money splitting also comes from the core: GGV tenant allocation
 uses `billing::proportional_split` (largest remainder), and

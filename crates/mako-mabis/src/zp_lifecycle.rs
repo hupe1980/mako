@@ -1000,6 +1000,25 @@ impl Workflow for MabisZpLifecycleWorkflow {
                     )));
                 }
 
+                // A series a Festlegung has repealed cannot be activated for a
+                // Bilanzierungsmonat that starts after it ends: BK6-23-241
+                // Tenorziffer 5 repeals the tägliche AAÜZ with the end of
+                // 30.09.2026, and a MaBiS-ZP activated into October contributes
+                // to a Summenzeitreihe that no longer exists — the Abrechnung
+                // never arrives and nothing else says why.
+                if vorgang == ZpVorgang::Aktivierung
+                    && let Some(beginn) = abrechnungszeitraum_beginn(billing_period.as_str())
+                    && !serie.gilt_am(beginn)
+                {
+                    return Err(WorkflowError::rejected(format!(
+                        "{} endet am {} und kann für den Abrechnungszeitraum {} \
+                         nicht mehr aktiviert werden",
+                        serie.label(),
+                        serie.endet_am().expect("gilt_am was false, so there is an end date"),
+                        billing_period.as_str()
+                    )));
+                }
+
                 if !validation_passed {
                     return Ok(vec![ZpLifecycleEvent::ValidationFailed {
                         reason: validation_errors.join("; "),
@@ -1160,6 +1179,25 @@ impl Workflow for MabisZpLifecycleWorkflow {
     }
 }
 
+
+/// First day of the month a [`BillingPeriod`] names, where it names one.
+///
+/// The value is a counterparty's and its shape is AHB-dependent — `YYYYMM` or
+/// `YYYYMMDD-YYYYMMDD` — so only the leading `YYYYMM` is read, and anything else
+/// answers `None`. A period that cannot be read is not evidence of a period out
+/// of range.
+fn abrechnungszeitraum_beginn(period: &str) -> Option<time::Date> {
+    // `YYYYMM`, `YYYY-MM` and `YYYYMMDD-YYYYMMDD` all appear across AHB
+    // versions, so the separator is ignored and the leading six digits are read.
+    let digits: String = period.chars().filter(char::is_ascii_digit).take(6).collect();
+    if digits.len() != 6 {
+        return None;
+    }
+    let year: i32 = digits[..4].parse().ok()?;
+    let month = time::Month::try_from(digits[4..6].parse::<u8>().ok()?).ok()?;
+    time::Date::from_calendar_date(year, month, 1).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1187,6 +1225,23 @@ mod tests {
             validation_passed: true,
             validation_errors: vec![],
         }
+    }
+
+
+    fn receive_for_period(
+        serie: ZpSerie,
+        vorgang: ZpVorgang,
+        period: &str,
+    ) -> ZpLifecycleCommand {
+        let mut cmd = receive(serie, vorgang);
+        if let ZpLifecycleCommand::ReceiveAnfrage {
+            ref mut billing_period,
+            ..
+        } = cmd
+        {
+            *billing_period = BillingPeriod::new(period);
+        }
+        cmd
     }
 
     fn fold(events: &[ZpLifecycleEvent]) -> ZpLifecycleState {
@@ -1551,6 +1606,78 @@ mod tests {
         let again = MabisZpLifecycleWorkflow::handle(&state, cmd).expect("idempotent");
         assert!(again.events.is_empty());
         assert!(again.outbox.is_empty());
+    }
+
+    /// BK6-23-241 Tenorziffer 5 repeals MaBiS Anlage 1 Kap. 17.2 with the end of
+    /// 30.09.2026, so a MaBiS-ZP cannot be activated for a Bilanzierungsmonat
+    /// that starts after it. Accepting one books a Zählpunkt into a
+    /// Summenzeitreihe that never settles, and nothing downstream says why.
+    #[test]
+    fn a_repealed_series_cannot_be_activated_after_its_end() {
+        let cmd = receive_for_period(
+            ZpSerie::TaeglicheAauez,
+            ZpVorgang::Aktivierung,
+            "202610",
+        );
+        let out = MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, cmd);
+        let err = out.expect_err("an activation past the repeal is refused");
+        assert!(
+            format!("{err}").contains("endet am 2026-09-30"),
+            "the refusal names the date: {err}"
+        );
+    }
+
+    /// The last month the series exists still activates.
+    #[test]
+    fn the_final_month_of_a_repealed_series_still_activates() {
+        let cmd = receive_for_period(
+            ZpSerie::TaeglicheAauez,
+            ZpVorgang::Aktivierung,
+            "202609",
+        );
+        assert!(
+            MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, cmd).is_ok()
+        );
+    }
+
+    /// A Deaktivierung is how a repealed series is wound down, so the guard
+    /// must not refuse one.
+    #[test]
+    fn a_deaktivierung_is_not_bound_by_the_end_date() {
+        let cmd = receive_for_period(
+            ZpSerie::TaeglicheAauez,
+            ZpVorgang::Deaktivierung,
+            "202610",
+        );
+        assert!(
+            MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, cmd).is_ok()
+        );
+    }
+
+    /// Every other series is open-ended and unaffected.
+    #[test]
+    fn a_series_with_no_end_date_activates_in_any_period() {
+        let cmd = receive_for_period(
+            ZpSerie::TaeglicheBkSzr,
+            ZpVorgang::Aktivierung,
+            "209912",
+        );
+        assert!(
+            MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, cmd).is_ok()
+        );
+    }
+
+    /// A period whose shape the AHB version changed is not evidence of a period
+    /// out of range, so the guard stands down rather than inventing a refusal.
+    #[test]
+    fn an_unreadable_abrechnungszeitraum_does_not_refuse() {
+        let okt = time::Date::from_calendar_date(2026, time::Month::October, 1).unwrap();
+        for shape in ["202610", "2026-10", "20261001-20261031"] {
+            assert_eq!(super::abrechnungszeitraum_beginn(shape), Some(okt), "{shape}");
+        }
+        for bad in ["2026", "", "202613"] {
+            assert_eq!(super::abrechnungszeitraum_beginn(bad), None, "{bad:?}");
+        }
     }
 }
 

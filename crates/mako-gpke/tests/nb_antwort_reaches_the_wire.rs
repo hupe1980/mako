@@ -49,6 +49,7 @@ fn answer_with(
         transaktionsgrund: Some("E03".to_owned()),
         transaktionsgrund_ergaenzung: Some("ZW4".to_owned()),
         veraeusserungsform: None,
+        tranchengroesse_prozent: None,
         vorgangsnummer: None,
         kunde_name: None,
         kunde_namensformat: None,

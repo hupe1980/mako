@@ -31,10 +31,16 @@ pub struct NetzCheckConfig {
 
     /// EEG-Marktlokation Zuordnungs-Vorlauf, in whole months.
     ///
-    /// The assignment of an EEG-/KWKG-Einspeise-MaLo to a Bilanzkreis
-    /// (signalled by the `ZW3` „Erzeugende Marktlokation" Transaktionsgrund-
-    /// ergänzung; §10c EEG) is only permitted to the **first of a month** and
-    /// requires at least this many months of lead. Defaults to `1`.
+    /// The assignment of an EEG-/KWKG-Einspeise-MaLo to a Bilanzkreis is only
+    /// permitted to the **first of a month** and requires at least this many
+    /// months of lead. Defaults to `1`.
+    ///
+    /// The rule is **§ 21b Abs. 1 EEG 2023** with the notice period in § 21c —
+    /// not § 10c, which is the Solarpaket-I „Zuordnung geringfügiger
+    /// Stromerzeugung" and says nothing about a Zuordnungsbeginn. Which
+    /// Anmeldung it governs follows from the Marktlokationsart, which the
+    /// Prüfidentifikator or the `SG4 STS+7` DE 9013 object code (`ZW3`) states —
+    /// on 55077 that element carries the Geschäftsvorfall instead.
     pub eeg_zuordnung_vorlauf_monate: u32,
 }
 

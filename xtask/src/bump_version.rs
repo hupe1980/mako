@@ -279,7 +279,6 @@ grid-billing     = { path = \"crates/grid-billing\", version = \"0.9\" }
 eeg-billing      = { path = \"crates/eeg-billing\", version = \"0.9\" }
 mako-obs         = { path = \"crates/mako-obs\", version = \"0.9\" }
 mako-service     = { path = \"crates/mako-service\", version = \"0.9\" }
-mako-plugin      = { path = \"crates/mako-plugin\", version = \"0.9\" }
 invoic-checker   = { path = \"crates/invoic-checker\", version = \"0.9\" }
 mako-pruefung    = { path = \"crates/mako-pruefung\", version = \"0.9\" }
 energy-billing   = { path = \"crates/energy-billing\", version = \"0.9\" }

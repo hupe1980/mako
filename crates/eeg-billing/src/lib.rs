@@ -95,6 +95,7 @@ mod model;
 pub mod negativpreis;
 pub mod rates;
 pub mod reductions;
+pub mod rounding;
 pub mod scheme;
 pub mod settlement_state;
 pub mod solar;
@@ -116,6 +117,7 @@ pub type EuroAmount = billing::Amount<5>;
 pub use aw_reductions::{AwReductionApplied, AwReductionContext, Sect54SolarReduction};
 pub use biomasse::{bemessungsleistung_stunden, sect44b_jahreskontingent_kwh};
 pub use error::SettlementError;
+pub use rounding::RoundMoney;
 pub use foerderdauer::{
     calculate_pflichtzahlung, compute_billing_days_fraction, foerderendedatum_eeg,
     foerderendedatum_eeg_ausschreibung, foerderendedatum_kwkg_years, foerderendedatum_repowering,

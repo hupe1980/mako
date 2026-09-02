@@ -15,10 +15,10 @@
 //! | 17110 | LF → NB   | Anforderung der Allokationsliste (Gas-only, ⚡=— in ORDERS AHB 1.0) |
 //! | 19110 | NB → LF   | Ablehnung der Anforderung Allokationsliste (Gas-only) |
 //!
-//! These ORDERS/ORDRSP PIDs are listed here for reference; they are also present
-//! in `mako-gpke` `gpke-allokationsliste` from a legacy cross-commodity
-//! registration. A future cleanup should remove them from `mako-gpke` and
-//! register them here exclusively, since both are Gas-only (⚡=— in AHB 1.0).
+//! Both are Gas-only (⚡=— in ORDERS AHB 1.0) but are registered by `mako-gpke`
+//! under `gpke-allokationsliste`, which carries the Strom pair beside them.
+//! They are named here because this is the workflow their answer belongs to;
+//! the routing lives there.
 //!
 //! # Regulatory basis
 //!

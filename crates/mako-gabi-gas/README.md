@@ -254,7 +254,7 @@ GaBi Gas capacity billing (PID 31010) is in this crate; AWH Sperrprozesse billin
 | Crate | Responsibility |
 |---|---|
 | `dvgw-edi` | EDIFACT parsing, validation and writing — ALOCAT, NOMINT, NOMRES |
-| `mako-gabi-gas` | Process engine — all eight workflow state machines, PID routing, deadline handling, domain model |
+| `mako-gabi-gas` | Process engine — the four workflows (`gabi-gas-allocation`, `-nomination`, `-invoic`, `-mmma`), PID routing, deadline handling, domain model |
 
 ## INVOIC billing workflows
 

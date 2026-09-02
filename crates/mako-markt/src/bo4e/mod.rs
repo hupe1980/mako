@@ -76,9 +76,8 @@ pub const SCHEMA_SERIES: &str = Marktlokation::SCHEMA_SERIES;
 /// Is `stored` a payload version this build can read?
 ///
 /// True for **any** release in the current series. Matching the full triple
-/// instead rejects a payload from a producer one BO4E patch ahead that mako
-/// reads perfectly — and rejected every payload at all when rubo4e 0.10
-/// corrected the wire spelling.
+/// instead would reject a payload from a producer one BO4E patch ahead that
+/// mako reads perfectly.
 ///
 /// # The `v` is tolerated on input and never written
 ///
@@ -120,8 +119,8 @@ mod schema_version_tests {
     ///
     /// BO4E ships patch releases inside a series and all of them deserialize
     /// into the same types, so matching the full triple would reject a producer
-    /// one patch ahead. Rows written before rubo4e 0.10 carry the `v`-prefixed
-    /// tag; they stay readable rather than being orphaned by the correction.
+    /// one patch ahead. A stored value carrying BO4E's `v`-prefixed tag spelling
+    /// reads too; mako never writes one.
     #[test]
     fn the_series_decides_what_is_readable() {
         let series = super::SCHEMA_SERIES;

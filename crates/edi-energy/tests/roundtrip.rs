@@ -1985,9 +1985,98 @@ fn a_strom_anmeldung_round_trips_its_bilanzkreis_produktpaket() {
     let paket = tx.sequences.first().expect("one Produktpaket");
     assert_eq!(paket.seq.sequence_id.as_deref(), Some("1"));
     assert_eq!(
-        paket.products[0].item_number.as_deref(),
+        paket.products[0].produkt_code(),
         Some("9991000002082")
     );
+}
+
+/// A Geschäftsvorfall 3 Anmeldung carries **two** products in one Produktpaket
+/// — the Bilanzkreis and the Tranchengröße — and each has its own `CAV+ZV4`.
+///
+/// The `SG8` group flattens `PIA` and `CCI`/`CAV` into separate lists, so the
+/// only thing tying a value to its product is wire order. Reading the group's
+/// first `CAV+ZV4` would answer the Bilanzkreis with a percentage.
+#[cfg(feature = "utilmd")]
+#[test]
+fn two_products_in_one_produktpaket_keep_their_own_values() {
+    use edi_energy::utilmd_codes::{
+        Produkt, Produktpaket, Transaktionsgrund, produkt, transaktionsgrund,
+    };
+
+    let paket = Produktpaket {
+        paket_id: 1,
+        // Deliberately Tranchengröße first: the defect this pins is order-dependent.
+        produkte: vec![
+            Produkt {
+                produkt_code: produkt::TRANCHENGROESSE.to_owned(),
+                eigenschaft: Some(produkt::TRANCHE_PROZENTUALE_AUFTEILUNG.to_owned()),
+                wert: Some("40".to_owned()),
+            },
+            Produkt::bilanzkreis("11XBK-STD-----9"),
+        ],
+        umsetzung: edi_energy::utilmd_codes::Umsetzungsgrad::Vollumfaenglich,
+    };
+
+    let bytes = edi_energy::builders::UtilmdBuilder::new(Release::new("S2.1"))
+        .pruefidentifikator(Pruefidentifikator::new(55_077).expect("valid PID"))
+        .sender("4012345000023")
+        .receiver("9900357000004")
+        .document_date("202608280900")
+        .transaction("VORGANG-0001")
+        .date(dtm::BEGINN_ZUM, "20261101")
+        .transaktionsgrund(Transaktionsgrund::new(
+            transaktionsgrund::WECHSEL,
+            edi_energy::utilmd_codes::ergaenzung::GESCHAEFTSVORFALL_3,
+        ))
+        .produktpaket(paket)
+        .marktlokation("51238696781")
+        .done()
+        .serialize()
+        .expect("serialises");
+
+    let msg = match Platform::with_all_profiles()
+        .parse(&bytes)
+        .expect("must re-parse")
+    {
+        edi_energy::AnyMessage::Utilmd(u) => u,
+        other => panic!("expected UTILMD, got {other:?}"),
+    };
+    let tx = msg.transactions().first().expect("one Vorgang");
+
+    assert_eq!(
+        tx.bilanzkreis(),
+        Some("11XBK-STD-----9"),
+        "the Bilanzkreis is read from its own product, not the package's first value"
+    );
+    let groesse = tx.tranchengroesse().expect("the Tranchengröße product");
+    assert_eq!(groesse.prozent_wert(), Some("40"));
+}
+
+/// The same product carries three Produkteigenschaften and only one of them is
+/// a share. An Aufteilungsfaktor read as a percentage would put a number that
+/// is not a share into `E_0623` Prüfschritte 510–530.
+#[cfg(feature = "utilmd")]
+#[test]
+fn an_aufteilungsfaktor_is_not_a_percentage() {
+    use edi_energy::utilmd_codes::{Tranchengroesse, produkt};
+
+    let faktor = Tranchengroesse {
+        eigenschaft: Some(produkt::TRANCHE_AUFTEILUNGSFAKTOR.to_owned()),
+        wert: "40".to_owned(),
+    };
+    assert_eq!(faktor.prozent_wert(), None);
+
+    let ohne = Tranchengroesse {
+        eigenschaft: None,
+        wert: "40".to_owned(),
+    };
+    assert_eq!(ohne.prozent_wert(), None);
+
+    let prozent = Tranchengroesse {
+        eigenschaft: Some(produkt::TRANCHE_PROZENTUALE_AUFTEILUNG.to_owned()),
+        wert: "40".to_owned(),
+    };
+    assert_eq!(prozent.prozent_wert(), Some("40"));
 }
 
 /// `GeLi` Gas states the same fact in one segment — `SG10 CCI+Z19` DE 7037,

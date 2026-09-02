@@ -316,10 +316,10 @@ const PAYMENT_RECONCILIATION_AGENT: Specialist = Specialist {
         // A rejected collection never settled, so it is a different
         // reconciliation from a return — and a different R-transaction fee.
         mako_events::accounting::SEPA_COLLECTION_REJECTED,
-        // The §§ 41f/41g EnWG sequence. Nothing on this plane received any of
-        // it, while the documentation claimed an out-of-compliance sequence was
-        // a finding it kept findable — a control that read as configured and
-        // could not fire, because the events reached no specialist at all.
+        // The §§ 41f/41g EnWG sequence. A specialist has to be subscribed to
+        // each step for an out-of-compliance sequence to be a finding at all —
+        // an unsubscribed event reaches no specialist, and the control reads as
+        // configured while never firing.
         mako_events::accounting::SPERRANDROHUNG,
         mako_events::accounting::SPERRANKUENDIGUNG,
         mako_events::accounting::ABWENDUNG_ANGEBOTEN,

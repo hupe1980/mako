@@ -1807,7 +1807,7 @@ impl EdmdMcpHandler {
                 "seasonal_correction_applied": forecast.seasonal_correction_applied,
                 "seasonal_factor": forecast.seasonal_factor.to_string(),
                 // A projection an agent cannot judge the spread of is one it
-                // should not bill on; metering 0.17 supplies the interval.
+                // should not bill on, so the prediction interval travels with it.
                 "confidence_lower_kwh": forecast.confidence_lower.map(|d| d.to_string()),
                 "confidence_upper_kwh": forecast.confidence_upper.map(|d| d.to_string()),
                 "prediction_interval_note": metering::AnnualForecast::prediction_interval_note(),

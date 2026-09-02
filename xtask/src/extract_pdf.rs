@@ -638,8 +638,7 @@ fn parse_ahb_requirements(text: &str) -> AhbRequirements {
                         // `Mark::conditioned` never sees them.
                         //
                         // The `[n]` markers therefore explain far less of the
-                        // over-marking than their raw count suggests. See the
-                        // AHB coverage item in `concepts/ROADMAP.md`.
+                        // over-marking than their raw count suggests.
                         let effective = if plain_optional {
                             "O".to_owned()
                         } else {

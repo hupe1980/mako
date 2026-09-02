@@ -81,12 +81,9 @@ fn menge(wert: Decimal, einheit: Mengeneinheit) -> Menge {
 ///
 /// `bezugswert` is the **reference quantity the price is stated per** — BO4E:
 /// *"Angabe, für welche Bezugsgröße der Preis gilt. Z.B. kWh"* — so it is a
-/// [`Mengeneinheit`], not a number. Until rubo4e 0.10 the field was typed
-/// `Decimal` (name-based inference read the `…wert` suffix and ignored the
-/// schema), and this function passed `Decimal::ONE` into it: every price on
-/// every Angebot went out with no unit of reference at all, so an Arbeitspreis
-/// of `24.9 ct` did not say *per kWh* and a Grundpreis of `120 EUR` did not say
-/// *per year*.
+/// [`Mengeneinheit`], not a number: an Arbeitspreis of `24.9 ct` has to say
+/// *per kWh* and a Grundpreis of `120 EUR` *per year*, or the Angebot states a
+/// price with no unit of reference.
 fn preis(wert: Decimal, einheit: Waehrungseinheit, bezugswert: Mengeneinheit) -> Preis {
     Preis {
         wert: Some(wert),

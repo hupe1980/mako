@@ -368,13 +368,24 @@ CREATE TABLE lf_zuordnung (
     tenant            TEXT        NOT NULL,
     lf_mp_id          TEXT        NOT NULL,
     -- Share of the Marktlokation, in percent: 100 for an untranchierte MaLo,
-    -- the Aufteilungsfaktor of the Tranchengröße product (9991000002090) for a
-    -- Tranche. NUMERIC because the shares are summed and compared against the
-    -- share the LFN registered, and a float cannot hold 33.3 exactly.
+    -- the Tranchengröße (Produkt-Code 9991000002090) for a Tranche. NUMERIC
+    -- because the shares are summed and compared against the share the LFN
+    -- registered, and a float cannot hold 33.3 exactly.
     prozent           NUMERIC(6,3) NOT NULL DEFAULT 100
                           CHECK (prozent > 0 AND prozent <= 100),
     -- Tranchen-ID (`SG5 LOC+Z21`); NULL for an untranchierte Marktlokation.
     tranche_id        TEXT,
+    -- GPKE Teil 1 § 3.2.1.5: „Eine Tranche umfasst folglich stets weniger als
+    -- 100 % der aus einer Marktlokation eingespeisten Energiemenge. Der
+    -- Prozentsatz einer Tranche ist immer größer 0% und kleiner als 100%."
+    -- A named Tranche at 100 % is Geschäftsvorfall 1 wearing a Tranchen-ID, and
+    -- it makes `E_0623` Prüfschritt 530 („verbleibt ein Anteil im Bilanzkreis
+    -- des Netzbetreibers?") read a remainder of zero on a Marktlokation that
+    -- was never split. A share with no Tranchen-ID is left to the column bound
+    -- above: `ist_tranchiert` treats it as tranchiert either way, which is the
+    -- fail-safe reading of a message that stated a share and no ID.
+    CONSTRAINT lf_zuordnung_tranche_unter_100
+        CHECK (tranche_id IS NULL OR prozent < 100),
     status            TEXT        NOT NULL CHECK (status IN ('Angekuendigt', 'Aktiv')),
     zuordnungsbeginn  DATE,
     zuordnungsende    DATE,

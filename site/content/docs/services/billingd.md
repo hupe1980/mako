@@ -1220,11 +1220,12 @@ default).
 
 ## Invoice content & arithmetic guarantees
 
-- **Rounding has one authority**: kaufmännisches Runden (DIN 1333, half away
-  from zero) via `billing::RoundingStrategy::MidpointAwayFromZero` — the same
-  strategy the `Amount` fixed-point core applies internally.
-  `energy_billing::round_money`/`.round_kfm(dp)` delegate to it; bare
-  `Decimal::round_dp` (banker's) is banned from money paths.
+- **Rounding has one mode**: kaufmännisches Runden (DIN 1333, half away from
+  zero) via `RoundingStrategy::MidpointAwayFromZero` — the same strategy the
+  `Amount` fixed-point core applies internally.
+  `energy_billing::round_money`/`.round_kfm(dp)` apply it to raw `Decimal`s.
+  `Decimal::round_dp` is banker's rounding and is refused workspace-wide by
+  `cargo xtask check-rounding`, so no call site can pick a different mode.
 - **Rechnungsnummer (§ 14 Abs. 4 Nr. 4 UStG)**: a **fortlaufende** number from
   the tenant's counter — `RE-2026-000123` invoice, `SR-` consolidated, `ST-`
   Storno, `VG-` § 41e Gutschrift. The number is a column with a unique index per

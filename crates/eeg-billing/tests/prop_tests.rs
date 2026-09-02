@@ -22,6 +22,7 @@
 //!
 //! Run: `cargo test -p eeg-billing --test prop_tests`
 
+use eeg_billing::RoundMoney;
 use eeg_billing::{
     SettleInput, SettlementScheme, SettlementStatus, calculate_settlement, foerderendedatum_eeg,
 };
@@ -83,7 +84,7 @@ proptest! {
         let actual = out.settlement_eur.expect("Calculated must have settlement_eur");
 
         // Formula: kwh × rate / 100 rounded to 5 decimal places
-        let expected = (kwh * rate / Decimal::from(100)).round_dp(5);
+        let expected = (kwh * rate / Decimal::from(100)).round_kfm(5);
 
         // Allow at most 1 ULP (0.00001 EUR) rounding difference
         let diff = (actual - expected).abs();

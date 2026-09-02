@@ -14,6 +14,7 @@
 //! 7. Zero consumption → `netto_eur == 0` for commodity-only products
 //! 8. Pro-rata fraction in [0, 1] → `brutto_eur <= full_period_brutto_eur`
 
+use energy_billing::RoundMoney;
 use energy_billing::{
     BillingContext, BillingPeriod, GasMeterInput, GridInput, InvoiceType, MeterInput, Product,
     Quantities, RegulatoryRates,
@@ -41,7 +42,7 @@ fn base_ctx() -> BillingContext {
 fn to_decimal(f: f64) -> Decimal {
     Decimal::from_f64_retain(f.abs())
         .unwrap_or(Decimal::ZERO)
-        .round_dp(4)
+        .round_kfm(4)
 }
 
 // ── Strategy generators ───────────────────────────────────────────────────────
@@ -214,7 +215,7 @@ proptest! {
 
         // Expected netto: grundpreis only = gp_ct/day × days / 100
         let days = Decimal::from(31u32); // Jan 2026 = 31 days
-        let expected_netto = (gp / dec!(100) * days).round_dp(5);
+        let expected_netto = (gp / dec!(100) * days).round_kfm(5);
         let diff = (invoice.netto_eur - expected_netto).abs();
         prop_assert!(
             diff < dec!(0.01),
@@ -592,7 +593,7 @@ proptest! {
         let electricity = match split {
             Some(f) => {
                 let f = to_decimal(f).min(Decimal::ONE);
-                let ht_kwh = (kwh * f).round_dp(3);
+                let ht_kwh = (kwh * f).round_kfm(3);
                 MeterInput {
                     arbeitsmenge_kwh: kwh,
                     arbeitsmenge_ht_kwh: Some(ht_kwh),

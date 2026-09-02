@@ -259,6 +259,7 @@ async fn ahb_55001_lieferbeginn_validates_and_dispatches() {
         transaktionsgrund: None, // not present in minimal fixture
         transaktionsgrund_ergaenzung: None,
         veraeusserungsform: None,
+        tranchengroesse_prozent: None,
         vorgangsnummer: None,
         kunde_name: None,
         kunde_namensformat: None,

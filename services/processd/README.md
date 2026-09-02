@@ -183,11 +183,21 @@ one rather than test for presence.
 
 **Strom, erzeugende Marktlokation** (220–830) picks between the **six**
 Vorlauffristen GPKE Teil 2 § 2.1.1 publishes, keyed on `(Geschäftsvorfall,
-bestehende, angemeldete Veräußerungsform)`. The *angemeldete* one is `SG10
-CCI+Z22` on the wire; the *bestehende* one and the Ausfallvergütung flag come
-from `einsd` (`[nb] einsd_url`), because wire code `Z90` covers two regimes whose
-Fristen differ by a month versus five Werktage. A missing fact escalates and is
-named. The Monatserster rule is **§ 21b Abs. 1 EEG 2023**, not § 10c.
+bestehende, angemeldete Veräußerungsform)`. The *Geschäftsvorfall* is `SG4 STS+7`
+DE 9013 element 3 — `ZW0` (die ganze Marktlokation), `ZW1` (eine bestehende
+Tranche), `ZW2` (eine neu zu bildende Tranche) — and the *angemeldete*
+Veräußerungsform is `SG10 CCI+Z22`; the *bestehende* one and the
+Ausfallvergütung flag come from `einsd` (`[nb] einsd_url`), because wire code
+`Z90` covers two regimes whose Fristen differ by a month versus five Werktage.
+A missing fact escalates and is named. The Monatserster rule is
+**§ 21b Abs. 1 EEG 2023**, not § 10c.
+
+A `ZW2` also makes the **Tranchengröße** Muss: `SG8` Produkt-Code
+`9991000002090` with the Produkteigenschaft „prozentuale Aufteilung", which is
+the share `E_0623` Prüfschritt 520 measures the released Tranchen against. The
+product's other two Eigenschaften — an Aufteilungsfaktor and an Aufteilung auf
+Technische Ressourcen — are different quantities, so an Anmeldung stating one
+escalates rather than being measured against a number that is not a share.
 
 **Gas** (`G_0011`) runs the `A03`/`A04`/`A16`/`A17` identification checks first as
 the AHB requires, then `E17`, `E13`, `ZC5` / `Z08`.

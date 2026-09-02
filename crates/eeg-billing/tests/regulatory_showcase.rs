@@ -15,6 +15,7 @@
 //!
 //! All monetary amounts in EUR. All rates in ct/kWh. No floating-point money.
 
+use eeg_billing::RoundMoney;
 use eeg_billing::{
     CapacityBlock, EegGesetz, SettleInput, SettlementScheme, SettlementStatus, TariffSource,
     calculate_settlement, foerderendedatum_eeg, foerderendedatum_kwkg_years,
@@ -1749,7 +1750,7 @@ fn s50a_flexibilitaetszuschlag_monthly_capacity_payment() {
     });
     assert_eq!(out.status, SettlementStatus::Calculated);
     // 200 kW × 100 EUR/kW/year ÷ 12 months = 1,666.667 EUR/month
-    let expected = (d("200") * d("100") / d("12")).round_dp(5);
+    let expected = (d("200") * d("100") / d("12")).round_kfm(5);
     assert_eq!(out.settlement_eur, Some(expected));
     assert_eq!(out.positions.len(), 1);
     assert!(out.positions[0].legal_basis.contains("50a"));
@@ -4246,7 +4247,7 @@ fn sect44_guellebonusanlage_rate_table() {
     // billing::Amount is EUR/kWh; convert to ct for readable assertion
     let gross_aw_ct = gross_aw.into_decimal() * rust_decimal::Decimal::from(100u32);
     assert_eq!(
-        gross_aw_ct.round_dp(2),
+        gross_aw_ct.round_kfm(2),
         dec!(16.90),
         "§44 EEG 2023 gross AW = 16.90 ct/kWh"
     );
@@ -4465,8 +4466,8 @@ fn s51_abs2_satz2_aggregates_capacity_blocks_per_sect24() {
     assert_eq!(out.status, SettlementStatus::Calculated);
     // 600 kWp total ≥ the 400 kW threshold → §51 applies to every block.
     // (Three 1/3 shares rounded to 3 dp leave a 0.027 kWh allocation residue.)
-    assert_eq!(out.eligible_kwh.unwrap().round(), d("27000"));
-    assert_eq!(out.settlement_eur.unwrap().round_dp(0), d("2160"));
+    assert_eq!(out.eligible_kwh.unwrap().round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero), d("27000"));
+    assert_eq!(out.settlement_eur.unwrap().round_kfm(0), d("2160"));
 }
 
 /// §24 EEG 2023 — a multi-block plant on a scheme with no per-block rate is
@@ -4675,4 +4676,71 @@ fn s51a_pre_solarspitzen_extension_is_auction_only() {
         auction.verlaengerungsanspruch_qh > 0,
         "an ausschreibungspflichtige Anlage did earn the extension"
     );
+}
+
+/// §24 EEG — the blocks are one plant, so their kWh add back up to the metered
+/// Einspeisemenge exactly.
+///
+/// Three equal blocks is the case that breaks a per-block share: 1/3 of 1000 kWh
+/// rounded to three decimals is 333.333 three times over, which settles 999.999
+/// kWh of a 1000 kWh month. The allocation is by largest remainder, so one block
+/// carries the remaining thousandth.
+#[test]
+fn s24_blocks_sum_to_the_metered_einspeisemenge() {
+    use eeg_billing::CapacityBlock;
+
+    let block = |kwp: &str| CapacityBlock {
+        leistung_kwp: d(kwp),
+        verguetungssatz_ct: d("8.11"),
+        inbetriebnahme: date!(2024 - 06 - 01),
+        foerderendedatum: date!(2044 - 12 - 31),
+    };
+    for menge in ["1000", "900", "1500", "12345.678"] {
+        let out = calculate_settlement(&SettleInput {
+            scheme: SettlementScheme::FeedInTariff {
+                verguetungssatz_ct: d("9.25"),
+            },
+            einspeisemenge_kwh: Some(d(menge)),
+            leistung_kwp: Some(d("5")),
+            inbetriebnahme: Some(date!(2020 - 03 - 15)),
+            foerderendedatum: Some(date!(2040 - 12 - 31)),
+            capacity_blocks: vec![block("5"), block("5")],
+            billing_date: Some(date!(2026 - 07 - 01)),
+            ..SettleInput::default()
+        });
+        assert_eq!(out.status, SettlementStatus::Calculated, "{menge}");
+        let summed: rust_decimal::Decimal = out.positions.iter().map(|p| p.kwh).sum();
+        assert_eq!(
+            summed,
+            d(menge),
+            "{menge} kWh split across three blocks must add back up"
+        );
+    }
+}
+
+/// A negative Einspeisemenge is not a settleable figure, and a §24 plant must
+/// say so rather than settling every block at zero.
+#[test]
+fn s24_refuses_a_negative_einspeisemenge() {
+    use eeg_billing::CapacityBlock;
+
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("9.25"),
+        },
+        einspeisemenge_kwh: Some(d("-100")),
+        leistung_kwp: Some(d("10")),
+        inbetriebnahme: Some(date!(2020 - 03 - 15)),
+        foerderendedatum: Some(date!(2040 - 12 - 31)),
+        capacity_blocks: vec![CapacityBlock {
+            leistung_kwp: d("5"),
+            verguetungssatz_ct: d("8.11"),
+            inbetriebnahme: date!(2024 - 06 - 01),
+            foerderendedatum: date!(2044 - 12 - 31),
+        }],
+        billing_date: Some(date!(2026 - 07 - 01)),
+        ..SettleInput::default()
+    });
+    assert_eq!(out.status, SettlementStatus::NoData);
+    assert_eq!(out.settlement_eur, None);
 }

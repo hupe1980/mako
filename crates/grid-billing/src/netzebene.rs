@@ -26,6 +26,7 @@
 //! rates supplied were the ones the price sheet meant for that utilisation. The
 //! crate does not pick the rate — it never resolves a Preisblatt.
 
+use crate::rounding::RoundMoney;
 use rust_decimal::Decimal;
 
 /// A voltage level, and the transformation between two of them.
@@ -101,7 +102,7 @@ pub fn benutzungsstundenzahl(
     if jahreshoechstleistung_kw.is_zero() {
         return None;
     }
-    Some((jahresarbeit_kwh / jahreshoechstleistung_kw).round_dp(1))
+    Some((jahresarbeit_kwh / jahreshoechstleistung_kw).round_kfm(1))
 }
 
 /// Whether §17 Abs. 6 permits billing this metering point on an Arbeitspreis

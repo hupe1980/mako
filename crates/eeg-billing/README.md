@@ -539,8 +539,14 @@ breakdown entry.
   Netzverknüpfungspunkte, disregarded Steckersolargeräte) — and returns the rule
   that decided. Ownership is deliberately not an input: Satz 1 says "unabhängig
   von den Eigentumsverhältnissen".
-- §24 multi-block allocation: `CapacityBlock` proportionally allocates settlement
-  across the blocks of an already-fused plant group
+- §24 multi-block allocation: `CapacityBlock` allocates the metered
+  Einspeisemenge across the blocks of an already-fused plant group by installed
+  capacity, by **largest remainder** (`billing::proportional_split`) so the
+  blocks add back up to the metered quantity exactly. A per-block share rounded
+  on its own does not: three equal blocks of a 1000 kWh month take 333.333 kWh
+  each and settle 999.999. Expired blocks are allocated and then dropped — their
+  capacity still counts towards the plant, and the energy falling to them is
+  simply no longer eligible.
 - §42b EnWG GGV / §21 Abs. 3 multi-meter split is **not** modelled here — the metering topology,
   Eigenverbrauch/Überschuss split and GGV tenant allocation live in the external `metering`
   crate (`AggregationRule`, `compute_virtual_meter`) + edmd; this crate settles the resulting
