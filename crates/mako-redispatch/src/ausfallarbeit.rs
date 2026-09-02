@@ -243,7 +243,8 @@ pub fn wind_bin_index(windgeschwindigkeit_ms: Decimal) -> i64 {
     // A speed exactly on a bin boundary goes to the outer bin — `Decimal::round`
     // would send it to the even one, which is the workspace's banker's-rounding
     // trap in a place that is not money.
-    let idx = (windgeschwindigkeit_ms / WIND_BIN_BREITE_MS).round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero);
+    let idx = (windgeschwindigkeit_ms / WIND_BIN_BREITE_MS)
+        .round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero);
     idx.try_into().unwrap_or(i64::MAX)
 }
 

@@ -203,8 +203,8 @@ fn party_registry_rejects_duplicate_role() {
 /// Reading the page is the point: a constant restating what it says is a claim,
 /// not a check, and drifts the moment the page is edited on its own.
 fn landing_page_stats() -> std::collections::HashMap<String, usize> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../site/templates/index.html");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../site/templates/index.html");
     let html = std::fs::read_to_string(&path).expect("the landing page template");
     let mut out = std::collections::HashMap::new();
     for chunk in html.split("<strong>").skip(1) {

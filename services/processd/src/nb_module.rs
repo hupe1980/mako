@@ -2747,7 +2747,10 @@ mod tests {
         let a = gv3(Some(rust_decimal::Decimal::from(40)), Some(true));
         let lage = tranchen_lage(&waiting_record(&["9900111000006"]), &a)
             .expect("complete facts build a TranchenLage");
-        assert_eq!(lage.gewuenschter_prozentsatz, rust_decimal::Decimal::from(40));
+        assert_eq!(
+            lage.gewuenschter_prozentsatz,
+            rust_decimal::Decimal::from(40)
+        );
         assert!(lage.direktvermarktungspflichtig);
         assert_eq!(lage.tranchen.len(), 1);
     }
@@ -2786,8 +2789,12 @@ mod tests {
     /// and the assignment list are read.
     #[test]
     fn geschaeftsvorfall_3_reaches_the_tranchen_pruefschritte() {
-        let erz = erzeugung_of(Some("ZW2"), Some("Z91"), Some(rust_decimal::Decimal::from(40)))
-            .expect("a Geschäftsvorfall 3");
+        let erz = erzeugung_of(
+            Some("ZW2"),
+            Some("Z91"),
+            Some(rust_decimal::Decimal::from(40)),
+        )
+        .expect("a Geschäftsvorfall 3");
         assert_eq!(
             erz.geschaeftsvorfall,
             mako_pruefung::nb::types::Geschaeftsvorfall::Drei

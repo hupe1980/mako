@@ -126,9 +126,9 @@ fn reads_a_float(line: &str) -> bool {
     }
     // A float literal: a digit, a dot, a digit.
     let bytes = line.as_bytes();
-    bytes.windows(3).any(|w| {
-        w[0].is_ascii_digit() && w[1] == b'.' && w[2].is_ascii_digit()
-    })
+    bytes
+        .windows(3)
+        .any(|w| w[0].is_ascii_digit() && w[1] == b'.' && w[2].is_ascii_digit())
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 //! Pure settlement formula — [`calculate_settlement`].
 
-use crate::rounding::RoundMoney;
 use crate::EuroAmount;
+use crate::rounding::RoundMoney;
 use rust_decimal::Decimal;
 use rust_decimal::dec;
 

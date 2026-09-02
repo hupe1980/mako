@@ -408,7 +408,11 @@ pub fn eur_units(amount_eur: Decimal) -> anyhow::Result<i64> {
     // refusing the one nonsensical position that caused it.
     amount_eur
         .checked_mul(Decimal::from(100_000_i64))
-        .and_then(|units: Decimal| units.round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero).to_i64())
+        .and_then(|units: Decimal| {
+            units
+                .round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
+                .to_i64()
+        })
         .with_context(|| format!("{amount_eur} EUR does not fit an i64 at 10⁻⁵ EUR"))
 }
 

@@ -1039,10 +1039,7 @@ fn compute_cost_breakdown(
         levies_eur: levies_eur.round_kfm(2),
         total_netto_eur: total_netto_eur.round_kfm(2),
         total_brutto_eur: total_brutto_eur.round_kfm(2),
-        arbeitspreis_ct_per_kwh: arbeitspreis_ct.map(|ct| {
-            (ct * rabatt)
-                .round_kfm(4)
-        }),
+        arbeitspreis_ct_per_kwh: arbeitspreis_ct.map(|ct| (ct * rabatt).round_kfm(4)),
         grundpreis_eur_per_year: grundpreis_ct
             .map(|gp| (gp * Decimal::from(365) / Decimal::ONE_HUNDRED).round_kfm(2)),
     })

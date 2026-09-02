@@ -489,7 +489,6 @@ pub async fn kostenblatt_deadline_alert(pool: &PgPool, cfg: &NetzbilanzConfig) {
     .await;
 }
 
-
 /// Each tenant's share of the supplied energy in percent, summing to exactly 100.
 ///
 /// Ordered the way the map iterates, so the caller can zip it back onto the

@@ -1984,10 +1984,7 @@ fn a_strom_anmeldung_round_trips_its_bilanzkreis_produktpaket() {
     assert_eq!(tx.bilanzkreis(), Some("11XBK-STD-----9"));
     let paket = tx.sequences.first().expect("one Produktpaket");
     assert_eq!(paket.seq.sequence_id.as_deref(), Some("1"));
-    assert_eq!(
-        paket.products[0].produkt_code(),
-        Some("9991000002082")
-    );
+    assert_eq!(paket.products[0].produkt_code(), Some("9991000002082"));
 }
 
 /// A Geschäftsvorfall 3 Anmeldung carries **two** products in one Produktpaket

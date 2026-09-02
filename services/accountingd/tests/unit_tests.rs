@@ -643,7 +643,10 @@ fn decimal_string_1_99_eur_gives_199_ct() {
     use std::str::FromStr;
     // This is the exact computation used in the fixed OffenePostenQuery handler.
     let d = Decimal::from_str("1.99").unwrap();
-    let ct: i64 = (d * Decimal::from(100)).round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero).to_i64().unwrap();
+    let ct: i64 = (d * Decimal::from(100))
+        .round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
+        .to_i64()
+        .unwrap();
     assert_eq!(
         ct, 199,
         "1.99 EUR must be 199 ct, not 198 ct from float truncation"
@@ -656,7 +659,10 @@ fn decimal_string_0_01_eur_gives_1_ct() {
     use rust_decimal::prelude::ToPrimitive as _;
     use std::str::FromStr;
     let d = Decimal::from_str("0.01").unwrap();
-    let ct: i64 = (d * Decimal::from(100)).round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero).to_i64().unwrap();
+    let ct: i64 = (d * Decimal::from(100))
+        .round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
+        .to_i64()
+        .unwrap();
     assert_eq!(ct, 1);
 }
 
@@ -666,7 +672,10 @@ fn decimal_string_100_00_eur_gives_10000_ct() {
     use rust_decimal::prelude::ToPrimitive as _;
     use std::str::FromStr;
     let d = Decimal::from_str("100.00").unwrap();
-    let ct: i64 = (d * Decimal::from(100)).round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero).to_i64().unwrap();
+    let ct: i64 = (d * Decimal::from(100))
+        .round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
+        .to_i64()
+        .unwrap();
     assert_eq!(ct, 10000);
 }
 

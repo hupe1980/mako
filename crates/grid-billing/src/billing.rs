@@ -20,8 +20,8 @@
 //! This enables AI-assisted invoice explainability and regulator audits without
 //! re-running the calculation.
 
-use crate::rounding::RoundMoney;
 use crate::EuroAmount;
+use crate::rounding::RoundMoney;
 use rust_decimal::Decimal;
 
 use crate::error::BillingError;

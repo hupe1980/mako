@@ -42,8 +42,8 @@
 //! - **GaBi Gas 2.1 (BK7-24-01-008)**: Balancing group accounting
 //! - **BNetzA BK7-24-01-008**: GaBi Gas 2.1 ruling
 
-use rust_decimal::RoundingStrategy;
 use rust_decimal::Decimal;
+use rust_decimal::RoundingStrategy;
 use time::{Date, Duration, OffsetDateTime, Time, Weekday};
 
 // ── GasQualityClass ───────────────────────────────────────────────────────────

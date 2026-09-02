@@ -126,20 +126,20 @@ regulatory sources.
 | [`makod`](services/makod/) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 70 workflows over 467 Prüfidentifikatoren, AS4 · REST · iMS |
 | [`marktd`](services/marktd/) | `:8180` | All | Market data hub — MaLo/MeLo, Versorgungsstatus, registries, durable CloudEvents fan-out |
 | [`processd`](services/processd/) | `:8580` | NB · LF · MSB | Process decision engine — answers the published Entscheidungsbäume, escalates what it cannot decide |
-| [`edmd`](services/edmd/) | `:8380` | All | Energy data management — MSCONS, Zählerstandsgang, quality scoring, Ablesesteuerung, tiered store |
-| [`vertragd`](services/vertragd/) | `:9780` | LF · MSB | Contracts and customers — every contract with a Kunde on one side |
-| [`productd`](services/productd/) | `:9080` | LF | Product and tariff catalogue — 14 categories, Angebot lifecycle, EPEX and BEHG price series |
-| [`netzbilanzd`](services/netzbilanzd/) | `:8680` | NB | Grid settlement runs — NNE, KA, MMM, MSB, AWH; issues the INVOIC |
-| [`einsd`](services/einsd/) | `:9180` | NB · LF | Einspeiser registry and EEG/KWKG settlement |
+| [`edmd`](services/edmd/) | `:8380` | All | Energy data management — MSCONS, Zählerstandsgang, quality scoring, Ablesesteuerung, tiered store · 15 MCP tools |
+| [`vertragd`](services/vertragd/) | `:9780` | LF · MSB | Contracts and customers — every contract with a Kunde on one side · 17 MCP tools |
+| [`productd`](services/productd/) | `:9080` | LF | Product and tariff catalogue — 14 categories, Angebot lifecycle, EPEX and BEHG price series · 13 MCP tools |
+| [`netzbilanzd`](services/netzbilanzd/) | `:8680` | NB | Grid settlement runs — NNE, KA, MMM, MSB, AWH; issues the INVOIC · 8 MCP tools |
+| [`einsd`](services/einsd/) | `:9180` | NB · LF | Einspeiser registry and EEG/KWKG settlement · 19 MCP tools + 6 prompts |
 | [`mabis-syncd`](services/mabis-syncd/) | `:8880` | ÜNB · NB | MaBiS Summenzeitreihen — one filing per Bilanzierungsgebiet, with the clearing windows |
-| [`invoicd`](services/invoicd/) | `:8280` | LF | INVOIC plausibility and the REMADV/COMDIS lifecycle |
-| [`billingd`](services/billingd/) | `:9280` | LF | Retail billing — §§ 40, 40b EnWG, EN 16931, Abschlagspläne |
+| [`invoicd`](services/invoicd/) | `:8280` | LF | INVOIC plausibility and the REMADV/COMDIS lifecycle · 7 MCP tools |
+| [`billingd`](services/billingd/) | `:9280` | LF | Retail billing — §§ 40, 40b EnWG, EN 16931, Abschlagspläne · 11 MCP tools |
 | [`accountingd`](services/accountingd/) | `:9380` | LF | Massenkontokorrent — tamper-evident double-entry ledger, SEPA, Mahnwesen |
 | [`outputd`](services/outputd/) | `:9880` | — | Customer communications — renders and delivers what other services computed |
-| [`portald`](services/portald/) | `:9480` | LF | Customer portal read-model gateway and the § 41 EnWG self-service writes |
-| [`sperrd`](services/sperrd/) | `:8780` | NB | Sperr-/Entsperrauftrag execution queue |
+| [`portald`](services/portald/) | `:9480` | LF | Customer portal read-model gateway and the § 41 EnWG self-service writes · 8 MCP tools |
+| [`sperrd`](services/sperrd/) | `:8780` | NB | Sperr-/Entsperrauftrag execution queue · 4 MCP tools |
 | [`obsd`](services/obsd/) | `:8480` | All | Business-process observability — KPIs, Fristen, the § 20 EnWG parity audit |
-| [`agentd`](services/agentd/) | `:9580` | All | Advisory agent plane — 28 specialists over the platform's MCP tools, journaled and human-gated |
+| [`agentd`](services/agentd/) | `:9580` | All | Advisory agent plane — **28 specialist manifests** over the platform's MCP tools, journaled and human-gated |
 
 ## ✨ Features
 

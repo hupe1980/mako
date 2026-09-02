@@ -1014,7 +1014,9 @@ impl Workflow for MabisZpLifecycleWorkflow {
                         "{} endet am {} und kann für den Abrechnungszeitraum {} \
                          nicht mehr aktiviert werden",
                         serie.label(),
-                        serie.endet_am().expect("gilt_am was false, so there is an end date"),
+                        serie
+                            .endet_am()
+                            .expect("gilt_am was false, so there is an end date"),
                         billing_period.as_str()
                     )));
                 }
@@ -1179,7 +1181,6 @@ impl Workflow for MabisZpLifecycleWorkflow {
     }
 }
 
-
 /// First day of the month a [`BillingPeriod`] names, where it names one.
 ///
 /// The value is a counterparty's and its shape is AHB-dependent — `YYYYMM` or
@@ -1189,7 +1190,11 @@ impl Workflow for MabisZpLifecycleWorkflow {
 fn abrechnungszeitraum_beginn(period: &str) -> Option<time::Date> {
     // `YYYYMM`, `YYYY-MM` and `YYYYMMDD-YYYYMMDD` all appear across AHB
     // versions, so the separator is ignored and the leading six digits are read.
-    let digits: String = period.chars().filter(char::is_ascii_digit).take(6).collect();
+    let digits: String = period
+        .chars()
+        .filter(char::is_ascii_digit)
+        .take(6)
+        .collect();
     if digits.len() != 6 {
         return None;
     }
@@ -1227,12 +1232,7 @@ mod tests {
         }
     }
 
-
-    fn receive_for_period(
-        serie: ZpSerie,
-        vorgang: ZpVorgang,
-        period: &str,
-    ) -> ZpLifecycleCommand {
+    fn receive_for_period(serie: ZpSerie, vorgang: ZpVorgang, period: &str) -> ZpLifecycleCommand {
         let mut cmd = receive(serie, vorgang);
         if let ZpLifecycleCommand::ReceiveAnfrage {
             ref mut billing_period,
@@ -1614,11 +1614,7 @@ mod tests {
     /// Summenzeitreihe that never settles, and nothing downstream says why.
     #[test]
     fn a_repealed_series_cannot_be_activated_after_its_end() {
-        let cmd = receive_for_period(
-            ZpSerie::TaeglicheAauez,
-            ZpVorgang::Aktivierung,
-            "202610",
-        );
+        let cmd = receive_for_period(ZpSerie::TaeglicheAauez, ZpVorgang::Aktivierung, "202610");
         let out = MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, cmd);
         let err = out.expect_err("an activation past the repeal is refused");
         assert!(
@@ -1630,41 +1626,23 @@ mod tests {
     /// The last month the series exists still activates.
     #[test]
     fn the_final_month_of_a_repealed_series_still_activates() {
-        let cmd = receive_for_period(
-            ZpSerie::TaeglicheAauez,
-            ZpVorgang::Aktivierung,
-            "202609",
-        );
-        assert!(
-            MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, cmd).is_ok()
-        );
+        let cmd = receive_for_period(ZpSerie::TaeglicheAauez, ZpVorgang::Aktivierung, "202609");
+        assert!(MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, cmd).is_ok());
     }
 
     /// A Deaktivierung is how a repealed series is wound down, so the guard
     /// must not refuse one.
     #[test]
     fn a_deaktivierung_is_not_bound_by_the_end_date() {
-        let cmd = receive_for_period(
-            ZpSerie::TaeglicheAauez,
-            ZpVorgang::Deaktivierung,
-            "202610",
-        );
-        assert!(
-            MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, cmd).is_ok()
-        );
+        let cmd = receive_for_period(ZpSerie::TaeglicheAauez, ZpVorgang::Deaktivierung, "202610");
+        assert!(MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, cmd).is_ok());
     }
 
     /// Every other series is open-ended and unaffected.
     #[test]
     fn a_series_with_no_end_date_activates_in_any_period() {
-        let cmd = receive_for_period(
-            ZpSerie::TaeglicheBkSzr,
-            ZpVorgang::Aktivierung,
-            "209912",
-        );
-        assert!(
-            MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, cmd).is_ok()
-        );
+        let cmd = receive_for_period(ZpSerie::TaeglicheBkSzr, ZpVorgang::Aktivierung, "209912");
+        assert!(MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, cmd).is_ok());
     }
 
     /// A period whose shape the AHB version changed is not evidence of a period
@@ -1673,7 +1651,11 @@ mod tests {
     fn an_unreadable_abrechnungszeitraum_does_not_refuse() {
         let okt = time::Date::from_calendar_date(2026, time::Month::October, 1).unwrap();
         for shape in ["202610", "2026-10", "20261001-20261031"] {
-            assert_eq!(super::abrechnungszeitraum_beginn(shape), Some(okt), "{shape}");
+            assert_eq!(
+                super::abrechnungszeitraum_beginn(shape),
+                Some(okt),
+                "{shape}"
+            );
         }
         for bad in ["2026", "", "202613"] {
             assert_eq!(super::abrechnungszeitraum_beginn(bad), None, "{bad:?}");

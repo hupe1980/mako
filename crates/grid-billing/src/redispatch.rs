@@ -19,8 +19,8 @@
 //! reference Lastgang in the Duldungsfall, from the transmitted schedule in
 //! the Aufforderungsfall) and the payment run live in the service layer.
 
-use crate::rounding::RoundMoney;
 use crate::EuroAmount;
+use crate::rounding::RoundMoney;
 use rust_decimal::Decimal;
 
 use crate::error::BillingError;
@@ -140,8 +140,7 @@ pub fn eeg_entgangene_einnahmen(
     ausfallarbeit_kwh: Decimal,
     anzulegender_wert_ct: Decimal,
 ) -> Decimal {
-    (ausfallarbeit_kwh * anzulegender_wert_ct / Decimal::ONE_HUNDRED)
-        .round_kfm(2)
+    (ausfallarbeit_kwh * anzulegender_wert_ct / Decimal::ONE_HUNDRED).round_kfm(2)
 }
 
 /// Compute the §13a Abs. 2 EnWG compensation for one redispatch activation.
@@ -169,9 +168,7 @@ pub fn redispatch_verguetung(
         }
     }
 
-    let round = |d: Decimal| {
-        d.round_kfm(2)
-    };
+    let round = |d: Decimal| d.round_kfm(2);
     let entgangene = round(input.entgangene_einnahmen_eur);
     let zusaetzliche = round(input.zusaetzliche_aufwendungen_eur);
     let ersparte = round(input.ersparte_aufwendungen_eur);
@@ -235,8 +232,7 @@ pub fn bilarem_finanzielle_korrektur(
     id_aep_eur_per_mwh: Decimal,
 ) -> Result<Decimal, BillingError> {
     let korr = (ausfallarbeit_kwh - ausgleich_kwh) / Decimal::from(1000) * id_aep_eur_per_mwh;
-    let rounded =
-        korr.round_kfm(2);
+    let rounded = korr.round_kfm(2);
     // Money boundary: must be representable as EUR cents.
     if rounded.abs() > Decimal::from(10_000_000) {
         return Err(BillingError::InvalidInput {

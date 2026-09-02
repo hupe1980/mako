@@ -1172,7 +1172,8 @@ mod comparison_feed_tests {
         assert_eq!(netto, dec!(1014.075));
 
         // brutto: 1014.075 × 1.19 = 1206.74925 (portal rounds to 2dp)
-        let brutto = (netto * dec!(1.19)).round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero);
+        let brutto = (netto * dec!(1.19))
+            .round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero);
         assert_eq!(brutto, dec!(1206.75));
 
         assert_eq!(

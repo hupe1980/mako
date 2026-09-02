@@ -340,20 +340,45 @@ fn per_service_claims(
 
     vec![
         // ── README service table ──
-        ("README.md", format!("{invoicd}-tool read-only")),
-        ("README.md", format!("{netzbilanzd}-tool **read-on")),
-        ("README.md", format!("{sperrd}-tool read-only")),
-        ("README.md", format!("{edmd}-tool MCP serve")),
-        ("README.md", format!("**{productd}-tool MCP serve")),
-        ("README.md", format!("{portald}-tool operator")),
-        ("README.md", format!("**{vertragd}-tool MCP serve")),
+        //
+        // The table is a one-line index, so each claim is pinned by the row's
+        // own wording rather than by a bare count: `· 7 MCP tools` alone would
+        // match any row whose service happens to expose seven.
         (
             "README.md",
-            format!("§51 neg-price, {einsd} MCP tools + {p_einsd} prompts"),
+            format!("REMADV/COMDIS lifecycle · {invoicd} MCP tools"),
         ),
         (
             "README.md",
-            format!("monthly iMSys Abrechnungsinformation); **{billingd} MCP tools**"),
+            format!("issues the INVOIC · {netzbilanzd} MCP tools"),
+        ),
+        (
+            "README.md",
+            format!("Entsperrauftrag execution queue · {sperrd} MCP tools"),
+        ),
+        (
+            "README.md",
+            format!("Ablesesteuerung, tiered store · {edmd} MCP tools"),
+        ),
+        (
+            "README.md",
+            format!("EPEX and BEHG price series · {productd} MCP tools"),
+        ),
+        (
+            "README.md",
+            format!("§ 41 EnWG self-service writes · {portald} MCP tools"),
+        ),
+        (
+            "README.md",
+            format!("Kunde on one side · {vertragd} MCP tools"),
+        ),
+        (
+            "README.md",
+            format!("EEG/KWKG settlement · {einsd} MCP tools + {p_einsd} prompts"),
+        ),
+        (
+            "README.md",
+            format!("EN 16931, Abschlagspläne · {billingd} MCP tools"),
         ),
         // ── Landing diagrams ──
         (
@@ -433,7 +458,7 @@ fn per_service_claims(
         ),
         (
             "services/edmd/README.md",
-            format!("/mcp` — {edmd} tools + {p_edmd} prompts"),
+            format!("MCP `POST\\|GET /mcp` ({edmd} tools, {p_edmd} prompts)"),
         ),
         (
             "services/einsd/README.md",
@@ -569,7 +594,7 @@ fn inventory_matches_the_docs(workspace_root: &Path, tools: &BTreeMap<String, bo
         ),
         (
             "site/templates/index.html",
-            format!("agent plane over the {total} MCP tools the platform exposes"),
+            format!("agent plane over the platform's {total} MCP tools"),
         ),
         (
             "concepts/MARKET_LANDSCAPE.md",
@@ -626,7 +651,7 @@ fn inventory_matches_the_docs(workspace_root: &Path, tools: &BTreeMap<String, bo
         ("README.md", format!("agent plane — {agents} specialists")),
         (
             "site/templates/index.html",
-            format!("exposes — {agents} declarative specialists"),
+            format!("Its {agents} declarative specialists"),
         ),
         (
             "site/content/docs/services/agentd.md",

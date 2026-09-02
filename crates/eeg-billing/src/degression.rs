@@ -112,8 +112,7 @@ pub fn abgesenkter_wert(basiswert_ct: Decimal, stufen: u32) -> Decimal {
     // Kaufmännisch, not bankers': 7,50 × 0,99 = 7,425 and §49's "gerundet" is
     // the published 7,43. `round_dp` alone would round half-to-even and give
     // 7,42 — a cent per kWh, for twenty years, on every ≤ 40 kW plant.
-    abgesenkter_wert_ungerundet(basiswert_ct, stufen)
-        .round_kfm(2)
+    abgesenkter_wert_ungerundet(basiswert_ct, stufen).round_kfm(2)
 }
 
 /// The unrounded §49 chain — the basis every further step is computed from

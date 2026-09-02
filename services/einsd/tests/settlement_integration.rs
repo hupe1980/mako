@@ -17,9 +17,9 @@
 //!
 //! Every test provisions its own schema, so they leave nothing behind.
 
-use eeg_billing::RoundMoney;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use eeg_billing::RoundMoney;
 use sqlx::PgPool;
 use tower::ServiceExt as _;
 

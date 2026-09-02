@@ -4466,7 +4466,12 @@ fn s51_abs2_satz2_aggregates_capacity_blocks_per_sect24() {
     assert_eq!(out.status, SettlementStatus::Calculated);
     // 600 kWp total ≥ the 400 kW threshold → §51 applies to every block.
     // (Three 1/3 shares rounded to 3 dp leave a 0.027 kWh allocation residue.)
-    assert_eq!(out.eligible_kwh.unwrap().round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero), d("27000"));
+    assert_eq!(
+        out.eligible_kwh
+            .unwrap()
+            .round_dp_with_strategy(0, rust_decimal::RoundingStrategy::MidpointAwayFromZero),
+        d("27000")
+    );
     assert_eq!(out.settlement_eur.unwrap().round_kfm(0), d("2160"));
 }
 

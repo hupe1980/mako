@@ -27,9 +27,9 @@
 //! unwired from `.validate()` for the same reason, and mako calls it by name on
 //! the outbound path.
 
-use rust_decimal::RoundingStrategy;
 use rubo4e::validation::ValidationFailure;
 use rust_decimal::Decimal;
+use rust_decimal::RoundingStrategy;
 
 /// Build a failure at `path`.
 fn failure(path: &str, message: impl Into<String>) -> ValidationFailure {

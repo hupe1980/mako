@@ -226,8 +226,7 @@ pub fn steuerausweis(
         bemessungsgrundlage_eur: netto_eur,
         // Kaufmännisch to the cent: the tax is a monetary amount on the
         // invoice, not an intermediate.
-        steuer_eur: (netto_eur * satz / dec!(100))
-            .round_kfm(2),
+        steuer_eur: (netto_eur * satz / dec!(100)).round_kfm(2),
         hinweis: None,
         rechtsgrundlage: "§12 Abs. 1 UStG",
     })
