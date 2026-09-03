@@ -37,13 +37,13 @@
 /// ```rust,ignore
 /// use edi_energy::{Platform, registry::{Profile, ReleaseRegistry}};
 ///
-/// let mut profiles: Vec<&'static dyn Profile> = Vec::new();
+/// let mut profiles: Vec<&'static Profile> = Vec::new();
 /// my_profiles::register(&mut profiles);
 /// let platform = Platform::new(ReleaseRegistry::new(profiles));
 /// ```
 use std::sync::Arc;
 
-use crate::{AnyMessage, Error, ParseConfig, generated, registry::ReleaseRegistry};
+use crate::{AnyMessage, Error, ParseConfig, registry::ReleaseRegistry};
 #[cfg(any_message)]
 use crate::{EdiEnergyReport, Release};
 
@@ -84,8 +84,8 @@ impl Platform {
     /// a fresh, independent registry — useful for test isolation.
     #[must_use]
     pub fn with_all_profiles() -> Self {
-        let mut profiles: Vec<&'static dyn crate::registry::Profile> = Vec::new();
-        generated::register_profiles(&mut profiles);
+        let mut profiles: Vec<&'static crate::registry::Profile> = Vec::new();
+        crate::register_profiles(&mut profiles);
         Self::new(ReleaseRegistry::new(profiles))
     }
 
@@ -357,8 +357,7 @@ impl Platform {
     pub fn warm_up(&self) {
         for profile in self.registry.all_profiles() {
             // Force initialisation of the LazyLock<Arc<ProfileRulePack>> statics.
-            let _ = profile.mig_rule_pack();
-            let _ = profile.ahb_rule_pack(None);
+            let _ = profile.structure.nodes.len();
         }
     }
 }

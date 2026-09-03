@@ -1,482 +1,1470 @@
 {
-  "schema_version": 1,
+  "ahb_version": "1.1g",
+  "envelope": [],
   "message_type": "INSRPT",
+  "pid_source": "rff_z13",
   "release": "1.1a",
-  "valid_from": "2026-01-01",
-  "supersedes_directory": "fv20211001",
-  "dtm_formats": {
-    "137": [
-      "303"
-    ],
-    "163": [
-      "102",
-      "303"
-    ],
-    "164": [
-      "102",
-      "303"
-    ],
-    "292": [
-      "102",
-      "303"
-    ],
-    "9": [
-      "102",
-      "303"
-    ]
+  "schema_version": 2,
+  "source": {
+    "file": "INSRPT_MIG_1.1a_-_ausserordentliche_Veroeffentlichung_Stand_26.07.2024.pdf",
+    "sha256": "c587cda239639e7d90aa70ef89f2d0f1a3e0b0464519e430f3a05d5bb2bf3534",
+    "title": "INSRPT MIG 1.1a -  außerordentliche Veröffentlichung Stand: 26.07.2024"
   },
-  "segments": [
+  "structure": [
     {
-      "tag": "UNH",
-      "name": "Nachrichten-Kopfsegment",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "format": "an..14",
           "id": "0062",
-          "status": "M",
-          "components": 1
+          "name": "Nachrichten-Referenznummer",
+          "note": "Eindeutige Nachrichtenreferenz des Absenders. Laufende Nummer der Nachrichten im Datenaustausch. Identisch mit DE0062 im UNT, i. d. R. vom sendenden Konverter vergeben.",
+          "status": "M"
         },
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "INSRPT",
+                  "name": "Prüfbericht"
+                }
+              ],
+              "format": "an..6",
+              "id": "0065",
+              "name": "Nachrichtentyp-Kennung",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "D",
+                  "name": "Entwurfs-Version"
+                }
+              ],
+              "format": "an..3",
+              "id": "0052",
+              "name": "Versionsnummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "10A",
+                  "name": "Ausgabe 2010 - A"
+                }
+              ],
+              "format": "an..3",
+              "id": "0054",
+              "name": "Freigabenummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "UN",
+                  "name": "UN/CEFACT"
+                }
+              ],
+              "format": "an..2",
+              "id": "0051",
+              "name": "Verwaltende Organisation",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "1.1a",
+                  "name": "Versionsnummer der zugrundeliegenden BDEW-Nachrichtenbeschreibung"
+                }
+              ],
+              "format": "an..6",
+              "id": "0057",
+              "name": "Anwendungscode der zuständigen Organisation",
+              "status": "R"
+            }
+          ],
           "id": "S009",
-          "status": "M",
-          "components": 6
+          "name": "Nachrichten-Kennung",
+          "status": "M"
         }
-      ]
+      ],
+      "example": "UNH+47110815+INSRPT:D:10A:UN:1.1a'",
+      "max": 1,
+      "name": "Nachrichten-Kopfsegment",
+      "nr": "00001",
+      "status": "M",
+      "tag": "UNH",
+      "zaehler": "0010"
     },
     {
-      "tag": "BGM",
-      "name": "Beginn der Nachricht",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "4",
+                  "name": "Prüfbericht"
+                }
+              ],
+              "format": "an..3",
+              "id": "1001",
+              "name": "Dokumentenname, Code",
+              "status": "R"
+            }
+          ],
           "id": "C002",
-          "status": "M",
-          "components": 4
+          "name": "Dokumenten-/ Nachrichtenname",
+          "status": "R"
         },
         {
+          "components": [
+            {
+              "format": "an..70",
+              "id": "1004",
+              "name": "Dokumentennummer",
+              "note": "EDI-Nachrichtennummer vergeben vom Absender des Dokuments. Eindeutige Referenz zur Identifikation der Übertragungsdatei.",
+              "status": "R"
+            }
+          ],
           "id": "C106",
-          "status": "C",
-          "components": 3
+          "name": "Dokumenten-/Nachrichten- Identifikation",
+          "status": "R"
         }
       ],
-      "qualifier_restrictions": {
-        "1001": [
-          "4"
-        ]
-      }
+      "example": "BGM+4+fi3wrp823'",
+      "max": 1,
+      "name": "Beginn der Nachricht",
+      "nr": "00002",
+      "status": "M",
+      "tag": "BGM",
+      "zaehler": "0020"
     },
     {
-      "tag": "DTM",
-      "name": "Dokumentendatum",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "137",
+                  "name": "Dokumenten-/Nachrichtendatum/-zeit"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
           "id": "C507",
-          "status": "M",
-          "components": 3
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
         }
       ],
-      "qualifier_restrictions": {
-        "2005": [
-          "137"
-        ]
-      }
+      "example": "DTM+137:201110050855?+00:303'",
+      "max": 1,
+      "name": "Dokumentendatum",
+      "nr": "00003",
+      "status": "R",
+      "tag": "DTM",
+      "zaehler": "0030"
     },
     {
-      "tag": "UNT",
-      "name": "Nachrichten-Endesegment",
-      "mandatory": true,
-      "max_occurrences": 1,
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "MR",
+                  "name": "Nachrichtenempfänger"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    },
+                    {
+                      "code": "332",
+                      "name": "DE, DVGW Service & Consult GmbH"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+MR+4078901000029::9'",
+          "max": 1,
+          "name": "MP-ID Empfänger",
+          "nr": "00004",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0080"
+        }
+      ],
+      "group": "SG2",
+      "max": 1,
+      "name": "MP-ID Empfänger",
+      "status": "R",
+      "zaehler": "0070"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "MS",
+                  "name": "Dokumenten-/Nachrichtenaussteller bzw. - absender"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    },
+                    {
+                      "code": "332",
+                      "name": "DE, DVGW Service & Consult GmbH"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+MS+4012345000023::9'",
+          "max": 1,
+          "name": "MP-ID Absender",
+          "nr": "00005",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0080"
+        }
+      ],
+      "group": "SG2",
+      "max": 1,
+      "name": "MP-ID Absender",
+      "status": "R",
+      "zaehler": "0070"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "21",
+                      "name": "Anfrage"
+                    },
+                    {
+                      "code": "22",
+                      "name": "Antwort auf Anfrage"
+                    },
+                    {
+                      "code": "23",
+                      "name": "Statusinformationen"
+                    },
+                    {
+                      "code": "293",
+                      "name": "Prüfbericht"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1001",
+                  "name": "Dokumentenname, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C002",
+              "name": "Dokumenten-/ Nachrichtenname",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..70",
+                  "id": "1004",
+                  "name": "Dokumentennummer",
+                  "note": "Vorgangsnummer Die Vorgangsnummer wird vom Ersteller der Nachricht vergeben",
+                  "status": "R"
+                }
+              ],
+              "id": "C503",
+              "name": "Dokument-/Nachricht- Einzelheiten",
+              "status": "R"
+            }
+          ],
+          "example": "DOC+21+h821nbdwi2198de'",
+          "max": 1,
+          "name": "Dokument-/Nachricht-Einzelheiten",
+          "nr": "00006",
+          "status": "M",
+          "tag": "DOC",
+          "zaehler": "0110"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z13",
+                          "name": "Prüfidentifikator"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "23001",
+                          "name": "WiM / Störungsmeldung vom LF/NB/MSB an MSB"
+                        },
+                        {
+                          "code": "23003",
+                          "name": "WiM / Ablehnung vom MSB an LF/NB/MSB"
+                        },
+                        {
+                          "code": "23004",
+                          "name": "WiM / Bestätigung vom MSB an LF/NB/MSB"
+                        },
+                        {
+                          "code": "23005",
+                          "name": "WiM / Informationsmeldung (Störungsmeldung) vom MSB an NB (Gas)/ MSB (Strom)"
+                        },
+                        {
+                          "code": "23008",
+                          "name": "WiM / Ergebnisbericht vom MSB an LF/NB/ MSB"
+                        },
+                        {
+                          "code": "23009",
+                          "name": "WiM / Informationsmeldung (Störungsbehebung) vom MSB an NB (Gas)/ MSB (Strom)"
+                        },
+                        {
+                          "code": "23011",
+                          "name": "WiM / Informationsmeldung (Störungsmeldung) vom MSB der MaLo"
+                        },
+                        {
+                          "code": "23012",
+                          "name": "WiM / Informationsmeldung (Störungsbehebung) vom MSB der MaLo"
+                        }
+                      ],
+                      "format": "n5",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "Prüfidentifikator",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+Z13:23001'",
+              "max": 1,
+              "name": "Prüfidentifikator",
+              "nr": "00007",
+              "status": "M",
+              "tag": "RFF",
+              "zaehler": "0130"
+            }
+          ],
+          "group": "SG4",
+          "max": 1,
+          "name": "Prüfidentifikator",
+          "status": "R",
+          "zaehler": "0120"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "AAV",
+                          "name": "Nummer der Anfrage"
+                        },
+                        {
+                          "code": "TN",
+                          "name": "Transaktions-Referenznummer"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..70",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "Dokumenten-/Vorgangsnummer der Bezugsnachricht",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+AAV:bdöoip9rc2hro8982c'",
+              "max": 1,
+              "name": "Referenzangaben",
+              "nr": "00008",
+              "status": "M",
+              "tag": "RFF",
+              "zaehler": "0130"
+            }
+          ],
+          "group": "SG4",
+          "max": 1,
+          "name": "Referenz auf Anfrage bzw. früheren Vorgang",
+          "status": "D",
+          "zaehler": "0120"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "MS",
+                      "name": "Dokumenten-/Nachrichtenaussteller bzw. - absender"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3035",
+                  "name": "Beteiligter, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..35",
+                      "id": "3039",
+                      "name": "Beteiligter, Identifikation",
+                      "note": "MP-ID",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..17",
+                      "id": "1131",
+                      "name": "Codeliste, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "9",
+                          "name": "GS1"
+                        },
+                        {
+                          "code": "293",
+                          "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                        },
+                        {
+                          "code": "332",
+                          "name": "DE, DVGW Service & Consult GmbH"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3055",
+                      "name": "Verantwortliche Stelle für die Codepflege, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C082",
+                  "name": "Identifikation des Beteiligten",
+                  "status": "R"
+                }
+              ],
+              "example": "NAD+MS+4012345000023::9'",
+              "max": 1,
+              "name": "Ansprechpartner beim Nachrichtenabsender",
+              "nr": "00009",
+              "status": "M",
+              "tag": "NAD",
+              "zaehler": "0160"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "codes": [
+                        {
+                          "code": "IC",
+                          "name": "Informationskontakt"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3139",
+                      "name": "Funktion des Ansprechpartners, Code",
+                      "status": "R"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..17",
+                          "id": "3413",
+                          "name": "Kontakt, Nummer",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "format": "an..256",
+                          "id": "3412",
+                          "name": "Kontakt",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C056",
+                      "name": "Kontaktangaben",
+                      "status": "R"
+                    }
+                  ],
+                  "example": "CTA+IC+:B. Zweistein'",
+                  "max": 1,
+                  "name": "Ansprechpartner",
+                  "nr": "00010",
+                  "status": "M",
+                  "tag": "CTA",
+                  "zaehler": "0180"
+                },
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "format": "an..512",
+                          "id": "3148",
+                          "name": "Kommunikationsadresse, Identifikation",
+                          "status": "M"
+                        },
+                        {
+                          "codes": [
+                            {
+                              "code": "EM",
+                              "name": "E-Mail"
+                            },
+                            {
+                              "code": "FX",
+                              "name": "Telefax"
+                            },
+                            {
+                              "code": "TE",
+                              "name": "Telefon"
+                            },
+                            {
+                              "code": "AJ",
+                              "name": "weiteres Telefon"
+                            },
+                            {
+                              "code": "AL",
+                              "name": "Handy"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "3155",
+                          "name": "Art des Kommunikationsmittels, Code",
+                          "status": "M"
+                        }
+                      ],
+                      "id": "C076",
+                      "name": "Kommunikationsverbindung",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "COM+004398989198:FX'",
+                  "max": 5,
+                  "name": "Kommunikationsverbindung",
+                  "nr": "00011",
+                  "status": "R",
+                  "tag": "COM",
+                  "zaehler": "0190"
+                }
+              ],
+              "group": "SG6",
+              "max": 1,
+              "name": "Ansprechpartner",
+              "status": "R",
+              "zaehler": "0170"
+            }
+          ],
+          "group": "SG5",
+          "max": 1,
+          "name": "Ansprechpartner beim Nachrichtenabsender",
+          "status": "D",
+          "zaehler": "0150"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "CC",
+                      "name": "Anspruchsteller"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3035",
+                  "name": "Beteiligter, Qualifier",
+                  "status": "M"
+                }
+              ],
+              "example": "NAD+CC'",
+              "max": 1,
+              "name": "Ansprechpartner beim Kunden",
+              "nr": "00012",
+              "status": "M",
+              "tag": "NAD",
+              "zaehler": "0160"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "codes": [
+                        {
+                          "code": "IC",
+                          "name": "Informationskontakt"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3139",
+                      "name": "Funktion des Ansprechpartners, Code",
+                      "status": "R"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..17",
+                          "id": "3413",
+                          "name": "Kontakt, Nummer",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "format": "an..256",
+                          "id": "3412",
+                          "name": "Kontakt",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C056",
+                      "name": "Kontaktangaben",
+                      "status": "R"
+                    }
+                  ],
+                  "example": "CTA+IC+:B. Zweistein'",
+                  "max": 1,
+                  "name": "Ansprechpartner",
+                  "nr": "00013",
+                  "status": "M",
+                  "tag": "CTA",
+                  "zaehler": "0180"
+                },
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "format": "an..512",
+                          "id": "3148",
+                          "name": "Kommunikationsadresse, Identifikation",
+                          "status": "M"
+                        },
+                        {
+                          "codes": [
+                            {
+                              "code": "EM",
+                              "name": "E-Mail"
+                            },
+                            {
+                              "code": "FX",
+                              "name": "Telefax"
+                            },
+                            {
+                              "code": "TE",
+                              "name": "Telefon"
+                            },
+                            {
+                              "code": "AJ",
+                              "name": "weiteres Telefon"
+                            },
+                            {
+                              "code": "AL",
+                              "name": "Handy"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "3155",
+                          "name": "Art des Kommunikationsmittels, Code",
+                          "status": "M"
+                        }
+                      ],
+                      "id": "C076",
+                      "name": "Kommunikationsverbindung",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "COM+004398989198:FX'",
+                  "max": 5,
+                  "name": "Kommunikationsverbindung",
+                  "nr": "00014",
+                  "status": "R",
+                  "tag": "COM",
+                  "zaehler": "0190"
+                }
+              ],
+              "group": "SG6",
+              "max": 1,
+              "name": "Ansprechpartner",
+              "status": "R",
+              "zaehler": "0170"
+            }
+          ],
+          "group": "SG5",
+          "max": 1,
+          "name": "Ansprechpartner beim Kunden",
+          "status": "D",
+          "zaehler": "0150"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "format": "n..6",
+                  "id": "1082",
+                  "name": "Positionsnummer",
+                  "note": "Laufende Positionsnummer innerhalb des in SG3 mittels DOC-Segment eröffneten Dokuments (von 1 bis n). Die Nummerierung beginnt in jedem Dokument bei 1.",
+                  "status": "R"
+                }
+              ],
+              "example": "LIN+1'",
+              "max": 1,
+              "name": "Positionsdaten",
+              "nr": "00015",
+              "status": "M",
+              "tag": "LIN",
+              "zaehler": "0210"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "9",
+                          "name": "Bearbeitungs-/Verarbeitungsdatum/-zeit"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2005",
+                      "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..35",
+                      "id": "2380",
+                      "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "102",
+                          "name": "CCYYMMDD"
+                        },
+                        {
+                          "code": "303",
+                          "name": "CCYYMMDDHHMMZZZ"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2379",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C507",
+                  "name": "Datum/Uhrzeit/Zeitspanne",
+                  "status": "M"
+                }
+              ],
+              "example": "DTM+9:201112241830?+01:303'",
+              "max": 1,
+              "name": "Zeitpunkt zu dem der Geräte-Status ermittelt wurde",
+              "nr": "00016",
+              "status": "D",
+              "tag": "DTM",
+              "zaehler": "0240"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "163",
+                          "name": "Verarbeitung, Beginndatum/-zeit"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2005",
+                      "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..35",
+                      "id": "2380",
+                      "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "102",
+                          "name": "CCYYMMDD"
+                        },
+                        {
+                          "code": "303",
+                          "name": "CCYYMMDDHHMMZZZ"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2379",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C507",
+                  "name": "Datum/Uhrzeit/Zeitspanne",
+                  "status": "M"
+                }
+              ],
+              "example": "DTM+163:201112241830?+01:303'",
+              "max": 1,
+              "name": "Beginn des Geräte-Status",
+              "nr": "00017",
+              "status": "D",
+              "tag": "DTM",
+              "zaehler": "0240"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "164",
+                          "name": "Verarbeitung, Endedatum/-zeit"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2005",
+                      "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..35",
+                      "id": "2380",
+                      "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "102",
+                          "name": "CCYYMMDD"
+                        },
+                        {
+                          "code": "303",
+                          "name": "CCYYMMDDHHMMZZZ"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2379",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C507",
+                  "name": "Datum/Uhrzeit/Zeitspanne",
+                  "status": "M"
+                }
+              ],
+              "example": "DTM+164:201112241830?+01:303'",
+              "max": 1,
+              "name": "Ende des Geräte-Status",
+              "nr": "00018",
+              "status": "D",
+              "tag": "DTM",
+              "zaehler": "0240"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "292",
+                          "name": "Datum/Zeit der abgeschlossenen Leistung (Arbeit), geplant"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2005",
+                      "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..35",
+                      "id": "2380",
+                      "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "102",
+                          "name": "CCYYMMDD"
+                        },
+                        {
+                          "code": "303",
+                          "name": "CCYYMMDDHHMMZZZ"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2379",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C507",
+                  "name": "Datum/Uhrzeit/Zeitspanne",
+                  "status": "M"
+                }
+              ],
+              "example": "DTM+292:201112241830?+01:303'",
+              "max": 1,
+              "name": "Ende des Zustands",
+              "nr": "00019",
+              "status": "D",
+              "tag": "DTM",
+              "zaehler": "0240"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z06",
+                          "name": "Gerätestatus"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "9015",
+                      "name": "Statuskategorie, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C601",
+                  "name": "Statuskategorie",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z09",
+                          "name": "störungsfrei"
+                        },
+                        {
+                          "code": "Z10",
+                          "name": "gestört"
+                        },
+                        {
+                          "code": "Z11",
+                          "name": "festgestellte Störung"
+                        },
+                        {
+                          "code": "Z12",
+                          "name": "vermutete Störung"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "4405",
+                      "name": "Status, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C555",
+                  "name": "Status",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z75",
+                          "name": "Kommunikationsstörung"
+                        },
+                        {
+                          "code": "Z78",
+                          "name": "Gerätewechsel"
+                        },
+                        {
+                          "code": "Z81",
+                          "name": "Messeinrichtung gestört/defekt"
+                        },
+                        {
+                          "code": "ZB8",
+                          "name": "keine Störung feststellbar"
+                        },
+                        {
+                          "code": "ZC1",
+                          "name": "Störungsbehebung nicht möglich"
+                        },
+                        {
+                          "code": "ZS1",
+                          "name": "Reparatur ohne Gerätewechsel"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "9013",
+                      "name": "Statusanlaß, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C556",
+                  "name": "Statusanlaß",
+                  "status": "D"
+                }
+              ],
+              "example": "STS+Z06+Z10+Z75'",
+              "max": 1,
+              "name": "Gerätestatus",
+              "nr": "00020",
+              "status": "D",
+              "tag": "STS",
+              "zaehler": "0250"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "E01",
+                          "name": "Status der Antwort"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "9015",
+                      "name": "Statuskategorie, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C601",
+                  "name": "Statuskategorie",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "4405",
+                      "name": "Status, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C555",
+                  "name": "Status",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "E15",
+                          "name": "Zustimmung ohne Korrekturen"
+                        },
+                        {
+                          "code": "Z29",
+                          "name": "Ablehnung (kein Vertragsverhältnis mehr vorhanden)"
+                        },
+                        {
+                          "code": "ZB8",
+                          "name": "keine Störung feststellbar"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "9013",
+                      "name": "Statusanlaß, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C556",
+                  "name": "Statusanlaß",
+                  "status": "R"
+                }
+              ],
+              "example": "STS+E01++ZB8'",
+              "max": 1,
+              "name": "Antwortstatus",
+              "nr": "00021",
+              "status": "D",
+              "tag": "STS",
+              "zaehler": "0250"
+            },
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "AAO",
+                      "name": "Fehlerbeschreibung (Freier Text)"
+                    },
+                    {
+                      "code": "ACD",
+                      "name": "Begründung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "4451",
+                  "name": "Textbezug, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..3",
+                  "id": "4453",
+                  "name": "Textfunktion, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "4441",
+                      "name": "Freier Text, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C107",
+                  "name": "Text-Referenz",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "4440",
+                      "name": "Freier Text",
+                      "note": "Freier Text zur weiteren Erklärung.",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..512",
+                      "id": "4440",
+                      "name": "Freier Text",
+                      "status": "O"
+                    },
+                    {
+                      "format": "an..512",
+                      "id": "4440",
+                      "name": "Freier Text",
+                      "status": "O"
+                    },
+                    {
+                      "format": "an..512",
+                      "id": "4440",
+                      "name": "Freier Text",
+                      "status": "O"
+                    },
+                    {
+                      "format": "an..512",
+                      "id": "4440",
+                      "name": "Freier Text",
+                      "status": "O"
+                    }
+                  ],
+                  "id": "C108",
+                  "name": "Text",
+                  "status": "R"
+                }
+              ],
+              "example": "FTX+AAO+++Erläuterung zur Störung:ggf. weiterer Hinweis zur Störung:X:X:X'",
+              "max": 1,
+              "name": "Freier Text",
+              "nr": "00022",
+              "status": "O",
+              "tag": "FTX",
+              "zaehler": "0310"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "codes": [
+                        {
+                          "code": "DP",
+                          "name": "Lieferanschrift"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3035",
+                      "name": "Beteiligter, Qualifier",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "NAD+DP'",
+                  "max": 1,
+                  "name": "Messlokation",
+                  "nr": "00023",
+                  "status": "M",
+                  "tag": "NAD",
+                  "zaehler": "0330"
+                },
+                {
+                  "elements": [
+                    {
+                      "codes": [
+                        {
+                          "code": "172",
+                          "name": "Meldepunkt"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3227",
+                      "name": "Ortsangabe, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..35",
+                          "id": "3225",
+                          "name": "Ortsangabe, Nummer",
+                          "note": "Identifikator",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C517",
+                      "name": "Ortsangabe",
+                      "status": "R"
+                    }
+                  ],
+                  "example": "LOC+172+DE0065239988901000000000008560083'",
+                  "max": 1,
+                  "name": "Meldepunkt",
+                  "nr": "00024",
+                  "status": "R",
+                  "tag": "LOC",
+                  "zaehler": "0350"
+                },
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "Z21",
+                              "name": "zugeordnete Messlokation"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "1153",
+                          "name": "Referenz, Qualifier",
+                          "status": "R"
+                        },
+                        {
+                          "format": "an..70",
+                          "id": "1154",
+                          "name": "Referenz, Identifikation",
+                          "note": "ID einer Messlokation",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C506",
+                      "name": "Referenz",
+                      "status": "R"
+                    }
+                  ],
+                  "example": "RFF+Z21:DE0065239988901000000000008560083'",
+                  "max": 99,
+                  "name": "Gestörte Messlokation",
+                  "nr": "00025",
+                  "status": "D",
+                  "tag": "RFF",
+                  "zaehler": "0380"
+                }
+              ],
+              "group": "SG8",
+              "max": 1,
+              "name": "NAD-LOC-RFF",
+              "status": "R",
+              "zaehler": "0320"
+            }
+          ],
+          "group": "SG7",
+          "max": 999,
+          "name": "LIN-DTM-DTM-DTM-DTM-STS-STS-FTX-SG8",
+          "status": "R",
+          "zaehler": "0200"
+        }
+      ],
+      "group": "SG3",
+      "max": 99,
+      "name": "Meldung",
+      "status": "M",
+      "zaehler": "0100"
+    },
+    {
       "elements": [
         {
+          "format": "n..6",
           "id": "0074",
-          "status": "M",
-          "components": 1
+          "name": "Anzahl der Segmente in einer Nachricht",
+          "note": "Hier wird die Gesamtzahl der Segmente einer Nachricht angegeben",
+          "status": "M"
         },
         {
+          "format": "an..14",
           "id": "0062",
-          "status": "M",
-          "components": 1
-        }
-      ]
-    }
-  ],
-  "segment_groups": [
-    {
-      "id": "SG2",
-      "trigger_segment": "NAD",
-      "mandatory": true,
-      "max_occurrences": 2,
-      "segments": [
-        {
-          "tag": "NAD",
-          "name": "MP-ID Absender/Empfänger",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "3035",
-              "status": "M",
-              "components": 1
-            },
-            {
-              "id": "C082",
-              "status": "C",
-              "components": 3
-            }
-          ],
-          "qualifier_restrictions": {
-            "3035": [
-              "MS",
-              "MR"
-            ]
-          }
+          "name": "Nachrichten-Referenznummer",
+          "note": "Die Referenznummer aus dem UNH-Segment muss hier wiederholt werden",
+          "status": "M"
         }
       ],
-      "groups": []
-    },
-    {
-      "id": "SG3",
-      "trigger_segment": "DOC",
-      "mandatory": true,
-      "max_occurrences": 99,
-      "segments": [
-        {
-          "tag": "DOC",
-          "name": "Dokument-/Nachricht-Einzelheiten",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "C002",
-              "status": "M",
-              "components": 4
-            },
-            {
-              "id": "C503",
-              "status": "C",
-              "components": 3
-            }
-          ],
-          "qualifier_restrictions": {
-            "1001": [
-              "21",
-              "22",
-              "23",
-              "293"
-            ]
-          }
-        },
-        {
-          "tag": "RFF",
-          "name": "Bezugsnummer des Dokuments",
-          "mandatory": false,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "C506",
-              "status": "M",
-              "components": 5
-            }
-          ],
-          "qualifier_restrictions": {
-            "1153": [
-              "AAV"
-            ]
-          }
-        }
-      ],
-      "groups": [
-        {
-          "id": "SG4",
-          "trigger_segment": "RFF",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "segments": [
-            {
-              "tag": "RFF",
-              "name": "Prüfidentifikator",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
-                {
-                  "id": "C506",
-                  "status": "M",
-                  "components": 5
-                }
-              ],
-              "qualifier_restrictions": {
-                "1153": [
-                  "Z13"
-                ]
-              }
-            }
-          ],
-          "groups": []
-        },
-        {
-          "id": "SG5",
-          "trigger_segment": "NAD",
-          "mandatory": false,
-          "max_occurrences": 2,
-          "segments": [
-            {
-              "tag": "NAD",
-              "name": "Ansprechpartner",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
-                {
-                  "id": "3035",
-                  "status": "M",
-                  "components": 1
-                },
-                {
-                  "id": "C082",
-                  "status": "C",
-                  "components": 3
-                }
-              ],
-              "qualifier_restrictions": {
-                "3035": [
-                  "MS",
-                  "CC"
-                ]
-              }
-            }
-          ],
-          "groups": [
-            {
-              "id": "SG6",
-              "trigger_segment": "CTA",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "segments": [
-                {
-                  "tag": "CTA",
-                  "name": "Ansprechpartner",
-                  "mandatory": true,
-                  "max_occurrences": 1,
-                  "elements": [
-                    {
-                      "id": "3139",
-                      "status": "C",
-                      "components": 1
-                    },
-                    {
-                      "id": "C056",
-                      "status": "C",
-                      "components": 2
-                    }
-                  ],
-                  "qualifier_restrictions": {
-                    "3139": [
-                      "IC"
-                    ]
-                  }
-                },
-                {
-                  "tag": "COM",
-                  "name": "Kommunikationsverbindung",
-                  "mandatory": true,
-                  "max_occurrences": 5,
-                  "elements": [
-                    {
-                      "id": "C076",
-                      "status": "M",
-                      "components": 2
-                    }
-                  ],
-                  "qualifier_restrictions": {
-                    "3155": [
-                      "EM",
-                      "FX",
-                      "TE",
-                      "AJ",
-                      "AL"
-                    ]
-                  }
-                }
-              ],
-              "groups": []
-            }
-          ]
-        },
-        {
-          "id": "SG7",
-          "trigger_segment": "LIN",
-          "mandatory": true,
-          "max_occurrences": 999,
-          "segments": [
-            {
-              "tag": "LIN",
-              "name": "Positionsdaten",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
-                {
-                  "id": "1082",
-                  "status": "C",
-                  "components": 1
-                }
-              ]
-            },
-            {
-              "tag": "DTM",
-              "name": "Datum/Uhrzeit des Geräte-Status",
-              "mandatory": false,
-              "max_occurrences": 4,
-              "elements": [
-                {
-                  "id": "C507",
-                  "status": "M",
-                  "components": 3
-                }
-              ],
-              "qualifier_restrictions": {
-                "2005": [
-                  "9",
-                  "163",
-                  "164",
-                  "292"
-                ]
-              }
-            },
-            {
-              "tag": "STS",
-              "name": "Gerätestatus",
-              "mandatory": false,
-              "max_occurrences": 2,
-              "elements": [
-                {
-                  "id": "C601",
-                  "status": "C",
-                  "components": 2
-                },
-                {
-                  "id": "C555",
-                  "status": "C",
-                  "components": 2
-                },
-                {
-                  "id": "C556",
-                  "status": "C",
-                  "components": 2
-                }
-              ]
-            },
-            {
-              "tag": "FTX",
-              "name": "Freier Text",
-              "mandatory": false,
-              "max_occurrences": 1,
-              "elements": [
-                {
-                  "id": "4451",
-                  "status": "M",
-                  "components": 1
-                },
-                {
-                  "id": "4453",
-                  "status": "C",
-                  "components": 1
-                },
-                {
-                  "id": "C107",
-                  "status": "C",
-                  "components": 3
-                },
-                {
-                  "id": "C108",
-                  "status": "C",
-                  "components": 5
-                }
-              ],
-              "qualifier_restrictions": {
-                "4451": [
-                  "AAO",
-                  "ACD"
-                ]
-              }
-            }
-          ],
-          "groups": [
-            {
-              "id": "SG8",
-              "trigger_segment": "NAD",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "segments": [
-                {
-                  "tag": "NAD",
-                  "name": "Messlokation",
-                  "mandatory": true,
-                  "max_occurrences": 1,
-                  "elements": [
-                    {
-                      "id": "3035",
-                      "status": "M",
-                      "components": 1
-                    }
-                  ],
-                  "qualifier_restrictions": {
-                    "3035": [
-                      "DP"
-                    ]
-                  }
-                },
-                {
-                  "tag": "LOC",
-                  "name": "Meldepunkt",
-                  "mandatory": true,
-                  "max_occurrences": 1,
-                  "elements": [
-                    {
-                      "id": "3227",
-                      "status": "M",
-                      "components": 1
-                    },
-                    {
-                      "id": "C517",
-                      "status": "C",
-                      "components": 2
-                    }
-                  ],
-                  "qualifier_restrictions": {
-                    "3227": [
-                      "172"
-                    ]
-                  }
-                },
-                {
-                  "tag": "RFF",
-                  "name": "Gestörte Messlokation",
-                  "mandatory": false,
-                  "max_occurrences": 99,
-                  "elements": [
-                    {
-                      "id": "C506",
-                      "status": "M",
-                      "components": 5
-                    }
-                  ],
-                  "qualifier_restrictions": {
-                    "1153": [
-                      "Z21"
-                    ]
-                  }
-                }
-              ],
-              "groups": []
-            }
-          ]
-        }
-      ]
+      "example": "UNT+26+47110815'",
+      "max": 1,
+      "name": "Nachrichten-Endesegment",
+      "nr": "00026",
+      "status": "M",
+      "tag": "UNT",
+      "zaehler": "0440"
     }
   ],
-  "ahb_revision": "1.1g",
-  "source_document": "INSRPT MIG 1.1g, außerordentliche Veröffentlichung Stand 11.12.2025"
+  "valid_from": "2026-01-01"
 }

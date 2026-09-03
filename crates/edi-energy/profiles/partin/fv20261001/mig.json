@@ -1,475 +1,4796 @@
 {
-  "schema_version": 1,
+  "ahb_version": "1.1",
+  "envelope": [],
   "message_type": "PARTIN",
+  "pid_source": "rff_z13",
+  "publikationsdatum": "2026-04-01",
   "release": "1.1",
-  "valid_from": "2026-10-01",
-  "ordering_hint": [
-    "UNH",
-    "BGM",
-    "DTM",
-    "RFF",
-    "DTM",
-    "RFF",
-    "NAD",
-    "NAD",
-    "UNS",
-    "NAD",
-    "FII",
-    "RFF",
-    "RFF",
-    "FTX",
-    "CCI",
-    "DTM",
-    "CAV",
-    "CCI",
-    "NAD",
-    "CTA",
-    "COM",
-    "UNT"
-  ],
-  "dtm_formats": {
-    "137": [
-      "303"
-    ],
-    "157": [
-      "303"
-    ],
-    "Z36": [
-      "501"
-    ]
+  "schema_version": 2,
+  "source": {
+    "file": "PARTIN_MIG_1.1.pdf",
+    "sha256": "a90c3fdff2d33244779a85899e2da1013d70b362ef33c078f5cb85597b68f489",
+    "title": "PARTIN MIG 1.1"
   },
-  "segments": [
+  "structure": [
     {
-      "tag": "UNH",
-      "name": "Message Header",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "format": "an..14",
           "id": "0062",
+          "name": "Nachrichten-Referenznummer",
+          "note": "Eindeutige Nachrichtenreferenz in einer Nachricht des Absenders. Nummer der Nachrichten einer Übertragungsdatei im Datenaustausch. Identisch mit DE0062 im UNT, i. d. R. vom sendenden Konverter vergeben.",
           "status": "M"
         },
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "PARTIN",
+                  "name": "Partnerstammdaten"
+                }
+              ],
+              "format": "an..6",
+              "id": "0065",
+              "name": "Nachrichtentyp-Kennung",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "D",
+                  "name": "Entwurfs-Version"
+                }
+              ],
+              "format": "an..3",
+              "id": "0052",
+              "name": "Versionsnummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "20B",
+                  "name": "Ausgabe 2020 - B"
+                }
+              ],
+              "format": "an..3",
+              "id": "0054",
+              "name": "Freigabenummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "UN",
+                  "name": "UN/CEFACT"
+                }
+              ],
+              "format": "an..2",
+              "id": "0051",
+              "name": "Verwaltende Organisation",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "1.1",
+                  "name": "Versionsnummer der zugrundeliegenden BDEW-Nachrichtenbeschreibung"
+                }
+              ],
+              "format": "an..6",
+              "id": "0057",
+              "name": "Anwendungscode der zuständigen Organisation",
+              "status": "R"
+            }
+          ],
           "id": "S009",
+          "name": "Nachrichten-Kennung",
           "status": "M"
         }
       ],
-      "qualifier_restrictions": {}
+      "example": "UNH+CS3TTZTT555558+PARTIN:D:20B:UN:1.1'",
+      "max": 1,
+      "name": "Nachrichten-Kopfsegment",
+      "nr": "00001",
+      "status": "M",
+      "tag": "UNH",
+      "zaehler": "0010"
     },
     {
-      "tag": "BGM",
-      "name": "Beginning of Message",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "10",
+                  "name": "Partnerstammdaten"
+                }
+              ],
+              "format": "an..3",
+              "id": "1001",
+              "name": "Dokumentenname, Code",
+              "status": "R"
+            }
+          ],
           "id": "C002",
-          "status": "M"
+          "name": "Dokumenten-/ Nachrichtenname",
+          "status": "R"
         },
         {
+          "components": [
+            {
+              "format": "an..35",
+              "id": "1004",
+              "name": "Dokumentennummer",
+              "note": "EDI-Nachrichtennummer vergeben vom Absender des Dokuments",
+              "status": "R"
+            }
+          ],
           "id": "C106",
-          "status": "C"
-        }
-      ],
-      "qualifier_restrictions": {
-        "1001": [
-          "35",
-          "59"
-        ]
-      }
-    },
-    {
-      "tag": "DTM",
-      "name": "Date/Time/Period (Nachrichtendatum)",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "C507",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {
-        "2005": [
-          "137"
-        ]
-      }
-    },
-    {
-      "tag": "RFF",
-      "name": "Reference (Prüfidentifikator)",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "C506",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {
-        "1153": [
-          "Z13"
-        ]
-      }
-    },
-    {
-      "tag": "RFF",
-      "name": "Reference (Versionsnummer)",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "C506",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {
-        "1153": [
-          "AGK"
-        ]
-      }
-    },
-    {
-      "tag": "DTM",
-      "name": "Date/Time/Period (Gültig Ab)",
-      "mandatory": false,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "C507",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {
-        "2005": [
-          "157"
-        ]
-      }
-    },
-    {
-      "tag": "RFF",
-      "name": "Reference (Vorgängerversion)",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "C506",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {
-        "1153": [
-          "ACW"
-        ]
-      }
-    },
-    {
-      "tag": "NAD",
-      "name": "Name and Address (Absender)",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "3035",
-          "status": "M"
+          "name": "Dokumenten-/Nachrichten- Identifikation",
+          "status": "R"
         },
         {
-          "id": "C082",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {
-        "3035": [
-          "MS"
-        ]
-      }
-    },
-    {
-      "tag": "NAD",
-      "name": "Name and Address (Empfänger)",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "3035",
-          "status": "M"
+          "format": "an..3",
+          "id": "1225",
+          "name": "Nachrichtenfunktion, Code",
+          "note": "Nicht benutzt",
+          "status": "N"
         },
         {
-          "id": "C082",
+          "format": "an..3",
+          "id": "4343",
+          "name": "Art der Antwort, Code",
+          "note": "Nicht benutzt",
+          "status": "N"
+        },
+        {
+          "codes": [
+            {
+              "code": "11",
+              "name": "Dokument nicht verfügbar"
+            }
+          ],
+          "format": "an..3",
+          "id": "1373",
+          "name": "Dokumentenstatus, Code",
+          "status": "D"
+        }
+      ],
+      "example": "BGM+10+CS356455854555+++11'",
+      "max": 1,
+      "name": "Beginn der Nachricht",
+      "nr": "00002",
+      "status": "M",
+      "tag": "BGM",
+      "zaehler": "0020"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "137",
+                  "name": "Dokumenten-/Nachrichtendatum/-zeit"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
           "status": "M"
         }
       ],
-      "qualifier_restrictions": {
-        "3035": [
-          "MR"
-        ]
-      }
+      "example": "DTM+137:202106070702?+00:303'",
+      "max": 1,
+      "name": "Nachrichtendatum",
+      "nr": "00003",
+      "status": "M",
+      "tag": "DTM",
+      "zaehler": "0030"
     },
     {
-      "tag": "UNS",
-      "name": "Section Control",
-      "mandatory": true,
-      "max_occurrences": 1,
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z13",
+                      "name": "Prüfidentifikator"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "37000",
+                      "name": "Kommunikationsdaten des LF Strom"
+                    },
+                    {
+                      "code": "37001",
+                      "name": "Kommunikationsdaten des NB Strom"
+                    },
+                    {
+                      "code": "37002",
+                      "name": "Kommunikationsdaten des MSB Strom"
+                    },
+                    {
+                      "code": "37003",
+                      "name": "Kommunikationsdaten des BKV Strom"
+                    },
+                    {
+                      "code": "37004",
+                      "name": "Kommunikationsdaten des BIKO Strom"
+                    },
+                    {
+                      "code": "37005",
+                      "name": "Kommunikationsdaten des ÜNB Strom"
+                    },
+                    {
+                      "code": "37006",
+                      "name": "Kommunikationsdaten des ESA Strom"
+                    },
+                    {
+                      "code": "37008",
+                      "name": "Kommunikationsdaten des LF Gas"
+                    },
+                    {
+                      "code": "37009",
+                      "name": "Kommunikationsdaten des NB Gas"
+                    },
+                    {
+                      "code": "37010",
+                      "name": "Kommunikationsdaten des MSB Gas"
+                    },
+                    {
+                      "code": "37011",
+                      "name": "Kommunikationsdaten des MGV Gas"
+                    },
+                    {
+                      "code": "37012",
+                      "name": "Spartenüb. Kommunikationsdaten des NB Gas"
+                    },
+                    {
+                      "code": "37013",
+                      "name": "Spartenüb. Kommunikationsdaten des MSB"
+                    },
+                    {
+                      "code": "37014",
+                      "name": "Spartenüb. Kommunikationsdaten des MSB"
+                    }
+                  ],
+                  "format": "n5",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "status": "R"
+                }
+              ],
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
+            }
+          ],
+          "example": "RFF+Z13:37000'",
+          "max": 1,
+          "name": "Prüfidentifikator",
+          "nr": "00004",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0070"
+        }
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "Prüfidentifiktor",
+      "status": "R",
+      "zaehler": "0060"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "AGK",
+                      "name": "Anwendungsreferenznummer"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "format": "an..6",
+                  "id": "1156",
+                  "name": "Zeilennummer",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "format": "n..9",
+                  "id": "1056",
+                  "name": "Versionsnummer",
+                  "note": "Versionsnummer",
+                  "status": "R"
+                }
+              ],
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
+            }
+          ],
+          "example": "RFF+AGK:::1'",
+          "max": 1,
+          "name": "Versionsnummer",
+          "nr": "00005",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0070"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "157",
+                      "name": "Gültigkeit, Beginndatum"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2005",
+                  "name": "Datums- oder Uhrzeit- oder Zeitspannen-Funktion, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "2380",
+                  "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "303",
+                      "name": "CCYYMMDDHHMMZZZ"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2379",
+                  "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C507",
+              "name": "Datum/Uhrzeit/Zeitspanne",
+              "status": "M"
+            }
+          ],
+          "example": "DTM+157:202106070702?+00:303'",
+          "max": 1,
+          "name": "Gültig Ab",
+          "nr": "00006",
+          "status": "D",
+          "tag": "DTM",
+          "zaehler": "0080"
+        }
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "Version / Gültig Ab",
+      "status": "R",
+      "zaehler": "0060"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "ACW",
+                      "name": "Referenznummer einer vorangegangenen Nachricht"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "format": "an..6",
+                  "id": "1156",
+                  "name": "Zeilennummer",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "format": "n..9",
+                  "id": "1056",
+                  "name": "Versionsnummer",
+                  "note": "Versionsnummer",
+                  "status": "R"
+                }
+              ],
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
+            }
+          ],
+          "example": "RFF+ACW:::1'",
+          "max": 1,
+          "name": "Vorgängerversion",
+          "nr": "00007",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0070"
+        }
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "Vorgängerversion",
+      "status": "D",
+      "zaehler": "0060"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "MS",
+                  "name": "Dokumenten-/Nachrichtenaussteller bzw. - absender"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    },
+                    {
+                      "code": "332",
+                      "name": "DE, DVGW Service & Consult GmbH"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+MS+9900259000002::9'",
+          "max": 1,
+          "name": "MP-ID Absender",
+          "nr": "00008",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0100"
+        }
+      ],
+      "group": "SG2",
+      "max": 1,
+      "name": "MP-ID Absender",
+      "status": "R",
+      "zaehler": "0090"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "MR",
+                  "name": "Nachrichtenempfänger"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    },
+                    {
+                      "code": "332",
+                      "name": "DE, DVGW Service & Consult GmbH"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+MR+9900259000002::9'",
+          "max": 1,
+          "name": "MP-ID Empfänger",
+          "nr": "00009",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0100"
+        }
+      ],
+      "group": "SG2",
+      "max": 1,
+      "name": "MP-ID Empfänger",
+      "status": "R",
+      "zaehler": "0090"
+    },
+    {
       "elements": [
         {
+          "codes": [
+            {
+              "code": "D",
+              "name": "Trennung von Kopf- und Positionsteil"
+            }
+          ],
+          "format": "a1",
           "id": "0081",
+          "name": "Abschnittskennung, codiert",
           "status": "M"
         }
       ],
-      "qualifier_restrictions": {}
+      "example": "UNS+D'",
+      "max": 1,
+      "name": "Abschnitts-Kontrollsegment",
+      "nr": "00010",
+      "status": "M",
+      "tag": "UNS",
+      "zaehler": "0140"
     },
     {
-      "tag": "NAD",
-      "name": "Name and Address (Stammdaten)",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
+      "children": [
         {
-          "id": "3035",
-          "status": "M"
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "SU",
+                  "name": "Lieferant"
+                },
+                {
+                  "code": "DDM",
+                  "name": "Netzbetreiber"
+                },
+                {
+                  "code": "DEB",
+                  "name": "Messstellenbetreiber"
+                },
+                {
+                  "code": "Z31",
+                  "name": "Übertragungsnetzbetreiber"
+                },
+                {
+                  "code": "Z34",
+                  "name": "Bilanzkoordinator"
+                },
+                {
+                  "code": "Z35",
+                  "name": "Bilanzkreisverantwortlicher"
+                },
+                {
+                  "code": "Z36",
+                  "name": "Energieserviceanbieter"
+                },
+                {
+                  "code": "Z71",
+                  "name": "Marktgebietsverantwortlicher"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3124",
+                  "name": "Zeile für Name und Anschrift",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C058",
+              "name": "Name und Anschrift",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Name",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z02",
+                      "name": "Struktur der Firmenbezeichnung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3045",
+                  "name": "Format für den Namen des Beteiligten, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C080",
+              "name": "Name des Beteiligten",
+              "note": "Name des Unternehmens",
+              "status": "D"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                }
+              ],
+              "id": "C059",
+              "name": "Straße",
+              "note": "Anschrift des Unternehmens",
+              "status": "D"
+            },
+            {
+              "format": "an..35",
+              "id": "3164",
+              "name": "Ort",
+              "note": "Ortsname, Klartext",
+              "status": "D"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..9",
+                  "id": "3229",
+                  "name": "Land-Untereinheit, Nummer",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C819",
+              "name": "Land-Untereinheit, Einzelheiten",
+              "status": "N"
+            },
+            {
+              "format": "an..17",
+              "id": "3251",
+              "name": "Postleitzahl, Code",
+              "note": "Postleitzahl",
+              "status": "D"
+            },
+            {
+              "format": "an..3",
+              "id": "3207",
+              "name": "Ländername, Code",
+              "note": "ISO 3166-1 = Alpha-2-Code",
+              "status": "D"
+            }
+          ],
+          "example": "NAD+SU+++Unternehmensname:::::Z02+Teststraße::815b:Musterortsteil+Entenhausen++10010+DE'",
+          "max": 1,
+          "name": "Name und Adresse des Unternehmens",
+          "nr": "00011",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0160"
         },
         {
-          "id": "C080",
-          "status": "C"
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "BK",
+                  "name": "Kreditinstitut"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3194",
+                  "name": "Kontonummer",
+                  "note": "IBAN",
+                  "status": "R"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3192",
+                  "name": "Kontoinhaber",
+                  "note": "Name des Kontoinhabers",
+                  "status": "R"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3192",
+                  "name": "Kontoinhaber",
+                  "note": "Name des Kontoinhabers",
+                  "status": "D"
+                }
+              ],
+              "id": "C078",
+              "name": "Identifikation des Kontoinhabers",
+              "status": "C"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..11",
+                  "id": "3433",
+                  "name": "Institution (Bank), Code",
+                  "note": "BIC",
+                  "status": "R"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "format": "an..17",
+                  "id": "3434",
+                  "name": "Zweigstellennummer",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3432",
+                  "name": "Name des Kreditinstituts",
+                  "note": "Name des Kredinstituts",
+                  "status": "R"
+                }
+              ],
+              "id": "C088",
+              "name": "Kreditinstitut-Identifikation",
+              "status": "R"
+            },
+            {
+              "format": "an..3",
+              "id": "3207",
+              "name": "Ländername, Code",
+              "note": "Nicht benutzt",
+              "status": "N"
+            }
+          ],
+          "example": "FII+BK+DE00000000000000000000:Unternehmens GmbH+BICXXXXXXXX::::::Bankname'",
+          "max": 1,
+          "name": "Bankverbindung",
+          "nr": "00012",
+          "status": "R",
+          "tag": "FII",
+          "zaehler": "0180"
         },
         {
-          "id": "C059",
-          "status": "C"
-        }
-      ],
-      "qualifier_restrictions": {
-        "3035": [
-          "SU"
-        ]
-      }
-    },
-    {
-      "tag": "FII",
-      "name": "Financial Institution Information",
-      "mandatory": true,
-      "max_occurrences": 10,
-      "elements": [
-        {
-          "id": "3035",
-          "status": "M"
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z13",
+                  "name": "Internetseite"
+                }
+              ],
+              "format": "an..3",
+              "id": "4451",
+              "name": "Textbezug, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..3",
+              "id": "4453",
+              "name": "Textfunktion, Code",
+              "note": "Nicht benutzt",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..17",
+                  "id": "4441",
+                  "name": "Freier Text, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C107",
+              "name": "Text-Referenz",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "note": "Internetseite",
+                  "status": "M"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "status": "D"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "status": "D"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "status": "D"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "status": "D"
+                }
+              ],
+              "id": "C108",
+              "name": "Text",
+              "status": "R"
+            }
+          ],
+          "example": "FTX+Z13+++https?://www.eine-unternehmens-adresse.de'",
+          "max": 1,
+          "name": "Internetseite (URL)",
+          "nr": "00013",
+          "status": "R",
+          "tag": "FTX",
+          "zaehler": "0200"
         },
         {
-          "id": "C078",
-          "status": "C"
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z15",
+                  "name": "Gericht und Handelsregister-Nummer"
+                }
+              ],
+              "format": "an..3",
+              "id": "4451",
+              "name": "Textbezug, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..3",
+              "id": "4453",
+              "name": "Textfunktion, Code",
+              "note": "Nicht benutzt",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..17",
+                  "id": "4441",
+                  "name": "Freier Text, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C107",
+              "name": "Text-Referenz",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..100",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "note": "Gericht",
+                  "status": "M"
+                },
+                {
+                  "format": "an..100",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "note": "Handelsregister-Nummer",
+                  "status": "R"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C108",
+              "name": "Text",
+              "status": "R"
+            }
+          ],
+          "example": "FTX+Z15+++Amtsgericht Musterhausen:xyz 123456789'",
+          "max": 1,
+          "name": "Gericht und Handelsregister-Nummer",
+          "nr": "00014",
+          "status": "D",
+          "tag": "FTX",
+          "zaehler": "0200"
         },
         {
-          "id": "C088",
-          "status": "C"
-        }
-      ],
-      "qualifier_restrictions": {}
-    },
-    {
-      "tag": "RFF",
-      "name": "Reference (Steuernummer/USt-ID)",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "C506",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {
-        "1153": [
-          "VA"
-        ]
-      }
-    },
-    {
-      "tag": "RFF",
-      "name": "Reference (Faxnummer)",
-      "mandatory": false,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "C506",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {
-        "1153": [
-          "Z25"
-        ]
-      }
-    },
-    {
-      "tag": "FTX",
-      "name": "Free Text",
-      "mandatory": false,
-      "max_occurrences": 10,
-      "elements": [
-        {
-          "id": "4451",
-          "status": "M"
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "VA",
+                          "name": "Umsatzsteuernummer"
+                        },
+                        {
+                          "code": "FC",
+                          "name": "Steuernummer"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..70",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+VA:DE999999999'",
+              "max": 1,
+              "name": "Steuernummer, Umsatzsteuernummer",
+              "nr": "00015",
+              "status": "M",
+              "tag": "RFF",
+              "zaehler": "0270"
+            }
+          ],
+          "group": "SG6",
+          "max": 2,
+          "name": "Steuernummer, Umsatzsteuernummer",
+          "status": "R",
+          "zaehler": "0260"
         },
         {
-          "id": "C108",
-          "status": "C"
-        }
-      ],
-      "qualifier_restrictions": {}
-    },
-    {
-      "tag": "CCI",
-      "name": "Characteristic/Class Id (Erreichbarkeit)",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "7059",
-          "status": "C"
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z25",
+                          "name": "Faxnummer"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..70",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "Faxnummer",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+Z25:020188888888'",
+              "max": 1,
+              "name": "Faxnummer",
+              "nr": "00016",
+              "status": "D",
+              "tag": "RFF",
+              "zaehler": "0270"
+            }
+          ],
+          "group": "SG6",
+          "max": 1,
+          "name": "Faxnummer",
+          "status": "D",
+          "zaehler": "0260"
         },
         {
-          "id": "C502",
-          "status": "C"
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z40",
+                      "name": "Erreichbarkeit des Unternehmens"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7059",
+                  "name": "Klassentyp, Code",
+                  "status": "R"
+                }
+              ],
+              "example": "CCI+Z40'",
+              "max": 1,
+              "name": "Erreichbarkeit an Werktagen",
+              "nr": "00017",
+              "status": "M",
+              "tag": "CCI",
+              "zaehler": "0500"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z36",
+                          "name": "Verfügbarkeit Montag"
+                        },
+                        {
+                          "code": "Z37",
+                          "name": "Verfügbarkeit Dienstag"
+                        },
+                        {
+                          "code": "Z38",
+                          "name": "Verfügbarkeit Mittwoch"
+                        },
+                        {
+                          "code": "Z39",
+                          "name": "Verfügbarkeit Donnerstag"
+                        },
+                        {
+                          "code": "Z40",
+                          "name": "Verfügbarkeit Freitag"
+                        },
+                        {
+                          "code": "Z41",
+                          "name": "Mittagspause (= Ausschluss der Verfügbarkeit)"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2005",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Funktion, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..35",
+                      "id": "2380",
+                      "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "501",
+                          "name": "HHMMHHMM"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2379",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C507",
+                  "name": "Datum/Uhrzeit/Zeitspanne",
+                  "status": "M"
+                }
+              ],
+              "example": "DTM+Z36:08001700:501'",
+              "max": 6,
+              "name": "Erreichbarkeit",
+              "nr": "00018",
+              "status": "R",
+              "tag": "DTM",
+              "zaehler": "0540"
+            }
+          ],
+          "group": "SG12",
+          "max": 1,
+          "name": "Erreichbarkeit an Werktagen",
+          "status": "R",
+          "zaehler": "0490"
         },
         {
-          "id": "C240",
-          "status": "C"
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z19",
+                      "name": "Bilanzkreis"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7059",
+                  "name": "Klassentyp, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "6313",
+                      "name": "Gemessene Dimension, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C502",
+                  "name": "Einzelheiten zu Maßangaben",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "7037",
+                      "name": "Merkmal, Code",
+                      "note": "Bilanzkreis",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C240",
+                  "name": "Merkmalsbeschreibung",
+                  "status": "R"
+                }
+              ],
+              "example": "CCI+Z19++1A---Bilanzkreis'",
+              "max": 1,
+              "name": "Bilanzkreis",
+              "nr": "00019",
+              "status": "M",
+              "tag": "CCI",
+              "zaehler": "0500"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z48",
+                          "name": "Bilanzkreis für verbrauchende Marktlokation"
+                        },
+                        {
+                          "code": "Z49",
+                          "name": "Bilanzkreis für erzeugende Marktlokation EEG"
+                        },
+                        {
+                          "code": "Z50",
+                          "name": "Bilanzkreis für erzeugende Marktlokation KWKG"
+                        },
+                        {
+                          "code": "Z51",
+                          "name": "Bilanzkreis für sonstige erzeugende Marktlokation"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7111",
+                      "name": "Merkmalswert, Code",
+                      "note": "Verwendungszeck",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C889",
+                  "name": "Merkmalswert",
+                  "status": "M"
+                }
+              ],
+              "example": "CAV+Z48'",
+              "max": 1,
+              "name": "Verwendungszweck",
+              "nr": "00020",
+              "status": "R",
+              "tag": "CAV",
+              "zaehler": "0530"
+            }
+          ],
+          "group": "SG12",
+          "max": 4,
+          "name": "Bilanzkreis",
+          "status": "D",
+          "zaehler": "0490"
         }
       ],
-      "qualifier_restrictions": {
-        "7059": [
-          "Z40"
-        ]
-      }
+      "group": "SG4",
+      "max": 1,
+      "name": "Unternehmensinformationen",
+      "status": "D",
+      "zaehler": "0150"
     },
     {
-      "tag": "DTM",
-      "name": "Date/Time/Period (Erreichbarkeit)",
-      "mandatory": true,
-      "max_occurrences": 6,
-      "elements": [
+      "children": [
         {
-          "id": "C507",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {
-        "2005": [
-          "Z36"
-        ]
-      }
-    },
-    {
-      "tag": "CAV",
-      "name": "Merkmalswert",
-      "mandatory": false,
-      "max_occurrences": 10,
-      "elements": [
-        {
-          "id": "C889",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {}
-    },
-    {
-      "tag": "CCI",
-      "name": "Characteristic/Class Id (Bilanzkreis)",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "7059",
-          "status": "C"
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z10",
+                  "name": "Ansprechpartner Übertragungsweg / Datenaustausch"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3124",
+                  "name": "Zeile für Name und Anschrift",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C058",
+              "name": "Name und Anschrift",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Name",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z02",
+                      "name": "Struktur der Firmenbezeichnung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3045",
+                  "name": "Format für den Namen des Beteiligten, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C080",
+              "name": "Name des Beteiligten",
+              "note": "Name des Unternehmens",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "M"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                }
+              ],
+              "id": "C059",
+              "name": "Straße",
+              "note": "Anschrift des Unternehmens",
+              "status": "R"
+            },
+            {
+              "format": "an..35",
+              "id": "3164",
+              "name": "Ort",
+              "note": "Ortsname, Klartext",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..9",
+                  "id": "3229",
+                  "name": "Land-Untereinheit, Nummer",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C819",
+              "name": "Land-Untereinheit, Einzelheiten",
+              "status": "N"
+            },
+            {
+              "format": "an..17",
+              "id": "3251",
+              "name": "Postleitzahl, Code",
+              "note": "Postleitzahl",
+              "status": "D"
+            },
+            {
+              "format": "an..3",
+              "id": "3207",
+              "name": "Ländername, Code",
+              "note": "ISO 3166-1 = Alpha-2-Code",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+Z10+++Unternehmensname:::::Z02+Teststraße::815b:Musterortsteil+Entenhausen++10010+DE'",
+          "max": 1,
+          "name": "Name und Anschrift Ansprechpartner Übertragungsweg / Datenaustausch",
+          "nr": "00021",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0160"
         },
         {
-          "id": "C502",
-          "status": "C"
-        },
-        {
-          "id": "C240",
-          "status": "C"
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "IC",
+                      "name": "Informationskontakt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3139",
+                  "name": "Funktion des Ansprechpartners, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "3413",
+                      "name": "Kontakt, Nummer",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..256",
+                      "id": "3412",
+                      "name": "Kontakt",
+                      "note": "Name der organisatorischen Einheit",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C056",
+                  "name": "Kontaktangaben",
+                  "status": "R"
+                }
+              ],
+              "example": "CTA+IC+:Abteilung XY'",
+              "max": 1,
+              "name": "Ansprechpartner",
+              "nr": "00022",
+              "status": "M",
+              "tag": "CTA",
+              "zaehler": "0300"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "3148",
+                      "name": "Kommunikationsadresse, Identifikation",
+                      "note": "Nummer / Adresse",
+                      "status": "M"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "EM",
+                          "name": "Elektronische Post"
+                        },
+                        {
+                          "code": "TE",
+                          "name": "Telefon"
+                        },
+                        {
+                          "code": "FX",
+                          "name": "Telefax"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3155",
+                      "name": "Art des Kommunikationsmittels, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C076",
+                  "name": "Kommunikationsverbindung",
+                  "status": "M"
+                }
+              ],
+              "example": "COM+?+49322227120:TE'",
+              "max": 3,
+              "name": "Kommunikationsverbindung",
+              "nr": "00023",
+              "status": "R",
+              "tag": "COM",
+              "zaehler": "0310"
+            }
+          ],
+          "group": "SG7",
+          "max": 1,
+          "name": "Kontaktinformationen",
+          "status": "D",
+          "zaehler": "0290"
         }
       ],
-      "qualifier_restrictions": {
-        "7059": [
-          "Z19"
-        ]
-      }
+      "group": "SG4",
+      "max": 1,
+      "name": "Ansprechpartner Übertragungsweg / Datenaustausch",
+      "status": "D",
+      "zaehler": "0150"
     },
     {
-      "tag": "NAD",
-      "name": "Name and Address (Ansprechpartner)",
-      "mandatory": true,
-      "max_occurrences": 11,
-      "elements": [
+      "children": [
         {
-          "id": "3035",
-          "status": "M"
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z11",
+                  "name": "Ansprechpartner Rahmenverträge"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3124",
+                  "name": "Zeile für Name und Anschrift",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C058",
+              "name": "Name und Anschrift",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Name",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z02",
+                      "name": "Struktur der Firmenbezeichnung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3045",
+                  "name": "Format für den Namen des Beteiligten, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C080",
+              "name": "Name des Beteiligten",
+              "note": "Name des Unternehmens",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "M"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                }
+              ],
+              "id": "C059",
+              "name": "Straße",
+              "note": "Anschrift des Unternehmens",
+              "status": "R"
+            },
+            {
+              "format": "an..35",
+              "id": "3164",
+              "name": "Ort",
+              "note": "Ortsname, Klartext",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..9",
+                  "id": "3229",
+                  "name": "Land-Untereinheit, Nummer",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C819",
+              "name": "Land-Untereinheit, Einzelheiten",
+              "status": "N"
+            },
+            {
+              "format": "an..17",
+              "id": "3251",
+              "name": "Postleitzahl, Code",
+              "note": "Postleitzahl",
+              "status": "D"
+            },
+            {
+              "format": "an..3",
+              "id": "3207",
+              "name": "Ländername, Code",
+              "note": "ISO 3166-1 = Alpha-2-Code",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+Z11+++Unternehmensname:::::Z02+Teststraße::815b:Musterortsteil+Entenhausen++10010+DE'",
+          "max": 1,
+          "name": "Name und Anschrift Ansprechpartner Rahmenverträge",
+          "nr": "00024",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0160"
         },
         {
-          "id": "C080",
-          "status": "C"
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "IC",
+                      "name": "Informationskontakt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3139",
+                  "name": "Funktion des Ansprechpartners, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "3413",
+                      "name": "Kontakt, Nummer",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..256",
+                      "id": "3412",
+                      "name": "Kontakt",
+                      "note": "Name der organisatorischen Einheit",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C056",
+                  "name": "Kontaktangaben",
+                  "status": "R"
+                }
+              ],
+              "example": "CTA+IC+:Abteilung XY'",
+              "max": 1,
+              "name": "Ansprechpartner",
+              "nr": "00025",
+              "status": "M",
+              "tag": "CTA",
+              "zaehler": "0300"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "3148",
+                      "name": "Kommunikationsadresse, Identifikation",
+                      "note": "Nummer / Adresse",
+                      "status": "M"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "EM",
+                          "name": "Elektronische Post"
+                        },
+                        {
+                          "code": "TE",
+                          "name": "Telefon"
+                        },
+                        {
+                          "code": "FX",
+                          "name": "Telefax"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3155",
+                      "name": "Art des Kommunikationsmittels, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C076",
+                  "name": "Kommunikationsverbindung",
+                  "status": "M"
+                }
+              ],
+              "example": "COM+?+49322227120:TE'",
+              "max": 3,
+              "name": "Kommunikationsverbindung",
+              "nr": "00026",
+              "status": "R",
+              "tag": "COM",
+              "zaehler": "0310"
+            }
+          ],
+          "group": "SG7",
+          "max": 1,
+          "name": "Kontaktinformationen",
+          "status": "D",
+          "zaehler": "0290"
+        }
+      ],
+      "group": "SG4",
+      "max": 1,
+      "name": "Ansprechpartner Rahmenverträge",
+      "status": "D",
+      "zaehler": "0150"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z12",
+                  "name": "Ansprechpartner Kündigungsprozesse"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3124",
+                  "name": "Zeile für Name und Anschrift",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C058",
+              "name": "Name und Anschrift",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Name",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z02",
+                      "name": "Struktur der Firmenbezeichnung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3045",
+                  "name": "Format für den Namen des Beteiligten, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C080",
+              "name": "Name des Beteiligten",
+              "note": "Name des Unternehmens",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "M"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                }
+              ],
+              "id": "C059",
+              "name": "Straße",
+              "note": "Anschrift des Unternehmens",
+              "status": "R"
+            },
+            {
+              "format": "an..35",
+              "id": "3164",
+              "name": "Ort",
+              "note": "Ortsname, Klartext",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..9",
+                  "id": "3229",
+                  "name": "Land-Untereinheit, Nummer",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C819",
+              "name": "Land-Untereinheit, Einzelheiten",
+              "status": "N"
+            },
+            {
+              "format": "an..17",
+              "id": "3251",
+              "name": "Postleitzahl, Code",
+              "note": "Postleitzahl",
+              "status": "D"
+            },
+            {
+              "format": "an..3",
+              "id": "3207",
+              "name": "Ländername, Code",
+              "note": "ISO 3166-1 = Alpha-2-Code",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+Z12+++Unternehmensname:::::Z02+Teststraße::815b:Musterortsteil+Entenhausen++10010+DE'",
+          "max": 1,
+          "name": "Name und Anschrift Ansprechpartner Kündigungsprozess",
+          "nr": "00027",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0160"
         },
         {
-          "id": "C059",
-          "status": "C"
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "IC",
+                      "name": "Informationskontakt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3139",
+                  "name": "Funktion des Ansprechpartners, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "3413",
+                      "name": "Kontakt, Nummer",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..256",
+                      "id": "3412",
+                      "name": "Kontakt",
+                      "note": "Name der organisatorischen Einheit",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C056",
+                  "name": "Kontaktangaben",
+                  "status": "R"
+                }
+              ],
+              "example": "CTA+IC+:Abteilung XY'",
+              "max": 1,
+              "name": "Ansprechpartner",
+              "nr": "00028",
+              "status": "M",
+              "tag": "CTA",
+              "zaehler": "0300"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "3148",
+                      "name": "Kommunikationsadresse, Identifikation",
+                      "note": "Nummer / Adresse",
+                      "status": "M"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "EM",
+                          "name": "Elektronische Post"
+                        },
+                        {
+                          "code": "TE",
+                          "name": "Telefon"
+                        },
+                        {
+                          "code": "FX",
+                          "name": "Telefax"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3155",
+                      "name": "Art des Kommunikationsmittels, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C076",
+                  "name": "Kommunikationsverbindung",
+                  "status": "M"
+                }
+              ],
+              "example": "COM+?+49322227120:TE'",
+              "max": 3,
+              "name": "Kommunikationsverbindung",
+              "nr": "00029",
+              "status": "R",
+              "tag": "COM",
+              "zaehler": "0310"
+            }
+          ],
+          "group": "SG7",
+          "max": 1,
+          "name": "Kontaktinformationen",
+          "status": "D",
+          "zaehler": "0290"
         }
       ],
-      "qualifier_restrictions": {
-        "3035": [
-          "Z10"
-        ]
-      }
+      "group": "SG4",
+      "max": 1,
+      "name": "Ansprechpartner Kündigungsprozess",
+      "status": "D",
+      "zaehler": "0150"
     },
     {
-      "tag": "CTA",
-      "name": "Contact Information (Ansprechpartner)",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
+      "children": [
         {
-          "id": "3139",
-          "status": "C"
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z13",
+                  "name": "Ansprechpartner Wechselprozesse"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3124",
+                  "name": "Zeile für Name und Anschrift",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C058",
+              "name": "Name und Anschrift",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Name",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z02",
+                      "name": "Struktur der Firmenbezeichnung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3045",
+                  "name": "Format für den Namen des Beteiligten, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C080",
+              "name": "Name des Beteiligten",
+              "note": "Name des Unternehmens",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "M"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                }
+              ],
+              "id": "C059",
+              "name": "Straße",
+              "note": "Anschrift des Unternehmens",
+              "status": "R"
+            },
+            {
+              "format": "an..35",
+              "id": "3164",
+              "name": "Ort",
+              "note": "Ortsname, Klartext",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..9",
+                  "id": "3229",
+                  "name": "Land-Untereinheit, Nummer",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C819",
+              "name": "Land-Untereinheit, Einzelheiten",
+              "status": "N"
+            },
+            {
+              "format": "an..17",
+              "id": "3251",
+              "name": "Postleitzahl, Code",
+              "note": "Postleitzahl",
+              "status": "D"
+            },
+            {
+              "format": "an..3",
+              "id": "3207",
+              "name": "Ländername, Code",
+              "note": "ISO 3166-1 = Alpha-2-Code",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+Z13+++Unternehmensname:::::Z02+Teststraße::815b:Musterortsteil+Entenhausen++10010+DE'",
+          "max": 1,
+          "name": "Name und Anschrift Ansprechpartner Wechselprozesse",
+          "nr": "00030",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0160"
         },
         {
-          "id": "C056",
-          "status": "C"
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "IC",
+                      "name": "Informationskontakt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3139",
+                  "name": "Funktion des Ansprechpartners, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "3413",
+                      "name": "Kontakt, Nummer",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..256",
+                      "id": "3412",
+                      "name": "Kontakt",
+                      "note": "Name der organisatorischen Einheit",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C056",
+                  "name": "Kontaktangaben",
+                  "status": "R"
+                }
+              ],
+              "example": "CTA+IC+:Abteilung XY'",
+              "max": 1,
+              "name": "Ansprechpartner",
+              "nr": "00031",
+              "status": "M",
+              "tag": "CTA",
+              "zaehler": "0300"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "3148",
+                      "name": "Kommunikationsadresse, Identifikation",
+                      "note": "Nummer / Adresse",
+                      "status": "M"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "EM",
+                          "name": "Elektronische Post"
+                        },
+                        {
+                          "code": "TE",
+                          "name": "Telefon"
+                        },
+                        {
+                          "code": "FX",
+                          "name": "Telefax"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3155",
+                      "name": "Art des Kommunikationsmittels, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C076",
+                  "name": "Kommunikationsverbindung",
+                  "status": "M"
+                }
+              ],
+              "example": "COM+?+49322227120:TE'",
+              "max": 3,
+              "name": "Kommunikationsverbindung",
+              "nr": "00032",
+              "status": "R",
+              "tag": "COM",
+              "zaehler": "0310"
+            }
+          ],
+          "group": "SG7",
+          "max": 1,
+          "name": "Kontaktinformationen",
+          "status": "D",
+          "zaehler": "0290"
         }
       ],
-      "qualifier_restrictions": {}
+      "group": "SG4",
+      "max": 1,
+      "name": "Ansprechpartner Wechselprozesse",
+      "status": "D",
+      "zaehler": "0150"
     },
     {
-      "tag": "COM",
-      "name": "Communication Contact (Ansprechpartner)",
-      "mandatory": true,
-      "max_occurrences": 5,
-      "elements": [
+      "children": [
         {
-          "id": "C076",
-          "status": "M"
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z14",
+                  "name": "Ansprechpartner Stammdatenprozesse"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3124",
+                  "name": "Zeile für Name und Anschrift",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C058",
+              "name": "Name und Anschrift",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Name",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z02",
+                      "name": "Struktur der Firmenbezeichnung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3045",
+                  "name": "Format für den Namen des Beteiligten, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C080",
+              "name": "Name des Beteiligten",
+              "note": "Name des Unternehmens",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "M"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                }
+              ],
+              "id": "C059",
+              "name": "Straße",
+              "note": "Anschrift des Unternehmens",
+              "status": "R"
+            },
+            {
+              "format": "an..35",
+              "id": "3164",
+              "name": "Ort",
+              "note": "Ortsname, Klartext",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..9",
+                  "id": "3229",
+                  "name": "Land-Untereinheit, Nummer",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C819",
+              "name": "Land-Untereinheit, Einzelheiten",
+              "status": "N"
+            },
+            {
+              "format": "an..17",
+              "id": "3251",
+              "name": "Postleitzahl, Code",
+              "note": "Postleitzahl",
+              "status": "D"
+            },
+            {
+              "format": "an..3",
+              "id": "3207",
+              "name": "Ländername, Code",
+              "note": "ISO 3166-1 = Alpha-2-Code",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+Z14+++Unternehmensname:::::Z02+Teststraße::815b:Musterortsteil+Entenhausen++10010+DE'",
+          "max": 1,
+          "name": "Name und Anschrift Ansprechpartner Stammdatenprozesse",
+          "nr": "00033",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0160"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "IC",
+                      "name": "Informationskontakt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3139",
+                  "name": "Funktion des Ansprechpartners, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "3413",
+                      "name": "Kontakt, Nummer",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..256",
+                      "id": "3412",
+                      "name": "Kontakt",
+                      "note": "Name der organisatorischen Einheit",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C056",
+                  "name": "Kontaktangaben",
+                  "status": "R"
+                }
+              ],
+              "example": "CTA+IC+:Abteilung XY'",
+              "max": 1,
+              "name": "Ansprechpartner",
+              "nr": "00034",
+              "status": "M",
+              "tag": "CTA",
+              "zaehler": "0300"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "3148",
+                      "name": "Kommunikationsadresse, Identifikation",
+                      "note": "Nummer / Adresse",
+                      "status": "M"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "EM",
+                          "name": "Elektronische Post"
+                        },
+                        {
+                          "code": "TE",
+                          "name": "Telefon"
+                        },
+                        {
+                          "code": "FX",
+                          "name": "Telefax"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3155",
+                      "name": "Art des Kommunikationsmittels, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C076",
+                  "name": "Kommunikationsverbindung",
+                  "status": "M"
+                }
+              ],
+              "example": "COM+?+49322227120:TE'",
+              "max": 3,
+              "name": "Kommunikationsverbindung",
+              "nr": "00035",
+              "status": "R",
+              "tag": "COM",
+              "zaehler": "0310"
+            }
+          ],
+          "group": "SG7",
+          "max": 1,
+          "name": "Kontaktinformationen",
+          "status": "D",
+          "zaehler": "0290"
         }
       ],
-      "qualifier_restrictions": {}
+      "group": "SG4",
+      "max": 1,
+      "name": "Ansprechpartner Stammdatenprozesse",
+      "status": "D",
+      "zaehler": "0150"
     },
     {
-      "tag": "UNT",
-      "name": "Message Trailer",
-      "mandatory": true,
-      "max_occurrences": 1,
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z16",
+                  "name": "Ansprechpartner Einspeiseprozesse"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3124",
+                  "name": "Zeile für Name und Anschrift",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C058",
+              "name": "Name und Anschrift",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Name",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z02",
+                      "name": "Struktur der Firmenbezeichnung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3045",
+                  "name": "Format für den Namen des Beteiligten, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C080",
+              "name": "Name des Beteiligten",
+              "note": "Name des Unternehmens",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "M"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                }
+              ],
+              "id": "C059",
+              "name": "Straße",
+              "note": "Anschrift des Unternehmens",
+              "status": "R"
+            },
+            {
+              "format": "an..35",
+              "id": "3164",
+              "name": "Ort",
+              "note": "Ortsname, Klartext",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..9",
+                  "id": "3229",
+                  "name": "Land-Untereinheit, Nummer",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C819",
+              "name": "Land-Untereinheit, Einzelheiten",
+              "status": "N"
+            },
+            {
+              "format": "an..17",
+              "id": "3251",
+              "name": "Postleitzahl, Code",
+              "note": "Postleitzahl",
+              "status": "D"
+            },
+            {
+              "format": "an..3",
+              "id": "3207",
+              "name": "Ländername, Code",
+              "note": "ISO 3166-1 = Alpha-2-Code",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+Z16+++Unternehmensname:::::Z02+Teststraße::815b:Musterortsteil+Entenhausen++10010+DE'",
+          "max": 1,
+          "name": "Name und Anschrift Ansprechpartner Einspeiseprozesse",
+          "nr": "00036",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0160"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "IC",
+                      "name": "Informationskontakt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3139",
+                  "name": "Funktion des Ansprechpartners, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "3413",
+                      "name": "Kontakt, Nummer",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..256",
+                      "id": "3412",
+                      "name": "Kontakt",
+                      "note": "Name der organisatorischen Einheit",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C056",
+                  "name": "Kontaktangaben",
+                  "status": "R"
+                }
+              ],
+              "example": "CTA+IC+:Abteilung XY'",
+              "max": 1,
+              "name": "Ansprechpartner",
+              "nr": "00037",
+              "status": "M",
+              "tag": "CTA",
+              "zaehler": "0300"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "3148",
+                      "name": "Kommunikationsadresse, Identifikation",
+                      "note": "Nummer / Adresse",
+                      "status": "M"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "EM",
+                          "name": "Elektronische Post"
+                        },
+                        {
+                          "code": "TE",
+                          "name": "Telefon"
+                        },
+                        {
+                          "code": "FX",
+                          "name": "Telefax"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3155",
+                      "name": "Art des Kommunikationsmittels, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C076",
+                  "name": "Kommunikationsverbindung",
+                  "status": "M"
+                }
+              ],
+              "example": "COM+?+49322227120:TE'",
+              "max": 3,
+              "name": "Kommunikationsverbindung",
+              "nr": "00038",
+              "status": "R",
+              "tag": "COM",
+              "zaehler": "0310"
+            }
+          ],
+          "group": "SG7",
+          "max": 1,
+          "name": "Kontaktinformationen",
+          "status": "D",
+          "zaehler": "0290"
+        }
+      ],
+      "group": "SG4",
+      "max": 1,
+      "name": "Ansprechpartner Einspeiseprozesse",
+      "status": "D",
+      "zaehler": "0150"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z17",
+                  "name": "Ansprechpartner Abrechnungsprozesse"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3124",
+                  "name": "Zeile für Name und Anschrift",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C058",
+              "name": "Name und Anschrift",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Name",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z02",
+                      "name": "Struktur der Firmenbezeichnung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3045",
+                  "name": "Format für den Namen des Beteiligten, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C080",
+              "name": "Name des Beteiligten",
+              "note": "Name des Unternehmens",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "M"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                }
+              ],
+              "id": "C059",
+              "name": "Straße",
+              "note": "Anschrift des Unternehmens",
+              "status": "R"
+            },
+            {
+              "format": "an..35",
+              "id": "3164",
+              "name": "Ort",
+              "note": "Ortsname, Klartext",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..9",
+                  "id": "3229",
+                  "name": "Land-Untereinheit, Nummer",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C819",
+              "name": "Land-Untereinheit, Einzelheiten",
+              "status": "N"
+            },
+            {
+              "format": "an..17",
+              "id": "3251",
+              "name": "Postleitzahl, Code",
+              "note": "Postleitzahl",
+              "status": "D"
+            },
+            {
+              "format": "an..3",
+              "id": "3207",
+              "name": "Ländername, Code",
+              "note": "ISO 3166-1 = Alpha-2-Code",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+Z17+++Unternehmensname:::::Z02+Teststraße::815b:Musterortsteil+Entenhausen++10010+DE'",
+          "max": 1,
+          "name": "Name und Anschrift Ansprechpartner Abrechnungsprozesse",
+          "nr": "00039",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0160"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "IC",
+                      "name": "Informationskontakt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3139",
+                  "name": "Funktion des Ansprechpartners, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "3413",
+                      "name": "Kontakt, Nummer",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..256",
+                      "id": "3412",
+                      "name": "Kontakt",
+                      "note": "Name der organisatorischen Einheit",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C056",
+                  "name": "Kontaktangaben",
+                  "status": "R"
+                }
+              ],
+              "example": "CTA+IC+:Abteilung XY'",
+              "max": 1,
+              "name": "Ansprechpartner",
+              "nr": "00040",
+              "status": "M",
+              "tag": "CTA",
+              "zaehler": "0300"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "3148",
+                      "name": "Kommunikationsadresse, Identifikation",
+                      "note": "Nummer / Adresse",
+                      "status": "M"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "EM",
+                          "name": "Elektronische Post"
+                        },
+                        {
+                          "code": "TE",
+                          "name": "Telefon"
+                        },
+                        {
+                          "code": "FX",
+                          "name": "Telefax"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3155",
+                      "name": "Art des Kommunikationsmittels, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C076",
+                  "name": "Kommunikationsverbindung",
+                  "status": "M"
+                }
+              ],
+              "example": "COM+?+49322227120:TE'",
+              "max": 3,
+              "name": "Kommunikationsverbindung",
+              "nr": "00041",
+              "status": "R",
+              "tag": "COM",
+              "zaehler": "0310"
+            }
+          ],
+          "group": "SG7",
+          "max": 1,
+          "name": "Kontaktinformationen",
+          "status": "D",
+          "zaehler": "0290"
+        }
+      ],
+      "group": "SG4",
+      "max": 1,
+      "name": "Ansprechpartner Abrechnungsprozesse",
+      "status": "D",
+      "zaehler": "0150"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z18",
+                  "name": "Ansprechpartner MMMA-Prozesse"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3124",
+                  "name": "Zeile für Name und Anschrift",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C058",
+              "name": "Name und Anschrift",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Name",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z02",
+                      "name": "Struktur der Firmenbezeichnung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3045",
+                  "name": "Format für den Namen des Beteiligten, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C080",
+              "name": "Name des Beteiligten",
+              "note": "Name des Unternehmens",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "M"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                }
+              ],
+              "id": "C059",
+              "name": "Straße",
+              "note": "Anschrift des Unternehmens",
+              "status": "R"
+            },
+            {
+              "format": "an..35",
+              "id": "3164",
+              "name": "Ort",
+              "note": "Ortsname, Klartext",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..9",
+                  "id": "3229",
+                  "name": "Land-Untereinheit, Nummer",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C819",
+              "name": "Land-Untereinheit, Einzelheiten",
+              "status": "N"
+            },
+            {
+              "format": "an..17",
+              "id": "3251",
+              "name": "Postleitzahl, Code",
+              "note": "Postleitzahl",
+              "status": "D"
+            },
+            {
+              "format": "an..3",
+              "id": "3207",
+              "name": "Ländername, Code",
+              "note": "ISO 3166-1 = Alpha-2-Code",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+Z18+++Unternehmensname:::::Z02+Teststraße::815b:Musterortsteil+Entenhausen++10010+DE'",
+          "max": 1,
+          "name": "Name und Anschrift Ansprechpartner MMMA-Prozesse",
+          "nr": "00042",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0160"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "IC",
+                      "name": "Informationskontakt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3139",
+                  "name": "Funktion des Ansprechpartners, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "3413",
+                      "name": "Kontakt, Nummer",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..256",
+                      "id": "3412",
+                      "name": "Kontakt",
+                      "note": "Name der organisatorischen Einheit",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C056",
+                  "name": "Kontaktangaben",
+                  "status": "R"
+                }
+              ],
+              "example": "CTA+IC+:Abteilung XY'",
+              "max": 1,
+              "name": "Ansprechpartner",
+              "nr": "00043",
+              "status": "M",
+              "tag": "CTA",
+              "zaehler": "0300"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "3148",
+                      "name": "Kommunikationsadresse, Identifikation",
+                      "note": "Nummer / Adresse",
+                      "status": "M"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "EM",
+                          "name": "Elektronische Post"
+                        },
+                        {
+                          "code": "TE",
+                          "name": "Telefon"
+                        },
+                        {
+                          "code": "FX",
+                          "name": "Telefax"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3155",
+                      "name": "Art des Kommunikationsmittels, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C076",
+                  "name": "Kommunikationsverbindung",
+                  "status": "M"
+                }
+              ],
+              "example": "COM+?+49322227120:TE'",
+              "max": 3,
+              "name": "Kommunikationsverbindung",
+              "nr": "00044",
+              "status": "R",
+              "tag": "COM",
+              "zaehler": "0310"
+            }
+          ],
+          "group": "SG7",
+          "max": 1,
+          "name": "Kontaktinformationen",
+          "status": "D",
+          "zaehler": "0290"
+        }
+      ],
+      "group": "SG4",
+      "max": 1,
+      "name": "Ansprechpartner MMMA Prozesse",
+      "status": "D",
+      "zaehler": "0150"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z19",
+                  "name": "Ansprechpartner Bewegungsdaten"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3124",
+                  "name": "Zeile für Name und Anschrift",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C058",
+              "name": "Name und Anschrift",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Name",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z02",
+                      "name": "Struktur der Firmenbezeichnung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3045",
+                  "name": "Format für den Namen des Beteiligten, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C080",
+              "name": "Name des Beteiligten",
+              "note": "Name des Unternehmens",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "M"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                }
+              ],
+              "id": "C059",
+              "name": "Straße",
+              "note": "Anschrift des Unternehmens",
+              "status": "R"
+            },
+            {
+              "format": "an..35",
+              "id": "3164",
+              "name": "Ort",
+              "note": "Ortsname, Klartext",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..9",
+                  "id": "3229",
+                  "name": "Land-Untereinheit, Nummer",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C819",
+              "name": "Land-Untereinheit, Einzelheiten",
+              "status": "N"
+            },
+            {
+              "format": "an..17",
+              "id": "3251",
+              "name": "Postleitzahl, Code",
+              "note": "Postleitzahl",
+              "status": "D"
+            },
+            {
+              "format": "an..3",
+              "id": "3207",
+              "name": "Ländername, Code",
+              "note": "ISO 3166-1 = Alpha-2-Code",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+Z19+++Unternehmensname:::::Z02+Teststraße::815b:Musterortsteil+Entenhausen++10010+DE'",
+          "max": 1,
+          "name": "Name und Anschrift Bewegungsdaten",
+          "nr": "00045",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0160"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "IC",
+                      "name": "Informationskontakt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3139",
+                  "name": "Funktion des Ansprechpartners, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "3413",
+                      "name": "Kontakt, Nummer",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..256",
+                      "id": "3412",
+                      "name": "Kontakt",
+                      "note": "Name der organisatorischen Einheit",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C056",
+                  "name": "Kontaktangaben",
+                  "status": "R"
+                }
+              ],
+              "example": "CTA+IC+:Abteilung XY'",
+              "max": 1,
+              "name": "Ansprechpartner",
+              "nr": "00046",
+              "status": "M",
+              "tag": "CTA",
+              "zaehler": "0300"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "3148",
+                      "name": "Kommunikationsadresse, Identifikation",
+                      "note": "Nummer / Adresse",
+                      "status": "M"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "EM",
+                          "name": "Elektronische Post"
+                        },
+                        {
+                          "code": "TE",
+                          "name": "Telefon"
+                        },
+                        {
+                          "code": "FX",
+                          "name": "Telefax"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3155",
+                      "name": "Art des Kommunikationsmittels, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C076",
+                  "name": "Kommunikationsverbindung",
+                  "status": "M"
+                }
+              ],
+              "example": "COM+?+49322227120:TE'",
+              "max": 3,
+              "name": "Kommunikationsverbindung",
+              "nr": "00047",
+              "status": "R",
+              "tag": "COM",
+              "zaehler": "0310"
+            }
+          ],
+          "group": "SG7",
+          "max": 1,
+          "name": "Kontaktinformationen",
+          "status": "D",
+          "zaehler": "0290"
+        }
+      ],
+      "group": "SG4",
+      "max": 1,
+      "name": "Ansprechpartner Bewegungsdaten",
+      "status": "D",
+      "zaehler": "0150"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z20",
+                  "name": "Ansprechpartner Sperr-/Entsperrprozesse"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3124",
+                  "name": "Zeile für Name und Anschrift",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C058",
+              "name": "Name und Anschrift",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Name",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z02",
+                      "name": "Struktur der Firmenbezeichnung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3045",
+                  "name": "Format für den Namen des Beteiligten, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C080",
+              "name": "Name des Beteiligten",
+              "note": "Name des Unternehmens",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "M"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                }
+              ],
+              "id": "C059",
+              "name": "Straße",
+              "note": "Anschrift des Unternehmens",
+              "status": "R"
+            },
+            {
+              "format": "an..35",
+              "id": "3164",
+              "name": "Ort",
+              "note": "Ortsname, Klartext",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..9",
+                  "id": "3229",
+                  "name": "Land-Untereinheit, Nummer",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C819",
+              "name": "Land-Untereinheit, Einzelheiten",
+              "status": "N"
+            },
+            {
+              "format": "an..17",
+              "id": "3251",
+              "name": "Postleitzahl, Code",
+              "note": "Postleitzahl",
+              "status": "D"
+            },
+            {
+              "format": "an..3",
+              "id": "3207",
+              "name": "Ländername, Code",
+              "note": "ISO 3166-1 = Alpha-2-Code",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+Z20+++Unternehmensname:::::Z02+Teststraße::815b:Musterortsteil+Entenhausen++10010+DE'",
+          "max": 1,
+          "name": "Name und Anschrift Ansprechpartner Prozesse zur Unterbrechung und Wiederherstellung der Anschlussnutzung",
+          "nr": "00048",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0160"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "IC",
+                      "name": "Informationskontakt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3139",
+                  "name": "Funktion des Ansprechpartners, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "3413",
+                      "name": "Kontakt, Nummer",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..256",
+                      "id": "3412",
+                      "name": "Kontakt",
+                      "note": "Name der organisatorischen Einheit",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C056",
+                  "name": "Kontaktangaben",
+                  "status": "R"
+                }
+              ],
+              "example": "CTA+IC+:Abteilung XY'",
+              "max": 1,
+              "name": "Ansprechpartner",
+              "nr": "00049",
+              "status": "M",
+              "tag": "CTA",
+              "zaehler": "0300"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "3148",
+                      "name": "Kommunikationsadresse, Identifikation",
+                      "note": "Nummer / Adresse",
+                      "status": "M"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "EM",
+                          "name": "Elektronische Post"
+                        },
+                        {
+                          "code": "TE",
+                          "name": "Telefon"
+                        },
+                        {
+                          "code": "FX",
+                          "name": "Telefax"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3155",
+                      "name": "Art des Kommunikationsmittels, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C076",
+                  "name": "Kommunikationsverbindung",
+                  "status": "M"
+                }
+              ],
+              "example": "COM+?+49322227120:TE'",
+              "max": 3,
+              "name": "Kommunikationsverbindung",
+              "nr": "00050",
+              "status": "R",
+              "tag": "COM",
+              "zaehler": "0310"
+            }
+          ],
+          "group": "SG7",
+          "max": 1,
+          "name": "Kontaktinformationen",
+          "status": "D",
+          "zaehler": "0290"
+        }
+      ],
+      "group": "SG4",
+      "max": 1,
+      "name": "Ansprechpartner Prozesse zur Unterbrechung und Wiederherstellung der Anschlussnutzung",
+      "status": "D",
+      "zaehler": "0150"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z21",
+                  "name": "Ansprechpartner Bilanzierungsprozesse / Bilanzkreismanagement"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3124",
+                  "name": "Zeile für Name und Anschrift",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C058",
+              "name": "Name und Anschrift",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Name",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z02",
+                      "name": "Struktur der Firmenbezeichnung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3045",
+                  "name": "Format für den Namen des Beteiligten, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C080",
+              "name": "Name des Beteiligten",
+              "note": "Name des Unternehmens",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "M"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                }
+              ],
+              "id": "C059",
+              "name": "Straße",
+              "note": "Anschrift des Unternehmens",
+              "status": "R"
+            },
+            {
+              "format": "an..35",
+              "id": "3164",
+              "name": "Ort",
+              "note": "Ortsname, Klartext",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..9",
+                  "id": "3229",
+                  "name": "Land-Untereinheit, Nummer",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C819",
+              "name": "Land-Untereinheit, Einzelheiten",
+              "status": "N"
+            },
+            {
+              "format": "an..17",
+              "id": "3251",
+              "name": "Postleitzahl, Code",
+              "note": "Postleitzahl",
+              "status": "D"
+            },
+            {
+              "format": "an..3",
+              "id": "3207",
+              "name": "Ländername, Code",
+              "note": "ISO 3166-1 = Alpha-2-Code",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+Z21+++Unternehmensname:::::Z02+Teststraße::815b:Musterortsteil+Entenhausen++10010+DE'",
+          "max": 1,
+          "name": "Name und Anschrift Ansprechpartner Bilanzierungsprozesse / Bilanzkreismanagement",
+          "nr": "00051",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0160"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "IC",
+                      "name": "Informationskontakt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3139",
+                  "name": "Funktion des Ansprechpartners, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "3413",
+                      "name": "Kontakt, Nummer",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..256",
+                      "id": "3412",
+                      "name": "Kontakt",
+                      "note": "Name der organisatorischen Einheit",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C056",
+                  "name": "Kontaktangaben",
+                  "status": "R"
+                }
+              ],
+              "example": "CTA+IC+:Abteilung XY'",
+              "max": 1,
+              "name": "Ansprechpartner",
+              "nr": "00052",
+              "status": "M",
+              "tag": "CTA",
+              "zaehler": "0300"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "3148",
+                      "name": "Kommunikationsadresse, Identifikation",
+                      "note": "Nummer / Adresse",
+                      "status": "M"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "EM",
+                          "name": "Elektronische Post"
+                        },
+                        {
+                          "code": "TE",
+                          "name": "Telefon"
+                        },
+                        {
+                          "code": "FX",
+                          "name": "Telefax"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3155",
+                      "name": "Art des Kommunikationsmittels, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C076",
+                  "name": "Kommunikationsverbindung",
+                  "status": "M"
+                }
+              ],
+              "example": "COM+?+49322227120:TE'",
+              "max": 3,
+              "name": "Kommunikationsverbindung",
+              "nr": "00053",
+              "status": "R",
+              "tag": "COM",
+              "zaehler": "0310"
+            }
+          ],
+          "group": "SG7",
+          "max": 1,
+          "name": "Kontaktinformationen",
+          "status": "D",
+          "zaehler": "0290"
+        }
+      ],
+      "group": "SG4",
+      "max": 1,
+      "name": "Ansprechpartner Bilanzierungsprozesse / Bilanzkreismanagement",
+      "status": "D",
+      "zaehler": "0150"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z33",
+                  "name": "Ansprechpartner technischer Netzanschluss für Neuanlagen und Anlagenumbau"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3124",
+                  "name": "Zeile für Name und Anschrift",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C058",
+              "name": "Name und Anschrift",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Name",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..70",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z02",
+                      "name": "Struktur der Firmenbezeichnung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3045",
+                  "name": "Format für den Namen des Beteiligten, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C080",
+              "name": "Name des Beteiligten",
+              "note": "Name des Unternehmens",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "M"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                }
+              ],
+              "id": "C059",
+              "name": "Straße",
+              "note": "Anschrift des Unternehmens",
+              "status": "R"
+            },
+            {
+              "format": "an..35",
+              "id": "3164",
+              "name": "Ort",
+              "note": "Ortsname, Klartext",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..9",
+                  "id": "3229",
+                  "name": "Land-Untereinheit, Nummer",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C819",
+              "name": "Land-Untereinheit, Einzelheiten",
+              "status": "N"
+            },
+            {
+              "format": "an..17",
+              "id": "3251",
+              "name": "Postleitzahl, Code",
+              "note": "Postleitzahl",
+              "status": "D"
+            },
+            {
+              "format": "an..3",
+              "id": "3207",
+              "name": "Ländername, Code",
+              "note": "ISO 3166-1 = Alpha-2-Code",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+Z33+++Unternehmensname:::::Z02+Teststraße::815b:Musterortsteil+Entenhausen++10010+DE'",
+          "max": 1,
+          "name": "Name und Anschrift Ansprechpartner Technischer Netzanschluss für Neuanlagen und Anlagenumbau",
+          "nr": "00054",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0160"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "IC",
+                      "name": "Informationskontakt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3139",
+                  "name": "Funktion des Ansprechpartners, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "3413",
+                      "name": "Kontakt, Nummer",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..256",
+                      "id": "3412",
+                      "name": "Kontakt",
+                      "note": "Name der organisatorischen Einheit",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C056",
+                  "name": "Kontaktangaben",
+                  "status": "R"
+                }
+              ],
+              "example": "CTA+IC+:Abteilung XY'",
+              "max": 1,
+              "name": "Ansprechpartner",
+              "nr": "00055",
+              "status": "M",
+              "tag": "CTA",
+              "zaehler": "0300"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "3148",
+                      "name": "Kommunikationsadresse, Identifikation",
+                      "note": "Nummer / Adresse",
+                      "status": "M"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "EM",
+                          "name": "Elektronische Post"
+                        },
+                        {
+                          "code": "TE",
+                          "name": "Telefon"
+                        },
+                        {
+                          "code": "FX",
+                          "name": "Telefax"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3155",
+                      "name": "Art des Kommunikationsmittels, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C076",
+                  "name": "Kommunikationsverbindung",
+                  "status": "M"
+                }
+              ],
+              "example": "COM+?+49322227120:TE'",
+              "max": 3,
+              "name": "Kommunikationsverbindung",
+              "nr": "00056",
+              "status": "R",
+              "tag": "COM",
+              "zaehler": "0310"
+            }
+          ],
+          "group": "SG7",
+          "max": 1,
+          "name": "Kontaktinformationen",
+          "status": "D",
+          "zaehler": "0290"
+        }
+      ],
+      "group": "SG4",
+      "max": 1,
+      "name": "Ansprechpartner Technischer Netzanschluss für Neuanlagen und Anlagenumbau",
+      "status": "D",
+      "zaehler": "0150"
+    },
+    {
       "elements": [
         {
+          "format": "n..6",
           "id": "0074",
+          "name": "Anzahl der Segmente in einer Nachricht",
+          "note": "Hier wird die Gesamtanzahl der Segmente einer Nachricht angegegeben.",
           "status": "M"
         },
         {
+          "format": "an..14",
           "id": "0062",
+          "name": "Nachrichten-Referenznummer",
+          "note": "Die Referenznummer aus dem UNH-Segment muss hier wiederholt werden.",
           "status": "M"
         }
       ],
-      "qualifier_restrictions": {}
+      "example": "UNT+57+CS3TTZTT555558'",
+      "max": 1,
+      "name": "Nachrichten-Endesegment",
+      "nr": "00057",
+      "status": "M",
+      "tag": "UNT",
+      "zaehler": "0650"
     }
   ],
-  "segment_groups": [],
-  "ahb_revision": "1.1",
-  "source_document": "PARTIN MIG 1.1, Publikationsdatum 01.04.2026",
-  "publikationsdatum": "2026-04-01"
+  "valid_from": "2026-10-01"
 }

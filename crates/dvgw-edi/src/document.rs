@@ -18,7 +18,8 @@
 //! carrier is used only as a cross-check.
 //!
 //! Sources: DVGW-Nachrichtenbeschreibungen ALOCAT 5.11a (ORDRSP / UN D.07A S3),
-//! NOMINT 4.6 (ORDERS / UN D.07A S3), NOMRES 4.7 (ORDRSP / UN D.07A S3).
+//! NOMINT 4.6 (ORDERS / UN D.07A S3), NOMRES 4.7 (ORDRSP / UN D.07A S3),
+//! SSQNOT 5.7 (ORDRSP / UN D.07A S3).
 
 use std::fmt;
 
@@ -28,7 +29,7 @@ use std::fmt;
 pub enum Carrier {
     /// `ORDERS` — Purchase Order. Carries NOMINT.
     Orders,
-    /// `ORDRSP` — Purchase Order Response. Carries ALOCAT and NOMRES.
+    /// `ORDRSP` — Purchase Order Response. Carries ALOCAT, NOMRES and SSQNOT.
     Ordrsp,
 }
 
@@ -69,6 +70,8 @@ pub enum DvgwMessageType {
     Nomint,
     /// NOMRES — Nominierungsantwort / Matching-Benachrichtigung.
     Nomres,
+    /// SSQNOT — Mehr-/Mindermengenmeldung zur Führung des Netzkontos (NB → MGV).
+    Ssqnot,
 }
 
 impl DvgwMessageType {
@@ -79,6 +82,7 @@ impl DvgwMessageType {
             Self::Alocat => "ALOCAT",
             Self::Nomint => "NOMINT",
             Self::Nomres => "NOMRES",
+            Self::Ssqnot => "SSQNOT",
         }
     }
 
@@ -87,7 +91,54 @@ impl DvgwMessageType {
     pub fn carrier(self) -> Carrier {
         match self {
             Self::Nomint => Carrier::Orders,
-            Self::Alocat | Self::Nomres => Carrier::Ordrsp,
+            Self::Alocat | Self::Nomres | Self::Ssqnot => Carrier::Ordrsp,
+        }
+    }
+
+    /// The `UNH` S009 DE 0057 value the Nachrichtenbeschreibung prescribes —
+    /// the message version for ALOCAT (`5.11a`), the Nachrichtentypen-Paket
+    /// for the others (`DVGW17`).
+    #[must_use]
+    pub fn anwendungscode(self) -> &'static str {
+        match self {
+            Self::Alocat => "5.11a",
+            Self::Nomint | Self::Nomres | Self::Ssqnot => "DVGW17",
+        }
+    }
+
+    /// The `QTY` C186 DE 6411 units the Segmentlayout admits, the default first.
+    ///
+    /// ALOCAT states rates (`KW1` kWh/h, `KW2` kWh/d); a nomination states a
+    /// rate or an energy (`KW1`, `KWH`); a Mehr-/Mindermengenmeldung is energy
+    /// only (`KWH`).
+    #[must_use]
+    pub fn admitted_units(self) -> &'static [&'static str] {
+        use crate::model::unit;
+        match self {
+            Self::Alocat => &[unit::KWH_PER_HOUR, unit::KWH_PER_DAY],
+            Self::Nomint | Self::Nomres => &[unit::KWH_PER_HOUR, unit::KWH],
+            Self::Ssqnot => &[unit::KWH],
+        }
+    }
+
+    /// The `QTY` C186 DE 6063 qualifiers the Segmentlayout admits.
+    #[must_use]
+    pub fn admitted_quantity_qualifiers(self) -> &'static [&'static str] {
+        use crate::model::qty;
+        match self {
+            Self::Alocat | Self::Nomint | Self::Nomres => &[qty::EINSPEISUNG, qty::AUSSPEISUNG],
+            Self::Ssqnot => &[qty::MEHRMENGE, qty::MINDERMENGE],
+        }
+    }
+
+    /// The `LOC` DE 3227 qualifiers the Segmentlayout admits.
+    #[must_use]
+    pub fn admitted_location_qualifiers(self) -> &'static [&'static str] {
+        match self {
+            // „In der Nachricht ist keine Angabe eines spezifischen Ortes
+            // erforderlich" — the segment is `LOC+Z99` and nothing else.
+            Self::Alocat | Self::Ssqnot => &["Z99"],
+            Self::Nomint | Self::Nomres => &["172", "Z17", "Z19"],
         }
     }
 
@@ -120,11 +171,12 @@ impl DvgwMessageType {
                 D::VhpBestaetigung,
                 D::BestaetigungFlexibilitaetsuebertragung,
             ],
+            Self::Ssqnot => &[D::MehrMindermengenmeldung],
         }
     }
 
     /// All families, in catalogue order.
-    pub const ALL: [Self; 3] = [Self::Alocat, Self::Nomint, Self::Nomres];
+    pub const ALL: [Self; 4] = [Self::Alocat, Self::Nomint, Self::Nomres, Self::Ssqnot];
 }
 
 impl fmt::Display for DvgwMessageType {
@@ -184,6 +236,10 @@ pub enum DvgwDocument {
     VhpBestaetigung,
     /// `Y2G` — Bestätigung Flexibilitätsübertragung.
     BestaetigungFlexibilitaetsuebertragung,
+
+    // ── SSQNOT (ORDRSP) ──────────────────────────────────────────────────────
+    /// `BAG` — Mehr-/Mindermengenmeldung zur Führung des Netzkontos.
+    MehrMindermengenmeldung,
 }
 
 /// `(wire code, document, German description)` — the single table every lookup
@@ -273,6 +329,11 @@ const CATALOGUE: &[(&str, DvgwDocument, &str)] = {
             D::BestaetigungFlexibilitaetsuebertragung,
             "Bestätigung Flexibilitätsübertragung",
         ),
+        (
+            "BAG",
+            D::MehrMindermengenmeldung,
+            "Mehr-/Mindermengenmeldung zur Führung des Netzkontos",
+        ),
     ]
 };
 
@@ -325,6 +386,38 @@ impl DvgwDocument {
     pub fn all() -> impl Iterator<Item = Self> {
         CATALOGUE.iter().map(|(_, d, _)| *d)
     }
+
+    /// The document-name code the Anwendungsfall column of `pid` admits in
+    /// `BGM` DE 1001 — every published column marks exactly one.
+    ///
+    /// Source: ALOCAT 5.11a §4, NOMINT 4.6 §4, NOMRES 4.7 §4, SSQNOT 5.7 §4.
+    /// `None` for a code no shipped column publishes.
+    #[must_use]
+    pub fn for_pid(pid: u32) -> Option<Self> {
+        use DvgwDocument as D;
+        Some(match pid {
+            70001 | 70008 | 70013 | 70018 | 70022 => D::AllokationSlp,
+            70002 | 70011 | 70023 => D::KorrigierteMengenmeldungNkp,
+            70003 | 70012 => D::TaeglicheMengenmeldungNkp,
+            70004 | 70014 => D::UntertaegigeAllokation,
+            70005 | 70015 => D::EndgueltigeAllokation,
+            70006 | 70009 | 70016 | 70019 => D::KorrigierteAllokationBilanzierungsbrennwert,
+            70007 | 70010 | 70017 | 70020 => D::KorrigierteAllokationAbrechnungsbrennwert,
+            70021 => D::SlpErsatzwerte,
+            70030 => D::NominierungTransportkunde,
+            70031 => D::NominierungVirtuellerHandelspunkt,
+            70032 => D::Flexibilitaetsuebertragung,
+            70033 => D::NominierungGebuendelteKapazitaet,
+            70034 => D::NominierungsweitergabeNetzbetreiber,
+            70035 => D::MatchingBenachrichtigung,
+            70036 => D::Bestaetigung,
+            70037 => D::VhpMatchingBenachrichtigung,
+            70038 => D::VhpBestaetigung,
+            70039 => D::BestaetigungFlexibilitaetsuebertragung,
+            70095 | 70096 => D::MehrMindermengenmeldung,
+            _ => return None,
+        })
+    }
 }
 
 /// The code-list responsible agency DVGW stamps on every coded value
@@ -376,12 +469,28 @@ mod tests {
         );
     }
 
+    /// Every published Anwendungsfall names one document, of its own family.
+    #[test]
+    fn every_catalogued_pid_names_a_document_of_its_family() {
+        for info in crate::pruefidentifikator::catalogue() {
+            let doc = DvgwDocument::for_pid(info.pid)
+                .unwrap_or_else(|| panic!("{} has no BGM code", info.pid));
+            assert_eq!(doc.message_type(), info.message_type, "{}", info.pid);
+        }
+        assert_eq!(DvgwDocument::for_pid(70_500), None);
+    }
+
     /// The carrier is the cross-check, so it must follow the family exactly.
     #[test]
     fn nomint_rides_orders_and_the_rest_ride_ordrsp() {
         assert_eq!(DvgwMessageType::Nomint.carrier(), Carrier::Orders);
         assert_eq!(DvgwMessageType::Alocat.carrier(), Carrier::Ordrsp);
         assert_eq!(DvgwMessageType::Nomres.carrier(), Carrier::Ordrsp);
+        assert_eq!(DvgwMessageType::Ssqnot.carrier(), Carrier::Ordrsp);
+        assert_eq!(
+            DvgwDocument::from_code("BAG"),
+            Some(DvgwDocument::MehrMindermengenmeldung)
+        );
         assert_eq!(
             Carrier::from_unh_code("ALOCAT"),
             None,

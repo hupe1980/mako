@@ -50,6 +50,11 @@ pub const BGM_CLEARINGLISTE: &str = "Z05";
 /// The Clearinglisten head block. Muss on both 55065 and 55066 (UTILMD AHB
 /// Strom 2.2 Kap. 13.4), paired with [`RFF_ZEITREIHE`].
 pub const SEQ_SUMMENZEITREIHE: &str = "Z22";
+/// `SG8 SEQ+Z01` — Daten der Marktlokation, the Stammdaten block a
+/// Vorgang's `CCI` Merkmale belong to.
+pub const SEQ_DATEN_DER_MARKTLOKATION: &str = "Z01";
+/// `SG8 SEQ+Z75` — Daten des Kunden des Lieferanten (EnFG-Grundlage).
+pub const SEQ_DATEN_DES_KUNDEN: &str = "Z75";
 
 /// `SG8 RFF+AUU` — Referenz auf eine Zeitreihe; DE 1154 is its Version.
 ///
@@ -379,6 +384,8 @@ pub mod nad {
     /// (UTILMD AHB Strom 2.2 Bedingung `[279]`); Bedingung `[572]` says it is
     /// the „Kundenname aus Anmeldung Lieferant neu".
     pub const KUNDE_DES_LF: &str = "Z09";
+    /// `NAD+Z04` — Korrespondenzanschrift des Kunden des Lieferanten.
+    pub const KORRESPONDENZANSCHRIFT_KUNDE: &str = "Z04";
     /// `VY` — andere zugehörige Partei, `SG12`. On a 55010 the
     /// **Neulieferant** (Bedingung `[567]`).
     pub const ZUGEHOERIGE_PARTEI: &str = "VY";

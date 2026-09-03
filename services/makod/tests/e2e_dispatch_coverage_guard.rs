@@ -186,88 +186,28 @@ const SEND_ONLY_PIDS: &[(u32, &str, &str)] = &[
     ),
 ];
 
-/// The EDIFACT message directory a PID's band belongs to.
-fn fixture_dir(pid: u32) -> Option<&'static str> {
-    Some(match pid / 1000 {
-        13 => "mscons",
-        15 => "quotes",
-        17 => "orders",
-        19 => "ordrsp",
-        21 => "iftsta",
-        23 => "insrpt",
-        25 => "utilts",
-        27 => "pricat",
-        29 => "aperak",
-        31 => "invoic",
-        33 => "remadv",
-        35 => "reqote",
-        37 => "partin",
-        39 => "ordchg",
-        44 | 55 => "utilmd",
-        _ => return None,
-    })
-}
-
-/// A real fixture carrying `pid`, preferring the curated file over the
-/// generated one, then any fixture of the same message type whose content
-/// carries the PID.
-///
-/// The content scan matters: 28 Prüfidentifikatoren have no file named after
-/// them but do appear in another fixture's `BGM` DE1004 or `RFF+Z13` — which is
-/// exactly how `validate-pruefids` and `generate-fixtures` count coverage. A
-/// filename-only lookup silently skips those, leaving their dispatch arms
-/// unguarded.
+/// A conformant message carrying `pid`, addressed to this tenant: the newest
+/// profile's own skeleton of the Anwendungsfall, so every registered
+/// Prüfidentifikator has a message and the guard exercises every arm.
 fn fixture(pid: u32) -> Option<String> {
-    let dir = fixture_dir(pid)?;
-    let base = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../crates/edi-energy/tests/fixtures"
-    );
-    let named = [
-        format!("{base}/{dir}/valid/pid_{pid}.edi"),
-        format!("{base}/{dir}/gen/pid_{pid}.gen.edi"),
-    ]
-    .into_iter()
-    .find_map(|p| std::fs::read_to_string(p).ok());
-    if named.is_some() {
-        return named;
-    }
-
-    // Fall back to any fixture of this message type that carries the PID.
-    for sub in ["valid", "gen"] {
-        let Ok(entries) = std::fs::read_dir(format!("{base}/{dir}/{sub}")) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let Ok(text) = std::fs::read_to_string(entry.path()) else {
-                continue;
-            };
-            if carries_pid(&text, pid) {
-                return Some(text);
-            }
-        }
-    }
-    None
-}
-
-/// `true` when the interchange announces `pid` in `BGM` DE1004 or `RFF+Z13`.
-///
-/// Both carry the Prüfidentifikator with optional leading zeros, which is why
-/// this trims rather than comparing the raw token.
-fn carries_pid(text: &str, pid: u32) -> bool {
-    let want = pid.to_string();
-    for seg in text.split('\'') {
-        let seg = seg.trim();
-        if let Some(rest) = seg.strip_prefix("RFF+Z13:")
-            && rest.trim_start_matches('0').starts_with(&want)
-        {
-            return true;
-        }
-        if seg.starts_with("BGM+") && seg.split('+').any(|f| f.trim_start_matches('0') == want) {
-            return true;
-        }
-    }
-    false
+    use edi_energy::profile::SkeletonParties;
+    let code = edi_energy::Pruefidentifikator::new(pid).ok()?;
+    let profile = edi_energy::ReleaseRegistry::global()
+        .all_profiles()
+        .iter()
+        .filter(|p| p.has_anwendungsfall(code))
+        .max_by_key(|p| p.valid_from())?;
+    let af = profile.anwendungsfall(pid)?;
+    let bytes = profile
+        .skeleton_interchange(
+            af,
+            &SkeletonParties {
+                sender: "4012345000023".to_owned(),
+                receiver: OWN_MP.to_owned(),
+            },
+        )
+        .ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// A synthetic reply-family message, for PIDs with no fixture on disk.
@@ -412,8 +352,8 @@ async fn every_registered_pid_reaches_a_dispatch_arm() {
     // Ratchet: 351 registrations are exercised today. A drop means fixtures
     // moved or the lookup broke, which would hollow the guard out silently.
     assert!(
-        exercised >= 351,
-        "only {exercised} PIDs were exercised (expected >= 310) — fixture \
+        exercised >= 440,
+        "only {exercised} PIDs were exercised (expected >= 440) — fixture \
          lookup is probably broken, and the coverage assertion below would \
          then be verifying almost nothing"
     );
@@ -460,7 +400,7 @@ async fn dispatch_coverage_is_not_silently_shrinking() {
             .registry()
             .all_profiles()
             .iter()
-            .any(|prof| prof.ahb_rule_pack(Some(p)).name() != "unknown-pid")
+            .any(|prof| prof.has_anwendungsfall(p))
     };
 
     let pairs: Vec<_> = registered_pairs()

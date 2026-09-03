@@ -1,837 +1,3719 @@
 {
-  "schema_version": 1,
+  "ahb_version": "1.0b",
+  "envelope": [],
   "message_type": "INVOIC",
+  "pid_source": "rff_z13",
+  "publikationsdatum": "2026-04-01",
   "release": "2.8e",
-  "valid_from": "2026-10-01",
-  "supersedes_directory": "fv20260401",
-  "dtm_formats": {
-    "137": [
-      "303"
-    ],
-    "155": [
-      "303"
-    ],
-    "156": [
-      "303"
-    ],
-    "171": [
-      "303"
-    ],
-    "203": [
-      "102",
-      "303"
-    ],
-    "265": [
-      "303"
-    ],
-    "3": [
-      "303"
-    ],
-    "9": [
-      "303"
-    ],
-    "Z11": [
-      "303"
-    ],
-    "Z12": [
-      "303"
-    ],
-    "Z42": [
-      "303"
-    ],
-    "Z43": [
-      "303"
-    ]
+  "schema_version": 2,
+  "source": {
+    "file": "INVOIC_MIG_2.8e.pdf",
+    "sha256": "ffb74414f77257582133a61f51b943274b5022b65f75efb8ef6cf8511efad8a9",
+    "title": "INVOIC MIG 2.8e"
   },
-  "segments": [
+  "structure": [
     {
-      "tag": "UNH",
-      "name": "Nachrichtenanfang",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "format": "an..14",
           "id": "0062",
-          "status": "M",
-          "components": 1
+          "name": "Nachrichten-Referenznummer",
+          "note": "Eindeutige Nachrichtenreferenz in einer Übertragungsdatei des Absenders. Nummer der Nachrichten einer Übertragungsdatei im Datenaustausch. Identisch mit DE0062 im UNT, i. d. R. vom sendenden Konverter vergeben.",
+          "status": "M"
         },
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "INVOIC",
+                  "name": "Rechnung"
+                }
+              ],
+              "format": "an..6",
+              "id": "0065",
+              "name": "Nachrichtentyp-Kennung",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "D",
+                  "name": "Entwurfs-Version"
+                }
+              ],
+              "format": "an..3",
+              "id": "0052",
+              "name": "Versionsnummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "06A",
+                  "name": "Ausgabe 2006 - A"
+                }
+              ],
+              "format": "an..3",
+              "id": "0054",
+              "name": "Freigabenummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "UN",
+                  "name": "UN/CEFACT"
+                }
+              ],
+              "format": "an..2",
+              "id": "0051",
+              "name": "Verwaltende Organisation",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "2.8e",
+                  "name": ""
+                }
+              ],
+              "format": "an..6",
+              "id": "0057",
+              "name": "Anwendungscode der zuständigen Organisation",
+              "status": "R"
+            }
+          ],
           "id": "S009",
-          "status": "M",
-          "components": 6
+          "name": "Nachrichten-Kennung",
+          "status": "M"
         }
-      ]
+      ],
+      "example": "UNH+1+INVOIC:D:06A:UN:2.8e'",
+      "max": 1,
+      "name": "Nachrichtenanfang",
+      "nr": "00003",
+      "status": "M",
+      "tag": "UNH",
+      "zaehler": "0010"
     },
     {
-      "tag": "BGM",
-      "name": "Rechnungsnummer",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "380",
+                  "name": "Handelsrechnung"
+                },
+                {
+                  "code": "389",
+                  "name": "Selbst ausgestellte Rechnung (engl.: \"Self- billed invoice\")"
+                },
+                {
+                  "code": "457",
+                  "name": "Storno einer Belastung."
+                },
+                {
+                  "code": "Z25",
+                  "name": "Storno für selbst ausgestellte Rechnung (Gutschrift im Gutschriftsverfahren)"
+                }
+              ],
+              "format": "an..3",
+              "id": "1001",
+              "name": "Dokumentenname, Code",
+              "status": "R"
+            }
+          ],
           "id": "C002",
-          "status": "M",
-          "components": 4
+          "name": "Dokumenten-/ Nachrichtenname",
+          "status": "R"
         },
         {
+          "components": [
+            {
+              "format": "an..35",
+              "id": "1004",
+              "name": "Dokumentennummer",
+              "note": "Eindeutige EDI-Nachrichtennummer, vergeben vom Absender des Dokuments, entspricht der Rechnungsnummer",
+              "status": "R"
+            }
+          ],
           "id": "C106",
-          "status": "C",
-          "components": 3
+          "name": "Dokumenten-/Nachrichten- Identifikation",
+          "status": "R"
+        },
+        {
+          "codes": [
+            {
+              "code": "7",
+              "name": "Duplikat"
+            },
+            {
+              "code": "9",
+              "name": "Original"
+            }
+          ],
+          "format": "an..3",
+          "id": "1225",
+          "name": "Nachrichtenfunktion, Code",
+          "status": "R"
         }
       ],
-      "qualifier_restrictions": {
-        "1001": [
-          "380",
-          "389",
-          "457",
-          "Z25"
-        ],
-        "1225": [
-          "7",
-          "9"
-        ]
-      }
+      "example": "BGM+380+INV12435422+9'",
+      "max": 1,
+      "name": "Rechnungsnummer",
+      "nr": "00004",
+      "status": "M",
+      "tag": "BGM",
+      "zaehler": "0020"
     },
     {
-      "tag": "DTM",
-      "name": "Datums-/Zeitangaben",
-      "mandatory": true,
-      "max_occurrences": 9,
       "elements": [
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "137",
+                  "name": "Dokumenten-/Nachrichtendatum/-zeit"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
           "id": "C507",
-          "status": "M",
-          "components": 3
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
         }
       ],
-      "qualifier_restrictions": {
-        "2005": [
-          "137",
-          "9",
-          "155",
-          "156",
-          "Z42",
-          "Z43",
-          "203",
-          "Z11",
-          "Z12"
-        ]
-      }
+      "example": "DTM+137:202106032200?+00:303'",
+      "max": 1,
+      "name": "Nachrichtendatum",
+      "nr": "00005",
+      "status": "M",
+      "tag": "DTM",
+      "zaehler": "0030"
     },
     {
-      "tag": "IMD",
-      "name": "Rechnungstyp",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "9",
+                  "name": "Bearbeitungs-/Verarbeitungsdatum/-zeit"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+9:202106032200?+00:303'",
+      "max": 1,
+      "name": "Bearbeitungs-/Verarbeitungsdatum",
+      "nr": "00006",
+      "status": "R",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "155",
+                  "name": "Rechnungsperiode, Beginndatum"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+155:202107312200?+00:303'",
+      "max": 1,
+      "name": "Abrechnungszeitraum Beginn",
+      "nr": "00007",
+      "status": "D",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "156",
+                  "name": "Rechnungsperiode, Endedatum"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+156:202108312200?+00:303'",
+      "max": 1,
+      "name": "Abrechnungszeitraum Ende",
+      "nr": "00008",
+      "status": "D",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "Z42",
+                  "name": "vorläufiger Abrechnungszeitraum Beginn"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+Z42:202107312200?+00:303'",
+      "max": 1,
+      "name": "vorläufiger Abrechnungszeitraum Beginn",
+      "nr": "00009",
+      "status": "D",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "Z43",
+                  "name": "vorläufiger Abrechnungszeitraum Ende"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+Z43:202108312200?+00:303'",
+      "max": 1,
+      "name": "vorläufiger Abrechnungszeitraum Ende",
+      "nr": "00010",
+      "status": "D",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "203",
+                  "name": "Ausführungsdatum/-zeit"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                },
+                {
+                  "code": "102",
+                  "name": "CCYYMMDD"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+203:202101112300?+00:303'",
+      "max": 1,
+      "name": "Ausführungsdatum",
+      "nr": "00011",
+      "status": "D",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "Z11",
+                  "name": "Beginndatum Bilanzierung zugeordnete Periode"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+Z11:202109302200?+00:303'",
+      "max": 1,
+      "name": "Beginn Bilanzierung",
+      "nr": "00012",
+      "status": "D",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "Z12",
+                  "name": "Ende Netznutzung zugeordnete Periode"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+Z12:202110242200?+00:303'",
+      "max": 1,
+      "name": "Ende Netznutzung",
+      "nr": "00013",
+      "status": "D",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
+        {
+          "format": "an..3",
+          "id": "7077",
+          "name": "Beschreibungsformat, Code",
+          "note": "Nicht benutzt",
+          "status": "N"
+        },
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "ABR",
+                  "name": "Abschlussrechnung"
+                },
+                {
+                  "code": "ABS",
+                  "name": "Abschlagsrechnung"
+                },
+                {
+                  "code": "JVR",
+                  "name": "Turnusrechnung"
+                },
+                {
+                  "code": "MVR",
+                  "name": "Monatsrechnung"
+                },
+                {
+                  "code": "WIM",
+                  "name": "Rechnung für WiM"
+                },
+                {
+                  "code": "ZVR",
+                  "name": "Zwischenrechnung"
+                },
+                {
+                  "code": "13I",
+                  "name": "Integrierte 13. Rechnung"
+                },
+                {
+                  "code": "13R",
+                  "name": "13. Rechnung"
+                },
+                {
+                  "code": "MMM",
+                  "name": "Mehr-/Mindermengenabrechnung"
+                },
+                {
+                  "code": "MSB",
+                  "name": "Rechnung für Messstellenbetrieb"
+                },
+                {
+                  "code": "NAP",
+                  "name": "Kapazitätsrechnung"
+                },
+                {
+                  "code": "Z43",
+                  "name": "Rechnung für Sperren und Wiederinbetriebnahme"
+                },
+                {
+                  "code": "Z44",
+                  "name": "Verzugskostenrechnung"
+                },
+                {
+                  "code": "Z45",
+                  "name": "Blindarbeitrechnung"
+                },
+                {
+                  "code": "SOR",
+                  "name": "Sonderrechnung"
+                },
+                {
+                  "code": "KON",
+                  "name": "Abrechnung von Konfigurationen (Universalbestellprozess)"
+                },
+                {
+                  "code": "TEC",
+                  "name": "Abrechnung von Technik"
+                }
+              ],
+              "format": "an..3",
+              "id": "7081",
+              "name": "Produkt/Leistung, Code",
+              "status": "R"
+            }
+          ],
           "id": "C272",
-          "status": "C",
-          "components": 3
+          "name": "Produkt/Leistung",
+          "status": "R"
         },
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "Z06",
+                  "name": "Erzeugung Marktlokation liefert Energie ins Netz."
+                },
+                {
+                  "code": "Z07",
+                  "name": "Verbrauch Marktlokation entnimmt Energie aus dem Netz."
+                }
+              ],
+              "format": "an..17",
+              "id": "7009",
+              "name": "Produkt-/ Leistungsbeschreibung, Code",
+              "status": "R"
+            }
+          ],
           "id": "C273",
-          "status": "C",
-          "components": 3
+          "name": "Produkt-/ Leistungsbeschreibung",
+          "status": "D"
         }
       ],
-      "qualifier_restrictions": {
-        "7081": [
-          "ABR",
-          "ABS",
-          "JVR",
-          "MVR",
-          "WIM",
-          "ZVR",
-          "13I",
-          "13R",
-          "MMM",
-          "MSB",
-          "NAP",
-          "Z43",
-          "Z44",
-          "Z45",
-          "SOR",
-          "KON",
-          "TEC"
-        ],
-        "7009": [
-          "Z06",
-          "Z07"
-        ]
-      }
+      "max": 1,
+      "name": "Rechnungstyp",
+      "nr": "00014",
+      "status": "R",
+      "tag": "IMD",
+      "zaehler": "0060"
     },
     {
-      "tag": "FTX",
-      "name": "Meldeinformationen",
-      "mandatory": false,
-      "max_occurrences": 1,
       "elements": [
         {
+          "codes": [
+            {
+              "code": "REG",
+              "name": "Meldeinformationen"
+            }
+          ],
+          "format": "an..3",
           "id": "4451",
-          "status": "M",
-          "components": 1
+          "name": "Textbezug, Qualifier",
+          "status": "M"
         },
         {
-          "id": "C108",
-          "status": "C",
-          "components": 5
+          "format": "an..3",
+          "id": "4453",
+          "name": "Textfunktion, Code",
+          "note": "Nicht benutzt",
+          "status": "N"
+        },
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "RCH",
+                  "name": "Reverse Charge gemäß §13b UStG / Steuerschuldnerschaft des Leistungsempfängers"
+                }
+              ],
+              "format": "an..17",
+              "id": "4441",
+              "name": "Freier Text, Code",
+              "status": "M"
+            }
+          ],
+          "id": "C107",
+          "name": "Text-Referenz",
+          "status": "R"
         }
       ],
-      "qualifier_restrictions": {
-        "4451": [
-          "REG"
-        ]
-      }
+      "example": "FTX+REG++RCH'",
+      "max": 1,
+      "name": "Meldeinformationen",
+      "nr": "00015",
+      "status": "D",
+      "tag": "FTX",
+      "zaehler": "0070"
     },
     {
-      "tag": "GEI",
+      "elements": [
+        {
+          "codes": [
+            {
+              "code": "Z01",
+              "name": "Art der Sonderrechnung"
+            }
+          ],
+          "format": "an..3",
+          "id": "9649",
+          "name": "Verarbeitungsinformation, Qualifier",
+          "status": "M"
+        },
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "Z01",
+                  "name": "Konzessionsabgabe (Testat)"
+                },
+                {
+                  "code": "Z02",
+                  "name": "Individuelle Vereinbarung für atypische und energieintensive Netznutzung"
+                },
+                {
+                  "code": "Z03",
+                  "name": "Individuelle Vereinbarung für singuläre Netznutzung"
+                },
+                {
+                  "code": "Z04",
+                  "name": "KWKG-Umlage"
+                },
+                {
+                  "code": "Z05",
+                  "name": "Offshore-Netzumlage"
+                },
+                {
+                  "code": "Z06",
+                  "name": "§ 19 StromNEV-Umlage"
+                },
+                {
+                  "code": "Z07",
+                  "name": "§18 AbLaV"
+                },
+                {
+                  "code": "Z08",
+                  "name": "Konzessionsabgabe (Wechsel auf Lastgangmessung)"
+                },
+                {
+                  "code": "Z09",
+                  "name": "Privilegierung nach EnFG"
+                },
+                {
+                  "code": "Z10",
+                  "name": "Konzessionsabgabe (weitergeleitete Mengen)"
+                }
+              ],
+              "format": "an..3",
+              "id": "7365",
+              "name": "Verarbeitungsindikator, Code",
+              "note": "Bemerkung: Z10 Wird verwendet wenn, aufgrund der Mitteilung von weitergeleiteten Mengen an Dritte neben der § 19 StromNEV-Umlage auch die Konzessionsabgabe zu korrigieren ist. Dies ist z.B. dann der Fall, wenn die Weiterleitung von Mengen an Dritte in der Niederspannung erfolgte und folgedessen die Konzessionsabgabe für Tarifkunden abzurechnen ist.",
+              "status": "R"
+            }
+          ],
+          "id": "C012",
+          "name": "Verarbeitungsindikator",
+          "status": "R"
+        }
+      ],
+      "example": "GEI+Z01+Z01'",
+      "max": 10,
       "name": "Spezifikation der Sonderrechnung",
-      "mandatory": false,
-      "max_occurrences": 10,
-      "elements": [
-        {
-          "id": "7365",
-          "status": "M",
-          "components": 1
-        },
-        {
-          "id": "C529",
-          "status": "C",
-          "components": 3
-        }
-      ],
-      "qualifier_restrictions": {
-        "7365": [
-          "Z01"
-        ]
-      }
+      "nr": "00016",
+      "status": "D",
+      "tag": "GEI",
+      "zaehler": "0090"
     },
     {
-      "tag": "UNS",
-      "name": "Abschnitts-Kontrollsegment",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
+      "children": [
         {
-          "id": "0081",
-          "status": "M",
-          "components": 1
-        }
-      ]
-    },
-    {
-      "tag": "UNT",
-      "name": "Nachrichtenende",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "0074",
-          "status": "M",
-          "components": 1
-        },
-        {
-          "id": "0062",
-          "status": "M",
-          "components": 1
-        }
-      ]
-    }
-  ],
-  "segment_groups": [
-    {
-      "id": "SG1",
-      "trigger_segment": "RFF",
-      "mandatory": true,
-      "max_occurrences": 99,
-      "segments": [
-        {
-          "tag": "RFF",
-          "name": "Referenz",
-          "mandatory": true,
-          "max_occurrences": 1,
           "elements": [
             {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z13",
+                      "name": "Prüfidentifikator"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "31001",
+                      "name": "Abschlagsrechnung Prüfidentifikator"
+                    },
+                    {
+                      "code": "31002",
+                      "name": "NN-Rechnung Prüfidentifikator"
+                    },
+                    {
+                      "code": "31003",
+                      "name": "WiM-Rechnung Prüfidentifikator"
+                    },
+                    {
+                      "code": "31004",
+                      "name": "Stornorechnung Prüfidentifikator"
+                    },
+                    {
+                      "code": "31005",
+                      "name": "MMM-Rechnung Prüfidentifikator"
+                    },
+                    {
+                      "code": "31006",
+                      "name": "MMM-selbst ausgestellte Rechnung Prüfidentifikator"
+                    },
+                    {
+                      "code": "31007",
+                      "name": "Aggregierte MMM-Rechnung Prüfidentifikator"
+                    },
+                    {
+                      "code": "31008",
+                      "name": "Aggregierte MMM-selbst ausgestellte Rechnung Prüfidentifikator"
+                    },
+                    {
+                      "code": "31009",
+                      "name": "MSB-Rechnung Prüfidentifikator"
+                    },
+                    {
+                      "code": "31010",
+                      "name": "Kapazitätsrechnung Prüfidentifikator"
+                    },
+                    {
+                      "code": "31011",
+                      "name": "Rechnung sonstige Leistung Prüfidentifikator"
+                    }
+                  ],
+                  "format": "n5",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "status": "R"
+                }
+              ],
               "id": "C506",
-              "status": "M",
-              "components": 5
+              "name": "Referenz",
+              "status": "M"
             }
           ],
-          "qualifier_restrictions": {
-            "1153": [
-              "Z13",
-              "OI",
-              "ACE",
-              "Z56"
-            ]
-          }
+          "example": "RFF+Z13:31001'",
+          "max": 1,
+          "name": "Prüfidentifikator",
+          "nr": "00017",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0130"
+        }
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "Prüfidentifikator",
+      "status": "R",
+      "zaehler": "0120"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "OI",
+                      "name": "Ursprungsrechnungsnummer"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "status": "R"
+                }
+              ],
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
+            }
+          ],
+          "example": "RFF+OI:AFN5834569523'",
+          "max": 1,
+          "name": "Referenz auf Ursprungsrechnungsnummer",
+          "nr": "00018",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0130"
         },
         {
-          "tag": "DTM",
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "171",
+                      "name": "Referenzdatum/-zeit"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2005",
+                  "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "2380",
+                  "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "303",
+                      "name": "CCYYMMDDHHMMZZZ"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2379",
+                  "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C507",
+              "name": "Datum/Uhrzeit/Zeitspanne",
+              "status": "M"
+            }
+          ],
+          "example": "DTM+171:202101010000?+00:303'",
+          "max": 1,
           "name": "Referenzdatum",
-          "mandatory": false,
-          "max_occurrences": 5,
-          "elements": [
-            {
-              "id": "C507",
-              "status": "M",
-              "components": 3
-            }
-          ],
-          "qualifier_restrictions": {
-            "2005": [
-              "Z01"
-            ]
-          }
+          "nr": "00019",
+          "status": "R",
+          "tag": "DTM",
+          "zaehler": "0140"
         }
       ],
-      "groups": []
+      "group": "SG1",
+      "max": 1,
+      "name": "Referenz auf Ursprungsrechnungsnummer",
+      "status": "D",
+      "zaehler": "0120"
     },
     {
-      "id": "SG2",
-      "trigger_segment": "NAD",
-      "mandatory": true,
-      "max_occurrences": 99,
-      "segments": [
+      "children": [
         {
-          "tag": "NAD",
-          "name": "Name und Adresse",
-          "mandatory": true,
-          "max_occurrences": 1,
           "elements": [
             {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "ACE",
+                      "name": "Nummer des zugehörigen Dokuments"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "status": "R"
+                }
+              ],
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
+            }
+          ],
+          "example": "RFF+ACE:12345'",
+          "max": 1,
+          "name": "Referenz auf Nummer des zugehörigen Dokuments",
+          "nr": "00020",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0130"
+        }
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "Referenz auf Nummer des zugehörigen Dokuments",
+      "status": "D",
+      "zaehler": "0120"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z56",
+                      "name": "Preise des Netzbetreibers"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "note": "MP-ID",
+                  "status": "R"
+                }
+              ],
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
+            }
+          ],
+          "example": "RFF+Z56:9907165000001'",
+          "max": 1,
+          "name": "Preise des Netzbetreibers",
+          "nr": "00021",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0130"
+        }
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "Preise des Netzbetreibers",
+      "status": "D",
+      "zaehler": "0120"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "MS",
+                  "name": "Dokumenten-/Nachrichtenaussteller bzw. - absender"
+                }
+              ],
+              "format": "an..3",
               "id": "3035",
-              "status": "M",
-              "components": 1
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
             },
             {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    },
+                    {
+                      "code": "332",
+                      "name": "DE, DVGW Service & Consult GmbH"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
+                }
+              ],
               "id": "C082",
-              "status": "C",
-              "components": 3
-            }
-          ],
-          "qualifier_restrictions": {
-            "3035": [
-              "MS",
-              "MR",
-              "DP",
-              "ZSH"
-            ]
-          }
-        },
-        {
-          "tag": "LOC",
-          "name": "Meldepunkt",
-          "mandatory": false,
-          "max_occurrences": 25,
-          "elements": [
-            {
-              "id": "3227",
-              "status": "M",
-              "components": 1
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
             },
             {
-              "id": "C517",
-              "status": "C",
-              "components": 2
-            }
-          ],
-          "qualifier_restrictions": {
-            "3227": [
-              "172"
-            ]
-          }
-        }
-      ],
-      "groups": [
-        {
-          "id": "SG3",
-          "trigger_segment": "RFF",
-          "mandatory": false,
-          "max_occurrences": 9999,
-          "segments": [
-            {
-              "tag": "RFF",
-              "name": "Steuernummer / Umsatzsteuernummer",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
+              "components": [
                 {
-                  "id": "C506",
-                  "status": "M",
-                  "components": 5
+                  "format": "an..35",
+                  "id": "3124",
+                  "name": "Zeile für Name und Anschrift",
+                  "note": "Nicht benutzt",
+                  "status": "N"
                 }
               ],
-              "qualifier_restrictions": {
-                "1153": [
-                  "VA"
-                ]
-              }
+              "id": "C058",
+              "name": "Name und Anschrift",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z01",
+                      "name": "Struktur von Personennamen"
+                    },
+                    {
+                      "code": "Z02",
+                      "name": "Struktur der Firmenbezeichnung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3045",
+                  "name": "Format für den Namen des Beteiligten, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C080",
+              "name": "Name des Beteiligten",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                }
+              ],
+              "id": "C059",
+              "name": "Straße",
+              "status": "D"
+            },
+            {
+              "format": "an..35",
+              "id": "3164",
+              "name": "Ort",
+              "note": "Ortsname, Klartext",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..9",
+                  "id": "3229",
+                  "name": "Land-Untereinheit, Nummer",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C819",
+              "name": "Land-Untereinheit, Einzelheiten",
+              "status": "N"
+            },
+            {
+              "format": "an..17",
+              "id": "3251",
+              "name": "Postleitzahl, Code",
+              "note": "Postleitzahl",
+              "status": "R"
+            },
+            {
+              "format": "an..3",
+              "id": "3207",
+              "name": "Ländername, Code",
+              "note": "ISO 3166-1 = Alpha-2-Code",
+              "status": "R"
             }
           ],
-          "groups": []
+          "example": "NAD+MS+9900020455303::293++Rechnungsersteller GmbH:::::Z02+Teststraße::123+Testort++12345+DE'",
+          "max": 1,
+          "name": "Name und Anschrift des Nachrichtensenders",
+          "nr": "00022",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0230"
         },
         {
-          "id": "SG5",
-          "trigger_segment": "CTA",
-          "mandatory": false,
-          "max_occurrences": 5,
-          "segments": [
+          "children": [
             {
-              "tag": "CTA",
-              "name": "Ansprechpartner",
-              "mandatory": true,
-              "max_occurrences": 1,
               "elements": [
                 {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "VA",
+                          "name": "Umsatzsteuernummer"
+                        },
+                        {
+                          "code": "FC",
+                          "name": "Steuernummer"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..70",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+VA:DE999999999'",
+              "max": 1,
+              "name": "Steuernummer, Umsatzsteuernummer",
+              "nr": "00023",
+              "status": "M",
+              "tag": "RFF",
+              "zaehler": "0280"
+            }
+          ],
+          "group": "SG3",
+          "max": 1,
+          "name": "Steuernummer, Umsatzsteuernummer",
+          "status": "R",
+          "zaehler": "0270"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "IC",
+                      "name": "Informationskontakt"
+                    }
+                  ],
+                  "format": "an..3",
                   "id": "3139",
-                  "status": "C",
-                  "components": 1
+                  "name": "Funktion des Ansprechpartners, Code",
+                  "status": "R"
                 },
                 {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "3413",
+                      "name": "Kontakt, Nummer",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..35",
+                      "id": "3412",
+                      "name": "Kontakt",
+                      "status": "R"
+                    }
+                  ],
                   "id": "C056",
-                  "status": "C",
-                  "components": 2
+                  "name": "Kontaktangaben",
+                  "status": "R"
                 }
-              ]
+              ],
+              "example": "CTA+IC+:D BOWEN'",
+              "max": 1,
+              "name": "Ansprechpartner",
+              "nr": "00024",
+              "status": "M",
+              "tag": "CTA",
+              "zaehler": "0340"
             },
             {
-              "tag": "COM",
-              "name": "Kommunikationsverbindung",
-              "mandatory": true,
-              "max_occurrences": 5,
               "elements": [
                 {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "3148",
+                      "name": "Kommunikationsadresse, Identifikation",
+                      "status": "M"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "EM",
+                          "name": "Elektronische Post"
+                        },
+                        {
+                          "code": "FX",
+                          "name": "Telefax"
+                        },
+                        {
+                          "code": "TE",
+                          "name": "Telefon"
+                        },
+                        {
+                          "code": "AJ",
+                          "name": "weiteres Telefon"
+                        },
+                        {
+                          "code": "AL",
+                          "name": "Handy"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3155",
+                      "name": "Art des Kommunikationsmittels, Code",
+                      "status": "M"
+                    }
+                  ],
                   "id": "C076",
-                  "status": "M",
-                  "components": 2
+                  "name": "Kommunikationsverbindung",
+                  "status": "M"
                 }
-              ]
+              ],
+              "example": "COM+?+4922271020:TE'",
+              "max": 5,
+              "name": "Kommunikationsverbindung",
+              "nr": "00025",
+              "status": "R",
+              "tag": "COM",
+              "zaehler": "0350"
             }
           ],
-          "groups": []
-        }
-      ]
-    },
-    {
-      "id": "SG7",
-      "trigger_segment": "CUX",
-      "mandatory": true,
-      "max_occurrences": 99,
-      "segments": [
-        {
-          "tag": "CUX",
-          "name": "Währungsangaben",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "C504",
-              "status": "M",
-              "components": 5
-            }
-          ]
+          "group": "SG5",
+          "max": 1,
+          "name": "Ansprechpartner",
+          "status": "O",
+          "zaehler": "0330"
         }
       ],
-      "groups": []
+      "group": "SG2",
+      "max": 1,
+      "name": "Absender",
+      "status": "R",
+      "zaehler": "0220"
     },
     {
-      "id": "SG8",
-      "trigger_segment": "PYT",
-      "mandatory": true,
-      "max_occurrences": 10,
-      "segments": [
+      "children": [
         {
-          "tag": "PYT",
-          "name": "Zahlungsbedingungen",
-          "mandatory": true,
-          "max_occurrences": 1,
           "elements": [
             {
-              "id": "4279",
-              "status": "M",
-              "components": 1
+              "codes": [
+                {
+                  "code": "MR",
+                  "name": "Nachrichtenempfänger"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
             },
             {
-              "id": "C019",
-              "status": "C",
-              "components": 5
-            }
-          ],
-          "qualifier_restrictions": {
-            "4279": [
-              "3"
-            ]
-          }
-        },
-        {
-          "tag": "DTM",
-          "name": "Fälligkeitsdatum",
-          "mandatory": false,
-          "max_occurrences": 5,
-          "elements": [
-            {
-              "id": "C507",
-              "status": "M",
-              "components": 3
-            }
-          ],
-          "qualifier_restrictions": {
-            "2005": [
-              "265"
-            ]
-          }
-        }
-      ],
-      "groups": []
-    },
-    {
-      "id": "SG26",
-      "trigger_segment": "LIN",
-      "mandatory": false,
-      "max_occurrences": 9999999,
-      "segments": [
-        {
-          "tag": "LIN",
-          "name": "Positionsdaten",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "1082",
-              "status": "C",
-              "components": 1
-            }
-          ]
-        },
-        {
-          "tag": "QTY",
-          "name": "Mengenangaben",
-          "mandatory": false,
-          "max_occurrences": 3,
-          "elements": [
-            {
-              "id": "C186",
-              "status": "M",
-              "components": 3
-            }
-          ],
-          "qualifier_restrictions": {
-            "6063": [
-              "47",
-              "136",
-              "Z17"
-            ]
-          }
-        },
-        {
-          "tag": "DTM",
-          "name": "Positionsbezogener Abrechnungszeitraum",
-          "mandatory": false,
-          "max_occurrences": 3,
-          "elements": [
-            {
-              "id": "C507",
-              "status": "M",
-              "components": 3
-            }
-          ],
-          "qualifier_restrictions": {
-            "2005": [
-              "155",
-              "156",
-              "203"
-            ]
-          }
-        }
-      ],
-      "groups": [
-        {
-          "id": "SG27",
-          "trigger_segment": "MOA",
-          "mandatory": true,
-          "max_occurrences": 99,
-          "segments": [
-            {
-              "tag": "MOA",
-              "name": "Positionsnettobetrag",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
+              "components": [
                 {
-                  "id": "C516",
-                  "status": "M",
-                  "components": 3
-                }
-              ]
-            }
-          ],
-          "groups": []
-        },
-        {
-          "id": "SG29",
-          "trigger_segment": "PRI",
-          "mandatory": false,
-          "max_occurrences": 25,
-          "segments": [
-            {
-              "tag": "PRI",
-              "name": "Preis",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
-                {
-                  "id": "C509",
-                  "status": "M",
-                  "components": 5
-                }
-              ]
-            }
-          ],
-          "groups": []
-        },
-        {
-          "id": "SG34",
-          "trigger_segment": "TAX",
-          "mandatory": true,
-          "max_occurrences": 99,
-          "segments": [
-            {
-              "tag": "TAX",
-              "name": "Umsatzsteuer der Position",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
-                {
-                  "id": "5283",
-                  "status": "M",
-                  "components": 1
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
                 },
                 {
-                  "id": "C241",
-                  "status": "C",
-                  "components": 3
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
                 },
                 {
-                  "id": "C243",
-                  "status": "C",
-                  "components": 6
-                }
-              ],
-              "qualifier_restrictions": {
-                "5153": [
-                  "VAT"
-                ]
-              }
-            }
-          ],
-          "groups": []
-        },
-        {
-          "id": "SG39",
-          "trigger_segment": "ALC",
-          "mandatory": false,
-          "max_occurrences": 30,
-          "segments": [
-            {
-              "tag": "ALC",
-              "name": "Abschlag / Zuschlag",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
-                {
-                  "id": "5463",
-                  "status": "M",
-                  "components": 1
-                },
-                {
-                  "id": "C552",
-                  "status": "C",
-                  "components": 2
-                }
-              ],
-              "qualifier_restrictions": {
-                "5463": [
-                  "A",
-                  "C"
-                ],
-                "5189": [
-                  "Z01",
-                  "Z02"
-                ]
-              }
-            }
-          ],
-          "groups": [
-            {
-              "id": "SG41",
-              "trigger_segment": "PCD",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "segments": [
-                {
-                  "tag": "PCD",
-                  "name": "Prozentangabe",
-                  "mandatory": true,
-                  "max_occurrences": 1,
-                  "elements": [
+                  "codes": [
                     {
-                      "id": "C501",
-                      "status": "M",
-                      "components": 3
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    },
+                    {
+                      "code": "332",
+                      "name": "DE, DVGW Service & Consult GmbH"
                     }
-                  ]
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
                 }
               ],
-              "groups": []
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
             },
             {
-              "id": "SG42",
-              "trigger_segment": "MOA",
-              "mandatory": false,
-              "max_occurrences": 2,
-              "segments": [
+              "components": [
                 {
-                  "tag": "MOA",
-                  "name": "Bemessungsgrundlage / Rabattbetrag",
-                  "mandatory": true,
-                  "max_occurrences": 1,
-                  "elements": [
-                    {
-                      "id": "C516",
-                      "status": "M",
-                      "components": 3
-                    }
-                  ]
+                  "format": "an..35",
+                  "id": "3124",
+                  "name": "Zeile für Name und Anschrift",
+                  "note": "Nicht benutzt",
+                  "status": "N"
                 }
               ],
-              "groups": []
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": "SG50",
-      "trigger_segment": "MOA",
-      "mandatory": true,
-      "max_occurrences": 100,
-      "segments": [
-        {
-          "tag": "MOA",
-          "name": "Rechnungsbetrag / Summenbetrag",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
+              "id": "C058",
+              "name": "Name und Anschrift",
+              "status": "N"
+            },
             {
-              "id": "C516",
-              "status": "M",
-              "components": 3
-            }
-          ]
-        }
-      ],
-      "groups": [
-        {
-          "id": "SG51",
-          "trigger_segment": "RFF",
-          "mandatory": false,
-          "max_occurrences": 1,
-          "segments": [
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "status": "D"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z01",
+                      "name": "Struktur von Personennamen"
+                    },
+                    {
+                      "code": "Z02",
+                      "name": "Struktur der Firmenbezeichnung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3045",
+                  "name": "Format für den Namen des Beteiligten, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C080",
+              "name": "Name des Beteiligten",
+              "status": "R"
+            },
             {
-              "tag": "RFF",
-              "name": "Referenz auf Vorgängerrechnung",
-              "mandatory": true,
-              "max_occurrences": 1,
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                }
+              ],
+              "id": "C059",
+              "name": "Straße",
+              "status": "D"
+            },
+            {
+              "format": "an..35",
+              "id": "3164",
+              "name": "Ort",
+              "note": "Ortsname, Klartext",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..9",
+                  "id": "3229",
+                  "name": "Land-Untereinheit, Nummer",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C819",
+              "name": "Land-Untereinheit, Einzelheiten",
+              "status": "N"
+            },
+            {
+              "format": "an..17",
+              "id": "3251",
+              "name": "Postleitzahl, Code",
+              "note": "Postleitzahl",
+              "status": "R"
+            },
+            {
+              "format": "an..3",
+              "id": "3207",
+              "name": "Ländername, Code",
+              "note": "ISO 3166-1 = Alpha-2-Code",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+MR+1234567890128::9++Rechnungsempfänger AG:::::Z02+Beispielstraße::123+Testort++12345+DE'",
+          "max": 1,
+          "name": "Name und Anschrift des Nachrichtenempfängers",
+          "nr": "00026",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0230"
+        },
+        {
+          "children": [
+            {
               "elements": [
                 {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "VA",
+                          "name": "Umsatzsteuernummer"
+                        },
+                        {
+                          "code": "FC",
+                          "name": "Steuernummer"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..70",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "status": "R"
+                    }
+                  ],
                   "id": "C506",
-                  "status": "M",
-                  "components": 5
+                  "name": "Referenz",
+                  "status": "M"
                 }
               ],
-              "qualifier_restrictions": {
-                "1153": [
-                  "OI"
-                ]
-              }
-            },
-            {
-              "tag": "DTM",
-              "name": "Datum der Vorgängerrechnung",
-              "mandatory": false,
-              "max_occurrences": 5,
-              "elements": [
-                {
-                  "id": "C507",
-                  "status": "M",
-                  "components": 3
-                }
-              ],
-              "qualifier_restrictions": {
-                "2005": [
-                  "3"
-                ]
-              }
+              "example": "RFF+FC:07/428/1234/5'",
+              "max": 1,
+              "name": "Steuernummer, Umsatzsteuernummer",
+              "nr": "00027",
+              "status": "M",
+              "tag": "RFF",
+              "zaehler": "0280"
             }
           ],
-          "groups": []
-        }
-      ]
-    },
-    {
-      "id": "SG52",
-      "trigger_segment": "TAX",
-      "mandatory": true,
-      "max_occurrences": 10,
-      "segments": [
-        {
-          "tag": "TAX",
-          "name": "Umsatzsteuer der Rechnung",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "5283",
-              "status": "M",
-              "components": 1
-            },
-            {
-              "id": "C241",
-              "status": "C",
-              "components": 3
-            },
-            {
-              "id": "C243",
-              "status": "C",
-              "components": 6
-            }
-          ],
-          "qualifier_restrictions": {
-            "5153": [
-              "VAT"
-            ]
-          }
-        },
-        {
-          "tag": "MOA",
-          "name": "Steuerbeträge (steuersatzbezogen)",
-          "mandatory": false,
-          "max_occurrences": 9,
-          "elements": [
-            {
-              "id": "C516",
-              "status": "M",
-              "components": 3
-            }
-          ]
+          "group": "SG3",
+          "max": 1,
+          "name": "Steuernummer, Umsatzsteuernummer",
+          "status": "D",
+          "zaehler": "0270"
         }
       ],
-      "groups": []
+      "group": "SG2",
+      "max": 1,
+      "name": "Empfänger",
+      "status": "R",
+      "zaehler": "0220"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "DP",
+                  "name": "Lieferanschrift"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3124",
+                  "name": "Zeile für Name und Anschrift",
+                  "note": "Zusatzinformation zur Identifizierung",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3124",
+                  "name": "Zeile für Name und Anschrift",
+                  "status": "D"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3124",
+                  "name": "Zeile für Name und Anschrift",
+                  "status": "D"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3124",
+                  "name": "Zeile für Name und Anschrift",
+                  "status": "D"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3124",
+                  "name": "Zeile für Name und Anschrift",
+                  "status": "D"
+                }
+              ],
+              "id": "C058",
+              "name": "Name und Anschrift",
+              "status": "D"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3036",
+                  "name": "Beteiligter",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C080",
+              "name": "Name des Beteiligten",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                },
+                {
+                  "format": "an..35",
+                  "id": "3042",
+                  "name": "Straße und Hausnummer oder Postfach",
+                  "status": "D"
+                }
+              ],
+              "id": "C059",
+              "name": "Straße",
+              "status": "D"
+            },
+            {
+              "format": "an..35",
+              "id": "3164",
+              "name": "Ort",
+              "note": "Ortsname, Klartext",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..9",
+                  "id": "3229",
+                  "name": "Land-Untereinheit, Nummer",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C819",
+              "name": "Land-Untereinheit, Einzelheiten",
+              "status": "N"
+            },
+            {
+              "format": "an..17",
+              "id": "3251",
+              "name": "Postleitzahl, Code",
+              "note": "Postleitzahl",
+              "status": "R"
+            },
+            {
+              "format": "an..3",
+              "id": "3207",
+              "name": "Ländername, Code",
+              "note": "ISO 3166-1 = Alpha-2-Code",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+DP++++Musterstrasse::123+Testort++12345+DE'",
+          "max": 1,
+          "name": "Adresse der Leistungserbringung",
+          "nr": "00028",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0230"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "172",
+                  "name": "Meldepunkt"
+                }
+              ],
+              "format": "an..3",
+              "id": "3227",
+              "name": "Ortsangabe, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3225",
+                  "name": "Ortsangabe, Nummer",
+                  "note": "Identifikator",
+                  "status": "R"
+                }
+              ],
+              "id": "C517",
+              "name": "Ortsangabe",
+              "status": "R"
+            }
+          ],
+          "example": "LOC+172+DE000562668020O6G56M11SN51G21M24S'",
+          "max": 1,
+          "name": "Meldepunkt",
+          "nr": "00029",
+          "status": "R",
+          "tag": "LOC",
+          "zaehler": "0240"
+        }
+      ],
+      "group": "SG2",
+      "max": 1,
+      "name": "Lieferanschrift",
+      "status": "D",
+      "zaehler": "0220"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "ZSH",
+                  "name": "Netzkonto"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "status": "M"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+ZSH+NBKCODE'",
+          "max": 1,
+          "name": "Netzbetreiberkontonummer",
+          "nr": "00030",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0230"
+        }
+      ],
+      "group": "SG2",
+      "max": 1,
+      "name": "Netzbetreiberkonto",
+      "status": "D",
+      "zaehler": "0220"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "2",
+                      "name": "Referenzwährung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "6347",
+                  "name": "Währungsverwendung, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "EUR",
+                      "name": "Euro"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "6345",
+                  "name": "Währung, Code",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "4",
+                      "name": "Währung der Rechnung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "6343",
+                  "name": "Währung, Qualifier",
+                  "status": "R"
+                }
+              ],
+              "id": "C504",
+              "name": "Währungsangaben",
+              "status": "R"
+            }
+          ],
+          "example": "CUX+2:EUR:4'",
+          "max": 1,
+          "name": "Währungsangaben",
+          "nr": "00031",
+          "status": "M",
+          "tag": "CUX",
+          "zaehler": "0410"
+        }
+      ],
+      "group": "SG7",
+      "max": 1,
+      "name": "Währung",
+      "status": "R",
+      "zaehler": "0400"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "3",
+                  "name": "Fixdatum"
+                }
+              ],
+              "format": "an..3",
+              "id": "4279",
+              "name": "Zahlungsbedingung, Qualifier",
+              "status": "M"
+            }
+          ],
+          "example": "PYT+3'",
+          "max": 1,
+          "name": "Zahlungsbedingungen",
+          "nr": "00032",
+          "status": "M",
+          "tag": "PYT",
+          "zaehler": "0440"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "265",
+                      "name": "Fälligkeitsdatum"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2005",
+                  "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "2380",
+                  "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "303",
+                      "name": "CCYYMMDDHHMMZZZ"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2379",
+                  "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C507",
+              "name": "Datum/Uhrzeit/Zeitspanne",
+              "status": "M"
+            }
+          ],
+          "example": "DTM+265:202108302200?+00:303'",
+          "max": 1,
+          "name": "Fälligkeitsdatum",
+          "nr": "00033",
+          "status": "R",
+          "tag": "DTM",
+          "zaehler": "0450"
+        }
+      ],
+      "group": "SG8",
+      "max": 1,
+      "name": "Fälligkeitsdatum",
+      "status": "R",
+      "zaehler": "0430"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "format": "n..6",
+              "id": "1082",
+              "name": "Positionsnummer",
+              "note": "Vom Programm vergebene Positionsnummer innerhalb der Rechnung",
+              "status": "R"
+            },
+            {
+              "format": "an..3",
+              "id": "1229",
+              "name": "Handlung, Code",
+              "note": "Nicht benutzt",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Artikelnummer oder Artikel-ID",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z01",
+                      "name": "Artikelnummer"
+                    },
+                    {
+                      "code": "Z09",
+                      "name": "Artikel-ID"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "R"
+            }
+          ],
+          "example": "LIN+1++9900010000011:Z01'\nLIN+1++1-01-1-001:Z09'\nLIN+1++9991000000044-01:Z09'",
+          "max": 1,
+          "name": "Positionsdaten",
+          "nr": "00034",
+          "status": "M",
+          "tag": "LIN",
+          "zaehler": "1100"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "47",
+                      "name": "Berechnete (fakturierte) Menge"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "6063",
+                  "name": "Menge, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "n..35",
+                  "id": "6060",
+                  "name": "Menge",
+                  "status": "M"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "KWH",
+                      "name": "Kilowattstunde"
+                    },
+                    {
+                      "code": "KWT",
+                      "name": "Kilowatt"
+                    },
+                    {
+                      "code": "KVR",
+                      "name": "kilovar"
+                    },
+                    {
+                      "code": "K3",
+                      "name": "kilovolt ampere reactive hour"
+                    },
+                    {
+                      "code": "H87",
+                      "name": "Stück"
+                    }
+                  ],
+                  "format": "an..8",
+                  "id": "6411",
+                  "name": "Maßeinheit, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C186",
+              "name": "Mengenangaben",
+              "status": "M"
+            }
+          ],
+          "example": "QTY+47:40:KWH'",
+          "max": 1,
+          "name": "energetische Mengenangaben",
+          "nr": "00035",
+          "status": "D",
+          "tag": "QTY",
+          "zaehler": "1150"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "136",
+                      "name": "Erreichte Menge in dem Zeitintervall"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "6063",
+                  "name": "Menge, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "n..35",
+                  "id": "6060",
+                  "name": "Menge",
+                  "status": "M"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "DAY",
+                      "name": "Tag"
+                    },
+                    {
+                      "code": "MON",
+                      "name": "Monat"
+                    },
+                    {
+                      "code": "ANN",
+                      "name": "Jahr"
+                    }
+                  ],
+                  "format": "an..8",
+                  "id": "6411",
+                  "name": "Maßeinheit, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C186",
+              "name": "Mengenangaben",
+              "status": "M"
+            }
+          ],
+          "example": "QTY+136:31:DAY'",
+          "max": 1,
+          "name": "zeitliche Mengenangaben",
+          "nr": "00036",
+          "status": "D",
+          "tag": "QTY",
+          "zaehler": "1150"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z17",
+                      "name": "Korrekturfaktor"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "6063",
+                  "name": "Menge, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "n..35",
+                  "id": "6060",
+                  "name": "Menge",
+                  "note": "-1",
+                  "status": "M"
+                }
+              ],
+              "id": "C186",
+              "name": "Mengenangaben",
+              "status": "M"
+            }
+          ],
+          "example": "QTY+Z17:-1'",
+          "max": 1,
+          "name": "Korrekturfaktor",
+          "nr": "00037",
+          "status": "D",
+          "tag": "QTY",
+          "zaehler": "1150"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "155",
+                      "name": "Rechnungsperiode, Beginndatum"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2005",
+                  "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "2380",
+                  "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "303",
+                      "name": "CCYYMMDDHHMMZZZ"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2379",
+                  "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C507",
+              "name": "Datum/Uhrzeit/Zeitspanne",
+              "status": "M"
+            }
+          ],
+          "example": "DTM+155:202107312200?+00:303'",
+          "max": 1,
+          "name": "Positionsbezogener Abrechnungszeitraum Beginn",
+          "nr": "00038",
+          "status": "D",
+          "tag": "DTM",
+          "zaehler": "1180"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "156",
+                      "name": "Rechnungsperiode, Endedatum"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2005",
+                  "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "2380",
+                  "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "303",
+                      "name": "CCYYMMDDHHMMZZZ"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2379",
+                  "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C507",
+              "name": "Datum/Uhrzeit/Zeitspanne",
+              "status": "M"
+            }
+          ],
+          "example": "DTM+156:202108312200?+00:303'",
+          "max": 1,
+          "name": "Positionsbezogener Abrechnungszeitraum Ende",
+          "nr": "00039",
+          "status": "D",
+          "tag": "DTM",
+          "zaehler": "1180"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "203",
+                      "name": "Ausführungsdatum/-zeit"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2005",
+                  "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "2380",
+                  "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "303",
+                      "name": "CCYYMMDDHHMMZZZ"
+                    },
+                    {
+                      "code": "102",
+                      "name": "CCYYMMDD"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2379",
+                  "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C507",
+              "name": "Datum/Uhrzeit/Zeitspanne",
+              "status": "M"
+            }
+          ],
+          "example": "DTM+203:202102020911?+00:303'",
+          "max": 1,
+          "name": "Ausführungsdatum",
+          "nr": "00040",
+          "status": "D",
+          "tag": "DTM",
+          "zaehler": "1180"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "203",
+                          "name": "Positionsbetrag (ohne USt.)"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "5025",
+                      "name": "Geldbetrag, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "n..35",
+                      "id": "5004",
+                      "name": "Geldbetrag",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C516",
+                  "name": "Geldbetrag",
+                  "status": "M"
+                }
+              ],
+              "example": "MOA+203:580'",
+              "max": 1,
+              "name": "Positionsnettobetrag",
+              "nr": "00041",
+              "status": "M",
+              "tag": "MOA",
+              "zaehler": "1260"
+            }
+          ],
+          "group": "SG27",
+          "max": 1,
+          "name": "Positionsnettobetrag",
+          "status": "R",
+          "zaehler": "1250"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "131",
+                          "name": "Gesamtzu- oder abschlagsbetrag"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "5025",
+                      "name": "Geldbetrag, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "n..35",
+                      "id": "5004",
+                      "name": "Geldbetrag",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C516",
+                  "name": "Geldbetrag",
+                  "status": "M"
+                }
+              ],
+              "example": "MOA+131:580'",
+              "max": 1,
+              "name": "Gesamtzu- oder abschlagsbetrag",
+              "nr": "00042",
+              "status": "M",
+              "tag": "MOA",
+              "zaehler": "1260"
+            }
+          ],
+          "group": "SG27",
+          "max": 1,
+          "name": "Gesamtzu- oder abschlagsbetrag",
+          "status": "D",
+          "zaehler": "1250"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "CAL",
+                          "name": "Berechnungspreis"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "5125",
+                      "name": "Preis, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "n..15",
+                      "id": "5118",
+                      "name": "Preis, Betrag",
+                      "status": "R"
+                    },
+                    {
+                      "format": "an..3",
+                      "id": "5375",
+                      "name": "Preisart, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..3",
+                      "id": "5387",
+                      "name": "Preisart, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "n..9",
+                      "id": "5284",
+                      "name": "Einzelpreisbasis, Menge",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "DAY",
+                          "name": "Tag"
+                        },
+                        {
+                          "code": "MON",
+                          "name": "Monat"
+                        },
+                        {
+                          "code": "ANN",
+                          "name": "Jahr"
+                        }
+                      ],
+                      "format": "an..8",
+                      "id": "6411",
+                      "name": "Maßeinheit, Code",
+                      "status": "D"
+                    }
+                  ],
+                  "id": "C509",
+                  "name": "Preisinformation",
+                  "status": "R"
+                }
+              ],
+              "example": "PRI+CAL:36::::ANN'\nPRI+CAL:14.50'",
+              "max": 1,
+              "name": "Preis",
+              "nr": "00043",
+              "status": "M",
+              "tag": "PRI",
+              "zaehler": "1340"
+            }
+          ],
+          "group": "SG29",
+          "max": 1,
+          "name": "Preis",
+          "status": "D",
+          "zaehler": "1330"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "7",
+                      "name": "Steuer"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "5283",
+                  "name": "Zoll-/Steuer-/ Gebührenfunktion, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "VAT",
+                          "name": "Umsatzsteuer"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "5153",
+                      "name": "Zoll-/Steuer-/Gebühren-Art, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C241",
+                  "name": "Zoll-/Steuer-/Gebührenart",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..6",
+                      "id": "5289",
+                      "name": "Zoll-/Steuer-/Gebührenkonto, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C533",
+                  "name": "Verrechnungseinzelheiten von Zoll/Steuer/Gebühren",
+                  "status": "N"
+                },
+                {
+                  "format": "an..15",
+                  "id": "5286",
+                  "name": "Zoll-/Steuer-/Gebühren, Veranlagungsbasis, Menge",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..7",
+                      "id": "5279",
+                      "name": "Zoll-/Steuer-/Gebührenrate, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..17",
+                      "id": "1131",
+                      "name": "Codeliste, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..3",
+                      "id": "3055",
+                      "name": "Verantwortliche Stelle für die Codepflege, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "n..17",
+                      "id": "5278",
+                      "name": "Zoll-/Steuer-/Gebührenrate",
+                      "note": "Aktueller Zoll-/Steuersatz (bei USt.)",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C243",
+                  "name": "Zoll-/Steuer-/Gebühren",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "S",
+                      "name": "Einheitssatz (Standard)"
+                    },
+                    {
+                      "code": "O",
+                      "name": "nicht steuerbar"
+                    },
+                    {
+                      "code": "AE",
+                      "name": "Reverse Charge / Steuerschuldnerschaft des Leistungsempfängers"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "5305",
+                  "name": "Zoll-/Steuer-/ Gebührenkategorie, Code",
+                  "status": "R"
+                }
+              ],
+              "example": "TAX+7+VAT+++:::19+S'",
+              "max": 1,
+              "name": "Umsatzsteuer der Position",
+              "nr": "00044",
+              "status": "M",
+              "tag": "TAX",
+              "zaehler": "1560"
+            }
+          ],
+          "group": "SG34",
+          "max": 1,
+          "name": "Steuersatz (Position)",
+          "status": "R",
+          "zaehler": "1550"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "A",
+                      "name": "Abschlag"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "5463",
+                  "name": "Zu- oder Abschlag, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..35",
+                      "id": "1230",
+                      "name": "Zu- oder Abschlag, Nummer",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "Z01",
+                          "name": "Gemeinderabatt nach Konzessionsabgabenverordnung"
+                        },
+                        {
+                          "code": "Z04",
+                          "name": "Anpassung nach § 19, Absatz 2 Stromnetzentgeltverordnung"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "5189",
+                      "name": "Zu- oder Abschlag, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C552",
+                  "name": "Zu-/Abschlagsinformation",
+                  "status": "R"
+                }
+              ],
+              "example": "ALC+A+:Z01'",
+              "max": 1,
+              "name": "Abschlag",
+              "nr": "00045",
+              "status": "M",
+              "tag": "ALC",
+              "zaehler": "1730"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "3",
+                              "name": "Zu- oder Abschlag"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "5245",
+                          "name": "Prozentsatz, Qualifier",
+                          "status": "M"
+                        },
+                        {
+                          "format": "n..10",
+                          "id": "5482",
+                          "name": "Prozentsatz",
+                          "note": "Prozentsatz",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C501",
+                      "name": "Prozentangaben",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "PCD+3:10'",
+                  "max": 1,
+                  "name": "Prozentangabe des Abschlags",
+                  "nr": "00046",
+                  "status": "M",
+                  "tag": "PCD",
+                  "zaehler": "1810"
+                }
+              ],
+              "group": "SG41",
+              "max": 1,
+              "name": "Prozentangabe des Abschlags",
+              "status": "R",
+              "zaehler": "1800"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "25",
+                              "name": "Zu-/Abschlagsbasis"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "5025",
+                          "name": "Geldbetrag, Qualifier",
+                          "status": "M"
+                        },
+                        {
+                          "format": "n..35",
+                          "id": "5004",
+                          "name": "Geldbetrag",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C516",
+                      "name": "Geldbetrag",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "MOA+25:536'",
+                  "max": 1,
+                  "name": "Bemessungsgrundlage des Gemeinderabatts",
+                  "nr": "00047",
+                  "status": "M",
+                  "tag": "MOA",
+                  "zaehler": "1840"
+                }
+              ],
+              "group": "SG42",
+              "max": 1,
+              "name": "Bemessungsgrundlage des Gemeinderabatts",
+              "status": "D",
+              "zaehler": "1830"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "Z01",
+                              "name": "Gemeinderabatt"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "5025",
+                          "name": "Geldbetrag, Qualifier",
+                          "status": "M"
+                        },
+                        {
+                          "format": "n..35",
+                          "id": "5004",
+                          "name": "Geldbetrag",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C516",
+                      "name": "Geldbetrag",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "MOA+Z01:53.6'",
+                  "max": 1,
+                  "name": "Gemeinderabatt der Position",
+                  "nr": "00048",
+                  "status": "M",
+                  "tag": "MOA",
+                  "zaehler": "1840"
+                }
+              ],
+              "group": "SG42",
+              "max": 1,
+              "name": "Gemeinderabatt der Position",
+              "status": "D",
+              "zaehler": "1830"
+            }
+          ],
+          "group": "SG39",
+          "max": 2,
+          "name": "Abschlag",
+          "status": "D",
+          "zaehler": "1720"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "C",
+                      "name": "Zuschlag"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "5463",
+                  "name": "Zu- oder Abschlag, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..35",
+                      "id": "1230",
+                      "name": "Zu- oder Abschlag, Nummer",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "Z02",
+                          "name": "Umspannungszuschlag"
+                        },
+                        {
+                          "code": "Z03",
+                          "name": "allein genutzte Betriebsmittel nach § 19, Absatz 3 Stromnetzentgeltverordnung"
+                        },
+                        {
+                          "code": "Z04",
+                          "name": "Anpassung nach § 19, Absatz 2 Stromnetzentgeltverordnung"
+                        },
+                        {
+                          "code": "Z05",
+                          "name": "Anpassung Pauschale Netzentgeltreduzierung nach § 14a EnWG auf Höhe der NNE"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "5189",
+                      "name": "Zu- oder Abschlag, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C552",
+                  "name": "Zu-/Abschlagsinformation",
+                  "status": "R"
+                }
+              ],
+              "example": "ALC+C+:Z04'",
+              "max": 1,
+              "name": "Zuschlag",
+              "nr": "00049",
+              "status": "M",
+              "tag": "ALC",
+              "zaehler": "1730"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "3",
+                              "name": "Zu- oder Abschlag"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "5245",
+                          "name": "Prozentsatz, Qualifier",
+                          "status": "M"
+                        },
+                        {
+                          "format": "n..10",
+                          "id": "5482",
+                          "name": "Prozentsatz",
+                          "note": "Prozentsatz",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C501",
+                      "name": "Prozentangaben",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "PCD+3:10'",
+                  "max": 1,
+                  "name": "Prozentangabe des Zuschlags",
+                  "nr": "00050",
+                  "status": "M",
+                  "tag": "PCD",
+                  "zaehler": "1810"
+                }
+              ],
+              "group": "SG41",
+              "max": 1,
+              "name": "Prozentangabe des Zuschlags",
+              "status": "D",
+              "zaehler": "1800"
+            }
+          ],
+          "group": "SG39",
+          "max": 3,
+          "name": "Zuschlag",
+          "status": "D",
+          "zaehler": "1720"
+        }
+      ],
+      "group": "SG26",
+      "max": 9999999,
+      "name": "Rechnungspositionen",
+      "status": "D",
+      "zaehler": "1090"
+    },
+    {
+      "elements": [
+        {
+          "codes": [
+            {
+              "code": "S",
+              "name": "Trennung von Positions- und Summenteil"
+            }
+          ],
+          "format": "a1",
+          "id": "0081",
+          "name": "Abschnittskennung, codiert",
+          "status": "M"
+        }
+      ],
+      "example": "UNS+S'",
+      "max": 1,
+      "name": "Abschnitts-Kontrollsegment",
+      "nr": "00051",
+      "status": "M",
+      "tag": "UNS",
+      "zaehler": "2180"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "77",
+                      "name": "Rechnungsbetrag"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "5025",
+                  "name": "Geldbetrag, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "n..35",
+                  "id": "5004",
+                  "name": "Geldbetrag",
+                  "status": "R"
+                }
+              ],
+              "id": "C516",
+              "name": "Geldbetrag",
+              "status": "M"
+            }
+          ],
+          "example": "MOA+77:33'",
+          "max": 1,
+          "name": "Rechnungsbetrag",
+          "nr": "00052",
+          "status": "M",
+          "tag": "MOA",
+          "zaehler": "2210"
+        }
+      ],
+      "group": "SG50",
+      "max": 1,
+      "name": "Rechnungsbetrag (inkl. USt.)",
+      "status": "R",
+      "zaehler": "2200"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "113",
+                      "name": "Vorausbezahlter Betrag (inkl. USt.)"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "5025",
+                  "name": "Geldbetrag, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "n..35",
+                  "id": "5004",
+                  "name": "Geldbetrag",
+                  "status": "R"
+                }
+              ],
+              "id": "C516",
+              "name": "Geldbetrag",
+              "status": "M"
+            }
+          ],
+          "example": "MOA+113:175'",
+          "max": 1,
+          "name": "Vorausbezahlter Betrag",
+          "nr": "00053",
+          "status": "M",
+          "tag": "MOA",
+          "zaehler": "2210"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "AFL",
+                          "name": "Zugehörige Rechnungen"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..70",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "Vorgängerrechnungsnummer",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+AFL:RE12435422'",
+              "max": 1,
+              "name": "Referenz auf Vorgängerrechnung",
+              "nr": "00054",
+              "status": "R",
+              "tag": "RFF",
+              "zaehler": "2230"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "3",
+                          "name": "Rechnungsdatum/-zeit"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2005",
+                      "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..35",
+                      "id": "2380",
+                      "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                      "note": "Rechnungsdatum der Vorgängerrechnung",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "303",
+                          "name": "CCYYMMDDHHMMZZZ"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2379",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C507",
+                  "name": "Datum/Uhrzeit/Zeitspanne",
+                  "status": "M"
+                }
+              ],
+              "example": "DTM+3:202107312200?+00:303'",
+              "max": 1,
+              "name": "Datum der Vorgängerrechnung",
+              "nr": "00055",
+              "status": "R",
+              "tag": "DTM",
+              "zaehler": "2240"
+            }
+          ],
+          "group": "SG51",
+          "max": 1,
+          "name": "Referenz auf Vorgängerrechnung",
+          "status": "D",
+          "zaehler": "2220"
+        }
+      ],
+      "group": "SG50",
+      "max": 20,
+      "name": "Vorausbezahlter Betrag (inkl. USt.)",
+      "status": "D",
+      "zaehler": "2200"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z01",
+                      "name": "Gemeinderabatt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "5025",
+                  "name": "Geldbetrag, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "n..35",
+                  "id": "5004",
+                  "name": "Geldbetrag",
+                  "status": "R"
+                }
+              ],
+              "id": "C516",
+              "name": "Geldbetrag",
+              "status": "M"
+            }
+          ],
+          "example": "MOA+Z01:1000'",
+          "max": 1,
+          "name": "Gemeinderabatt",
+          "nr": "00056",
+          "status": "M",
+          "tag": "MOA",
+          "zaehler": "2210"
+        }
+      ],
+      "group": "SG50",
+      "max": 1,
+      "name": "Gemeinderabatt",
+      "status": "D",
+      "zaehler": "2200"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "Fälliger Betrag (inkl. USt.)"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "5025",
+                  "name": "Geldbetrag, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "n..35",
+                  "id": "5004",
+                  "name": "Geldbetrag",
+                  "status": "R"
+                }
+              ],
+              "id": "C516",
+              "name": "Geldbetrag",
+              "status": "M"
+            }
+          ],
+          "example": "MOA+9:33'",
+          "max": 1,
+          "name": "Fälliger Betrag",
+          "nr": "00057",
+          "status": "M",
+          "tag": "MOA",
+          "zaehler": "2210"
+        }
+      ],
+      "group": "SG50",
+      "max": 1,
+      "name": "Fälliger Betrag (inkl. USt.)",
+      "status": "R",
+      "zaehler": "2200"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "7",
+                  "name": "Steuer"
+                }
+              ],
+              "format": "an..3",
+              "id": "5283",
+              "name": "Zoll-/Steuer-/ Gebührenfunktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "VAT",
+                      "name": "Umsatzsteuer"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "5153",
+                  "name": "Zoll-/Steuer-/Gebühren-Art, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C241",
+              "name": "Zoll-/Steuer-/Gebührenart",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..6",
+                  "id": "5289",
+                  "name": "Zoll-/Steuer-/Gebührenkonto, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C533",
+              "name": "Verrechnungseinzelheiten von Zoll/Steuer/Gebühren",
+              "status": "N"
+            },
+            {
+              "format": "an..15",
+              "id": "5286",
+              "name": "Zoll-/Steuer-/Gebühren, Veranlagungsbasis, Menge",
+              "note": "Nicht benutzt",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..7",
+                  "id": "5279",
+                  "name": "Zoll-/Steuer-/Gebührenrate, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "format": "n..17",
+                  "id": "5278",
+                  "name": "Zoll-/Steuer-/Gebührenrate",
+                  "note": "Aktueller Zoll-/Steuersatz (bei USt.)",
+                  "status": "R"
+                }
+              ],
+              "id": "C243",
+              "name": "Zoll-/Steuer-/Gebühren",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "S",
+                  "name": "Einheitssatz (Standard)"
+                },
+                {
+                  "code": "O",
+                  "name": "nicht steuerbar"
+                },
+                {
+                  "code": "AE",
+                  "name": "Reverse Charge / Steuerschuldnerschaft des Leistungsempfängers"
+                }
+              ],
+              "format": "an..3",
+              "id": "5305",
+              "name": "Zoll-/Steuer-/ Gebührenkategorie, Code",
+              "status": "R"
+            }
+          ],
+          "example": "TAX+7+VAT+++:::19+S'",
+          "max": 1,
+          "name": "Umsatzsteuer der Rechnung",
+          "nr": "00058",
+          "status": "M",
+          "tag": "TAX",
+          "zaehler": "2260"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "113",
+                      "name": "Vorausbezahlter Betrag (inkl. USt.)"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "5025",
+                  "name": "Geldbetrag, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "n..35",
+                  "id": "5004",
+                  "name": "Geldbetrag",
+                  "status": "R"
+                }
+              ],
+              "id": "C516",
+              "name": "Geldbetrag",
+              "status": "M"
+            }
+          ],
+          "example": "MOA+113:116'",
+          "max": 1,
+          "name": "Vorausbezahlter Betrag (steuersatzbezogen)",
+          "nr": "00059",
+          "status": "D",
+          "tag": "MOA",
+          "zaehler": "2270"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "115",
+                      "name": "Vorausbezahlte Steuern (USt.-Anteil des vorausbezahlten Betrages)"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "5025",
+                  "name": "Geldbetrag, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "n..35",
+                  "id": "5004",
+                  "name": "Geldbetrag",
+                  "status": "R"
+                }
+              ],
+              "id": "C516",
+              "name": "Geldbetrag",
+              "status": "M"
+            }
+          ],
+          "example": "MOA+115:19'",
+          "max": 1,
+          "name": "Vorausbezahlte Steuern (steuersatzbezogen)",
+          "nr": "00060",
+          "status": "D",
+          "tag": "MOA",
+          "zaehler": "2270"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "125",
+                      "name": "Besteuerungsgrundlage"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "5025",
+                  "name": "Geldbetrag, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "n..35",
+                  "id": "5004",
+                  "name": "Geldbetrag",
+                  "status": "R"
+                }
+              ],
+              "id": "C516",
+              "name": "Geldbetrag",
+              "status": "M"
+            }
+          ],
+          "example": "MOA+125:28.45'",
+          "max": 1,
+          "name": "Besteuerungsgrundlage (steuersatzbezogen)",
+          "nr": "00061",
+          "status": "R",
+          "tag": "MOA",
+          "zaehler": "2270"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "161",
+                      "name": "Steuer-/Gebühren-/Abgabebetrag"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "5025",
+                  "name": "Geldbetrag, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "n..35",
+                  "id": "5004",
+                  "name": "Geldbetrag",
+                  "status": "R"
+                }
+              ],
+              "id": "C516",
+              "name": "Geldbetrag",
+              "status": "M"
+            }
+          ],
+          "example": "MOA+161:4.55'",
+          "max": 1,
+          "name": "Steuerbetrag (steuersatzbezogen)",
+          "nr": "00062",
+          "status": "R",
+          "tag": "MOA",
+          "zaehler": "2270"
+        }
+      ],
+      "group": "SG52",
+      "max": 10,
+      "name": "Steuerangaben u. -mengen (Summen)",
+      "status": "R",
+      "zaehler": "2250"
+    },
+    {
+      "elements": [
+        {
+          "format": "n..6",
+          "id": "0074",
+          "name": "Anzahl der Segmente in einer Nachricht",
+          "note": "Hier wird die Gesamtzahl der Segmente einer Nachricht angegeben",
+          "status": "M"
+        },
+        {
+          "format": "an..14",
+          "id": "0062",
+          "name": "Nachrichten-Referenznummer",
+          "note": "Die Referenznummer aus dem UNH-Segment muss hier wiederholt werden",
+          "status": "M"
+        }
+      ],
+      "example": "UNT+47+1'",
+      "max": 1,
+      "name": "Nachrichtenende",
+      "nr": "00063",
+      "status": "M",
+      "tag": "UNT",
+      "zaehler": "2330"
     }
   ],
-  "ahb_revision": "1.0b",
-  "source_document": "INVOIC MIG 2.8e, Publikationsdatum 01.04.2026",
-  "publikationsdatum": "2026-04-01"
+  "valid_from": "2026-10-01"
 }

@@ -267,7 +267,9 @@ fn utilmd_builder_constructs_valid_message() {
     assert_eq!(msg.message_ref(), "BLDTEST");
     assert_eq!(msg.assoc_code(), "5.5.3a");
     let bgm = msg.bgm().expect("BGM must be set");
-    assert_eq!(bgm.document_id.as_deref(), Some("11001"));
+    // BGM DE 1004 is the Dokumentennummer — the message reference unless one
+    // is given; the Prüfidentifikator travels in `SG6 RFF+Z13`.
+    assert_eq!(bgm.document_id.as_deref(), Some("BLDTEST"));
     let sender = msg.sender().expect("sender must be set");
     assert_eq!(sender.party_id.as_deref(), Some("9900987654321"));
     let receiver = msg.receiver().expect("receiver must be set");
@@ -346,7 +348,11 @@ fn contrl_builder_accept() {
     let uci = msg.uci().expect("UCI must be present");
     assert_eq!(uci.interchange_ref, "INTER-2024-001");
     assert_eq!(uci.sender.as_deref(), Some("9900111222333"));
-    assert_eq!(uci.action_code.as_deref(), Some("4"), "accept = code 4");
+    assert_eq!(
+        uci.action_code.as_deref(),
+        Some("7"),
+        "Empfangsbestätigung = code 7"
+    );
 }
 
 #[cfg(feature = "contrl")]
@@ -358,12 +364,16 @@ fn contrl_builder_reject() {
         .interchange_ref("INTER-2024-002")
         .sender("9900111222333")
         .receiver("9900444555666")
-        .reject()
+        .reject("12")
         .build()
         .expect("ContrlBuilder::reject build must succeed");
 
     let uci = msg.uci().expect("UCI must be present");
-    assert_eq!(uci.action_code.as_deref(), Some("8"), "reject = code 8");
+    assert_eq!(
+        uci.action_code.as_deref(),
+        Some("4"),
+        "Syntaxfehlermeldung = UCI DE 0083 code 4"
+    );
     assert_eq!(msg.message_responses().len(), 0);
 }
 
@@ -390,7 +400,8 @@ fn mscons_builder_metering_point_sub_builder() {
         "one delivery point from sub-builder"
     );
     let dp = &msg.delivery_points()[0];
-    assert_eq!(dp.nad.party_id.as_deref(), Some("DE0001234567890"));
+    // `NAD+DP` is bare on every MSCONS column; the point rides `SG6 LOC+172`.
+    assert!(dp.nad.party_id.is_none(), "{:?}", dp.nad.party_id);
     assert_eq!(dp.time_series.len(), 1);
     let ts = &dp.time_series[0];
     assert_eq!(ts.loc.qualifier, "172");
@@ -412,6 +423,8 @@ fn utilmd_builder_serialize_roundtrip() {
         .sender("9900987654321")
         .receiver("9900123456789")
         .document_date("20230901")
+        .transaction("VORGANG0001")
+        .done()
         .serialize()
         .expect("UtilmdBuilder::serialize must succeed");
 
@@ -434,7 +447,9 @@ fn utilmd_builder_serialize_roundtrip() {
     let AnyMessage::Utilmd(u) = msg else {
         panic!("must re-parse as UTILMD")
     };
-    assert_eq!(u.bgm().unwrap().document_id.as_deref(), Some("11001"));
+    // BGM DE 1004 is the Dokumentennummer: the message reference, `1` by
+    // default; the Prüfidentifikator travels in `SG6 RFF+Z13`.
+    assert_eq!(u.bgm().unwrap().document_id.as_deref(), Some("1"));
 }
 
 #[cfg(feature = "contrl")]

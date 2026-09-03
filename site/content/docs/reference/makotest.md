@@ -244,6 +244,14 @@ The **send date** picks the format version, and the release follows from it.
 Pinning a release by hand and validating on a date where a different one is in
 force produces findings that describe the mismatch rather than the message.
 
+A builder states what the test knows, and the message is **completed to the
+Prüfschablone** of its Prüfidentifikator: every place and data element the
+column makes Muss and the call did not name — the Kunde and the Stammdaten of a
+55001, the `CTA`/`COM` of an ESA answer, the `STS+Z35` beside an `A50` — is
+filled the way the profile's own skeleton fills it. Completion only adds: what
+the call states stays, even where the column forbids it, so a knowingly invalid
+message is still buildable and validation names what is wrong with it.
+
 ```python
 from makotest import UtilmdTransaction, build_interchange, build_utilmd
 
@@ -255,9 +263,8 @@ msg = build_utilmd(
     transactions=[
         UtilmdTransaction(
             "VORGANG-1",                  # IDE+24 — never a location ID
-            locations=[("melo", "DE00014559929E00856996N5139699L01")],
+            locations=[("malo", "51238696012")],   # SG5 LOC+Z16; a Gas track writes LOC+172
             dates=[("92", "20260501")],   # SG4 DTM — Beginn zum
-            references=[("Z13", "55001")],
         )
     ],
 )
@@ -272,7 +279,7 @@ A Zuordnung's Bilanzkreis is a whole segment group, so it is named once rather
 than assembled:
 
 ```python
-UtilmdTransaction("VORGANG-1", locations=[("melo", melo)],
+UtilmdTransaction("VORGANG-1", locations=[("malo", malo)],
                   bilanzkreis="11XBK-EEG-----1")
 # → SEQ+Z79+1 · PIA+5+9991000002082:Z11 · CCI+Z66 · CAV+ZV4:::11XBK-EEG-----1
 ```
@@ -287,7 +294,9 @@ the LF, so an Anmeldung that omits it is refused rather than sent.
 
 An Ablehnung that reports a *third* party's refusal carries a second status:
 `antwort_dritter="A32"` writes `SG4 STS+Z35++A32:E_0624`, the Altlieferant's own
-ground from its own tree. The AHB makes it Muss on `A50` and `A57`.
+ground from its own tree. The AHB makes it Muss on `A50` and `A57`, so a call
+naming none gets the column's placeholder. The Codeliste in DE 1131 follows the
+column too: a Strom answer names its EBD, a Gas answer its `G_…` list.
 
 `build_utilmd` and `build_mscons` return a **message** (`UNH`…`UNT`); the wire
 unit a market partner receives over AS4 is an interchange. The UNB qualifier
@@ -646,9 +655,10 @@ assert_edifact_valid(build_interchange(..., messages=[msg], ...), on="2026-04-01
 
 Interval data needs `intervals=`, never `quantities=`. A bare `QTY` states a
 magnitude with **no time reference**, so a receiver cannot place it on the
-settlement grid — and the AHB does not reject it, so a Lastgang built from flat
-quantities validates while being unusable. Gaps stay absent here too, so the
-Ersatzwert path is what a receiver has to take.
+settlement grid; the Lastgang and Summenzeitreihe columns make the `SG10`
+Messperiode Muss on every value, and `build_mscons` refuses a bare quantity
+there rather than complete it with a period nobody measured. Gaps stay absent
+here too, so the Ersatzwert path is what a receiver has to take.
 
 Three states, three obligations, and a platform has to tell them apart:
 

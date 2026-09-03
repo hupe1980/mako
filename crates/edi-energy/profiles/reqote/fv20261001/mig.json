@@ -1,444 +1,2708 @@
 {
-  "schema_version": 1,
+  "ahb_version": "1.2",
+  "envelope": [],
   "message_type": "REQOTE",
+  "pid_source": "rff_z13",
+  "publikationsdatum": "2026-04-01",
   "release": "1.3c",
-  "valid_from": "2026-10-01",
-  "supersedes_directory": "fv20251001",
-  "ordering_hint": [],
-  "dtm_formats": {
-    "137": [
-      "303"
-    ],
-    "203": [
-      "303"
-    ],
-    "469": [
-      "303"
-    ],
-    "472": [
-      "303"
-    ],
-    "76": [
-      "303"
-    ]
+  "schema_version": 2,
+  "source": {
+    "file": "REQOTE_MIG_1.3c.pdf",
+    "sha256": "6447176dbec93c80a750de98c81cd0d6168c345119c39d8054ad85d66279c631",
+    "title": "REQOTE MIG 1.3c"
   },
-  "segments": [
+  "structure": [
     {
-      "tag": "UNH",
-      "name": "Message Header",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "format": "an..14",
           "id": "0062",
+          "name": "Nachrichten-Referenznummer",
+          "note": "Eindeutige Nachrichtenreferenz des Absenders. Nummer der Nachrichten einer Übertragungsdatei im Datenaustausch. Identisch mit DE0062 im UNT, i. d. R. vom sendenden Konverter vergeben.",
           "status": "M"
         },
         {
-          "id": "S009",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {}
-    },
-    {
-      "tag": "BGM",
-      "name": "Beginning of Message",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "C002",
-          "status": "M"
-        },
-        {
-          "id": "C106",
-          "status": "C"
-        }
-      ],
-      "qualifier_restrictions": {
-        "1001": [
-          "311",
-          "Z29",
-          "Z57",
-          "Z74",
-          "Z93"
-        ]
-      }
-    },
-    {
-      "tag": "DTM",
-      "name": "Date/Time/Period",
-      "mandatory": true,
-      "max_occurrences": 5,
-      "elements": [
-        {
-          "id": "C507",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {
-        "2005": [
-          "137",
-          "203",
-          "163",
-          "164",
-          "469",
-          "472"
-        ]
-      }
-    },
-    {
-      "tag": "IMD",
-      "name": "Item Description",
-      "mandatory": false,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "7077",
-          "status": "C"
-        },
-        {
-          "id": "C273",
-          "status": "C"
-        }
-      ],
-      "qualifier_restrictions": {}
-    },
-    {
-      "tag": "FTX",
-      "name": "Free Text",
-      "mandatory": false,
-      "max_occurrences": 2,
-      "elements": [
-        {
-          "id": "4451",
-          "status": "M"
-        },
-        {
-          "id": "C108",
-          "status": "C"
-        }
-      ],
-      "qualifier_restrictions": {
-        "4451": [
-          "ZZZ",
-          "REG"
-        ]
-      }
-    },
-    {
-      "tag": "NAD",
-      "name": "Name and Address",
-      "mandatory": true,
-      "max_occurrences": 4,
-      "elements": [
-        {
-          "id": "3035",
-          "status": "M"
-        },
-        {
-          "id": "C082",
-          "status": "C"
-        }
-      ],
-      "qualifier_restrictions": {
-        "3035": [
-          "MS",
-          "MR",
-          "DP",
-          "BY"
-        ]
-      }
-    },
-    {
-      "tag": "CTA",
-      "name": "Contact Information",
-      "mandatory": false,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "3139",
-          "status": "C"
-        },
-        {
-          "id": "C056",
-          "status": "C"
-        }
-      ],
-      "qualifier_restrictions": {}
-    },
-    {
-      "tag": "COM",
-      "name": "Communication Contact",
-      "mandatory": false,
-      "max_occurrences": 5,
-      "elements": [
-        {
-          "id": "C076",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {}
-    },
-    {
-      "tag": "LOC",
-      "name": "Place/Location Identification",
-      "mandatory": false,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "3227",
-          "status": "M"
-        },
-        {
-          "id": "C517",
-          "status": "C"
-        }
-      ],
-      "qualifier_restrictions": {
-        "3227": [
-          "172"
-        ]
-      }
-    },
-    {
-      "tag": "LIN",
-      "name": "Line Item",
-      "mandatory": false,
-      "max_occurrences": 200000,
-      "elements": [
-        {
-          "id": "1082",
-          "status": "C"
-        },
-        {
-          "id": "1229",
-          "status": "C"
-        }
-      ],
-      "qualifier_restrictions": {}
-    },
-    {
-      "tag": "UNT",
-      "name": "Message Trailer",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "0074",
-          "status": "M"
-        },
-        {
-          "id": "0062",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {}
-    }
-  ],
-  "segment_groups": [
-    {
-      "id": "SG1",
-      "trigger_segment": "RFF",
-      "mandatory": true,
-      "max_occurrences": 9999,
-      "segments": [
-        {
-          "tag": "RFF",
-          "name": "Reference (Prüfidentifikator/Referenz)",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
+          "components": [
             {
-              "id": "C506",
-              "status": "M"
-            }
-          ],
-          "qualifier_restrictions": {
-            "1153": [
-              "Z13",
-              "AGO",
-              "AEP",
-              "AGK"
-            ]
-          }
-        }
-      ],
-      "groups": []
-    },
-    {
-      "id": "SG11",
-      "trigger_segment": "NAD",
-      "mandatory": true,
-      "max_occurrences": 99,
-      "segments": [
-        {
-          "tag": "NAD",
-          "name": "Name and Address (MP-ID)",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "3035",
-              "status": "M"
-            },
-            {
-              "id": "C082",
-              "status": "C"
-            }
-          ],
-          "qualifier_restrictions": {
-            "3035": [
-              "MS",
-              "MR",
-              "DP",
-              "BY"
-            ]
-          }
-        },
-        {
-          "tag": "LOC",
-          "name": "Place/Location (Meldepunkt)",
-          "mandatory": false,
-          "max_occurrences": 99,
-          "elements": [
-            {
-              "id": "3227",
-              "status": "M"
-            },
-            {
-              "id": "C517",
-              "status": "C"
-            }
-          ],
-          "qualifier_restrictions": {
-            "3227": [
-              "172"
-            ]
-          }
-        }
-      ],
-      "groups": [
-        {
-          "id": "SG14",
-          "trigger_segment": "CTA",
-          "mandatory": false,
-          "max_occurrences": 5,
-          "segments": [
-            {
-              "tag": "CTA",
-              "name": "Contact Information",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
+              "codes": [
                 {
-                  "id": "3139",
-                  "status": "C"
-                },
-                {
-                  "id": "C056",
-                  "status": "C"
+                  "code": "REQOTE",
+                  "name": "Anfrage"
                 }
               ],
-              "qualifier_restrictions": {}
+              "format": "an..6",
+              "id": "0065",
+              "name": "Nachrichtentyp-Kennung",
+              "status": "M"
             },
             {
-              "tag": "COM",
-              "name": "Communication Contact",
-              "mandatory": false,
-              "max_occurrences": 5,
+              "codes": [
+                {
+                  "code": "D",
+                  "name": "Entwurfs-Version"
+                }
+              ],
+              "format": "an..3",
+              "id": "0052",
+              "name": "Versionsnummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "10A",
+                  "name": "Ausgabe 2010 - A"
+                }
+              ],
+              "format": "an..3",
+              "id": "0054",
+              "name": "Freigabenummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "UN",
+                  "name": "UN/CEFACT"
+                }
+              ],
+              "format": "an..2",
+              "id": "0051",
+              "name": "Verwaltende Organisation",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "1.3c",
+                  "name": "Versionsnummer der zugrundeliegenden BDEW-Nachrichtenbeschreibung"
+                }
+              ],
+              "format": "an..6",
+              "id": "0057",
+              "name": "Anwendungscode der zuständigen Organisation",
+              "status": "R"
+            }
+          ],
+          "id": "S009",
+          "name": "Nachrichten-Kennung",
+          "status": "M"
+        }
+      ],
+      "example": "UNH+1+REQOTE:D:10A:UN:1.3c'",
+      "max": 1,
+      "name": "Nachrichten-Kopfsegment",
+      "nr": "00001",
+      "status": "M",
+      "tag": "UNH",
+      "zaehler": "0010"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "311",
+                  "name": "Aufforderung zur Angebotsabgabe (Anfrage)"
+                },
+                {
+                  "code": "Z29",
+                  "name": "Abrechnung des Messstellenbetriebs vom MSB an den LF"
+                },
+                {
+                  "code": "Z57",
+                  "name": "Übermittlung von Werten an ESA"
+                },
+                {
+                  "code": "Z74",
+                  "name": "Bestellung eines Angebots einer Konfiguration"
+                },
+                {
+                  "code": "Z82",
+                  "name": "Bestellung eines Angebots einer Konfiguration durch den LF"
+                },
+                {
+                  "code": "Z93",
+                  "name": "Bestellung eines Angebots Änderung der Technik der Lokation"
+                }
+              ],
+              "format": "an..3",
+              "id": "1001",
+              "name": "Dokumentenname, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C002",
+          "name": "Dokumenten-/ Nachrichtenname",
+          "status": "R"
+        },
+        {
+          "components": [
+            {
+              "format": "an..70",
+              "id": "1004",
+              "name": "Dokumentennummer",
+              "note": "EDI-Nachrichtennummer vergeben vom Absender des Dokuments",
+              "status": "R"
+            }
+          ],
+          "id": "C106",
+          "name": "Dokumenten-/Nachrichten- Identifikation",
+          "status": "R"
+        }
+      ],
+      "example": "BGM+311+MKIDI5422'",
+      "max": 1,
+      "name": "Beginn der Nachricht",
+      "nr": "00002",
+      "status": "M",
+      "tag": "BGM",
+      "zaehler": "0020"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "137",
+                  "name": "Dokumenten-/Nachrichtendatum/-zeit"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+137:199904081315?+00:303'",
+      "max": 1,
+      "name": "Nachrichtendatum",
+      "nr": "00003",
+      "status": "M",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "76",
+                  "name": "Lieferdatum/-zeit, geplant"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+76:200710012200?+00:303'",
+      "max": 1,
+      "name": "Datum zum geplanten Leistungsbeginn",
+      "nr": "00004",
+      "status": "D",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "203",
+                  "name": "Ausführungsdatum/-zeit"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+203:200710012200?+00:303'",
+      "max": 1,
+      "name": "Ausführungsdatum",
+      "nr": "00005",
+      "status": "D",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "469",
+                  "name": "Startdatum oder -zeitpunkt, frühestes/r"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+469:200710012200?+00:303'",
+      "max": 1,
+      "name": "Startdatum oder Zeitpunkt",
+      "nr": "00006",
+      "status": "D",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "472",
+                  "name": "Endedatum oder -zeitpunkt, spätestes/r"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+472:200710012200?+00:303'",
+      "max": 1,
+      "name": "Endedatum oder Zeitpunkt",
+      "nr": "00007",
+      "status": "D",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
+        {
+          "format": "an..3",
+          "id": "7077",
+          "name": "Beschreibungsformat, Code",
+          "note": "Nicht benutzt",
+          "status": "N"
+        },
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "Z55",
+                  "name": "Änderung Konfiguration"
+                },
+                {
+                  "code": "Z64",
+                  "name": "Neukonfiguration"
+                }
+              ],
+              "format": "an..3",
+              "id": "7081",
+              "name": "Produkt/Leistung, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C272",
+          "name": "Produkt/Leistung",
+          "status": "R"
+        }
+      ],
+      "example": "IMD++Z55'",
+      "max": 1,
+      "name": "Grund des Angebots",
+      "nr": "00008",
+      "status": "D",
+      "tag": "IMD",
+      "zaehler": "0060"
+    },
+    {
+      "elements": [
+        {
+          "codes": [
+            {
+              "code": "ACB",
+              "name": "Zusätzliche Informationen (für allgemeine Hinweise)"
+            }
+          ],
+          "format": "an..3",
+          "id": "4451",
+          "name": "Textbezug, Qualifier",
+          "status": "M"
+        },
+        {
+          "format": "an..3",
+          "id": "4453",
+          "name": "Textfunktion, Code",
+          "note": "Nicht benutzt",
+          "status": "N"
+        },
+        {
+          "components": [
+            {
+              "format": "an..17",
+              "id": "4441",
+              "name": "Freier Text, Code",
+              "note": "Nicht benutzt",
+              "status": "N"
+            }
+          ],
+          "id": "C107",
+          "name": "Text-Referenz",
+          "status": "N"
+        },
+        {
+          "components": [
+            {
+              "format": "an..512",
+              "id": "4440",
+              "name": "Freier Text",
+              "note": "Freier Text zur weiteren Erklärung.",
+              "status": "M"
+            },
+            {
+              "format": "an..512",
+              "id": "4440",
+              "name": "Freier Text",
+              "status": "D"
+            },
+            {
+              "format": "an..512",
+              "id": "4440",
+              "name": "Freier Text",
+              "status": "D"
+            },
+            {
+              "format": "an..512",
+              "id": "4440",
+              "name": "Freier Text",
+              "status": "D"
+            },
+            {
+              "format": "an..512",
+              "id": "4440",
+              "name": "Freier Text",
+              "status": "D"
+            }
+          ],
+          "id": "C108",
+          "name": "Text",
+          "status": "R"
+        }
+      ],
+      "example": "FTX+ACB+++Text:Text2:Text3:Text4:Text5'",
+      "max": 1,
+      "name": "Allgemeine Information (Feld für allgemeine Hinweise)",
+      "nr": "00009",
+      "status": "D",
+      "tag": "FTX",
+      "zaehler": "0080"
+    },
+    {
+      "elements": [
+        {
+          "codes": [
+            {
+              "code": "Z13",
+              "name": "Internetseite"
+            }
+          ],
+          "format": "an..3",
+          "id": "4451",
+          "name": "Textbezug, Qualifier",
+          "status": "M"
+        },
+        {
+          "format": "an..3",
+          "id": "4453",
+          "name": "Textfunktion, Code",
+          "note": "Nicht benutzt",
+          "status": "N"
+        },
+        {
+          "components": [
+            {
+              "format": "an..17",
+              "id": "4441",
+              "name": "Freier Text, Code",
+              "note": "Passwort",
+              "status": "M"
+            }
+          ],
+          "id": "C107",
+          "name": "Text-Referenz",
+          "status": "R"
+        },
+        {
+          "components": [
+            {
+              "format": "an..512",
+              "id": "4440",
+              "name": "Freier Text",
+              "note": "Link zur Vollmacht des Kunden",
+              "status": "M"
+            },
+            {
+              "format": "an..512",
+              "id": "4440",
+              "name": "Freier Text",
+              "status": "D"
+            },
+            {
+              "format": "an..512",
+              "id": "4440",
+              "name": "Freier Text",
+              "status": "D"
+            },
+            {
+              "format": "an..512",
+              "id": "4440",
+              "name": "Freier Text",
+              "status": "D"
+            },
+            {
+              "format": "an..512",
+              "id": "4440",
+              "name": "Freier Text",
+              "status": "D"
+            }
+          ],
+          "id": "C108",
+          "name": "Text",
+          "status": "R"
+        }
+      ],
+      "max": 1,
+      "name": "Vollmacht des Kunden",
+      "nr": "00010",
+      "status": "D",
+      "tag": "FTX",
+      "zaehler": "0080"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z13",
+                      "name": "Prüfidentifikator"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "35001",
+                      "name": "Anforderung Angebot Geräteübernahme"
+                    },
+                    {
+                      "code": "35002",
+                      "name": "Anfrage Rechnungsabwicklung MSB über LF"
+                    },
+                    {
+                      "code": "35003",
+                      "name": "Anfrage von Werten für ESA"
+                    },
+                    {
+                      "code": "35004",
+                      "name": "Anfrage einer Konfiguration"
+                    },
+                    {
+                      "code": "35005",
+                      "name": "Anfrage Angebot Änderung Technik"
+                    }
+                  ],
+                  "format": "n5",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "note": "Prüfidentifikator",
+                  "status": "R"
+                }
+              ],
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
+            }
+          ],
+          "example": "RFF+Z13:35001'",
+          "max": 1,
+          "name": "Prüfidentifikator",
+          "nr": "00011",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0100"
+        }
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "Prüfidentifikator",
+      "status": "R",
+      "zaehler": "0090"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z41",
+                      "name": "Referenznummer des Vorgangs der Anmeldung nach WiM"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "status": "R"
+                }
+              ],
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
+            }
+          ],
+          "example": "RFF+Z41:3467768456AST345'",
+          "max": 1,
+          "name": "Referenznummer des Vorgangs der Anmeldung nach WiM",
+          "nr": "00012",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0100"
+        }
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "Referenznummer des Vorgangs der Anmeldung nach WiM",
+      "status": "D",
+      "zaehler": "0090"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z42",
+                      "name": "Referenznummer der Nachricht der betroffenen Antwort auf Bestellung (Bestellbestätigung)"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "status": "R"
+                }
+              ],
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
+            }
+          ],
+          "example": "RFF+Z42:98786423423435'",
+          "max": 1,
+          "name": "Referenznummer der Nachricht der betroffenen Antwort auf Bestellung",
+          "nr": "00013",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0100"
+        }
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "Referenznummer der Nachricht der betroffenen Antwort auf Bestellung",
+      "status": "D",
+      "zaehler": "0090"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z43",
+                      "name": "Referenznummer des Vorgangs der betroffenen Antwort auf Bestellung (Bestellbestätigung)"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "n..5",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "status": "R"
+                }
+              ],
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
+            }
+          ],
+          "example": "RFF+Z43:12'",
+          "max": 1,
+          "name": "Referenznummer des Vorgangs der betroffenen Antwort auf Bestellung",
+          "nr": "00014",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0100"
+        }
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "Referenznummer des Vorgangs der betroffenen Antwort auf Bestellung",
+      "status": "D",
+      "zaehler": "0090"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "DDM",
+                  "name": "Netzbetreiber"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "n13",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+DDM+9900259000002::9'",
+          "max": 1,
+          "name": "MP-ID des NB des Vorgangs der Anmeldung nach WiM",
+          "nr": "00015",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0520"
+        }
+      ],
+      "group": "SG11",
+      "max": 1,
+      "name": "MP-ID des NB des Vorgangs der Anmeldung nach WiM",
+      "status": "D",
+      "zaehler": "0510"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "MS",
+                  "name": "Dokumenten-/Nachrichtenaussteller bzw. - absender"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    },
+                    {
+                      "code": "332",
+                      "name": "DE, DVGW Service & Consult GmbH"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+MS+9900259000002::293'",
+          "max": 1,
+          "name": "MP-ID Absender",
+          "nr": "00016",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0520"
+        },
+        {
+          "children": [
+            {
               "elements": [
                 {
+                  "codes": [
+                    {
+                      "code": "IC",
+                      "name": "Informationskontakt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3139",
+                  "name": "Funktion des Ansprechpartners, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "3413",
+                      "name": "Kontakt, Nummer",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..256",
+                      "id": "3412",
+                      "name": "Kontakt",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C056",
+                  "name": "Kontaktangaben",
+                  "status": "R"
+                }
+              ],
+              "example": "CTA+IC+:P GETTY'",
+              "max": 1,
+              "name": "Ansprechpartner",
+              "nr": "00017",
+              "status": "M",
+              "tag": "CTA",
+              "zaehler": "0620"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "3148",
+                      "name": "Kommunikationsadresse, Identifikation",
+                      "note": "Nummer / Adresse",
+                      "status": "M"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "EM",
+                          "name": "Elektronische Post"
+                        },
+                        {
+                          "code": "FX",
+                          "name": "Telefax"
+                        },
+                        {
+                          "code": "TE",
+                          "name": "Telefon"
+                        },
+                        {
+                          "code": "AJ",
+                          "name": "weiteres Telefon"
+                        },
+                        {
+                          "code": "AL",
+                          "name": "Handy"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3155",
+                      "name": "Art des Kommunikationsmittels, Code",
+                      "status": "M"
+                    }
+                  ],
                   "id": "C076",
+                  "name": "Kommunikationsverbindung",
                   "status": "M"
                 }
               ],
-              "qualifier_restrictions": {}
+              "example": "COM+?+493222271020:TE'",
+              "max": 5,
+              "name": "Kommunikationsverbindung",
+              "nr": "00018",
+              "status": "R",
+              "tag": "COM",
+              "zaehler": "0630"
             }
           ],
-          "groups": []
-        }
-      ]
-    },
-    {
-      "id": "SG27",
-      "trigger_segment": "LIN",
-      "mandatory": false,
-      "max_occurrences": 200000,
-      "segments": [
-        {
-          "tag": "LIN",
-          "name": "Line Item",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "1082",
-              "status": "C"
-            },
-            {
-              "id": "1229",
-              "status": "C"
-            }
-          ],
-          "qualifier_restrictions": {}
-        },
-        {
-          "tag": "PIA",
-          "name": "Zusätzliche Produktidentifikation",
-          "mandatory": false,
-          "max_occurrences": 25,
-          "elements": [
-            {
-              "id": "4347",
-              "status": "M"
-            },
-            {
-              "id": "C212",
-              "status": "M"
-            }
-          ],
-          "qualifier_restrictions": {}
+          "group": "SG14",
+          "max": 1,
+          "name": "Kontaktinformationen",
+          "status": "D",
+          "zaehler": "0610"
         }
       ],
-      "groups": [
+      "group": "SG11",
+      "max": 1,
+      "name": "MP-ID Absender",
+      "status": "R",
+      "zaehler": "0510"
+    },
+    {
+      "children": [
         {
-          "id": "SG28",
-          "trigger_segment": "CCI",
-          "mandatory": false,
-          "max_occurrences": 99,
-          "segments": [
+          "elements": [
             {
-              "tag": "CCI",
-              "name": "Characteristic/Class Id",
-              "mandatory": false,
-              "max_occurrences": 1,
-              "elements": [
+              "codes": [
                 {
-                  "id": "7059",
-                  "status": "C",
-                  "components": 1
-                },
-                {
-                  "id": "C502",
-                  "status": "C",
-                  "components": 3
-                },
-                {
-                  "id": "C240",
-                  "status": "C",
-                  "components": 3
+                  "code": "MR",
+                  "name": "Nachrichtenempfänger"
                 }
-              ]
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    },
+                    {
+                      "code": "332",
+                      "name": "DE, DVGW Service & Consult GmbH"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
             }
           ],
-          "groups": []
+          "example": "NAD+MR+9900259000002::293'",
+          "max": 1,
+          "name": "MP-ID Empfänger",
+          "nr": "00019",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0520"
         }
-      ]
+      ],
+      "group": "SG11",
+      "max": 1,
+      "name": "MP-ID Empfänger",
+      "status": "R",
+      "zaehler": "0510"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "DP",
+                  "name": "Lieferanschrift"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            }
+          ],
+          "example": "NAD+DP'",
+          "max": 1,
+          "name": "Liefer-, bzw. Bezugsort",
+          "nr": "00020",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0520"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "172",
+                  "name": "Meldepunkt"
+                }
+              ],
+              "format": "an..3",
+              "id": "3227",
+              "name": "Ortsangabe, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3225",
+                  "name": "Ortsangabe, Nummer",
+                  "note": "Identifikator",
+                  "status": "R"
+                }
+              ],
+              "id": "C517",
+              "name": "Ortsangabe",
+              "status": "R"
+            }
+          ],
+          "example": "LOC+172+C816417ST77'",
+          "max": 1,
+          "name": "Meldepunkt",
+          "nr": "00021",
+          "status": "R",
+          "tag": "LOC",
+          "zaehler": "0530"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z18",
+                          "name": "Marktlokation"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "n11",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "ID der Marktlokation",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+Z18:57685676748'",
+              "max": 1,
+              "name": "Referenz auf ID der Marktlokation",
+              "nr": "00022",
+              "status": "M",
+              "tag": "RFF",
+              "zaehler": "0560"
+            }
+          ],
+          "group": "SG12",
+          "max": 99,
+          "name": "Referenz auf ID der Marktlokation",
+          "status": "D",
+          "zaehler": "0550"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z37",
+                          "name": "Technische Ressource"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an11",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "ID der Technischen Ressource",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+Z37:D417MLM8164'",
+              "max": 1,
+              "name": "Referenz auf ID der Technischen Ressource",
+              "nr": "00023",
+              "status": "M",
+              "tag": "RFF",
+              "zaehler": "0560"
+            }
+          ],
+          "group": "SG12",
+          "max": 99,
+          "name": "Referenz auf ID der Technischen Ressource",
+          "status": "D",
+          "zaehler": "0550"
+        }
+      ],
+      "group": "SG11",
+      "max": 1,
+      "name": "Liefer-, bzw. Bezugsort",
+      "status": "R",
+      "zaehler": "0510"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z09",
+                  "name": "Kunde des LF"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            }
+          ],
+          "example": "NAD+Z09'",
+          "max": 1,
+          "name": "Kunde des Lieferanten",
+          "nr": "00024",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0520"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "IC",
+                      "name": "Informationsstelle"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3139",
+                  "name": "Funktion des Ansprechpartners, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "3413",
+                      "name": "Kontakt, Nummer",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..256",
+                      "id": "3412",
+                      "name": "Kontakt",
+                      "note": "Kontaktdaten",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C056",
+                  "name": "Kontaktangaben",
+                  "status": "R"
+                }
+              ],
+              "example": "CTA+IC+:Kontakt'",
+              "max": 1,
+              "name": "Kontaktdaten des Kunden",
+              "nr": "00025",
+              "status": "M",
+              "tag": "CTA",
+              "zaehler": "0620"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "3148",
+                      "name": "Kommunikationsadresse, Identifikation",
+                      "note": "Nummer / Adresse",
+                      "status": "M"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "EM",
+                          "name": "E-Mail"
+                        },
+                        {
+                          "code": "TE",
+                          "name": "Telefon"
+                        },
+                        {
+                          "code": "AL",
+                          "name": "Handy"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3155",
+                      "name": "Art des Kommunikationsmittels, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C076",
+                  "name": "Kommunikationsverbindung",
+                  "status": "M"
+                }
+              ],
+              "example": "COM+?+493222271020:AL'",
+              "max": 5,
+              "name": "Kommunikationsverbindung",
+              "nr": "00026",
+              "status": "R",
+              "tag": "COM",
+              "zaehler": "0630"
+            }
+          ],
+          "group": "SG14",
+          "max": 1,
+          "name": "Kontaktdaten des Kunden",
+          "status": "R",
+          "zaehler": "0610"
+        }
+      ],
+      "group": "SG11",
+      "max": 1,
+      "name": "Kunde des Lieferanten",
+      "status": "D",
+      "zaehler": "0510"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "format": "n..6",
+              "id": "1082",
+              "name": "Positionsnummer",
+              "note": "Vom Programm vorgegebene Positionsnummer innerhalb einer Anfrage",
+              "status": "R"
+            }
+          ],
+          "example": "LIN+1'",
+          "max": 1,
+          "name": "Positionsdaten",
+          "nr": "00027",
+          "status": "M",
+          "tag": "LIN",
+          "zaehler": "1030"
+        }
+      ],
+      "group": "SG27",
+      "max": 1,
+      "name": "LIN",
+      "status": "D",
+      "zaehler": "1020"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "format": "n1",
+              "id": "1082",
+              "name": "Positionsnummer",
+              "note": "Vom Programm vorgegebene Positionsnummer innerhalb einer Anfrage",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "Z64",
+                  "name": "Erforderliches Produkt Schaltzeitdefinitionen"
+                }
+              ],
+              "format": "an..3",
+              "id": "1229",
+              "name": "Handlung, Code",
+              "status": "R"
+            }
+          ],
+          "example": "LIN+1+Z64'",
+          "max": 1,
+          "name": "Erforderliches Produkt Schaltzeitdefinitionen",
+          "nr": "00028",
+          "status": "M",
+          "tag": "LIN",
+          "zaehler": "1030"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "5",
+                  "name": "Produktidentifikation"
+                }
+              ],
+              "format": "an..1",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "n13",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Produkt-Code",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z11",
+                      "name": "Produkt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+5+9991000000713:Z11'",
+          "max": 1,
+          "name": "Erforderliches Produkt Schaltzeitdefinitionen",
+          "nr": "00029",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1040"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z52",
+                      "name": "Code der Schaltzeitdefinition"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7059",
+                  "name": "Klassentyp, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "6313",
+                      "name": "Gemessene Dimension, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C502",
+                  "name": "Einzelheiten zu Maßangaben",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "7037",
+                      "name": "Merkmal, Code",
+                      "note": "Code der Schaltzeitdefinition",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C240",
+                  "name": "Merkmalsbeschreibung",
+                  "status": "R"
+                }
+              ],
+              "example": "CCI+Z52++NBX'",
+              "max": 1,
+              "name": "Zugeordnete Schaltzeitdefinition",
+              "nr": "00030",
+              "status": "M",
+              "tag": "CCI",
+              "zaehler": "1180"
+            }
+          ],
+          "group": "SG28",
+          "max": 1,
+          "name": "Zugeordnete Schaltzeitdefinition",
+          "status": "R",
+          "zaehler": "1170"
+        }
+      ],
+      "group": "SG27",
+      "max": 1,
+      "name": "Erforderliches Produkt Schaltzeitdefinitionen",
+      "status": "D",
+      "zaehler": "1020"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "format": "n1",
+              "id": "1082",
+              "name": "Positionsnummer",
+              "note": "Vom Programm vorgegebene Positionsnummer innerhalb einer Anfrage",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "Z65",
+                  "name": "Erforderliches Produkt Leistungskurvendefinitionen"
+                }
+              ],
+              "format": "an..3",
+              "id": "1229",
+              "name": "Handlung, Code",
+              "status": "R"
+            }
+          ],
+          "example": "LIN+1+Z65'",
+          "max": 1,
+          "name": "Erforderliches Produkt Leistungskurvendefinitionen",
+          "nr": "00031",
+          "status": "M",
+          "tag": "LIN",
+          "zaehler": "1030"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "5",
+                  "name": "Produktidentifikation"
+                }
+              ],
+              "format": "an..1",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "n13",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Produkt-Code",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z11",
+                      "name": "Produkt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+5+9991000000721:Z11'",
+          "max": 1,
+          "name": "Erforderliches Produkt Leistungskurvendefinitionen",
+          "nr": "00032",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1040"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z53",
+                      "name": "Code der Leistungskurvendefinition"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7059",
+                  "name": "Klassentyp, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "6313",
+                      "name": "Gemessene Dimension, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C502",
+                  "name": "Einzelheiten zu Maßangaben",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "7037",
+                      "name": "Merkmal, Code",
+                      "note": "Code der Leistungskurvendefinition",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C240",
+                  "name": "Merkmalsbeschreibung",
+                  "status": "R"
+                }
+              ],
+              "example": "CCI+Z53++NBF'",
+              "max": 1,
+              "name": "Zugeordnete Leistungskurvendefinitionen",
+              "nr": "00033",
+              "status": "M",
+              "tag": "CCI",
+              "zaehler": "1180"
+            }
+          ],
+          "group": "SG28",
+          "max": 1,
+          "name": "Zugeordnete Leistungskurvendefinitionen",
+          "status": "R",
+          "zaehler": "1170"
+        }
+      ],
+      "group": "SG27",
+      "max": 1,
+      "name": "Erforderliches Produkt Leistungskurvendefinitionen",
+      "status": "D",
+      "zaehler": "1020"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "format": "n1",
+              "id": "1082",
+              "name": "Positionsnummer",
+              "note": "Vom Programm vorgegebene Positionsnummer innerhalb einer Anfrage",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "Z66",
+                  "name": "Erforderliches Produkt Ad-hoc-Steuerkanal"
+                }
+              ],
+              "format": "an..3",
+              "id": "1229",
+              "name": "Handlung, Code",
+              "status": "R"
+            }
+          ],
+          "example": "LIN+1+Z66'",
+          "max": 1,
+          "name": "Erforderliches Produkt Ad-hoc-Steuerkanal",
+          "nr": "00034",
+          "status": "M",
+          "tag": "LIN",
+          "zaehler": "1030"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "5",
+                  "name": "Produktidentifikation"
+                }
+              ],
+              "format": "an..1",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "n13",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Produkt-Code",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z11",
+                      "name": "Produkt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+5+9991000000739:Z11'",
+          "max": 1,
+          "name": "Erforderliches Produkt Ad-hoc-Steuerkanal",
+          "nr": "00035",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1040"
+        }
+      ],
+      "group": "SG27",
+      "max": 1,
+      "name": "Erforderliches Produkt Ad-hoc-Steuerkanal",
+      "status": "D",
+      "zaehler": "1020"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "format": "n1",
+              "id": "1082",
+              "name": "Positionsnummer",
+              "note": "Vom Programm vorgegebene Positionsnummer innerhalb einer Anfrage",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "Z67",
+                  "name": "Erforderliches Messprodukt für Werte nach Typ 2 aus Backend"
+                }
+              ],
+              "format": "an..3",
+              "id": "1229",
+              "name": "Handlung, Code",
+              "status": "R"
+            }
+          ],
+          "example": "LIN+1+Z67'",
+          "max": 1,
+          "name": "Erforderliches Messprodukt für Werte nach Typ 2 aus Backend",
+          "nr": "00036",
+          "status": "M",
+          "tag": "LIN",
+          "zaehler": "1030"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "5",
+                  "name": "Produktidentifikation"
+                }
+              ],
+              "format": "an..1",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "n13",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Produkt-Code",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z11",
+                      "name": "Produkt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+5+9991000000739:Z11'",
+          "max": 1,
+          "name": "Erforderliches Messprodukt für Werte nach Typ 2 aus Backend",
+          "nr": "00037",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1040"
+        }
+      ],
+      "group": "SG27",
+      "max": 1,
+      "name": "Erforderliches Messprodukt für Werte nach Typ 2 aus Backend",
+      "status": "D",
+      "zaehler": "1020"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "format": "n1",
+              "id": "1082",
+              "name": "Positionsnummer",
+              "note": "Vom Programm vorgegebene Positionsnummer innerhalb einer Anfrage",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "Z68",
+                  "name": "Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW"
+                }
+              ],
+              "format": "an..3",
+              "id": "1229",
+              "name": "Handlung, Code",
+              "status": "R"
+            }
+          ],
+          "example": "LIN+1+Z68'",
+          "max": 1,
+          "name": "Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW",
+          "nr": "00038",
+          "status": "M",
+          "tag": "LIN",
+          "zaehler": "1030"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "5",
+                  "name": "Produktidentifikation"
+                }
+              ],
+              "format": "an..1",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "n13",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Produkt-Code",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z11",
+                      "name": "Produkt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+5+9991000000739:Z11'",
+          "max": 1,
+          "name": "Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW",
+          "nr": "00039",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1040"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z17",
+                  "name": "Zieladresse URI"
+                }
+              ],
+              "format": "an..3",
+              "id": "4451",
+              "name": "Textbezug, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..3",
+              "id": "4453",
+              "name": "Textfunktion, Code",
+              "note": "Nicht benutzt",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..17",
+                  "id": "4441",
+                  "name": "Freier Text, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C107",
+              "name": "Text-Referenz",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "note": "Zieladresse URI IPv4 für die Bereitstellung der Werte",
+                  "status": "M"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "note": "Zieladresse URI IPv6 für die Bereitstellung der Werte",
+                  "status": "R"
+                }
+              ],
+              "id": "C108",
+              "name": "Text",
+              "status": "R"
+            }
+          ],
+          "example": "FTX+Z17+++X:X'",
+          "max": 1,
+          "name": "Zieladresse URI",
+          "nr": "00040",
+          "status": "R",
+          "tag": "FTX",
+          "zaehler": "1140"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z24",
+                  "name": "Aussteller (Issuer)"
+                }
+              ],
+              "format": "an..3",
+              "id": "4451",
+              "name": "Textbezug, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..3",
+              "id": "4453",
+              "name": "Textfunktion, Code",
+              "note": "Nicht benutzt",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..17",
+                  "id": "4441",
+                  "name": "Freier Text, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C107",
+              "name": "Text-Referenz",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "note": "Zertifikatsaussteller",
+                  "status": "M"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "status": "D"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "status": "D"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "status": "D"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "status": "D"
+                }
+              ],
+              "id": "C108",
+              "name": "Text",
+              "status": "R"
+            }
+          ],
+          "example": "FTX+Z24+++SERIALNUMBER = 3, C = DE, O = SM-PKI-DE, CN = T-Systems-EnergyCA.CA:X:X:X:X'",
+          "max": 1,
+          "name": "Zertifikatsaussteller (Issuer)",
+          "nr": "00041",
+          "status": "R",
+          "tag": "FTX",
+          "zaehler": "1140"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z23",
+                  "name": "Zertifikatsnutzer (Subject)"
+                }
+              ],
+              "format": "an..3",
+              "id": "4451",
+              "name": "Textbezug, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..3",
+              "id": "4453",
+              "name": "Textfunktion, Code",
+              "note": "Nicht benutzt",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..17",
+                  "id": "4441",
+                  "name": "Freier Text, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C107",
+              "name": "Text-Referenz",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "note": "Zertifikatsnutzer",
+                  "status": "M"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "status": "D"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "status": "D"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "status": "D"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "status": "D"
+                }
+              ],
+              "id": "C108",
+              "name": "Text",
+              "status": "R"
+            }
+          ],
+          "max": 1,
+          "name": "Zertifikatsnutzer (Subject)",
+          "nr": "00042",
+          "status": "R",
+          "tag": "FTX",
+          "zaehler": "1140"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z54",
+                      "name": "Änderungsmöglichkeit der Konfiguration im SMGW"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7059",
+                  "name": "Klassentyp, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "6313",
+                      "name": "Gemessene Dimension, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C502",
+                  "name": "Einzelheiten zu Maßangaben",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "ZF7",
+                          "name": "selbstständige Änderungsmöglichkeit erforderlich"
+                        },
+                        {
+                          "code": "ZF8",
+                          "name": "selbstständige Änderungsmöglichkeit nicht erforderlich"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7037",
+                      "name": "Merkmal, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C240",
+                  "name": "Merkmalsbeschreibung",
+                  "status": "R"
+                }
+              ],
+              "example": "CCI+Z54++ZF7'",
+              "max": 1,
+              "name": "Änderungsmöglichkeit der Konfiguration im SMGW",
+              "nr": "00043",
+              "status": "M",
+              "tag": "CCI",
+              "zaehler": "1180"
+            }
+          ],
+          "group": "SG28",
+          "max": 1,
+          "name": "Änderungsmöglichkeit der Konfiguration im SMGW",
+          "status": "D",
+          "zaehler": "1170"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z60",
+                      "name": "Schwellwerte"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7059",
+                  "name": "Klassentyp, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "6313",
+                      "name": "Gemessene Dimension, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C502",
+                  "name": "Einzelheiten zu Maßangaben",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "n13",
+                      "id": "7037",
+                      "name": "Merkmal, Code",
+                      "note": "Messprodukt-Position-Code",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..17",
+                      "id": "1131",
+                      "name": "Codeliste, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..3",
+                      "id": "3055",
+                      "name": "Verantwortliche Stelle für die Codepflege, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "n..10",
+                      "id": "7036",
+                      "name": "Merkmal",
+                      "note": "oberer Schwellwert",
+                      "status": "R"
+                    },
+                    {
+                      "format": "n..10",
+                      "id": "7036",
+                      "name": "Merkmal",
+                      "note": "unterer Schwellwert",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C240",
+                  "name": "Merkmalsbeschreibung",
+                  "status": "R"
+                }
+              ],
+              "example": "CCI+Z60++9991000001042:::207.22:168.81'",
+              "max": 1,
+              "name": "Schwellwerte",
+              "nr": "00044",
+              "status": "M",
+              "tag": "CCI",
+              "zaehler": "1180"
+            }
+          ],
+          "group": "SG28",
+          "max": 999,
+          "name": "Schwellwerte",
+          "status": "D",
+          "zaehler": "1170"
+        }
+      ],
+      "group": "SG27",
+      "max": 1,
+      "name": "Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW",
+      "status": "D",
+      "zaehler": "1020"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "format": "n..6",
+              "id": "1082",
+              "name": "Positionsnummer",
+              "note": "Vom Programm vorgegebene Positionsnummer innerhalb einer Anforderung",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "Z19",
+                  "name": "Erforderliches Produkt der Messlokation"
+                }
+              ],
+              "format": "an..3",
+              "id": "1229",
+              "name": "Handlung, Code",
+              "status": "R"
+            }
+          ],
+          "example": "LIN+1+Z19'",
+          "max": 1,
+          "name": "Erforderliches Produkt der Messlokation",
+          "nr": "00045",
+          "status": "M",
+          "tag": "LIN",
+          "zaehler": "1030"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "5",
+                  "name": "Produktidentifikation"
+                }
+              ],
+              "format": "an..3",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "n13",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Produkt-Code",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z11",
+                      "name": "Produkt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+5+9991000000656:Z11'",
+          "max": 1,
+          "name": "Erforderliches Produkt der Messlokation",
+          "nr": "00046",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1040"
+        }
+      ],
+      "group": "SG27",
+      "max": 200000,
+      "name": "Erforderliches Produkt der Messlokation",
+      "status": "D",
+      "zaehler": "1020"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "format": "n..6",
+              "id": "1082",
+              "name": "Positionsnummer",
+              "note": "Vom Programm vorgegebene Positionsnummer innerhalb einer Anforderung",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "Z55",
+                  "name": "Erforderliches Produkt der Netzlokation"
+                }
+              ],
+              "format": "an..3",
+              "id": "1229",
+              "name": "Handlung, Code",
+              "status": "R"
+            }
+          ],
+          "example": "LIN+1+Z55'",
+          "max": 1,
+          "name": "Erforderliches Produkt der Netzlokation",
+          "nr": "00047",
+          "status": "M",
+          "tag": "LIN",
+          "zaehler": "1030"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "5",
+                  "name": "Produktidentifikation"
+                }
+              ],
+              "format": "an..3",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "n13",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Produkt-Code",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z11",
+                      "name": "Produkt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+5+9991000000656:Z11'",
+          "max": 1,
+          "name": "Erforderliches Produkt der Netzlokation",
+          "nr": "00048",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1040"
+        }
+      ],
+      "group": "SG27",
+      "max": 200000,
+      "name": "Erforderliches Produkt der Netzlokation",
+      "status": "D",
+      "zaehler": "1020"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "format": "n..6",
+              "id": "1082",
+              "name": "Positionsnummer",
+              "note": "Vom Programm vorgegebene Positionsnummer innerhalb einer Anforderung",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "Z56",
+                  "name": "Erforderliches Produkt der Steuerbaren Ressource"
+                }
+              ],
+              "format": "an..3",
+              "id": "1229",
+              "name": "Handlung, Code",
+              "status": "R"
+            }
+          ],
+          "example": "LIN+1+Z56'",
+          "max": 1,
+          "name": "Erforderliches Produkt der Steuerbaren Ressource",
+          "nr": "00049",
+          "status": "M",
+          "tag": "LIN",
+          "zaehler": "1030"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "5",
+                  "name": "Produktidentifikation"
+                }
+              ],
+              "format": "an..3",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "n13",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Produkt-Code",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z11",
+                      "name": "Produkt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+5+9991000002371:Z11'",
+          "max": 1,
+          "name": "Erforderliches Produkt der Steuerbaren Ressource",
+          "nr": "00050",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1040"
+        }
+      ],
+      "group": "SG27",
+      "max": 200000,
+      "name": "Erforderliches Produkt der Steuerbaren Ressource",
+      "status": "D",
+      "zaehler": "1020"
+    },
+    {
+      "elements": [
+        {
+          "codes": [
+            {
+              "code": "S",
+              "name": "Trennung von Positions- und Summenteil"
+            }
+          ],
+          "format": "a1",
+          "id": "0081",
+          "name": "Abschnittskennung, codiert",
+          "status": "M"
+        }
+      ],
+      "example": "UNS+S'",
+      "max": 1,
+      "name": "Abschnitts-Kontrollsegment",
+      "nr": "00051",
+      "status": "M",
+      "tag": "UNS",
+      "zaehler": "2200"
+    },
+    {
+      "elements": [
+        {
+          "format": "n..6",
+          "id": "0074",
+          "name": "Anzahl der Segmente in einer Nachricht",
+          "note": "Hier wird die Gesamtzahl der Segmente einer Nachricht angegeben.",
+          "status": "M"
+        },
+        {
+          "format": "an..14",
+          "id": "0062",
+          "name": "Nachrichten-Referenznummer",
+          "note": "Die Referenznummer aus dem UNH-Segment muss hier wiederholt werden.",
+          "status": "M"
+        }
+      ],
+      "example": "UNT+39+1'",
+      "max": 1,
+      "name": "Nachrichten-Endesegment",
+      "nr": "00052",
+      "status": "M",
+      "tag": "UNT",
+      "zaehler": "2270"
     }
   ],
-  "ahb_revision": "1.2",
-  "source_document": "REQOTE MIG 1.3c, Publikationsdatum 01.04.2026",
-  "pid_source": "rff_z13",
-  "publikationsdatum": "2026-04-01"
+  "valid_from": "2026-10-01"
 }

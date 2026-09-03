@@ -3,9 +3,9 @@
 **DVGW EDIFACT parser, validator and writer for the German gas transport and
 balancing market**
 
-Covers the DVGW-governed formats used in GaBi Gas 2.1 (BNetzA BK7-24-01-008).
-The DVGW counterpart to `edi-energy`, which covers BDEW EDI@Energy (UTILMD,
-MSCONS, INVOIC, APERAK, …).
+Covers the DVGW-governed formats used in GaBi Gas 2.1 (BNetzA BK7-24-01-008):
+ALOCAT, NOMINT, NOMRES and SSQNOT. The DVGW counterpart to `edi-energy`, which
+covers BDEW EDI@Energy (UTILMD, MSCONS, INVOIC, APERAK, …).
 
 ## The one thing to know first
 
@@ -30,8 +30,8 @@ Two more consequences worth stating plainly:
 - **`DTM+137` is not the gas day.** It is when the message was written. The gas
   day is `DTM+Z01`, a *period* in format `719`.
 - **DVGW publishes real Prüfidentifikatoren** in `SG1 RFF+Z13` — ALOCAT
-  70001–70023, NOMINT 70030–70034, NOMRES 70035–70039. No synthetic encoding is
-  needed, and the range does not collide with BDEW's.
+  70001–70023, NOMINT 70030–70034, NOMRES 70035–70039, SSQNOT 70095–70096. No
+  synthetic encoding is needed, and the range does not collide with BDEW's.
 
 ## Supported formats
 
@@ -40,13 +40,14 @@ Two more consequences worth stating plainly:
 | **ALOCAT** — Allokationsnachricht | `ORDRSP` | `X1G X2G X3G X4G X5G X6G X7G XBG` | 70001–70023 |
 | **NOMINT** — Nominierung | `ORDERS` | `01G 55G Y1G Y6G Y7G` | 70030–70034 |
 | **NOMRES** — Nominierungsantwort | `ORDRSP` | `07G 08G 19G 20G Y2G` | 70035–70039 |
+| **SSQNOT** — Mehr-/Mindermengenmeldung | `ORDRSP` | `BAG` | 70095 (SLP), 70096 (RLM) |
 
 `CONTRL` and `APERAK` acknowledge DVGW interchanges but are BDEW formats; they
 live in `edi-energy` and are not reimplemented here.
 
 `UNH` S009 DE 0057 holds either a package code (`DVGW17`) or the message version
 (`5.11a`) depending on the format, so it is captured verbatim and nothing selects
-behaviour from it.
+behaviour from it; the builder writes the family's value unless told otherwise.
 
 ## Reading
 
@@ -83,10 +84,12 @@ for result in platform.parse_interchange(raw) {
 # Ok::<(), dvgw_edi::Error>(())
 ```
 
-### A quantity is a rate
+### A quantity is a rate — unless its unit says otherwise
 
-`KW1` is **kWh/h**, so a `QTY` states a rate over the period its own `DTM+2`
-names, and the energy is `Σ(rate × duration)`:
+`KW1` is **kWh/h** and `KW2` **kWh/d**, so such a `QTY` states a rate over the
+period its own `DTM+2` names, and the energy is `Σ(rate × duration)`; `KWH` is
+the energy itself. Which units a family admits is the Segmentlayout's
+(`DvgwMessageType::admitted_units`):
 
 ```rust
 // 100 kWh/h for one hour + 200 kWh/h for two hours = 500 kWh (not 300).
@@ -109,19 +112,42 @@ Values are `Decimal`, not float: gas settles to at least three decimal places
 `Quantity::raw_value` keeps the wire text so a non-numeric value is reportable
 rather than silently zero.
 
+The DVGW column of every Nachrichtenstruktur caps `DTM+2` and `SG37 QTY` at one
+per `LOC` group, so a profile is a run of `LOC` groups. The reader keeps every
+`QTY` it meets under a `LOC` all the same, `DVGW-LOC-MAX` reports the excess,
+and the builder writes the conformant shape.
+
+### SSQNOT as one record
+
+```rust
+use dvgw_edi::ssqnot::MehrMindermengenmeldung;
+
+let record = MehrMindermengenmeldung::from_message(&msg)?;
+// Netzkonto, Netzbetreiber, Abrechnungszeitraum, Verfahren (SLP/RLM),
+// Mehrmenge and Mindermenge in kWh.
+println!("{} {} kWh", record.netzkonto, record.saldo_kwh());
+```
+
+A message the Segmentlayout refuses — no `NAD+ZSH`, no `STS` Verfahren, a
+non-numeric Menge — is refused here too rather than read as a partial figure.
+
 ### How a message finds its process
 
 ALOCAT 5.11a §3.3 publishes, per Prüfidentifikator, which *Zuordnungstupel* the
 receiver applies, and names the segments each element comes from — `ZO-T1`
 (Bilanzkreis, Netzbetreiber, Zeitreihentyp) through `ZG-T1` (Clearingnummer).
+The Zeitreihentyp is the `STS` code under the quantity (`09G`, `14G`, …), not
+`LIN` C212, which reads `Z01` „allokiert" on every position. SSQNOT 5.7 §3.3
+adds its own 2-Tupel (Netzkonto, Netzbetreiber), labelled `ZO-T1:SSQNOT`.
 
 ```rust
 let key = msg.correlation_key().expect("published Zuordnung");
 assert_eq!(key.zuordnung, dvgw_edi::Zuordnung::ZoT3);
 
 // `process_key` adds the gas day for the ZO-T* tuples: they identify an
-// *object*, and a process is one gas day of it.
-assert_eq!(msg.process_key().as_deref(), Some("ZO-T3|BK1|NK1|Z01|2026-03-01"));
+// *object*, and a process is one gas day of it — or one Abrechnungszeitraum
+// for a SSQNOT.
+assert_eq!(msg.process_key().as_deref(), Some("ZO-T3|BK1|NK1|09G|2026-03-01"));
 ```
 
 `ZG-T1` is returned unchanged — a Clearingnummer already identifies one
@@ -134,8 +160,12 @@ NOMINT it answers, so the two are paired on the business key both carry.
 
 ## Writing
 
-A BKV that can only parse cannot nominate. `MessageBuilder` renders the header
-and `LIN` loops the Nachrichtenbeschreibungen prescribe:
+A BKV that can only parse cannot nominate, and a Netzbetreiber that can only
+parse cannot report its Mehr-/Mindermengen. `MessageBuilder` renders the header
+and `LIN` loops the Nachrichtenbeschreibungen prescribe — `SG1` in the order
+each structure lists it, every coded value under its agency (`332`, or `9` for
+a GLN through `sender_coded`/`receiver_coded`/`party_coded`), one `LOC` per
+period, the family's unit and `UNH` Anwendungscode unless overridden:
 
 ```rust
 use dvgw_edi::{DvgwDocument, DvgwPeriod, MessageBuilder, Position};
@@ -165,6 +195,12 @@ let wire = MessageBuilder::new(DvgwDocument::NominierungTransportkunde)
 # Ok::<(), dvgw_edi::Error>(())
 ```
 
+A re-nomination names the original with `original_nomination(reference,
+processed_at)`, which writes `RFF+AGO` with the `DTM+9` NOMINT marks
+Erforderlich beside it. A SSQNOT is a `MehrMindermengenmeldung` position:
+`location("Z99", None)`, `quantity("ZY2", "6782", zeitraum)` (in `KWH`),
+`status("A1G")` and `party("ZSH", netzkonto)`.
+
 `build()` refuses rather than emitting a message missing a `Muss` field. The
 `UNB`/`UNZ` envelope is deliberately not written — the AS4 layer owns it and its
 control reference.
@@ -174,8 +210,14 @@ control reference.
 `DvgwPlatform::validate` checks the message against the Segmentlayout of its
 Nachrichtenbeschreibung: the mandatory `BGM` fields, the three header `DTM` rows
 and whether each value matches the format code it declares, `RFF+Z13` and its
-range, `NAD+MS`/`NAD+MR`, at least one `LIN`, a `QTY` per `LOC` group, the `KW1`
-unit, and the per-family rows (`RFF+ANX` for ALOCAT, `IMD` for NOMRES).
+range, `NAD+MS`/`NAD+MR`, at least one `LIN`, a `LOC` group per position with
+one `DTM+2` and one `QTY`, and the qualifiers, units and position `NAD` rows the
+family's Segmentlayout lists. Rows that hang on the Anwendungsfall are keyed on
+the Prüfidentifikator: `BGM` DE 1001 must be the code the column publishes
+(`DvgwDocument::for_pid`), `RFF+ANX` is Muss on the six Allokationsclearing
+columns only, `DTM+9` beside a NOMINT's `RFF+AGO`, the `STS` Verfahren on every
+SSQNOT Menge, and the RLM Anwendungsfall (70096, `STS+A2G`) is retired for
+Zeiträume from 1.10.2015.
 
 Findings come back as `DvgwIssue` with a typed `Severity` and a stable rule id;
 only failures that stop the message being *identified* are `Err`.
@@ -212,7 +254,8 @@ match dvgw_edi::sniff(bytes) {
 - **§ 20 Abs. 3 EnWG** — Festlegungskompetenz for gas network access and balancing
 - **BNetzA BK7-24-01-008** — GaBi Gas 2.1
 - **Kooperationsvereinbarung Gas (KoV)** — nomination and allocation deadlines
-- **DVGW-Nachrichtenbeschreibungen** ALOCAT 5.11a, NOMINT 4.6, NOMRES 4.7 —
+- **DVGW-Nachrichtenbeschreibungen** ALOCAT 5.11a, NOMINT 4.6, NOMRES 4.7,
+  SSQNOT 5.7 —
   <https://www.dvgw-sc.de/leistungen/it-dienstleistungen/datenaustausch-gas>
 
 ## Relationship to other crates

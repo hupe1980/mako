@@ -137,23 +137,6 @@ pub(super) fn render_mscons(
             message_type: mt.into(),
             field: "mabis_zp_id (SG6 LOC+172 Meldepunkt — the MaBiS-Zählpunkt, not the Bilanzierungsgebiet)".into(),
         })?;
-    let bilanzierungsgebiet = p
-        .get("bilanzierungsgebiet_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| RenderError::MissingField {
-            message_type: mt.into(),
-            field: "bilanzierungsgebiet_id (SG6 LOC+107)".into(),
-        })?;
-    // The two identify different things and can never share a value. Equality
-    // means the Bilanzierungsgebiet was passed for both — the original defect,
-    // refused here because it is invisible once on the wire.
-    if bilanzierungsgebiet == mabis_zp {
-        return Err(RenderError::BuilderError(format!(
-            "MSCONS {pid}: mabis_zp_id and bilanzierungsgebiet_id are both \
-             {bilanzierungsgebiet:?} — LOC+172 is the MaBiS-Zählpunkt and LOC+107 the \
-             Bilanzierungsgebiet, so one value for both misidentifies the Meldepunkt"
-        )));
-    }
     let balancing_period = p
         .get("balancing_period")
         .and_then(|v| v.as_str())
@@ -169,6 +152,19 @@ pub(super) fn render_mscons(
                 field: "version (CCYYMMDDHHMMSSZZZ)".into(),
             })?;
 
+    // `SG9 PIA+5+<OBIS>:SRW` is Muss on every MSCONS position; the
+    // Summenzeitreihe's OBIS-Kennzahl names the series.
+    let obis = p
+        .get("obis_code")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| RenderError::MissingField {
+            message_type: mt.into(),
+            field: "obis_code (SG9 PIA+5+<OBIS>:SRW)".into(),
+        })
+        .and_then(|code| {
+            rubo4e::identifiers::ObisCode::new(code)
+                .map_err(|e| RenderError::BuilderError(format!("invalid OBIS code {code:?}: {e}")))
+        })?;
     let intervals = p
         .get("intervals")
         .and_then(|v| v.as_array())
@@ -190,7 +186,20 @@ pub(super) fn render_mscons(
         }
     })?;
 
-    let mut mp = builders::MsconsBuilder::new(release)
+    // `QTY` DE 6411 goes out where the column lists it (13023 admits `KWH`,
+    // 13003 lists none — the unit is the OBIS-Kennzahl's).
+    let unit = if super::column_lists(
+        MessageType::Mscons,
+        &release,
+        u32::try_from(pid).unwrap_or_default(),
+        "QTY",
+        "6411",
+    ) {
+        "KWH"
+    } else {
+        ""
+    };
+    let mut mp = builders::MsconsBuilder::new(release.clone())
         .sender(sender)
         .receiver(receiver)
         .message_ref(message_ref)
@@ -201,9 +210,14 @@ pub(super) fn render_mscons(
             )?,
         )
         .metering_point(mabis_zp)
-        .bilanzierungsgebiet(bilanzierungsgebiet)
         .balancing_period(balancing_period)
-        .version(version);
+        .version(version)
+        .line_item(obis);
+    if pid == MSCONS_PID_AUSFALLARBEIT_SZR {
+        // The Redispatch Ausfallarbeits-SZR names its series as a Medium
+        // (`PIA+5+…:Z08`), not as an OBIS-Kennzahl.
+        mp = mp.pia_type("Z08");
+    }
 
     for iv in intervals {
         let (Some(from), Some(to), Some(qty)) = (
@@ -223,7 +237,7 @@ pub(super) fn render_mscons(
         mp = mp.quantity_for_period(
             edi_energy::builders::QTY_ENERGIE_SUMMIERT,
             qty,
-            "KWH",
+            unit,
             from,
             to,
         );
@@ -328,10 +342,55 @@ pub(super) fn render_mscons_arbeit_leistungsmax(
         }
     };
 
-    let arbeit_unit = arbeit.get("unit").and_then(|v| v.as_str()).unwrap_or("KWH");
-    checked_unit(arbeit_unit)?;
+    // No column lists DE 6411 on `QTY`; a unit goes out only when stated.
+    let arbeit_unit = arbeit.get("unit").and_then(|v| v.as_str()).unwrap_or("");
+    if !arbeit_unit.is_empty() {
+        checked_unit(arbeit_unit)?;
+    }
+    let obis_of = |v: &serde_json::Value,
+                   default: &str|
+     -> Result<rubo4e::identifiers::ObisCode, RenderError> {
+        let code = v.get("obis").and_then(|x| x.as_str()).unwrap_or(default);
+        rubo4e::identifiers::ObisCode::new(code)
+            .map_err(|e| RenderError::BuilderError(format!("invalid OBIS code {code:?}: {e}")))
+    };
+    // `SG1 RFF+AGI` — the Bestellung/Anfrage this answers, Muss on 13015,
+    // 13016 and 13019.
+    let order_reference = p
+        .get("korrelation_ref")
+        .or_else(|| p.get("order_reference"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| missing("order_reference (SG1 RFF+AGI)"))?;
+    // `STS+Z40` Grund der Ersatzwertbildung is a place 13016/13019 list and
+    // 13015 does not.
+    let lists_grund = super::column_lists_place(
+        MessageType::Mscons,
+        &release,
+        u32::try_from(pid).unwrap_or_default(),
+        "STS",
+        Some("Z40"),
+        "9013",
+    );
+    let ersatzwert_of = |v: &serde_json::Value| -> Result<Option<(String, String)>, RenderError> {
+        if v.get("ersatzwert").and_then(serde_json::Value::as_bool) != Some(true) {
+            return Ok(None);
+        }
+        let verfahren = v
+            .get("ersatzwert_verfahren")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| missing("ersatzwert_verfahren (STS+Z32: Z88/Z89/Z92/ZJ2)"))?;
+        let grund = if lists_grund {
+            v.get("ersatzwert_grund")
+                .and_then(|x| x.as_str())
+                .ok_or_else(|| missing("ersatzwert_grund (STS+Z40: Z74/Z75/Z76/Z77)"))?
+        } else {
+            ""
+        };
+        Ok(Some((verfahren.to_owned(), grund.to_owned())))
+    };
 
-    let mut mp = builders::MsconsBuilder::new(release)
+    let mut mp = builders::MsconsBuilder::new(release.clone())
         .sender(sender)
         .receiver(receiver)
         .message_ref(message_ref)
@@ -341,8 +400,22 @@ pub(super) fn render_mscons_arbeit_leistungsmax(
                 |e| RenderError::BuilderError(format!("invalid Prüfidentifikator {pid}: {e}")),
             )?,
         )
+        .header_reference("AGI", order_reference)
         .metering_point(malo_id)
+        // The Energiemenge is OBIS `1-1:1.9.0` (Wirkarbeit); Bedingungen
+        // [27]/[73] tie the Messperiode `DTM+163`/`164` to it.
+        .line_item(obis_of(arbeit, "1-1:1.9.0")?)
         .quantity_for_period(qualifier(arbeit), arbeit_kwh, arbeit_unit, from, to);
+    if let Some((verfahren, grund)) = ersatzwert_of(arbeit)? {
+        mp = mp.ersatzwert(verfahren, grund);
+    }
+    if pid == MSCONS_PID_ENERGIEMENGE {
+        // `SG6 RFF+AGK` Konfigurations-ID and `SG10 STS+10` Messklassifizierung
+        // — Muss on the Energiemenge (13019).
+        if let Some(k) = p.get("messklassifizierung").and_then(|v| v.as_str()) {
+            mp = mp.messklassifizierung(k);
+        }
+    }
 
     let maxima = p
         .get("leistungsmaxima")
@@ -390,13 +463,20 @@ pub(super) fn render_mscons_arbeit_leistungsmax(
             .and_then(|v| v.as_str())
             .unwrap_or("610");
         // Power, not energy.
-        let unit = m.get("unit").and_then(|v| v.as_str()).unwrap_or("KWT");
-        checked_unit(unit)?;
-
+        let unit = m.get("unit").and_then(|v| v.as_str()).unwrap_or("");
+        if !unit.is_empty() {
+            checked_unit(unit)?;
+        }
+        // A Leistungsmaximum is OBIS `1-1:1.6.0`; Bedingung [28]/[72] tie
+        // the Leistungsperiode `DTM+306` to it.
         mp = mp
             .next_line_item()
+            .line_item(obis_of(m, "1-1:1.6.0")?)
             .quantity(qualifier(m), value, unit)
             .leistungsperiode(period, period_format);
+        if let Some((verfahren, grund)) = ersatzwert_of(m)? {
+            mp = mp.ersatzwert(verfahren, grund);
+        }
     }
 
     finish_interchange(mp.done().serialize(), sender, receiver, msg)
@@ -463,6 +543,18 @@ pub(super) fn render_mscons_typ2(
         }
     };
 
+    // `QTY` DE 6411 goes out where the 13027 column lists it.
+    let unit = if super::column_lists(
+        MessageType::Mscons,
+        &release,
+        u32::try_from(MSCONS_PID_WERTE_TYP2).unwrap_or_default(),
+        "QTY",
+        "6411",
+    ) {
+        "KWH"
+    } else {
+        ""
+    };
     let mut builder = builders::MsconsBuilder::new(release)
         .sender(sender)
         .receiver(receiver)
@@ -516,7 +608,7 @@ pub(super) fn render_mscons_typ2(
             current_obis = obis.map(str::to_owned);
             first_item = false;
         }
-        mp = mp.quantity_for_period(qualifier(r), quantity, "KWH", from, to);
+        mp = mp.quantity_for_period(qualifier(r), quantity, unit, from, to);
     }
 
     super::finish_interchange_with_app_ref(

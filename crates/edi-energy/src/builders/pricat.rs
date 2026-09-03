@@ -355,7 +355,13 @@ impl<S, R> PricatBuilder<S, R> {
         let mut buf = Vec::new();
         let mut w = Writer::new(&mut buf);
 
-        let doc_id = self.inner.document_id.as_deref().unwrap_or("");
+        // `BGM` DE 1004 is the Dokumentennummer — the message reference unless
+        // one is given.
+        let doc_id = self
+            .inner
+            .document_id
+            .as_deref()
+            .unwrap_or(&self.inner.message_ref);
         emit_comp!(
             w,
             "UNH",

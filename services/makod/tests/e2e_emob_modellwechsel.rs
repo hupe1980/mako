@@ -37,14 +37,26 @@ async fn dispatcher() -> EdifactIngestDispatcher {
     )
 }
 
-/// The shipped `edi-energy` fixture for `pid`.
+/// A conformant `pid` message addressed to this tenant: the profile's own
+/// skeleton of the Anwendungsfall, so the fixture is the Prüfschablone.
 fn fixture(pid: u32) -> Vec<u8> {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../crates/edi-energy/tests/fixtures/utilmd/valid/pid_",
-    );
-    std::fs::read(format!("{path}{pid}.edi"))
-        .unwrap_or_else(|e| panic!("fixture for {pid} is missing: {e}"))
+    use edi_energy::profile::SkeletonParties;
+    let code = edi_energy::Pruefidentifikator::new(pid).expect("five digits");
+    let profile = edi_energy::ReleaseRegistry::global()
+        .profiles_for(edi_energy::MessageType::Utilmd)
+        .filter(|p| p.has_anwendungsfall(code))
+        .max_by_key(|p| p.valid_from())
+        .unwrap_or_else(|| panic!("no UTILMD profile carries {pid}"));
+    let af = profile.anwendungsfall(pid).expect("carried");
+    profile
+        .skeleton_interchange(
+            af,
+            &SkeletonParties {
+                sender: "4012345000023".to_owned(),
+                receiver: OWN_MP.to_owned(),
+            },
+        )
+        .unwrap_or_else(|e| panic!("skeleton for {pid}: {e}"))
 }
 
 async fn dispatch_on(d: &EdifactIngestDispatcher, pid: u32, workflow: &str) -> IngestOutcome {

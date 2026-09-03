@@ -21,7 +21,7 @@ crates/mako-wim/          WiM Strom — Messstellenbetrieb (55039, 55042, 55051,
 crates/mako-geli-gas/     GeLi Gas 3.0 — UTILMD G (44001–44021) + LFN-side Lieferbeginn workflow (`geli-gas-lf-anmeldung`, PIDs 44001/44004 outbound + 44002/44003 + 44005/44006 inbound) + UTILMD G Stornierung role-conditional (44022 Nb-only, 44023/44024 Lf-only) + ORDERS Sperrung Gas (17115–17117, LF-role `geli-gas-sperrung-lf` + GNB-role `geli-gas-sperrung-nb`) + ORDERS Datenabruf (17103/17104 + ORDRSP 19103/19104, `geli-gas-datenabruf`) + Stammdatenänderung GeLi Gas (44109–44182 — `geli-gas-stammdatenaenderung`, Zustimmung/Ablehnung E15/E13/E17, Monatserster rule) + PARTIN Gas (37008–37014) + INVOIC 31011 (AWH Sperrprozesse Gas)
 crates/mako-mabis/        MaBiS — 6 workflows: Bilanzkreisabrechnung Strom (MSCONS 13003, 13010–13012 `mabis-billing`, BKV↔ÜNB/BIKO); UTILMD Clearinglisten (55065/55069/55070 `mabis-clearingliste`, record-only); ZP-Lifecycle (`mabis-zp-lifecycle`, 55062–55064/55071–55072/55197–55200/55203–55214 — half the families have no Antwort PID and are terminal on arrival; 55064 answers BOTH 55062 and 55063); Anforderungen (`mabis-anforderung`, ORDERS 17201–17208 — the Abonnement verb is in the payload, NOT the PID); Listenabgleich (`mabis-listenabgleich`, 55195/55196, 55201/55202, 55223/55224 — reply is a correction count, not accept/reject)
 crates/mako-gabi-gas/     GaBi Gas 2.1 (BK7-24-01-008) — INVOIC 31010 (Kapazitätsrechnung) + INVOIC 31007/31008 (Aggreg. MMM-Rechnung Gas, NB → MGV) + MSCONS 13013 (Allokationsliste Gas, MMMA) + ORDERS 17110/ORDRSP 19110 + DVGW workflows ALOCAT/NOMINT/NOMRES (3 workflows — the transport formats `dvgw-edi` does not parse have none); typed gas domain: `GasDay` (DST-aware 06:00 CET per DVGW G 2000), `GasQuantity` (Decimal kWh_Hs), `GasBeschaffenheit` (Hs + Zustandszahl, DVGW G 685, `.validate()` per DVGW G 260), `GasQualityFlag` (8 variants: Measured/Estimated/Substituted/Calculated/Corrected/Rejected/Unknown; billability per GaBi Gas 2.1 (BK7-24-01-008)), `AllocationVersion` (Initial/Correction/Final per KoV §6.4), `GasMarketRole` (BKV/FNB/VNB/MGV/LF/Händler), `GasPortfolioBalance` (BKV portfolio across Bilanzkreise, `conservation_check()`), `GasImbalanceSaldo` (Mehr/Minder/Balanced, `ausgleichsenergie_price_ct_per_kwh` per KoV §9); `cloud_events` module (`de.gabi.*` typed CloudEvent constants); DVGW releases take effect 1 April / 1 October at 06:00 CET; the version a counterparty claims is `UNH` S009 DE 0057, captured verbatim by `dvgw_edi::DvgwVersion` (either a package code like `DVGW17` or a message version like `5.11a`, so nothing selects behaviour from it); `GasDay::nomres_deadline_utc()` (D-1 15:00 CET per KoV) + `initial_alocat_deadline_utc()` (D+3 12:00 CET per KoV §6.4) + `final_alocat_deadline_utc()` (M+2 per KoV §6.4); nomination correction chain (`corrects_nomination_ref` + `correction_sequence` in `NominationData`); `ConservationViolation` error type; `quantity_decimal()` on every DVGW quantity type (Decimal only — there is no `f64` accessor)
-crates/dvgw-edi/          DVGW EDIFACT formats — ALOCAT, NOMINT, NOMRES
+crates/dvgw-edi/          DVGW EDIFACT formats — ALOCAT, NOMINT, NOMRES, SSQNOT
 crates/mako-nbw/          Netzbetreiberwechsel — PARTIN bulk DSO handover [placeholder]
 crates/energy-api/        BDEW API-Webdienste Strom REST/WebSocket client+server
 crates/mako-as4/          BDEW AS4-Profil v1.2 — `BdewAs4Profile`, `bdew_pmode()` (sign+encrypt, X509PKIPathv1, BrainpoolP256r1), `bdew_pmode_sign_only()`, `bdew_push_policy()` (require_encrypted_inbound), `WsSecOutboundKeyInfoProfile`, `BdewAction` enum (**16 standard variants** + `Custom`: UTILMD, APERAK, CONTRL, MSCONS, INVOIC, REMADV, IFTSTA, ORDRSP, ORDERS, ORDCHG, REQOTE, INSRPT, PRICAT, QUOTES, PARTIN, UTILTS), `Display`/`FromStr` impls on `BdewAction`, `bdew_action_from_str()` free fn, `ParseBdewActionError` uninhabited, `PartnerDirectory`, per-partner encryption cert registry; testing feature: `BdewTestPki` + `generate_self_signed_bdew_keypair()` + `MockAs4Endpoint::builder().with_decryption_key_pem(key)` (full sign+encrypt→decrypt round-trip); constants: `SIG_ALGO_ECDSA_SHA256`, `ENC_KEY_AGREEMENT_ECDH_ES`, `ENC_KEY_DERIVATION_CONCAT_KDF`, `ENC_KEY_WRAP_AES128`, `ENC_CONTENT_AES128_GCM`; asx-rs **v0.13** (SwA packaging with an empty SOAP Body per BDEW §2.2.3.2; BDEW envelope vocabulary set explicitly on send — `AGREEMENT_REF`, `ROLE_INITIATOR`/`ROLE_RESPONDER`, `party_id_type_for_agency`, `PAYLOAD_MIME_TYPE`; synchronous receipt verification via `verify_sync_response`/`send_and_verify` — signature-bound + NRI-digest-verified NRR, `As4ReceiptPolicy::regulated()`; `regulated_with_decryption_key()`; AS2 MIC moved to `As2ValidationPolicy`) auto-detects ECDSA vs RSA from key type and ECDH-ES vs RSA-OAEP from cert type; v0.8 new APIs used: `SessionContextBuilder::with_signing_material(cert, key)` (atomic, auto-derives key_id), `EventBus::new_for_testing()` (BestEffort, no audit sink), `As4HttpTransport::new_for_localhost_testing()` + `send_to_localhost()` (SSRF bypass for tests), partial `As4SendCredentials` (None fields fall back to session cert_handle)
@@ -117,26 +117,20 @@ cargo deny check
 
 # xtask tasks:
 cargo xtask bump-version X.Y.Z       # bump [workspace.package].version
-cargo xtask codegen                   # regenerate profile Rust code from profiles/*/*/mig.json + ahb.json
-cargo xtask validate-profiles         # validate all profiles against EDIFACT specs
-cargo xtask validate-pruefids         # validate Prüfidentifikatoren (AHB check)
-cargo xtask audit-ahb                 # audit Application Handbooks
+cargo xtask import-profiles           # regenerate profiles/*/*/{mig,ahb}.json from the BDEW PDFs (profiles/sources.json)
+cargo xtask validate-profiles         # the committed profiles are consistent
+cargo xtask check-pid-coverage        # shipped columns against the published Prüfidentifikator inventory
 cargo xtask check-release-coverage    # verify format-version coverage
 cargo xtask check-bo4e-coverage       # verify rubo4e::current type count matches README exactly
 cargo xtask check-bo4e-discriminants  # refuse a hand-written BO4E `_typ` (build it typed instead)
 cargo xtask check-bo4e-examples       # refuse a documented BO4E example using an undefined field
-cargo xtask generate-fixtures         # regenerate EDIFACT test fixtures
-cargo xtask extract-pdf               # extract tables from BDEW specification PDFs
-cargo xtask import-codelists          # import BDEW code lists
-cargo xtask import-xml-ahb            # import AHB rules from BDEW XML
-cargo xtask release-diff              # diff between format versions
+cargo xtask sync-regulatories         # mirror the BDEW document set the profiles are read from
 ```
 
 **`just ci` is the minimum gate before any commit.** It runs check + test + clippy
 (including `clippy-roles`, which lints each role-scoped makod build — `--all-features`
 enables every role at once and so can never catch role-gating mistakes)
-+ fmt-check + deny + no-version-alias + doc-check + codegen-check + validate-profiles-strict
-+ validate-pruefids-strict-ci.
++ fmt-check + deny + no-version-alias + doc-check + validate-profiles + import-profiles-check.
 
 **MSRV: 1.94** — do not use language features or stdlib APIs introduced after 1.94.
 

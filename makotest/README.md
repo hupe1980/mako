@@ -104,8 +104,10 @@ wrong; `ValueError` means the test is.
 ## A tour
 
 **Five families, four Frist shapes, and Gas differs on the wire too** — a Gas
-answer names no Codeliste in `SG4 STS+E01` DE 1131 where a GPKE answer names its
-EBD, and UTILMD runs a parallel `G…` release track on the same date as `S…`.
+UTILMD names its Marktlokation as the Meldepunkt (`LOC+172`, never `Z16`), its
+answers name a `G_…` Codeliste where a GPKE answer names its EBD, and UTILMD runs
+a parallel `G…` release track on the same date as `S…`. The builders follow the
+track: a `("malo", …)` location lands where the column of the Sparte puts it.
 
 **Fristen have four shapes, so ask the table.** "A Werktage Frist expires at
 17:00 Berlin" is true of the WiM MSB-Wechsel windows and of nothing else — GPKE
@@ -118,9 +120,14 @@ assert_deadline_is(response["deadline"], received=received, pid=55001)
 assert_frist_met(55001, received=received, answered_at=answer["sent_at"])
 ```
 
-**The send date picks the format version.** Pinning a release by hand and
-validating on a date where another is in force reports the mismatch rather than
-the message.
+**The send date picks the format version, and the column fills the rest.** A
+builder states what the test knows — the Vorgang, the Marktlokation, the
+Beginn — and the message is completed to the Prüfschablone of its
+Prüfidentifikator: the Kunde, the Stammdaten and the Transaktionsgrund a 55001
+demands are there when the simulator validates it. What the test states stays,
+even where the column forbids it, so a knowingly invalid message is still
+buildable. Pinning a release by hand and validating on a date where another is
+in force reports the mismatch rather than the message.
 
 ```python
 msg = build_utilmd(
@@ -129,7 +136,7 @@ msg = build_utilmd(
     receiver=NB,
     on="2026-04-01",
     transactions=[
-        UtilmdTransaction("VORGANG-1", locations=[("melo", melo)], dates=[("92", start)])
+        UtilmdTransaction("VORGANG-1", locations=[("malo", malo)], dates=[("92", start)])
     ],
 )
 wire = build_interchange(

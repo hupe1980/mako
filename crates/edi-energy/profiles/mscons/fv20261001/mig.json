@@ -1,485 +1,2768 @@
 {
-  "schema_version": 1,
-  "message_type": "MSCONS",
-  "release": "2.5",
-  "valid_from": "2026-10-01",
-  "ordering_hint": [
-    "UNH",
-    "BGM",
-    "DTM",
-    "RFF",
-    "NAD",
-    "CTA",
-    "COM",
-    "UNS",
-    "NAD",
-    "LOC",
-    "DTM",
-    "CCI",
-    "LIN",
-    "PIA",
-    "QTY",
-    "DTM",
-    "STS",
-    "UNT"
-  ],
-  "dtm_formats": {
-    "137": [
-      "303"
-    ],
-    "157": [
-      "610"
-    ],
-    "163": [
-      "303"
-    ],
-    "164": [
-      "303"
-    ],
-    "293": [
-      "304"
-    ],
-    "306": [
-      "102",
-      "610"
-    ],
-    "492": [
-      "610"
-    ],
-    "60": [
-      "303"
-    ],
-    "7": [
-      "303"
-    ],
-    "9": [
-      "102",
-      "303"
-    ]
-  },
-  "segments": [
+  "ahb_version": "3.2",
+  "envelope": [
     {
-      "tag": "UNH",
-      "name": "Nachrichtenkopfsegment",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
-          "id": "0062",
-          "status": "M",
-          "components": 1
-        },
-        {
-          "id": "S009",
-          "status": "M",
-          "components": 6
-        }
-      ]
-    },
-    {
-      "tag": "BGM",
-      "name": "Beginn der Nachricht",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "C002",
-          "status": "M",
-          "components": 4
-        },
-        {
-          "id": "C106",
-          "status": "C",
-          "components": 3
-        },
-        {
-          "id": "1225",
-          "status": "C",
-          "components": 1
-        }
-      ],
-      "qualifier_restrictions": {
-        "1001": [
-          "35",
-          "7",
-          "BK",
-          "Z27",
-          "Z28",
-          "Z39",
-          "Z41",
-          "Z42",
-          "Z46"
-        ]
-      }
-    },
-    {
-      "tag": "DTM",
-      "name": "Nachrichtendatum",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "C507",
-          "status": "M",
-          "components": 3
-        }
-      ],
-      "qualifier_restrictions": {
-        "2005": [
-          "137"
-        ]
-      }
-    },
-    {
-      "tag": "UNS",
-      "name": "Abschnitts-Kontrollsegment",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "0081",
-          "status": "M",
-          "components": 1
-        }
-      ]
-    },
-    {
-      "tag": "UNT",
-      "name": "Nachrichten-Endesegment",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "0074",
-          "status": "M",
-          "components": 1
-        },
-        {
-          "id": "0062",
-          "status": "M",
-          "components": 1
-        }
-      ]
-    }
-  ],
-  "segment_groups": [
-    {
-      "id": "SG1",
-      "trigger_segment": "RFF",
-      "mandatory": false,
-      "max_occurrences": 9,
-      "segments": [
-        {
-          "tag": "RFF",
-          "name": "Referenzangaben",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
+          "components": [
             {
-              "id": "C506",
-              "status": "M",
-              "components": 5
-            }
-          ],
-          "qualifier_restrictions": {
-            "1153": [
-              "AGI",
-              "Z13",
-              "ACW",
-              "MG"
-            ]
-          }
-        },
-        {
-          "tag": "DTM",
-          "name": "Versionsangabe",
-          "mandatory": false,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "C507",
-              "status": "M",
-              "components": 3
-            }
-          ]
-        }
-      ],
-      "groups": []
-    },
-    {
-      "id": "SG2",
-      "trigger_segment": "NAD",
-      "mandatory": true,
-      "max_occurrences": 99,
-      "segments": [
-        {
-          "tag": "NAD",
-          "name": "MP-ID Absender/Empfänger",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "3035",
-              "status": "M",
-              "components": 1
-            },
-            {
-              "id": "C082",
-              "status": "C",
-              "components": 3
-            }
-          ],
-          "qualifier_restrictions": {
-            "3035": [
-              "MS",
-              "MR"
-            ]
-          }
-        }
-      ],
-      "groups": [
-        {
-          "id": "SG4",
-          "trigger_segment": "CTA",
-          "mandatory": false,
-          "max_occurrences": 9,
-          "segments": [
-            {
-              "tag": "CTA",
-              "name": "Ansprechpartner",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
+              "codes": [
                 {
-                  "id": "3139",
-                  "status": "C",
-                  "components": 1
-                },
-                {
-                  "id": "C056",
-                  "status": "C",
-                  "components": 2
-                }
-              ]
-            },
-            {
-              "tag": "COM",
-              "name": "Kommunikationsverbindung",
-              "mandatory": false,
-              "max_occurrences": 5,
-              "elements": [
-                {
-                  "id": "C076",
-                  "status": "M",
-                  "components": 2
-                }
-              ]
-            }
-          ],
-          "groups": []
-        }
-      ]
-    },
-    {
-      "id": "SG5",
-      "trigger_segment": "LOC",
-      "mandatory": true,
-      "max_occurrences": 99999,
-      "segments": [
-        {
-          "tag": "LOC",
-          "name": "Identifikationsangabe",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "3227",
-              "status": "M",
-              "components": 1
-            },
-            {
-              "id": "C517",
-              "status": "M",
-              "components": 4
-            }
-          ],
-          "qualifier_restrictions": {
-            "3227": [
-              "172",
-              "237",
-              "Z06",
-              "Z98",
-              "ZZZ"
-            ]
-          }
-        },
-        {
-          "tag": "DTM",
-          "name": "Zeitraumangaben",
-          "mandatory": false,
-          "max_occurrences": 9,
-          "elements": [
-            {
-              "id": "C507",
-              "status": "M",
-              "components": 3
-            }
-          ],
-          "qualifier_restrictions": {
-            "2005": [
-              "163",
-              "164",
-              "293",
-              "137",
-              "7",
-              "25",
-              "37",
-              "306"
-            ]
-          }
-        },
-        {
-          "tag": "CCI",
-          "name": "Merkmal/Charakteristik",
-          "mandatory": false,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "7081",
-              "status": "C",
-              "components": 1
-            },
-            {
-              "id": "C240",
-              "status": "C",
-              "components": 4
-            }
-          ]
-        }
-      ],
-      "groups": [
-        {
-          "id": "SG9",
-          "trigger_segment": "LIN",
-          "mandatory": false,
-          "max_occurrences": 99999,
-          "segments": [
-            {
-              "tag": "LIN",
-              "name": "Laufende Position",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
-                {
-                  "id": "1082",
-                  "status": "C",
-                  "components": 1
-                }
-              ]
-            },
-            {
-              "tag": "PIA",
-              "name": "Produktidentifikation (OBIS-Kennzahl)",
-              "mandatory": false,
-              "max_occurrences": 1,
-              "elements": [
-                {
-                  "id": "4347",
-                  "status": "M",
-                  "components": 1
-                },
-                {
-                  "id": "C212",
-                  "status": "M",
-                  "components": 4
+                  "code": "UNOC",
+                  "name": "UN/ECE-Zeichensatz C"
                 }
               ],
-              "qualifier_restrictions": {
-                "4347": [
-                  "5"
-                ]
-              }
+              "format": "a4",
+              "id": "0001",
+              "name": "Syntax-Kennung",
+              "note": "UNOC = UN/ECE level C",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "3",
+                  "name": "Version 3"
+                }
+              ],
+              "format": "n1",
+              "id": "0002",
+              "name": "Syntax-Versionsnummer",
+              "note": "3 = Syntax-Versionsnummer 3",
+              "status": "M"
             }
           ],
-          "groups": [
+          "id": "S001",
+          "name": "Syntax-Bezeichner",
+          "status": "M"
+        },
+        {
+          "components": [
             {
-              "id": "SG10",
-              "trigger_segment": "QTY",
-              "mandatory": true,
-              "max_occurrences": 9999,
-              "segments": [
+              "format": "an..35",
+              "id": "0004",
+              "name": "Absenderbezeichnung",
+              "note": "MP-ID Absender",
+              "status": "M"
+            },
+            {
+              "codes": [
                 {
-                  "tag": "QTY",
-                  "name": "Mengenangaben",
-                  "mandatory": true,
-                  "max_occurrences": 1,
-                  "elements": [
-                    {
-                      "id": "C186",
-                      "status": "M",
-                      "components": 3
-                    }
-                  ],
-                  "qualifier_restrictions": {
-                    "6063": [
-                      "220",
-                      "67",
-                      "Z10",
-                      "Z18",
-                      "Z19"
-                    ]
-                  }
+                  "code": "14",
+                  "name": "GS1"
                 },
                 {
-                  "tag": "DTM",
-                  "name": "Zeitangaben Messwert",
-                  "mandatory": false,
-                  "max_occurrences": 9,
-                  "elements": [
-                    {
-                      "id": "C507",
-                      "status": "M",
-                      "components": 3
-                    }
-                  ],
-                  "qualifier_restrictions": {
-                    "2005": [
-                      "163",
-                      "164",
-                      "7",
-                      "25",
-                      "306"
-                    ]
-                  }
+                  "code": "500",
+                  "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
                 },
                 {
-                  "tag": "STS",
-                  "name": "Statusangabe",
-                  "mandatory": false,
-                  "max_occurrences": 9,
-                  "elements": [
+                  "code": "502",
+                  "name": "DE, DVGW Service & Consult GmbH"
+                }
+              ],
+              "format": "an..4",
+              "id": "0007",
+              "name": "Teilnehmerbezeichnung, Qualifier",
+              "status": "R"
+            }
+          ],
+          "id": "S002",
+          "name": "Absender der Übertragungsdatei",
+          "status": "M"
+        },
+        {
+          "components": [
+            {
+              "format": "an..35",
+              "id": "0010",
+              "name": "Empfängerbezeichnung",
+              "note": "MP-ID Empfänger",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "14",
+                  "name": "GS1"
+                },
+                {
+                  "code": "500",
+                  "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                },
+                {
+                  "code": "502",
+                  "name": "DE, DVGW Service & Consult GmbH"
+                }
+              ],
+              "format": "an..4",
+              "id": "0007",
+              "name": "Teilnehmerbezeichnung, Qualifier",
+              "status": "R"
+            }
+          ],
+          "id": "S003",
+          "name": "Empfänger der Übertragungsdatei",
+          "status": "M"
+        },
+        {
+          "components": [
+            {
+              "format": "n6",
+              "id": "0017",
+              "name": "Datum der Erstellung",
+              "note": "JJMMTT",
+              "status": "M"
+            },
+            {
+              "format": "n4",
+              "id": "0019",
+              "name": "Uhrzeit der Erstellung",
+              "note": "HHMM",
+              "status": "M"
+            }
+          ],
+          "id": "S004",
+          "name": "Datum/Uhrzeit der Erstellung",
+          "status": "M"
+        },
+        {
+          "format": "an..14",
+          "id": "0020",
+          "name": "Datenaustauschreferenz",
+          "note": "Eindeutige Referenz zur Identifikation der Übertragungsdatei, vergeben vom Sender.",
+          "status": "M"
+        },
+        {
+          "components": [
+            {
+              "format": "an..14",
+              "id": "0022",
+              "name": "Referenz oder Paßwort des Empfängers",
+              "note": "Nicht benutzt",
+              "status": "N"
+            }
+          ],
+          "id": "S005",
+          "name": "Referenz/Paßwort des Empfängers",
+          "status": "N"
+        },
+        {
+          "codes": [
+            {
+              "code": "EM",
+              "name": "Energiemenge"
+            },
+            {
+              "code": "TL",
+              "name": "Lastgang, beliebiger Zeitraum"
+            },
+            {
+              "code": "VL",
+              "name": "Verrechnungsliste, Zählerstand"
+            }
+          ],
+          "format": "an..14",
+          "id": "0026",
+          "name": "Anwendungsreferenz",
+          "status": "R"
+        },
+        {
+          "format": "a1",
+          "id": "0029",
+          "name": "Verarbeitungspriorität, Code",
+          "note": "Nicht benutzt",
+          "status": "N"
+        },
+        {
+          "format": "n1",
+          "id": "0031",
+          "name": "Bestätigungsanforderung",
+          "note": "Nicht benutzt",
+          "status": "N"
+        },
+        {
+          "format": "an..35",
+          "id": "0032",
+          "name": "Austauschvereinbarungskennu ng",
+          "note": "Nicht benutzt",
+          "status": "N"
+        },
+        {
+          "codes": [
+            {
+              "code": "1",
+              "name": "Übertragungsdatei ist ein Test"
+            }
+          ],
+          "format": "n1",
+          "id": "0035",
+          "name": "Test-Kennzeichen",
+          "status": "D"
+        }
+      ],
+      "example": "UNB+UNOC:3+4012345678901:14+4012345678901:14+200426:1151+ABC4711++TL++++1'",
+      "max": 1,
+      "name": "Nutzdaten-Kopfsegment",
+      "nr": "00002",
+      "status": "M",
+      "tag": "UNB",
+      "zaehler": "0000"
+    },
+    {
+      "elements": [
+        {
+          "format": "n..6",
+          "id": "0036",
+          "name": "Datenaustauschzähler",
+          "note": "Anzahl der Nachrichten oder Nachrichtengruppen in der Übertragungsdatei",
+          "status": "M"
+        },
+        {
+          "format": "an..14",
+          "id": "0020",
+          "name": "Datenaustauschreferenz",
+          "note": "Identisch mit DE0020 im UNB-Segment",
+          "status": "M"
+        }
+      ],
+      "example": "UNZ+1+ABC4711'",
+      "max": 1,
+      "name": "Nutzdaten-Endesegment",
+      "nr": "00040",
+      "status": "M",
+      "tag": "UNZ",
+      "zaehler": "0000"
+    }
+  ],
+  "message_type": "MSCONS",
+  "pid_source": "rff_z13",
+  "publikationsdatum": "2026-04-01",
+  "release": "2.5",
+  "schema_version": 2,
+  "source": {
+    "file": "MSCONS_MIG_2.5.pdf",
+    "sha256": "1be2e52bf8c0de13a3fb4f2b35a9dd4aeb3ec658d63bfc8cb47c15b5f98bde25",
+    "title": "MSCONS MIG 2.5"
+  },
+  "structure": [
+    {
+      "elements": [
+        {
+          "format": "an..14",
+          "id": "0062",
+          "name": "Nachrichten-Referenznummer",
+          "note": "Eindeutige Nachrichtenreferenz des Absenders. Nummer der Nachrichten einer Übertragungsdatei im Datenaustausch. Identisch mit DE0062 im UNT, i. d. R. vom sendenden Konverter vergeben.",
+          "status": "M"
+        },
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "MSCONS",
+                  "name": "Bericht über den Verbrauch messbarer Dienstleistungen"
+                }
+              ],
+              "format": "an..6",
+              "id": "0065",
+              "name": "Nachrichtentyp-Kennung",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "D",
+                  "name": "Entwurfs-Version"
+                }
+              ],
+              "format": "an..3",
+              "id": "0052",
+              "name": "Versionsnummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "04B",
+                  "name": "Ausgabe 2004 - B"
+                }
+              ],
+              "format": "an..3",
+              "id": "0054",
+              "name": "Freigabenummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "UN",
+                  "name": "UN/CEFACT"
+                }
+              ],
+              "format": "an..2",
+              "id": "0051",
+              "name": "Verwaltende Organisation",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "2.5",
+                  "name": "Versionsnummer der zugrundeliegenden BDEW-Nachrichtenbeschreibung"
+                }
+              ],
+              "format": "an..6",
+              "id": "0057",
+              "name": "Anwendungscode der zuständigen Organisation",
+              "status": "R"
+            }
+          ],
+          "id": "S009",
+          "name": "Nachrichten-Kennung",
+          "status": "M"
+        },
+        {
+          "format": "an..35",
+          "id": "0068",
+          "name": "Allgemeine Zuordnungs- Referenz",
+          "note": "Allgemeine Zuordnungs-Referenz",
+          "status": "D"
+        },
+        {
+          "components": [
+            {
+              "format": "n..2",
+              "id": "0070",
+              "name": "Übermittlungsfolgenummer",
+              "note": "Übermittlungsfolgenummer",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "C",
+                  "name": "Beginn"
+                },
+                {
+                  "code": "F",
+                  "name": "Ende"
+                }
+              ],
+              "format": "a1",
+              "id": "0073",
+              "name": "Erste und letzte Übermittlung",
+              "status": "D"
+            }
+          ],
+          "id": "S010",
+          "name": "Status der Übermittlung",
+          "status": "D"
+        }
+      ],
+      "example": "UNH+1+MSCONS:D:04B:UN:2.5+UNB_DE0020_nr_1+1:C'",
+      "max": 1,
+      "name": "Nachrichtenkopfsegment",
+      "nr": "00003",
+      "status": "M",
+      "tag": "UNH",
+      "zaehler": "0010"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "7",
+                  "name": "Prozessdatenbericht"
+                },
+                {
+                  "code": "270",
+                  "name": "Lieferschein"
+                },
+                {
+                  "code": "BK",
+                  "name": "Zeitreihen im Rahmen der Bilanzkreisabrechnung"
+                },
+                {
+                  "code": "Z06",
+                  "name": "normiertes Profil"
+                },
+                {
+                  "code": "Z15",
+                  "name": "EEG-Überführungszeitreihe"
+                },
+                {
+                  "code": "Z16",
+                  "name": "Profilschar"
+                },
+                {
+                  "code": "Z20",
+                  "name": "Vergangenheitswerte für TEP mit Referenzmessung"
+                },
+                {
+                  "code": "Z21",
+                  "name": "Gasbeschaffenheitsdaten"
+                },
+                {
+                  "code": "Z23",
+                  "name": "Bilanzierte Menge (MMMA)"
+                },
+                {
+                  "code": "Z24",
+                  "name": "Allokationsliste (MMMA)"
+                },
+                {
+                  "code": "Z27",
+                  "name": "Bewegungsdaten im Kalenderjahr vor Lieferbeginn"
+                },
+                {
+                  "code": "Z28",
+                  "name": "Energiemenge und Leistungsmaximum"
+                },
+                {
+                  "code": "Z39",
+                  "name": "Tägliche Summenzeitreihe"
+                },
+                {
+                  "code": "Z41",
+                  "name": "Lieferschein Grund- / Arbeitspreis"
+                },
+                {
+                  "code": "Z42",
+                  "name": "Lieferschein Arbeits- / Leistungspreis"
+                },
+                {
+                  "code": "Z43",
+                  "name": "Redispatch Ausfallarbeitsüberführungszeitreihe"
+                },
+                {
+                  "code": "Z44",
+                  "name": "Redispatch Übermittlung von meteorologischen Daten"
+                },
+                {
+                  "code": "Z45",
+                  "name": "Redispatch Einzelzeitreihe Ausfallarbeit"
+                },
+                {
+                  "code": "Z46",
+                  "name": "Redispatch Ausfallarbeitssummenzeitreihe"
+                },
+                {
+                  "code": "Z48",
+                  "name": "Lastgang Marktlokation, Tranche"
+                },
+                {
+                  "code": "Z50",
+                  "name": "Redispatch EEG-Überführungszeitreihe aufgrund Ausfallarbeit"
+                },
+                {
+                  "code": "Z69",
+                  "name": "Redispatch tägliche Ausfallarbeitsüberführungszeitreihe"
+                },
+                {
+                  "code": "Z83",
+                  "name": "Werte nach Typ 2"
+                },
+                {
+                  "code": "Z85",
+                  "name": "Grundlage POG-Ermittlung"
+                }
+              ],
+              "format": "an..3",
+              "id": "1001",
+              "name": "Dokumentenname, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C002",
+          "name": "Dokumenten-/ Nachrichtenname",
+          "status": "R"
+        },
+        {
+          "components": [
+            {
+              "format": "an..35",
+              "id": "1004",
+              "name": "Dokumentennummer",
+              "note": "Eindeutige EDI-Nachrichtennummer vergeben vom Absender des Dokuments",
+              "status": "R"
+            }
+          ],
+          "id": "C106",
+          "name": "Dokumenten-/Nachrichten- Identifikation",
+          "status": "R"
+        },
+        {
+          "codes": [
+            {
+              "code": "9",
+              "name": "Original"
+            },
+            {
+              "code": "1",
+              "name": "Storno"
+            }
+          ],
+          "format": "an..3",
+          "id": "1225",
+          "name": "Nachrichtenfunktion, Code",
+          "status": "R"
+        }
+      ],
+      "example": "BGM+7+MSI5422+9'",
+      "max": 1,
+      "name": "Beginn der Nachricht",
+      "nr": "00004",
+      "status": "M",
+      "tag": "BGM",
+      "zaehler": "0020"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "137",
+                  "name": "Dokumenten-/Nachrichtendatum/-zeit"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+137:202106011315?+00:303'",
+      "max": 1,
+      "name": "Nachrichtendatum",
+      "nr": "00005",
+      "status": "M",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
                     {
-                      "id": "9015",
-                      "status": "C",
-                      "components": 1
+                      "code": "AGI",
+                      "name": "Beantragungsnummer"
                     },
                     {
-                      "id": "C601",
-                      "status": "C",
-                      "components": 4
+                      "code": "ACW",
+                      "name": "Referenznummer einer vorangegangenen Nachricht"
                     }
-                  ]
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "note": "Referenznummer",
+                  "status": "R"
                 }
               ],
-              "groups": []
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
             }
-          ]
+          ],
+          "example": "RFF+AGI:AFN9523'",
+          "max": 1,
+          "name": "Referenzangaben",
+          "nr": "00006",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0060"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "293",
+                      "name": "Fertigstellungsdatum/-zeit"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2005",
+                  "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "2380",
+                  "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "304",
+                      "name": "CCYYMMDDHHMMSSZZZ"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2379",
+                  "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C507",
+              "name": "Datum/Uhrzeit/Zeitspanne",
+              "status": "M"
+            }
+          ],
+          "example": "DTM+293:20210601060030?+00:304'",
+          "max": 1,
+          "name": "Versionsangabe marktlokationsscharfe Allokationsliste Gas (MMMA)",
+          "nr": "00007",
+          "status": "D",
+          "tag": "DTM",
+          "zaehler": "0070"
         }
-      ]
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "Referenz",
+      "status": "D",
+      "zaehler": "0050"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z30",
+                      "name": "Referenz auf vorherige Stammdatenmeldung des MSB"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "note": "Referenznummer",
+                  "status": "R"
+                }
+              ],
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
+            }
+          ],
+          "example": "RFF+Z30:UTILMDXYZ_1235'",
+          "max": 1,
+          "name": "Referenz auf vorherige Stammdatenmeldung des MSB",
+          "nr": "00008",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0060"
+        }
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "Referenz auf vorherige Stammdatenmeldung des MSB",
+      "status": "D",
+      "zaehler": "0050"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z13",
+                      "name": "Prüfidentifikator"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "13002",
+                      "name": "Messw. Zählerstand (Gas)"
+                    },
+                    {
+                      "code": "13003",
+                      "name": "Summenzeitreihe"
+                    },
+                    {
+                      "code": "13005",
+                      "name": "EEG-Überf.ZR"
+                    },
+                    {
+                      "code": "13006",
+                      "name": "Messw. Storno"
+                    },
+                    {
+                      "code": "13007",
+                      "name": "Gasbeschaffenheitsdaten"
+                    },
+                    {
+                      "code": "13008",
+                      "name": "Messwert Lastgang (Gas)"
+                    },
+                    {
+                      "code": "13009",
+                      "name": "Messwert Energiemenge (Gas)"
+                    },
+                    {
+                      "code": "13010",
+                      "name": "Profil"
+                    },
+                    {
+                      "code": "13011",
+                      "name": "Profilschar"
+                    },
+                    {
+                      "code": "13012",
+                      "name": "TEP Vergangenheitswerte Referenz-Messung"
+                    },
+                    {
+                      "code": "13013",
+                      "name": "Marktlokationsscharfe Allokationsliste Gas (MMMA)"
+                    },
+                    {
+                      "code": "13014",
+                      "name": "Marktlokationsscharfe bilanzierte Menge (MMMA)"
+                    },
+                    {
+                      "code": "13015",
+                      "name": "Bewegungsdaten im Kalenderjahr vor Lieferbeginn"
+                    },
+                    {
+                      "code": "13016",
+                      "name": "Energiemenge und Leistungsmaximum"
+                    },
+                    {
+                      "code": "13017",
+                      "name": "Messw. Zählerstand (Strom)"
+                    },
+                    {
+                      "code": "13018",
+                      "name": "Lastgang Messlokation, Netzkoppelpunkt"
+                    },
+                    {
+                      "code": "13019",
+                      "name": "Messwert Energiemenge (Strom)"
+                    },
+                    {
+                      "code": "13020",
+                      "name": "Redispatch Ausfallarbeitsüberführungszeitreihe"
+                    },
+                    {
+                      "code": "13021",
+                      "name": "Redispatch Übermittlung von meteorologischen Daten"
+                    },
+                    {
+                      "code": "13022",
+                      "name": "Redispatch Einzelzeitreihe Ausfallarbeit"
+                    },
+                    {
+                      "code": "13023",
+                      "name": "Redispatch Ausfallarbeitssummenzeitreihe"
+                    },
+                    {
+                      "code": "13025",
+                      "name": "Lastgang Marktlokation, Tranche"
+                    },
+                    {
+                      "code": "13026",
+                      "name": "Redispatch EEG-Überführungszeitreihe aufgrund Ausfallarbeit"
+                    },
+                    {
+                      "code": "13027",
+                      "name": "Werte nach Typ 2"
+                    },
+                    {
+                      "code": "13028",
+                      "name": "Grundlage POG-Ermittlung"
+                    }
+                  ],
+                  "format": "n5",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "note": "Prüfidentifikator",
+                  "status": "R"
+                }
+              ],
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
+            }
+          ],
+          "example": "RFF+Z13:13002'",
+          "max": 1,
+          "name": "Prüfidentifikator",
+          "nr": "00009",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0060"
+        }
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "Prüfidentifikator",
+      "status": "R",
+      "zaehler": "0050"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "MS",
+                  "name": "Dokumenten-/Nachrichtenaussteller bzw. - absender"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    },
+                    {
+                      "code": "332",
+                      "name": "DE, DVGW Service & Consult GmbH"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+MS+4012345678901::9'\nNAD+MS+9920455302123::293'",
+          "max": 1,
+          "name": "MP-ID Absender",
+          "nr": "00010",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0090"
+        }
+      ],
+      "group": "SG2",
+      "max": 1,
+      "name": "MP-ID Absender",
+      "status": "R",
+      "zaehler": "0080"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "MR",
+                  "name": "Nachrichtenempfänger"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    },
+                    {
+                      "code": "332",
+                      "name": "DE, DVGW Service & Consult GmbH"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+MR+4012345678901::9'",
+          "max": 1,
+          "name": "MP-ID Empfänger",
+          "nr": "00011",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0090"
+        }
+      ],
+      "group": "SG2",
+      "max": 1,
+      "name": "MP-ID Empfänger",
+      "status": "R",
+      "zaehler": "0080"
+    },
+    {
+      "elements": [
+        {
+          "codes": [
+            {
+              "code": "D",
+              "name": "Trennung von Kopf- und Positionsteil"
+            }
+          ],
+          "format": "a1",
+          "id": "0081",
+          "name": "Abschnittskennung, codiert",
+          "status": "M"
+        }
+      ],
+      "example": "UNS+D'",
+      "max": 1,
+      "name": "Abschnitts-Kontrollsegment",
+      "nr": "00012",
+      "status": "M",
+      "tag": "UNS",
+      "zaehler": "0160"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "DP",
+                  "name": "Lieferanschrift"
+                },
+                {
+                  "code": "DED",
+                  "name": "Profilerstellung"
+                },
+                {
+                  "code": "Z15",
+                  "name": "Überführungszeitreihe"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            }
+          ],
+          "example": "NAD+DP'",
+          "max": 1,
+          "name": "Name und Adresse",
+          "nr": "00013",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0180"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "237",
+                      "name": "Bilanzkreis"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3227",
+                  "name": "Ortsangabe, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..35",
+                      "id": "3225",
+                      "name": "Ortsangabe, Code",
+                      "note": "Bilanzkreis an",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C517",
+                  "name": "Ortsangabe",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..25",
+                      "id": "3223",
+                      "name": "Erster zugehöriger Platz/Ort, Code",
+                      "note": "Bilanzkreis von",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C519",
+                  "name": "Zugehöriger Ort 1, Identifikation",
+                  "status": "R"
+                }
+              ],
+              "example": "LOC+237+11XUENBSOLS----X+11XVNBSOLS-----X'",
+              "max": 1,
+              "name": "Bilanzkreis",
+              "nr": "00014",
+              "status": "M",
+              "tag": "LOC",
+              "zaehler": "0200"
+            }
+          ],
+          "group": "SG6",
+          "max": 1,
+          "name": "Bilanzkreis",
+          "status": "D",
+          "zaehler": "0190"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "172",
+                      "name": "Meldepunkt"
+                    },
+                    {
+                      "code": "Z04",
+                      "name": "Profilbezeichnung"
+                    },
+                    {
+                      "code": "107",
+                      "name": "Bilanzierungsgebiet"
+                    },
+                    {
+                      "code": "Z06",
+                      "name": "Profilschar"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3227",
+                  "name": "Ortsangabe, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..35",
+                      "id": "3225",
+                      "name": "Ortsangabe, Code",
+                      "note": "Bezeichnung",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C517",
+                  "name": "Ortsangabe",
+                  "status": "D"
+                }
+              ],
+              "example": "LOC+107+11YR000000011247'\nLOC+172+DE00014559929E00856996N5139699L01'\nLOC+Z04+H0'",
+              "max": 1,
+              "name": "Identifikationsangabe",
+              "nr": "00015",
+              "status": "M",
+              "tag": "LOC",
+              "zaehler": "0200"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "163",
+                          "name": "Verarbeitung, Beginndatum/-zeit"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2005",
+                      "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..35",
+                      "id": "2380",
+                      "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "303",
+                          "name": "CCYYMMDDHHMMZZZ"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2379",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C507",
+                  "name": "Datum/Uhrzeit/Zeitspanne",
+                  "status": "M"
+                }
+              ],
+              "example": "DTM+163:202102012300?+00:303'",
+              "max": 1,
+              "name": "Beginn Messperiode Übertragungszeitraum",
+              "nr": "00016",
+              "status": "D",
+              "tag": "DTM",
+              "zaehler": "0210"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "164",
+                          "name": "Verarbeitung, Endedatum/-zeit"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2005",
+                      "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..35",
+                      "id": "2380",
+                      "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "303",
+                          "name": "CCYYMMDDHHMMZZZ"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2379",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C507",
+                  "name": "Datum/Uhrzeit/Zeitspanne",
+                  "status": "M"
+                }
+              ],
+              "example": "DTM+164:202102022300?+00:303'",
+              "max": 1,
+              "name": "Ende Messperiode Übertragungszeitraum",
+              "nr": "00017",
+              "status": "D",
+              "tag": "DTM",
+              "zaehler": "0210"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "492",
+                          "name": "Bilanzierungsdatum, -zeit, -periode"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2005",
+                      "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..35",
+                      "id": "2380",
+                      "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "610",
+                          "name": "CCYYMM"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2379",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C507",
+                  "name": "Datum/Uhrzeit/Zeitspanne",
+                  "status": "M"
+                }
+              ],
+              "example": "DTM+492:202004:610'",
+              "max": 1,
+              "name": "Bilanzierungsmonat",
+              "nr": "00018",
+              "status": "D",
+              "tag": "DTM",
+              "zaehler": "0210"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "293",
+                          "name": "Fertigstellungsdatum/-zeit"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2005",
+                      "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..35",
+                      "id": "2380",
+                      "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "304",
+                          "name": "CCYYMMDDHHMMSSZZZ"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2379",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C507",
+                  "name": "Datum/Uhrzeit/Zeitspanne",
+                  "status": "M"
+                }
+              ],
+              "example": "DTM+293:20210420103245?+00:304'",
+              "max": 1,
+              "name": "Versionsangabe",
+              "nr": "00019",
+              "status": "D",
+              "tag": "DTM",
+              "zaehler": "0210"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "157",
+                          "name": "Gültigkeit, Beginndatum"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2005",
+                      "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..35",
+                      "id": "2380",
+                      "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "610",
+                          "name": "CCYYMM"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2379",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C507",
+                  "name": "Datum/Uhrzeit/Zeitspanne",
+                  "status": "M"
+                }
+              ],
+              "example": "DTM+157:202002:610'",
+              "max": 1,
+              "name": "Gültigkeit, Beginndatum Profilschar",
+              "nr": "00020",
+              "status": "D",
+              "tag": "DTM",
+              "zaehler": "0210"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "MG",
+                              "name": "Gerätenummer"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "1153",
+                          "name": "Referenz, Qualifier",
+                          "status": "M"
+                        },
+                        {
+                          "format": "an..70",
+                          "id": "1154",
+                          "name": "Referenz, Identifikation",
+                          "note": "Gerätenummer",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C506",
+                      "name": "Referenz",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "RFF+MG:8465929523'",
+                  "max": 1,
+                  "name": "Gerätenummer",
+                  "nr": "00021",
+                  "status": "M",
+                  "tag": "RFF",
+                  "zaehler": "0230"
+                }
+              ],
+              "group": "SG7",
+              "max": 1,
+              "name": "Referenzangaben",
+              "status": "D",
+              "zaehler": "0220"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "AGK",
+                              "name": "Anwendungsreferenznummer"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "1153",
+                          "name": "Referenz, Qualifier",
+                          "status": "M"
+                        },
+                        {
+                          "format": "an..70",
+                          "id": "1154",
+                          "name": "Referenz, Identifikation",
+                          "note": "Konfigurations-ID",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C506",
+                      "name": "Referenz",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "RFF+AGK:34590456ujdfsdghdlktztwqq-053trg'",
+                  "max": 1,
+                  "name": "Konfigurations-ID",
+                  "nr": "00022",
+                  "status": "M",
+                  "tag": "RFF",
+                  "zaehler": "0230"
+                }
+              ],
+              "group": "SG7",
+              "max": 1,
+              "name": "Referenzangaben",
+              "status": "D",
+              "zaehler": "0220"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "codes": [
+                        {
+                          "code": "15",
+                          "name": "Struktur"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7059",
+                      "name": "Klassentyp, Code",
+                      "status": "R"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..3",
+                          "id": "6313",
+                          "name": "Gemessene Dimension, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        }
+                      ],
+                      "id": "C502",
+                      "name": "Einzelheiten zu Maßangaben",
+                      "status": "N"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..17",
+                          "id": "7037",
+                          "name": "Merkmal, Code",
+                          "note": "Zeitreihentyp",
+                          "status": "M"
+                        }
+                      ],
+                      "id": "C240",
+                      "name": "Merkmalsbeschreibung",
+                      "status": "R"
+                    }
+                  ],
+                  "example": "CCI+15++BI1'",
+                  "max": 1,
+                  "name": "Zeitreihentyp",
+                  "nr": "00023",
+                  "status": "M",
+                  "tag": "CCI",
+                  "zaehler": "0260"
+                }
+              ],
+              "group": "SG8",
+              "max": 1,
+              "name": "Zeitreihentyp",
+              "status": "D",
+              "zaehler": "0250"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "format": "n..6",
+                      "id": "1082",
+                      "name": "Positionsnummer",
+                      "status": "R"
+                    }
+                  ],
+                  "example": "LIN+1'",
+                  "max": 1,
+                  "name": "lfd. Position",
+                  "nr": "00024",
+                  "status": "M",
+                  "tag": "LIN",
+                  "zaehler": "0290"
+                },
+                {
+                  "elements": [
+                    {
+                      "codes": [
+                        {
+                          "code": "5",
+                          "name": "Produktidentifikation"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "4347",
+                      "name": "Produkt-/Erzeugnisnummer, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..35",
+                          "id": "7140",
+                          "name": "Produkt-/Leistungsnummer",
+                          "note": "Medium / OBIS-Kennzahl",
+                          "status": "R"
+                        },
+                        {
+                          "codes": [
+                            {
+                              "code": "SRW",
+                              "name": "OBIS-Kennzahl"
+                            },
+                            {
+                              "code": "Z02",
+                              "name": "BDEW OBIS-ähnliche Kennzahl"
+                            },
+                            {
+                              "code": "Z08",
+                              "name": "Medium"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7143",
+                          "name": "Art der Produkt-/ Leistungsnummer, Code",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C212",
+                      "name": "Waren-/Leistungsnummer, Identifikation",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "PIA+5+1-1?:1.8.1:SRW'",
+                  "max": 1,
+                  "name": "Produktidentifikation",
+                  "nr": "00025",
+                  "status": "R",
+                  "tag": "PIA",
+                  "zaehler": "0300"
+                },
+                {
+                  "children": [
+                    {
+                      "elements": [
+                        {
+                          "components": [
+                            {
+                              "codes": [
+                                {
+                                  "code": "220",
+                                  "name": "Wahrer Wert"
+                                },
+                                {
+                                  "code": "67",
+                                  "name": "Ersatzwert"
+                                },
+                                {
+                                  "code": "201",
+                                  "name": "Vorschlagswert"
+                                },
+                                {
+                                  "code": "20",
+                                  "name": "Nicht verwendbarer Wert"
+                                },
+                                {
+                                  "code": "187",
+                                  "name": "Prognosewert"
+                                },
+                                {
+                                  "code": "79",
+                                  "name": "Energiemenge summiert (Summenwert, Bilanzsumme)"
+                                },
+                                {
+                                  "code": "Z18",
+                                  "name": "Vorläufiger Wert"
+                                },
+                                {
+                                  "code": "Z30",
+                                  "name": "Fehlender Wert"
+                                },
+                                {
+                                  "code": "Z31",
+                                  "name": "Angabe für Lieferschein"
+                                },
+                                {
+                                  "code": "Z47",
+                                  "name": "Grundlage POG-Ermittlung"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "6063",
+                              "name": "Menge, Qualifier",
+                              "status": "M"
+                            },
+                            {
+                              "format": "n..35",
+                              "id": "6060",
+                              "name": "Menge",
+                              "status": "M"
+                            },
+                            {
+                              "codes": [
+                                {
+                                  "code": "D54",
+                                  "name": "Watt pro Quadratmeter"
+                                },
+                                {
+                                  "code": "MTS",
+                                  "name": "Meter pro Sekunde"
+                                },
+                                {
+                                  "code": "KWH",
+                                  "name": "Kilowattstunde"
+                                },
+                                {
+                                  "code": "KWT",
+                                  "name": "Kilowatt"
+                                }
+                              ],
+                              "format": "an..8",
+                              "id": "6411",
+                              "name": "Maßeinheit, Code",
+                              "status": "D"
+                            }
+                          ],
+                          "id": "C186",
+                          "name": "Mengenangaben",
+                          "status": "M"
+                        }
+                      ],
+                      "example": "QTY+220:4250.465:D54'",
+                      "max": 1,
+                      "name": "Mengenangaben",
+                      "nr": "00026",
+                      "status": "M",
+                      "tag": "QTY",
+                      "zaehler": "0360"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "components": [
+                            {
+                              "codes": [
+                                {
+                                  "code": "163",
+                                  "name": "Verarbeitung, Beginndatum/-zeit"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "2005",
+                              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                              "status": "M"
+                            },
+                            {
+                              "format": "an..35",
+                              "id": "2380",
+                              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                              "status": "R"
+                            },
+                            {
+                              "codes": [
+                                {
+                                  "code": "303",
+                                  "name": "CCYYMMDDHHMMZZZ"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "2379",
+                              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                              "status": "R"
+                            }
+                          ],
+                          "id": "C507",
+                          "name": "Datum/Uhrzeit/Zeitspanne",
+                          "status": "M"
+                        }
+                      ],
+                      "example": "DTM+163:202101012300?+00:303'",
+                      "max": 1,
+                      "name": "Beginn Messperiode",
+                      "nr": "00027",
+                      "status": "D",
+                      "tag": "DTM",
+                      "zaehler": "0370"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "components": [
+                            {
+                              "codes": [
+                                {
+                                  "code": "164",
+                                  "name": "Verarbeitung, Endedatum/-zeit"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "2005",
+                              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                              "status": "M"
+                            },
+                            {
+                              "format": "an..35",
+                              "id": "2380",
+                              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                              "status": "R"
+                            },
+                            {
+                              "codes": [
+                                {
+                                  "code": "303",
+                                  "name": "CCYYMMDDHHMMZZZ"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "2379",
+                              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                              "status": "R"
+                            }
+                          ],
+                          "id": "C507",
+                          "name": "Datum/Uhrzeit/Zeitspanne",
+                          "status": "M"
+                        }
+                      ],
+                      "example": "DTM+164:202101312315?+00:303'",
+                      "max": 1,
+                      "name": "Ende Messperiode",
+                      "nr": "00028",
+                      "status": "D",
+                      "tag": "DTM",
+                      "zaehler": "0370"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "components": [
+                            {
+                              "codes": [
+                                {
+                                  "code": "9",
+                                  "name": "Bearbeitungs-/Verarbeitungsdatum/-zeit"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "2005",
+                              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                              "status": "M"
+                            },
+                            {
+                              "format": "an..35",
+                              "id": "2380",
+                              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                              "status": "R"
+                            },
+                            {
+                              "codes": [
+                                {
+                                  "code": "102",
+                                  "name": "CCYYMMDD"
+                                },
+                                {
+                                  "code": "303",
+                                  "name": "CCYYMMDDHHMMZZZ"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "2379",
+                              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                              "status": "R"
+                            }
+                          ],
+                          "id": "C507",
+                          "name": "Datum/Uhrzeit/Zeitspanne",
+                          "status": "M"
+                        }
+                      ],
+                      "example": "DTM+9:20210201:102'\nDTM+9:202107011655?+00:303'",
+                      "max": 1,
+                      "name": "Ablesedatum",
+                      "nr": "00029",
+                      "status": "D",
+                      "tag": "DTM",
+                      "zaehler": "0370"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "components": [
+                            {
+                              "codes": [
+                                {
+                                  "code": "7",
+                                  "name": "Gültigkeitsdatum/-zeit"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "2005",
+                              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                              "status": "M"
+                            },
+                            {
+                              "format": "an..35",
+                              "id": "2380",
+                              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                              "status": "R"
+                            },
+                            {
+                              "codes": [
+                                {
+                                  "code": "303",
+                                  "name": "CCYYMMDDHHMMZZZ"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "2379",
+                              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                              "status": "R"
+                            }
+                          ],
+                          "id": "C507",
+                          "name": "Datum/Uhrzeit/Zeitspanne",
+                          "status": "M"
+                        }
+                      ],
+                      "example": "DTM+7:202106012200?+00:303'",
+                      "max": 1,
+                      "name": "Nutzungszeitpunkt",
+                      "nr": "00030",
+                      "status": "D",
+                      "tag": "DTM",
+                      "zaehler": "0370"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "components": [
+                            {
+                              "codes": [
+                                {
+                                  "code": "60",
+                                  "name": "Konstruktionsänderungsdatum"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "2005",
+                              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                              "status": "M"
+                            },
+                            {
+                              "format": "an..35",
+                              "id": "2380",
+                              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                              "status": "R"
+                            },
+                            {
+                              "codes": [
+                                {
+                                  "code": "303",
+                                  "name": "CCYYMMDDHHMMZZZ"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "2379",
+                              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                              "status": "R"
+                            }
+                          ],
+                          "id": "C507",
+                          "name": "Datum/Uhrzeit/Zeitspanne",
+                          "status": "M"
+                        }
+                      ],
+                      "example": "DTM+60:202106011730?+00:303'",
+                      "max": 1,
+                      "name": "Ausführungs- / Änderungszeitpunkt",
+                      "nr": "00031",
+                      "status": "D",
+                      "tag": "DTM",
+                      "zaehler": "0370"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "components": [
+                            {
+                              "codes": [
+                                {
+                                  "code": "306",
+                                  "name": "Leistungsperiode"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "2005",
+                              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                              "status": "M"
+                            },
+                            {
+                              "format": "an..35",
+                              "id": "2380",
+                              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                              "status": "R"
+                            },
+                            {
+                              "codes": [
+                                {
+                                  "code": "102",
+                                  "name": "CCYYMMDD"
+                                },
+                                {
+                                  "code": "610",
+                                  "name": "CCYYMM"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "2379",
+                              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                              "status": "R"
+                            }
+                          ],
+                          "id": "C507",
+                          "name": "Datum/Uhrzeit/Zeitspanne",
+                          "status": "M"
+                        }
+                      ],
+                      "example": "DTM+306:20200401:102'",
+                      "max": 1,
+                      "name": "Leistungsperiode",
+                      "nr": "00032",
+                      "status": "D",
+                      "tag": "DTM",
+                      "zaehler": "0370"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "components": [
+                            {
+                              "codes": [
+                                {
+                                  "code": "Z33",
+                                  "name": "Plausibilisierungshinweis"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "9015",
+                              "name": "Statuskategorie, Code",
+                              "status": "M"
+                            }
+                          ],
+                          "id": "C601",
+                          "name": "Statuskategorie",
+                          "status": "R"
+                        },
+                        {
+                          "components": [
+                            {
+                              "format": "an..3",
+                              "id": "4405",
+                              "name": "Status, Code",
+                              "note": "Nicht benutzt",
+                              "status": "N"
+                            }
+                          ],
+                          "id": "C555",
+                          "name": "Status",
+                          "status": "N"
+                        },
+                        {
+                          "components": [
+                            {
+                              "codes": [
+                                {
+                                  "code": "Z83",
+                                  "name": "Kundenselbstablesung Messwert wurde durch den Kunden am Zähler abgelesen."
+                                },
+                                {
+                                  "code": "Z84",
+                                  "name": "Leerstand"
+                                },
+                                {
+                                  "code": "Z85",
+                                  "name": "Realer Zählerüberlauf geprüft"
+                                },
+                                {
+                                  "code": "Z86",
+                                  "name": "Plausibel wg. Kontrollablesung"
+                                },
+                                {
+                                  "code": "Z87",
+                                  "name": "Plausibel wg. Kundenhinweis"
+                                },
+                                {
+                                  "code": "ZC3",
+                                  "name": "Austausch des Ersatzwertes"
+                                },
+                                {
+                                  "code": "ZR5",
+                                  "name": "Rechenwert Gas: Rechnerisch ermittelter Wert gemäß G685"
+                                },
+                                {
+                                  "code": "ZS2",
+                                  "name": "Wert auf Basis der modernen Messeinrichtung"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "9013",
+                              "name": "Statusanlaß, Code",
+                              "status": "M"
+                            }
+                          ],
+                          "id": "C556",
+                          "name": "Statusanlaß",
+                          "status": "R"
+                        }
+                      ],
+                      "example": "STS+Z33++Z84'",
+                      "max": 4,
+                      "name": "Plausibilisierungshinweis",
+                      "nr": "00033",
+                      "status": "D",
+                      "tag": "STS",
+                      "zaehler": "0380"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "components": [
+                            {
+                              "codes": [
+                                {
+                                  "code": "Z32",
+                                  "name": "Ersatzwertbildungsverfahren"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "9015",
+                              "name": "Statuskategorie, Code",
+                              "status": "M"
+                            }
+                          ],
+                          "id": "C601",
+                          "name": "Statuskategorie",
+                          "status": "R"
+                        },
+                        {
+                          "components": [
+                            {
+                              "format": "an..3",
+                              "id": "4405",
+                              "name": "Status, Code",
+                              "note": "Nicht benutzt",
+                              "status": "N"
+                            }
+                          ],
+                          "id": "C555",
+                          "name": "Status",
+                          "status": "N"
+                        },
+                        {
+                          "components": [
+                            {
+                              "codes": [
+                                {
+                                  "code": "Z88",
+                                  "name": "Vergleichsmessung (geeicht) Strom: Messwert aus geeichter Vergleichsmessung."
+                                },
+                                {
+                                  "code": "Z89",
+                                  "name": "Vergleichsmessung (nicht geeicht) Strom: Messwert aus verfügbaren nicht geeichten Geräten (z. B. Analogmessung). Gas: Messwert eines nicht geeichten Messgerätes in der gleichen Messstrecke."
+                                },
+                                {
+                                  "code": "Z90",
+                                  "name": "Messwertnachbildung aus geeichten Werten Gas: Messwert eines geeichten Messgerätes an einem geeigneten, dem Messort möglichst nahen Ort, ggf. unter Berücksichtigung der Zeitverschiebung."
+                                },
+                                {
+                                  "code": "Z91",
+                                  "name": "Messwertnachbildung aus nicht geeichten Werten Gas: Messwert eines nicht geeichten Messgerätes an einem geeigneten, dem Messort möglichst nahen Ort, ggf. unter Berücksichtigung der Zeitverschiebung."
+                                },
+                                {
+                                  "code": "Z92",
+                                  "name": "Interpolation Strom / Gas: Berechnung eines neuen Wertes durch Interpolation."
+                                },
+                                {
+                                  "code": "Z93",
+                                  "name": "Haltewert Gas: Weiterverwendung des zuletzt gültig gemessenen Wertes."
+                                },
+                                {
+                                  "code": "Z94",
+                                  "name": "Bilanzierung Netzabschnitt Gas: Berechnung eines neuen Wertes durch Bilanzierung über einen geschlossenen Netzabschnitt."
+                                },
+                                {
+                                  "code": "Z95",
+                                  "name": "Historische Messwerte Gas: historische Messwerte aus einem geeigneten Zeitabschnitt."
+                                },
+                                {
+                                  "code": "ZJ2",
+                                  "name": "Statistische Methode Strom: Vergleichswertverfahren mit Teilschritten Wertebestimmung, Ersatzprofilbestimmung und Skalierung."
+                                },
+                                {
+                                  "code": "ZQ8",
+                                  "name": "Aufteilung Gas: Aufteilung des bekannten Fortschritts des Volumens im Betriebszustand (aus den Zeitbereich, ggf. mit Anwendung eines Profils. Stunden, in denen das Volumen im Betriebszustand Null ist, werden nicht berücksichtigt. Berechnung des Volumens im Normzustand mit den besten verfügbaren Werten für Druck, Temperatur und K-Zahl. Berechnung der Energie mit den besten verfügbaren Werten für Druck, Temperatur, K-Zahl und Brennwert."
+                                },
+                                {
+                                  "code": "ZQ9",
+                                  "name": "Verwendung von Werten des Störmengenzählwerks Gas: Verwendung von Messwerten aus dem Störmengenzählwerk bei vorliegender Störung des Hauptzählwerkes."
+                                },
+                                {
+                                  "code": "ZR0",
+                                  "name": "Umgangs- und Korrekturmengen Gas: Umgangs- und Korrekturmengen aus Revisionsmaßnahmen."
+                                },
+                                {
+                                  "code": "ZS0",
+                                  "name": "Ersatzwertbildungsverfahren gemäß Angaben auf Ebene der Messlokation Strom / Gas: bei einer 1:N Beziehung zwischen Markt- und Messlokation können auf Ebene der Messlokation verschiedene Ersatzwertbildungsverfahren verwendet werden, sodass auf Ebene der Marktlokation auf die Ersatzwerbildungsverfahren der bereits übermittelten Werte der Messlokation verwiesen wird."
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "9013",
+                              "name": "Statusanlaß, Code",
+                              "status": "M"
+                            }
+                          ],
+                          "id": "C556",
+                          "name": "Statusanlaß",
+                          "status": "R"
+                        }
+                      ],
+                      "example": "STS+Z32++Z88'",
+                      "max": 1,
+                      "name": "Ersatzwertbildungsverfahren",
+                      "nr": "00034",
+                      "status": "D",
+                      "tag": "STS",
+                      "zaehler": "0380"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "components": [
+                            {
+                              "codes": [
+                                {
+                                  "code": "Z34",
+                                  "name": "Korrekturgrund"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "9015",
+                              "name": "Statuskategorie, Code",
+                              "status": "M"
+                            }
+                          ],
+                          "id": "C601",
+                          "name": "Statuskategorie",
+                          "status": "R"
+                        },
+                        {
+                          "components": [
+                            {
+                              "format": "an..3",
+                              "id": "4405",
+                              "name": "Status, Code",
+                              "note": "Nicht benutzt",
+                              "status": "N"
+                            }
+                          ],
+                          "id": "C555",
+                          "name": "Status",
+                          "status": "N"
+                        },
+                        {
+                          "components": [
+                            {
+                              "codes": [
+                                {
+                                  "code": "Z74",
+                                  "name": "kein Zugang Strom / Gas: Zugang zur Messeinrichtung nicht möglich (Vor-Ort-Ablesung)."
+                                },
+                                {
+                                  "code": "Z75",
+                                  "name": "Kommunikationsstörung Strom / Gas: Fernauslesung konnte nicht fristgerecht durchgeführt werden."
+                                },
+                                {
+                                  "code": "Z76",
+                                  "name": "Netzausfall Strom / Gas: Netzausfall = Ausfall eines Netzgebietes/fehlende Primärspannung."
+                                },
+                                {
+                                  "code": "Z77",
+                                  "name": "Spannungsausfall Strom: Messspannungsausfall oder fehlende Hilfsspannung."
+                                },
+                                {
+                                  "code": "Z78",
+                                  "name": "Gerätewechsel Strom / Gas: Messwerte unvollständig wegen Gerätewechsels."
+                                },
+                                {
+                                  "code": "Z79",
+                                  "name": "Kalibrierung Strom: Während Wartungs-, Revisions- oder Instandsetzungsarbeiten am geeichten Messgeräten stehen keine Messwerte zur Verfügung."
+                                },
+                                {
+                                  "code": "Z80",
+                                  "name": "Gerät arbeitet außerhalb der Betriebsbedingungen Strom / Gas: Das Gerät arbeitet außerhalb der zugelassenen Betriebsbedingungen und liefert keine Messwerte."
+                                },
+                                {
+                                  "code": "Z81",
+                                  "name": "Messeinrichtung gestört/defekt Strom / Gas: Messwerte sind nicht verwendbar / verfügbar, da bei der Messeinrichtung ein Defekt festgestellt wurde."
+                                },
+                                {
+                                  "code": "Z82",
+                                  "name": "Unsicherheit Messung Strom / Gas: Möglicher Gerätedefekt/ Messeinrichtung in Überprüfung (z. B. Befundprüfung)."
+                                },
+                                {
+                                  "code": "Z98",
+                                  "name": "Berücksichtigung Störmengenzählwerk Gas: Normvolumen aus Störmengenzähler des MU."
+                                },
+                                {
+                                  "code": "Z99",
+                                  "name": "Mengenumwertung unvollständig Gas: Zur Ermittlung des Normvolumens relevante Faktoren sind nicht verfügbar."
+                                },
+                                {
+                                  "code": "ZA0",
+                                  "name": "Uhrzeit gestellt /Synchronisation Strom / Gas: Uhrzeit war außerhalb der zulässigen Grenzwerte."
+                                },
+                                {
+                                  "code": "ZA1",
+                                  "name": "Messwert unplausibel Strom / Gas: Energie, Leistung, Volumen, etc. unplausibel."
+                                },
+                                {
+                                  "code": "ZA3",
+                                  "name": "Falscher Wandlerfaktor"
+                                },
+                                {
+                                  "code": "ZA4",
+                                  "name": "Fehlerhafte Ablesung Strom / Gas: Fehlerhafte Ablesung incl. Messstellenverwechslung, Zahlendreher, ..."
+                                },
+                                {
+                                  "code": "ZA5",
+                                  "name": "Änderung der Berechnung Strom / Gas: z. B. Änderung der Berechnungsvorschrift, nachträglich berücksichtigte Zweit- bzw. Untermessung."
+                                },
+                                {
+                                  "code": "ZA6",
+                                  "name": "Umbau der Messlokation"
+                                },
+                                {
+                                  "code": "ZA7",
+                                  "name": "Datenbearbeitungsfehler"
+                                },
+                                {
+                                  "code": "ZA8",
+                                  "name": "Brennwertkorrektur"
+                                },
+                                {
+                                  "code": "ZA9",
+                                  "name": "Z-Zahl-Korrektur"
+                                },
+                                {
+                                  "code": "ZB0",
+                                  "name": "Störung / Defekt Messeinrichtung Strom / Gas: Technischer Fehler in der Messeinrichtung."
+                                },
+                                {
+                                  "code": "ZB9",
+                                  "name": "Änderung Tarifschaltzeiten"
+                                },
+                                {
+                                  "code": "ZC2",
+                                  "name": "Tarifschaltgerät defekt Strom: Tarifschaltgerät defekt."
+                                },
+                                {
+                                  "code": "ZC4",
+                                  "name": "Impulswertigkeit nicht ausreichend Strom / Gas: Der Wert basiert auf einer unzureichenden Anzahl von Impulsen gemäß der Eichordnung."
+                                },
+                                {
+                                  "code": "ZJ8",
+                                  "name": "Energiemenge in ungemessenem Zeitintervall Strom: Energiemenge, die in dem Zeitintervall Ausbau eines Zählers und Einbau eines neuen"
+                                },
+                                {
+                                  "code": "ZJ9",
+                                  "name": "Energiemenge aus dem ungepairten Zeitintervall Strom / Gas: Energiemenge, die in dem Zeitintervall Einbau einer mME und erstem"
+                                },
+                                {
+                                  "code": "ZR1",
+                                  "name": "Wartungsarbeiten an geeichtem Messgerät Gas: Während Wartungs-, Revisions- oder Instandsetzungsarbeiten an geeichten Messgeräten stehen keine Messwerte zur Verfügung."
+                                },
+                                {
+                                  "code": "ZR2",
+                                  "name": "gestörte Werte Gas: Das Messgerät kennzeichnet seine Messergebnisse als gestörte Werte."
+                                },
+                                {
+                                  "code": "ZR3",
+                                  "name": "Wartungsarbeiten an eichrechtskonformen Messgeräten Gas: Während Wartungs-, Revisions- oder Instandsetzungsarbeiten an eichrechtskonformen Messgeräten stehen keine Messwerte zur Verfügung."
+                                },
+                                {
+                                  "code": "ZR4",
+                                  "name": "Konsistenz- und Synchronprüfung Gas: Auf Basis der Prüfungen gemäß G685 Kapitel 2.4 und 2.5 wird ein Messwert als unplausibel erkannt (Konsistenz- und Synchronprüfung)."
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "9013",
+                              "name": "Statusanlaß, Code",
+                              "status": "M"
+                            }
+                          ],
+                          "id": "C556",
+                          "name": "Statusanlaß",
+                          "status": "R"
+                        }
+                      ],
+                      "example": "STS+Z34++Z81'",
+                      "max": 1,
+                      "name": "Korrekturgrund",
+                      "nr": "00035",
+                      "status": "D",
+                      "tag": "STS",
+                      "zaehler": "0380"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "components": [
+                            {
+                              "codes": [
+                                {
+                                  "code": "Z40",
+                                  "name": "Grund der Ersatzwertbildung"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "9015",
+                              "name": "Statuskategorie, Code",
+                              "status": "M"
+                            }
+                          ],
+                          "id": "C601",
+                          "name": "Statuskategorie",
+                          "status": "R"
+                        },
+                        {
+                          "components": [
+                            {
+                              "format": "an..3",
+                              "id": "4405",
+                              "name": "Status, Code",
+                              "note": "Nicht benutzt",
+                              "status": "N"
+                            }
+                          ],
+                          "id": "C555",
+                          "name": "Status",
+                          "status": "N"
+                        },
+                        {
+                          "components": [
+                            {
+                              "codes": [
+                                {
+                                  "code": "Z74",
+                                  "name": "kein Zugang Strom / Gas: Zugang zur Messeinrichtung nicht möglich (Vor-Ort-Ablesung)."
+                                },
+                                {
+                                  "code": "Z75",
+                                  "name": "Kommunikationsstörung Strom / Gas: Fernauslesung konnte nicht fristgerecht durchgeführt werden."
+                                },
+                                {
+                                  "code": "Z76",
+                                  "name": "Netzausfall Strom / Gas: Netzausfall = Ausfall eines Netzgebietes/fehlende Primärspannung."
+                                },
+                                {
+                                  "code": "Z77",
+                                  "name": "Spannungsausfall Strom: Messspannungsausfall oder fehlende Hilfsspannung."
+                                },
+                                {
+                                  "code": "Z78",
+                                  "name": "Gerätewechsel Strom / Gas: Messwerte unvollständig wegen Gerätewechsels."
+                                },
+                                {
+                                  "code": "Z79",
+                                  "name": "Kalibrierung Strom: Während Wartungs-, Revisions- oder Instandsetzungsarbeiten am geeichten Messgeräten stehen keine Messwerte zur Verfügung."
+                                },
+                                {
+                                  "code": "Z80",
+                                  "name": "Gerät arbeitet außerhalb der Betriebsbedingungen Strom / Gas: Das Gerät arbeitet außerhalb der zugelassenen Betriebsbedingungen und liefert keine Messwerte."
+                                },
+                                {
+                                  "code": "Z81",
+                                  "name": "Messeinrichtung gestört/defekt Strom / Gas: Messwerte sind nicht verwendbar / verfügbar, da bei der Messeinrichtung ein Defekt festgestellt wurde."
+                                },
+                                {
+                                  "code": "Z82",
+                                  "name": "Unsicherheit Messung Strom / Gas: Möglicher Gerätedefekt/ Messeinrichtung in Überprüfung (z. B. Befundprüfung)."
+                                },
+                                {
+                                  "code": "Z98",
+                                  "name": "Berücksichtigung Störmengenzählwerk Gas: Normvolumen aus Störmengenzähler des MU."
+                                },
+                                {
+                                  "code": "Z99",
+                                  "name": "Mengenumwertung unvollständig Gas: Zur Ermittlung des Normvolumens relevante Faktoren sind nicht verfügbar."
+                                },
+                                {
+                                  "code": "ZA0",
+                                  "name": "Uhrzeit gestellt /Synchronisation Strom / Gas: Uhrzeit war außerhalb der zulässigen Grenzwerte."
+                                },
+                                {
+                                  "code": "ZA1",
+                                  "name": "Messwert unplausibel Strom / Gas: Energie, Leistung, Volumen, etc. unplausibel."
+                                },
+                                {
+                                  "code": "ZA3",
+                                  "name": "Falscher Wandlerfaktor"
+                                },
+                                {
+                                  "code": "ZA4",
+                                  "name": "Fehlerhafte Ablesung Strom / Gas: Fehlerhafte Ablesung incl. Messstellenverwechslung, Zahlendreher, ..."
+                                },
+                                {
+                                  "code": "ZA5",
+                                  "name": "Änderung der Berechnung Strom / Gas: z. B. Änderung der Berechnungsvorschrift, nachträglich berücksichtigte Zweit- bzw. Untermessung."
+                                },
+                                {
+                                  "code": "ZA6",
+                                  "name": "Umbau der Messlokation"
+                                },
+                                {
+                                  "code": "ZA7",
+                                  "name": "Datenbearbeitungsfehler"
+                                },
+                                {
+                                  "code": "ZB0",
+                                  "name": "Störung / Defekt Messeinrichtung Strom / Gas: Technischer Fehler in der Messeinrichtung."
+                                },
+                                {
+                                  "code": "ZB9",
+                                  "name": "Änderung Tarifschaltzeiten"
+                                },
+                                {
+                                  "code": "ZC2",
+                                  "name": "Tarifschaltgerät defekt Strom: Tarifschaltgerät defekt."
+                                },
+                                {
+                                  "code": "ZC4",
+                                  "name": "Impulswertigkeit nicht ausreichend Strom / Gas: Der Wert basiert auf einer unzureichenden Anzahl von Impulsen gemäß der Eichordnung."
+                                },
+                                {
+                                  "code": "ZR1",
+                                  "name": "Wartungsarbeiten an geeichtem Messgerät Gas: Während Wartungs-, Revisions- oder Instandsetzungsarbeiten an geeichten Messgeräten stehen keine Messwerte zur Verfügung."
+                                },
+                                {
+                                  "code": "ZR2",
+                                  "name": "gestörte Werte Gas: Das Messgerät kennzeichnet seine Messergebnisse als gestörte Werte."
+                                },
+                                {
+                                  "code": "ZR3",
+                                  "name": "Wartungsarbeiten an eichrechtskonformen Messgeräten Gas: Während Wartungs-, Revisions- oder Instandsetzungsarbeiten an eichrechtskonformen Messgeräten stehen keine Messwerte zur Verfügung."
+                                },
+                                {
+                                  "code": "ZR4",
+                                  "name": "Konsistenz- und Synchronprüfung Gas: Auf Basis der Prüfungen gemäß G685 Kapitel 2.4 und 2.5 wird ein Messwert als unplausibel erkannt (Konsistenz- und Synchronprüfung)."
+                                },
+                                {
+                                  "code": "ZS9",
+                                  "name": "Grund der Ersatzwertbildung gemäß Angaben auf Ebene der Messlokation Strom / Gas: bei einer 1:N Beziehung zwischen Markt- und Messlokation können auf Ebene der Messlokation verschiedene unterschiedliche Gründe für die Ersatzwertbildung vorliegen, sodass auf Ebene der Marktlokation auf die Gründe der Ersatzwertbildung der bereits übermittelten Werte der Messlokation verwiesen wird."
+                                },
+                                {
+                                  "code": "ZT8",
+                                  "name": "Anforderung in die Vergangenheit, zum angeforderten Zeitpunkt liegt kein Wert vor. Strom / Gas: Bei Bestellungen von Werten zu einem Nutzungszeitpunkt der in der Vergangenheit liegt, zu dem beim MSB kein realer Wert vorliegt, ist es notwendig für den angeforderten Zeitpunkt einen Ersatzwert zu bilden und zu übermitteln."
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "9013",
+                              "name": "Statusanlaß, Code",
+                              "status": "M"
+                            }
+                          ],
+                          "id": "C556",
+                          "name": "Statusanlaß",
+                          "status": "R"
+                        }
+                      ],
+                      "example": "STS+Z40++Z74'",
+                      "max": 1,
+                      "name": "Grund der Ersatzwertbildung",
+                      "nr": "00036",
+                      "status": "D",
+                      "tag": "STS",
+                      "zaehler": "0380"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "components": [
+                            {
+                              "codes": [
+                                {
+                                  "code": "Z31",
+                                  "name": "Gasqualität"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "9015",
+                              "name": "Statuskategorie, Code",
+                              "status": "M"
+                            }
+                          ],
+                          "id": "C601",
+                          "name": "Statuskategorie",
+                          "status": "R"
+                        },
+                        {
+                          "components": [
+                            {
+                              "format": "an..3",
+                              "id": "4405",
+                              "name": "Status, Code",
+                              "note": "Nicht benutzt",
+                              "status": "N"
+                            }
+                          ],
+                          "id": "C555",
+                          "name": "Status",
+                          "status": "N"
+                        },
+                        {
+                          "components": [
+                            {
+                              "codes": [
+                                {
+                                  "code": "ZG3",
+                                  "name": "Umstellung Gasqualität Der Status wird gesetzt, wenn ein Wert auf Grund der Umstellung von Gasqualität übermittelt werden muss."
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "9013",
+                              "name": "Statusanlaß, Code",
+                              "status": "M"
+                            }
+                          ],
+                          "id": "C556",
+                          "name": "Statusanlaß",
+                          "status": "R"
+                        }
+                      ],
+                      "example": "STS+Z31++ZG3'",
+                      "max": 1,
+                      "name": "Gasqualität",
+                      "nr": "00037",
+                      "status": "D",
+                      "tag": "STS",
+                      "zaehler": "0380"
+                    },
+                    {
+                      "elements": [
+                        {
+                          "components": [
+                            {
+                              "codes": [
+                                {
+                                  "code": "10",
+                                  "name": "Messklassifizierung"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "9015",
+                              "name": "Statuskategorie, Code",
+                              "status": "M"
+                            }
+                          ],
+                          "id": "C601",
+                          "name": "Statuskategorie",
+                          "status": "R"
+                        },
+                        {
+                          "components": [
+                            {
+                              "codes": [
+                                {
+                                  "code": "Z36",
+                                  "name": "Zählerstand zum Beginn der angegebenen Energiemenge vorhanden und kommuniziert"
+                                },
+                                {
+                                  "code": "Z37",
+                                  "name": "Zählerstand zum Ende der angegebenen Energiemenge vorhanden und kommuniziert"
+                                },
+                                {
+                                  "code": "Z38",
+                                  "name": "Zählerstand zum Beginn der angegebenen Energiemenge nicht vorhanden da Mengenabgrenzung"
+                                },
+                                {
+                                  "code": "Z39",
+                                  "name": "Zählerstand zum Ende der angegebenen Energiemenge nicht vorhanden da Mengenabgrenzung"
+                                }
+                              ],
+                              "format": "an..3",
+                              "id": "4405",
+                              "name": "Status, Code",
+                              "status": "M"
+                            }
+                          ],
+                          "id": "C555",
+                          "name": "Status",
+                          "status": "R"
+                        }
+                      ],
+                      "example": "STS+10+Z36'",
+                      "max": 2,
+                      "name": "Grundlage der Energiemenge",
+                      "nr": "00038",
+                      "status": "D",
+                      "tag": "STS",
+                      "zaehler": "0380"
+                    }
+                  ],
+                  "group": "SG10",
+                  "max": 9999,
+                  "name": "Mengen- und Statusangaben",
+                  "status": "M",
+                  "zaehler": "0350"
+                }
+              ],
+              "group": "SG9",
+              "max": 99999,
+              "name": "Positionsdaten",
+              "status": "D",
+              "zaehler": "0280"
+            }
+          ],
+          "group": "SG6",
+          "max": 1,
+          "name": "Wert- und Erfassungsangaben zum Objekt",
+          "status": "M",
+          "zaehler": "0190"
+        }
+      ],
+      "group": "SG5",
+      "max": 99999,
+      "name": "Liefer-, bzw. Bezugsort",
+      "status": "M",
+      "zaehler": "0170"
+    },
+    {
+      "elements": [
+        {
+          "format": "n..6",
+          "id": "0074",
+          "name": "Anzahl der Segmente in einer Nachricht",
+          "note": "Hier wird die Gesamtzahl der Segmente einer Nachricht angegeben.",
+          "status": "M"
+        },
+        {
+          "format": "an..14",
+          "id": "0062",
+          "name": "Nachrichten-Referenznummer",
+          "note": "Die Referenznummer aus dem UNH-Segment muss hier wiederholt werden.",
+          "status": "M"
+        }
+      ],
+      "example": "UNT+38+1'",
+      "max": 1,
+      "name": "Nachrichten-Endesegment",
+      "nr": "00039",
+      "status": "M",
+      "tag": "UNT",
+      "zaehler": "0440"
     }
   ],
-  "ahb_revision": "3.2",
-  "source_document": "MSCONS MIG 2.5, Publikationsdatum 01.04.2026",
-  "pid_source": "rff_z13",
-  "publikationsdatum": "2026-04-01"
+  "valid_from": "2026-10-01"
 }

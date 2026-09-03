@@ -7,7 +7,7 @@ interchange is how a broken second one gets shipped.
 
 import pytest
 
-from conftest import BILANZKREIS, MELO, ON, utilmd_interchange
+from conftest import BILANZKREIS, MALO, ON, utilmd_interchange
 from makotest import (
     UtilmdTransaction,
     assert_edifact_valid,
@@ -21,9 +21,9 @@ from makotest.plugin import LF_ID, NB_ID
 
 
 def _message(
-    pid: int, *, melo: str = MELO, message_ref: str = "MSG-1", on: str = ON
+    pid: int, *, lokation: str = MALO, message_ref: str = "MSG-1", on: str = ON
 ) -> bytes:
-    """A complete UTILMD message — a UTILMD needs both an RFF and an SG4 IDE."""
+    """A UTILMD message of `pid`, completed to its column where one exists."""
     return build_utilmd(
         pid,
         LF_ID,
@@ -31,13 +31,11 @@ def _message(
         on=on,
         release="S2.1" if pid > 55999 else None,
         message_ref=message_ref,
-        references=[("Z13", str(pid))],
         transactions=[
             UtilmdTransaction(
                 "VORGANG-1",
-                locations=[("melo", melo)],
+                locations=[("malo", lokation)],
                 dates=[("92", "20260501")],
-                references=[("Z13", str(pid))],
                 bilanzkreis=BILANZKREIS,
             )
         ],
@@ -77,7 +75,7 @@ class TestReport:
 
     def test_every_message_of_a_multi_message_interchange_is_validated(self):
         good = _message(55001)
-        bad = _message(55001, melo="NOTAMELO", message_ref="2")
+        bad = _message(55001, lokation="NOTAMELO", message_ref="2")
         wire = build_interchange(
             sender=LF_ID, receiver=NB_ID, dar="REF2", messages=[good, bad], on=ON
         )
@@ -103,11 +101,11 @@ class TestReport:
 
 class TestFindings:
     def test_a_bad_location_id_fires_the_semantic_rule(self):
-        wire = utilmd_interchange(melo="NOTAMELO")
+        wire = utilmd_interchange(lokation="NOTAMELO")
         assert_rule_fires(wire, "SEM-UTILMD-LOKATIONS-ID", on=ON)
 
     def test_a_finding_carries_its_position_and_layer(self):
-        report = validate_edifact(utilmd_interchange(melo="NOTAMELO"), ON)
+        report = validate_edifact(utilmd_interchange(lokation="NOTAMELO"), ON)
         finding = report.errors[0]
         assert finding.rule_origin == "semantic"
         assert finding.position, "a finding must say where it fired"
@@ -133,25 +131,27 @@ class TestFindings:
     def test_assert_rule_fires_reports_what_did_fire(self):
         with pytest.raises(AssertionError, match="expected rule"):
             assert_rule_fires(
-                utilmd_interchange(melo="NOTAMELO"), "SEM-NOT-A-REAL-RULE", on=ON
+                utilmd_interchange(lokation="NOTAMELO"), "SEM-NOT-A-REAL-RULE", on=ON
             )
 
 
 class TestVacuousValidation:
     def test_a_pid_with_no_rules_is_reported_rather_than_passing(self):
-        """56xxx is unassigned: the message "validates" having checked nothing.
+        """56xxx is unassigned: no column checks it, and the MIG refuses it.
 
-        This is the failure mode that makes a green suite worthless, so the
-        assertion helper refuses it even though `is_valid` is true.
+        `RFF+Z13` DE 1154 lists the published Prüfidentifikatoren, so an
+        unassigned code is a MIG finding — and no AHB rule applies, which the
+        assertion helpers name rather than let pass as a green run.
         """
         message = _message(56001)
         wire = build_interchange(
             sender=LF_ID, receiver=NB_ID, dar="REF4", messages=[message], on=ON
         )
         report = validate_edifact(wire, ON)
-        assert report.is_valid, "nothing checked it, so nothing rejected it"
+        assert not report.is_valid
+        assert [f.rule_id for f in report.errors] == ["MIG-00057-RFF-1154-CODE"]
         assert not report.rules_applied
-        with pytest.raises(AssertionError, match="no AHB rules were applied"):
+        with pytest.raises(AssertionError):
             assert_edifact_valid(wire, on=ON)
         with pytest.raises(AssertionError, match="cannot fail as written"):
             assert_rules_applied(wire, on=ON)

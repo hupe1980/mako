@@ -116,11 +116,21 @@ let bytes = UtilmdBuilder::new(Release::new("S2.2"))
     .produktpaket(Produktpaket::bilanzkreis("11XBK-STD-----9"))
     // The Lokations-ID lives in `SG5 LOC+Z16`.
     .marktlokation("51238696799")
+    // The rest of the 55001 column: the Marktlokation's and the Kunde's
+    // Stammdaten blocks and the Kunde with a Korrespondenzanschrift.
+    .stammdaten("Z01").cci("", "Z15").done()
+    .stammdaten("Z75").cci("Z61", "ZF9").cav("ZU5").done()
+    .kunde_des_lf(["Mustermann".to_owned()], "Z01")
+    .anschrift("Z04", ["Mustermann".to_owned()], "Z01", "Musterstr. 1", "Berlin", "10115", "DE")
     .done()
     .serialize()?;
 
 println!("{}", String::from_utf8_lossy(&bytes));
 ```
+
+The builder emits what it is given; the Prüfschablone says what a column
+needs (`profile.pruefschablone(55001)`), and `profile.validate` on the result
+names every place still missing.
 
 See the [builder guide][builders] for the full builder API and all message types.
 
@@ -186,54 +196,84 @@ whether that is legal is an AHB question. `AnyMessage::nad_sender()` /
 `nad_receiver()` expose the message-level parties uniformly; CONTRL has none,
 being an interchange-level acknowledgement.
 
-## Segment definitions and element positions
+## Profiles — read from the BDEW documents
 
-A MIG lists only the elements *that profile uses*, but an element's **position**
-inside a segment is fixed by the UN/EDIFACT directory — it is what a
-counterparty writes on the wire. Deriving positions from the order of the MIG's
-list therefore shifts every element that follows an omitted one, and the shift
-stays invisible until a real message arrives.
+A profile is one MIG and one AHB of one format version, generated from the
+BDEW PDFs by `cargo xtask import-profiles` and embedded at build time:
 
-Two tables describe those positions, because parsing and validation reach them
-by different routes:
+- `mig.json` — the Nachrichtenstruktur as a tree, every segment with the MIG's
+  running number `Nr` and its Segmentlayout (BDEW status, format, codes);
+- `ahb.json` — one **Prüfschablone** per Anwendungsfall, keyed by the same
+  `Nr`: the status of every segment and group (`Muss`, `Muss [10]`,
+  `Soll [3] ∧ [4]`), the operands on every data element and code, and every
+  Bedingung as printed.
 
-| Source | Authored | Used by |
-|---|---|---|
-| `src/messages/layouts.rs` | by hand from the MIG PDFs | the `EdifactDeserialize` derive, to resolve `#[edifact(element = "4440")]` when **reading** a typed segment |
-| `src/generated/*.rs` | `cargo xtask codegen` from `profiles/` | segment arity **validation** of an inbound message |
+`Profile::validate` resolves each segment of a message to its place in the
+structure (`SG5 LOC+Z16` Marktlokation is not `SG5 LOC+Z17` Messlokation),
+applies the MIG's checks and the column's Prüfschablone, and evaluates
+Voraussetzungen against the message. A finding names the place:
 
-Segments are addressed by UN/EDIFACT data element identifier
-(`#[edifact(element = "4440")]`), never by ordinal, so a mistyped code is a
-compile error rather than a silent read of the wrong slot.
-`xtask::codegen::CANONICAL_ELEMENT_POSITIONS` pins the segments whose MIG
-listing omits an unused element (`FTX`, `CCI`, `IMD`, `STS`) to their directory
-positions; the rest are dense and need no entry.
+```text
+[AHB-55001-SG6-00057-MISSING]  segment group SG6 „Prüfidentifikator" (Nr 00057) is Muss for 55001 in SG4 but missing
+[MIG-00050-LOC-3225-FORMAT]    LOC (Nr 00050): DE 3225 „Marktlokations-ID" is "BADID", the MIG says n11
+```
 
-Three tests hold the sources together, and all three must pass before a layout
-change ships:
+The same profile answers what a sender has to fill:
 
-- `tests/element_positions.rs` — no element appears at two different positions
-  across the generated message families, the known layouts are exact, **and the
-  hand-authored layouts agree with the generated tables**.
-- `tests/segment_layout_guard.rs` — every data element the accessors address
-  sits where the BDEW MIG puts it.
+```rust,no_run
+use edi_energy::{MessageType, ReleaseRegistry};
+use edi_energy::profile::SkeletonParties;
 
-When a MIG import turns out to be missing an element the AHB requires, fix the
-profile JSON against the MIG PDF and regenerate; do not work around it in a
-builder.
+let profile = ReleaseRegistry::global()
+    .profiles_for(MessageType::Utilmd)
+    .find(|p| p.release().as_str() == "S2.2")
+    .expect("shipped");
+// The column, for a reader.
+println!("{}", profile.pruefschablone(55001).expect("55001 is a column"));
+// The minimal conformant message of the column — every Muss place filled.
+let af = profile.anwendungsfall(55001).expect("55001 is a column");
+let bytes = profile.skeleton_interchange(af, &SkeletonParties::default())?;
+// A sender's message, completed to the column: what it states stays, what
+// the column requires and it lacks is filled the same way.
+let seed: Vec<edifact_rs::OwnedSegment> = edifact_rs::from_bytes(b"UNH+1+UTILMD:D:11A:UN:S2.2'BGM+E01+1'IDE+24+VG1'LOC+Z16+51238696781'UNT+5+1'")
+    .map(|s| s.map(edifact_rs::Segment::into_owned))
+    .collect::<Result<_, _>>()?;
+let done = profile.complete(&seed, af, &SkeletonParties::default());
+```
 
-## Active Format Versions
+Every Anwendungsfall's skeleton validating against its own column is the
+crate's proof that extraction and validator agree (`tests/skeletons.rs`, 958
+columns across 32 profiles). `Profile::complete` is the sender-side
+counterpart: it runs the same fixpoint from a seed and only adds, so a builder
+states the business case and the profile states the rest of the Prüfschablone. `cargo run --example 07_resolve --all-features --
+message.edi` prints where every segment of a message landed and why it is
+rejected.
+
+## Element positions
+
+An element's position inside a segment is fixed by the UN/EDIFACT directory —
+it is what a counterparty writes on the wire — and the BDEW MIGs list every
+element (unused ones as `N`), so the imported layouts carry those positions.
+The hand-authored layouts in `src/messages/layouts.rs`, which the
+`EdifactDeserialize` derive resolves `#[edifact(element = "4440")]` against
+when **reading** a typed segment, must agree with them; `tests/element_positions.rs`
+holds every hand-authored layout against every profile's layout of that tag,
+and `tests/segment_layout_guard.rs` holds the accessors.
+
+## Format Versions
 
 | Format version | Strom | Gas | Valid period |
 |---|---|---|---|
-| `FV2024-10-01` | ✓ S1.2 (LFW24 predecessor) | ✓ G0.x | 2024-10-01 – 2025-09-30 |
-| `FV2025-10-01` | ✓ S2.1 — **current production** | ✓ G1.1 | 2025-10-01 – 2026-09-30 |
-| `FV2026-10-01` | ✓ S2.2 — next release | ✓ G1.2 | from 2026-10-01 |
+| `FV2025-10-01` | S2.1 — **current production** | — | 2025-10-01 – 2026-09-30 |
+| `FV2026-04-01` | — | G1.1 — **current production** | 2026-04-01 – 2026-09-30 |
+| `FV2026-10-01` | S2.2 — next release | G1.2 — next release | from 2026-10-01 |
 
-Both `FV2025-10-01` and `FV2026-10-01` are simultaneously active in production
-deployments during the transition window (±7 days around each annual cutover).
-The profile registry resolves the correct rules from the UNH association code
-automatically — no per-message format selection is needed.
+Cutovers are staggered per message type; `profiles/sources.json` states every
+profile's window and `cargo xtask check-release-coverage` proves a date is
+covered. The registry resolves the profile from the `UNH` DE 0057 wire code
+and the date — no per-message format selection is needed. EDIFACT has no
+Übergangsfrist: `ReleaseRegistry::with_receive_tolerance_days(n)` is a local
+receiving policy for a late-arriving message in the superseded format.
 
 ## Features
 
@@ -244,7 +284,6 @@ automatically — no per-message format selection is needed.
 | `serde` | off | `serde::{Serialize, Deserialize}` on public types |
 | `diagnostics` | off | Rich validation error messages with segment context |
 | `tracing` | off | Emit `tracing` events during parse (performance overhead) |
-| `archive` | off | Include expired profile versions (`FV2024-10-01` and earlier) |
 
 To enable a minimal build for a single message type:
 
@@ -280,6 +319,7 @@ Run with `cargo run --example <name> --all-features`:
 | `04_interchange_dispatch` | Stream-parse a bulk interchange with PID-based dispatch |
 | `05_validate` | Run AHB validation and render error diagnostics |
 | `06_parse_reader` | Low-allocation streaming parse from a `BufRead` |
+| `07_resolve` | Where every segment sits in the Nachrichtenstruktur; `--pruefschablone`, `--skeleton`, `--structure` |
 
 ## Documentation
 
@@ -292,7 +332,7 @@ Full documentation: <https://hupe1980.github.io/mako/>
 | Validation guide | [Validation][validation] |
 | Builder guide | [Builders][builders] |
 | Platform (multi-tenant / test isolation) | [Platform][platform] |
-| Profile format versions | [Release lifecycle][release-lifecycle] |
+| Profile files and format versions | [Profile files][profile-files] · [Release lifecycle][release-lifecycle] |
 | PID reference | [PID reference][pid-reference] |
 
 ## Regulatory Standards
@@ -310,5 +350,6 @@ Full documentation: <https://hupe1980.github.io/mako/>
 [validation]: https://hupe1980.github.io/mako/docs/reference/validation/
 [builders]: https://hupe1980.github.io/mako/docs/reference/builders/
 [platform]: https://hupe1980.github.io/mako/docs/reference/platform/
+[profile-files]: https://hupe1980.github.io/mako/docs/compliance/schema-versioning/
 [release-lifecycle]: https://hupe1980.github.io/mako/docs/compliance/release-lifecycle/
 [pid-reference]: https://hupe1980.github.io/mako/docs/regulatory/pid-reference/

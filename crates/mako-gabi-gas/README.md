@@ -34,11 +34,12 @@ sequenceDiagram
 |---|---|---|---|
 | `gabi-gas-invoic` | INVOIC 31010 (Kapazitätsrechnung, NB/VNB → BKV) + 31007/31008 (Aggreg. MMM-Rechnung, NB → MGV) | BK7-24-01-008 | ✅ |
 | `gabi-gas-allocation` | ALOCAT (PIDs 70001–70023) | BK7-24-01-008 / DVGW ALOCAT 5.11a | ✅ |
-| `gabi-gas-nomination` | NOMINT (70030–70034) + NOMRES (70035–70039) | BK7-24-01-008 / DVGW NOMINT 4.6 FK / NOMRES 4.7 FK | ✅ |
+| `gabi-gas-nomination` | NOMINT (70030–70034) + NOMRES (70035–70039) — both ends: `SendNomination` enqueues this tenant's NOMINT from its positions and `SendNomres` the answer it owes; `ReceiveNomint`/`ReceiveNomres` record the counterparty's. A curtailment, a refusal and a missed answer each notify the ERP | BK7-24-01-008 / DVGW NOMINT 4.6 FK / NOMRES 4.7 FK | ✅ |
 | `gabi-gas-mmma` | MSCONS 13013 + ORDERS 17110 + ORDRSP 19110 (Allokationsliste Gas, MMMA) | BK7-24-01-008 | ✅ |
+| `gabi-gas-mehr-mindermengen` | SSQNOT (70095 SLP / 70096 RLM, NB → MGV) — both ends: records a Netzbetreiber's report, or enqueues this tenant's own (`Melden`) | BK7-24-01-008 / DVGW SSQNOT 5.7 | ✅ |
 
 The DVGW transport formats `dvgw-edi` does not parse — SCHEDL, IMBNOT, TRANOT,
-DELORD/DELRES, SSQNOT, CHACAP, NUEVOR, SLPASP and TSIMSG — have no workflow
+DELORD/DELRES, CHACAP, NUEVOR, SLPASP and TSIMSG — have no workflow
 here. A workflow for a format nothing can parse is unreachable, and registering
 a Prüfidentifikator for it overstates what the router handles.
 

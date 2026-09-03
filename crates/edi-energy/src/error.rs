@@ -178,42 +178,6 @@ pub enum Error {
         release: crate::Release,
     },
 
-    /// The requested profile is compiled out — enable the feature flag to include it.
-    ///
-    /// This error is returned when the release/message-type combination is a known
-    /// **archived** profile that exists in the `edi-energy` codebase but is excluded
-    /// from the current build by a feature gate (e.g. `contrl-archive`, `mscons-archive`,
-    /// `insrpt-archive`, or the catch-all `archive` feature).
-    ///
-    /// ## How to fix
-    ///
-    /// Add the required feature to your `Cargo.toml`:
-    ///
-    /// ```toml
-    /// [dependencies]
-    /// edi-energy = { version = "...", features = ["contrl-archive"] }
-    /// ```
-    ///
-    /// ## Background
-    ///
-    /// Archived profiles are kept in the source tree for retroactive validation
-    /// (audit / dispute resolution) but excluded from default builds to keep
-    /// binary size and compile times small.  For the `contrl` message type, the
-    /// archived `FV2025-10-01` profile covers interchanges from October 2025 –
-    /// December 2025 (before `contrl_fv20260101` became active on 2026-01-01).
-    #[error(
-        "profile for {message_type:?} release {release} is archived \
-         (enable feature \"{feature_flag}\" to include it)"
-    )]
-    ProfileArchived {
-        /// The EDIFACT message type.
-        message_type: crate::MessageType,
-        /// The release / association code.
-        release: crate::Release,
-        /// The Cargo feature flag needed to include this profile.
-        feature_flag: &'static str,
-    },
-
     /// The requested profile exists but has not yet become normatively valid on `date`.
     ///
     /// The profile's `valid_from` is in the future relative to the processing date.
@@ -352,7 +316,6 @@ impl miette::Diagnostic for Error {
             Error::MissingRelease => "edi-energy::missing-release",
             Error::InvalidRelease(_) => "edi-energy::invalid-release",
             Error::ProfileNotFound { .. } => "edi-energy::profile-not-found",
-            Error::ProfileArchived { .. } => "edi-energy::profile-archived",
             Error::ProfileNotYetActive { .. } => "edi-energy::profile-not-yet-active",
             Error::Validation { .. } => "edi-energy::validation",
             Error::Io(_) => "edi-energy::io",
@@ -379,13 +342,6 @@ impl miette::Diagnostic for Error {
                 release,
             } => Some(Box::new(format!(
                 "run `cargo xtask codegen` to generate profile data for {message_type} {release}"
-            ))),
-            Error::ProfileArchived {
-                message_type,
-                release,
-                feature_flag,
-            } => Some(Box::new(format!(
-                "add `{feature_flag}` to your Cargo.toml features to enable the archived {message_type} {release} profile"
             ))),
             Error::ProfileNotYetActive {
                 message_type,

@@ -16,9 +16,9 @@
 
 <section class="stats">
   <div class="stats-inner">
-    <div><strong>467</strong><span>Prüfidentifikatoren routed</span></div>
-    <div><strong>70</strong><span>MaKo workflows</span></div>
-    <div><strong>17</strong><span>EDIFACT message types</span></div>
+    <div><strong>469</strong><span>Prüfidentifikatoren routed</span></div>
+    <div><strong>71</strong><span>MaKo workflows</span></div>
+    <div><strong>17</strong><span>EDI@Energy message types</span></div>
     <div><strong>17</strong><span>services</span></div>
     <div><strong>4</strong><span>market roles (NB·LF·MSB·ESA)</span></div>
   </div>
@@ -56,8 +56,8 @@ graph LR
       receives typed commands and emits typed events.</p>
 
     <p>Two numbers describe the same catalogue from different sides:
-      <strong>467</strong> Prüfidentifikatoren are <em>routed</em> to a workflow, and
-      <strong>358</strong> additionally carry validated AHB segment rules. The gap is
+      <strong>469</strong> Prüfidentifikatoren are <em>routed</em> to a workflow, and
+      <strong>434</strong> additionally carry validated AHB segment rules. The gap is
       a declared set of routed-without-rules PIDs, not an accident — and a release
       that would shrink either number fails the build.</p>
   </div>
@@ -143,7 +143,7 @@ graph TB
     <div class="card-grid">
       <div class="card">
         <h3>Protocol &amp; process</h3>
-        <p>Parse, validate and build all 17 EDI@Energy EDIFACT types; run every MaKo process as an event-sourced, replayable workflow over AS4/ebMS3 — BDEW AS4-Profil, sign and encrypt, signed receipts, retry with duplicate elimination.</p>
+        <p>Parse, validate and build all 17 EDI@Energy EDIFACT types, plus the four DVGW gas-transport formats; run every MaKo process as an event-sourced, replayable workflow over AS4/ebMS3 — BDEW AS4-Profil, sign and encrypt, signed receipts, retry with duplicate elimination.</p>
         <a class="card-count" href="{{ get_url(path='@/docs/services/makod.md') | safe }}">makod · processd →</a>
       </div>
       <div class="card">

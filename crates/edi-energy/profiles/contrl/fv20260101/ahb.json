@@ -1,9 +1,973 @@
 {
-  "schema_version": 1,
+  "ahb_version": "1.0",
+  "anwendungsfaelle": [
+    {
+      "chapter": "2.5 Regeln zum Einsatz der CONTRL bei spartenübergreifenden Datenaustausch",
+      "elements": [
+        {
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "CONTRL",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "3",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "2.0b",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0020",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0007",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "14",
+              "operand": "X"
+            },
+            {
+              "code": "500",
+              "operand": "X"
+            },
+            {
+              "code": "502",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0010",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0007",
+          "nr": "00002",
+          "occurrence": 1,
+          "operands": [
+            {
+              "code": "14",
+              "operand": "X"
+            },
+            {
+              "code": "502",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0083",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "7",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00006",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00006",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        }
+      ],
+      "name": "Empfangsbestätigung",
+      "rows": [
+        {
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        }
+      ]
+    },
+    {
+      "chapter": "2.5 Regeln zum Einsatz der CONTRL bei spartenübergreifenden Datenaustausch",
+      "elements": [
+        {
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "CONTRL",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "3",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "2.0b",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0020",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0007",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "14",
+              "operand": "X"
+            },
+            {
+              "code": "500",
+              "operand": "X"
+            },
+            {
+              "code": "502",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0010",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0007",
+          "nr": "00002",
+          "occurrence": 1,
+          "operands": [
+            {
+              "code": "14",
+              "operand": "X"
+            },
+            {
+              "code": "500",
+              "operand": "X"
+            },
+            {
+              "code": "502",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0083",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "4",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0085",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "2",
+              "operand": "X"
+            },
+            {
+              "code": "7",
+              "operand": "X"
+            },
+            {
+              "code": "12",
+              "operand": "X"
+            },
+            {
+              "code": "13",
+              "operand": "X"
+            },
+            {
+              "code": "16",
+              "operand": "X"
+            },
+            {
+              "code": "20",
+              "operand": "X"
+            },
+            {
+              "code": "21",
+              "operand": "X"
+            },
+            {
+              "code": "23",
+              "operand": "X"
+            },
+            {
+              "code": "25",
+              "operand": "X"
+            },
+            {
+              "code": "26",
+              "operand": "X"
+            },
+            {
+              "code": "28",
+              "operand": "X"
+            },
+            {
+              "code": "29",
+              "operand": "X"
+            },
+            {
+              "code": "32",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0013",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "UNA",
+              "operand": "X"
+            },
+            {
+              "code": "UNB",
+              "operand": "X"
+            },
+            {
+              "code": "UNZ",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0098",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "S [1]"
+            }
+          ]
+        },
+        {
+          "de": "0104",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "S [1]"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00006",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00006",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        }
+      ],
+      "name": "Syntaxfehler -meldung in der Übertragungsdatei",
+      "rows": [
+        {
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        }
+      ]
+    },
+    {
+      "chapter": "2.5 Regeln zum Einsatz der CONTRL bei spartenübergreifenden Datenaustausch",
+      "elements": [
+        {
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "CONTRL",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "3",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "2.0b",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0020",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0007",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "14",
+              "operand": "X"
+            },
+            {
+              "code": "500",
+              "operand": "X"
+            },
+            {
+              "code": "502",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0010",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0007",
+          "nr": "00002",
+          "occurrence": 1,
+          "operands": [
+            {
+              "code": "14",
+              "operand": "X"
+            },
+            {
+              "code": "500",
+              "operand": "X"
+            },
+            {
+              "code": "502",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0083",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "4",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0065",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "APERAK",
+              "operand": "X"
+            },
+            {
+              "code": "COMDIS",
+              "operand": "X"
+            },
+            {
+              "code": "IFTSTA",
+              "operand": "X"
+            },
+            {
+              "code": "INSRPT",
+              "operand": "X"
+            },
+            {
+              "code": "INVOIC",
+              "operand": "X"
+            },
+            {
+              "code": "ORDERS",
+              "operand": "X"
+            },
+            {
+              "code": "ORDRSP",
+              "operand": "X"
+            },
+            {
+              "code": "PARTIN",
+              "operand": "X"
+            },
+            {
+              "code": "PRICAT",
+              "operand": "X"
+            },
+            {
+              "code": "REQOTE",
+              "operand": "X"
+            },
+            {
+              "code": "UTILMD",
+              "operand": "X"
+            },
+            {
+              "code": "UTILTS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0052",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0054",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0051",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0057",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0083",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "4",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0085",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "S [2] ∨ [3]"
+            },
+            {
+              "code": "12",
+              "operand": "X"
+            },
+            {
+              "code": "13",
+              "operand": "X"
+            },
+            {
+              "code": "16",
+              "operand": "X"
+            },
+            {
+              "code": "21",
+              "operand": "X"
+            },
+            {
+              "code": "22",
+              "operand": "X"
+            },
+            {
+              "code": "26",
+              "operand": "X"
+            },
+            {
+              "code": "28",
+              "operand": "X"
+            },
+            {
+              "code": "29",
+              "operand": "X"
+            },
+            {
+              "code": "39",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0013",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X [2] ∨ [3]"
+            },
+            {
+              "code": "UNH",
+              "operand": "X"
+            },
+            {
+              "code": "UNT",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0098",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "S [8] ∧ [1]"
+            }
+          ]
+        },
+        {
+          "de": "0104",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "S [8] ∧ [1]"
+            }
+          ]
+        },
+        {
+          "de": "0096",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0085",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X [5]"
+            },
+            {
+              "code": "13",
+              "operand": "X"
+            },
+            {
+              "code": "15",
+              "operand": "X"
+            },
+            {
+              "code": "16",
+              "operand": "X"
+            },
+            {
+              "code": "22",
+              "operand": "X"
+            },
+            {
+              "code": "35",
+              "operand": "X"
+            },
+            {
+              "code": "36",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0085",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "12",
+              "operand": "X"
+            },
+            {
+              "code": "13",
+              "operand": "X"
+            },
+            {
+              "code": "16",
+              "operand": "X"
+            },
+            {
+              "code": "19",
+              "operand": "X"
+            },
+            {
+              "code": "21",
+              "operand": "X"
+            },
+            {
+              "code": "22",
+              "operand": "X"
+            },
+            {
+              "code": "37",
+              "operand": "X"
+            },
+            {
+              "code": "38",
+              "operand": "X"
+            },
+            {
+              "code": "39",
+              "operand": "X"
+            },
+            {
+              "code": "40",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0098",
+          "nr": "00005",
+          "operands": [
+            {
+              "operand": "M"
+            }
+          ]
+        },
+        {
+          "de": "0104",
+          "nr": "00005",
+          "operands": [
+            {
+              "operand": "S [1]"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00006",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00006",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        }
+      ],
+      "name": "Syntaxfehler -meldung in der Nachricht",
+      "rows": [
+        {
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00003",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00004",
+          "group": "SG2",
+          "status": [
+            "Muss [9]"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00005",
+          "status": [
+            "Soll [6]"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        }
+      ]
+    }
+  ],
+  "conditions": {
+    "1": "Wenn Angabe möglich.",
+    "2": "Wenn Syntaxfehler in UNH vorhanden.",
+    "3": "Wenn Syntaxfehler in UNT vorhanden.",
+    "5": "Wenn Fehler auf Segment(gruppen)ebene vorhanden.",
+    "6": "Wenn Fehler auf Datenelement-, Gruppendatenelement- oder Datengruppenebene vorhanden.",
+    "8": "Wenn SG1 UCM DE0013 vorhanden.",
+    "9": "Wenn SG1 UCM DE0013 nicht vorhanden."
+  },
   "message_type": "CONTRL",
+  "packages": {},
   "release": "2.0b",
-  "source_document": "CONTRL AHB, wire release 2.0b (Stand 01.01.2026)",
-  "pruefidentifikatoren": [],
-  "reviewed_by": "xtask/import-xml-ahb",
-  "reviewed_at": "2026-07-08"
+  "schema_version": 2,
+  "source": {
+    "file": "CONTRL_AHB_1.0_-_ausserordentliche_Veroeffentlichung_Stand_11.12.2025.pdf",
+    "sha256": "6ad48c23071e501e250e5f40d776a0fbf75c6ec825df150de3bdf428e7f3f551",
+    "title": "CONTRL AHB 1.0 - außerordentliche Veröffentlichung Stand: 11.12.2025"
+  }
 }

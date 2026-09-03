@@ -40,6 +40,16 @@ struct UtilmdTransactionSpec {
     references: Vec<(String, String)>,
     /// `SG6 RFF+TN` — the Vorgangsnummer of the message being answered.
     referenz_vorgangsnummer: Option<String>,
+    /// `SG6 RFF` with its `DTM`: (RFF qualifier, reference, DTM qualifier,
+    /// value, format) — `RFF+Z18` with `DTM+Z20:2026:802`.
+    dated_references: Vec<(String, String, String, String, String)>,
+    /// `SG4 IMD` — (DE 7081 Produkt, DE 7009 Beschreibung).
+    imd: Option<(String, String)>,
+    /// `SG8 SEQ` blocks the typed fields do not cover, by SEQ code, in the
+    /// order the MIG lists the places.
+    stammdaten: Vec<Sg8Block>,
+    /// `SG12 NAD` with an address.
+    addressed_nads: Vec<Anschrift>,
     /// `SG8 SEQ+Z79` — the Produktpakete an Anmeldung and its Bestätigung
     /// carry. Muss on 55001, 55077, 55600, 55601, 55014 and 55608.
     produktpakete: Vec<Produktpaket>,
@@ -65,6 +75,41 @@ struct UtilmdTransactionSpec {
     named_nads: Vec<(String, Vec<String>, String)>,
 }
 
+/// An `SG12 NAD` with an address: `NAD+Z04+++Name:::::Z01+Straße+Ort++PLZ+DE`.
+#[derive(Debug, Clone)]
+struct Anschrift {
+    qualifier: String,
+    name_parts: Vec<String>,
+    name_format: String,
+    strasse: String,
+    ort: String,
+    plz: String,
+    land: String,
+}
+
+/// One `SG8 SEQ` with the `SG10 CCI`/`CAV`, `SG9 QTY` and `RFF` it carries.
+#[derive(Debug, Clone, Default)]
+pub struct Sg8Block {
+    seq: String,
+    items: Vec<Sg8Item>,
+}
+
+#[derive(Debug, Clone)]
+enum Sg8Item {
+    /// `CCI+<Klassentyp>++<Merkmal>`
+    Cci { klassentyp: String, merkmal: String },
+    /// `CAV+<Code>:::<Wert>`
+    Cav { code: String, wert: String },
+    /// `QTY+<Qualifier>:<Menge>:<Einheit>`
+    Qty {
+        qualifier: String,
+        menge: String,
+        einheit: String,
+    },
+    /// `RFF+<Qualifier>:<Referenz>`
+    Rff { qualifier: String, referenz: String },
+}
+
 #[derive(Debug, Clone)]
 struct UtilmdBuilderInner {
     release: Release,
@@ -75,6 +120,8 @@ struct UtilmdBuilderInner {
     receiver_agency: Option<AgencyCode>,
     message_ref: String,
     document_code: String,
+    /// `BGM` DE 1004; the message reference when not set.
+    document_number: Option<String>,
     /// `DTM+157` Gültigkeit, Beginndatum — `CCYYMM`, DE 2379 `610`.
     ///
     /// The Bilanzierungsmonat a Clearingliste covers. A header date beside
@@ -131,6 +178,7 @@ impl UtilmdBuilder<Unset, Unset> {
                 receiver_agency: None,
                 message_ref: "1".to_owned(),
                 document_code: "E01".to_owned(),
+                document_number: None,
                 gueltigkeit_beginn: None,
                 document_date: None,
                 rff_entries: Vec::new(),
@@ -195,6 +243,13 @@ impl<S, R> UtilmdBuilder<S, R> {
     /// Override the BGM document name code (DE 1001).  Defaults to `"E01"`.
     pub fn document_code(mut self, code: impl Into<String>) -> Self {
         self.inner.document_code = code.into();
+        self
+    }
+
+    /// Set the `BGM` Dokumentennummer (DE 1004). Defaults to the message
+    /// reference, which is unique per message already.
+    pub fn document_number(mut self, number: impl Into<String>) -> Self {
+        self.inner.document_number = Some(number.into());
         self
     }
 
@@ -317,7 +372,72 @@ fn emit_sg6<W: std::io::Write>(
     for (rff_q, rff_ref) in &tx.references {
         emit_comp!(w, "RFF", [rff_q, rff_ref]);
     }
+    for (rff_q, rff_ref, dtm_q, value, format) in &tx.dated_references {
+        emit_comp!(w, "RFF", [rff_q, rff_ref]);
+        emit_comp!(w, "DTM", [dtm_q, value, format]);
+    }
     Ok(())
+}
+
+/// Emit one `SG8` block.
+fn emit_sg8_block<W: std::io::Write>(w: &mut Writer<W>, block: &Sg8Block) -> Result<(), Error> {
+    emit_seg!(w, "SEQ", &block.seq);
+    for item in &block.items {
+        match item {
+            // `CCI+<7059>++<7037>` — C502 is nicht benutzt and still occupies
+            // element 2.
+            Sg8Item::Cci {
+                klassentyp,
+                merkmal,
+            } => emit_seg!(w, "CCI", klassentyp, "", merkmal),
+            Sg8Item::Cav { code, wert } if wert.is_empty() => emit_seg!(w, "CAV", code),
+            Sg8Item::Cav { code, wert } => emit_comp!(w, "CAV", [code, "", "", wert]),
+            Sg8Item::Qty {
+                qualifier,
+                menge,
+                einheit,
+            } if einheit.is_empty() => {
+                emit_comp!(w, "QTY", [qualifier, menge]);
+            }
+            Sg8Item::Qty {
+                qualifier,
+                menge,
+                einheit,
+            } => emit_comp!(w, "QTY", [qualifier, menge, einheit]),
+            Sg8Item::Rff {
+                qualifier,
+                referenz,
+            } => emit_comp!(w, "RFF", [qualifier, referenz]),
+        }
+    }
+    Ok(())
+}
+
+/// The rank of every `SEQ` code in the MIG's list of `SG8` places, so blocks
+/// go out in the order the Nachrichtenstruktur gives them; unknown releases
+/// keep insertion order.
+fn sg8_ranks(release: &Release) -> std::collections::HashMap<String, usize> {
+    let mut ranks = std::collections::HashMap::new();
+    let Some(profile) = crate::ReleaseRegistry::global()
+        .profiles_for(crate::MessageType::Utilmd)
+        .find(|p| p.release() == release)
+    else {
+        return ranks;
+    };
+    for (rank, layout) in profile
+        .structure
+        .layouts
+        .iter()
+        .filter(|l| l.tag == "SEQ")
+        .enumerate()
+    {
+        if let Some(el) = layout.elements.first() {
+            for code in &el.codes {
+                ranks.entry(code.code.clone()).or_insert(rank);
+            }
+        }
+    }
+    ranks
 }
 
 /// Emit the `SG8` / `SG10` Produktpakete of one Vorgang.
@@ -415,11 +535,15 @@ fn emit_sg4<W: std::io::Write>(
     pid_str: &str,
     tx: &UtilmdTransactionSpec,
     carries_pid: bool,
+    ranks: &std::collections::HashMap<String, usize>,
 ) -> Result<(), Error> {
     // MIG Zähler order inside SG4: IDE (0190), DTM (0230), STS (0250),
     // FTX (0280), AGR (0290), then SG5 LOC (0330), SG6 RFF (0360) and
     // SG12 NAD. Layer 3.5 checks it, on both sides of the wire.
     emit_seg!(w, "IDE", &tx.ide_qualifier, &tx.vorgangsnummer);
+    if let Some((produkt, beschreibung)) = &tx.imd {
+        emit_comp!(w, "IMD", [""], [produkt], [beschreibung]);
+    }
     for (qualifier, date_val) in &tx.process_dates {
         let fmt = sg4_dtm_format(qualifier);
         let value = if fmt == "303" {
@@ -509,12 +633,17 @@ fn emit_sg4<W: std::io::Write>(
         emit_comp!(w, "LOC", [loc_q], [loc_id]);
     }
     emit_sg6(w, pid_str, tx, carries_pid)?;
-    for (klassentyp, wert) in &tx.merkmale {
-        // `CCI+<7059>++<7037>` — C502 „Einzelheiten zu Maßangaben" is
-        // nicht benutzt and still occupies element 2.
-        emit_seg!(w, "CCI", klassentyp, "", wert);
-    }
-    emit_sg8_produktpakete(w, tx)?;
+    emit_sg8(w, tx, ranks)?;
+    emit_sg12(w, tx)?;
+    Ok(())
+}
+
+/// The `SG12 NAD`s of the Vorgang: named parties, addressed parties, and the
+/// parties identified by MP-ID.
+fn emit_sg12<W: std::io::Write>(
+    w: &mut Writer<W>,
+    tx: &UtilmdTransactionSpec,
+) -> Result<(), Error> {
     for (nad_q, parts, format) in &tx.named_nads {
         // `NAD+<3035>++++<3036>:<3036>:…::<3045>` — C080 sits at element 4 and
         // repeats DE 3036 five times before DE 3045. C082 and C058 stay empty:
@@ -530,6 +659,26 @@ fn emit_sg4<W: std::io::Write>(
         )
         .map_err(Error::Parse)?;
     }
+    for a in &tx.addressed_nads {
+        let mut c080: Vec<&str> = a.name_parts.iter().map(String::as_str).take(5).collect();
+        c080.resize(5, "");
+        c080.push(a.name_format.as_str());
+        w.write_composites(
+            "NAD",
+            &[
+                &[a.qualifier.as_str()][..],
+                &[""][..],
+                &[""][..],
+                &c080[..],
+                &[a.strasse.as_str()][..],
+                &[a.ort.as_str()][..],
+                &[""][..],
+                &[a.plz.as_str()][..],
+                &[a.land.as_str()][..],
+            ],
+        )
+        .map_err(Error::Parse)?;
+    }
     for (nad_q, nad_id) in &tx.customer_nads {
         // SG12 NAD names a *third* party (the Altlieferant on a 55036, the
         // auslösender Marktpartner on a 55038), so its DE 3055 follows that
@@ -540,6 +689,54 @@ fn emit_sg4<W: std::io::Write>(
             [nad_q],
             [nad_id, "", super::agency_for(None, nad_id)]
         );
+    }
+    Ok(())
+}
+
+/// Every `SG8` of the Vorgang — Produktpakete, Summenzeitreihe, Merkmale and
+/// the generic blocks — in the MIG's order of `SEQ` places.
+fn emit_sg8<W: std::io::Write>(
+    w: &mut Writer<W>,
+    tx: &UtilmdTransactionSpec,
+    ranks: &std::collections::HashMap<String, usize>,
+) -> Result<(), Error> {
+    use crate::utilmd_codes::produkt;
+    let rank = |code: &str| ranks.get(code).copied().unwrap_or(usize::MAX);
+    // (rank, insertion order, block)
+    let mut blocks: Vec<(usize, usize, Sg8Block)> = Vec::new();
+    let mut z01 = Sg8Block {
+        seq: crate::utilmd_codes::SEQ_DATEN_DER_MARKTLOKATION.to_owned(),
+        items: Vec::new(),
+    };
+    for (klassentyp, wert) in &tx.merkmale {
+        z01.items.push(Sg8Item::Cci {
+            klassentyp: klassentyp.clone(),
+            merkmal: wert.clone(),
+        });
+    }
+    for block in &tx.stammdaten {
+        if block.seq == z01.seq {
+            z01.items.extend(block.items.iter().cloned());
+        } else {
+            blocks.push((rank(&block.seq), blocks.len(), block.clone()));
+        }
+    }
+    if !z01.items.is_empty() {
+        blocks.push((rank(&z01.seq), blocks.len(), z01));
+    }
+    let produkt_rank =
+        rank(produkt::SEQ_PRODUKTPAKET).min(rank(crate::utilmd_codes::SEQ_SUMMENZEITREIHE));
+    blocks.sort_by_key(|(r, i, _)| (*r, *i));
+    let mut produkte_done = false;
+    for (r, _, block) in &blocks {
+        if !produkte_done && *r >= produkt_rank {
+            emit_sg8_produktpakete(w, tx)?;
+            produkte_done = true;
+        }
+        emit_sg8_block(w, block)?;
+    }
+    if !produkte_done {
+        emit_sg8_produktpakete(w, tx)?;
     }
     Ok(())
 }
@@ -566,7 +763,14 @@ impl<S, R> UtilmdBuilder<S, R> {
             [&self.inner.message_ref],
             ["UTILMD", "D", "11A", "UN", self.inner.release.as_str()]
         );
-        emit_seg!(w, "BGM", &self.inner.document_code, &pid_str, "9");
+        // `BGM` DE 1004 is the Dokumentennummer (UTILMD MIG S2.2 example
+        // `BGM+E01+MKIDI5422'`), and the MIG defines no DE 1225 for UTILMD.
+        let document_number = self
+            .inner
+            .document_number
+            .as_deref()
+            .unwrap_or(&self.inner.message_ref);
+        emit_seg!(w, "BGM", &self.inner.document_code, document_number);
         // `DTM+137` Dokumentendatum. Every EDI@Energy AHB gives DE 2379 as
         // `303` (`CCYYMMDDHHMMZZZ`) with condition `[931]` fixing the zone to
         // `+00`; `[494]` requires the stamp to be the creation moment or
@@ -604,9 +808,10 @@ impl<S, R> UtilmdBuilder<S, R> {
             .transactions
             .iter()
             .any(|tx| tx.ide_qualifier == crate::utilmd_codes::IDE_LISTE);
+        let ranks = sg8_ranks(&self.inner.release);
         for tx in &self.inner.transactions {
             let carries_pid = !ist_liste || tx.ide_qualifier == crate::utilmd_codes::IDE_LISTE;
-            emit_sg4(&mut w, &pid_str, tx, carries_pid)?;
+            emit_sg4(&mut w, &pid_str, tx, carries_pid, &ranks)?;
         }
         w.finish_unt(&self.inner.message_ref)
             .map_err(Error::Parse)?;
@@ -817,6 +1022,68 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
         self
     }
 
+    /// `SG4 IMD` — Produkt (DE 7081) and Beschreibung (DE 7009):
+    /// `IMD++Z36+Z12` on a Gas Anmeldung.
+    pub fn imd(mut self, produkt: impl Into<String>, beschreibung: impl Into<String>) -> Self {
+        self.spec.imd = Some((produkt.into(), beschreibung.into()));
+        self
+    }
+
+    /// `SG6 RFF` with the `DTM` of its group: `RFF+Z18'DTM+Z20:2026:802'`.
+    pub fn reference_dated(
+        mut self,
+        qualifier: impl Into<String>,
+        referenz: impl Into<String>,
+        dtm_qualifier: impl Into<String>,
+        value: impl Into<String>,
+        format: impl Into<String>,
+    ) -> Self {
+        self.spec.dated_references.push((
+            qualifier.into(),
+            referenz.into(),
+            dtm_qualifier.into(),
+            value.into(),
+            format.into(),
+        ));
+        self
+    }
+
+    /// An `SG8 SEQ` block of Stammdaten the typed fields do not cover; the
+    /// blocks go out in the MIG's order of `SEQ` places.
+    pub fn stammdaten(self, seq: impl Into<String>) -> Sg8Builder<S, R> {
+        Sg8Builder {
+            parent: self,
+            block: Sg8Block {
+                seq: seq.into(),
+                items: Vec::new(),
+            },
+        }
+    }
+
+    /// `SG12 NAD` with an address: `NAD+Z04+++Name:::::Z01+Straße+Ort++PLZ+DE`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn anschrift(
+        mut self,
+        party_qualifier: impl Into<String>,
+        name_parts: impl IntoIterator<Item = String>,
+        name_format: impl Into<String>,
+        strasse: impl Into<String>,
+        ort: impl Into<String>,
+        plz: impl Into<String>,
+        land: impl Into<String>,
+    ) -> Self {
+        self.spec.addressed_nads.push(Anschrift {
+            qualifier: party_qualifier.into(),
+            name_parts: name_parts.into_iter().collect(),
+            name_format: name_format.into(),
+            strasse: strasse.into(),
+            ort: ort.into(),
+            plz: plz.into(),
+            land: land.into(),
+        });
+        self
+    }
+
     /// Add a `SG8 SEQ+Z79` Produktpaket to this Vorgang.
     ///
     /// The AHB marks the segment group Muss on every Anmeldung einer Zuordnung
@@ -976,5 +1243,70 @@ fn sg4_dtm_format(qualifier: &str) -> &'static str {
         "154" => "102",
         "Z10" => "106",
         _ => "303",
+    }
+}
+
+// ── Sg8Builder ────────────────────────────────────────────────────────────────
+
+/// Builds one `SG8 SEQ` block; `done()` returns to the Vorgang.
+#[derive(Debug)]
+#[must_use = "Sub-builder must be finalized with .done()"]
+pub struct Sg8Builder<S = Unset, R = Unset> {
+    parent: UtilmdTransactionBuilder<S, R>,
+    block: Sg8Block,
+}
+
+impl<S, R> Sg8Builder<S, R> {
+    /// `SG10 CCI+<Klassentyp>++<Merkmal>` — an empty Klassentyp gives `CCI+++Z15`.
+    pub fn cci(mut self, klassentyp: impl Into<String>, merkmal: impl Into<String>) -> Self {
+        self.block.items.push(Sg8Item::Cci {
+            klassentyp: klassentyp.into(),
+            merkmal: merkmal.into(),
+        });
+        self
+    }
+
+    /// `SG10 CAV+<Code>`.
+    pub fn cav(self, code: impl Into<String>) -> Self {
+        self.cav_wert(code, "")
+    }
+
+    /// `SG10 CAV+<Code>:::<Wert>`.
+    pub fn cav_wert(mut self, code: impl Into<String>, wert: impl Into<String>) -> Self {
+        self.block.items.push(Sg8Item::Cav {
+            code: code.into(),
+            wert: wert.into(),
+        });
+        self
+    }
+
+    /// `SG9 QTY+<Qualifier>:<Menge>:<Einheit>`; an empty Einheit is left out.
+    pub fn qty(
+        mut self,
+        qualifier: impl Into<String>,
+        menge: impl Into<String>,
+        einheit: impl Into<String>,
+    ) -> Self {
+        self.block.items.push(Sg8Item::Qty {
+            qualifier: qualifier.into(),
+            menge: menge.into(),
+            einheit: einheit.into(),
+        });
+        self
+    }
+
+    /// `SG8 RFF+<Qualifier>:<Referenz>`.
+    pub fn rff(mut self, qualifier: impl Into<String>, referenz: impl Into<String>) -> Self {
+        self.block.items.push(Sg8Item::Rff {
+            qualifier: qualifier.into(),
+            referenz: referenz.into(),
+        });
+        self
+    }
+
+    /// Back to the Vorgang.
+    pub fn done(mut self) -> UtilmdTransactionBuilder<S, R> {
+        self.parent.spec.stammdaten.push(self.block);
+        self.parent
     }
 }

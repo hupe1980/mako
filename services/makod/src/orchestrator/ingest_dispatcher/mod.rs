@@ -54,8 +54,8 @@ use mako_engine::{
 };
 use mako_fristen::{self as fristen, HolidayCalendar};
 use mako_gabi_gas::{
-    AllocationCommand, GaBiGasAllocationWorkflow, GaBiGasInvoicWorkflow, GaBiGasNominationWorkflow,
-    NominationCommand,
+    AllocationCommand, GaBiGasAllocationWorkflow, GaBiGasInvoicWorkflow,
+    GaBiGasMehrMindermengenWorkflow, GaBiGasNominationWorkflow, NominationCommand,
 };
 use mako_geli_gas::{
     GeliGasDatanabrufWorkflow, GeliGasLfAnmeldungWorkflow, GeliGasLfStornierungWorkflow,
@@ -264,6 +264,7 @@ impl EdifactIngestDispatcher {
         mako_wim::esa_wertebestellung::WORKFLOW_NAME,
         "gabi-gas-allocation",
         "gabi-gas-invoic",
+        "gabi-gas-mehr-mindermengen",
         "gabi-gas-mmma",
         "gabi-gas-nomination",
         "geli-gas-datenabruf",

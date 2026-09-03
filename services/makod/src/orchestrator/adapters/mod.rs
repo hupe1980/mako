@@ -151,7 +151,8 @@ pub(crate) fn parse_ccyymmdd(v: &str) -> Option<time::OffsetDateTime> {
         .map(|d| d.midnight().assume_utc())
 }
 use mako_gabi_gas::{
-    AllocationCommand, GaBiGasAllocationWorkflow, GaBiGasInvoicWorkflow, GaBiGasNominationWorkflow,
+    AllocationCommand, GaBiGasAllocationWorkflow, GaBiGasInvoicWorkflow,
+    GaBiGasMehrMindermengenWorkflow, GaBiGasNominationWorkflow, MehrMindermengenCommand,
     NominationCommand, NomresAcceptance,
 };
 use mako_geli_gas::{
@@ -315,6 +316,22 @@ fn dtm303_to_rfc3339(value: &str, format: Option<&str>) -> Option<String> {
 ///
 /// A reading whose period cannot be established is skipped rather than dated
 /// by guesswork; the count is returned so the caller can say how many.
+/// The unit an MSCONS column leaves implicit: most Prüfschablonen list no
+/// `QTY` DE 6411, and the OBIS-Kennzahl's measurement kind (`C.D.E`, D) says
+/// whether the figure is energy (`8`, `9`, `29`, `30` — kWh) or power (`6`,
+/// `7` — kW).
+fn unit_for_obis(obis: &str) -> Option<String> {
+    let after_medium = obis.rsplit(':').next()?;
+    let mut parts = after_medium.split('.');
+    let _c = parts.next()?;
+    let d: u32 = parts.next()?.parse().ok()?;
+    match d {
+        8 | 9 | 29 | 30 => Some("KWH".to_owned()),
+        6 | 7 => Some("KWT".to_owned()),
+        _ => None,
+    }
+}
+
 pub(crate) fn mscons_intervals(
     msg: &edi_energy::messages::mscons::MsconsMessage,
 ) -> (Vec<mako_engine::types::MeteredInterval>, usize) {
@@ -360,7 +377,11 @@ pub(crate) fn mscons_intervals(
                         dtm_from,
                         dtm_to,
                         quantity,
-                        unit: q.qty.unit.clone(),
+                        unit: q
+                            .qty
+                            .unit
+                            .clone()
+                            .or_else(|| obis_code.as_deref().and_then(unit_for_obis)),
                         qualifier: q.qty.qualifier.clone(),
                     });
                 }
@@ -718,6 +739,7 @@ coverage_table! {
     emob_zuordnungsende_registry,
     esa_wertebestellung_registry,
     gabi_gas_allocation_registry,
+    gabi_gas_mehr_mindermengen_registry,
     gabi_gas_comdis_registry,
     gabi_gas_invoic_registry,
     gabi_gas_nomination_registry,
@@ -1017,9 +1039,9 @@ fn dtm<'a>(segs: &'a [OwnedSegment], qualifier: &str) -> Option<&'a str> {
 ///
 /// | `IMD+7081` | `RFF+ACE` names | Fundstelle |
 /// |---|---|---|
-/// | `KON` Abrechnung von Konfigurationen (Universalbestellprozess) | the **ORDERS** | `[66] ∧ [501]` |
+/// | `KON` Abrechnung von Konfigurationen (Universalbestellprozess) | the **ORDERS** | `[66] ∧ \[501\]` |
 /// | `MSB` Rechnung für Messstellenbetrieb | the **QUOTES** | `[73] ∧ [508]` |
-/// | `TEC` Abrechnung von Technik | the **ORDERS** | `[87] ∧ [501]` |
+/// | `TEC` Abrechnung von Technik | the **ORDERS** | `[87] ∧ \[501\]` |
 ///
 /// BO4E has no field for it — `Rechnung` models the document, not the order it
 /// answers — so it travels as a process fact rather than being smuggled into

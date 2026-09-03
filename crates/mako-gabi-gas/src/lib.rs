@@ -8,6 +8,9 @@
 //! | Kapazitätsrechnung (capacity billing) | 31010 | INVOIC |
 //! | Aggreg. MMM-Rechnung Gas (NB → MGV) | 31007, 31008 | INVOIC |
 //! | Allokationsliste Gas (MSCONS data delivery) | 13013 | MSCONS |
+//! | Allokation (NB/MGV/BKV, receive-and-record) | 70001–70023 | ALOCAT (DVGW) |
+//! | Nominierung (Transportkunde ↔ NB/MGV, both ends) | 70030–70039 | NOMINT / NOMRES (DVGW) |
+//! | Mehr-/Mindermengenmeldung (NB → MGV, both ends) | 70095, 70096 | SSQNOT (DVGW) |
 //!
 //! # Note on PID 31011
 //!
@@ -21,7 +24,7 @@
 //!
 //! | Crate | Responsibility |
 //! |---|---|
-//! | `dvgw-edi` | EDIFACT parsing — ALOCAT, NOMINT, NOMRES (parse at transport boundary in `makod`) |
+//! | `dvgw-edi` | EDIFACT parsing — ALOCAT, NOMINT, NOMRES, SSQNOT (parse at transport boundary in `makod`) |
 //! | `mako-gabi-gas` | Process engine — Workflow state machines, PID routing, deadline handling |
 //!
 //! # Domain background
@@ -86,6 +89,9 @@ pub mod allocation;
 /// GaBi Gas MMM Allokationsliste Gas — Mehr-/Mindermengen data delivery (MSCONS 13013).
 pub mod mmma;
 
+/// GaBi Gas Mehr-/Mindermengenmeldung — SSQNOT receive-and-record (PIDs 70095/70096).
+pub mod mehr_mindermengen;
+
 // ── Domain re-exports ─────────────────────────────────────────────────────────
 
 pub use domain::{
@@ -117,14 +123,21 @@ pub use invoic::{
     SETTLEMENT_WINDOW_LABEL as INVOIC_SETTLEMENT_WINDOW_LABEL,
     WORKFLOW_NAME as INVOIC_WORKFLOW_NAME,
 };
+pub use mehr_mindermengen::{
+    GaBiGasMehrMindermengenWorkflow, MEHR_MINDERMENGEN_PIDS, MehrMindermengenCommand,
+    MehrMindermengenData, MehrMindermengenEvent, MehrMindermengenState, MmmVerfahren,
+    WORKFLOW_NAME as MEHR_MINDERMENGEN_WORKFLOW_NAME,
+};
 pub use mmma::{
     MMMA_MSCONS_PIDS, ORDERS_ANFRAGE_PID as MMMA_ORDERS_ANFRAGE_PID,
     ORDRSP_ABLEHNUNG_PID as MMMA_ORDRSP_ABLEHNUNG_PID, WORKFLOW_NAME as MMMA_WORKFLOW_NAME,
 };
 pub use nomination::{
     GaBiGasNominationWorkflow, NOMINATION_PIDS, NOMINT_PIDS, NOMRES_DEADLINE_LABEL, NOMRES_PIDS,
-    NominationCommand, NominationCounterparty, NominationData, NominationEvent, NominationState,
-    NomresAcceptance, WORKFLOW_NAME as NOMINATION_WORKFLOW_NAME,
+    NominationCommand, NominationCounterparty, NominationData, NominationEvent, NominationMenge,
+    NominationPosition, NominationRichtung, NominationState, NomresAcceptance, Renominierung,
+    WORKFLOW_NAME as NOMINATION_WORKFLOW_NAME, nomination_process_key, nomint_payload,
+    nomres_payload, single_direction_energy,
 };
 
 // ── EngineModule ──────────────────────────────────────────────────────────────
@@ -147,12 +160,13 @@ pub use nomination::{
 /// **DVGW gas transport (Prüfidentifikatoren from `SG1 RFF+Z13`):**
 /// - PIDs 70001–70023 → `"gabi-gas-allocation"` (ALOCAT)
 /// - PIDs 70030–70039 → `"gabi-gas-nomination"` (NOMINT / NOMRES)
+/// - PIDs 70095–70096 → `"gabi-gas-mehr-mindermengen"` (SSQNOT)
 ///
 /// The DVGW formats this crate does **not** cover — SCHEDL, IMBNOT, TRANOT,
-/// DELORD/DELRES, SSQNOT, CHACAP, NUEVOR, SLPASP and TSIMSG — have no workflow
-/// and no Prüfidentifikator here. `dvgw-edi` cannot parse them, so a workflow
-/// for one would be unreachable and its registration would overstate what the
-/// router handles.
+/// DELORD/DELRES, CHACAP, NUEVOR, SLPASP and TSIMSG — have no workflow and no
+/// Prüfidentifikator here. `dvgw-edi` cannot parse them, so a workflow for one
+/// would be unreachable and its registration would overstate what the router
+/// handles.
 ///
 /// Note: PID 31011 (Rechnung sonstige Leistung / AWH Sperrprozesse Gas) is
 /// handled by `mako-geli-gas` (`geli-gas-sperrprozesse-invoic`), not here.
@@ -172,6 +186,7 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
             nomination::WORKFLOW_NAME,
             allocation::WORKFLOW_NAME,
             mmma::WORKFLOW_NAME,
+            mehr_mindermengen::WORKFLOW_NAME,
         ]
     }
 
@@ -204,6 +219,11 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
         // ALOCAT Prüfidentifikatoren (DVGW, 70001–70023).
         for &pid in allocation::ALLOCATION_PIDS {
             router.register(pid, "gabi-gas-allocation");
+        }
+
+        // SSQNOT Prüfidentifikatoren (DVGW, 70095/70096) — NB → MGV.
+        for &pid in mehr_mindermengen::MEHR_MINDERMENGEN_PIDS {
+            router.register(pid, mehr_mindermengen::WORKFLOW_NAME);
         }
 
         // MMM Allokationsliste Gas — MSCONS 13013 (NB → LF, Gas-only).

@@ -761,8 +761,12 @@ section on this page.
 
 | PID | Beschreibung | Prozess | Von → An | Reaktion | ⚡ | 🔥 | 3.3 | 4.0 | Crate / Workflow |
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
-| 70095 | Mehr-/Mindermengenmeldung SLP | MMM Strom/Gas | NB → MGV | — | — | ✅ | ✅ | ✅ | — |
-| 70096 | Mehr-/Mindermengenmeldung RLP | MMM Strom/Gas | NB → MGV | — | — | ✅ | ✅ | ✅ | — |
+| 70095 | Mehr-/Mindermengenmeldung SLP | MMM Gas (GaBi Gas) | NB → MGV | — | — | ✅ | ✅ | ✅ | `mako-gabi-gas` `gabi-gas-mehr-mindermengen` |
+| 70096 | Mehr-/Mindermengenmeldung RLM (Zeiträume before 1.10.2015 only, SSQNOT 5.7 Hinweis [500]) | MMM Gas (GaBi Gas) | NB → MGV | — | — | ✅ | ✅ | ✅ | `mako-gabi-gas` `gabi-gas-mehr-mindermengen` |
+
+SSQNOT is a DVGW Nachrichtenbeschreibung (5.7, an `ORDRSP` subset), parsed by
+`dvgw-edi`; the Anwendungsübersicht lists its two Prüfidentifikatoren beside the
+BDEW ones.
 
 ---
 

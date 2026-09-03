@@ -276,7 +276,7 @@ fn the_landing_page_figures_match_the_registered_engine() {
     };
     let landing_page_pids = stat("Prüfidentifikatoren routed");
     let landing_page_workflows = stat("MaKo workflows");
-    let landing_page_message_types = stat("EDIFACT message types");
+    let landing_page_message_types = stat("EDI@Energy message types");
     let landing_page_services = stat("services");
 
     assert_eq!(

@@ -1,731 +1,5095 @@
 {
-  "schema_version": 1,
+  "ahb_version": "1.1",
+  "envelope": [],
   "message_type": "QUOTES",
+  "pid_source": "rff_z13",
+  "publikationsdatum": "2025-04-01",
   "release": "1.3b",
-  "valid_from": "2025-10-01",
-  "ordering_hint": [],
-  "dtm_formats": {
-    "137": [
-      "303"
-    ],
-    "203": [
-      "303"
-    ],
-    "273": [
-      "802",
-      "803",
-      "804"
-    ],
-    "279": [
-      "802",
-      "803",
-      "804"
-    ],
-    "469": [
-      "303"
-    ],
-    "472": [
-      "303"
-    ],
-    "76": [
-      "303"
-    ],
-    "94": [
-      "602"
-    ],
-    "Z04": [
-      "602"
-    ]
+  "schema_version": 2,
+  "source": {
+    "file": "QUOTES_MIG_1.3b_-_konsolidierte_Lesefassung_Stand_30.01.2026.pdf",
+    "sha256": "192abbdfdee1efdf18555e2cef2c5dcbb836cb9acd7e52b224d8608dd9b320eb",
+    "title": "QUOTES MIG 1.3b - konsolidierte Lesefassung mit Fehlerkorrekturen Stand: 30.01.2026"
   },
-  "segments": [
+  "structure": [
     {
-      "tag": "UNH",
-      "name": "Nachrichten-Kopfsegment",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "format": "an..14",
           "id": "0062",
+          "name": "Nachrichten-Referenznummer",
+          "note": "Eindeutige Nachrichtenreferenz des Absenders. Nummer der Nachrichten einer Übertragungsdatei im Datenaustausch. Identisch mit DE0062 im UNT, i. d. R. vom sendenden Konverter vergeben.",
           "status": "M"
         },
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "QUOTES",
+                  "name": "Angebot"
+                }
+              ],
+              "format": "an..6",
+              "id": "0065",
+              "name": "Nachrichtentyp-Kennung",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "D",
+                  "name": "Entwurfs-Version"
+                }
+              ],
+              "format": "an..3",
+              "id": "0052",
+              "name": "Versionsnummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "10A",
+                  "name": "Ausgabe 2010 - A"
+                }
+              ],
+              "format": "an..3",
+              "id": "0054",
+              "name": "Freigabenummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "UN",
+                  "name": "UN/CEFACT"
+                }
+              ],
+              "format": "an..2",
+              "id": "0051",
+              "name": "Verwaltende Organisation",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "1.3b",
+                  "name": "Versionsnummer der zugrundeliegenden BDEW-Nachrichtenbeschreibung"
+                }
+              ],
+              "format": "an..6",
+              "id": "0057",
+              "name": "Anwendungscode der zuständigen Organisation",
+              "status": "R"
+            }
+          ],
           "id": "S009",
+          "name": "Nachrichten-Kennung",
           "status": "M"
         }
       ],
-      "qualifier_restrictions": {}
+      "example": "UNH+1+QUOTES:D:10A:UN:1.3b'",
+      "max": 1,
+      "name": "Nachrichten-Kopfsegment",
+      "nr": "00001",
+      "status": "M",
+      "tag": "UNH",
+      "zaehler": "0010"
     },
     {
-      "tag": "BGM",
-      "name": "Beginn der Nachricht",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "310",
+                  "name": "Angebot"
+                },
+                {
+                  "code": "Z29",
+                  "name": "Abrechnung des Messstellenbetriebs vom MSB an den LF"
+                },
+                {
+                  "code": "Z57",
+                  "name": "Übermittlung von Werten an ESA"
+                },
+                {
+                  "code": "Z74",
+                  "name": "Bestellung eines Angebots einer Konfiguration"
+                },
+                {
+                  "code": "Z93",
+                  "name": "Bestellung eines Angebots Änderung der Technik der Lokation"
+                }
+              ],
+              "format": "an..3",
+              "id": "1001",
+              "name": "Dokumentenname, Code",
+              "status": "R"
+            }
+          ],
           "id": "C002",
-          "status": "M"
+          "name": "Dokumenten-/ Nachrichtenname",
+          "status": "R"
         },
         {
+          "components": [
+            {
+              "format": "an..70",
+              "id": "1004",
+              "name": "Dokumentennummer",
+              "note": "EDI-Nachrichtennummer, vergeben vom Absender des Dokuments.",
+              "status": "R"
+            }
+          ],
           "id": "C106",
-          "status": "C"
+          "name": "Dokumenten-/Nachrichten- Identifikation",
+          "status": "R"
         }
       ],
-      "qualifier_restrictions": {
-        "1001": [
-          "310"
-        ]
-      }
+      "example": "BGM+310+MKIDI5422'",
+      "max": 1,
+      "name": "Beginn der Nachricht",
+      "nr": "00002",
+      "status": "M",
+      "tag": "BGM",
+      "zaehler": "0020"
     },
     {
-      "tag": "DTM",
-      "name": "Datum/Uhrzeit/Zeitspanne",
-      "mandatory": true,
-      "max_occurrences": 7,
       "elements": [
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "137",
+                  "name": "Dokumenten-/Nachrichtendatum/-zeit"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
           "id": "C507",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {
-        "2005": [
-          "137",
-          "76",
-          "203",
-          "469",
-          "472",
-          "279",
-          "273"
-        ]
-      }
-    },
-    {
-      "tag": "IMD",
-      "name": "Produkt-/Leistungsbeschreibung",
-      "mandatory": false,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "7077",
-          "status": "C"
-        },
-        {
-          "id": "C273",
-          "status": "C"
-        }
-      ],
-      "qualifier_restrictions": {}
-    },
-    {
-      "tag": "FTX",
-      "name": "Allgemeine Information",
-      "mandatory": false,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "4451",
-          "status": "M"
-        },
-        {
-          "id": "C108",
-          "status": "C"
-        }
-      ],
-      "qualifier_restrictions": {
-        "4451": [
-          "ACB"
-        ]
-      }
-    },
-    {
-      "tag": "NAD",
-      "name": "Beteiligter",
-      "mandatory": true,
-      "max_occurrences": 3,
-      "elements": [
-        {
-          "id": "3035",
-          "status": "M"
-        },
-        {
-          "id": "C082",
-          "status": "C"
-        }
-      ],
-      "qualifier_restrictions": {
-        "3035": [
-          "MS",
-          "MR",
-          "DP"
-        ]
-      }
-    },
-    {
-      "tag": "CTA",
-      "name": "Ansprechpartner",
-      "mandatory": false,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "3139",
-          "status": "C"
-        },
-        {
-          "id": "C056",
-          "status": "C"
-        }
-      ],
-      "qualifier_restrictions": {}
-    },
-    {
-      "tag": "COM",
-      "name": "Kommunikationsverbindung",
-      "mandatory": false,
-      "max_occurrences": 5,
-      "elements": [
-        {
-          "id": "C076",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {}
-    },
-    {
-      "tag": "LOC",
-      "name": "Meldepunkt",
-      "mandatory": false,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "3227",
-          "status": "M"
-        },
-        {
-          "id": "C517",
-          "status": "C"
-        }
-      ],
-      "qualifier_restrictions": {
-        "3227": [
-          "172"
-        ]
-      }
-    },
-    {
-      "tag": "LIN",
-      "name": "Positionsdaten",
-      "mandatory": false,
-      "max_occurrences": 200000,
-      "elements": [
-        {
-          "id": "1082",
-          "status": "C"
-        },
-        {
-          "id": "1229",
-          "status": "C"
-        }
-      ],
-      "qualifier_restrictions": {}
-    },
-    {
-      "tag": "PIA",
-      "name": "Zusätzliche Produktidentifikation",
-      "mandatory": false,
-      "max_occurrences": 25,
-      "elements": [
-        {
-          "id": "4347",
-          "status": "M"
-        },
-        {
-          "id": "C212",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {}
-    },
-    {
-      "tag": "GIN",
-      "name": "Herstellernummer",
-      "mandatory": false,
-      "max_occurrences": 3,
-      "elements": [
-        {
-          "id": "7405",
-          "status": "M"
-        },
-        {
-          "id": "C208",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {}
-    },
-    {
-      "tag": "CCI",
-      "name": "Merkmal/Eigenschaft",
-      "mandatory": false,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "7059",
-          "status": "C"
-        },
-        {
-          "id": "C240",
-          "status": "C"
-        }
-      ],
-      "qualifier_restrictions": {}
-    },
-    {
-      "tag": "CAV",
-      "name": "Merkmalswert",
-      "mandatory": false,
-      "max_occurrences": 10,
-      "elements": [
-        {
-          "id": "C889",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {}
-    },
-    {
-      "tag": "PRI",
-      "name": "Preisangaben",
-      "mandatory": false,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "C509",
-          "status": "C"
-        }
-      ],
-      "qualifier_restrictions": {}
-    },
-    {
-      "tag": "UNT",
-      "name": "Nachrichten-Endesegment",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "0074",
-          "status": "M"
-        },
-        {
-          "id": "0062",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {}
-    }
-  ],
-  "segment_groups": [
-    {
-      "id": "SG1",
-      "trigger_segment": "RFF",
-      "mandatory": true,
-      "max_occurrences": 9999,
-      "segments": [
-        {
-          "tag": "RFF",
-          "name": "Referenz",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "C506",
-              "status": "M"
-            }
-          ],
-          "qualifier_restrictions": {
-            "1153": [
-              "AAV",
-              "ACW",
-              "Z13"
-            ]
-          }
-        }
-      ],
-      "groups": []
-    },
-    {
-      "id": "SG4",
-      "trigger_segment": "CUX",
-      "mandatory": false,
-      "max_occurrences": 5,
-      "segments": [
-        {
-          "tag": "CUX",
-          "name": "Währungsangaben",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "C504",
-              "status": "C"
-            }
-          ],
-          "qualifier_restrictions": {
-            "6343": [
-              "4"
-            ],
-            "6347": [
-              "2"
-            ]
-          }
-        }
-      ],
-      "groups": []
-    },
-    {
-      "id": "SG11",
-      "trigger_segment": "NAD",
-      "mandatory": true,
-      "max_occurrences": 99,
-      "segments": [
-        {
-          "tag": "NAD",
-          "name": "Beteiligter (MP-ID)",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "3035",
-              "status": "M"
-            },
-            {
-              "id": "C082",
-              "status": "C"
-            }
-          ],
-          "qualifier_restrictions": {
-            "3035": [
-              "MS",
-              "MR",
-              "DP"
-            ]
-          }
-        },
-        {
-          "tag": "LOC",
-          "name": "Meldepunkt",
-          "mandatory": false,
-          "max_occurrences": 99,
-          "elements": [
-            {
-              "id": "3227",
-              "status": "M"
-            },
-            {
-              "id": "C517",
-              "status": "C"
-            }
-          ],
-          "qualifier_restrictions": {
-            "3227": [
-              "172"
-            ]
-          }
-        }
-      ],
-      "groups": [
-        {
-          "id": "SG14",
-          "trigger_segment": "CTA",
-          "mandatory": false,
-          "max_occurrences": 5,
-          "segments": [
-            {
-              "tag": "CTA",
-              "name": "Ansprechpartner",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
-                {
-                  "id": "3139",
-                  "status": "C"
-                },
-                {
-                  "id": "C056",
-                  "status": "C"
-                }
-              ],
-              "qualifier_restrictions": {}
-            },
-            {
-              "tag": "COM",
-              "name": "Kommunikationsverbindung",
-              "mandatory": false,
-              "max_occurrences": 5,
-              "elements": [
-                {
-                  "id": "C076",
-                  "status": "M"
-                }
-              ],
-              "qualifier_restrictions": {}
-            }
-          ],
-          "groups": []
-        }
-      ]
-    },
-    {
-      "id": "SG27",
-      "trigger_segment": "LIN",
-      "mandatory": false,
-      "max_occurrences": 200000,
-      "segments": [
-        {
-          "tag": "LIN",
-          "name": "Positionsdaten",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "1082",
-              "status": "C"
-            },
-            {
-              "id": "1229",
-              "status": "C"
-            }
-          ],
-          "qualifier_restrictions": {}
-        },
-        {
-          "tag": "PIA",
-          "name": "Zusätzliche Produktidentifikation",
-          "mandatory": false,
-          "max_occurrences": 25,
-          "elements": [
-            {
-              "id": "4347",
-              "status": "M"
-            },
-            {
-              "id": "C212",
-              "status": "M"
-            }
-          ],
-          "qualifier_restrictions": {}
-        },
-        {
-          "tag": "IMD",
-          "name": "Produkt-/Leistungsbeschreibung",
-          "mandatory": false,
-          "max_occurrences": 99,
-          "elements": [
-            {
-              "id": "7077",
-              "status": "C"
-            },
-            {
-              "id": "C273",
-              "status": "C"
-            }
-          ],
-          "qualifier_restrictions": {}
-        },
-        {
-          "tag": "DTM",
           "name": "Datum/Uhrzeit/Zeitspanne",
-          "mandatory": false,
-          "max_occurrences": 2,
-          "elements": [
-            {
-              "id": "C507",
-              "status": "M"
-            }
-          ],
-          "qualifier_restrictions": {}
-        },
-        {
-          "tag": "GIN",
-          "name": "Herstellernummer",
-          "mandatory": false,
-          "max_occurrences": 3,
-          "elements": [
-            {
-              "id": "7405",
-              "status": "M"
-            },
-            {
-              "id": "C208",
-              "status": "M"
-            }
-          ],
-          "qualifier_restrictions": {}
-        },
-        {
-          "tag": "FTX",
-          "name": "Allgemeine Information",
-          "mandatory": false,
-          "max_occurrences": 99,
-          "elements": [
-            {
-              "id": "4451",
-              "status": "M"
-            },
-            {
-              "id": "C108",
-              "status": "C"
-            }
-          ],
-          "qualifier_restrictions": {}
+          "status": "M"
         }
       ],
-      "groups": [
+      "example": "DTM+137:199904081315?+00:303'",
+      "max": 1,
+      "name": "Nachrichtendatum",
+      "nr": "00003",
+      "status": "M",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
         {
-          "id": "SG28",
-          "trigger_segment": "CCI",
-          "mandatory": false,
-          "max_occurrences": 999,
-          "segments": [
+          "components": [
             {
-              "tag": "CCI",
-              "name": "Merkmal/Eigenschaft",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
+              "codes": [
                 {
-                  "id": "7059",
-                  "status": "C"
-                },
-                {
-                  "id": "C240",
-                  "status": "C"
+                  "code": "76",
+                  "name": "Lieferdatum/-zeit, geplant"
                 }
               ],
-              "qualifier_restrictions": {}
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
             },
             {
-              "tag": "CAV",
-              "name": "Merkmalswert",
-              "mandatory": false,
-              "max_occurrences": 10,
-              "elements": [
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
                 {
-                  "id": "C889",
-                  "status": "M"
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
                 }
               ],
-              "qualifier_restrictions": {}
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
             }
           ],
-          "groups": []
-        },
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+76:200710012200?+00:303'",
+      "max": 1,
+      "name": "Datum zum geplanten Leistungsbeginn",
+      "nr": "00004",
+      "status": "D",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
         {
-          "id": "SG31",
-          "trigger_segment": "PRI",
-          "mandatory": false,
-          "max_occurrences": 99,
-          "segments": [
+          "components": [
             {
-              "tag": "PRI",
-              "name": "Preisangaben",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
+              "codes": [
                 {
-                  "id": "C509",
-                  "status": "C"
+                  "code": "203",
+                  "name": "Ausführungsdatum/-zeit"
                 }
               ],
-              "qualifier_restrictions": {}
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
             },
             {
-              "tag": "RNG",
-              "name": "Angaben zum Wertebereich",
-              "mandatory": false,
-              "max_occurrences": 1,
-              "elements": [
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
                 {
-                  "id": "6167",
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+203:200710012200?+00:303'",
+      "max": 1,
+      "name": "Ausführungsdatum",
+      "nr": "00005",
+      "status": "D",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "469",
+                  "name": "Startdatum oder -zeitpunkt, frühestes/r"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+469:200710012200?+00:303'",
+      "max": 1,
+      "name": "Startdatum oder Zeitpunkt",
+      "nr": "00006",
+      "status": "D",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "472",
+                  "name": "Endedatum oder -zeitpunkt, spätestes/r"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+472:200710012200?+00:303'",
+      "max": 1,
+      "name": "Endedatum oder Zeitpunkt",
+      "nr": "00007",
+      "status": "D",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "279",
+                  "name": "Vom Bestelleingangsdatum bis Lieferdatum"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "note": "Zeitraum",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "802",
+                  "name": "Monat"
+                },
+                {
+                  "code": "803",
+                  "name": "Woche"
+                },
+                {
+                  "code": "804",
+                  "name": "Tag"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+279:10:804'",
+      "max": 1,
+      "name": "Erforderliche Zeitspanne zur Einrichtung der Übermittlung von Werten ab Bestellung",
+      "nr": "00008",
+      "status": "D",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "273",
+                  "name": "Gültigkeitszeitspanne"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "note": "Zeitraum",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "802",
+                  "name": "Monat"
+                },
+                {
+                  "code": "803",
+                  "name": "Woche"
+                },
+                {
+                  "code": "804",
+                  "name": "Tag"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+273:1:802'",
+      "max": 1,
+      "name": "Gültigkeitsdauer (Bindungsfrist des Angebots)",
+      "nr": "00009",
+      "status": "D",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
+        {
+          "format": "an..3",
+          "id": "7077",
+          "name": "Beschreibungsformat, Code",
+          "note": "Nicht benutzt",
+          "status": "N"
+        },
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "Z07",
+                  "name": "Kauf"
+                },
+                {
+                  "code": "Z08",
+                  "name": "Nutzungsüberlassung"
+                },
+                {
+                  "code": "Z33",
+                  "name": "Angebot auf Basis Preisblatt"
+                },
+                {
+                  "code": "Z34",
+                  "name": "Individuelles Angebot"
+                },
+                {
+                  "code": "Z55",
+                  "name": "Änderung Konfiguration"
+                },
+                {
+                  "code": "Z64",
+                  "name": "Neukonfiguration"
+                }
+              ],
+              "format": "an..3",
+              "id": "7081",
+              "name": "Produkt/Leistung, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C272",
+          "name": "Produkt/Leistung",
+          "status": "R"
+        }
+      ],
+      "example": "IMD++Z08'",
+      "max": 1,
+      "name": "Produkt-/Leistungsbeschreibung",
+      "nr": "00010",
+      "status": "D",
+      "tag": "IMD",
+      "zaehler": "0060"
+    },
+    {
+      "elements": [
+        {
+          "codes": [
+            {
+              "code": "ACB",
+              "name": "Zusätzliche Informationen (für allgemeine Hinweise)"
+            }
+          ],
+          "format": "an..3",
+          "id": "4451",
+          "name": "Textbezug, Qualifier",
+          "status": "M"
+        },
+        {
+          "format": "an..3",
+          "id": "4453",
+          "name": "Textfunktion, Code",
+          "note": "Nicht benutzt",
+          "status": "N"
+        },
+        {
+          "components": [
+            {
+              "format": "an..17",
+              "id": "4441",
+              "name": "Freier Text, Code",
+              "note": "Nicht benutzt",
+              "status": "N"
+            }
+          ],
+          "id": "C107",
+          "name": "Text-Referenz",
+          "status": "N"
+        },
+        {
+          "components": [
+            {
+              "format": "an..512",
+              "id": "4440",
+              "name": "Freier Text",
+              "note": "Freier Text zur weiteren Erklärung.",
+              "status": "M"
+            },
+            {
+              "format": "an..512",
+              "id": "4440",
+              "name": "Freier Text",
+              "status": "D"
+            },
+            {
+              "format": "an..512",
+              "id": "4440",
+              "name": "Freier Text",
+              "status": "D"
+            },
+            {
+              "format": "an..512",
+              "id": "4440",
+              "name": "Freier Text",
+              "status": "D"
+            },
+            {
+              "format": "an..512",
+              "id": "4440",
+              "name": "Freier Text",
+              "status": "D"
+            }
+          ],
+          "id": "C108",
+          "name": "Text",
+          "status": "R"
+        }
+      ],
+      "example": "FTX+ACB+++Text:Text2:Text3:Text4:Text5'",
+      "max": 1,
+      "name": "Allgemeine Information (Feld für allgemeine Hinweise)",
+      "nr": "00011",
+      "status": "D",
+      "tag": "FTX",
+      "zaehler": "0080"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "AAV",
+                      "name": "Nummer der Anfrage"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
                   "status": "M"
                 },
                 {
-                  "id": "C280",
+                  "format": "an..70",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "note": "Nachrichtennummer",
                   "status": "R"
                 }
               ],
-              "qualifier_restrictions": {
-                "6167": [
-                  "10"
-                ]
-              }
-            }
-          ],
-          "groups": []
-        },
-        {
-          "id": "SG32",
-          "trigger_segment": "RFF",
-          "mandatory": false,
-          "max_occurrences": 9999,
-          "segments": [
-            {
-              "tag": "RFF",
+              "id": "C506",
               "name": "Referenz",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
-                {
-                  "id": "C506",
-                  "status": "M"
-                }
-              ],
-              "qualifier_restrictions": {
-                "1153": [
-                  "Z09",
-                  "Z18",
-                  "APF"
-                ]
-              }
+              "status": "M"
             }
           ],
-          "groups": []
-        },
+          "example": "RFF+AAV:123456789'",
+          "max": 1,
+          "name": "Nachrichtennummer der Anfrage",
+          "nr": "00012",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0110"
+        }
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "Referenz der Anfrage",
+      "status": "D",
+      "zaehler": "0100"
+    },
+    {
+      "children": [
         {
-          "id": "SG42",
-          "trigger_segment": "NAD",
-          "mandatory": false,
-          "max_occurrences": 999,
-          "segments": [
+          "elements": [
             {
-              "tag": "NAD",
-              "name": "Beteiligter Marktpartner MP-ID",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
+              "components": [
                 {
-                  "id": "3035",
+                  "codes": [
+                    {
+                      "code": "ACW",
+                      "name": "Referenznummer einer vorangegangenen Nachricht"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
                   "status": "M"
                 },
                 {
-                  "id": "C082",
-                  "status": "C"
+                  "format": "an..70",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "status": "R"
                 }
               ],
-              "qualifier_restrictions": {
-                "3035": [
-                  "VY"
-                ]
-              }
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
             }
           ],
-          "groups": []
+          "example": "RFF+ACW:1313'",
+          "max": 1,
+          "name": "Referenz Nachrichtennummer",
+          "nr": "00013",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0110"
         }
-      ]
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "Referenz Nachrichtennummer",
+      "status": "D",
+      "zaehler": "0100"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z13",
+                      "name": "Prüfidentifikator"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "15001",
+                      "name": "Angebot Geräteübernahme"
+                    },
+                    {
+                      "code": "15002",
+                      "name": "Angebot Rechnungsabwicklung MSB über LF"
+                    },
+                    {
+                      "code": "15003",
+                      "name": "Angebot zur Anfrage von Werten für ESA"
+                    },
+                    {
+                      "code": "15004",
+                      "name": "Angebot zur Anfrage einer Konfiguration"
+                    },
+                    {
+                      "code": "15005",
+                      "name": "Angebot zur Anfrage Änderung Technik"
+                    }
+                  ],
+                  "format": "n5",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "note": "Prüfidentifikator",
+                  "status": "R"
+                }
+              ],
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
+            }
+          ],
+          "example": "RFF+Z13:15001'",
+          "max": 1,
+          "name": "Prüfidentifikator",
+          "nr": "00014",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0110"
+        }
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "Prüfidentifikator",
+      "status": "R",
+      "zaehler": "0100"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "2",
+                      "name": "Referenzwährung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "6347",
+                  "name": "Währungsverwendung, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "EUR",
+                      "name": "Euro"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "6345",
+                  "name": "Währung, Code",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "4",
+                      "name": "Währung der Rechnung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "6343",
+                  "name": "Währung, Qualifier",
+                  "status": "R"
+                }
+              ],
+              "id": "C504",
+              "name": "Währungsangaben",
+              "status": "R"
+            }
+          ],
+          "example": "CUX+2:EUR:4'",
+          "max": 1,
+          "name": "Währungsangaben",
+          "nr": "00015",
+          "status": "M",
+          "tag": "CUX",
+          "zaehler": "0210"
+        }
+      ],
+      "group": "SG4",
+      "max": 1,
+      "name": "Währungsangaben",
+      "status": "D",
+      "zaehler": "0200"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "MS",
+                  "name": "Dokumenten-/Nachrichtenaussteller bzw. - absender"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    },
+                    {
+                      "code": "332",
+                      "name": "DE, DVGW Service & Consult GmbH"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+MS+9900259000002::293'",
+          "max": 1,
+          "name": "MP-ID Absender",
+          "nr": "00016",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0540"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "IC",
+                      "name": "Informationskontakt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3139",
+                  "name": "Funktion des Ansprechpartners, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "3413",
+                      "name": "Kontakt, Nummer",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..256",
+                      "id": "3412",
+                      "name": "Kontakt",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C056",
+                  "name": "Kontaktangaben",
+                  "status": "R"
+                }
+              ],
+              "example": "CTA+IC+:P GETTY'",
+              "max": 1,
+              "name": "Ansprechpartner",
+              "nr": "00017",
+              "status": "M",
+              "tag": "CTA",
+              "zaehler": "0650"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "3148",
+                      "name": "Kommunikationsadresse, Identifikation",
+                      "note": "Nummer / Adresse",
+                      "status": "M"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "EM",
+                          "name": "Elektronische Post"
+                        },
+                        {
+                          "code": "FX",
+                          "name": "Telefax"
+                        },
+                        {
+                          "code": "TE",
+                          "name": "Telefon"
+                        },
+                        {
+                          "code": "AJ",
+                          "name": "weiteres Telefon"
+                        },
+                        {
+                          "code": "AL",
+                          "name": "Handy"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3155",
+                      "name": "Art des Kommunikationsmittels, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C076",
+                  "name": "Kommunikationsverbindung",
+                  "status": "M"
+                }
+              ],
+              "example": "COM+?+493222271020:TE'",
+              "max": 5,
+              "name": "Kommunikationsverbindung",
+              "nr": "00018",
+              "status": "R",
+              "tag": "COM",
+              "zaehler": "0660"
+            }
+          ],
+          "group": "SG14",
+          "max": 1,
+          "name": "Kontaktinformationen",
+          "status": "D",
+          "zaehler": "0640"
+        }
+      ],
+      "group": "SG11",
+      "max": 1,
+      "name": "MP-ID Absender",
+      "status": "R",
+      "zaehler": "0530"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "MR",
+                  "name": "Nachrichtenempfänger"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    },
+                    {
+                      "code": "332",
+                      "name": "DE, DVGW Service & Consult GmbH"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+MR+9900259000002::293'",
+          "max": 1,
+          "name": "MP-ID Empfänger",
+          "nr": "00019",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0540"
+        }
+      ],
+      "group": "SG11",
+      "max": 1,
+      "name": "MP-ID Empfänger",
+      "status": "R",
+      "zaehler": "0530"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "DP",
+                  "name": "Lieferanschrift"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            }
+          ],
+          "example": "NAD+DP'",
+          "max": 1,
+          "name": "Liefer-, bzw. Bezugsort",
+          "nr": "00020",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0540"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "172",
+                  "name": "Meldepunkt"
+                }
+              ],
+              "format": "an..3",
+              "id": "3227",
+              "name": "Ortsangabe, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3225",
+                  "name": "Ortsangabe, Nummer",
+                  "note": "Identifikator",
+                  "status": "R"
+                }
+              ],
+              "id": "C517",
+              "name": "Ortsangabe",
+              "status": "R"
+            }
+          ],
+          "example": "LOC+172+E1688117482'",
+          "max": 1,
+          "name": "Meldepunkt",
+          "nr": "00021",
+          "status": "R",
+          "tag": "LOC",
+          "zaehler": "0550"
+        }
+      ],
+      "group": "SG11",
+      "max": 1,
+      "name": "Liefer-, bzw. Bezugsort",
+      "status": "R",
+      "zaehler": "0530"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "format": "n..6",
+              "id": "1082",
+              "name": "Positionsnummer",
+              "note": "Vom Programm vorgegebene Positionsnummer innerhalb einer Anforderung",
+              "status": "R"
+            },
+            {
+              "format": "an..3",
+              "id": "1229",
+              "name": "Handlung, Code",
+              "note": "Nicht benutzt",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Produkt-/Leistungsnummer",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z01",
+                      "name": "Artikelnummer"
+                    },
+                    {
+                      "code": "Z09",
+                      "name": "Artikel-ID"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "R"
+            }
+          ],
+          "example": "LIN+1++9990001000649:Z01'",
+          "max": 1,
+          "name": "Positionsdaten",
+          "nr": "00022",
+          "status": "M",
+          "tag": "LIN",
+          "zaehler": "1070"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "1",
+                  "name": "Zusätzliche Identifikation"
+                }
+              ],
+              "format": "an..3",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Preisschlüsselstamm",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z06",
+                      "name": "Preisschlüsselstamm"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "R"
+            }
+          ],
+          "example": "PIA+1+FX12:Z06'",
+          "max": 1,
+          "name": "Zusätzliche Produktidentifikation",
+          "nr": "00023",
+          "status": "D",
+          "tag": "PIA",
+          "zaehler": "1080"
+        },
+        {
+          "elements": [
+            {
+              "format": "an..3",
+              "id": "7077",
+              "name": "Beschreibungsformat, Code",
+              "note": "Nicht benutzt",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z09",
+                      "name": "Kann nicht angeboten werden"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7081",
+                  "name": "Produkt/Leistung, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C272",
+              "name": "Produkt/Leistung",
+              "status": "R"
+            }
+          ],
+          "example": "IMD++Z09'",
+          "max": 1,
+          "name": "Produkt-/Leistungsbeschreibung",
+          "nr": "00024",
+          "status": "D",
+          "tag": "IMD",
+          "zaehler": "1090"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "94",
+                      "name": "Produktions-/Herstellungsdatum"
+                    },
+                    {
+                      "code": "Z03",
+                      "name": "Baujahr/Jahr des in Verkehrs bringens"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2005",
+                  "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "2380",
+                  "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "602",
+                      "name": "CCYY"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2379",
+                  "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C507",
+              "name": "Datum/Uhrzeit/Zeitspanne",
+              "status": "M"
+            }
+          ],
+          "example": "DTM+94:1999:602'",
+          "max": 1,
+          "name": "Baujahr/Jahr des In Verkehrs bringen",
+          "nr": "00025",
+          "status": "D",
+          "tag": "DTM",
+          "zaehler": "1140"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z04",
+                      "name": "Eichgültigkeit"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2005",
+                  "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "2380",
+                  "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "602",
+                      "name": "CCYY"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2379",
+                  "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C507",
+              "name": "Datum/Uhrzeit/Zeitspanne",
+              "status": "M"
+            }
+          ],
+          "example": "DTM+Z04:2012:602'",
+          "max": 1,
+          "name": "Eichgültigkeitsdauer bis",
+          "nr": "00026",
+          "status": "D",
+          "tag": "DTM",
+          "zaehler": "1140"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "BN",
+                  "name": "Serialnummer"
+                }
+              ],
+              "format": "an..3",
+              "id": "7405",
+              "name": "Objektidentifikation, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "7402",
+                  "name": "Objekt, Identifikation",
+                  "note": "Herstellernummer",
+                  "status": "M"
+                }
+              ],
+              "id": "C208",
+              "name": "Identifikationsnummern- Bereich",
+              "status": "M"
+            }
+          ],
+          "example": "GIN+BN+124332458763'",
+          "max": 3,
+          "name": "Herstellernummer",
+          "nr": "00027",
+          "status": "D",
+          "tag": "GIN",
+          "zaehler": "1150"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "ACB",
+                  "name": "Zusätzliche Informationen (für allgemeine Hinweise)"
+                }
+              ],
+              "format": "an..3",
+              "id": "4451",
+              "name": "Textbezug, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..3",
+              "id": "4453",
+              "name": "Textfunktion, Code",
+              "note": "Nicht benutzt",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..17",
+                  "id": "4441",
+                  "name": "Freier Text, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C107",
+              "name": "Text-Referenz",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "note": "Freier Text zur weiteren Erklärung.",
+                  "status": "M"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "status": "D"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "status": "D"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "status": "D"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "status": "D"
+                }
+              ],
+              "id": "C108",
+              "name": "Text",
+              "status": "R"
+            }
+          ],
+          "example": "FTX+ACB+++Text:Text2:Text3:Text4:Text5'",
+          "max": 1,
+          "name": "Allgemeine Information (Feld für allgemeine Hinweise)",
+          "nr": "00028",
+          "status": "D",
+          "tag": "FTX",
+          "zaehler": "1180"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "format": "an..3",
+                  "id": "7059",
+                  "name": "Klassentyp, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "6313",
+                      "name": "Gemessene Dimension, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C502",
+                  "name": "Einzelheiten zu Maßangaben",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "E13",
+                          "name": "Zählertyp"
+                        }
+                      ],
+                      "format": "an..17",
+                      "id": "7037",
+                      "name": "Merkmal, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C240",
+                  "name": "Merkmalsbeschreibung",
+                  "status": "R"
+                }
+              ],
+              "example": "CCI+++E13'",
+              "max": 1,
+              "name": "Zähleinrichtung",
+              "nr": "00029",
+              "status": "M",
+              "tag": "CCI",
+              "zaehler": "1240"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "AHZ",
+                          "name": "analoger Haushaltszähler (Drehstrom)"
+                        },
+                        {
+                          "code": "BGZ",
+                          "name": "Balgengaszähler"
+                        },
+                        {
+                          "code": "DKZ",
+                          "name": "Drehkolbengaszähler"
+                        },
+                        {
+                          "code": "EHZ",
+                          "name": "elektronischer Haushaltszähler"
+                        },
+                        {
+                          "code": "IVA",
+                          "name": "Individuelle Abstimmung (Sonderausstattung) Zur Sonderausstattung gehört z.B. Gas-Encoder"
+                        },
+                        {
+                          "code": "LAZ",
+                          "name": "Lastgangzähler"
+                        },
+                        {
+                          "code": "MAZ",
+                          "name": "Maximumzähler"
+                        },
+                        {
+                          "code": "MME",
+                          "name": "moderne Messeinrichtung nach MsbG"
+                        },
+                        {
+                          "code": "MRG",
+                          "name": "Messdatenregistriergerät"
+                        },
+                        {
+                          "code": "TRZ",
+                          "name": "Turbinenradgaszähler"
+                        },
+                        {
+                          "code": "UGZ",
+                          "name": "Ultraschallgaszähler"
+                        },
+                        {
+                          "code": "WGZ",
+                          "name": "Wirbelgaszähler"
+                        },
+                        {
+                          "code": "WSZ",
+                          "name": "analoger Wechselstromzähler"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7111",
+                      "name": "Merkmalswert, Code",
+                      "status": "R"
+                    },
+                    {
+                      "format": "an..17",
+                      "id": "1131",
+                      "name": "Codeliste, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..3",
+                      "id": "3055",
+                      "name": "Verantwortliche Stelle für die Codepflege, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "Z01",
+                          "name": "EDL40"
+                        },
+                        {
+                          "code": "Z02",
+                          "name": "EDL21"
+                        },
+                        {
+                          "code": "Z03",
+                          "name": "sonstiger EHZ"
+                        },
+                        {
+                          "code": "Z04",
+                          "name": "Standard"
+                        },
+                        {
+                          "code": "Z05",
+                          "name": "MeDa-Zähler"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7110",
+                      "name": "Merkmalswert",
+                      "note": "Zählertyp",
+                      "status": "D"
+                    }
+                  ],
+                  "id": "C889",
+                  "name": "Merkmalswert",
+                  "status": "M"
+                }
+              ],
+              "example": "CAV+EHZ:::Z01'",
+              "max": 1,
+              "name": "Zähleinrichtung/Zählertyp",
+              "nr": "00030",
+              "status": "R",
+              "tag": "CAV",
+              "zaehler": "1250"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "7111",
+                      "name": "Merkmalswert, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..17",
+                      "id": "1131",
+                      "name": "Codeliste, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..3",
+                      "id": "3055",
+                      "name": "Verantwortliche Stelle für die Codepflege, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "G10",
+                          "name": "Gaszähler G10"
+                        },
+                        {
+                          "code": "G100",
+                          "name": "Gaszähler G100"
+                        },
+                        {
+                          "code": "G1000",
+                          "name": "Gaszähler G1000"
+                        },
+                        {
+                          "code": "G10000",
+                          "name": "Gaszähler G10000"
+                        },
+                        {
+                          "code": "G12500",
+                          "name": "Gaszähler G12500"
+                        },
+                        {
+                          "code": "G16",
+                          "name": "Gaszähler G16"
+                        },
+                        {
+                          "code": "G160",
+                          "name": "Gaszähler G160"
+                        },
+                        {
+                          "code": "G1600",
+                          "name": "Gaszähler G1600"
+                        },
+                        {
+                          "code": "G16000",
+                          "name": "Gaszähler G16000"
+                        },
+                        {
+                          "code": "G2.5",
+                          "name": "Gaszähler G2.5"
+                        },
+                        {
+                          "code": "G25",
+                          "name": "Gaszähler G25"
+                        },
+                        {
+                          "code": "G250",
+                          "name": "Gaszähler G250"
+                        },
+                        {
+                          "code": "G2500",
+                          "name": "Gaszähler G2500"
+                        },
+                        {
+                          "code": "G350",
+                          "name": "Gaszähler G350"
+                        },
+                        {
+                          "code": "G4",
+                          "name": "Gaszähler G4"
+                        },
+                        {
+                          "code": "G40",
+                          "name": "Gaszähler G40"
+                        },
+                        {
+                          "code": "G400",
+                          "name": "Gaszähler G400"
+                        },
+                        {
+                          "code": "G4000",
+                          "name": "Gaszähler G4000"
+                        },
+                        {
+                          "code": "G6",
+                          "name": "Gaszähler G6"
+                        },
+                        {
+                          "code": "G65",
+                          "name": "Gaszähler G65"
+                        },
+                        {
+                          "code": "G650",
+                          "name": "Gaszähler G650"
+                        },
+                        {
+                          "code": "G6500",
+                          "name": "Gaszähler G6500"
+                        }
+                      ],
+                      "format": "an..35",
+                      "id": "7110",
+                      "name": "Merkmalswert",
+                      "note": "für Gas: (Angabe Größe)",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C889",
+                  "name": "Merkmalswert",
+                  "status": "M"
+                }
+              ],
+              "example": "CAV+:::G16'",
+              "max": 1,
+              "name": "Zähleinrichtung/Zählergröße (Gas)",
+              "nr": "00031",
+              "status": "D",
+              "tag": "CAV",
+              "zaehler": "1250"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "ETZ",
+                          "name": "Eintarif"
+                        },
+                        {
+                          "code": "ZTZ",
+                          "name": "Zweitarif"
+                        },
+                        {
+                          "code": "NTZ",
+                          "name": "Mehrtarif"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7111",
+                      "name": "Merkmalswert, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C889",
+                  "name": "Merkmalswert",
+                  "status": "M"
+                }
+              ],
+              "example": "CAV+ETZ'",
+              "max": 1,
+              "name": "Zähleinrichtung/Tarifanzahl",
+              "nr": "00032",
+              "status": "D",
+              "tag": "CAV",
+              "zaehler": "1250"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "ERZ",
+                          "name": "Einrichtungszähler"
+                        },
+                        {
+                          "code": "ZRZ",
+                          "name": "Zweirichtungszähler"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7111",
+                      "name": "Merkmalswert, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C889",
+                  "name": "Merkmalswert",
+                  "status": "M"
+                }
+              ],
+              "example": "CAV+ERZ'",
+              "max": 1,
+              "name": "Zähleinrichtung/Energierichtung",
+              "nr": "00033",
+              "status": "D",
+              "tag": "CAV",
+              "zaehler": "1250"
+            }
+          ],
+          "group": "SG28",
+          "max": 1,
+          "name": "Zähleinrichtung",
+          "status": "D",
+          "zaehler": "1230"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "format": "an..3",
+                  "id": "7059",
+                  "name": "Klassentyp, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "6313",
+                      "name": "Gemessene Dimension, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C502",
+                  "name": "Einzelheiten zu Maßangaben",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z25",
+                          "name": "Wandler"
+                        }
+                      ],
+                      "format": "an..17",
+                      "id": "7037",
+                      "name": "Merkmal, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C240",
+                  "name": "Merkmalsbeschreibung",
+                  "status": "R"
+                }
+              ],
+              "example": "CCI+++Z25'",
+              "max": 1,
+              "name": "Wandler",
+              "nr": "00034",
+              "status": "M",
+              "tag": "CCI",
+              "zaehler": "1240"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "MBW",
+                          "name": "Blockstromwandler"
+                        },
+                        {
+                          "code": "MIW",
+                          "name": "Messwandlersatz Strom"
+                        },
+                        {
+                          "code": "MPW",
+                          "name": "Kombimesswandlersatz (Strom und Spannung)"
+                        },
+                        {
+                          "code": "MUW",
+                          "name": "Messwandlersatz Spannung"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7111",
+                      "name": "Merkmalswert, Code",
+                      "status": "R"
+                    },
+                    {
+                      "format": "an..17",
+                      "id": "1131",
+                      "name": "Codeliste, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..3",
+                      "id": "3055",
+                      "name": "Verantwortliche Stelle für die Codepflege, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "n..35",
+                      "id": "7110",
+                      "name": "Merkmalswert",
+                      "note": "Wandlerfaktor",
+                      "status": "D"
+                    }
+                  ],
+                  "id": "C889",
+                  "name": "Merkmalswert",
+                  "status": "M"
+                }
+              ],
+              "example": "CAV+MIW:::10'",
+              "max": 1,
+              "name": "Wandlertyp und Faktor",
+              "nr": "00035",
+              "status": "R",
+              "tag": "CAV",
+              "zaehler": "1250"
+            }
+          ],
+          "group": "SG28",
+          "max": 1,
+          "name": "Wandler",
+          "status": "D",
+          "zaehler": "1230"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "format": "an..3",
+                  "id": "7059",
+                  "name": "Klassentyp, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "6313",
+                      "name": "Gemessene Dimension, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C502",
+                  "name": "Einzelheiten zu Maßangaben",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z64",
+                          "name": "Mengenumwerter"
+                        }
+                      ],
+                      "format": "an..17",
+                      "id": "7037",
+                      "name": "Merkmal, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C240",
+                  "name": "Merkmalsbeschreibung",
+                  "status": "R"
+                }
+              ],
+              "example": "CCI+++Z64'",
+              "max": 1,
+              "name": "Mengenumwerter",
+              "nr": "00036",
+              "status": "M",
+              "tag": "CCI",
+              "zaehler": "1240"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "DMU",
+                          "name": "Dichtemengenumwerter"
+                        },
+                        {
+                          "code": "TMU",
+                          "name": "Temperaturmengenumwerter"
+                        },
+                        {
+                          "code": "ZMU",
+                          "name": "Zustandsmengenumwerter"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7111",
+                      "name": "Merkmalswert, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C889",
+                  "name": "Merkmalswert",
+                  "status": "M"
+                }
+              ],
+              "example": "CAV+DMU'",
+              "max": 1,
+              "name": "Mengenumwertertyp",
+              "nr": "00037",
+              "status": "R",
+              "tag": "CAV",
+              "zaehler": "1250"
+            }
+          ],
+          "group": "SG28",
+          "max": 1,
+          "name": "Mengenumwerter",
+          "status": "D",
+          "zaehler": "1230"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "format": "an..3",
+                  "id": "7059",
+                  "name": "Klassentyp, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "6313",
+                      "name": "Gemessene Dimension, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C502",
+                  "name": "Einzelheiten zu Maßangaben",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z26",
+                          "name": "Kommunikationseinrichtung"
+                        }
+                      ],
+                      "format": "an..17",
+                      "id": "7037",
+                      "name": "Merkmal, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C240",
+                  "name": "Merkmalsbeschreibung",
+                  "status": "R"
+                }
+              ],
+              "example": "CCI+++Z26'",
+              "max": 1,
+              "name": "Kommunikationseinrichtung",
+              "nr": "00038",
+              "status": "M",
+              "tag": "CCI",
+              "zaehler": "1240"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "GSM",
+                          "name": "GSM/GPRS/UMTS-Kom.-Einr."
+                        },
+                        {
+                          "code": "ETH",
+                          "name": "Ethernet-Kom.-Einricht. LAN/WLAN"
+                        },
+                        {
+                          "code": "PLC",
+                          "name": "PLC-Kom.-Einrichtung"
+                        },
+                        {
+                          "code": "PST",
+                          "name": "Festnetz-Kom.-Einricht. TAE"
+                        },
+                        {
+                          "code": "DSL",
+                          "name": "DSL-Kom.Einr."
+                        },
+                        {
+                          "code": "LTE",
+                          "name": "LTE-Kom.-Einr."
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7111",
+                      "name": "Merkmalswert, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C889",
+                  "name": "Merkmalswert",
+                  "status": "M"
+                }
+              ],
+              "example": "CAV+GSM'",
+              "max": 1,
+              "name": "Kommunikationseinrichtung",
+              "nr": "00039",
+              "status": "R",
+              "tag": "CAV",
+              "zaehler": "1250"
+            }
+          ],
+          "group": "SG28",
+          "max": 1,
+          "name": "Kommunikationseinrichtung",
+          "status": "D",
+          "zaehler": "1230"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "format": "an..3",
+                  "id": "7059",
+                  "name": "Klassentyp, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "6313",
+                      "name": "Gemessene Dimension, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C502",
+                  "name": "Einzelheiten zu Maßangaben",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z27",
+                          "name": "Technische Steuereinrichtung"
+                        }
+                      ],
+                      "format": "an..17",
+                      "id": "7037",
+                      "name": "Merkmal, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C240",
+                  "name": "Merkmalsbeschreibung",
+                  "status": "R"
+                }
+              ],
+              "example": "CCI+++Z27'",
+              "max": 1,
+              "name": "Technische Steuereinrichtung",
+              "nr": "00040",
+              "status": "M",
+              "tag": "CCI",
+              "zaehler": "1240"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "RSU",
+                          "name": "Rundsteuerempfänger"
+                        },
+                        {
+                          "code": "TSU",
+                          "name": "Tarifschaltuhr"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7111",
+                      "name": "Merkmalswert, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C889",
+                  "name": "Merkmalswert",
+                  "status": "M"
+                }
+              ],
+              "example": "CAV+RSU'",
+              "max": 1,
+              "name": "Technische Steuereinrichtung",
+              "nr": "00041",
+              "status": "R",
+              "tag": "CAV",
+              "zaehler": "1250"
+            }
+          ],
+          "group": "SG28",
+          "max": 1,
+          "name": "Technische Steuereinrichtung",
+          "status": "D",
+          "zaehler": "1230"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "format": "an..3",
+                  "id": "7059",
+                  "name": "Klassentyp, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "6313",
+                      "name": "Gemessene Dimension, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C502",
+                  "name": "Einzelheiten zu Maßangaben",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z75",
+                          "name": "Smartmeter-Gateway"
+                        }
+                      ],
+                      "format": "an..17",
+                      "id": "7037",
+                      "name": "Merkmal, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C240",
+                  "name": "Merkmalsbeschreibung",
+                  "status": "R"
+                }
+              ],
+              "example": "CCI+++Z75'",
+              "max": 1,
+              "name": "Smartmeter-Gateway",
+              "nr": "00042",
+              "status": "M",
+              "tag": "CCI",
+              "zaehler": "1240"
+            }
+          ],
+          "group": "SG28",
+          "max": 1,
+          "name": "Smartmeter-Gateway",
+          "status": "D",
+          "zaehler": "1230"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "format": "an..3",
+                  "id": "7059",
+                  "name": "Klassentyp, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "6313",
+                      "name": "Gemessene Dimension, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C502",
+                  "name": "Einzelheiten zu Maßangaben",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z76",
+                          "name": "Steuerbox"
+                        }
+                      ],
+                      "format": "an..17",
+                      "id": "7037",
+                      "name": "Merkmal, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C240",
+                  "name": "Merkmalsbeschreibung",
+                  "status": "R"
+                }
+              ],
+              "example": "CCI+++Z76'",
+              "max": 1,
+              "name": "Steuerbox",
+              "nr": "00043",
+              "status": "M",
+              "tag": "CCI",
+              "zaehler": "1240"
+            }
+          ],
+          "group": "SG28",
+          "max": 1,
+          "name": "Steuerbox",
+          "status": "D",
+          "zaehler": "1230"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "format": "an..3",
+                  "id": "7059",
+                  "name": "Klassentyp, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "6313",
+                      "name": "Gemessene Dimension, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C502",
+                  "name": "Einzelheiten zu Maßangaben",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z28",
+                          "name": "Befestigungsart Zähleinrichtung"
+                        }
+                      ],
+                      "format": "an..17",
+                      "id": "7037",
+                      "name": "Merkmal, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C240",
+                  "name": "Merkmalsbeschreibung",
+                  "status": "R"
+                }
+              ],
+              "example": "CCI+++Z28'",
+              "max": 1,
+              "name": "Befestigungsart",
+              "nr": "00044",
+              "status": "M",
+              "tag": "CCI",
+              "zaehler": "1240"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "BKE",
+                          "name": "Stecktechnik (Befestigungs- und Kontaktierungseinrichtung)"
+                        },
+                        {
+                          "code": "DPA",
+                          "name": "3-Dreipunktaufhängung"
+                        },
+                        {
+                          "code": "HUT",
+                          "name": "Hutschiene"
+                        },
+                        {
+                          "code": "Z31",
+                          "name": "Einstutzen-Zähler"
+                        },
+                        {
+                          "code": "Z32",
+                          "name": "Zweistutzen-Zähler"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7111",
+                      "name": "Merkmalswert, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C889",
+                  "name": "Merkmalswert",
+                  "status": "M"
+                }
+              ],
+              "example": "CAV+DPA'",
+              "max": 1,
+              "name": "Befestigungsart",
+              "nr": "00045",
+              "status": "R",
+              "tag": "CAV",
+              "zaehler": "1250"
+            }
+          ],
+          "group": "SG28",
+          "max": 1,
+          "name": "Befestigungsart",
+          "status": "D",
+          "zaehler": "1230"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "format": "an..3",
+                  "id": "7059",
+                  "name": "Klassentyp, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "6313",
+                      "name": "Gemessene Dimension, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C502",
+                  "name": "Einzelheiten zu Maßangaben",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "E12",
+                          "name": "Messwerterfassung an der Zähleinrichtung"
+                        }
+                      ],
+                      "format": "an..17",
+                      "id": "7037",
+                      "name": "Merkmal, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C240",
+                  "name": "Merkmalsbeschreibung",
+                  "status": "R"
+                }
+              ],
+              "example": "CCI+++E12'",
+              "max": 1,
+              "name": "Messwerterfassung",
+              "nr": "00046",
+              "status": "M",
+              "tag": "CCI",
+              "zaehler": "1240"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "AMR",
+                          "name": "fernauslesbare Zähler"
+                        },
+                        {
+                          "code": "MMR",
+                          "name": "manuell ausgelesene Zähler"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7111",
+                      "name": "Merkmalswert, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C889",
+                  "name": "Merkmalswert",
+                  "status": "M"
+                }
+              ],
+              "example": "CAV+AMR'",
+              "max": 1,
+              "name": "Messwerterfassung",
+              "nr": "00047",
+              "status": "R",
+              "tag": "CAV",
+              "zaehler": "1250"
+            }
+          ],
+          "group": "SG28",
+          "max": 1,
+          "name": "Messwerterfassung",
+          "status": "D",
+          "zaehler": "1230"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "CAL",
+                          "name": "Berechnungspreis"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "5125",
+                      "name": "Preis, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "n..15",
+                      "id": "5118",
+                      "name": "Preis, Betrag",
+                      "status": "D"
+                    },
+                    {
+                      "format": "an..3",
+                      "id": "5375",
+                      "name": "Preisart, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..3",
+                      "id": "5387",
+                      "name": "Preisart, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "n..9",
+                      "id": "5284",
+                      "name": "Einzelpreisbasis, Menge",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "H87",
+                          "name": "Stück"
+                        },
+                        {
+                          "code": "DAY",
+                          "name": "Tag"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "6411",
+                      "name": "Maßeinheit, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C509",
+                  "name": "Preisinformation",
+                  "status": "R"
+                }
+              ],
+              "example": "PRI+CAL:5.1234:::1:H87'",
+              "max": 1,
+              "name": "Preisangaben",
+              "nr": "00048",
+              "status": "M",
+              "tag": "PRI",
+              "zaehler": "1370"
+            }
+          ],
+          "group": "SG31",
+          "max": 2,
+          "name": "Preisangabe zur Position",
+          "status": "D",
+          "zaehler": "1360"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z09",
+                          "name": "Gerätenummer"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..70",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "Gerätenummer",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+Z09:8465929523'",
+              "max": 1,
+              "name": "Gerätenummer",
+              "nr": "00049",
+              "status": "M",
+              "tag": "RFF",
+              "zaehler": "1430"
+            }
+          ],
+          "group": "SG32",
+          "max": 9999,
+          "name": "Gerätenummer",
+          "status": "D",
+          "zaehler": "1420"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z18",
+                          "name": "Marktlokation"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..70",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "ID einer Marktlokation",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+Z18:57685676748'",
+              "max": 1,
+              "name": "Referenz auf ID weiterer Marktlokationen",
+              "nr": "00050",
+              "status": "M",
+              "tag": "RFF",
+              "zaehler": "1430"
+            }
+          ],
+          "group": "SG32",
+          "max": 9999,
+          "name": "Referenz auf ID weiterer Marktlokationen",
+          "status": "D",
+          "zaehler": "1420"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "APF",
+                          "name": "Verweis auf Katalognummer"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..70",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "Katalognummer",
+                      "status": "R"
+                    },
+                    {
+                      "format": "an..6",
+                      "id": "1156",
+                      "name": "Zeilennummer",
+                      "status": "R"
+                    },
+                    {
+                      "format": "an..9",
+                      "id": "1056",
+                      "name": "Versionsnummer",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+APF:X:X:X'",
+              "max": 1,
+              "name": "Referenz auf einen veröffentlichten Preiskatalog",
+              "nr": "00051",
+              "status": "M",
+              "tag": "RFF",
+              "zaehler": "1430"
+            }
+          ],
+          "group": "SG32",
+          "max": 9999,
+          "name": "Referenz auf veröffentlichte Preisliste",
+          "status": "D",
+          "zaehler": "1420"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "VY",
+                      "name": "andere zugehörige Partei"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3035",
+                  "name": "Beteiligter, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..35",
+                      "id": "3039",
+                      "name": "Beteiligter, Identifikation",
+                      "note": "MP-ID",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..17",
+                      "id": "1131",
+                      "name": "Codeliste, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "9",
+                          "name": "GS1"
+                        },
+                        {
+                          "code": "293",
+                          "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                        },
+                        {
+                          "code": "332",
+                          "name": "DE, DVGW Service & Consult GmbH"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3055",
+                      "name": "Verantwortliche Stelle für die Codepflege, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C082",
+                  "name": "Identifikation des Beteiligten",
+                  "status": "R"
+                }
+              ],
+              "example": "NAD+VY+9900259000002::293'",
+              "max": 1,
+              "name": "Beteiligter Marktpartner MP-ID",
+              "nr": "00052",
+              "status": "M",
+              "tag": "NAD",
+              "zaehler": "1850"
+            }
+          ],
+          "group": "SG42",
+          "max": 1,
+          "name": "Beteiligter Marktpartner MP-ID",
+          "status": "D",
+          "zaehler": "1840"
+        }
+      ],
+      "group": "SG27",
+      "max": 200000,
+      "name": "Positionsteil",
+      "status": "D",
+      "zaehler": "1060"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "format": "n1",
+              "id": "1082",
+              "name": "Positionsnummer",
+              "note": "Vom Programm vorgegebene Positionsnummer innerhalb einer Anfrage",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "Z64",
+                  "name": "Erforderliches Produkt Schaltzeitdefinitionen"
+                }
+              ],
+              "format": "an..3",
+              "id": "1229",
+              "name": "Handlung, Code",
+              "status": "R"
+            }
+          ],
+          "example": "LIN+1+Z64'",
+          "max": 1,
+          "name": "Erforderliches Produkt Schaltzeitdefinitionen",
+          "nr": "00053",
+          "status": "M",
+          "tag": "LIN",
+          "zaehler": "1070"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "5",
+                  "name": "Produktidentifikation"
+                }
+              ],
+              "format": "an..1",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "n13",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Produkt-Code",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z11",
+                      "name": "Produkt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+5+9991000000713:Z11'",
+          "max": 1,
+          "name": "Erforderliches Produkt Schaltzeitdefinitionen",
+          "nr": "00054",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1080"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z02",
+                  "name": "Gruppenartikel-ID / Artikel-ID"
+                }
+              ],
+              "format": "an..3",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an16",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Artikel-ID",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z09",
+                      "name": "Artikel-ID"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+Z02+9991000000713-01:Z09'",
+          "max": 3,
+          "name": "Artikel-ID",
+          "nr": "00055",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1080"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z52",
+                      "name": "Code der Schaltzeitdefinition"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7059",
+                  "name": "Klassentyp, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "6313",
+                      "name": "Gemessene Dimension, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C502",
+                  "name": "Einzelheiten zu Maßangaben",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "7037",
+                      "name": "Merkmal, Code",
+                      "note": "Code der Schaltzeitdefinition",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C240",
+                  "name": "Merkmalsbeschreibung",
+                  "status": "R"
+                }
+              ],
+              "example": "CCI+Z52++NBW'",
+              "max": 1,
+              "name": "Zugeordnete Schaltzeitdefinition",
+              "nr": "00056",
+              "status": "M",
+              "tag": "CCI",
+              "zaehler": "1240"
+            }
+          ],
+          "group": "SG28",
+          "max": 1,
+          "name": "Zugeordnete Schaltzeitdefinition",
+          "status": "R",
+          "zaehler": "1230"
+        }
+      ],
+      "group": "SG27",
+      "max": 1,
+      "name": "Erforderliches Produkt Schaltzeitdefinitionen",
+      "status": "D",
+      "zaehler": "1060"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "format": "n1",
+              "id": "1082",
+              "name": "Positionsnummer",
+              "note": "Vom Programm vorgegebene Positionsnummer innerhalb einer Anfrage",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "Z65",
+                  "name": "Erforderliches Produkt Leistungskurvendefinitionen"
+                }
+              ],
+              "format": "an..3",
+              "id": "1229",
+              "name": "Handlung, Code",
+              "status": "R"
+            }
+          ],
+          "example": "LIN+1+Z65'",
+          "max": 1,
+          "name": "Erforderliches Produkt Leistungskurvendefinitionen",
+          "nr": "00057",
+          "status": "M",
+          "tag": "LIN",
+          "zaehler": "1070"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "5",
+                  "name": "Produktidentifikation"
+                }
+              ],
+              "format": "an..1",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "n13",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Produkt-Code",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z11",
+                      "name": "Produkt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+5+9991000000721:Z11'",
+          "max": 1,
+          "name": "Erforderliches Produkt Leistungskurvendefinitionen",
+          "nr": "00058",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1080"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z02",
+                  "name": "Gruppenartikel-ID / Artikel-ID"
+                }
+              ],
+              "format": "an..3",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an16",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Artikel-ID",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z09",
+                      "name": "Artikel-ID"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+Z02+9991000000721-01:Z09'",
+          "max": 3,
+          "name": "Artikel-ID",
+          "nr": "00059",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1080"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z53",
+                      "name": "Code der Leistungskurvendefinition"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7059",
+                  "name": "Klassentyp, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "6313",
+                      "name": "Gemessene Dimension, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C502",
+                  "name": "Einzelheiten zu Maßangaben",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "7037",
+                      "name": "Merkmal, Code",
+                      "note": "Code der Leistungskurvendefinition",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C240",
+                  "name": "Merkmalsbeschreibung",
+                  "status": "R"
+                }
+              ],
+              "example": "CCI+Z53++NBF'",
+              "max": 1,
+              "name": "Zugeordnete Leistungskurvendefinition",
+              "nr": "00060",
+              "status": "M",
+              "tag": "CCI",
+              "zaehler": "1240"
+            }
+          ],
+          "group": "SG28",
+          "max": 1,
+          "name": "Zugeordnete Leistungskurvendefinitionen",
+          "status": "R",
+          "zaehler": "1230"
+        }
+      ],
+      "group": "SG27",
+      "max": 1,
+      "name": "Erforderliches Produkt Leistungskurvendefinitionen",
+      "status": "D",
+      "zaehler": "1060"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "format": "n1",
+              "id": "1082",
+              "name": "Positionsnummer",
+              "note": "Vom Programm vorgegebene Positionsnummer innerhalb einer Anfrage",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "Z66",
+                  "name": "Erforderliches Produkt Ad-hoc-Steuerkanal"
+                }
+              ],
+              "format": "an..3",
+              "id": "1229",
+              "name": "Handlung, Code",
+              "status": "R"
+            }
+          ],
+          "example": "LIN+1+Z66'",
+          "max": 1,
+          "name": "Erforderliches Produkt Ad-hoc-Steuerkanal",
+          "nr": "00061",
+          "status": "M",
+          "tag": "LIN",
+          "zaehler": "1070"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "5",
+                  "name": "Produktidentifikation"
+                }
+              ],
+              "format": "an..1",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "n13",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Produkt-Code",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z11",
+                      "name": "Produkt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+5+9991000000739:Z11'",
+          "max": 1,
+          "name": "Erforderliches Produkt Ad-hoc-Steuerkanal",
+          "nr": "00062",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1080"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z02",
+                  "name": "Gruppenartikel-ID / Artikel-ID"
+                }
+              ],
+              "format": "an..3",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an16",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Artikel-ID",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z09",
+                      "name": "Artikel-ID"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+Z02+9991000000739-01:Z09'",
+          "max": 3,
+          "name": "Artikel-ID",
+          "nr": "00063",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1080"
+        }
+      ],
+      "group": "SG27",
+      "max": 1,
+      "name": "Erforderliches Produkt Ad-hoc-Steuerkanal",
+      "status": "D",
+      "zaehler": "1060"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "format": "n1",
+              "id": "1082",
+              "name": "Positionsnummer",
+              "note": "Vom Programm vorgegebene Positionsnummer innerhalb einer Anfrage",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "Z67",
+                  "name": "Erforderliches Messprodukt für Werte nach Typ 2 aus Backend"
+                }
+              ],
+              "format": "an..3",
+              "id": "1229",
+              "name": "Handlung, Code",
+              "status": "R"
+            }
+          ],
+          "example": "LIN+1+Z67'",
+          "max": 1,
+          "name": "Erforderliches Messprodukt für Werte nach Typ 2 aus Backend",
+          "nr": "00064",
+          "status": "M",
+          "tag": "LIN",
+          "zaehler": "1070"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "5",
+                  "name": "Produktidentifikation"
+                }
+              ],
+              "format": "an..1",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "n13",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Produkt-Code",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z11",
+                      "name": "Produkt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+5+9991000000739:Z11'",
+          "max": 1,
+          "name": "Erforderliches Messprodukt für Werte nach Typ 2 aus Backend",
+          "nr": "00065",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1080"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z02",
+                  "name": "Gruppenartikel-ID / Artikel-ID"
+                }
+              ],
+              "format": "an..3",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an16",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Artikel-ID",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z09",
+                      "name": "Artikel-ID"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+Z02+9991000000739-01:Z09'",
+          "max": 3,
+          "name": "Artikel-ID",
+          "nr": "00066",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1080"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "5",
+                  "name": "Produktidentifikation"
+                }
+              ],
+              "format": "an..1",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "OBIS-Kennzahl für Werte nach Typ 2 Backend",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "SRW",
+                      "name": "OBIS-Kennzahl"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+5+1-1?:1.29.0:SRW'",
+          "max": 23,
+          "name": "OBIS-Kennzahl für Werte nach Typ 2 Backend",
+          "nr": "00067",
+          "status": "D",
+          "tag": "PIA",
+          "zaehler": "1080"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "CAL",
+                          "name": "Berechnungspreis"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "5125",
+                      "name": "Preis, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "n..15",
+                      "id": "5118",
+                      "name": "Preis, Betrag",
+                      "status": "R"
+                    },
+                    {
+                      "format": "an..3",
+                      "id": "5375",
+                      "name": "Preisart, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "Z01",
+                          "name": "Einrichtungspreis"
+                        },
+                        {
+                          "code": "Z02",
+                          "name": "Transaktionspreis"
+                        },
+                        {
+                          "code": "Z03",
+                          "name": "Betriebspreis"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "5387",
+                      "name": "Preisart, Code",
+                      "status": "R"
+                    },
+                    {
+                      "format": "n1",
+                      "id": "5284",
+                      "name": "Einzelpreisbasis, Menge",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "H87",
+                          "name": "Stück"
+                        },
+                        {
+                          "code": "DAY",
+                          "name": "Tag"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "6411",
+                      "name": "Maßeinheit, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C509",
+                  "name": "Preisinformation",
+                  "status": "R"
+                }
+              ],
+              "example": "PRI+CAL:5.1234::Z01:1:H87'",
+              "max": 1,
+              "name": "Preisangaben",
+              "nr": "00068",
+              "status": "M",
+              "tag": "PRI",
+              "zaehler": "1370"
+            }
+          ],
+          "group": "SG31",
+          "max": 3,
+          "name": "Preisangabe zur Position",
+          "status": "D",
+          "zaehler": "1360"
+        }
+      ],
+      "group": "SG27",
+      "max": 1,
+      "name": "Erforderliches Messprodukt für Werte nach Typ 2 aus Backend",
+      "status": "D",
+      "zaehler": "1060"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "format": "n1",
+              "id": "1082",
+              "name": "Positionsnummer",
+              "note": "Vom Programm vorgegebene Positionsnummer innerhalb einer Anfrage",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "Z68",
+                  "name": "Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW"
+                }
+              ],
+              "format": "an..3",
+              "id": "1229",
+              "name": "Handlung, Code",
+              "status": "R"
+            }
+          ],
+          "example": "LIN+1+Z68'",
+          "max": 1,
+          "name": "Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW",
+          "nr": "00069",
+          "status": "M",
+          "tag": "LIN",
+          "zaehler": "1070"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "5",
+                  "name": "Produktidentifikation"
+                }
+              ],
+              "format": "an..1",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "n13",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Produkt-Code",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z11",
+                      "name": "Produkt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+5+9991000000739:Z11'",
+          "max": 1,
+          "name": "Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW",
+          "nr": "00070",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1080"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z02",
+                  "name": "Gruppenartikel-ID / Artikel-ID"
+                }
+              ],
+              "format": "an..3",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an16",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Artikel-ID",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z09",
+                      "name": "Artikel-ID"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+Z02+9991000000739-01:Z09'",
+          "max": 3,
+          "name": "Artikel-ID",
+          "nr": "00071",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1080"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z54",
+                      "name": "Änderungsmöglichkeit der Konfiguration im SMGW"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7059",
+                  "name": "Klassentyp, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "6313",
+                      "name": "Gemessene Dimension, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C502",
+                  "name": "Einzelheiten zu Maßangaben",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "ZF7",
+                          "name": "selbstständige Änderungsmöglichkeit erforderlich"
+                        },
+                        {
+                          "code": "ZF8",
+                          "name": "selbstständige Änderungsmöglichkeit nicht erforderlich"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7037",
+                      "name": "Merkmal, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C240",
+                  "name": "Merkmalsbeschreibung",
+                  "status": "R"
+                }
+              ],
+              "example": "CCI+Z54++ZF7'",
+              "max": 1,
+              "name": "Änderungsmöglichkeit der Konfiguration im SMGW",
+              "nr": "00072",
+              "status": "M",
+              "tag": "CCI",
+              "zaehler": "1240"
+            }
+          ],
+          "group": "SG28",
+          "max": 1,
+          "name": "Änderungsmöglichkeit der Konfiguration im SMGW",
+          "status": "D",
+          "zaehler": "1230"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z60",
+                      "name": "Schwellwerte"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7059",
+                  "name": "Klassentyp, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..3",
+                      "id": "6313",
+                      "name": "Gemessene Dimension, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C502",
+                  "name": "Einzelheiten zu Maßangaben",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "n13",
+                      "id": "7037",
+                      "name": "Merkmal, Code",
+                      "note": "Messprodukt-Position-Code",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..17",
+                      "id": "1131",
+                      "name": "Codeliste, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..3",
+                      "id": "3055",
+                      "name": "Verantwortliche Stelle für die Codepflege, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "n..10",
+                      "id": "7036",
+                      "name": "Merkmal",
+                      "note": "oberer Schwellwert",
+                      "status": "R"
+                    },
+                    {
+                      "format": "n..10",
+                      "id": "7036",
+                      "name": "Merkmal",
+                      "note": "unterer Schwellwert",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C240",
+                  "name": "Merkmalsbeschreibung",
+                  "status": "R"
+                }
+              ],
+              "example": "CCI+Z60++9991000001042:::207.22:168.81'",
+              "max": 1,
+              "name": "Schwellwerte",
+              "nr": "00073",
+              "status": "M",
+              "tag": "CCI",
+              "zaehler": "1240"
+            }
+          ],
+          "group": "SG28",
+          "max": 999,
+          "name": "Schwellwerte",
+          "status": "D",
+          "zaehler": "1230"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "CAL",
+                          "name": "Berechnungspreis"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "5125",
+                      "name": "Preis, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "n..15",
+                      "id": "5118",
+                      "name": "Preis, Betrag",
+                      "status": "R"
+                    },
+                    {
+                      "format": "an..3",
+                      "id": "5375",
+                      "name": "Preisart, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "Z01",
+                          "name": "Einrichtungspreis"
+                        },
+                        {
+                          "code": "Z02",
+                          "name": "Transaktionspreis"
+                        },
+                        {
+                          "code": "Z03",
+                          "name": "Betriebspreis"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "5387",
+                      "name": "Preisart, Code",
+                      "status": "R"
+                    },
+                    {
+                      "format": "n1",
+                      "id": "5284",
+                      "name": "Einzelpreisbasis, Menge",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "H87",
+                          "name": "Stück"
+                        },
+                        {
+                          "code": "DAY",
+                          "name": "Tag"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "6411",
+                      "name": "Maßeinheit, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C509",
+                  "name": "Preisinformation",
+                  "status": "R"
+                }
+              ],
+              "example": "PRI+CAL:5.1234::Z01:1:H87'",
+              "max": 1,
+              "name": "Preisangaben",
+              "nr": "00074",
+              "status": "M",
+              "tag": "PRI",
+              "zaehler": "1370"
+            }
+          ],
+          "group": "SG31",
+          "max": 3,
+          "name": "Preisangabe zur Position",
+          "status": "D",
+          "zaehler": "1360"
+        }
+      ],
+      "group": "SG27",
+      "max": 1,
+      "name": "Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW",
+      "status": "D",
+      "zaehler": "1060"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "format": "n..6",
+              "id": "1082",
+              "name": "Positionsnummer",
+              "note": "Vom Programm vorgegebene Positionsnummer innerhalb einer Anforderung",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "Z19",
+                  "name": "Erforderliches Produkt der Messlokation"
+                }
+              ],
+              "format": "an..3",
+              "id": "1229",
+              "name": "Handlung, Code",
+              "status": "R"
+            }
+          ],
+          "example": "LIN+1+Z19'",
+          "max": 1,
+          "name": "Erforderliches Produkt der Messlokation",
+          "nr": "00075",
+          "status": "M",
+          "tag": "LIN",
+          "zaehler": "1070"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "5",
+                  "name": "Produktidentifikation"
+                }
+              ],
+              "format": "an..3",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "n13",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Produkt-Code",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z11",
+                      "name": "Produkt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+5+9991000000656:Z11'",
+          "max": 1,
+          "name": "Erforderliches Produkt der Messlokation",
+          "nr": "00076",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1080"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z02",
+                  "name": "Gruppenartikel-ID / Artikel-ID"
+                }
+              ],
+              "format": "an..3",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an16",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Artikel-ID",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z09",
+                      "name": "Artikel-ID"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+Z02+9991000000721-01:Z09'",
+          "max": 2,
+          "name": "Artikel-ID",
+          "nr": "00077",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1080"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "CAL",
+                          "name": "Berechnungspreis"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "5125",
+                      "name": "Preis, Qualifier",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C509",
+                  "name": "Preisinformation",
+                  "status": "R"
+                }
+              ],
+              "example": "PRI+CAL'",
+              "max": 1,
+              "name": "Preisangaben",
+              "nr": "00078",
+              "status": "M",
+              "tag": "PRI",
+              "zaehler": "1370"
+            },
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z03",
+                      "name": "verbindliche Mengenangabe"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "6167",
+                  "name": "Wertebereich, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "H87",
+                          "name": "Stück"
+                        }
+                      ],
+                      "format": "an..8",
+                      "id": "6411",
+                      "name": "Maßeinheit, Code",
+                      "status": "M"
+                    },
+                    {
+                      "format": "n..18",
+                      "id": "6162",
+                      "name": "Wertebereichsgrenze, untere",
+                      "note": "Mengenangabe",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C280",
+                  "name": "Wertebereich",
+                  "status": "R"
+                }
+              ],
+              "example": "RNG+Z03+H87:2'",
+              "max": 1,
+              "name": "verbindliche Mengenangabe",
+              "nr": "00079",
+              "status": "D",
+              "tag": "RNG",
+              "zaehler": "1390"
+            },
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z04",
+                      "name": "unverbindliche Mengenangabe"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "6167",
+                  "name": "Wertebereich, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "H87",
+                          "name": "Stück"
+                        }
+                      ],
+                      "format": "an..8",
+                      "id": "6411",
+                      "name": "Maßeinheit, Code",
+                      "status": "M"
+                    },
+                    {
+                      "format": "n..18",
+                      "id": "6162",
+                      "name": "Wertebereichsgrenze, untere",
+                      "note": "minimale Mengenangabe",
+                      "status": "R"
+                    },
+                    {
+                      "format": "n..18",
+                      "id": "6152",
+                      "name": "Wertebereichsgrenze, obere",
+                      "note": "maximale Mengenangabe",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C280",
+                  "name": "Wertebereich",
+                  "status": "R"
+                }
+              ],
+              "example": "RNG+Z04+H87:1:4'",
+              "max": 1,
+              "name": "unverbindliche Mengenangabe",
+              "nr": "00080",
+              "status": "D",
+              "tag": "RNG",
+              "zaehler": "1390"
+            }
+          ],
+          "group": "SG31",
+          "max": 1,
+          "name": "Preisangabe zur Position",
+          "status": "R",
+          "zaehler": "1360"
+        }
+      ],
+      "group": "SG27",
+      "max": 200000,
+      "name": "Erforderliches Produkt der Messlokation",
+      "status": "D",
+      "zaehler": "1060"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "format": "n..6",
+              "id": "1082",
+              "name": "Positionsnummer",
+              "note": "Vom Programm vorgegebene Positionsnummer innerhalb einer Anforderung",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "Z55",
+                  "name": "Erforderliches Produkt der Netzlokation"
+                }
+              ],
+              "format": "an..3",
+              "id": "1229",
+              "name": "Handlung, Code",
+              "status": "R"
+            }
+          ],
+          "example": "LIN+1+Z55'",
+          "max": 1,
+          "name": "Erforderliches Produkt der Netzlokation",
+          "nr": "00081",
+          "status": "M",
+          "tag": "LIN",
+          "zaehler": "1070"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "5",
+                  "name": "Produktidentifikation"
+                }
+              ],
+              "format": "an..3",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "n13",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Produkt-Code",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z11",
+                      "name": "Produkt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+5+9991000000656:Z11'",
+          "max": 1,
+          "name": "Erforderliches Produkt der Netzlokation",
+          "nr": "00082",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1080"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z02",
+                  "name": "Gruppenartikel-ID / Artikel-ID"
+                }
+              ],
+              "format": "an..3",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an16",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Artikel-ID",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z09",
+                      "name": "Artikel-ID"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+Z02+9991000000721-01:Z09'",
+          "max": 2,
+          "name": "Artikel-ID",
+          "nr": "00083",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1080"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "CAL",
+                          "name": "Berechnungspreis"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "5125",
+                      "name": "Preis, Qualifier",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C509",
+                  "name": "Preisinformation",
+                  "status": "R"
+                }
+              ],
+              "example": "PRI+CAL'",
+              "max": 1,
+              "name": "Preisangaben",
+              "nr": "00084",
+              "status": "M",
+              "tag": "PRI",
+              "zaehler": "1370"
+            },
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z03",
+                      "name": "verbindliche Mengenangabe"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "6167",
+                  "name": "Wertebereich, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "H87",
+                          "name": "Stück"
+                        }
+                      ],
+                      "format": "an..8",
+                      "id": "6411",
+                      "name": "Maßeinheit, Code",
+                      "status": "M"
+                    },
+                    {
+                      "format": "n..18",
+                      "id": "6162",
+                      "name": "Wertebereichsgrenze, untere",
+                      "note": "Mengenangabe",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C280",
+                  "name": "Wertebereich",
+                  "status": "R"
+                }
+              ],
+              "example": "RNG+Z03+H87:2'",
+              "max": 1,
+              "name": "verbindliche Mengenangabe",
+              "nr": "00085",
+              "status": "D",
+              "tag": "RNG",
+              "zaehler": "1390"
+            },
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z04",
+                      "name": "unverbindliche Mengenangabe"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "6167",
+                  "name": "Wertebereich, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "H87",
+                          "name": "Stück"
+                        }
+                      ],
+                      "format": "an..8",
+                      "id": "6411",
+                      "name": "Maßeinheit, Code",
+                      "status": "M"
+                    },
+                    {
+                      "format": "n..18",
+                      "id": "6162",
+                      "name": "Wertebereichsgrenze, untere",
+                      "note": "minimale Mengenangabe",
+                      "status": "R"
+                    },
+                    {
+                      "format": "n..18",
+                      "id": "6152",
+                      "name": "Wertebereichsgrenze, obere",
+                      "note": "maximale Mengenangabe",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C280",
+                  "name": "Wertebereich",
+                  "status": "R"
+                }
+              ],
+              "example": "RNG+Z04+H87:1:4'",
+              "max": 1,
+              "name": "unverbindliche Mengenangabe",
+              "nr": "00086",
+              "status": "D",
+              "tag": "RNG",
+              "zaehler": "1390"
+            }
+          ],
+          "group": "SG31",
+          "max": 1,
+          "name": "Preisangabe zur Position",
+          "status": "R",
+          "zaehler": "1360"
+        }
+      ],
+      "group": "SG27",
+      "max": 200000,
+      "name": "Erforderliches Produkt der Netzlokation",
+      "status": "D",
+      "zaehler": "1060"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "format": "n..6",
+              "id": "1082",
+              "name": "Positionsnummer",
+              "note": "Vom Programm vorgegebene Positionsnummer innerhalb einer Anforderung",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "Z56",
+                  "name": "Erforderliches Produkt der Steuerbaren Ressource"
+                }
+              ],
+              "format": "an..3",
+              "id": "1229",
+              "name": "Handlung, Code",
+              "status": "R"
+            }
+          ],
+          "example": "LIN+1+Z56'",
+          "max": 1,
+          "name": "Erforderliches Produkt der Steuerbaren Ressource",
+          "nr": "00087",
+          "status": "M",
+          "tag": "LIN",
+          "zaehler": "1070"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "5",
+                  "name": "Produktidentifikation"
+                }
+              ],
+              "format": "an..3",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "n13",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Produkt-Code",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z11",
+                      "name": "Produkt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+5+9991000002371:Z11'",
+          "max": 1,
+          "name": "Erforderliches Produkt der Steuerbaren Ressource",
+          "nr": "00088",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1080"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z02",
+                  "name": "Gruppenartikel-ID / Artikel-ID"
+                }
+              ],
+              "format": "an..3",
+              "id": "4347",
+              "name": "Produkt-/Erzeugnisnummer, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an16",
+                  "id": "7140",
+                  "name": "Produkt-/Leistungsnummer",
+                  "note": "Artikel-ID",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "Z09",
+                      "name": "Artikel-ID"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7143",
+                  "name": "Art der Produkt-/ Leistungsnummer, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C212",
+              "name": "Waren-/Leistungsnummer, Identifikation",
+              "status": "M"
+            }
+          ],
+          "example": "PIA+Z02+9991000000721-01:Z09'",
+          "max": 2,
+          "name": "Artikel-ID",
+          "nr": "00089",
+          "status": "R",
+          "tag": "PIA",
+          "zaehler": "1080"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "CAL",
+                          "name": "Berechnungspreis"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "5125",
+                      "name": "Preis, Qualifier",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C509",
+                  "name": "Preisinformation",
+                  "status": "R"
+                }
+              ],
+              "example": "PRI+CAL'",
+              "max": 1,
+              "name": "Preisangaben",
+              "nr": "00090",
+              "status": "M",
+              "tag": "PRI",
+              "zaehler": "1370"
+            },
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z03",
+                      "name": "verbindliche Mengenangabe"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "6167",
+                  "name": "Wertebereich, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "H87",
+                          "name": "Stück"
+                        }
+                      ],
+                      "format": "an..8",
+                      "id": "6411",
+                      "name": "Maßeinheit, Code",
+                      "status": "M"
+                    },
+                    {
+                      "format": "n..18",
+                      "id": "6162",
+                      "name": "Wertebereichsgrenze, untere",
+                      "note": "Mengenangabe",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C280",
+                  "name": "Wertebereich",
+                  "status": "R"
+                }
+              ],
+              "example": "RNG+Z03+H87:2'",
+              "max": 1,
+              "name": "verbindliche Mengenangabe",
+              "nr": "00091",
+              "status": "D",
+              "tag": "RNG",
+              "zaehler": "1390"
+            },
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z04",
+                      "name": "unverbindliche Mengenangabe"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "6167",
+                  "name": "Wertebereich, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "H87",
+                          "name": "Stück"
+                        }
+                      ],
+                      "format": "an..8",
+                      "id": "6411",
+                      "name": "Maßeinheit, Code",
+                      "status": "M"
+                    },
+                    {
+                      "format": "n..18",
+                      "id": "6162",
+                      "name": "Wertebereichsgrenze, untere",
+                      "note": "minimale Mengenangabe",
+                      "status": "R"
+                    },
+                    {
+                      "format": "n..18",
+                      "id": "6152",
+                      "name": "Wertebereichsgrenze, obere",
+                      "note": "maximale Mengenangabe",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C280",
+                  "name": "Wertebereich",
+                  "status": "R"
+                }
+              ],
+              "example": "RNG+Z04+H87:1:4'",
+              "max": 1,
+              "name": "unverbindliche Mengenangabe",
+              "nr": "00092",
+              "status": "D",
+              "tag": "RNG",
+              "zaehler": "1390"
+            }
+          ],
+          "group": "SG31",
+          "max": 1,
+          "name": "Preisangabe zur Position",
+          "status": "R",
+          "zaehler": "1360"
+        }
+      ],
+      "group": "SG27",
+      "max": 200000,
+      "name": "Erforderliches Produkt der Steuerbaren Ressource",
+      "status": "D",
+      "zaehler": "1060"
+    },
+    {
+      "elements": [
+        {
+          "codes": [
+            {
+              "code": "S",
+              "name": "Trennung von Positions- und Summenteil"
+            }
+          ],
+          "format": "a1",
+          "id": "0081",
+          "name": "Abschnittskennung, codiert",
+          "status": "M"
+        }
+      ],
+      "example": "UNS+S'",
+      "max": 1,
+      "name": "Abschnitts-Kontrollsegment",
+      "nr": "00093",
+      "status": "M",
+      "tag": "UNS",
+      "zaehler": "2270"
+    },
+    {
+      "elements": [
+        {
+          "format": "n..6",
+          "id": "0074",
+          "name": "Anzahl der Segmente in einer Nachricht",
+          "note": "Hier wird die Gesamtzahl der Segmente einer Nachricht angegeben.",
+          "status": "M"
+        },
+        {
+          "format": "an..14",
+          "id": "0062",
+          "name": "Nachrichten-Referenznummer",
+          "note": "Die Referenznummer aus dem UNH-Segment muss hier wiederholt werden.",
+          "status": "M"
+        }
+      ],
+      "example": "UNT+74+1'",
+      "max": 1,
+      "name": "Nachrichten-Endesegment",
+      "nr": "00094",
+      "status": "M",
+      "tag": "UNT",
+      "zaehler": "2340"
     }
   ],
-  "valid_until": "2026-09-30",
-  "ahb_revision": "1.1",
-  "source_document": "QUOTES MIG 1.3b, Publikationsdatum 01.04.2025",
-  "pid_source": "rff_z13",
-  "publikationsdatum": "2025-04-01"
+  "valid_from": "2025-10-01",
+  "valid_until": "2026-09-30"
 }

@@ -23,6 +23,7 @@ use mako_gabi_gas::{
     GaBiGasNominationWorkflow, NOMINATION_PIDS, NOMRES_DEADLINE_LABEL, NominationCommand,
     NominationCounterparty, NominationState, NomresAcceptance,
 };
+use rust_decimal::Decimal;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────────────────────
 
@@ -40,15 +41,30 @@ fn send_nomination(pruefidentifikator: u32) -> NominationCommand {
 
 fn send_nomination_of(
     pruefidentifikator: u32,
-    nominated_kwh: Option<rust_decimal::Decimal>,
+    nominated_kwh: Option<Decimal>,
 ) -> NominationCommand {
+    let gas_day = mako_gabi_gas::GasDay::parse("2025-01-15").unwrap();
+    // One flat rate over the gas day: `nominated_kwh` = rate × 24 h.
+    let kwh_pro_h = nominated_kwh.unwrap_or(Decimal::from(1_000)) / Decimal::from(24);
     NominationCommand::SendNomination {
         pruefidentifikator,
         sender_eic: "11XBKV-SENDTESTU".to_owned(),
         receiver_eic: "11XFNB-RECVTESTT".to_owned(),
-        gas_day: mako_gabi_gas::GasDay::parse("2025-01-15").unwrap(),
+        gas_day,
         nomination_ref: MessageRef::new("NOMINT-2025-001"),
-        nominated_kwh,
+        positions: vec![mako_gabi_gas::NominationPosition {
+            ort_qualifier: "Z19".to_owned(),
+            ort: "37Z005053MH0000D".to_owned(),
+            richtung: "Z03".to_owned(),
+            bilanzkreis_intern: "THE0BFH000000001".to_owned(),
+            bilanzkreis_extern: Some("THE0BFH000000002".to_owned()),
+            mengen: vec![mako_gabi_gas::NominationMenge {
+                von: gas_day.start_utc(),
+                bis: gas_day.end_utc(),
+                kwh_pro_h,
+            }],
+        }],
+        corrects: None,
     }
 }
 
@@ -58,7 +74,7 @@ fn receive_nomres(acceptance: NomresAcceptance) -> NominationCommand {
 
 fn receive_nomres_of(
     acceptance: NomresAcceptance,
-    confirmed_kwh: Option<rust_decimal::Decimal>,
+    confirmed_kwh: Option<Decimal>,
 ) -> NominationCommand {
     NominationCommand::ReceiveNomres {
         nomres_ref: MessageRef::new("NOMRES-2025-001"),
@@ -149,8 +165,8 @@ async fn nomination_to_fnb_accepted_happy_path() {
     proc.execute(send_nomination(70030)).await.unwrap();
     let state = proc.state().await.unwrap();
     assert!(
-        matches!(state, NominationState::NominationSent(_)),
-        "state must be NominationSent after SendNomination, got: {state:?}"
+        matches!(state, NominationState::Open(_)),
+        "state must be Open after SendNomination, got: {state:?}"
     );
 
     // Step 2: FNB confirms in full
@@ -386,4 +402,221 @@ async fn an_unquantified_confirmation_keeps_its_stated_acceptance() {
         proc.state().await.unwrap(),
         NominationState::Accepted(_)
     ));
+}
+
+// ── The answering side: a NB/MGV tenant owes the NOMRES ──────────────────────
+
+fn position(richtung: &str, kwh_pro_h: i64) -> mako_gabi_gas::NominationPosition {
+    let gas_day = mako_gabi_gas::GasDay::parse("2025-01-15").unwrap();
+    mako_gabi_gas::NominationPosition {
+        ort_qualifier: "Z19".to_owned(),
+        ort: "37Z005053MH0000D".to_owned(),
+        richtung: richtung.to_owned(),
+        bilanzkreis_intern: "THE0BFH000000001".to_owned(),
+        bilanzkreis_extern: Some("THE0BFH000000002".to_owned()),
+        mengen: vec![mako_gabi_gas::NominationMenge {
+            von: gas_day.start_utc(),
+            bis: gas_day.end_utc(),
+            kwh_pro_h: Decimal::from(kwh_pro_h),
+        }],
+    }
+}
+
+fn receive_nomint(pruefidentifikator: u32) -> NominationCommand {
+    NominationCommand::ReceiveNomint {
+        pruefidentifikator,
+        sender_eic: "11XBKV-SENDTESTU".to_owned(),
+        receiver_eic: "11XFNB-RECVTESTT".to_owned(),
+        gas_day: mako_gabi_gas::GasDay::parse("2025-01-15").unwrap(),
+        nomination_ref: MessageRef::new("NOMINT-2025-001"),
+        positions: vec![position("Z03", 100)],
+        nominated_kwh: Some(Decimal::from(2_400)),
+    }
+}
+
+/// The NB/MGV records the nomination it received and answers it: the NOMRES
+/// goes to the outbox addressed to the nominating BKV, labelled `16G`.
+#[tokio::test]
+async fn the_answering_side_confirms_a_received_nomination() {
+    use mako_engine::workflow::Workflow as _;
+    let process = make_process();
+    process
+        .execute(receive_nomint(70_030))
+        .await
+        .expect("recorded");
+    let state = process.state().await.expect("state");
+    let NominationState::Open(data) = &state else {
+        panic!("a received nomination opens the process: {state:?}")
+    };
+    assert_eq!(data.richtung, mako_gabi_gas::NominationRichtung::Empfangen);
+    assert_eq!(data.positions.len(), 1);
+
+    // `Process::execute` persists the outbox rather than returning it, so the
+    // answer is taken from `handle` on the state the command path produced.
+    let output = GaBiGasNominationWorkflow::handle(
+        &state,
+        NominationCommand::SendNomres {
+            pruefidentifikator: 70_036,
+            nomres_ref: MessageRef::new("NOMRES-2025-001"),
+            acceptance: NomresAcceptance::Accepted,
+            confirmed: None,
+        },
+    )
+    .expect("answers");
+    assert_eq!(output.outbox.len(), 1, "the NOMRES is enqueued");
+    let entry = &output.outbox[0];
+    assert_eq!(entry.message_type.as_ref(), "NOMRES");
+    assert_eq!(
+        entry.recipient.as_ref(),
+        "11XBKV-SENDTESTU",
+        "the answer goes back to the nominating BKV"
+    );
+    assert_eq!(entry.payload["pid"], 70_036);
+    assert_eq!(entry.payload["positions"][0]["description"], "16G");
+    assert_eq!(
+        entry.payload["positions"][0]["quantities"][0]["value"], "100",
+        "the answer restates the nominated rate"
+    );
+    let answered = output
+        .events
+        .iter()
+        .fold(state, GaBiGasNominationWorkflow::apply);
+    assert!(
+        matches!(answered, NominationState::Accepted(_)),
+        "{answered:?}"
+    );
+}
+
+/// A curtailment is stated as the positions the match produced.
+#[tokio::test]
+async fn the_answer_states_the_curtailed_positions() {
+    use mako_engine::workflow::Workflow as _;
+    let process = make_process();
+    process.execute(receive_nomint(70_030)).await.unwrap();
+    let open = process.state().await.unwrap();
+    let output = GaBiGasNominationWorkflow::handle(
+        &open,
+        NominationCommand::SendNomres {
+            pruefidentifikator: 70_036,
+            nomres_ref: MessageRef::new("NOMRES-2025-002"),
+            acceptance: NomresAcceptance::PartiallyAccepted,
+            confirmed: Some(vec![position("Z03", 75)]),
+        },
+    )
+    .expect("answers");
+    assert_eq!(
+        output.outbox[0].payload["positions"][0]["quantities"][0]["value"],
+        "75"
+    );
+    let state = output
+        .events
+        .iter()
+        .fold(open, GaBiGasNominationWorkflow::apply);
+    let NominationState::PartiallyAccepted(data) = &state else {
+        panic!("{state:?}")
+    };
+    let q = data.quantity.as_ref().expect("quantity");
+    assert_eq!(q.submitted_kwh, Decimal::from(2_400));
+    assert_eq!(q.accepted_kwh, Some(Decimal::from(1_800)));
+}
+
+/// Each side answers its own way round: a nomination this tenant sent is
+/// answered *by* the counterparty, and one it received is answered by it.
+#[tokio::test]
+async fn neither_side_can_play_the_other() {
+    let sent = make_process();
+    sent.execute(send_nomination(70_030)).await.unwrap();
+    assert!(
+        sent.execute(NominationCommand::SendNomres {
+            pruefidentifikator: 70_036,
+            nomres_ref: MessageRef::new("NOMRES-X"),
+            acceptance: NomresAcceptance::Accepted,
+            confirmed: None,
+        })
+        .await
+        .is_err(),
+        "the NOMRES to our own nomination comes from the counterparty"
+    );
+
+    let received = make_process();
+    received.execute(receive_nomint(70_030)).await.unwrap();
+    assert!(
+        received
+            .execute(receive_nomres(NomresAcceptance::Accepted))
+            .await
+            .is_err(),
+        "a nomination addressed to this tenant owes the NOMRES rather than receiving one"
+    );
+}
+
+// ── What the ERP is told ─────────────────────────────────────────────────────
+
+/// A curtailment leaves the portfolio short, so it is notified rather than only
+/// recorded: the difference is what the BKV has to buy or re-nominate.
+#[tokio::test]
+async fn a_curtailment_notifies_the_shortfall() {
+    use mako_engine::workflow::Workflow as _;
+
+    let process = make_process();
+    process
+        .execute(send_nomination_of(70_030, Some(Decimal::from(24_000))))
+        .await
+        .unwrap();
+    let open = process.state().await.unwrap();
+
+    let out = GaBiGasNominationWorkflow::handle(
+        &open,
+        receive_nomres_of(
+            NomresAcceptance::PartiallyAccepted,
+            Some(Decimal::from(18_000)),
+        ),
+    )
+    .expect("a curtailment is not an error");
+    assert_eq!(out.outbox.len(), 1);
+    let notice = &out.outbox[0];
+    // This string is the contract with `map_message_type_to_erp_event`.
+    assert_eq!(notice.message_type.as_ref(), "GabiNominationCurtailed");
+    assert_eq!(notice.payload["nominated_kwh"], serde_json::json!("24000"));
+    assert_eq!(notice.payload["confirmed_kwh"], serde_json::json!("18000"));
+    assert_eq!(notice.payload["curtailed_kwh"], serde_json::json!("6000"));
+}
+
+/// A refusal and an answer that never comes are both operator calls.
+#[tokio::test]
+async fn a_refusal_and_a_missed_window_are_both_notified() {
+    use mako_engine::workflow::Workflow as _;
+
+    let process = make_process();
+    process.execute(send_nomination(70_030)).await.unwrap();
+    let open = process.state().await.unwrap();
+
+    let refused = GaBiGasNominationWorkflow::handle(
+        &open,
+        receive_nomres_rejected("Kapazität nicht verfügbar"),
+    )
+    .expect("a refusal is not an error");
+    assert_eq!(refused.outbox.len(), 1);
+    assert_eq!(
+        refused.outbox[0].message_type.as_ref(),
+        "GabiNominationRejected"
+    );
+    assert_eq!(
+        refused.outbox[0].payload["reason"],
+        serde_json::json!("Kapazität nicht verfügbar")
+    );
+
+    let missed = GaBiGasNominationWorkflow::handle(
+        &open,
+        NominationCommand::NomresDeadlineExpired {
+            deadline_id: DeadlineId::new(),
+            label: NOMRES_DEADLINE_LABEL.to_owned(),
+        },
+    )
+    .expect("the window closing is not an error");
+    assert_eq!(missed.outbox.len(), 1);
+    assert_eq!(missed.outbox[0].message_type.as_ref(), "GabiNomresMissing");
+    assert_eq!(
+        missed.outbox[0].payload["deadline_label"],
+        serde_json::json!(NOMRES_DEADLINE_LABEL)
+    );
 }

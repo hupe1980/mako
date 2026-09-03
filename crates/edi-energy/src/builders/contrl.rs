@@ -16,6 +16,8 @@ struct ContrlBuilderInner {
     sender_id: Option<String>,
     receiver_id: Option<String>,
     action_code: String,
+    /// `UCI` DE 0085, on a Syntaxfehlermeldung.
+    syntax_error: Option<String>,
 }
 
 /// Fluent builder for `CONTRL` (Syntax and Service Report) messages.
@@ -42,7 +44,7 @@ struct ContrlBuilderInner {
 ///     .accept()
 ///     .build()?;
 ///
-/// assert_eq!(msg.uci().unwrap().action_code.as_deref(), Some("4"));
+/// assert_eq!(msg.uci().unwrap().action_code.as_deref(), Some("7"));
 /// # Ok::<(), edi_energy::Error>(())
 /// ```
 #[derive(Debug, Clone)]
@@ -63,7 +65,8 @@ impl ContrlBuilder<Unset, Unset> {
                 interchange_ref: String::new(),
                 sender_id: None,
                 receiver_id: None,
-                action_code: "4".to_owned(),
+                action_code: "7".to_owned(),
+                syntax_error: None,
             },
         }
     }
@@ -136,27 +139,28 @@ impl<S, R> ContrlBuilder<S, R> {
         self
     }
 
-    /// Set action code to `4` — interchange accepted.
+    /// Empfangsbestätigung: `UCI` DE 0083 = `7` — „Übertragung bestätigt"
+    /// (CONTRL AHB 1.0 Kap. 2: „Empfangsbestätigung (UCI DE0083 = 7)").
     pub fn accept(mut self) -> Self {
-        "4".clone_into(&mut self.inner.action_code);
-        self
-    }
-
-    /// Set action code to `8` — interchange rejected (entire interchange).
-    pub fn reject(mut self) -> Self {
-        "8".clone_into(&mut self.inner.action_code);
-        self
-    }
-
-    /// Set action code to `7` — interchange rejected (group-level).
-    pub fn reject_group(mut self) -> Self {
         "7".clone_into(&mut self.inner.action_code);
+        self.inner.syntax_error = None;
         self
     }
 
-    /// Set an explicit UCI action code (DE 0083).
+    /// Syntaxfehlermeldung: `UCI` DE 0083 = `4` — „Diese Ebene und alle
+    /// tieferen Ebenen zurückgewiesen" (CONTRL AHB 1.0 Kap. 2), with the DE
+    /// 0085 Syntaxfehler code the AHB admits at interchange level (`2`, `7`,
+    /// `12`, `13`, `16`, `20`, `21`, `23`, `25`, `26`, `28`, `29`, `32`).
+    pub fn reject(mut self, syntax_error: impl Into<String>) -> Self {
+        "4".clone_into(&mut self.inner.action_code);
+        self.inner.syntax_error = Some(syntax_error.into());
+        self
+    }
+
+    /// Set an explicit `UCI` action code (DE 0083).
     ///
-    /// Prefer [`accept`][Self::accept] / [`reject`][Self::reject] for common cases.
+    /// Prefer [`accept`][Self::accept] / [`reject`][Self::reject]: the AHB
+    /// admits exactly `7` and `4` here.
     pub fn action_code(mut self, code: impl Into<String>) -> Self {
         self.inner.action_code = code.into();
         self
@@ -175,13 +179,17 @@ impl<S, R> ContrlBuilder<S, R> {
             [&self.inner.message_ref],
             ["CONTRL", "D", "3", "UN", self.inner.release.as_str()]
         );
-        emit_seg!(
+        // `S002`/`S003` carry the MP-ID with its DE 0007 Verzeichnis, as the
+        // `UNB` they answer does (`14` GS1, `500` BDEW, `502` DVGW).
+        let syntax_error = self.inner.syntax_error.as_deref().unwrap_or("");
+        emit_comp!(
             w,
             "UCI",
-            &self.inner.interchange_ref,
-            sender,
-            receiver,
-            &self.inner.action_code
+            [&self.inner.interchange_ref],
+            [sender, super::interchange::unb_qualifier(sender)],
+            [receiver, super::interchange::unb_qualifier(receiver)],
+            [&self.inner.action_code],
+            [syntax_error]
         );
         w.finish_unt(&self.inner.message_ref)
             .map_err(Error::Parse)?;

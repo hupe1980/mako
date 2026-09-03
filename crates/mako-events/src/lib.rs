@@ -434,9 +434,12 @@ pub mod agent {
 /// final-allocation window closes unsettled, and `OutboxErpWorker` delivers it
 /// as a CloudEvent like every other ERP notification.
 ///
+/// The three nomination outcomes a BKV has to act on — a curtailment, a
+/// refusal, and an answer that never came — are emitted the same way, from
+/// `gabi-gas-nomination`.
+///
 /// ⚠ The remaining ten are phantom: subscribed by agentd (`gabi-gas-agent`
-/// globs `de.gabi.imbalance.*`, `de.gabi.nomination.*`), but no service emits
-/// them.
+/// globs `de.gabi.imbalance.*`), but no service emits them.
 pub mod gabi {
     /// ⚠ phantom: no emitter yet.
     pub const MEASUREMENT_RECEIVED: &str = "de.gabi.measurement.received";
@@ -446,6 +449,26 @@ pub mod gabi {
     pub const NOMINATION_CREATED: &str = "de.gabi.nomination.created";
     /// ⚠ phantom: no emitter yet.
     pub const NOMINATION_CONFIRMED: &str = "de.gabi.nomination.confirmed";
+    /// The FNB/MGV confirmed **less** than was nominated.
+    ///
+    /// Emitted by `makod` from `gabi-gas-nomination` when the NOMRES states a
+    /// quantity below the nomination's. The BKV's portfolio is short by the
+    /// difference until it re-nominates or buys the gap, so the `data` payload
+    /// carries `gas_day`, `nominated_kwh`, `confirmed_kwh` and `curtailed_kwh`
+    /// beside the parties.
+    pub const NOMINATION_CURTAILED: &str = "de.gabi.nomination.curtailed";
+    /// The FNB/MGV refused the nomination.
+    ///
+    /// Emitted by `makod` from `gabi-gas-nomination`; the `data` payload
+    /// carries `gas_day`, `reason` and the parties. Nothing flows on this
+    /// nomination, so the BKV must re-nominate.
+    pub const NOMINATION_REJECTED: &str = "de.gabi.nomination.rejected";
+    /// The `KoV` NOMRES window closed with no answer on file.
+    ///
+    /// Emitted by `makod` when the `gabi-gas-nomination` deadline fires: the
+    /// nomination's status is unknown at gas-day start, which is an operator
+    /// call rather than something to assume either way.
+    pub const NOMRES_MISSING: &str = "de.gabi.nomres.missing";
     /// ⚠ phantom: no emitter yet.
     pub const IMBALANCE_CALCULATED: &str = "de.gabi.imbalance.calculated";
     /// ⚠ phantom: no emitter yet.
@@ -659,6 +682,9 @@ pub fn all() -> &'static [&'static str] {
         gabi::MEASUREMENT_RECEIVED,
         gabi::ALLOCATION_COMPLETED,
         gabi::NOMINATION_CREATED,
+        gabi::NOMINATION_CURTAILED,
+        gabi::NOMINATION_REJECTED,
+        gabi::NOMRES_MISSING,
         gabi::NOMINATION_CONFIRMED,
         gabi::IMBALANCE_CALCULATED,
         gabi::CORRECTION_CREATED,

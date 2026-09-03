@@ -176,7 +176,6 @@ def build_mscons(
     message_ref: str = "1",
     document_date: str | None = None,
     obis: str | None = None,
-    bilanzierungsgebiet: str | None = None,
 ) -> bytes:
     """`quantities` are `(qualifier, value, unit)`; `intervals` add `(start, end)`.
 
@@ -207,6 +206,7 @@ def build_contrl(
     accept: bool = True,
     message_ref: str = "1",
     action_code: str | None = None,
+    syntax_error: str | None = None,
 ) -> bytes: ...
 def build_aperak_for(
     received: bytes,

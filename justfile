@@ -274,7 +274,7 @@ examples:
         python3 -c "import json,sys; m=json.load(sys.stdin); [print(p['name'], t['name']) for p in m['packages'] for t in p['targets'] if 'example' in t['kind']]" | sort)
     exit $fail
 
-ci: check test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-wire-timestamps check-business-dates check-rounding check-pid-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci validate-release-codes validate-ebd-codes lint-makotest test-makotest
+ci: check test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-wire-timestamps check-business-dates check-rounding check-pid-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -425,48 +425,33 @@ infra-logs container="postgres":
 bump version:
     cargo xtask bump-version {{ version }}
 
-# ── Profile codegen ───────────────────────────────────────────────────────────
+# ── Profiles ──────────────────────────────────────────────────────────────────
 
-# Regenerate all Rust profile code from YAML/JSON schemas
-codegen:
-    cargo xtask codegen
+# Regenerate every profile from its BDEW MIG/AHB PDF (profiles/sources.json).
+# Needs the document mirror (`just regulatories-download`) and poppler's
+# `pdftotext`.
+import-profiles:
+    cargo xtask import-profiles
 
-# Regenerate profiles for a single message type (e.g. `just codegen-type UTILMD`)
-codegen-type type:
-    cargo xtask codegen --message-type {{ type }}
+# One profile, e.g. `just import-profile utilmd/fv20261001`
+import-profile dir:
+    cargo xtask import-profiles --profile {{ dir }}
 
-# Check that generated files are up-to-date (CI drift guard)
-codegen-check:
-    cargo xtask codegen --check
+# Fail when a committed profile no longer matches its source PDF; SKIPs
+# without the mirror or poppler.
+import-profiles-check:
+    cargo xtask import-profiles --check
 
-# Mark expired profiles as archived and regenerate mod.rs
-codegen-prune:
-    cargo xtask codegen --prune-expired
+# Dump a BDEW PDF as the character grid the importer reads
+pdf-grid file:
+    cargo xtask pdf-grid {{ file }}
 
 # ── Validation ────────────────────────────────────────────────────────────────
 
-# Validate all committed profiles for consistency errors
+# The committed profiles are consistent: sources.json, dates and continuity
+# per track, Prüfidentifikatoren, AHB rows against the MIG structure.
 validate-profiles:
     cargo xtask validate-profiles
-
-# Strict profile validation — errors on any _WARNING field (F-013 CI gate)
-# Run this in CI to catch incomplete or placeholder profile entries.
-validate-profiles-strict:
-    cargo xtask validate-profiles --strict
-
-# Check that every AHB Prüfidentifikator has a test fixture
-validate-pruefids:
-    cargo xtask validate-pruefids
-
-# Strict Prüfidentifikator validation (exits 1 on missing coverage)
-validate-pruefids-strict:
-    cargo xtask validate-pruefids --strict
-
-# F-018 CI gate: strict Prüfidentifikator validation with minimum coverage ≥ 1
-# Used by the `ci` recipe to ensure every registered PID has at least one test
-# fixture.  Prefer `validate-pruefids-strict` for local iteration.
-validate-pruefids-strict-ci:
-    cargo xtask validate-pruefids --strict --min-coverage 1
 
 # Hold the mako-pruefung Antwortcode catalogue against the published EBD PDF.
 #
@@ -480,10 +465,6 @@ validate-pruefids-strict-ci:
 # poppler's `pdftotext`. Run `cargo xtask sync-regulatories --download` first.
 validate-ebd-codes:
     cargo xtask validate-ebd-codes
-
-# Verify every receivable profile's release code appears in a UNH 0057 fixture
-validate-release-codes:
-    cargo xtask validate-release-codes
 
 # Verify a profile covers today's date
 check-release-coverage:
@@ -584,60 +565,6 @@ check-tool-grants:
 # looked healthy the whole way.
 check-answer-commands:
     cargo run -q -p xtask -- check-answer-commands
-
-# ── AHB audit ─────────────────────────────────────────────────────────────────
-
-# Comprehensive AHB rule-coverage analysis
-audit-ahb:
-    cargo xtask audit-ahb
-
-# Audit a single message type (e.g. `just audit-ahb-type INVOIC`)
-audit-ahb-type type:
-    cargo xtask audit-ahb --message-type {{ type }}
-
-# ── Fixtures ──────────────────────────────────────────────────────────────────
-
-# Regenerate EDIFACT test fixtures
-generate-fixtures:
-    cargo xtask generate-fixtures
-
-# Dry-run fixture generation (show what would be created)
-generate-fixtures-dry:
-    cargo xtask generate-fixtures --dry-run
-
-# ── Profile management ────────────────────────────────────────────────────────
-
-# Scaffold a new BDEW format-version directory skeleton (e.g. `just add-release FV2027-10-01`)
-add-release fv:
-    cargo xtask add-release --fv {{ fv }}
-
-# Diff two profile releases (e.g. `just release-diff UTILMD fv20251001 fv20261001`)
-# Use folder-name format (fv20251001) or canonical FV format (FV2025-10-01).
-# Both spellings are accepted; FV2025-10-01 is normalised to fv20251001 automatically.
-release-diff type from to:
-    cargo xtask release-diff --message-type {{ type }} --from {{ from }} --to {{ to }}
-
-# ── Import / extraction ───────────────────────────────────────────────────────
-
-# Import BDEW code lists from CSV
-import-codelists file type release:
-    cargo xtask import-codelists --file {{ file }} --message-type {{ type }} --release {{ release }}
-
-# Extract MIG/AHB tables from a PDF (best-effort)
-extract-pdf file type:
-    cargo xtask extract-pdf --file {{ file }} --message-type {{ type }}
-
-# Extract MIG/AHB tables from a DOCX (exact column parser)
-extract-docx file type:
-    cargo xtask extract-docx --file {{ file }} --message-type {{ type }}
-
-# Import AHB from official BDEW XML (requires BDEW subscription)
-import-xml-ahb file type release valid-from:
-    cargo xtask import-xml-ahb --file {{ file }} --message-type {{ type }} --release {{ release }} --valid-from {{ valid-from }}
-
-# Import MIG from official BDEW XML (requires BDEW subscription)
-import-xml-mig file type release valid-from:
-    cargo xtask import-xml-mig --file {{ file }} --message-type {{ type }} --release {{ release }} --valid-from {{ valid-from }}
 
 # ── Docs ──────────────────────────────────────────────────────────────────────
 

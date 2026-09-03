@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import MELO, ON
+from conftest import MALO, ON
 from makotest import (
     MarktpartnerSim,
     UtilmdTransaction,
@@ -31,7 +31,11 @@ from makotest import (
     release_for,
     validate_edifact,
 )
-from makotest.plugin import LF_ID, NB_ID
+from makotest.plugin import LF_ID
+
+# A Gas Netzbetreiber carries a DVGW-Codenummer: the Gas columns admit DE 3055
+# `332` (DVGW) and `9` (GS1) only.
+NB_ID = "9870012345678"
 
 RECEIVED = "2026-03-02T09:00:00Z"
 
@@ -47,7 +51,7 @@ def gas_anmeldung(pid: int = 44001, *, dar: str = "G1") -> bytes:
         transactions=[
             UtilmdTransaction(
                 "VORGANG-G1",
-                locations=[("melo", MELO)],
+                locations=[("malo", MALO)],
                 dates=[("92", "20260501")],
             )
         ],
@@ -118,20 +122,14 @@ class TestAntwort:
         assert_answer_pid(reply.pid, anfrage=44001, accepted=True)
         assert reply.pid == 44002
 
-    def test_a_gas_answer_names_no_codeliste_on_the_wire(self):
-        """DE 1131 carries the Codeliste, and the Gas MIG does not require one.
-
-        The Strom counterpart writes its EBD there, so a simulator that treated
-        the two alike would emit a component the Gas receiver never expects.
-        """
+    def test_a_gas_answer_names_its_codeliste_on_the_wire(self):
+        """The Gas columns list DE 1131 on `STS+E01`: `G_0012` on the 44002
+        Bestätigung, `G_0011` on the 44003 Ablehnung (UTILMD AHB Gas)."""
         sim = nb()
         sim.on(44001).ablehnung(antwort_code="A03")
         reply = sim.receive(gas_anmeldung())
         vorgang = validate_edifact(reply.business, ON).messages[0].vorgaenge[0]
-
-        assert vorgang.antwort_code == "A03"
-        assert vorgang.antwort_codeliste is None
-        assert_edifact_valid(reply.business, on=ON)
+        assert vorgang.antwort_codeliste == "G_0011"
 
     def test_gas_splits_vorpruefung_from_lieferbeginn_like_strom(self):
         """`E_3005` refuses; `E_3007` decides the Lieferbeginn.

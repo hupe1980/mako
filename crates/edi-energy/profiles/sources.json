@@ -1,0 +1,285 @@
+{
+  "_comment": "Which BDEW publication each profile is extracted from. `cargo xtask import-profiles` reads the named PDFs from the document mirror and regenerates <dir>/mig.json and <dir>/ahb.json; the JSON files are derived artefacts. Dates follow Allgemeine Festlegungen 6.1d §2.5: `valid_from` is the Anwendungszeitpunkt, `publikationsdatum` the Veröffentlichungszeitpunkt six months earlier. `release` is the wire code in UNH DE 0057.",
+  "profiles": {
+    "aperak/fv20251001": {
+      "release": "2.1i",
+      "valid_from": "2025-10-01",
+      "valid_until": "2026-09-30",
+      "publikationsdatum": "2025-04-01",
+      "ahb_version": "1.0",
+      "mig": "APERAK_MIG_2.1i.pdf",
+      "ahb": "APERAK_AHB_1.0_-_konsolidierte_Lesefassung_Stand_30.09.2025.pdf",
+      "pids": {
+        "Fehlermeldung": 29001,
+        "Anerkennungsmeldung": 29002
+      }
+    },
+    "aperak/fv20261001": {
+      "release": "2.2",
+      "valid_from": "2026-10-01",
+      "publikationsdatum": "2026-04-01",
+      "ahb_version": "1.1",
+      "mig": "APERAK_MIG_2.2.pdf",
+      "ahb": "APERAK_AHB_1.1.pdf",
+      "pids": {
+        "Fehlermeldung": 29001,
+        "Anerkennungsmeldung": 29002
+      }
+    },
+    "comdis/fv20260401": {
+      "release": "1.0g",
+      "valid_from": "2026-04-01",
+      "publikationsdatum": "2025-10-01",
+      "ahb_version": "1.0h",
+      "mig": "COMDIS_MIG_1.0g.pdf",
+      "ahb": "COMDIS_AHB_1.0h.pdf"
+    },
+    "contrl/fv20260101": {
+      "release": "2.0b",
+      "valid_from": "2026-01-01",
+      "ahb_version": "1.0",
+      "pid_exempt": true,
+      "mig": "CONTRL_MIG_2.0b_-_ausserordentliche_Veroeffentlichung_Stand_11.12.2025.pdf",
+      "ahb": "CONTRL_AHB_1.0_-_ausserordentliche_Veroeffentlichung_Stand_11.12.2025.pdf"
+    },
+    "iftsta/fv20251001": {
+      "release": "2.0g",
+      "valid_from": "2025-10-01",
+      "valid_until": "2026-09-30",
+      "publikationsdatum": "2025-04-01",
+      "ahb_version": "2.0h",
+      "mig": "IFTSTA_MIG_2.0g.pdf",
+      "ahb": "IFTSTA_AHB_2.0h_-_konsolidierte_Lesefassung_Stand_23.06.2025.pdf"
+    },
+    "iftsta/fv20261001": {
+      "release": "2.1",
+      "valid_from": "2026-10-01",
+      "publikationsdatum": "2026-04-01",
+      "ahb_version": "2.1",
+      "mig": "IFTSTA_MIG_2.1.pdf",
+      "ahb": "IFTSTA_AHB_2.1.pdf"
+    },
+    "insrpt/fv20260101": {
+      "release": "1.1a",
+      "valid_from": "2026-01-01",
+      "ahb_version": "1.1g",
+      "mig": "INSRPT_MIG_1.1a_-_ausserordentliche_Veroeffentlichung_Stand_26.07.2024.pdf",
+      "ahb": "INSRPT_AHB_1.1g_-_ausserordentliche_Veroeffentlichung_Stand_11.12.2025.pdf"
+    },
+    "invoic/fv20260401": {
+      "release": "2.8e",
+      "valid_from": "2026-04-01",
+      "valid_until": "2026-09-30",
+      "publikationsdatum": "2025-10-01",
+      "ahb_version": "1.0a",
+      "mig": "INVOIC_MIG_2.8e.pdf",
+      "ahb": "INVOIC_AHB_1.0a.pdf"
+    },
+    "invoic/fv20261001": {
+      "release": "2.8e",
+      "valid_from": "2026-10-01",
+      "publikationsdatum": "2026-04-01",
+      "ahb_version": "1.0b",
+      "mig": "INVOIC_MIG_2.8e.pdf",
+      "ahb": "INVOIC_AHB_1.0b.pdf"
+    },
+    "mscons/fv20260401": {
+      "release": "2.4c",
+      "valid_from": "2026-04-01",
+      "valid_until": "2026-09-30",
+      "publikationsdatum": "2025-10-01",
+      "ahb_version": "3.1g",
+      "mig": "MSCONS_MIG_2.4c_-_ausserordentliche_Veroeffentlichung_Stand_26.07.2024.pdf",
+      "ahb": "MSCONS_AHB_3.1g_-_konsolidierte_Lesefassung_Stand_02.03.2026.pdf"
+    },
+    "mscons/fv20261001": {
+      "release": "2.5",
+      "valid_from": "2026-10-01",
+      "publikationsdatum": "2026-04-01",
+      "ahb_version": "3.2",
+      "mig": "MSCONS_MIG_2.5.pdf",
+      "ahb": "MSCONS_AHB_3.2.pdf"
+    },
+    "ordchg/fv20250401": {
+      "release": "1.1",
+      "valid_from": "2025-04-01",
+      "valid_until": "2026-09-30",
+      "publikationsdatum": "2024-10-01",
+      "ahb_version": "1.0a",
+      "mig": "ORDCHG_MIG_1.1_-_ausserordentliche_Veroeffentlichung_Stand_26.07.2024.pdf",
+      "ahb": "ORDCHG_AHB_1.0a.pdf"
+    },
+    "ordchg/fv20261001": {
+      "release": "1.2",
+      "valid_from": "2026-10-01",
+      "publikationsdatum": "2026-04-01",
+      "ahb_version": "1.1",
+      "mig": "ORDCHG_MIG_1.2.pdf",
+      "ahb": "ORDCHG_AHB_1.1.pdf"
+    },
+    "orders/fv20260401": {
+      "release": "1.4b",
+      "valid_from": "2026-04-01",
+      "valid_until": "2026-09-30",
+      "publikationsdatum": "2025-10-01",
+      "ahb_version": "1.1a",
+      "mig": "ORDERS_MIG_1.4b.pdf",
+      "ahb": "ORDERS_AHB_1.1a.pdf"
+    },
+    "orders/fv20261001": {
+      "release": "1.4c",
+      "valid_from": "2026-10-01",
+      "publikationsdatum": "2026-04-01",
+      "ahb_version": "1.1b",
+      "mig": "ORDERS_MIG_1.4c.pdf",
+      "ahb": "ORDERS_AHB_1.1b_-_konsolidierte_Lesefassung_mit_Fehlerkorrekturen_Stand_29.06.2026.pdf"
+    },
+    "ordrsp/fv20260401": {
+      "release": "1.4b",
+      "valid_from": "2026-04-01",
+      "valid_until": "2026-09-30",
+      "publikationsdatum": "2025-10-01",
+      "ahb_version": "1.1a",
+      "mig": "ORDRSP_MIG_1.4b.pdf",
+      "ahb": "ORDRSP_AHB_1.1a_-_konsolidierte_Lesefassung_Stand_27.03.2026.pdf"
+    },
+    "ordrsp/fv20261001": {
+      "release": "1.4c",
+      "valid_from": "2026-10-01",
+      "publikationsdatum": "2026-04-01",
+      "ahb_version": "1.1b",
+      "mig": "ORDRSP_MIG_1.4c.pdf",
+      "ahb": "ORDRSP_AHB_1.1b.pdf"
+    },
+    "partin/fv20260401": {
+      "release": "1.0f",
+      "valid_from": "2026-04-01",
+      "valid_until": "2026-09-30",
+      "publikationsdatum": "2025-10-01",
+      "ahb_version": "1.0f",
+      "mig": "PARTIN_MIG_1.0f.pdf",
+      "ahb": "PARTIN_AHB_1.0f_-_konsolidierte_Lesefassung_Stand_02.03.2026.pdf"
+    },
+    "partin/fv20261001": {
+      "release": "1.1",
+      "valid_from": "2026-10-01",
+      "publikationsdatum": "2026-04-01",
+      "ahb_version": "1.1",
+      "mig": "PARTIN_MIG_1.1.pdf",
+      "ahb": "PARTIN_AHB_1.1.pdf"
+    },
+    "pricat/fv20251001": {
+      "release": "2.0e",
+      "valid_from": "2025-10-01",
+      "valid_until": "2026-09-30",
+      "publikationsdatum": "2025-04-01",
+      "ahb_version": "2.0f",
+      "mig": "PRICAT_MIG_2.0e_-_konsolidierte_Lesefassung_Stand_30.09.2025.pdf",
+      "ahb": "PRICAT_AHB_2.0f_-_konsolidierte_Lesefassung_Stand_11.12.2025.pdf"
+    },
+    "pricat/fv20261001": {
+      "release": "2.1",
+      "valid_from": "2026-10-01",
+      "publikationsdatum": "2026-04-01",
+      "ahb_version": "2.1",
+      "mig": "PRICAT_MIG_2.1.pdf",
+      "ahb": "PRICAT_AHB_2.1.pdf"
+    },
+    "quotes/fv20251001": {
+      "release": "1.3b",
+      "valid_from": "2025-10-01",
+      "valid_until": "2026-09-30",
+      "publikationsdatum": "2025-04-01",
+      "ahb_version": "1.1",
+      "mig": "QUOTES_MIG_1.3b_-_konsolidierte_Lesefassung_Stand_30.01.2026.pdf",
+      "ahb": "QUOTES_AHB_1.1.pdf"
+    },
+    "quotes/fv20261001": {
+      "release": "1.3c",
+      "valid_from": "2026-10-01",
+      "publikationsdatum": "2026-04-01",
+      "ahb_version": "1.1a",
+      "mig": "QUOTES_MIG_1.3c.pdf",
+      "ahb": "QUOTES_AHB_1.1a.pdf"
+    },
+    "remadv/fv20260401": {
+      "release": "2.9e",
+      "valid_from": "2026-04-01",
+      "publikationsdatum": "2025-10-01",
+      "ahb_version": "1.0a",
+      "mig": "REMADV_MIG_2.9e.pdf",
+      "ahb": "REMADV_AHB_1.0a.pdf"
+    },
+    "reqote/fv20251001": {
+      "release": "1.3c",
+      "valid_from": "2025-10-01",
+      "valid_until": "2026-09-30",
+      "publikationsdatum": "2025-04-01",
+      "ahb_version": "1.1",
+      "mig": "REQOTE_MIG_1.3c.pdf",
+      "ahb": "REQOTE_AHB_1.1.pdf"
+    },
+    "reqote/fv20261001": {
+      "release": "1.3c",
+      "valid_from": "2026-10-01",
+      "publikationsdatum": "2026-04-01",
+      "ahb_version": "1.2",
+      "mig": "REQOTE_MIG_1.3c.pdf",
+      "ahb": "REQOTE_AHB_1.2_-_konsolidierte_Lesefassung_mit_Fehlerkorrekturen_Stand_29.06.2026.pdf"
+    },
+    "utilmd/fv20251001": {
+      "release": "S2.1",
+      "track": "Strom",
+      "valid_from": "2025-10-01",
+      "valid_until": "2026-09-30",
+      "ahb_version": "2.1",
+      "mig": "UTILMD_MIG_Strom_S2.1_-_konsolidierte_Lesefassung_Stand_02.03.2026.pdf",
+      "ahb": "UTILMD_AHB_Strom_2.1_-_konsolidierte_Lesefassung_mit_Fehlerkorrekturen_Stand_29.06.2026.pdf"
+    },
+    "utilmd/fv20261001": {
+      "release": "S2.2",
+      "track": "Strom",
+      "valid_from": "2026-10-01",
+      "publikationsdatum": "2026-04-01",
+      "ahb_version": "2.2",
+      "mig": "UTILMD_MIG_Strom_S2.2_-_konsolidierte_Lesefassung_mit_Fehlerkorrekturen_Stand_06.08.2026.pdf",
+      "ahb": "UTILMD_AHB_Strom_2.2_-_konsolidierte_Lesefassung_mit_Fehlerkorrekturen_Stand_29.06.2026.pdf"
+    },
+    "utilmd/fv20260401_gas": {
+      "release": "G1.1",
+      "track": "Gas",
+      "valid_from": "2026-04-01",
+      "valid_until": "2026-09-30",
+      "publikationsdatum": "2025-10-01",
+      "ahb_version": "1.1",
+      "mig": "UTILMD_MIG_Gas_1.1_-_ausserordentliche_Veroeffentlichung_Stand_11.12.2025.pdf",
+      "ahb": "UTILMD_AHB_Gas_1.1_-_konsolidierte_Lesefassung_Stand_27.03.2026.pdf"
+    },
+    "utilmd/fv20261001_gas": {
+      "release": "G1.2",
+      "track": "Gas",
+      "valid_from": "2026-10-01",
+      "publikationsdatum": "2026-04-01",
+      "ahb_version": "1.2",
+      "mig": "UTILMD_MIG_Gas_G1.2_-_konsolidierte_Lesefassung_mit_Fehlerkorrekturen_Stand_29.06.2026.pdf",
+      "ahb": "UTILMD_AHB_Gas_1.2_-_konsolidierte_Lesefassung_mit_Fehlerkorrekturen_Stand_06.08.2026.pdf"
+    },
+    "utilts/fv20250401": {
+      "release": "1.1e",
+      "valid_from": "2025-04-01",
+      "valid_until": "2026-09-30",
+      "publikationsdatum": "2024-10-01",
+      "ahb_version": "1.0",
+      "mig": "UTILTS_MIG_1.1e_-_konsolidierte_Lesefassung_Stand_13.12.2024.pdf",
+      "ahb": "UTILTS_AHB_1.0_-_konsolidierte_Lesefassung_Stand_27.03.2026.pdf"
+    },
+    "utilts/fv20261001": {
+      "release": "1.1e",
+      "valid_from": "2026-10-01",
+      "publikationsdatum": "2026-04-01",
+      "ahb_version": "1.1",
+      "mig": "UTILTS_MIG_1.1e_-_konsolidierte_Lesefassung_Stand_13.12.2024.pdf",
+      "ahb": "UTILTS_AHB_1.1.pdf"
+    }
+  }
+}

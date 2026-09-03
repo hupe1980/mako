@@ -1,7 +1,4 @@
-use edifact_rs::{
-    EdifactDeserialize, EdifactSerialize, EventEmitter, OwnedSegment, ProfileRulePack,
-    ValidationIssue, ValidationSeverity,
-};
+use edifact_rs::{EdifactDeserialize, EdifactSerialize, EventEmitter, OwnedSegment};
 
 use crate::{
     MessageType,
@@ -62,8 +59,8 @@ pub struct AperakMessage {
     sender: Option<Nad>,
     /// NAD+MR — message recipient.
     receiver: Option<Nad>,
-    /// RFF+ACW — acknowledgement reference number.  Must be present in a
-    /// valid APERAK (rule `SEM-APERAK-REF-MISSING`).
+    /// RFF+ACW — the acknowledged message's reference; the AHB demands it of
+    /// a Fehlermeldung, not of an Anerkennungsmeldung.
     ref_acw: Option<Rff>,
     /// SG2 — application error groups (ERC + optional FTX / RFF).
     errors: Vec<AperakError>,
@@ -177,7 +174,7 @@ impl EdifactSerialize for AperakMessage {
         self.core.emit_segments(emitter)
     }
 }
-impl_edi_energy_message!(AperakMessage, sem = aperak_semantic_pack());
+impl_edi_energy_message!(AperakMessage);
 
 // ── segment group parsers ─────────────────────────────────────────────────────
 
@@ -228,51 +225,3 @@ fn parse_errors(segments: &[edifact_rs::Segment<'_>]) -> Vec<AperakError> {
 }
 
 // ── Layer 5: APERAK semantic rule pack ───────────────────────────────────────
-
-/// Build the APERAK semantic rule pack (Layer 5).
-///
-/// Rules:
-/// - [`rule_sem_aperak_ref_missing`]: An `RFF+ACW` reference to the original
-///   message is mandatory in every APERAK.
-fn aperak_semantic_pack() -> ProfileRulePack {
-    ProfileRulePack::new("APERAK-SEM")
-        .for_message_type("APERAK")
-        .with_rule_fn(rule_sem_aperak_ref_missing)
-}
-
-/// `SEM-APERAK-REF-MISSING` — Every APERAK must reference the message it is
-/// responding to via `RFF+ACW`.
-///
-/// The `ACW` qualifier (DE 1153 = "Acknowledgement") in an `RFF` segment
-/// carries the document/message number of the transaction being acknowledged
-/// or rejected. Without it the recipient cannot correlate the APERAK to the
-/// original request.
-fn rule_sem_aperak_ref_missing(
-    segments: &[edifact_rs::Segment<'_>],
-    issues: &mut Vec<ValidationIssue>,
-) {
-    let has_acw = segments
-        .iter()
-        .filter(|s| s.tag == "RFF")
-        .any(|s| s.get_element(0).and_then(|e| e.get_component(0)) == Some("ACW"));
-    // Capture the span of the first RFF for source location (best-effort: span points
-    // to the RFF that was checked, even though the ACW variant is absent).
-    let first_rff_span = segments.iter().find(|s| s.tag == "RFF").map(|s| s.span);
-    if !has_acw {
-        let mut issue = ValidationIssue::new(
-            ValidationSeverity::Error,
-            "APERAK must contain an RFF+ACW reference to the acknowledged/rejected \
-             transaction (DE 1153 = ACW)",
-        )
-        .with_rule_id("SEM-APERAK-REF-MISSING")
-        .with_segment("RFF")
-        .with_suggestion(
-            "Add an RFF segment with DE 1153 = ACW and set DE 1154 to the \
-             message reference (UNH DE 0062) of the acknowledged or rejected message",
-        );
-        if let Some(span) = first_rff_span {
-            issue = issue.with_span(span);
-        }
-        issues.push(issue);
-    }
-}

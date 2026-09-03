@@ -1,7 +1,6 @@
 # BDEW EDIFACT Test Fixtures
 
-This directory contains EDIFACT message fixtures used by the conformance test
-suite (`tests/conformance.rs`).
+EDIFACT messages the conformance suite (`tests/conformance.rs`) reads.
 
 ## Directory Layout
 
@@ -10,131 +9,65 @@ fixtures/
   <message_type>/
     valid/       — must parse + validate without errors
     invalid/     — must parse; validation must produce errors matching .expected.json
-    gen/         — synthetic PID witnesses (`cargo xtask generate-fixtures`)
 ```
-
-### What each directory asserts
 
 | Directory | Asserted by | Claim |
 |---|---|---|
 | `valid/` | `conformance.rs` | mako reads this Anwendungsfall and finds nothing wrong |
 | `invalid/` | `conformance.rs` + `.expected.json` | mako refuses it, for the stated reason |
-| `gen/` | nothing about content | the Prüfidentifikator appears somewhere in the corpus |
 
-A `gen/` fixture carries the PID and the segments every message has, not the
-ones the AHB marks Muss for that Prüfidentifikator, so it validates with errors
-by construction. `validate-pruefids` therefore reports two coverage numbers:
-total, and the curated subset the conformance suite asserts clean. The second is
-the one that means mako reads the Anwendungsfall.
+The corpus is curated, not exhaustive: **every** Anwendungsfall of every profile
+is witnessed by `tests/skeletons.rs`, which generates the minimal message of
+each column from the Prüfschablone and validates it against that column. A
+fixture here is an example a reader can copy — a Beispielnachricht with
+realistic (synthetic) MP-IDs, Lokations-IDs and dates — or a defect that must
+be refused.
 
 ## Corpus-wide invariants
 
-`validation_snapshot.txt` records each fixture's verdict and fails when one
-moves. Two things it cannot express are asserted separately:
+`validation_snapshot.txt` records each fixture's verdict, rule id by rule id,
+and fails when one moves. Two things it cannot express are asserted separately:
 
 - **`validation_snapshot.rs::every_fixture_parses_and_is_judged`** — no fixture
-  may fail to parse or to validate. Such a fixture never reaches the rule
-  layers, so an unchanging failure is an unchanging verdict and the snapshot
-  stays green.
+  may fail to parse or to validate.
 - **`demo_fixtures.rs`** — the fixtures under `demos/` are outside this corpus
   and are validated there instead.
+- **`party_agency_code.rs`** — every `NAD` stamps the agency its MP-ID range
+  implies: `99…` is `293` (BDEW), `98…` is `332` (DVGW), a GLN is `9`. Gas
+  columns admit only `9`/`332`, so a Gas fixture carries `98…` ids in `UNB`
+  and `NAD` alike.
 
-## Fixture Naming Convention
+## Naming
 
-| Prefix          | Meaning                                        |
-|-----------------|------------------------------------------------|
-| `pid_NNNNN`     | Minimal fixture for a single Prüfidentifikator |
-| `beispiel_*`    | Representative Beispielnachricht (see below)   |
+| Prefix | Meaning |
+|---|---|
+| `beispiel_<PID>_<name>` | a Beispielnachricht of one Prüfidentifikator |
+| `pid_<PID>_<variant>` | a variant of one Prüfidentifikator (an older format version, a Sparte) |
+| `<scenario>` (invalid/) | one defect, named by what is wrong; its `.expected.json` names the rule ids that must fire |
 
-A `pid_NNNNN` fixture must sit under a message type whose shipped profiles
-**declare that Prüfidentifikator**; `fixture_placement.rs` enforces it.
+A fixture must sit under a message type whose shipped profiles **declare that
+Prüfidentifikator**; `fixture_placement.rs` enforces it, resolving against the
+profiles because PID bands overlap (29xxx belongs to both APERAK and COMDIS).
 
-The directory is part of the assertion, not filing. A fixture placed under the
-wrong message type still parses and still counts toward `validate-pruefids`
-coverage, so nothing else catches it — while it asserts a message-type/PID
-pairing no AHB defines.
+## Writing one
 
-The check resolves against the profiles rather than assuming a PID band maps to
-one message type, because the bands overlap: 29xxx belongs to **both** APERAK
-and COMDIS, so `comdis/valid/pid_29002.edi` and `aperak/…/pid_29002` are each
-correct.
+Start from the column's own skeleton and put real values in:
 
-## Beispielnachrichten
+```bash
+cargo run -p edi-energy --all-features --example 07_resolve -- --skeleton UTILMD S2.2 55001
+cargo run -p edi-energy --all-features --example 07_resolve -- tests/fixtures/utilmd/valid/beispiel_55001_lieferbeginn.edi
+```
 
-Fixtures named `beispiel_*` are structured to resemble the _Beispielnachrichten_
-published by BDEW in their MIG/AHB documents.  They cover the complete segment
-structure required for the named Prüfidentifikator and BDEW format version, with
-realistic (but synthetic) market-participant IDs and dates.
-
-### UTILMD (BDEW S2.2, `fv20261001`)
-
-| File                                  | PID    | Description                        |
-|---------------------------------------|--------|------------------------------------|
-| `beispiel_55001_lieferbeginn.edi`     | 55001  | Lieferbeginn Strom – Anfrage LFN→NB |
-| `beispiel_55002_lieferende.edi`       | 55002  | Lieferende Strom – Anfrage LFN→NB  |
-
-### MSCONS (BDEW 2.5, `fv20261001`)
-
-| File                                       | PID   | Description                                |
-|--------------------------------------------|-------|--------------------------------------------|
-| `beispiel_13002_gas_release_2_5.edi`       | 13002 | Messwerte Zählerstand Gas (release 2.5)    |
-| `beispiel_13002_release_2_4c.edi`          | 13002 | Messwerte Zählerstand Strom (release 2.4c) |
-
-### APERAK (BDEW 2.2, `fv20261001`)
-
-| File                                           | PID   | Description                          |
-|------------------------------------------------|-------|--------------------------------------|
-| `beispiel_29001_verarbeitbarkeitsfehler.edi`   | 29001 | Verarbeitbarkeitsfehler mit FTX       |
-| `beispiel_29002_anerkennungsmeldung.edi`       | 29002 | Anerkennungsmeldung                   |
+The second command shows where every segment landed in the Nachrichtenstruktur
+and every finding, so a fixture is never edited blind. The interchange parties
+(`UNB`) must be the `NAD+MS`/`NAD+MR` of the message (Allgemeine Festlegungen
+§2.13); the Prüfidentifikator travels where the AHB puts it — `SG6 RFF+Z13` in
+UTILMD, `SG1 RFF+Z13` in most other types — and `BGM` DE 1004 is the
+Dokumentennummer.
 
 ## Which format version a fixture carries
 
-Every release code a counterparty can still send needs at least one fixture
-carrying it in `UNH` DE 0057 — `cargo xtask validate-release-codes` fails
-otherwise, and the annual-release checklist runs it.
-
-That is more than one code per message type during a transition. MSCONS `2.4c`
-runs until 2026-09-30 and `2.5` starts the next day, so both are on the wire
-within the same year and both are witnessed here. Only a **superseded** version
-needs no fixture: `ReleaseRegistry::is_acceptable_on` refuses it at the BDEW
-default receive tolerance of zero days, so retiring its fixtures with it is
-correct.
-
-`cargo xtask generate-fixtures` fills gaps for PIDs that have no fixture at all,
-stamping each with the release **in force today** — never the newest one shipped.
-`valid_from` is a hard edge (Allgemeine Festlegungen 6.1 §2.5): a message stamped
-with the next format version is rejected until its Anwendungszeitpunkt, so
-generating at the newest release produces a corpus of messages nobody can send
-yet and leaves the in-force version unexercised.
-
-## Known Limitations
-
-The current MIG validator uses a **flat segment-sequence** model, which means
-that segment tags appearing in multiple segment groups (e.g. `DTM` in both the
-message header and the `IDE` group in UTILMD) are treated as a single position
-in the expected order.  As a result:
-
-- Fixtures **omit** segment-group-level `DTM`, `NAD`, and similar repeated tags
-  that would follow `IDE`/`LOC` in real BDEW Beispielnachrichten.
-
-For two-section messages (containing `UNS`), the detail section now uses a
-group-trigger-aware ordering check: when the first tag of the detail section
-is seen again (e.g. a second `LOC` in MSCONS), the ordering cursor resets to
-allow multiple group occurrences.  Fixtures can therefore include multiple
-`LOC` groups in MSCONS messages.
-
-## Market-Participant IDs Used in Fixtures
-
-All IDs are **synthetic** and do not represent real market participants.
-
-| GLN / Code      | Qualifier | Role used in fixtures                   |
-|-----------------|-----------|-----------------------------------------|
-| `4012345000023` | `14`      | Lieferant / Nachrichten-Sender (MS)     |
-| `9900357000004` | `14`      | Netzbetreiber / Empfänger (MR)          |
-| `9907317000007` | `14`      | Marktpartner (alternative Sender)       |
-
-## Segment-Count Rules
-
-The `UNT` segment count must equal the number of segments from `UNH` through
-`UNT` inclusive (i.e. all segments in the functional group, including `UNH` and
-`UNT` themselves).
+A fixture carries the release it is an example of, in `UNH` DE 0057; the
+conformance suite validates it on the newest `valid_from` any profile states.
+Both releases of a transition (MSCONS `2.4c` until 2026-09-30, `2.5` from the
+next day) are on the wire in the same year and both are represented here.

@@ -47,9 +47,7 @@ class TestOrdersOrdrspRoundTrip:
     def test_the_request_and_its_answer_both_build(self):
         """The pair closes the loop a WiM or ESA test drives."""
         request = wrap(
-            build_orders(
-                17008, NB_ID, LF_ID, on=ON, document_code="E01", abonnement="Z01"
-            ),
+            build_orders(17008, NB_ID, LF_ID, on=ON, abonnement="Z02"),
             dar="O1",
         )
         assert_edifact_valid(request, on=ON)
@@ -63,7 +61,7 @@ class TestOrdersOrdrspRoundTrip:
                 antwort_code="A01",
                 antwort_ebd="E_0254",
                 on=ON,
-                abonnement="Z01",
+                abonnement="Z02",
                 line_item=True,
                 item_description=True,
             ),
@@ -80,11 +78,15 @@ class TestOrdersOrdrspRoundTrip:
         an order: the rule is per Prüfidentifikator, not per message type.
         """
         wire = wrap(
-            build_orders(17008, NB_ID, LF_ID, on=ON, document_code="E01", location=MALO)
+            build_orders(17008, NB_ID, LF_ID, on=ON, abonnement="Z02", location=MALO)
         )
         report = validate_edifact(wire, ON)
         assert not report.is_valid
-        assert "AHB-17008-LOC-N" in {f.rule_id for f in report.errors}
+        assert any(
+            (f.rule_id or "").startswith("AHB-17008-")
+            and f.rule_id.endswith("-LOC-NOT-PERMITTED")
+            for f in report.errors
+        ), [f.rule_id for f in report.errors]
 
     def test_the_answer_pid_comes_from_the_published_table(self):
         """17008's answer is an ORDRSP, and the table says which."""
@@ -111,7 +113,7 @@ class TestIftsta:
         )
         assert_edifact_valid(wire, on=ON)
         text = wire.decode()
-        assert "STS+Z21+:105" in text
+        assert "STS+Z21+105" in text
         assert "CNI+1" in text, "the Vorgangsnummer is Muss on a WiM status"
 
     def test_the_message_is_an_iftsta_the_ahb_checks(self):
@@ -214,4 +216,4 @@ class TestCoverage:
         ]
         # The three stragglers are UTILMD by band; their *answer* PIDs carry no
         # compiled AHB rules, so the message type cannot be resolved from them.
-        assert sorted(unanswerable) == [55077, 55230, 55557]
+        assert sorted(unanswerable) == []

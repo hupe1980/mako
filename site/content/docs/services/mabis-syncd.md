@@ -108,19 +108,14 @@ wrong territory is a settlement error the BIKO cannot detect.
 
 ### MaBiS-Zählpunkt vs Bilanzierungsgebiet
 
-The Summenzeitreihe carries **two different SG6 `LOC` identifiers**, and MSCONS
-AHB 3.2 gives each its own qualifier:
-
-| Qualifier | Carries |
-|---|---|
-| `LOC+172` | **Meldepunkt** — the MaBiS-Zählpunkt (33-char Zählpunktbezeichnung) |
-| `LOC+107` | **Bilanzierungsgebiet** (16-char EIC) |
-| `LOC+237` | Bilanzkreis |
-
-Both are free text at the MIG level, so a message that swaps them still parses
-and still validates — the BIKO simply files the Summenzeitreihe against the
-wrong Meldepunkt. Nothing downstream can detect it, which is why the two are
-kept as separate inputs all the way from master data to the wire.
+The Summenzeitreihe names its territory through the **Meldepunkt alone**: the
+13003 column of the MSCONS AHB marks `SG6 LOC` with qualifier `172` only, and
+the MaBiS-Zählpunkt is the identifier the BIKO files the series under. The
+Bilanzierungsgebiet EIC never travels on the wire — it selects *which*
+MaBiS-Zählpunkt to send, through the marktd assignment below. A wrong
+assignment therefore files energy against the wrong Meldepunkt, and nothing
+downstream can detect it, which is why the two stay separate inputs from master
+data to the wire.
 
 The assignment is **marktd master data**, not service configuration. Before each
 submission `mabis-syncd` resolves it over HTTP:
@@ -190,9 +185,9 @@ Two guards make the resolution explicit rather than implied:
   all, and `Deserialize` runs the same check because the value arrives as JSON
   from marktd. `Summenzeitreihe::validate_identifiers()` then refuses the one
   case the type cannot rule out: a Meldepunkt *equal* to its Bilanzierungsgebiet.
-  MSCONS SG6 carries `LOC+172` (Meldepunkt), `LOC+107` (Bilanzierungsgebiet) and
-  `LOC+237` (Bilanzkreis) as free text at the MIG level, so a swapped pair parses,
-  validates and is accepted — filed against the wrong point. `marktd`'s
+  MSCONS `SG6 LOC+172` carries the Meldepunkt as free text at the MIG level, so
+  a Bilanzierungsgebiet EIC standing in for it parses, validates and is
+  accepted — filed against the wrong point. `marktd`'s
   `mabis_zp_not_the_gebiet` CHECK guards only rows written to that table; a series
   assembled from any other source reaches rendering without meeting it, which is
   why the check also lives in the pure crate.
@@ -470,7 +465,7 @@ Two values are checked at startup, where refusing still costs nothing:
 
 - **`bilanzierungsgebiet_id`** must be a 16-character EIC of ENTSO-E object type
   **`Y` (Area)**. A Bilanzkreis is type `X` (Party) and the same length, and
-  `LOC+107` carries the value as free text, so the BIKO would accept either.
+  the marktd assignment lookup is keyed by the string, so either would resolve.
 - **`submission_target`** must be one that has an implementation.
 
 The alternative is discovering either at 05:00 on the Erstaufschlag-Werktag,

@@ -211,24 +211,30 @@ async fn end_to_end_geraetewechsel_pipeline() {
 /// AHB conformance — wrong BGM qualifier on PID 55042 must produce a
 /// validation error with rule `AHB-55042-BGM-1001-Q`.
 ///
-/// Guards the open-fail path: a PID absent from `ahb.json` sends
-/// `ahb_rule_pack` down the `Some(_unknown)` branch, which warns instead of
-/// rejecting, and `report.is_valid()` then returns `true` for any WiM UTILMD
-/// message. The four MSB-Wechsel PIDs must stay in the profile.
+/// Guards the open-fail path: a PID absent from `ahb.json` validates with the
+/// `AHB-UNKNOWN-PID` warning and no AHB rules, and `report.is_valid()` then
+/// returns `true` for any WiM UTILMD message. The four MSB-Wechsel PIDs must
+/// stay in the profile.
 #[test]
 fn negative_ahb_wrong_bgm_qualifier_pid_55042() {
     // Valid PID 55042 uses BGM+E01; inject BGM+E99 (never valid for any WiM PID).
     let invalid_bytes: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+WIM-NEG-001'\
+UNB+UNOC:3+9900357000004:14+4012345000023:14+261001:0700+WIM-NEG-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:S2.1'\
-BGM+E99:::+00055042::+9'\
-DTM+137:202501150800?+00:303'\
-RFF+Z13:WIM-REF-NEG-001'\
-NAD+MS+4012345000023::293'\
-NAD+MR+9900357000004::293'\
-IDE+24+DE0001000001234567890000000000001::'\
-LOC+Z16+DE0001000001234567890000000000001::'\
-UNT+9+MSG-001'\
+BGM+E99+DOK55042'\
+DTM+137:202610010000?+00:303'\
+NAD+MS+9900357000004::9'\
+NAD+MR+4012345000023::9'\
+IDE+24+VORGANG0001'\
+DTM+76:202610010000?+00:303'\
+STS+7++E01'\
+LOC+Z16+51238696781'\
+LOC+Z17+DE00056266802AO6G56M11SN51G21M24S'\
+RFF+Z13:55042'\
+NAD+Z07+++Mustermann:::::Z01'\
+NAD+Z08+++Mustermann:::::Z01+Musterstr. 1+Berlin+++DE'\
+NAD+Z05+++Mustermann:::::Z01+Musterstr. 1+Berlin+++DE'\
+UNT+15+MSG-001'\
 UNZ+1+WIM-NEG-001'";
 
     let platform = Platform::with_all_profiles();
@@ -237,26 +243,25 @@ UNZ+1+WIM-NEG-001'";
         .expect("EDIFACT syntax is valid; parse must succeed");
 
     // Use a fixed reference date within the fv20251001 validity window (2025-10-01 to 2026-09-30).
-    let ref_date = time::Date::from_calendar_date(2026, time::Month::January, 15).unwrap();
+    let ref_date = time::Date::from_calendar_date(2026, time::Month::June, 15).unwrap();
     let report = msg
         .validate_on_date(ref_date)
         .expect("validate_on_date must not error");
 
     assert!(
         !report.is_valid(),
-        "BGM+E99 on PID 55042 must fail AHB validation; got is_valid=true.\n\
-         This means WiM AHB qualifier checks are not firing — check that PID 55042 \
-         is registered in ahb.json for fv20251001/fv20261001."
+        "BGM+E99 on PID 55042 must fail AHB validation; got is_valid=true — \
+         the 55042 column's BGM code list is not being applied."
     );
 
     let bgm_qualifier_rule_fired = report.errors().iter().any(|e| {
         e.rule_id
             .as_deref()
-            .is_some_and(|id| id.starts_with("AHB-55042-BGM-1001-Q"))
+            .is_some_and(|id| id == "AHB-55042-00004-BGM-1001-CODE")
     });
     assert!(
         bgm_qualifier_rule_fired,
-        "expected rule AHB-55042-BGM-1001-Q to fire; errors: {:#?}",
+        "expected rule AHB-55042-00004-BGM-1001-CODE to fire; errors: {:#?}",
         report.errors()
     );
 }
@@ -271,16 +276,20 @@ UNZ+1+WIM-NEG-001'";
 #[test]
 fn negative_ahb_undefined_ide_qualifier_pid_55039() {
     let invalid_bytes: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+WIM-NEG-002'\
+UNB+UNOC:3+9900357000004:14+4012345000023:14+261001:0700+WIM-NEG-002'\
 UNH+MSG-001+UTILMD:D:11A:UN:S2.1'\
-BGM+E35:::+00055039::+9'\
-DTM+137:202501150800?+00:303'\
-RFF+Z13:WIM-REF-NEG-002'\
-NAD+MS+4012345000023::293'\
-NAD+MR+9900357000004::293'\
-IDE+Z19+VORGANG-0001'\
+BGM+E35+DOK55039'\
+DTM+137:202610010000?+00:303'\
+NAD+MS+9900357000004::9'\
+NAD+MR+4012345000023::9'\
+IDE+Z19+VORGANG0001'\
+DTM+93:202610010000?+00:303'\
+STS+7++E03'\
 LOC+Z16+51238696781'\
-UNT+9+MSG-001'\
+LOC+Z17+DE00056266802AO6G56M11SN51G21M24S'\
+RFF+Z13:55039'\
+NAD+Z07+++Mustermann:::::Z01'\
+UNT+13+MSG-001'\
 UNZ+1+WIM-NEG-002'";
 
     let platform = Platform::with_all_profiles();
@@ -288,7 +297,7 @@ UNZ+1+WIM-NEG-002'";
         .parse(invalid_bytes)
         .expect("EDIFACT syntax is valid; parse must succeed");
 
-    let ref_date = time::Date::from_calendar_date(2026, time::Month::January, 15).unwrap();
+    let ref_date = time::Date::from_calendar_date(2026, time::Month::June, 15).unwrap();
     let report = msg
         .validate_on_date(ref_date)
         .expect("validate_on_date must not error");
@@ -301,11 +310,11 @@ UNZ+1+WIM-NEG-002'";
     let ide_rule_fired = report.errors().iter().any(|e| {
         e.rule_id
             .as_deref()
-            .is_some_and(|id| id.starts_with("AHB-55039-IDE-7495-Q"))
+            .is_some_and(|id| id.ends_with("-IDE-7495-CODE"))
     });
     assert!(
         ide_rule_fired,
-        "expected rule AHB-55039-IDE-7495-Q to fire; errors: {:#?}",
+        "expected an IDE-7495-CODE rule to fire; errors: {:#?}",
         report.errors()
     );
 }

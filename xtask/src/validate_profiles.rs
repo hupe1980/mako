@@ -1,528 +1,34 @@
-//! Profile consistency checker for `cargo xtask validate-profiles`.
+//! `cargo xtask validate-profiles` — the committed profiles are consistent.
 //!
-//! Checks all `profiles/<type>/<release>/` directories for:
-//! - JSON Schema conformance of `mig.json`, `ahb.json`, `codelists.json`
-//! - Presence of all three JSON files (`mig.json`, `ahb.json`, `codelists.json`)
-//! - `release` field inside each JSON matching the directory name
-//! - `message_type` field matching the parent directory name
-//! - All qualifier-restriction codes in `ahb.json` existing in `codelists.json`
-//! - All qualifier-restriction codes in `mig.json` existing in `codelists.json`
-//! - PID codes in `ahb.json` being valid 5-digit integers (10000–99999)
-//! - Segment tags in `ahb.json` `segment_rules` being a subset of those in `mig.json`
-//! - `element_index` in `ahb.json` `field_rules` not exceeding the segment's element count
-//! - PID continuity across consecutive releases of the same track (see
-//!   [`check_pid_continuity`]) — a PID that disappears without an entry in
-//!   [`RETIRED_PIDS`] is an import regression, not a BDEW retirement
+//! `import-profiles --check` proves a profile against its source PDF, but only
+//! where the document mirror is. This runs everywhere: it holds the profile
+//! files against `sources.json`, against each other and against the mirror's
+//! manifest when that is present.
+//!
+//! - every `sources.json` entry has a directory with `mig.json` and `ahb.json`,
+//!   and every profile directory is in `sources.json`;
+//! - `message_type`, `release`, `valid_from`, `valid_until` and `ahb_version`
+//!   agree between the files and the manifest entry;
+//! - per message type and track the validity windows neither overlap nor leave
+//!   a gap, and exactly one is open-ended;
+//! - Prüfidentifikatoren are five digits, unique within a profile, and a code
+//!   the previous release carried is still there unless [`RETIRED_PIDS`]
+//!   explains its absence;
+//! - every AHB row names a segment `Nr` the MIG structure has, and every column
+//!   lists `UNH`;
+//! - the `source.sha256` matches the mirrored document when the mirror is here.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Deserialize;
 
-// ── Minimal JSON models (mirrors codegen.rs but only what's needed) ───────────
+const PROFILES_DIR: &str = "crates/edi-energy/profiles";
+const MIRROR_MANIFEST: &str = "regulatories/bdew-mako/manifest.json";
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[allow(dead_code)]
-struct MigProfile {
-    schema_version: u32,
-    message_type: String,
-    release: String,
-    #[serde(default)]
-    ordering_hint: Vec<String>,
-    #[serde(default)]
-    pid_source: String,
-    // Added in  expiry date for release transition modeling.
-    #[serde(default)]
-    valid_until: Option<String>,
-    /// Date BDEW published the source document — source metadata, never the
-    /// Anwendungszeitpunkt. See the `publikationsdatum` doc in `codegen.rs`.
-    #[serde(default)]
-    publikationsdatum: Option<String>,
-    // Added in  links a newer release to the older one it supersedes.
-    #[serde(default)]
-    supersedes_directory: Option<String>,
-    // Added in  AHB revision identifier.
-    #[serde(default)]
-    ahb_revision: Option<String>,
-    // Added in  source document title.
-    #[serde(default)]
-    source_document: Option<String>,
-    // Added in  explicit archive marker set by `cargo xtask codegen --prune-expired`.
-    #[serde(default)]
-    archived: bool,
-    // Added in  profiles that intentionally have no PIDs (e.g. CONTRL).
-    #[serde(default)]
-    pid_exempt: bool,
-    // Added in  explicit valid_from date matching directory name.
-    #[serde(default)]
-    valid_from: Option<String>,
-    /// DE 2005 date qualifier → the DE 2379 format codes the MIG admits.
-    /// See the field of the same name in `codegen.rs` for why it is a set.
-    #[serde(default)]
-    dtm_formats: std::collections::BTreeMap<String, Vec<String>>,
-    segments: Vec<MigSegment>,
-    segment_groups: Vec<MigGroup>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[allow(dead_code)]
-struct MigSegment {
-    tag: String,
-    name: String,
-    mandatory: bool,
-    max_occurrences: u32,
-    elements: Vec<MigElement>,
-    #[serde(default)]
-    qualifier_restrictions: BTreeMap<String, Vec<String>>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[allow(dead_code)]
-struct MigElement {
-    id: String,
-    status: String,
-    components: Option<u32>,
-    /// How many times this composite repeats in the segment (`STS` `C556` = 3).
-    max_repeat: Option<u8>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[allow(dead_code)]
-struct MigGroup {
-    id: String,
-    trigger_segment: String,
-    mandatory: bool,
-    max_occurrences: u32,
-    #[serde(default)]
-    min_occurrences: Option<u32>,
-    segments: Vec<MigSegment>,
-    groups: Vec<MigGroup>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[allow(dead_code)]
-struct AhbProfile {
-    schema_version: u32,
-    message_type: String,
-    release: String,
-    // Added in  expiry date for release transition modeling.
-    #[serde(default)]
-    valid_until: Option<String>,
-    // Added in  links a newer release to the older one it supersedes.
-    #[serde(default)]
-    supersedes_directory: Option<String>,
-    // Added in  AHB revision identifier.
-    #[serde(default)]
-    ahb_revision: Option<String>,
-    // Added in  source document title.
-    #[serde(default)]
-    source_document: Option<String>,
-    /// Human reviewer of this profile before promotion to production.
-    ///
-    /// Required for `fv2026*` and later profiles to ensure no draft-extracted
-    /// profile is shipped without human validation.
-    #[serde(default)]
-    reviewed_by: Option<String>,
-    /// ISO 8601 date when this profile was reviewed and promoted.
-    #[serde(default)]
-    reviewed_at: Option<String>,
-    pruefidentifikatoren: Vec<PruefidentifikatorEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[allow(dead_code)]
-struct PruefidentifikatorEntry {
-    code: u32,
-    name: String,
-    segment_rules: Vec<AhbSegmentRule>,
-    /// Per-segment-group-instance rules. Each entry is scoped to a
-    /// specific group definition and fires once per group occurrence.
-    #[serde(default)]
-    group_rules: Vec<AhbGroupRule>,
-}
-
-/// A single AHB rule scoped to a segment-group instance.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[allow(dead_code)]
-struct AhbGroupRule {
-    /// Segment-group identifier (e.g. `"SG4"`).
-    group_id: String,
-    /// EDIFACT segment tag to check within the group (e.g. `"STS"`).
-    tag: String,
-    /// `M` = mandatory, `N` = must not appear, `O` = optional, `C` = conditional.
-    requirement: String,
-    /// Require the group itself to occur, not merely that `tag` is present
-    /// wherever it does. See the codegen struct of the same name.
-    #[serde(default)]
-    #[allow(dead_code)]
-    group_required: bool,
-    /// Qualifier restrictions: element DE identifier → list of allowed values.
-    #[serde(default)]
-    qualifier_restrictions: BTreeMap<String, Vec<String>>,
-    /// BDEW Bedingungsoperator rules scoped to each group occurrence.
-    #[serde(default)]
-    conditional_rules: Vec<AhbConditionalRule>,
-    /// Human-readable description for documentation.
-    #[serde(default, rename = "_description")]
-    description: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[allow(dead_code)]
-struct AhbSegmentRule {
-    tag: String,
-    requirement: String,
-    #[serde(default)]
-    qualifier_restrictions: BTreeMap<String, Vec<String>>,
-    #[serde(default)]
-    field_rules: Vec<AhbFieldRule>,
-    #[serde(default)]
-    required_qualifiers: BTreeMap<String, Vec<String>>,
-    // Added in  conditional rules for segments with requirement "C".
-    #[serde(default)]
-    conditional_rules: Vec<AhbConditionalRule>,
-    // Added in  human-readable description (not used in validation).
-    #[serde(default, rename = "_description")]
-    description: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[allow(dead_code)]
-struct AhbWhenElement {
-    element_index: usize,
-    #[serde(default)]
-    value: Option<String>,
-    #[serde(default)]
-    value_alternatives: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[allow(dead_code)]
-struct AhbConditionalRule {
-    when_tag: String,
-    #[serde(default)]
-    when_element_index: usize,
-    #[serde(default)]
-    when_value: Option<String>,
-    #[serde(default)]
-    when_value_alternatives: Vec<String>,
-    #[serde(default)]
-    when_additional_elements: Vec<AhbWhenElement>,
-    /// BDEW Bedingungsoperator (I/V/E/X/U/O/G/K/Z).
-    #[serde(default)]
-    operator: Option<String>,
-    /// Secondary trigger segment tag (required for X/U/O operators; optional for K).
-    #[serde(default)]
-    secondary_tag: Option<String>,
-    /// Extra segment tags for the K operator (beyond when_tag and secondary_tag).
-    #[serde(default)]
-    additional_tags: Vec<String>,
-    /// Count threshold for the G (≥N) operator.
-    #[serde(default)]
-    count_threshold: Option<u32>,
-    then_requirement: String,
-    #[serde(default)]
-    then_qualifier_index: usize,
-    #[serde(default)]
-    then_qualifier_value: Option<String>,
-    #[serde(default, rename = "_description")]
-    description: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[allow(dead_code)]
-struct AhbFieldRule {
-    element: String,
-    requirement: String,
-    #[serde(default)]
-    allowed_values: Vec<String>,
-    /// 0-based element index within the segment — must be set explicitly.
-    element_index: usize,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CodelistsData {
-    #[serde(default)]
-    #[allow(dead_code)]
-    schema_version: u32,
-    #[allow(dead_code)]
-    release: String,
-    lists: BTreeMap<String, Vec<String>>,
-}
-
-// ── Entry point ───────────────────────────────────────────────────────────────
-
-/// Compiled JSON Schema validators used during profile checks.
-struct Schemas {
-    mig: jsonschema::Validator,
-    ahb: jsonschema::Validator,
-    codelists: jsonschema::Validator,
-}
-
-impl Schemas {
-    /// Load and compile the three schema files from `schemas_dir`.
-    ///
-    /// Returns `Err(String)` when a schema file is missing or invalid JSON Schema.
-    fn load(schemas_dir: &Path) -> Result<Self, String> {
-        let load = |name: &str| -> Result<jsonschema::Validator, String> {
-            let path = schemas_dir.join(name);
-            let raw = std::fs::read_to_string(&path)
-                .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-            let schema: serde_json::Value = serde_json::from_str(&raw)
-                .map_err(|e| format!("{}: invalid JSON: {e}", path.display()))?;
-            jsonschema::validator_for(&schema)
-                .map_err(|e| format!("{}: invalid JSON Schema: {e}", path.display()))
-        };
-        Ok(Self {
-            mig: load("mig.schema.json")?,
-            ahb: load("ahb.schema.json")?,
-            codelists: load("codelists.schema.json")?,
-        })
-    }
-}
-
-/// Run profile validation from `workspace_root`. Returns `true` if all checks pass.
-pub fn run(workspace_root: &str) -> bool {
-    // Which BDEW documents the mirror actually holds, so a profile can be held
-    // to citing one that exists. Empty until `sync-regulatories` has run.
-    let mirrored = crate::sync_regulatories::load_manifest(Path::new(workspace_root));
-    let profiles_dir = PathBuf::from(workspace_root)
-        .join("crates")
-        .join("edi-energy")
-        .join("profiles");
-    let schemas_dir = profiles_dir.join("schemas");
-
-    let mut errors: Vec<String> = Vec::new();
-    let mut warnings: Vec<String> = Vec::new();
-    let mut checked = 0u32;
-
-    // Load and compile the JSON Schema validators once, before iterating profiles.
-    let schemas = match Schemas::load(&schemas_dir) {
-        Ok(s) => Some(s),
-        Err(e) => {
-            eprintln!(
-                "WARNING  cannot load profile schemas from {}: {e}",
-                schemas_dir.display()
-            );
-            eprintln!("WARNING  JSON Schema validation will be skipped");
-            None
-        }
-    };
-
-    // Track (message_type_upper, wire_release_code) → folder path for duplicate detection.
-    // Profiles with `supersedes_directory` intentionally carry the same wire code as the
-    // directory they supersede (BDEW correction cycle). These are NOT duplicates.
-    let mut seen_wire_releases: BTreeMap<(String, String), String> = BTreeMap::new();
-
-    for msg_type_dir in read_subdirs(&profiles_dir) {
-        let dir_name = msg_type_dir
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_uppercase();
-        if dir_name == "SCHEMAS" {
-            continue;
-        }
-
-        for release_dir in read_subdirs(&msg_type_dir) {
-            let release = release_dir
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .to_string();
-            checked += 1;
-
-            let result = check_profile(
-                &msg_type_dir,
-                &release_dir,
-                &dir_name,
-                &release,
-                schemas.as_ref(),
-                &mirrored,
-                &mut errors,
-                &mut warnings,
-            );
-
-            if let Some((wire, supersedes)) = result {
-                let folder = format!("{}/{}", dir_name.to_lowercase(), release);
-                if let Some(ref superseded_name) = supersedes {
-                    // Correction profile: same wire code as predecessor is intentional.
-                    // Verify the directory it claims to supersede actually exists.
-                    let superseded_path = msg_type_dir.join(superseded_name);
-                    if !superseded_path.is_dir() {
-                        errors.push(format!(
-                            "{folder}  supersedes_directory {superseded_name:?} does not exist"
-                        ));
-                    }
-                } else {
-                    // Originating profile: register as the canonical holder of this wire code.
-                    let key = (dir_name.clone(), wire.clone());
-                    if let Some(prev) = seen_wire_releases.insert(key, folder.clone()) {
-                        errors.push(format!(
-                            "{folder}  duplicate wire release code {wire:?} — already registered by {prev}"
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
-    check_pid_continuity(&profiles_dir, &mut errors, &mut warnings);
-    check_validity_continuity(&profiles_dir, &mut errors, &mut warnings);
-
-    // Print results
-    for w in &warnings {
-        eprintln!("WARNING  {w}");
-    }
-    for e in &errors {
-        eprintln!("ERROR    {e}");
-    }
-
-    let ok = errors.is_empty();
-    eprintln!();
-    eprintln!(
-        "validate-profiles: checked {checked} profile(s) — {} error(s), {} warning(s)",
-        errors.len(),
-        warnings.len()
-    );
-
-    ok
-}
-
-// ── Validity continuity across releases ───────────────────────────────────────
-
-/// Every profile chain must be a non-overlapping sequence of validity windows.
-///
-/// Within one `(message_type, track)` the profiles partition the timeline: at any
-/// date exactly one Formatversion is the *Anwendungszeitpunkt* holder. Allgemeine
-/// Festlegungen 6.1d §2.5 gives the EDIFACT formats a single changeover instant
-/// and no overlap around it, so two profiles claiming the same day means one of
-/// their dates is wrong.
-///
-/// A six-month overlap is the signature of a Publikationsdatum written into
-/// `valid_from`, since the predecessor's `valid_until` comes from the regulatory
-/// calendar.
-///
-/// A **gap** is a warning, not an error: it means no profile was authored for
-/// that Formatversion, which is a coverage statement rather than a contradiction.
-fn check_validity_continuity(
-    profiles_dir: &Path,
-    errors: &mut Vec<String>,
-    warnings: &mut Vec<String>,
-) {
-    for msg_type_dir in read_subdirs(profiles_dir) {
-        let msg = msg_type_dir
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
-        if msg.eq_ignore_ascii_case("schemas") {
-            continue;
-        }
-        // Sparte tracks live in sibling directories distinguished by a `_suffix`
-        // (`fv20261001_gas`); they are independent chains.
-        let mut chains: BTreeMap<String, Vec<(String, String, Option<String>)>> = BTreeMap::new();
-        for release_dir in read_subdirs(&msg_type_dir) {
-            let folder = release_dir
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .to_string();
-            let Ok(raw) = std::fs::read_to_string(release_dir.join("mig.json")) else {
-                continue;
-            };
-            let Ok(mig) = serde_json::from_str::<serde_json::Value>(&raw) else {
-                continue;
-            };
-            let Some(from) = mig.get("valid_from").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            let until = mig
-                .get("valid_until")
-                .and_then(|v| v.as_str())
-                .map(ToOwned::to_owned);
-            let track = folder
-                .split_once('_')
-                .map_or_else(String::new, |(_, suffix)| suffix.to_owned());
-            chains
-                .entry(track)
-                .or_default()
-                .push((folder, from.to_owned(), until));
-        }
-        for (track, mut chain) in chains {
-            chain.sort_by(|a, b| a.1.cmp(&b.1));
-            let label = if track.is_empty() {
-                msg.clone()
-            } else {
-                format!("{msg} ({track})")
-            };
-            for pair in chain.windows(2) {
-                let (ref older, _, ref older_until) = pair[0];
-                let (ref newer, ref newer_from, _) = pair[1];
-                let Some(until) = older_until else {
-                    errors.push(format!(
-                        "{label}  {older} has no valid_until but {newer} starts on \
-                         {newer_from} — an open-ended profile cannot precede another"
-                    ));
-                    continue;
-                };
-                match until.as_str().cmp(newer_from.as_str()) {
-                    std::cmp::Ordering::Less => {
-                        if !is_day_before(until, newer_from) {
-                            warnings.push(format!(
-                                "{label}  gap between {older} (valid_until {until}) and \
-                                 {newer} (valid_from {newer_from}) — no profile covers \
-                                 that Formatversion"
-                            ));
-                        }
-                    }
-                    _ => errors.push(format!(
-                        "{label}  {older} is valid until {until} but {newer} already \
-                         starts on {newer_from} — the windows overlap. `valid_from` is \
-                         the Anwendungszeitpunkt, six months after the Publikationsdatum \
-                         (Allgemeine Festlegungen 6.1d §2.5)."
-                    )),
-                }
-            }
-        }
-    }
-}
-
-/// Whether `until` is the calendar day immediately before `from` (ISO dates).
-fn is_day_before(until: &str, from: &str) -> bool {
-    let parse = |s: &str| -> Option<time::Date> {
-        let mut it = s.split('-');
-        let y: i32 = it.next()?.parse().ok()?;
-        let m: u8 = it.next()?.parse().ok()?;
-        let d: u8 = it.next()?.parse().ok()?;
-        time::Date::from_calendar_date(y, time::Month::try_from(m).ok()?, d).ok()
-    };
-    match (parse(until), parse(from)) {
-        (Some(u), Some(f)) => u.next_day() == Some(f),
-        _ => false,
-    }
-}
-
-// ── PID continuity across releases ────────────────────────────────────────────
-
-/// PIDs that BDEW genuinely retired, keyed by `(message_type, track, pid)`.
-///
-/// A retired PID keeps its rule table in the release that still carries it and
-/// loses it in the successor.  Each entry records the AHB version that dropped
-/// it, verified against the published document: the retired PID survives only as
-/// a cross-reference in the Bedingungen appendix, with no rule table of its own.
+/// Prüfidentifikatoren BDEW retired: (message type, track suffix, PID, why).
+/// A PID that vanishes between two releases and is not listed here is an
+/// import regression.
 const RETIRED_PIDS: &[(&str, &str, u32, &str)] = &[
     (
         "ORDERS",
@@ -537,1000 +43,350 @@ const RETIRED_PIDS: &[(&str, &str, u32, &str)] = &[
         "retired in ORDERS AHB 1.1b (01.04.2026) — Anforderung der bilanzierten Menge",
     ),
     (
-        "UTILMD",
-        "_gas",
-        44170,
-        "retired in UTILMD AHB G1.2 (01.10.2026) — Ablehnung Verpflichtungsanfrage",
+        "IFTSTA",
+        "",
+        21015,
+        "withdrawn by IFTSTA AHB 2.1 Änd-ID 27061 (01.10.2026)",
+    ),
+    (
+        "IFTSTA",
+        "",
+        21024,
+        "withdrawn by IFTSTA AHB 2.1 (01.10.2026) — Messstellenumbau, Änderungshistorie",
+    ),
+    (
+        "IFTSTA",
+        "",
+        21026,
+        "withdrawn by IFTSTA AHB 2.1 (01.10.2026) — Messstellenumbau, Änderungshistorie",
+    ),
+    (
+        "ORDRSP",
+        "",
+        19115,
+        "withdrawn by ORDRSP AHB 1.1b (01.10.2026) — Ablehnung Anforderung bilanzierte Menge",
     ),
 ];
 
-/// PIDs missing from a release **despite still being published** in the
-/// corresponding AHB — i.e. import regressions, not retirements.
-///
-/// These are reported as loud warnings rather than hard errors so the gap stays
-/// visible on every CI run without blocking unrelated work.  Each needs a
-/// re-import from the BDEW AHB XML (`cargo xtask import-xml-ahb`) to clear.
-///
-/// Until then AHB validation for these PIDs is **vacuous**: `ahb_rule_pack`
-/// returns a warning-only `unknown-pid` pack for an unknown PID — `is_valid()`
-/// stays `true` — so inbound messages carrying them
-/// pass the AHB layer unchecked (the MIG layer still applies).
-const KNOWN_IMPORT_GAPS: &[(&str, &str, u32, &str)] = &[
-    // Empty: ORDERS 17008/17116/17117 were recovered from ORDERS AHB 1.1b by the
-    // PDF table parser (`cargo xtask extract-pdf`) in 2026-08. Add an entry here
-    // only for a PID that is still published but missing from a profile, and
-    // clear it as soon as the profile is re-imported.
-];
-
-/// One release of a track: `(fv date digits, folder name, declared PIDs)`.
-type ReleasePids = (String, String, BTreeSet<u32>);
-
-/// Split an `fv<YYYYMMDD>[_<track>]` folder name into its date and track parts.
-///
-/// `fv20261001_gas` → `("20261001", "_gas")`; `fv20261001` → `("20261001", "")`.
-fn split_release_track(folder: &str) -> Option<(&str, &str)> {
-    let after_fv = folder.strip_prefix("fv")?;
-    let digits = after_fv.get(..8)?;
-    if !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    Some((digits, &after_fv[8..]))
+#[derive(Deserialize)]
+struct Sources {
+    profiles: BTreeMap<String, Source>,
 }
 
-/// Verify that no PID silently disappears between consecutive releases of a track.
-///
-/// A PID present in release N but absent from release N+1 means messages carrying
-/// it validate against an empty AHB rule pack from N+1's `valid_from` onward.
-/// That is almost always an import regression — the BDEW XML importer emits one
-/// `<AWF>` per PID, but a PID that shares an AHB rule table with siblings can be
-/// dropped when only the table's first column is captured.
-///
-/// Genuine retirements belong in [`RETIRED_PIDS`]; acknowledged regressions
-/// awaiting re-import belong in [`KNOWN_IMPORT_GAPS`].
-fn check_pid_continuity(profiles_dir: &Path, errors: &mut Vec<String>, warnings: &mut Vec<String>) {
-    // (message_type, track) → sorted [(date, folder, pids)]
-    let mut tracks: BTreeMap<(String, String), Vec<ReleasePids>> = BTreeMap::new();
+#[derive(Deserialize)]
+struct Source {
+    release: String,
+    #[serde(default)]
+    track: Option<String>,
+    valid_from: String,
+    #[serde(default)]
+    valid_until: Option<String>,
+    ahb_version: String,
+    mig: String,
+    ahb: String,
+}
 
-    for msg_type_dir in read_subdirs(profiles_dir) {
-        let msg_type = msg_type_dir
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_uppercase();
-        if msg_type == "SCHEMAS" {
+#[derive(Deserialize)]
+struct Mig {
+    schema_version: u32,
+    message_type: String,
+    release: String,
+    #[serde(default)]
+    track: Option<String>,
+    valid_from: String,
+    #[serde(default)]
+    valid_until: Option<String>,
+    ahb_version: String,
+    source: FileSource,
+    structure: Vec<serde_json::Value>,
+    #[serde(default)]
+    envelope: Vec<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct Ahb {
+    schema_version: u32,
+    message_type: String,
+    release: String,
+    ahb_version: String,
+    source: FileSource,
+    anwendungsfaelle: Vec<Anwendungsfall>,
+}
+
+#[derive(Deserialize)]
+struct FileSource {
+    file: String,
+    #[serde(default)]
+    sha256: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Anwendungsfall {
+    #[serde(default)]
+    pid: Option<u32>,
+    name: String,
+    rows: Vec<Row>,
+}
+
+#[derive(Deserialize)]
+struct Row {
+    #[serde(default)]
+    nr: Option<String>,
+    #[serde(default)]
+    before: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Manifest {
+    files: BTreeMap<String, ManifestEntry>,
+}
+
+#[derive(Deserialize)]
+struct ManifestEntry {
+    #[serde(default)]
+    sha256: Option<String>,
+}
+
+/// Every segment `Nr` in a MIG structure.
+fn nrs(nodes: &[serde_json::Value], out: &mut BTreeSet<String>) {
+    for n in nodes {
+        if let Some(nr) = n.get("nr").and_then(|v| v.as_str()) {
+            out.insert(nr.to_owned());
+        }
+        if let Some(children) = n.get("children").and_then(|v| v.as_array()) {
+            nrs(children, out);
+        }
+    }
+}
+
+/// One profile's window and Prüfidentifikatoren: (dir, valid_from, valid_until, pids).
+type Span = (String, time::Date, Option<time::Date>, BTreeSet<u32>);
+
+fn load<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
+    let raw = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    serde_json::from_str(&raw).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn date(s: &str) -> Option<time::Date> {
+    let f = time::macros::format_description!("[year]-[month]-[day]");
+    time::Date::parse(s, &f).ok()
+}
+
+pub fn run(workspace_root: &str) -> bool {
+    let root = Path::new(workspace_root);
+    let profiles = root.join(PROFILES_DIR);
+    let mut errors: Vec<String> = Vec::new();
+
+    let sources: Sources = match load(&profiles.join("sources.json")) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return false;
+        }
+    };
+    let manifest: BTreeMap<String, ManifestEntry> = load::<Manifest>(&root.join(MIRROR_MANIFEST))
+        .map(|m| m.files)
+        .unwrap_or_default();
+
+    // Directories ↔ sources.json.
+    let mut dirs: BTreeSet<String> = BTreeSet::new();
+    for ty in std::fs::read_dir(&profiles).into_iter().flatten().flatten() {
+        if !ty.path().is_dir() {
             continue;
         }
-
-        for release_dir in read_subdirs(&msg_type_dir) {
-            let folder = release_dir
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .to_string();
-            let Some((date, track)) = split_release_track(&folder) else {
-                continue;
-            };
-
-            // Archived profiles are intentionally retired and may have gaps.
-            if let Ok(mig) = load_json::<MigProfile>(&release_dir.join("mig.json"))
-                && mig.archived
-            {
-                continue;
-            }
-
-            let Ok(ahb) = load_json::<AhbProfile>(&release_dir.join("ahb.json")) else {
-                continue;
-            };
-            let pids: BTreeSet<u32> = ahb.pruefidentifikatoren.iter().map(|p| p.code).collect();
-
-            tracks
-                .entry((msg_type.clone(), track.to_string()))
-                .or_default()
-                .push((date.to_string(), folder, pids));
-        }
-    }
-
-    for ((msg_type, track), mut releases) in tracks {
-        releases.sort_by(|a, b| a.0.cmp(&b.0));
-
-        for pair in releases.windows(2) {
-            let (_, prev_folder, prev_pids) = &pair[0];
-            let (_, curr_folder, curr_pids) = &pair[1];
-
-            for pid in prev_pids.difference(curr_pids) {
-                let matches =
-                    |t: &&(&str, &str, u32, &str)| t.0 == msg_type && t.1 == track && t.2 == *pid;
-
-                if let Some(entry) = RETIRED_PIDS.iter().find(matches) {
-                    let _ = entry; // documented retirement — expected, nothing to report
-                } else if let Some(entry) = KNOWN_IMPORT_GAPS.iter().find(matches) {
-                    warnings.push(format!(
-                        "{}/{curr_folder}  PID {pid} lost vs {prev_folder} — {} \
-                         (acknowledged import gap: AHB validation is vacuous for this PID; \
-                         re-import via `cargo xtask import-xml-ahb` to clear)",
-                        msg_type.to_lowercase(),
-                        entry.3,
-                    ));
-                } else {
-                    errors.push(format!(
-                        "{}/{curr_folder}  PID {pid} present in {prev_folder} but missing here — \
-                         AHB validation would be vacuous for it. If BDEW retired the PID, add it to \
-                         RETIRED_PIDS in xtask/src/validate_profiles.rs with the AHB version that \
-                         dropped it; otherwise re-import the profile.",
-                        msg_type.to_lowercase(),
-                    ));
-                }
+        for fv in std::fs::read_dir(ty.path()).into_iter().flatten().flatten() {
+            if fv.path().join("mig.json").is_file() || fv.path().join("ahb.json").is_file() {
+                dirs.insert(format!(
+                    "{}/{}",
+                    ty.file_name().to_string_lossy(),
+                    fv.file_name().to_string_lossy()
+                ));
             }
         }
     }
-}
-
-/// Convert an `fv<YYYYMMDD>[_<suffix>]` directory name to an ISO 8601 date string.
-///
-/// Returns `Some("YYYY-MM-DD")` for well-formed FV-date directories, `None` otherwise.
-fn parse_fv_date_str(folder_name: &str) -> Option<String> {
-    let after_fv = folder_name.strip_prefix("fv")?;
-    let digits = after_fv.get(..8)?;
-    if !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let rest = &after_fv[8..];
-    if !rest.is_empty() && !rest.starts_with('_') {
-        return None;
-    }
-    let year = &digits[0..4];
-    let month = &digits[4..6];
-    let day = &digits[6..8];
-    let mo: u8 = month.parse().ok()?;
-    let d: u8 = day.parse().ok()?;
-    if mo == 0 || mo > 12 || d == 0 || d > 31 {
-        return None;
-    }
-    Some(format!("{year}-{month}-{day}"))
-}
-
-// ── Per-profile checks ────────────────────────────────────────────────────────
-
-/// Check a single profile directory.
-///
-/// Returns `Some((wire_code, supersedes_directory))` when `mig.json` parsed
-/// successfully:
-/// - `wire_code` is the `release` JSON field (the BDEW wire association code).
-/// - `supersedes_directory` is `Some(name)` when this is a correction profile that
-///   intentionally carries the same wire code as the directory it supersedes.
-///
-/// Returns `None` when the profile is too broken to extract wire identity.
-fn check_profile(
-    _msg_type_dir: &Path,
-    release_dir: &Path,
-    expected_type: &str,
-    expected_release: &str,
-    schemas: Option<&Schemas>,
-    // Mirrored BDEW documents, file name → catalogue title. Empty when the
-    // mirror has no manifest yet, which turns the citation check off rather
-    // than failing every profile.
-    mirrored: &std::collections::BTreeMap<String, String>,
-    errors: &mut Vec<String>,
-    warnings: &mut Vec<String>,
-) -> Option<(String, Option<String>)> {
-    let mig_path = release_dir.join("mig.json");
-    let ahb_path = release_dir.join("ahb.json");
-    let codelists_path = release_dir.join("codelists.json");
-    let rel_prefix = format!("{}/{}", expected_type.to_lowercase(), expected_release);
-
-    // 1. Presence check
-    if !mig_path.exists() {
-        errors.push(format!("{rel_prefix}  missing mig.json"));
-    }
-    if !ahb_path.exists() {
-        errors.push(format!("{rel_prefix}  missing ahb.json"));
-    }
-    if !codelists_path.exists() {
-        errors.push(format!("{rel_prefix}  missing codelists.json"));
-    }
-    if !mig_path.exists() || !ahb_path.exists() || !codelists_path.exists() {
-        return None; // Can't do further checks without all files
-    }
-
-    // 2. JSON Schema validation — runs before Rust deserialization so structural
-    //    constraints (pattern, enum, required, additionalProperties) are enforced.
-    //    This catches malformed release codes, missing required fields, and version
-    //    mismatches that serde would silently accept.
-    if let Some(schemas) = schemas {
-        validate_json_file(
-            &mig_path,
-            &schemas.mig,
-            rel_prefix.as_str(),
-            "mig.json",
-            errors,
-        );
-        validate_json_file(
-            &ahb_path,
-            &schemas.ahb,
-            rel_prefix.as_str(),
-            "ahb.json",
-            errors,
-        );
-        validate_json_file(
-            &codelists_path,
-            &schemas.codelists,
-            rel_prefix.as_str(),
-            "codelists.json",
-            errors,
-        );
-    }
-
-    // 3. Parse JSON into typed structs for deeper cross-file consistency checks.
-    let mig = match load_json::<MigProfile>(&mig_path) {
-        Ok(v) => v,
-        Err(e) => {
-            errors.push(format!("{rel_prefix}/mig.json  JSON parse error: {e}"));
-            return None;
+    for dir in &dirs {
+        if !sources.profiles.contains_key(dir) {
+            errors.push(format!("{dir}: profile directory is not in sources.json"));
         }
-    };
-    let ahb = match load_json::<AhbProfile>(&ahb_path) {
-        Ok(v) => v,
-        Err(e) => {
-            errors.push(format!("{rel_prefix}/ahb.json  JSON parse error: {e}"));
-            return None;
+    }
+
+    // (message type, track) → [(dir, from, until, pids)]
+    let mut chains: BTreeMap<(String, String), Vec<Span>> = BTreeMap::new();
+
+    for (dir, src) in &sources.profiles {
+        let (ty, fv) = match dir.split_once('/') {
+            Some(p) => p,
+            None => {
+                errors.push(format!("{dir}: profile directory must be <type>/<fv>"));
+                continue;
+            }
+        };
+        let message_type = ty.to_ascii_uppercase();
+        let mig: Mig = match load(&profiles.join(dir).join("mig.json")) {
+            Ok(m) => m,
+            Err(e) => {
+                errors.push(format!("{dir}: {e}"));
+                continue;
+            }
+        };
+        let ahb: Ahb = match load(&profiles.join(dir).join("ahb.json")) {
+            Ok(a) => a,
+            Err(e) => {
+                errors.push(format!("{dir}: {e}"));
+                continue;
+            }
+        };
+        let mut e = |msg: String| errors.push(format!("{dir}: {msg}"));
+        if mig.schema_version != 2 || ahb.schema_version != 2 {
+            e("schema_version must be 2".into());
         }
-    };
-    let codelists = match load_json::<CodelistsData>(&codelists_path) {
-        Ok(v) => v,
-        Err(e) => {
-            errors.push(format!(
-                "{rel_prefix}/codelists.json  JSON parse error: {e}"
+        if mig.message_type != message_type || ahb.message_type != message_type {
+            e(format!(
+                "message_type {:?}/{:?} does not match the directory",
+                mig.message_type, ahb.message_type
             ));
-            return None;
         }
-    };
-
-    // The MIG release and the AHB revision must each name a document in
-    // `regulatories/bdew-mako/`. They are independent version lines — APERAK
-    // MIG 2.1i goes with AHB 1.0, MSCONS MIG 2.4c with AHB 3.1g — so citing the
-    // MIG release as `ahb_revision` names a document that does not exist, and
-    // sends the next reviewer to the wrong text.
-    let sparte = if rel_prefix.ends_with("_gas") {
-        Some("Gas")
-    } else if mig.message_type.eq_ignore_ascii_case("UTILMD") {
-        Some("Strom")
-    } else {
-        None
-    };
-    let cites = |kind: &str, version: &str| -> bool {
-        let want = sparte.map_or_else(
-            || format!("{} {kind} {version}", mig.message_type),
-            |sp| format!("{} {kind} {sp} {version}", mig.message_type),
-        );
-        mirrored.values().any(|title| title.trim() == want)
-    };
-    let today = {
-        let now = mako_fristen::heute();
-        format!(
-            "{:04}-{:02}-{:02}",
-            now.year(),
-            u8::from(now.month()),
-            now.day()
-        )
-    };
-    if !mirrored.is_empty() {
-        for (kind, version) in [
-            ("MIG", mig.release.clone()),
-            ("AHB", mig.ahb_revision.clone().unwrap_or_default()),
+        if mig.release != src.release || ahb.release != src.release {
+            e(format!(
+                "release {:?}/{:?} does not match sources.json {:?}",
+                mig.release, ahb.release, src.release
+            ));
+        }
+        if mig.track != src.track {
+            e(format!(
+                "track {:?} does not match sources.json {:?}",
+                mig.track, src.track
+            ));
+        }
+        if mig.valid_from != src.valid_from || mig.valid_until != src.valid_until {
+            e("valid_from/valid_until do not match sources.json".into());
+        }
+        if mig.ahb_version != src.ahb_version || ahb.ahb_version != src.ahb_version {
+            e(format!(
+                "ahb_version {:?}/{:?} does not match sources.json {:?}",
+                mig.ahb_version, ahb.ahb_version, src.ahb_version
+            ));
+        }
+        if mig.source.file != src.mig || ahb.source.file != src.ahb {
+            e("source.file does not name the sources.json document".into());
+        }
+        let expected_fv = format!("fv{}", src.valid_from.replace('-', ""));
+        if !fv.starts_with(&expected_fv) {
+            e(format!(
+                "directory {fv:?} does not start with {expected_fv:?} (valid_from {})",
+                src.valid_from
+            ));
+        }
+        for (what, file, sha) in [
+            ("mig", &src.mig, &mig.source.sha256),
+            ("ahb", &src.ahb, &ahb.source.sha256),
         ] {
-            if version.is_empty() || cites(kind, &version) {
-                continue;
-            }
-            let msg = format!(
-                "{rel_prefix}/mig.json  cites {kind} {version}, which is not in \
-                 regulatories/bdew-mako. The MIG and AHB version lines are \
-                 independent — check the {kind} document, not the other one. \
-                 `cargo xtask sync-regulatories --download` fetches what is missing."
-            );
-            // A Formatversion that has passed legitimately cites a document
-            // BDEW no longer publishes — the catalogue drops superseded
-            // versions. Only a profile still in force must have its source.
-            let superseded = mig
-                .valid_until
-                .as_deref()
-                .is_some_and(|until| until < today.as_str());
-            if superseded || mig.archived {
-                warnings.push(msg);
-            } else {
-                errors.push(msg);
-            }
-        }
-    }
-
-    // A profile carrying `DTM` must say which DE 2379 format codes each of its
-    // qualifiers admits. Nothing else constrains the format — DE 2379 has no
-    // `codelists.json` table — so without `dtm_formats` a `DTM+137:20260701:102`
-    // validates clean, a shape no EDI@Energy MIG defines.
-    //
-    // CONTRL is the one exception: a service-message envelope with no `DTM`.
-    let carries_dtm = mig.segments.iter().any(|seg| seg.tag == "DTM")
-        || mig
-            .segment_groups
-            .iter()
-            .any(|g| g.segments.iter().any(|seg| seg.tag == "DTM"));
-    if carries_dtm && mig.dtm_formats.is_empty() {
-        errors.push(format!(
-            "{rel_prefix}/mig.json  carries DTM but declares no `dtm_formats` — \
-             DE 2379 would be unvalidated. Read the qualifier/format pairs off \
-             the MIG segment-layout tables (each DTM block fixes DE 2005 and \
-             DE 2379 together, with extra formats on continuation rows)."
-        ));
-    }
-
-    // 3. Field consistency: release field must be consistent across all three files.
-    // For FV-date directories (`fv<YYYYMMDD>`), the folder name encodes the valid_from
-    // date while the JSON `release` field holds the wire assoc_code (e.g. "2.4c").
-    // In that case we skip the folder-name vs release check but still require all
-    // three JSON files to agree on the release value.
-    let is_fv_dir = expected_release.starts_with("fv");
-
-    // F-013: For FV2026-10-01 and later profiles, require human review provenance.
-    // Profiles promoted from an auto-generated draft without review risk incorrect
-    // segment-group validation against the AHB. We require `reviewed_by` in
-    // ahb.json for all `fv2026*` (and later) profiles.
-    //
-    // FV2025 profiles are grandfathered. FV2026+ must have been reviewed.
-    if is_fv_dir {
-        let after_2025 = expected_release
-            .trim_start_matches("fv")
-            .split('_')
-            .next()
-            .and_then(|s| s.parse::<u32>().ok())
-            .map(|v| v > 20_260_101) // any date after 2026-01-01
-            .unwrap_or(false);
-        if after_2025 && ahb.reviewed_by.is_none() {
-            warnings.push(format!(
-                "{rel_prefix}/ahb.json  missing `reviewed_by` field — \
-                 FV2026+ profiles must be reviewed before production use. \
-                 Add {{\"reviewed_by\": \"<reviewer>\", \"reviewed_at\": \"<ISO-date>\"}} \
-                 to confirm a human validated this profile against the BDEW AHB PDF \
-                 (note: the AHB and MIG carry independent version numbers — check the \
-                 AHB document, not the MIG revision cited in `release`)."
-            ));
-        }
-    }
-
-    if !is_fv_dir {
-        if mig.release != expected_release {
-            errors.push(format!(
-                "{rel_prefix}/mig.json  `release` field {:?} does not match directory {:?}",
-                mig.release, expected_release
-            ));
-        }
-        if ahb.release != expected_release {
-            errors.push(format!(
-                "{rel_prefix}/ahb.json  `release` field {:?} does not match directory {:?}",
-                ahb.release, expected_release
-            ));
-        }
-        if codelists.release != expected_release {
-            errors.push(format!(
-                "{rel_prefix}/codelists.json  `release` field {:?} does not match directory {:?}",
-                codelists.release, expected_release
-            ));
-        }
-    }
-    // All three files must agree on the release value regardless of directory naming.
-    if mig.release != ahb.release {
-        errors.push(format!(
-            "{rel_prefix}  mig.json release {:?} does not match ahb.json release {:?}",
-            mig.release, ahb.release
-        ));
-    }
-    if mig.release != codelists.release {
-        errors.push(format!(
-            "{rel_prefix}  mig.json release {:?} does not match codelists.json release {:?}",
-            mig.release, codelists.release
-        ));
-    }
-
-    // 4. Field consistency: message_type matches directory (case-insensitive)
-    if mig.message_type.to_uppercase() != expected_type {
-        errors.push(format!(
-            "{rel_prefix}/mig.json  `message_type` field {:?} does not match directory {:?}",
-            mig.message_type, expected_type
-        ));
-    }
-    if ahb.message_type.to_uppercase() != expected_type {
-        errors.push(format!(
-            "{rel_prefix}/ahb.json  `message_type` field {:?} does not match directory {:?}",
-            ahb.message_type, expected_type
-        ));
-    }
-
-    // 4b.  valid_from field must be present and consistent with the directory name.
-    if is_fv_dir {
-        let expected_date = parse_fv_date_str(expected_release);
-        match &mig.valid_from {
-            None => errors.push(format!(
-                "{rel_prefix}/mig.json  `valid_from` field is missing — add \
-                 e.g. {:?} to match the directory name",
-                expected_date.as_deref().unwrap_or("YYYY-MM-DD"),
-            )),
-            Some(vf) if expected_date.as_deref() != Some(vf.as_str()) => errors.push(format!(
-                "{rel_prefix}/mig.json  `valid_from` {:?} does not match the \
-                 date implied by directory {:?} (expected {:?})",
-                vf,
-                expected_release,
-                expected_date.as_deref().unwrap_or("?"),
-            )),
-            _ => {}
-        }
-    }
-
-    // 5. Audit trail: ahb_revision and source_document must be set.
-    if mig.ahb_revision.as_deref().unwrap_or("").trim().is_empty() {
-        warnings.push(format!(
-            "{rel_prefix}/mig.json  `ahb_revision` is missing — add BDEW AHB revision letter for audit traceability"
-        ));
-    }
-    if mig
-        .source_document
-        .as_deref()
-        .unwrap_or("")
-        .trim()
-        .is_empty()
-    {
-        warnings.push(format!(
-            "{rel_prefix}/mig.json  `source_document` is missing — add BDEW document title (e.g. \"MSCONS AHB 2.4c, Stand 01.10.2025\")"
-        ));
-    }
-
-    // 6. Build known segment tag set from MIG + segment element-count map
-    let mig_tags: BTreeSet<&str> = collect_all_tags(&mig);
-    // Map from tag → element count for the first definition in MIG.
-    let mig_element_counts: BTreeMap<&str, usize> = collect_segment_element_counts(&mig);
-
-    // 7. Build known code-list keys
-    let codelist_keys: BTreeSet<&str> = codelists
-        .lists
-        .keys()
-        .map(std::string::String::as_str)
-        .collect();
-
-    // A profile whose validity has lapsed is frozen: it is kept so messages from
-    // its window still resolve, and BDEW no longer publishes the MIG its code
-    // list would have to be corrected against. Reporting code-list gaps there is
-    // noise that buries the ones still worth fixing.
-    let still_in_force = mig
-        .valid_until
-        .as_deref()
-        .and_then(|d| {
-            time::Date::parse(d, &time::format_description::well_known::Iso8601::DATE).ok()
-        })
-        .is_none_or(|until| until >= mako_fristen::heute());
-
-    // 7. MIG qualifier_restrictions: all referenced DE IDs should be in codelists
-    check_mig_qualifiers(&mig, &codelist_keys, &rel_prefix, warnings);
-
-    // 8. AHB checks
-    for pid in &ahb.pruefidentifikatoren {
-        // PID range check
-        if pid.code < 10000 || pid.code > 99999 {
-            errors.push(format!(
-                "{rel_prefix}/ahb.json  PID {}: code must be in range 10000–99999",
-                pid.code
-            ));
-        }
-
-        // Zero-rule guard: a PID with no segment_rules AND no
-        // group_rules is a silent validation hole — every inbound message passes
-        // AHB validation vacuously.  Profiles that intentionally have no PIDs set
-        // `pid_exempt = true` on their MIG; individual PIDs cannot opt out.
-        if pid.segment_rules.is_empty() && pid.group_rules.is_empty() {
-            errors.push(format!(
-                "{rel_prefix}/ahb.json  PID {}: has zero segment_rules and zero \
-                 group_rules — messages will pass AHB validation vacuously. \
-                 Import the rules from the official BDEW AHB or mark the profile \
-                 `pid_exempt = true` if PIDs are intentionally absent.",
-                pid.code
-            ));
-        }
-
-        for rule in &pid.segment_rules {
-            // Segment tag cross-reference
-            if !mig_tags.contains(&*rule.tag) {
-                warnings.push(format!(
-                    "{rel_prefix}/ahb.json  PID {}: segment {:?} not defined in mig.json",
-                    pid.code, rule.tag
+            if let (Some(entry), Some(sha)) = (manifest.get(file), sha)
+                && entry.sha256.as_deref().is_some_and(|m| m != sha)
+            {
+                e(format!(
+                    "{what}.json was imported from a different {file} than the mirror holds (sha256 differs)"
                 ));
             }
+        }
 
-            // Requirement value check — M/C/N/O/S/X are valid
-            if !matches!(rule.requirement.as_str(), "M" | "C" | "N" | "O" | "S" | "X") {
-                errors.push(format!(
-                    "{rel_prefix}/ahb.json  PID {}: segment {:?} has invalid requirement {:?} (expected M/C/N/O/S/X)",
-                    pid.code, rule.tag, rule.requirement
-                ));
-            }
-
-            // qualifier_restrictions: DE IDs in codelists, and the values too.
-            //
-            // Checking only the key lets a rule demand a value the same profile's
-            // code list rejects, which no message can satisfy: the AHB layer
-            // insists on it and the code-list layer refuses it.
-            for (de_id, values) in &rule.qualifier_restrictions {
-                if !still_in_force {
-                    continue;
-                }
-                let Some(known) = codelists.lists.get(de_id.as_str()) else {
-                    warnings.push(format!(
-                        "{rel_prefix}/ahb.json  PID {}: segment {:?} qualifier_restriction DE {:?} not in codelists.json",
-                        pid.code, rule.tag, de_id
-                    ));
-                    continue;
-                };
-                report_unknown_codes(
-                    values,
-                    known,
-                    &format!(
-                        "{rel_prefix}/ahb.json  PID {}: segment {:?} qualifier_restriction DE {de_id}",
-                        pid.code, rule.tag
-                    ),
-                    warnings,
-                );
-            }
-            for (de_id, values) in &rule.required_qualifiers {
-                if !still_in_force {
-                    continue;
-                }
-                if let Some(known) = codelists.lists.get(de_id.as_str()) {
-                    report_unknown_codes(
-                        values,
-                        known,
-                        &format!(
-                            "{rel_prefix}/ahb.json  PID {}: segment {:?} required_qualifiers DE {de_id}",
-                            pid.code, rule.tag
-                        ),
-                        warnings,
-                    );
-                }
-            }
-
-            //  conditional rule when_tag and secondary_tag cross-check.
-            // Both must refer to segments defined in mig.json.
-            for (ci, cond) in rule.conditional_rules.iter().enumerate() {
-                if !mig_tags.contains(cond.when_tag.as_str()) {
-                    warnings.push(format!(
-                        "{rel_prefix}/ahb.json  PID {}: segment {:?} conditional_rule[{ci}] \
-                         when_tag {:?} is not defined in mig.json",
-                        pid.code, rule.tag, cond.when_tag
+        // PIDs and rows.
+        let mut all_nrs = BTreeSet::new();
+        nrs(&mig.structure, &mut all_nrs);
+        let unh = all_nrs.iter().next().cloned().unwrap_or_default();
+        // The AHB tables list the interchange envelope too.
+        nrs(&mig.envelope, &mut all_nrs);
+        let mut pids: BTreeSet<u32> = BTreeSet::new();
+        for af in &ahb.anwendungsfaelle {
+            if let Some(pid) = af.pid {
+                if !(10_000..=99_999).contains(&pid) {
+                    e(format!(
+                        "Anwendungsfall {:?}: Prüfidentifikator {pid} is not five digits",
+                        af.name
                     ));
                 }
-                if let Some(ref st) = cond.secondary_tag
-                    && !mig_tags.contains(st.as_str())
-                {
-                    warnings.push(format!(
-                        "{rel_prefix}/ahb.json  PID {}: segment {:?} conditional_rule[{ci}] \
-                             secondary_tag {:?} is not defined in mig.json",
-                        pid.code, rule.tag, st
-                    ));
+                if !pids.insert(pid) {
+                    e(format!("Prüfidentifikator {pid} appears twice"));
                 }
-                // Operator semantic constraints: X/U/O operators require secondary_tag.
-                // K operator requires at least two tags total (when_tag + secondary_tag or additional_tags).
-                if let Some(ref op) = cond.operator {
-                    if matches!(op.as_str(), "X" | "U" | "O") && cond.secondary_tag.is_none() {
-                        warnings.push(format!(
-                            "{rel_prefix}/ahb.json  PID {}: segment {:?} conditional_rule[{ci}] \
-                             operator {:?} requires secondary_tag to be set",
-                            pid.code, rule.tag, op
+            }
+            let mut has_unh = false;
+            for row in &af.rows {
+                if let Some(nr) = row.nr.as_deref().or(row.before.as_deref()) {
+                    if !all_nrs.contains(nr) {
+                        e(format!(
+                            "Anwendungsfall {:?}: row Nr {nr} is not in the MIG structure",
+                            af.name
                         ));
                     }
-                    if op == "K" {
-                        let total_tags =
-                            1 + cond.secondary_tag.is_some() as usize + cond.additional_tags.len();
-                        if total_tags < 2 {
-                            warnings.push(format!(
-                                "{rel_prefix}/ahb.json  PID {}: segment {:?} conditional_rule[{ci}] \
-                                 operator K requires at least 2 tags (when_tag + secondary_tag or additional_tags)",
-                                pid.code, rule.tag
-                            ));
-                        }
-                        // Validate additional_tags exist in mig.json
-                        for at in &cond.additional_tags {
-                            if !mig_tags.contains(at.as_str()) {
-                                warnings.push(format!(
-                                    "{rel_prefix}/ahb.json  PID {}: segment {:?} conditional_rule[{ci}] \
-                                     K additional_tag {:?} is not defined in mig.json",
-                                    pid.code, rule.tag, at
-                                ));
-                            }
-                        }
+                    if nr == unh {
+                        has_unh = true;
                     }
                 }
             }
+            if !has_unh {
+                e(format!("Anwendungsfall {:?} lists no UNH row", af.name));
+            }
+        }
+        let Some(from) = date(&src.valid_from) else {
+            e(format!("valid_from {:?} is not a date", src.valid_from));
+            continue;
+        };
+        let until = src.valid_until.as_deref().and_then(date);
+        if src.valid_until.is_some() && until.is_none() {
+            e(format!("valid_until {:?} is not a date", src.valid_until));
+        }
+        chains
+            .entry((message_type.clone(), src.track.clone().unwrap_or_default()))
+            .or_default()
+            .push((dir.clone(), from, until, pids));
+    }
 
-            //  element_index cross-check — warn when index exceeds segment's element count.
-            if let Some(&elem_count) = mig_element_counts.get(&*rule.tag) {
-                for fr in &rule.field_rules {
-                    if fr.element_index >= elem_count {
+    // Continuity per chain.
+    for ((ty, track), chain) in &mut chains {
+        chain.sort_by_key(|(_, from, _, _)| *from);
+        let suffix = if track.is_empty() { "" } else { "_gas" };
+        for pair in chain.windows(2) {
+            let (a, b) = (&pair[0], &pair[1]);
+            match a.2 {
+                None => errors.push(format!("{}: is open-ended but {} follows it", a.0, b.0)),
+                Some(until) => {
+                    if until.next_day() != Some(b.1) {
                         errors.push(format!(
-                            "{rel_prefix}/ahb.json  PID {}: segment {:?} field_rule for DE {:?} has element_index {} but segment only has {} element(s)",
-                            pid.code, rule.tag, fr.element, fr.element_index, elem_count
+                            "{}: ends {} but {} starts {}",
+                            a.0, until, b.0, b.1
                         ));
                     }
                 }
             }
-        }
-    }
-
-    // valid_until >= valid_from (if valid_until is set and we can infer valid_from)
-    // For `fv<YYYYMMDD>` directories, parse the valid_from date from the folder name.
-    // Dates compared lexicographically as ISO-8601 strings (YYYY-MM-DD format).
-    if let Some(valid_until) = &mig.valid_until
-        && let Some(valid_from_str) = parse_fv_date(expected_release)
-        && valid_until.as_str() < valid_from_str.as_str()
-    {
-        errors.push(format!(
-                "{rel_prefix}/mig.json  valid_until {valid_until:?} is before inferred valid_from {valid_from_str:?}"
-            ));
-    }
-
-    //  Warn when a non-archived profile has no valid_until and has been open-ended
-    // for more than 14 months (> the maximum BDEW annual update cycle).  This surfaces
-    // profiles where a successor should have been authored but wasn't.
-    if !mig.archived
-        && mig.valid_until.is_none()
-        && let Some(valid_from_str) = parse_fv_date(expected_release)
-    {
-        // Compute age in months by comparing YYYY-MM prefixes (lexicographic is safe for ISO-8601).
-        // "2024-10" + 14 months = "2026-00" — use integer arithmetic instead.
-        if let (Ok(year), Ok(month)) = (
-            valid_from_str[..4].parse::<u32>(),
-            valid_from_str[5..7].parse::<u32>(),
-        ) {
-            let expire_year = year + (month + 13) / 12;
-            let expire_month = (month + 13) % 12 + 1; // 14 months after valid_from
-            let cutoff = format!("{expire_year:04}-{expire_month:02}");
-            // Use today's date (YYYY-MM) to determine if this profile is stale.
-            // Parse today's date from RFC3339 timestamp to avoid adding the `time` crate.
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            // Approximate: seconds since epoch → YYYY-MM (good enough for 14-month check).
-            // 1970-01-01 + n_days → year/month via div/mod. Use simple epoch arithmetic.
-            let days = now / 86400;
-            // Gregorian calendar epoch arithmetic (Zeller-style, no leap-second issues for months).
-            let (today_year, today_month) = days_to_year_month(days);
-            let today_ym = format!("{today_year:04}-{today_month:02}");
-            if today_ym >= cutoff {
-                warnings.push(format!(
-                    "{rel_prefix}/mig.json  no `valid_until` set — profile has been open-ended for \
-                     >14 months (valid_from {valid_from_str:?}). Set `valid_until` when BDEW publishes \
-                     the successor, or set `pid_exempt: true` if this type has no annual update"
-                ));
+            for pid in a.3.difference(&b.3) {
+                let retired = RETIRED_PIDS
+                    .iter()
+                    .any(|(t, s, p, _)| t == ty && *s == suffix && p == pid);
+                if !retired {
+                    errors.push(format!(
+                        "{}: Prüfidentifikator {pid} of {} is gone — an import regression unless BDEW retired it (then list it in RETIRED_PIDS)",
+                        b.0, a.0
+                    ));
+                }
             }
         }
-    }
-
-    // schema_version must be >= SCHEMA_MIN
-    const SCHEMA_MIN: u32 = 1;
-    if mig.schema_version < SCHEMA_MIN {
-        errors.push(format!(
-            "{rel_prefix}/mig.json  schema_version {} is below minimum {SCHEMA_MIN}",
-            mig.schema_version
-        ));
-    }
-    if ahb.schema_version < SCHEMA_MIN {
-        errors.push(format!(
-            "{rel_prefix}/ahb.json  schema_version {} is below minimum {SCHEMA_MIN}",
-            ahb.schema_version
-        ));
-    }
-
-    // Implausible segment counts — fewer than 3 top-level segments is suspicious.
-    let total_seg_count = count_all_segments(&mig);
-    if total_seg_count < 3 {
-        warnings.push(format!(
-            "{rel_prefix}/mig.json  only {total_seg_count} segment(s) defined — possible empty or copy-paste error"
-        ));
-    }
-
-    // max_occurrences = 0 on any segment is always wrong.
-    for seg in &mig.segments {
-        if seg.max_occurrences == 0 {
+        if let Some(last) = chain.last()
+            && last.2.is_some()
+        {
             errors.push(format!(
-                "{rel_prefix}/mig.json  segment {:?} has max_occurrences = 0 (must be >= 1)",
-                seg.tag
+                "{}: the newest {ty}{suffix} profile is not open-ended",
+                last.0
             ));
         }
     }
 
-    //  AHB rule-coverage quality gates.
-    // These are WARNING-level; they do not block CI but make gaps visible.
-    if !mig.archived && !mig.pid_exempt {
-        let pid_count = ahb.pruefidentifikatoren.len();
-        if pid_count == 0 {
-            warnings.push(format!(
-                "{rel_prefix}/ahb.json  no Prüfidentifikatoren defined — set `pid_exempt: true` in mig.json if this is intentional (e.g. CONTRL)"
-            ));
-        } else {
-            // Avg rules / PID density check.
-            // Only meaningful when the profile has enough non-EDIFACT segments to
-            // reach the threshold; tiny profiles (e.g. ORDCHG with 4 app segments)
-            // are exempt.
-            let total_rules: usize = ahb
-                .pruefidentifikatoren
-                .iter()
-                .map(|p| p.segment_rules.len() + p.group_rules.len())
-                .sum();
-            let avg = total_rules as f64 / pid_count as f64;
-            const MIN_DENSITY: f64 = 5.0;
-            const EDIFACT_STRUCTURE: &[&str] = &["UNH", "UNT", "UNS", "UNB", "UNZ", "UIH", "UIT"];
-            let app_seg_count = collect_all_tags(&mig)
-                .iter()
-                .filter(|t| !EDIFACT_STRUCTURE.contains(t))
-                .count();
-            if avg < MIN_DENSITY && app_seg_count as f64 >= MIN_DENSITY {
-                warnings.push(format!(
-                    "{rel_prefix}/ahb.json  avg rules/PID is {avg:.1} (threshold {MIN_DENSITY}) — AHB coverage is critically sparse"
-                ));
-            }
-
-            // Mandatory-group coverage: every mandatory MIG group should have at
-            // least one group_rule in at least one PID.
-            let groups_with_rules: BTreeSet<&str> = ahb
-                .pruefidentifikatoren
-                .iter()
-                .flat_map(|p| p.group_rules.iter().map(|gr| gr.group_id.as_str()))
-                .collect();
-            let mandatory_uncovered =
-                collect_mandatory_group_gaps(&mig.segment_groups, &groups_with_rules);
-            for (group_id, trigger) in &mandatory_uncovered {
-                warnings.push(format!(
-                    "{rel_prefix}/ahb.json  mandatory group {group_id:?} (trigger: {trigger:?}) has no group_rule in any PID — add per-instance trigger-segment enforcement"
-                ));
-            }
-        }
+    for e in &errors {
+        eprintln!("error   {e}");
     }
-
-    Some((mig.release.clone(), mig.supersedes_directory.clone()))
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-fn collect_all_tags(mig: &MigProfile) -> BTreeSet<&str> {
-    let mut tags = BTreeSet::new();
-    for seg in &mig.segments {
-        tags.insert(&*seg.tag);
-    }
-    for group in &mig.segment_groups {
-        collect_group_tags(group, &mut tags);
-    }
-    tags
-}
-
-/// Build a map from segment tag → number of elements, using the first definition found.
-fn collect_segment_element_counts(mig: &MigProfile) -> BTreeMap<&str, usize> {
-    let mut counts = BTreeMap::new();
-    for seg in &mig.segments {
-        counts.entry(&*seg.tag).or_insert(seg.elements.len());
-    }
-    for group in &mig.segment_groups {
-        collect_group_element_counts(group, &mut counts);
-    }
-    counts
-}
-
-fn collect_group_element_counts<'a>(group: &'a MigGroup, counts: &mut BTreeMap<&'a str, usize>) {
-    for seg in &group.segments {
-        counts.entry(&*seg.tag).or_insert(seg.elements.len());
-    }
-    for nested in &group.groups {
-        collect_group_element_counts(nested, counts);
-    }
-}
-
-fn collect_group_tags<'a>(group: &'a MigGroup, tags: &mut BTreeSet<&'a str>) {
-    for seg in &group.segments {
-        tags.insert(&*seg.tag);
-    }
-    for nested in &group.groups {
-        collect_group_tags(nested, tags);
-    }
-}
-
-/// Warn for each code a rule demands that the profile's own code list omits.
-///
-/// A message cannot satisfy both layers when they disagree, so every hit is
-/// either a code list imported incompletely or an AHB rule naming a value the
-/// document does not define. Which one it is has to be read off the BDEW AHB —
-/// this only says the two disagree.
-fn report_unknown_codes(
-    values: &[String],
-    known: &[String],
-    context: &str,
-    warnings: &mut Vec<String>,
-) {
-    let missing: Vec<&str> = values
-        .iter()
-        .filter(|v| !known.iter().any(|k| k == *v))
-        .map(std::string::String::as_str)
-        .collect();
-    if !missing.is_empty() {
-        warnings.push(format!(
-            "{context} names {:?}, which codelists.json does not define —              no message can satisfy both the AHB rule and the code list",
-            missing
-        ));
-    }
-}
-
-fn check_mig_qualifiers(
-    mig: &MigProfile,
-    codelist_keys: &BTreeSet<&str>,
-    rel_prefix: &str,
-    warnings: &mut Vec<String>,
-) {
-    for seg in &mig.segments {
-        for de_id in seg.qualifier_restrictions.keys() {
-            if !codelist_keys.contains(de_id.as_str()) {
-                warnings.push(format!(
-                    "{rel_prefix}/mig.json  segment {:?} qualifier_restriction DE {:?} not in codelists.json",
-                    seg.tag, de_id
-                ));
-            }
-        }
-    }
-    for group in &mig.segment_groups {
-        check_group_qualifiers(group, codelist_keys, rel_prefix, warnings);
-    }
-}
-
-fn check_group_qualifiers(
-    group: &MigGroup,
-    codelist_keys: &BTreeSet<&str>,
-    rel_prefix: &str,
-    warnings: &mut Vec<String>,
-) {
-    for seg in &group.segments {
-        for de_id in seg.qualifier_restrictions.keys() {
-            if !codelist_keys.contains(de_id.as_str()) {
-                warnings.push(format!(
-                    "{rel_prefix}/mig.json  group {:?} segment {:?} qualifier_restriction DE {:?} not in codelists.json",
-                    group.id, seg.tag, de_id
-                ));
-            }
-        }
-    }
-    for nested in &group.groups {
-        check_group_qualifiers(nested, codelist_keys, rel_prefix, warnings);
-    }
-}
-
-fn read_subdirs(dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut dirs: Vec<PathBuf> = entries
-        .filter_map(std::result::Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .collect();
-    dirs.sort();
-    dirs
-}
-
-fn load_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    serde_json::from_str(&content).map_err(|e| format!("cannot parse {}: {e}", path.display()))
-}
-
-/// Validate a raw JSON file against a compiled `jsonschema::Validator`.
-///
-/// All schema violations are appended to `errors` as:
-/// `"<rel_prefix>/<filename>  schema: <message> at <instance_path>"`
-///
-/// Non-fatal I/O or JSON-parse errors are also pushed to `errors` (they prevent
-/// meaningful schema validation).
-fn validate_json_file(
-    path: &Path,
-    validator: &jsonschema::Validator,
-    rel_prefix: &str,
-    filename: &str,
-    errors: &mut Vec<String>,
-) {
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(e) => {
-            errors.push(format!(
-                "{rel_prefix}/{filename}  cannot read for schema validation: {e}"
-            ));
-            return;
-        }
-    };
-    let value: serde_json::Value = match serde_json::from_str(&content) {
-        Ok(v) => v,
-        Err(e) => {
-            errors.push(format!(
-                "{rel_prefix}/{filename}  invalid JSON (cannot validate against schema): {e}"
-            ));
-            return;
-        }
-    };
-    for error in validator.iter_errors(&value) {
-        errors.push(format!(
-            "{rel_prefix}/{filename}  schema: {} at {}",
-            error,
-            error.instance_path()
-        ));
-    }
-}
-
-/// Count the total number of segments (top-level and within groups) in a MIG profile.
-fn count_all_segments(mig: &MigProfile) -> usize {
-    let mut count = mig.segments.len();
-    for group in &mig.segment_groups {
-        count += count_group_segments(group);
-    }
-    count
-}
-
-fn count_group_segments(group: &MigGroup) -> usize {
-    let mut count = group.segments.len();
-    for nested in &group.groups {
-        count += count_group_segments(nested);
-    }
-    count
-}
-
-/// Collect mandatory groups that have no group_rule in any PID.
-/// Returns `Vec<(group_id, trigger_segment)>` sorted by group_id.
-fn collect_mandatory_group_gaps<'a>(
-    groups: &'a [MigGroup],
-    groups_with_rules: &BTreeSet<&str>,
-) -> Vec<(&'a str, &'a str)> {
-    let mut gaps: Vec<(&str, &str)> = Vec::new();
-    for g in groups {
-        // Only warn when the mandatory group has non-trigger mandatory segments that
-        // are not covered by any group_rule.  A trigger segment is implicitly present
-        // whenever the group itself exists, so a group_rule for the trigger is
-        // redundant and must not be required here.
-        let has_non_trigger_mandatory = g
-            .segments
-            .iter()
-            .any(|s| s.mandatory && s.tag != g.trigger_segment);
-        if g.mandatory && has_non_trigger_mandatory && !groups_with_rules.contains(g.id.as_str()) {
-            gaps.push((g.id.as_str(), g.trigger_segment.as_str()));
-        }
-        let nested = collect_mandatory_group_gaps(&g.groups, groups_with_rules);
-        gaps.extend(nested);
-    }
-    gaps
-}
-
-/// Parse a folder name of the form `fv<YYYYMMDD>` into an ISO-8601 date string `YYYY-MM-DD`.
-/// Returns `None` if the folder name does not match.
-fn parse_fv_date(folder_name: &str) -> Option<String> {
-    let digits = folder_name.strip_prefix("fv")?;
-    if digits.len() != 8 || !digits.chars().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    let (year, rest) = digits.split_at(4);
-    let (month, day) = rest.split_at(2);
-    Some(format!("{year}-{month}-{day}"))
-}
-
-/// Convert a Unix day count (days since 1970-01-01) to `(year, month)`.
-///
-/// Uses the proleptic Gregorian calendar — accurate for any date after 1970.
-/// Sufficient precision for the 14-month open-ended profile check.
-fn days_to_year_month(days: u64) -> (u32, u32) {
-    // Algorithm: civil_from_days (Howard Hinnant, public domain).
-    let z = days as i64 + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097) as u32; // day of era [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365; // year of era [0, 399]
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // day of year [0, 365]
-    let mp = (5 * doy + 2) / 153; // month index in [0, 11] starting from March
-    let m: i64 = mp as i64 + if mp < 10 { 3 } else { -9i64 }; // month [1, 12]
-    let year = y + if m <= 2 { 1 } else { 0 };
-    (year as u32, m as u32)
+    eprintln!(
+        "validate-profiles: {} profiles, {} error(s)",
+        sources.profiles.len(),
+        errors.len()
+    );
+    errors.is_empty()
 }

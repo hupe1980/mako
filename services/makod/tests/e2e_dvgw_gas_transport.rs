@@ -11,7 +11,8 @@
 //! parse, correlate, dispatch — is verified here, from real wire bytes.
 //!
 //! The fixtures are the specification's own examples (DVGW-Nachrichtenbeschreibung
-//! ALOCAT 5.11a §3.2, NOMINT 4.6 §3.2), not messages shaped to suit the parser.
+//! ALOCAT 5.11a §3.2, NOMINT 4.6 §3.2, SSQNOT 5.7 §3.2), not messages shaped to
+//! suit the parser.
 
 use std::sync::Arc;
 
@@ -50,7 +51,10 @@ async fn ingest_state() -> makod::edifact_api::EdifactApiState {
     for info in dvgw_edi::catalogue() {
         let workflow = match info.message_type {
             dvgw_edi::DvgwMessageType::Alocat => "gabi-gas-allocation",
-            _ => "gabi-gas-nomination",
+            dvgw_edi::DvgwMessageType::Ssqnot => "gabi-gas-mehr-mindermengen",
+            dvgw_edi::DvgwMessageType::Nomint | dvgw_edi::DvgwMessageType::Nomres => {
+                "gabi-gas-nomination"
+            }
         };
         pid_router.register(info.pid, workflow);
     }
@@ -80,12 +84,21 @@ async fn ingest_state() -> makod::edifact_api::EdifactApiState {
     }
 }
 
+/// The `BGM` DE 1001 code the column of `pid` publishes — every Anwendungsfall
+/// marks exactly one, and the validator holds a message to it.
+fn document(pid: u32) -> &'static str {
+    // An uncatalogued code (the „no published Zuordnung" cases below) has no
+    // column; the message is then shaped like the SLP-Allokation.
+    dvgw_edi::DvgwDocument::for_pid(pid).map_or("X1G", dvgw_edi::DvgwDocument::code)
+}
+
 /// ALOCAT 5.11a §3.2, wrapped in the interchange the spec example omits.
 fn alocat(pid: u32, gas_day: &str, clearing: &str) -> String {
+    let document = document(pid);
     format!(
         "UNB+UNOA:3+{NB_MP}:502+{MGV_MP}:502+180101:1200+IC1'\
 UNH+123456+ORDRSP:D:07A:UN:5.11a'\
-BGM+X1G::332+ALOCAT123456'\
+BGM+{document}::332+ALOCAT123456'\
 DTM+Z05:0:805'\
 DTM+137:201801011200:203'\
 DTM+Z01:{gas_day}:719'\
@@ -130,8 +143,36 @@ UNZ+1+IC2'"
     )
 }
 
+/// SSQNOT 5.7 §3.2 — the Mehr-/Mindermengenmeldung of one Netzkonto for a
+/// month, SLP.
+fn ssqnot(pid: u32, zeitraum: &str, netzkonto: &str) -> String {
+    format!(
+        "UNB+UNOA:3+{NB_MP}:502+{MGV_MP}:502+180104:2056+IC5'\
+UNH+123456+ORDRSP:D:07A:UN:DVGW17'\
+BGM+BAG::332+SSQNOT00052'\
+DTM+Z05:0:805'\
+DTM+137:201801042056:203'\
+DTM+Z01:{zeitraum}:719'\
+RFF+Z13:{pid}'\
+NAD+MS+{NB_MP}::332'\
+NAD+MR+{MGV_MP}::332'\
+LIN+1'\
+LOC+Z99'\
+DTM+2:{zeitraum}:719'\
+QTY+ZY2:6782:KWH'\
+STS+A1G::332'\
+NAD+ZSH+{netzkonto}::332'\
+UNS+S'\
+UNT+16+123456'\
+UNZ+1+IC5'"
+    )
+}
+
 /// A winter gas day: 05:00 UTC → 05:00 UTC is the 06:00 CET boundary.
 const GAS_DAY: &str = "201801010500201801020500";
+/// A calendar month of gas days — the SSQNOT Abrechnungszeitraum.
+const MONTH: &str = "201801010500201802010500";
+const NEXT_MONTH: &str = "201802010500201803010500";
 const GAS_DAY_2: &str = "201801020500201801030500";
 
 async fn dispatch(edi: &str, workflow: &str, pid: u32) -> IngestOutcome {
@@ -177,6 +218,46 @@ async fn a_nomint_reaches_the_nomination_workflow() {
     );
 }
 
+/// A SSQNOT reaches the Mehr-/Mindermengen workflow; a later report for the
+/// same Netzkonto and Zeitraum resumes it, another month spawns its own.
+#[tokio::test]
+async fn a_ssqnot_reaches_the_mehr_mindermengen_workflow() {
+    let d = dispatcher().await;
+    let parse = |edi: &str| {
+        dvgw_edi::DvgwPlatform::default()
+            .parse(edi.as_bytes())
+            .expect("parses")
+    };
+    let january = parse(&ssqnot(70_095, MONTH, "THE0NKH712345678"));
+    let january_again = parse(&ssqnot(70_095, MONTH, "THE0NKH712345678"));
+    let february = parse(&ssqnot(70_095, NEXT_MONTH, "THE0NKH712345678"));
+    assert_eq!(january.process_key(), january_again.process_key());
+    assert_ne!(january.process_key(), february.process_key());
+
+    let wf = "gabi-gas-mehr-mindermengen";
+    assert!(matches!(
+        d.dispatch_dvgw(&january, wf, 70_095)
+            .await
+            .expect("january"),
+        IngestOutcome::Spawned { .. }
+    ));
+    assert!(
+        matches!(
+            d.dispatch_dvgw(&january_again, wf, 70_095)
+                .await
+                .expect("again"),
+            IngestOutcome::Dispatched { .. }
+        ),
+        "a later report for the same period resumes its process"
+    );
+    assert!(matches!(
+        d.dispatch_dvgw(&february, wf, 70_095)
+            .await
+            .expect("february"),
+        IngestOutcome::Spawned { .. }
+    ));
+}
+
 /// Every routed Prüfidentifikator must reach an arm.
 ///
 /// The registry registers 70001–70039; a code with no arm is a silent drop, and
@@ -196,6 +277,18 @@ async fn every_registered_dvgw_pid_reaches_a_dispatch_arm() {
             dvgw_edi::DvgwMessageType::Nomres => (
                 "gabi-gas-nomination",
                 nomination("ORDRSP", "08G", info.pid, GAS_DAY),
+            ),
+            // 70096 (RLM) is admitted for Zeiträume before 1.10.2015 only.
+            dvgw_edi::DvgwMessageType::Ssqnot => (
+                "gabi-gas-mehr-mindermengen",
+                ssqnot(info.pid, "201501010500201502010500", "THE0NKH712345678").replace(
+                    "STS+A1G",
+                    if info.pid == 70_096 {
+                        "STS+A2G"
+                    } else {
+                        "STS+A1G"
+                    },
+                ),
             ),
         };
         let outcome = dispatch(&edi, workflow, info.pid).await;
@@ -395,51 +488,35 @@ async fn a_message_without_a_usable_gas_day_is_refused() {
 
 // ── Quantities ───────────────────────────────────────────────────────────────
 
-/// A NOMRES that confirms less than was nominated must reach the workflow as a
+/// A NOMRES that confirms less than was nominated reaches the workflow as a
 /// curtailment, from wire bytes.
 ///
 /// Both halves have to be right for this to work: the energy must be integrated
 /// over the period (a `QTY` is a rate), and the NOMRES must be scoped to the
 /// recipient's own side of the match — `IMD` `18G` is the counterparty's mirror,
 /// and adding it would turn a shortfall into a surplus.
+///
+/// The answer is read by the adapter rather than dispatched here: an inbound
+/// NOMRES answers a nomination *this* tenant sent, and only the sending
+/// command opens that process (`gabi.nominierung.senden`).
 #[tokio::test]
-async fn a_curtailed_nomination_is_recorded_as_curtailed() {
-    let d = dispatcher().await;
-    let parse = |edi: &str| {
-        dvgw_edi::DvgwPlatform::default()
-            .parse(edi.as_bytes())
-            .expect("parses")
+async fn a_curtailed_nomres_reaches_the_workflow_as_a_curtailment() {
+    use mako_engine::version::FormatVersion;
+
+    // The MGV confirms 75 kWh/h over the gas day — 1 800 kWh — and mirrors the
+    // counterparty's 100 under `18G`, which must be ignored.
+    let nomres = dvgw_edi::DvgwPlatform::default()
+        .parse(nomres_two_sided(70_036, GAS_DAY, "75", "100").as_bytes())
+        .expect("parses");
+    let raw: &dyn std::any::Any = &nomres;
+    let cmd = makod::adapters::gabi_gas_nomination_registry()
+        .dispatch(raw, &FormatVersion::new("FV2025-10-01"))
+        .expect("the adapter reads the answer");
+    let mako_gabi_gas::NominationCommand::ReceiveNomres { confirmed_kwh, .. } = cmd else {
+        panic!("a NOMRES is an answer, not a nomination")
     };
-
-    // Nominate 100 kWh/h for the whole gas day = 2 400 kWh.
-    let nomint = parse(&nomination_of(
-        "ORDERS", "01G", 70_030, GAS_DAY, "100", None,
-    ));
-    assert!(matches!(
-        d.dispatch_dvgw(&nomint, "gabi-gas-nomination", 70_030)
-            .await
-            .expect("nomint"),
-        IngestOutcome::Spawned { .. }
-    ));
-
-    // The MGV confirms 75 kWh/h — 1 800 kWh — and states it as a Bestätigung.
-    // It also mirrors the counterparty's 100 under `18G`, which must be ignored.
-    let nomres = parse(&nomres_two_sided(70_036, GAS_DAY, "75", "100"));
-    assert!(matches!(
-        d.dispatch_dvgw(&nomres, "gabi-gas-nomination", 70_036)
-            .await
-            .expect("nomres"),
-        IngestOutcome::Dispatched { .. }
-    ));
-
-    // The recipient's own side integrates to 1 800 kWh, not 4 200.
     assert_eq!(
-        nomres
-            .single_energy_kwh(|item| matches!(
-                item.description_code(),
-                Some(dvgw_edi::model::imd::NOMINIERT) | None
-            ))
-            .map(|d| d.to_string()),
+        confirmed_kwh.map(|d| d.to_string()),
         Some("1800".to_owned()),
         "the counterparty's mirrored quantity must not be added in"
     );
@@ -689,9 +766,11 @@ async fn an_unroutable_message_is_still_accepted_and_dead_lettered() {
 /// It reports the state of the match. Feeding it to the workflow as an answer
 /// drove the process to a terminal `Rejected`, and the Bestätigung that followed
 /// then failed with `invalid_state` — leaving a nomination the counterparty had
-/// confirmed permanently on file as rejected.
+/// confirmed permanently on file as rejected. The ingest arm therefore records
+/// it and leaves the nomination open; only a Bestätigung decides one, and it is
+/// the nominating side that receives it.
 #[tokio::test]
-async fn a_matching_notification_leaves_the_nomination_open_for_its_confirmation() {
+async fn a_matching_notification_decides_nothing() {
     let d = dispatcher().await;
     let parse = |edi: &str| {
         dvgw_edi::DvgwPlatform::default()
@@ -699,6 +778,7 @@ async fn a_matching_notification_leaves_the_nomination_open_for_its_confirmation
             .expect("parses")
     };
 
+    // A Transportkunde nominates at this tenant, which owes the answer.
     let nomint = parse(&nomination_of(
         "ORDERS", "01G", 70_030, GAS_DAY, "100", None,
     ));
@@ -709,46 +789,30 @@ async fn a_matching_notification_leaves_the_nomination_open_for_its_confirmation
         IngestOutcome::Spawned { .. }
     ));
 
-    // The Matching-Benachrichtigung arrives first, as it does in practice.
-    let matching = parse(&nomination_of(
-        "ORDRSP",
-        "07G",
-        70_035,
-        GAS_DAY,
-        "100",
-        Some("17G"),
-    ));
-    assert!(
-        matches!(
-            d.dispatch_dvgw(&matching, "gabi-gas-nomination", 70_035)
-                .await
-                .expect("matching notification"),
-            IngestOutcome::Skipped {
-                reason: "matching_notification_states_no_acceptance",
-                ..
-            }
-        ),
-        "a matching notification must not decide the nomination"
-    );
-
-    // The Bestätigung must still land.
-    let bestaetigung = parse(&nomination_of(
-        "ORDRSP",
-        "08G",
-        70_036,
-        GAS_DAY,
-        "100",
-        Some("17G"),
-    ));
-    assert!(
-        matches!(
-            d.dispatch_dvgw(&bestaetigung, "gabi-gas-nomination", 70_036)
-                .await
-                .expect("bestätigung"),
-            IngestOutcome::Dispatched { .. }
-        ),
-        "the nomination must still be open for its Bestätigung"
-    );
+    // Neither Matching-Benachrichtigung reaches the workflow, however often it
+    // arrives — a second one must not decide what the first did not.
+    for (pid, document) in [(70_035_u32, "07G"), (70_037, "19G"), (70_035, "07G")] {
+        let matching = parse(&nomination_of(
+            "ORDRSP",
+            document,
+            pid,
+            GAS_DAY,
+            "100",
+            Some("17G"),
+        ));
+        assert!(
+            matches!(
+                d.dispatch_dvgw(&matching, "gabi-gas-nomination", pid)
+                    .await
+                    .expect("matching notification"),
+                IngestOutcome::Skipped {
+                    reason: "matching_notification_states_no_acceptance",
+                    ..
+                }
+            ),
+            "{document} must not decide the nomination"
+        );
+    }
 }
 
 /// `17G` and `16G` name the same quantity twice; only one may be counted.

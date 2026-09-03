@@ -66,6 +66,7 @@ fn summed_series_payload(pid: u32) -> serde_json::Value {
         "receiver_mp_id": "9900077000006",
         "bilanzierungsgebiet_id": "DE0011YAPG4",
         "mabis_zp_id": "DE0004030099000000000000000012345",
+        "obis_code": "1-1:1.29.0",
         "balancing_period": "202606",
         "version": "20260714050000+00",
         "intervals": [
@@ -96,6 +97,7 @@ fn arbeit_payload(pid: u32, with_maxima: bool) -> serde_json::Value {
         "sender_mp_id": "9900357000004",
         "receiver_mp_id": "9900077000006",
         "malo_id": "51238696781",
+        "order_reference": "BESTELLUNG-2026-1",
         "arbeit": {
             "quantity": "184500.000",
             "from": "202601010000+00",
@@ -105,7 +107,8 @@ fn arbeit_payload(pid: u32, with_maxima: bool) -> serde_json::Value {
     if with_maxima {
         payload["leistungsmaxima"] = serde_json::json!([
             { "quantity": "412.500", "period": "202602" },
-            { "quantity": "398.000", "period": "202601", "ersatzwert": true },
+            { "quantity": "398.000", "period": "202601", "ersatzwert": true,
+              "ersatzwert_verfahren": "Z92", "ersatzwert_grund": "Z75" },
         ]);
     }
     payload

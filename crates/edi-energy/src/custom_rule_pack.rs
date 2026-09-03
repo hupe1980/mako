@@ -381,22 +381,22 @@ impl CustomRulePack {
         let rule_id_inner = Arc::clone(&rule_id);
         self.0 = self.0.with_named_rule_fn(rule_id, move |segs, issues| {
             for (occ, seg) in segs.iter().enumerate().filter(|(_, s)| s.tag == tag) {
-                if let Some(v) = seg.component_str(element_index, component_index) {
-                    if !validator(v) {
-                        let msg = format!(
-                            "segment {tag} element {element_index} component {component_index}: \
-                             value does not match expected format ({description})"
-                        );
-                        issues.push(
-                            ValidationIssue::new(ValidationSeverity::Error, msg)
-                                .with_span(seg.span)
-                                .with_rule_id((*rule_id_inner).to_owned())
-                                .with_segment(tag.to_owned())
-                                .with_segment_occurrence(occ as u16)
-                                .with_element_index(element_index as u8)
-                                .with_component_index(component_index as u8),
-                        );
-                    }
+                if let Some(v) = seg.component_str(element_index, component_index)
+                    && !validator(v)
+                {
+                    let msg = format!(
+                        "segment {tag} element {element_index} component {component_index}: \
+                         value does not match expected format ({description})"
+                    );
+                    issues.push(
+                        ValidationIssue::new(ValidationSeverity::Error, msg)
+                            .with_span(seg.span)
+                            .with_rule_id((*rule_id_inner).to_owned())
+                            .with_segment(tag.to_owned())
+                            .with_segment_occurrence(occ as u16)
+                            .with_element_index(element_index as u8)
+                            .with_component_index(component_index as u8),
+                    );
                 }
             }
         });

@@ -924,6 +924,31 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(31007),
         dispatch: cmd_gabi_gas_rechnung_ablehnen,
     },
+    // ── GaBi Gas nomination (DVGW NOMINT/NOMRES) ───────────────────────────────
+    // The Transportkunde nominates and the NB/MGV answers, so the two commands
+    // sit on opposite roles: a BKV nominates its gas day, and the operator that
+    // received a nomination sends the NOMRES it owes.
+    CommandDescriptor {
+        name: "gabi.nominierung.senden",
+        permitted_roles: &[Marktrolle::Bkv],
+        primary_pid: pid(70030),
+        dispatch: cmd_gabi_nominierung_senden,
+    },
+    CommandDescriptor {
+        name: "gabi.nominierung.beantworten",
+        permitted_roles: &[Marktrolle::Nb, Marktrolle::Mgv],
+        primary_pid: pid(70036),
+        dispatch: cmd_gabi_nominierung_beantworten,
+    },
+    // ── GaBi Gas Mehr-/Mindermengen (DVGW SSQNOT) ──────────────────────────────
+    // NB an MGV: the Netzbetreiber reports its Netzkonto's Mehr-/Mindermenge
+    // for an Abrechnungszeitraum.
+    CommandDescriptor {
+        name: "gabi.mehrmindermengen.melden",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(70095),
+        dispatch: cmd_gabi_mehrmindermengen_melden,
+    },
     // ── MABIS Bilanzkreisabrechnung ────────────────────────────────────────────
     CommandDescriptor {
         name: "mabis.abrechnung.einleiten",

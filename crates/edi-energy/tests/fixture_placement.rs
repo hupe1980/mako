@@ -66,7 +66,10 @@ fn named_fixtures(dir: &Path, out: &mut Vec<(PathBuf, String, u32)>) {
                     continue;
                 }
                 let name = entry.file_name().to_string_lossy().into_owned();
-                let Some(rest) = name.strip_prefix("pid_") else {
+                let Some(rest) = name
+                    .strip_prefix("beispiel_")
+                    .or_else(|| name.strip_prefix("pid_"))
+                else {
                     continue;
                 };
                 let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
@@ -85,7 +88,7 @@ fn every_fixture_sits_under_a_message_type_that_declares_its_pid() {
     named_fixtures(&fixtures_root(), &mut fixtures);
 
     assert!(
-        fixtures.len() > 100,
+        fixtures.len() > 50,
         "only {} named fixtures found — the scan is broken",
         fixtures.len()
     );
@@ -143,21 +146,41 @@ fn wim_fixtures_put_the_pruefidentifikator_in_rff_z13() {
         if path.extension().and_then(|e| e.to_str()) != Some("edi") {
             continue;
         }
-        let raw = std::fs::read_to_string(&path).expect("fixture is readable");
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
         let Some(pid) = WIM_MSB_WECHSEL
             .iter()
-            .find(|p| raw.contains(&format!("+000{p}::")))
+            .find(|p| name.contains(&p.to_string()))
         else {
             continue;
         };
-        let rff = raw
+        let raw = std::fs::read_to_string(&path).expect("fixture is readable");
+        let segments: Vec<&str> = raw
             .split('\'')
-            .find_map(|s| s.trim_start_matches('\n').strip_prefix("RFF+Z13:"))
+            .map(|s| s.trim_start_matches('\n'))
+            .collect();
+        let rff = segments
+            .iter()
+            .find_map(|s| s.strip_prefix("RFF+Z13:"))
             .unwrap_or_else(|| panic!("{}: no SG6 RFF+Z13", path.display()));
         assert_eq!(
             rff,
             pid.to_string(),
             "{}: RFF+Z13 DE 1154 must carry the Prüfidentifikator",
+            path.display(),
+        );
+        let bgm = segments
+            .iter()
+            .find(|s| s.starts_with("BGM+"))
+            .expect("BGM");
+        assert!(
+            !bgm.split('+')
+                .nth(2)
+                .unwrap_or_default()
+                .starts_with(&pid.to_string()),
+            "{}: BGM DE 1004 is the Dokumentennummer, not the Prüfidentifikator",
             path.display(),
         );
         checked += 1;

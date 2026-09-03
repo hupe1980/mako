@@ -771,7 +771,7 @@ RUN cargo build -p makod --release \
 
 Selecting no role at all is refused at startup rather than silently producing an
 all-roles binary. Each role build registers a strict subset of the default's
-**70 workflows over 467 Prüfidentifikatoren**, and the startup log records both
+**71 workflows over 469 Prüfidentifikatoren**, and the startup log records both
 counts for whichever roles were compiled, so the binary's scope is evidence for a
 BNetzA audit.
 
@@ -1616,7 +1616,7 @@ first: `POST /edifact`, AS4 inbound, and the combined-role loopback. A BDEW
 interchange pays only the sniff.
 
 For a DVGW interchange the response has the same shape, with `message_type` set
-to the DVGW family (`ALOCAT`, `NOMINT`, `NOMRES`) and `pid` to the code from
+to the DVGW family (`ALOCAT`, `NOMINT`, `NOMRES`, `SSQNOT`) and `pid` to the code from
 `RFF+Z13`. Two DVGW-specific outcomes appear in `error` as `skipped: …`:
 
 | `skipped` | Meaning |
@@ -1848,7 +1848,7 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `mabis.abrechnung.einleiten` | `BKV` | MaBiS | 13003 · 13020 · 13023 | Record a version of a Summenzeitreihe; opens the settlement on the first one and resumes it on every later one. Requires `zeitreihe` (the `SG10 CAV` code) and `version` (the Erstellungszeitpunkt) |
 | `mabis.abrechnung.daten-einreichen` | `BKV` | MaBiS | 21000 · 21001 · 21005 | Send a Prüfmitteilung for one version. Requires `antwortcode` — a code published by the Entscheidungsbaum that decides *this* Summenzeitreihe — plus `grund` for anything other than that tree's Zustimmung. **No Frist** — bounded by the § 3.10 clearing window |
 | `mabis.abrechnung.begleichen` | `BKV` or `ÜNB` | MaBiS | — | Close the clearing window. It does **not** set a Datenstatus: that is the BIKO's alone (§ 3.8.3) and arrives as IFTSTA 21003/21004 |
-| `mabis.liste.korrigieren` | `LFN`/`NB`/`ÜNB` | MaBiS | 55066 · 55196 · 55202 · 55224 | Answer a Clearingliste with a **Korrekturliste** — one entry per disputed Marktlokation, `{ malo, grund }`. An empty list is the ordinary „reconciled, nothing to correct" reply and is still sent: silence reads as acceptance of whatever the distributor filed. `sender_rolle` is required — it selects the Entscheidungsbaum, and `E_0047` (NB) and `E_0004` (ÜNB) publish different codes for the same Korrekturgrund |
+| `mabis.liste.korrigieren` | `LFN`/`NB`/`ÜNB` | MaBiS | 55066 · 55196 · 55202 · 55224 | Answer a Clearingliste with a **Korrekturliste**, `{ malo, grund }` per disputed Marktlokation; an empty list is the „nothing to correct" reply and is still sent. `sender_rolle` selects the Entscheidungsbaum (`E_0047` NB / `E_0004` ÜNB publish different codes) |
 | `mabis.liste.ablehnen` | `LFN`/`NB`/`ÜNB` | MaBiS | 55066 · 55196 · 55202 · 55224 | Refuse a Clearingliste **entire** — the disjoint cluster that names no Marktlokation at all. Each whole-list fact (`abonnement_bestellt`, `zeitraum_plausibel`, `mabis_zp_passt`, `version_zugelassen`, `innerhalb_clearingphase`) is tri-state: absent means „cannot answer", which escalates rather than guessing. The tree decides, so a list whose whole-list Prüfschritte all pass is refused here and owed a Korrekturliste instead |
 | `mabis.summenzeitreihe.uebermitteln` | `NB` or `ÜNB` | MaBiS | 13003 | File a Summenzeitreihe for one Bilanzierungsgebiet with the BIKO |
 | `gpke.vollzugsmeldung.empfangen` | `NB`/`LFN`/`LFA` | GPKE | 21024–21033 | Vollzugsmeldung received via REST (manual replay) |
@@ -1902,6 +1902,9 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `invoic.sonstige-leistung.ablehnen` | `LF`, `LFG`, `LFN`, `LFA` | Sparte-neutral | 31011 | LF disputes the invoice (REMADV) |
 | `gabi.rechnung.annehmen` | `BKV` · `MGV` | GaBi Gas | 31007 | Settles a GaBi Gas invoice — the MGV the aggregated MMM-Rechnung 31007/31008, the BKV the Kapazitätsrechnung 31010 |
 | `gabi.rechnung.ablehnen` | `BKV` · `MGV` | GaBi Gas | 31007 | Disputes one — same family, same two roles |
+| `gabi.nominierung.senden` | `BKV` | GaBi Gas (DVGW) | 70030 | Nominates a gas day: `positionen` state the point, the direction and one rate (`kwh_pro_h`) per period, and the NOMINT goes out under the key its NOMRES resolves to |
+| `gabi.nominierung.beantworten` | `NB` · `MGV` | GaBi Gas (DVGW) | 70036 | Answers a nomination addressed to this tenant — `entscheidung` `bestaetigt` / `teilweise` / `abgelehnt`, with `bestaetigte_positionen` where the match curtailed it |
+| `gabi.mehrmindermengen.melden` | `NB` | GaBi Gas (DVGW) | 70095 | Reports a Netzkonto's Mehr-/Mindermenge for an Abrechnungszeitraum (SSQNOT); `verfahren` `slp` or `rlm` picks the Anwendungsfall |
 | `geli.lieferbeginn.ablehnen` | `GNB` | GeLi Gas | 44003 | GNB rejects the Anmeldung Netznutzung (`G_0011`) |
 | `geli.nb-lieferende.bestaetigen` | `LFG` | GeLi Gas | 44008 | LFG confirms the GNB-initiated Lieferende |
 | `geli.beendigung-zuordnung.bestaetigen` | `LFG` | GeLi Gas | 44011 | LFA confirms the Abmeldungsanfrage |
@@ -2124,7 +2127,11 @@ the MP-ID and the address.
 ## EDIFACT Rendering
 
 Workflow intent becomes wire bytes in `orchestrator/edifact_renderer/` (split per message type), which dispatches on
-the outbox message type and — for MSCONS — on the Prüfidentifikator.
+the outbox message type and — for MSCONS — on the Prüfidentifikator. The BDEW
+families go through the `edi-energy` builders; `ALOCAT`, `NOMINT`, `NOMRES` and
+`SSQNOT` through `dvgw-edi`'s, and a DVGW message is checked against its
+Nachrichtenbeschreibung before it leaves — a `Muss` row the payload cannot fill
+is a render error, never a message on the wire.
 
 ```mermaid
 flowchart LR
@@ -2132,9 +2139,11 @@ flowchart LR
     wf --> ob[("Outbox")]
     ob --> r["edifact_renderer"]
     r -->|"message_type"| mt{"UTILMD · APERAK · CONTRL<br/>ORDERS · ORDCHG · ORDRSP · REQOTE · QUOTES<br/>INVOIC · REMADV · MSCONS · IFTSTA · …"}
+    r -->|"ALOCAT · NOMINT · NOMRES · SSQNOT"| d["dvgw-edi builder"]
     mt -->|"MSCONS"| pid{"Prüfidentifikator"}
     pid --> b["edi-energy builder"]
     b --> as4["AS4 / ebMS3"]
+    d --> as4
 ```
 
 **IFTSTA** carries WiM Strom Teil 2 UC 4.4 „Beendigung durch MSB" as an

@@ -199,11 +199,13 @@ impl<S, R> OrdchgBuilder<S, R> {
         // earlier. There is no Anwendungsfall in any AHB that takes `102`.
         emit_comp!(w, "DTM", ["137", &super::ccyymmddhhmm_utc(&dtm_val), "303"]);
         // ── SG1: reference (mandatory; the ORDCHG has no LOC) ────────────────
-        if let Some(pid) = self.inner.pruefidentifikator {
-            emit_comp!(w, "RFF", ["Z13", &pid.to_string()]);
-        }
+        // The MIG lists the Referenz places (`RFF+AAG`, `RFF+ON`, `RFF+AAV`)
+        // before the Prüfidentifikator's.
         for (q, v) in &self.inner.references {
             emit_comp!(w, "RFF", [q, v]);
+        }
+        if let Some(pid) = self.inner.pruefidentifikator {
+            emit_comp!(w, "RFF", ["Z13", &pid.to_string()]);
         }
         // ── SG3: parties ─────────────────────────────────────────────────────
         if let Some(id) = &self.inner.sender_id {
@@ -222,7 +224,7 @@ impl<S, R> OrdchgBuilder<S, R> {
                 [id, "", super::agency_for(self.inner.receiver_agency, id)]
             );
         }
-        emit_seg!(w, "UNS", "D");
+        emit_seg!(w, "UNS", "S");
         w.finish_unt(&self.inner.message_ref)
             .map_err(Error::Parse)?;
         Ok(buf)

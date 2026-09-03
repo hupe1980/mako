@@ -7015,6 +7015,7 @@ name = "makotest-native"
 version = "0.19.0"
 dependencies = [
  "edi-energy",
+ "edifact-rs",
  "mako-events",
  "mako-fristen",
  "mako-pruefung",
@@ -13782,6 +13783,7 @@ dependencies = [
  "lopdf",
  "mako-fristen",
  "quick-xml 0.40.1",
+ "regex",
  "reqwest 0.13.4",
  "rubo4e",
  "serde",

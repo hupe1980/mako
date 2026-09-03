@@ -1,21 +1,24 @@
-//! The typed message model, shared by all three DVGW families.
+//! The typed message model, shared by all four DVGW families.
 //!
-//! ALOCAT, NOMINT and NOMRES have the same shape — they differ in which
-//! qualifiers are legal, not in structure — so one model serves all three and
-//! the per-family rules live in the validation layer.
+//! ALOCAT, NOMINT, NOMRES and SSQNOT have the same shape — they differ in
+//! which qualifiers are legal, not in structure — so one model serves all
+//! four and the per-family rules live in the validation layer.
 //!
 //! ```text
 //! BGM DTM×3 RFF+ NAD+MS NAD+MR
-//! └─ LIN                          ← LineItem (Positionsnummer, Zeitreihentyp)
+//! └─ LIN                          ← LineItem (Positionsnummer)
 //!    ├─ IMD                       ← NOMRES: nominated / counterparty / matched
 //!    ├─ LOC                       ← LocationGroup, repeats
-//!    │  ├─ DTM+2                  ← period for the quantities that follow
-//!    │  └─ QTY (+STS)             ← Quantity, repeats — a time series
-//!    └─ NAD+ZEU / NAD+ZES / …     ← Bilanzkreis, Netzkonto, VHP
+//!    │  ├─ DTM+2                  ← period for the quantity that follows
+//!    │  └─ QTY (+STS)             ← Quantity; STS = Zeitreihentyp (ALOCAT) / Verfahren (SSQNOT)
+//!    └─ NAD+ZEU / NAD+ZSH / …     ← Bilanzkreis, Netzkonto, VHP
 //! ```
 //!
-//! A `LOC` group carries **many** `QTY` segments — Edig@s `SG37` repeats up to
-//! 199 times — one per period of the profile.
+//! The DVGW column of every Nachrichtenstruktur caps `DTM+2` and `SG37 QTY`
+//! at **one per `LOC` group**, so a profile is a run of `LOC` groups, one per
+//! period. The reader still keeps every `QTY` it meets under a `LOC` — a
+//! counterparty that packs a series under one `LOC` loses nothing — and
+//! validation reports the excess.
 
 use rust_decimal::Decimal;
 
@@ -67,6 +70,45 @@ pub mod rff {
     pub const ORIGINAL_NOMINIERUNG: &str = "AGO";
 }
 
+/// `QTY` C186 DE 6063 qualifiers the DVGW Nachrichtenbeschreibungen define.
+pub mod qty {
+    /// `Z02` — Einspeisung (ALOCAT, NOMINT, NOMRES).
+    pub const EINSPEISUNG: &str = "Z02";
+    /// `Z03` — Ausspeisung (ALOCAT, NOMINT, NOMRES).
+    pub const AUSSPEISUNG: &str = "Z03";
+    /// `ZY0` — Mehrmenge (SSQNOT).
+    pub const MEHRMENGE: &str = "ZY0";
+    /// `ZY2` — Mindermenge (SSQNOT).
+    pub const MINDERMENGE: &str = "ZY2";
+}
+
+/// `QTY` C186 DE 6411 units the DVGW Nachrichtenbeschreibungen define.
+pub mod unit {
+    /// `KW1` — Kilowattstunden pro Stunde (kWh/h): a rate.
+    pub const KWH_PER_HOUR: &str = "KW1";
+    /// `KW2` — Kilowattstunden pro Tag (kWh/d): a rate (ALOCAT).
+    pub const KWH_PER_DAY: &str = "KW2";
+    /// `KWH` — Kilowattstunden: an energy (NOMINT, NOMRES, SSQNOT).
+    pub const KWH: &str = "KWH";
+}
+
+/// `STS` DE 9015 codes the DVGW Nachrichtenbeschreibungen define.
+pub mod sts {
+    /// `A1G` — SLP: the Mehr-/Mindermenge was determined by Standardlastprofil (SSQNOT).
+    pub const SLP: &str = "A1G";
+    /// `A2G` — RLM: registrierende Leistungsmessung (SSQNOT; Zeiträume before
+    /// 1.10.2015 only, Hinweis \[501\]).
+    pub const RLM: &str = "A2G";
+    /// `09G` — Lastprofil (SLP) synthetisch (ALOCAT Zeitreihentyp).
+    pub const SLP_SYNTHETISCH: &str = "09G";
+    /// `14G` — Gemessen (RLM) Tagesregime (ALOCAT Zeitreihentyp).
+    pub const RLM_TAGESREGIME: &str = "14G";
+    /// `15G` — Lastprofil (SLP) analytisch (ALOCAT Zeitreihentyp).
+    pub const SLP_ANALYTISCH: &str = "15G";
+    /// `18G` — Gemessen (RLM) Stundenregime (ALOCAT Zeitreihentyp).
+    pub const RLM_STUNDENREGIME: &str = "18G";
+}
+
 /// `NAD` party function qualifiers the DVGW Nachrichtenbeschreibungen define.
 pub mod nad {
     /// `MS` — Absender der Nachricht.
@@ -83,7 +125,7 @@ pub mod nad {
     pub const NETZKONTO: &str = "ZSZ";
     /// `ZSO` — Netzbetreibercode.
     pub const NETZBETREIBER: &str = "ZSO";
-    /// `ZSH` — Netzkontonummer (Allokationsmeldung 3-Tupel ZO-T3).
+    /// `ZSH` — Netzkontonummer (ALOCAT `ZO-T3`; the SSQNOT position party).
     pub const NETZKONTO_ZO_T3: &str = "ZSH";
     /// `ZET` — vorgelagerter Netzbetreiber (Netzkopplungspunktmeldung).
     pub const VORGELAGERTER_NETZBETREIBER: &str = "ZET";
@@ -107,7 +149,8 @@ pub struct Quantity {
     pub value: Option<Decimal>,
     /// The value exactly as it appeared on the wire.
     pub raw_value: String,
-    /// C186 DE 6411 measurement unit — `KW1` (kWh/h) throughout DVGW.
+    /// C186 DE 6411 measurement unit — `KW1` (kWh/h), `KW2` (kWh/d) or `KWH`;
+    /// see [`unit`](mod@unit).
     pub unit: Option<String>,
     /// The period from the `DTM+2` in effect for this quantity.
     ///
@@ -118,7 +161,9 @@ pub struct Quantity {
     /// would multiply that hour's rate across the entire gas day.
     /// `DVGW-DTM-2-REQUIRED` reports the omission instead.
     pub period: Option<DvgwPeriod>,
-    /// `STS` DE 9015 status codes attached to this quantity (ALOCAT).
+    /// `STS` DE 9015 codes attached to this quantity — the Zeitreihentyp of
+    /// an ALOCAT (`09G` SLP synthetisch, `14G` RLM, …), the Verfahren of a
+    /// SSQNOT (`A1G` SLP, `A2G` RLM); see [`sts`].
     pub status: Vec<String>,
 }
 
@@ -153,14 +198,22 @@ pub struct ItemDescription {
     pub code: Option<String>,
 }
 
-/// `IMD` DE 7009 codes NOMRES uses to label a position.
+/// `IMD` DE 7009 codes NOMRES uses to label a position (NOMRES 4.7 §3.2).
 pub mod imd {
-    /// `17G` — die nominierten Mengen (eigene Seite).
-    pub const NOMINIERT: &str = "17G";
-    /// `18G` — die Mengen der Gegenseite.
-    pub const GEGENSEITE: &str = "18G";
-    /// `16G` — die gematchten Mengen.
+    /// `12G` — Akzeptiert vom Netzbetreiber.
+    pub const AKZEPTIERT_NB: &str = "12G";
+    /// `13G` — Akzeptiert vom benachbarten Netzbetreiber.
+    pub const AKZEPTIERT_NACHBAR_NB: &str = "13G";
+    /// `14G` — Verarbeitet vom Netzbetreiber.
+    pub const VERARBEITET_NB: &str = "14G";
+    /// `15G` — Verarbeitet vom benachbarten Netzbetreiber.
+    pub const VERARBEITET_NACHBAR_NB: &str = "15G";
+    /// `16G` — Bestätigt: die gematchten Mengen.
     pub const GEMATCHT: &str = "16G";
+    /// `17G` — Nominiert vom Empfänger des Dokumentes (eigene Seite).
+    pub const NOMINIERT: &str = "17G";
+    /// `18G` — Nominiert vom Geschäftspartner (Gegenseite).
+    pub const GEGENSEITE: &str = "18G";
 }
 
 /// One `LIN` loop — a position of the message.
@@ -183,29 +236,39 @@ pub struct LineItem {
 impl Quantity {
     /// The energy this quantity represents, in kWh.
     ///
-    /// A DVGW `QTY` is a **rate** — `KW1` is kWh/h — over the period its own
-    /// `DTM+2` names, so the energy is rate × duration. Summing the raw values
-    /// of a profile adds rates together and yields a number in no unit at all;
-    /// it is the single most tempting way to get a gas quantity wrong.
+    /// A `KW1` (kWh/h) or `KW2` (kWh/d) `QTY` is a **rate** over the period its
+    /// own `DTM+2` names, so the energy is rate × duration; summing the raw
+    /// values of a profile adds rates together and yields a number in no unit
+    /// at all — the single most tempting way to get a gas quantity wrong. A
+    /// `KWH` `QTY` is the energy itself.
     ///
-    /// Returns `None` when the value is not numeric, when there is no period to
-    /// integrate over, or when the unit is not one this can convert.
+    /// Returns `None` when the value is not numeric, when a rate has no period
+    /// to integrate over, or when the unit is not one this can convert.
     #[must_use]
     pub fn energy_kwh(&self) -> Option<Decimal> {
-        // Only kWh/h is converted. A unit this does not know is not assumed to
-        // be a rate — silently treating one as kWh/h is how a wrong figure
-        // becomes an invoice.
-        if self.unit.as_deref() != Some("KW1") {
-            return None;
-        }
         let value = self.value?;
+        // A unit this does not know is not assumed to be a rate — silently
+        // treating one as kWh/h is how a wrong figure becomes an invoice.
+        let per_seconds = match self.unit.as_deref() {
+            Some(unit::KWH) => return Some(value),
+            Some(unit::KWH_PER_HOUR) => Decimal::from(3600),
+            Some(unit::KWH_PER_DAY) => Decimal::from(86_400),
+            _ => return None,
+        };
         let period = self.period?;
         let seconds = Decimal::from(period.duration().whole_seconds());
         if seconds <= Decimal::ZERO {
             return None;
         }
-        // kWh/h × h = kWh. Seconds keep a sub-hourly period exact.
-        Some(value * seconds / Decimal::from(3600))
+        // rate × (duration / the rate's own period). Seconds keep a
+        // sub-hourly period exact.
+        Some(value * seconds / per_seconds)
+    }
+
+    /// The first `STS` DE 9015 code attached to this quantity, if any.
+    #[must_use]
+    pub fn status_code(&self) -> Option<&str> {
+        self.status.first().map(String::as_str)
     }
 }
 
@@ -225,6 +288,13 @@ impl LineItem {
     #[must_use]
     pub fn description_code(&self) -> Option<&str> {
         self.descriptions.iter().find_map(|d| d.code.as_deref())
+    }
+
+    /// The `STS` DE 9015 code of this position's first quantity — the
+    /// Zeitreihentyp of an ALOCAT position, the Verfahren of a SSQNOT one.
+    #[must_use]
+    pub fn status_code(&self) -> Option<&str> {
+        self.quantities().find_map(Quantity::status_code)
     }
 }
 
@@ -250,6 +320,33 @@ mod tests {
             period: None,
             status: Vec::new(),
         }
+    }
+
+    #[test]
+    fn energy_follows_the_unit() {
+        use crate::datetime::DvgwPeriod;
+        use time::macros::datetime;
+        let day = DvgwPeriod {
+            start: datetime!(2026-03-01 05:00 UTC),
+            end: datetime!(2026-03-02 05:00 UTC),
+        };
+        let q = |unit: &str| Quantity {
+            qualifier: "Z03".into(),
+            value: Decimal::from_i64(100),
+            raw_value: "100".into(),
+            unit: Some(unit.into()),
+            period: Some(day),
+            status: Vec::new(),
+        };
+        // 100 kWh/h over a day, 100 kWh/d over a day, 100 kWh.
+        assert_eq!(q("KW1").energy_kwh().unwrap().to_string(), "2400");
+        assert_eq!(q("KW2").energy_kwh().unwrap().to_string(), "100");
+        assert_eq!(q("KWH").energy_kwh().unwrap().to_string(), "100");
+        assert_eq!(
+            q("MWH").energy_kwh(),
+            None,
+            "an unknown unit is not guessed"
+        );
     }
 
     #[test]

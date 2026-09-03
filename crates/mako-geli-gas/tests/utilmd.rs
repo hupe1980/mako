@@ -249,25 +249,41 @@ async fn wrong_pid_returns_workflow_error() {
 
 // ── Negative AHB conformance tests ───────────────────────────────────────────
 
-/// A UTILMD G PID 44001 with an invalid BGM qualifier (`E99` instead of `E01`)
-/// must be rejected by the AHB rule pack with rule `AHB-44001-BGM-1001-Q`.
+/// A conformant UTILMD Gas 44001 whose `BGM` DE 1001 carries `E99` instead of
+/// `E01` must be refused with `AHB-44001-00004-BGM-1001-CODE`.
 ///
-/// This guards against the `Some(_unknown)` dispatch branch silently returning
-/// `is_valid = true` for any PID absent from the AHB profile dispatch table,
-/// and against profile regressions that remove or relax the BGM qualifier check.
+/// Guards against a profile regression that removes or relaxes the column's
+/// code list, and against 44001 falling out of the Gas profile (which would
+/// validate with the `AHB-UNKNOWN-PID` warning and nothing else).
 #[test]
 fn negative_ahb_wrong_bgm_qualifier_pid_44001() {
     let invalid_bytes: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+GAS-NEG-001'\
+UNB+UNOC:3+9900357000004:14+4012345000023:14+261001:0700+GAS-NEG-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:G1.1'\
-BGM+E99:::+00044001::+9'\
-DTM+137:202501150800?+00:303'\
-RFF+Z13:GAS-NEG-REF-001'\
-NAD+MS+4012345000023::293'\
-NAD+MR+9900357000004::293'\
-IDE+24+VORGANG-0001'\
-LOC+Z16+52695662076'\
-UNT+9+MSG-001'\
+BGM+E99+DOK44001'\
+DTM+137:202610010000?+00:303'\
+NAD+MS+9900357000004::9'\
+NAD+MR+4012345000023::9'\
+IDE+24+VORGANG0001'\
+IMD++Z36+Z12'\
+DTM+92:202610010000?+00:303'\
+STS+7++E01'\
+LOC+172+DE00056266802AO6G56M11SN51G21M24S'\
+RFF+Z13:44001'\
+RFF+Z18'\
+DTM+Z20:2026:802'\
+SEQ+Z01'\
+CCI+Z19++X'\
+CCI+++Z15'\
+CCI+++Z88'\
+CAV+Z74:::Z08'\
+CAV+Z73:::Z11'\
+SEQ+Z12'\
+QTY+Z16:100:P1'\
+NAD+Z09+++Mustermann:::::Z01'\
+NAD+Z04+++Mustermann:::::Z01+Musterstr. 1+Berlin+++DE'\
+NAD+Z05+++Mustermann:::::Z01+Musterstr. 1+Berlin+++DE'\
+UNT+25+MSG-001'\
 UNZ+1+GAS-NEG-001'";
 
     let platform = Platform::with_all_profiles();
@@ -290,8 +306,8 @@ UNZ+1+GAS-NEG-001'";
         report.errors().iter().any(|e| e
             .rule_id
             .as_deref()
-            .is_some_and(|id| id == "AHB-44001-BGM-1001-Q")),
-        "error list must contain rule AHB-44001-BGM-1001-Q; got: {:?}",
+            .is_some_and(|id| id == "AHB-44001-00004-BGM-1001-CODE")),
+        "error list must contain rule AHB-44001-00004-BGM-1001-CODE; got: {:?}",
         report
             .errors()
             .iter()

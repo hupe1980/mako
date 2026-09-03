@@ -128,6 +128,14 @@ async fn loopback_round_trip_spawns_process() {
             // cannot assign the Marktlokation without a Bilanzkreis, so a command
             // that omits it renders a message the pre-send gate dead-letters.
             "bilanzkreis": "11XBK-EEG-----1",
+            // The rest of the 55001 column: the Transaktionsgrund, the
+            // Marktlokation's Gruppenzuordnung, the Kunde's EnFG-Grundlage,
+            // and the Kunde with a Korrespondenzanschrift.
+            "transaktionsgrund": "E03",
+            "kundengruppe": "Z15",
+            "enfg_grundlage": "ZG0",
+            "kunde_name": "Mustermann, Max",
+            "kunde_anschrift": { "strasse": "Musterstr. 1", "plz": "10115", "ort": "Berlin", "land": "DE" },
         }),
     );
 

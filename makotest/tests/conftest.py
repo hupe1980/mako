@@ -31,7 +31,7 @@ def utilmd_interchange(
     *,
     sender: str = LF_ID,
     receiver: str = NB_ID,
-    melo: str = MELO,
+    lokation: str = MALO,
     document_code: str = "E01",
     on: str = ON,
     dar: str = "REF1",
@@ -47,9 +47,8 @@ def utilmd_interchange(
         transactions=[
             UtilmdTransaction(
                 "VORGANG-1",
-                locations=[("melo", melo)],
+                locations=[("malo", lokation)],
                 dates=[("92", "20260501")],
-                references=[("Z13", str(pid))],
                 bilanzkreis=BILANZKREIS,
             )
         ],

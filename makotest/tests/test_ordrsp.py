@@ -28,6 +28,9 @@ WERTEBESTELLUNG_PID = 19011
 
 
 def antwort(code: str, ebd: str, *, pid: int = WERTEBESTELLUNG_PID, **kw) -> bytes:
+    # The column pairs the EBD with the Abonnement: `E_0254` answers an
+    # Abbestellung (`IMD Z02`), `E_0256` a Bestellung (`Z01`).
+    kw.setdefault("abonnement", "Z02" if ebd == "E_0254" else "Z01")
     message = build_ordrsp(
         pid,
         NB_ID,
@@ -35,7 +38,6 @@ def antwort(code: str, ebd: str, *, pid: int = WERTEBESTELLUNG_PID, **kw) -> byt
         antwort_code=code,
         antwort_ebd=ebd,
         on=ON,
-        abonnement="Z01",
         line_item=True,
         item_description=True,
         **kw,
@@ -65,8 +67,12 @@ class TestAdjustment:
         with pytest.raises(ValueError, match="both antwort_code and antwort_ebd"):
             build_ordrsp(WERTEBESTELLUNG_PID, NB_ID, LF_ID, antwort_ebd="E_0254", on=ON)
 
-    def test_an_answer_may_carry_no_adjustment_at_all(self):
-        """Not every ORDRSP refuses something."""
+    def test_an_answer_without_a_code_still_carries_its_muss_ajt(self):
+        """`SG2 AJT` is Muss on 19011: the answer states a Prüfschritt either way.
+
+        A caller who names none gets the column's placeholder, and the message
+        still validates — the builder completes what the column requires.
+        """
         message = build_ordrsp(
             WERTEBESTELLUNG_PID,
             NB_ID,
@@ -76,7 +82,11 @@ class TestAdjustment:
             line_item=True,
             item_description=True,
         )
-        assert b"AJT+" not in message
+        assert b"AJT+" in message
+        wire = build_interchange(
+            sender=NB_ID, receiver=LF_ID, dar="O3", messages=[message], on=ON
+        )
+        assert_edifact_valid(wire, on=ON)
 
 
 class TestOneCatalogueThreeWires:
@@ -99,24 +109,19 @@ class TestOneCatalogueThreeWires:
         assert any(c.ist_zustimmung is False for c in codes)
 
 
-class TestKnownLimitation:
-    def test_a_pid_needing_an_ansprechpartner_cannot_be_built_conformantly(self):
-        """19002 makes `CTA` and `COM` Muss, and the builder exposes neither.
+class TestCompletion:
+    def test_a_pid_needing_an_ansprechpartner_gets_one(self):
+        """19002 makes `CTA` and `COM` Muss; the builder exposes neither.
 
-        Pinned so the limitation is visible rather than surprising: the message
-        builds and the AHB names exactly what is missing, so a test reaching for
-        this PID gets a precise answer instead of a puzzling one. The gap is in
-        the builder's surface, not in the profile.
+        The message is completed to its column, so the Ansprechpartner the
+        builder cannot name is filled in and the answer validates.
         """
+        # 19002 answers out of `S_0068` (Strom) or `G_0074` (Gas).
         message = build_ordrsp(
-            19002, NB_ID, LF_ID, antwort_code="A01", antwort_ebd="E_0254", on=ON
+            19002, NB_ID, LF_ID, antwort_code="A01", antwort_ebd="S_0068", on=ON
         )
+        assert b"CTA+" in message and b"COM+" in message
         wire = build_interchange(
             sender=NB_ID, receiver=LF_ID, dar="O2", messages=[message], on=ON
         )
-        report = validate_edifact(wire, ON)
-        assert not report.is_valid
-        assert {f.rule_id for f in report.errors} == {
-            "AHB-19002-CTA-M",
-            "AHB-19002-COM-M",
-        }
+        assert_edifact_valid(wire, on=ON)

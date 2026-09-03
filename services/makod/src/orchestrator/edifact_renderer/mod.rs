@@ -29,18 +29,15 @@
 //! | INVOIC | `sender`, `receiver`, `document_id`, `document_code`, `document_date`, `message_ref` |
 //! | REMADV | `sender`, `receiver`, `document_id`, `document_code`, `document_date`, `message_ref` |
 //! | IFTSTA | `pid` (WiM 21042), `sender`, `receiver`, `sts_code`, `korrelation_ref`, `beendigung_zum`, `document_id`, `document_date`, `message_ref` |
+//! | ALOCAT / NOMINT / NOMRES / SSQNOT | `pid`, `validity_period`, `positions` (DVGW; see `dvgw.rs`) — `document`, `sender`, `receiver`, `clearingnummer`, `original_nomination`, `document_number`, `message_ref` optional |
 //!
-//! ## Not yet renderable — intent-only payloads
+//! ## What a payload cannot supply is refused
 //!
-//! [`RenderError::InsufficientPayload`] is returned for message types whose
-//! outbox payload carries only domain intent without the business data required
-//! for a conformant wire message:
-//!
-//! - **MSCONS** — requires actual meter readings (not included in the intent payload)
-//!
-//! The AS4 sender returns `EngineError::RendererNotImplemented` for these, which
-//! causes the outbox worker to dead-letter the entry immediately instead of
-//! transmitting a non-conformant JSON blob over AS4.
+//! A payload short of a field the column makes Muss — meter readings on an
+//! MSCONS, the positions of a NOMINT — is a [`RenderError::MissingField`] (or
+//! a [`RenderError::BuilderError`] when the built message fails its profile),
+//! and the outbox worker dead-letters the entry instead of transmitting a
+//! non-conformant message over AS4.
 //!
 //! [`PendingOutbox`]: mako_engine::outbox::PendingOutbox
 //! [`ReleaseRegistry`]: edi_energy::ReleaseRegistry
@@ -166,6 +163,10 @@ pub fn render_to_wire_bytes(
         "MSCONS" => render_mscons(p, msg, registry),
         "IFTSTA" => render_iftsta(p, msg, registry),
         "INSRPT" => render_insrpt(p, msg, registry),
+        "ALOCAT" => render_dvgw("ALOCAT", p, msg, registry),
+        "NOMINT" => render_dvgw("NOMINT", p, msg, registry),
+        "NOMRES" => render_dvgw("NOMRES", p, msg, registry),
+        "SSQNOT" => render_dvgw("SSQNOT", p, msg, registry),
         other => Err(intent_only(other)),
     }
 }
@@ -207,6 +208,97 @@ fn dar_for(msg: &OutboxMessage) -> String {
         .chars()
         .take(14)
         .collect()
+}
+
+/// Whether the column of `pid` in the profile of `release` lists data
+/// element `de` of a `tag` place — what decides whether a renderer may fill
+/// it (a data element the column does not list is not to be sent). An
+/// unknown profile or column answers `true` and leaves the decision to the
+/// receiver's validation.
+pub(super) fn column_lists(
+    mt: MessageType,
+    release: &edi_energy::Release,
+    pid: u32,
+    tag: &str,
+    de: &str,
+) -> bool {
+    column_lists_place(mt, release, pid, tag, None, de)
+}
+
+/// How many occurrences of data element `de` the column of `pid` marks at the
+/// `tag` place selected by `first_code` — `NAD+Z09` lists one `3036` on a
+/// 55001 (the whole name in one component) and several where the AHB asks
+/// for Nachname and Vorname apart.
+pub(super) fn column_occurrences(
+    mt: MessageType,
+    release: &edi_energy::Release,
+    pid: u32,
+    tag: &str,
+    first_code: Option<&str>,
+    de: &str,
+) -> u8 {
+    let Some(profile) = edi_energy::ReleaseRegistry::global()
+        .profiles_for(mt)
+        .find(|p| p.release() == release)
+    else {
+        return 0;
+    };
+    let Some(af) = profile.anwendungsfall(pid) else {
+        return 0;
+    };
+    profile
+        .structure
+        .layouts
+        .iter()
+        .filter(|l| l.tag == tag)
+        .filter(|l| {
+            first_code.is_none_or(|code| {
+                l.leaves()
+                    .next()
+                    .is_some_and(|(_, _, e)| e.codes.iter().any(|c| c.code == code))
+            })
+        })
+        .flat_map(|l| af.element_rules(&l.nr).filter(|r| r.de == de))
+        .map(|r| r.occurrence + 1)
+        .max()
+        .unwrap_or(0)
+}
+
+/// [`column_lists`] narrowed to the `tag` place whose leading qualifier
+/// admits `first_code` (`STS+Z40`, `SEQ+Z75`); `None` means any place.
+pub(super) fn column_lists_place(
+    mt: MessageType,
+    release: &edi_energy::Release,
+    pid: u32,
+    tag: &str,
+    first_code: Option<&str>,
+    de: &str,
+) -> bool {
+    let Ok(code) = edi_energy::Pruefidentifikator::new(pid) else {
+        return true;
+    };
+    let Some(profile) = edi_energy::ReleaseRegistry::global()
+        .profiles_for(mt)
+        .find(|p| p.release() == release)
+    else {
+        return true;
+    };
+    let Some(af) = profile.anwendungsfall(code.as_u32()) else {
+        return true;
+    };
+    profile
+        .structure
+        .layouts
+        .iter()
+        .filter(|l| l.tag == tag)
+        .filter(|l| {
+            first_code.is_none_or(|code| {
+                l.leaves()
+                    .next()
+                    .is_some_and(|(_, _, e)| e.codes.iter().any(|c| c.code == code))
+            })
+        })
+        .any(|l| af.element_rules(&l.nr).any(|r| r.de == de))
 }
 
 /// Wrap rendered message bytes in the `UNB…UNZ` interchange envelope.
@@ -267,6 +359,7 @@ fn finish_interchange_with_app_ref(
 
 mod aperak;
 mod contrl;
+mod dvgw;
 mod iftsta;
 mod insrpt;
 mod invoic;
@@ -276,6 +369,7 @@ mod utilmd;
 
 use aperak::*;
 use contrl::*;
+use dvgw::*;
 use iftsta::*;
 use insrpt::*;
 use invoic::*;
@@ -451,7 +545,7 @@ mod tests {
         // position was refused with — repeated „bis alle Fehler der
         // Positionsebene genannt sind" (condition [525]). One code where the
         // walk found two tells the issuer to correct half of it.
-        assert!(wire.contains("DLI+1:7"), "{wire}");
+        assert!(wire.contains("DLI+1+7"), "{wire}");
         // The ESA tree, not the Netznutzungs one — `A11` means nothing in
         // `E_0406`, and DE 1082 is what the counterparty resolves against.
         assert!(wire.contains("AJT+A11+E_0264"), "{wire}");
@@ -503,7 +597,7 @@ mod tests {
         edi_energy::EdiEnergyMessage::validate(&edi_energy::parse(wire.as_bytes()).expect("parse"))
             .expect("validate")
             .into_error_result()
-            .unwrap_or_else(|e| panic!("REMADV 33001 must be MIG-conformant: {e}\n{wire}"));
+            .unwrap_or_else(|e| panic!("REMADV 33001 must be MIG-conformant: {e:#?}\n{wire}"));
     }
 
     #[test]
@@ -730,7 +824,8 @@ mod tests {
             }),
             "9900123456789",
         );
-        assert!(info.contains("BGM+E01+55036"), "{info}");
+        assert!(info.contains("BGM+E01+"), "{info}");
+        assert!(info.contains("RFF+Z13:55036"), "{info}");
         assert!(
             !info.contains("DTM+92") && !info.contains("DTM+93"),
             "55036 has no SG4 date column at all: {info}"
@@ -757,7 +852,8 @@ mod tests {
             }),
             "9900123456789",
         );
-        assert!(beendigung.contains("BGM+E02+55037"), "{beendigung}");
+        assert!(beendigung.contains("BGM+E02+"), "{beendigung}");
+        assert!(beendigung.contains("RFF+Z13:55037"), "{beendigung}");
         assert!(beendigung.contains("DTM+93:"), "Ende zum: {beendigung}");
         assert!(beendigung.contains("STS+7++ZC8"), "{beendigung}");
         assert!(
@@ -774,17 +870,19 @@ mod tests {
                 "receiver": "9900987654321",
                 "malo": "51238696012",
                 "document_code": "E02",
-                "transaktionsgrund": "ZH0",
+                "transaktionsgrund": "ZG5",
                 "process_date": "20261201",
                 "lokationstyp": "Z21",
-                "beteiligte_marktpartner": ["9900555000005"],
             }),
             "9900123456789",
         );
-        assert!(aufhebung.contains("BGM+E02+55038"), "{aufhebung}");
+        assert!(aufhebung.contains("BGM+E02+"), "{aufhebung}");
+        assert!(aufhebung.contains("RFF+Z13:55038"), "{aufhebung}");
         assert!(aufhebung.contains("DTM+92:"), "Beginn zum: {aufhebung}");
         assert!(aufhebung.contains("LOC+Z21+"), "Tranche: {aufhebung}");
-        assert!(aufhebung.contains("NAD+VY+9900555000005"), "{aufhebung}");
+        // Bedingung [206] keeps `SG12 NAD+VY` off a 55038: the Aufhebung
+        // names no Beteiligter.
+        assert!(!aufhebung.contains("NAD+VY"), "{aufhebung}");
 
         // 44036 — the Gas twin: `E44` Informationsmeldung at a Meldepunkt,
         // with the DVGW code list throughout.
@@ -802,7 +900,8 @@ mod tests {
             }),
             "9870123456789",
         );
-        assert!(gas.contains("BGM+E44+44036"), "{gas}");
+        assert!(gas.contains("BGM+E44+"), "{gas}");
+        assert!(gas.contains("RFF+Z13:44036"), "{gas}");
         assert!(gas.contains("LOC+172+51238696012"), "{gas}");
         assert!(gas.contains("NAD+VY+9871234567897::332"), "{gas}");
         assert!(!gas.contains("::293"), "{gas}");
@@ -871,7 +970,7 @@ mod tests {
             let out = send(leg, daten(leg.anfrage_pid));
             let text = wire_of(&out);
             assert!(
-                text.contains(&format!("BGM+{bgm}+{}", leg.anfrage_pid)),
+                text.contains(&format!("BGM+{bgm}+")),
                 "{} wants BGM+{bgm}:\n{text}",
                 leg.anfrage_pid
             );
@@ -907,7 +1006,8 @@ mod tests {
         )
         .expect("answered");
         let text = wire_of(&answered.outbox[0]);
-        assert!(text.contains("BGM+E01+55239"), "{text}");
+        assert!(text.contains("BGM+E01+"), "{text}");
+        assert!(text.contains("RFF+Z13:55239"), "{text}");
         assert!(text.contains("LOC+Z16+51238696012"), "{text}");
         assert!(
             text.contains("LOC+Z15+DE0001234567890000000000000000123"),
@@ -1136,6 +1236,7 @@ mod tests {
             serde_json::json!({
                 "pid": 13003_u32,
                 "mabis_zp_id": "DE0004030099000000000000000012345",
+                "obis_code": "1-1:1.29.0",
                 "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
             }),
         );
@@ -1159,6 +1260,7 @@ mod tests {
                 "sender_mp_id": "9900357000004",
                 "receiver_mp_id": "9900987654321",
                 "malo_id": "51238696781",
+                "order_reference": "BESTELLUNG-2026-1",
                 "arbeit": {
                     "quantity": "184500.000",
                     "from": "202601010000+00",
@@ -1166,7 +1268,7 @@ mod tests {
                 },
                 "leistungsmaxima": [
                     { "quantity": "412.5", "period": "202602" },
-                    { "quantity": "398.0", "period": "202601", "ersatzwert": true },
+                    { "quantity": "398.0", "period": "202601", "ersatzwert": true, "ersatzwert_verfahren": "Z88" },
                 ],
             }),
         );
@@ -1174,16 +1276,17 @@ mod tests {
             render_to_wire_bytes(&msg, &test_registry("9900123456789")).expect("13015 must render");
         let wire = String::from_utf8(wire.bytes).expect("utf-8");
 
-        // Work: DE 6063 `220` (Wahrer Wert), bounded by the billing period.
-        assert!(wire.contains("QTY+220:184500.000:KWH"), "{wire}");
+        // Work: DE 6063 `220` (Wahrer Wert), bounded by the billing period. The
+        // 13015 column lists no DE 6411, so the quantities carry no unit.
+        assert!(wire.contains("QTY+220:184500.000'"), "{wire}");
         assert!(wire.contains("DTM+163:202601010000?+00:303"), "{wire}");
         assert!(wire.contains("DTM+164:202605010000?+00:303"), "{wire}");
 
         // Maxima: power, each with the month it occurred in.
-        assert!(wire.contains("QTY+220:412.5:KWT"), "{wire}");
+        assert!(wire.contains("QTY+220:412.5'"), "{wire}");
         assert!(wire.contains("DTM+306:202602:610"), "{wire}");
         // A substitute maximum must be declared as one, not reported as measured.
-        assert!(wire.contains("QTY+67:398.0:KWT"), "{wire}");
+        assert!(wire.contains("QTY+67:398.0'"), "{wire}");
         assert!(wire.contains("DTM+306:202601:610"), "{wire}");
 
         // Three line items: one work entry plus two maxima.
@@ -1235,7 +1338,7 @@ mod tests {
             )
             .expect("validate")
             .into_error_result()
-            .unwrap_or_else(|e| panic!("ORDERS {pid} must be MIG-conformant: {e}\n{wire}"));
+            .unwrap_or_else(|e| panic!("ORDERS {pid} must be MIG-conformant: {e:#?}\n{wire}"));
         }
     }
 
@@ -1272,16 +1375,23 @@ mod tests {
                 wire.contains(&format!("RFF+{qualifier}:ESA-BE-0001")),
                 "PID {pid} correlates by RFF+{qualifier}: {wire}"
             );
+            // 19011/19012 name the EBD in DE 1082; the 19013/19014 columns
+            // mark DE 4465 alone.
+            let ajt = if matches!(pid, 19011 | 19012) {
+                format!("AJT+{code}+{ebd}'")
+            } else {
+                format!("AJT+{code}'")
+            };
             assert!(
-                wire.contains(&format!("AJT+{code}+{ebd}")),
-                "SG2 AJT carries the Prüfschritt code and its EBD: {wire}"
+                wire.contains(&ajt),
+                "SG2 AJT states the Prüfschritt code as its column does: {wire}"
             );
             edi_energy::EdiEnergyMessage::validate(
                 &edi_energy::parse(wire.as_bytes()).expect("parse"),
             )
             .expect("validate")
             .into_error_result()
-            .unwrap_or_else(|e| panic!("ORDRSP {pid} must be MIG-conformant: {e}\n{wire}"));
+            .unwrap_or_else(|e| panic!("ORDRSP {pid} must be MIG-conformant: {e:#?}\n{wire}"));
         }
     }
 
@@ -1329,7 +1439,7 @@ mod tests {
             "PID in SG15 RFF+Z13: {wire}"
         );
         assert!(
-            wire.contains("STS+Z21+:105"),
+            wire.contains("STS+Z21+105"),
             "STS Z21/105 „beendet\": {wire}"
         );
         assert!(wire.contains("CNI+1"), "Vorgangsnummer SG14 CNI: {wire}");
@@ -1344,7 +1454,7 @@ mod tests {
         edi_energy::EdiEnergyMessage::validate(&edi_energy::parse(wire.as_bytes()).expect("parse"))
             .expect("validate")
             .into_error_result()
-            .unwrap_or_else(|e| panic!("IFTSTA 21042 must be MIG-conformant: {e}\n{wire}"));
+            .unwrap_or_else(|e| panic!("IFTSTA 21042 must be MIG-conformant: {e:#?}\n{wire}"));
     }
 
     #[test]
@@ -1408,6 +1518,8 @@ mod tests {
                 "pid": 39002_u32,
                 "sender": "9900555000005",
                 "receiver": "9900357000004",
+                // `SG1 RFF+ON` — the Bestellung being cancelled, Muss.
+                "order_reference": "BESTELLUNG-2026-1",
             }),
         );
         let wire =
@@ -1422,7 +1534,7 @@ mod tests {
         edi_energy::EdiEnergyMessage::validate(&edi_energy::parse(wire.as_bytes()).expect("parse"))
             .expect("validate")
             .into_error_result()
-            .unwrap_or_else(|e| panic!("39002 Stornierung must be MIG-conformant: {e}\n{wire}"));
+            .unwrap_or_else(|e| panic!("39002 Stornierung must be MIG-conformant: {e:#?}\n{wire}"));
     }
 
     #[test]
@@ -1461,7 +1573,9 @@ mod tests {
         edi_energy::EdiEnergyMessage::validate(&edi_energy::parse(wire.as_bytes()).expect("parse"))
             .expect("validate")
             .into_error_result()
-            .unwrap_or_else(|e| panic!("35003 Werteanfrage must be MIG-conformant: {e}\n{wire}"));
+            .unwrap_or_else(|e| {
+                panic!("35003 Werteanfrage must be MIG-conformant: {e:#?}\n{wire}")
+            });
     }
 
     /// `PIA+5 DE7140` accepts only Kapitel-4.6 codes (REQOTE AHB 1.2 §4.3
@@ -1503,8 +1617,10 @@ mod tests {
                 "messprodukt": "9991000003056",
                 // Condition [2042]/[2071]: one Artikel-ID per priced position,
                 // and one `PRI+CAL` per Artikel-ID. The last two digits of the
-                // ID select the price kind (01 Einrichtung, 03 Betrieb).
-                "artikel_ids": ["9991000012301", "9991000012303"],
+                // `an16` ID select the price kind ([83]–[85]: 01 Einrichtung,
+                // 02 Betrieb, 03 Transaktion).
+                "artikel_ids": ["9991000012300001", "9991000012300002"],
+                "obis": ["1-1:1.29.0"],
                 "preise": [
                     { "betrag": "12.50", "art": "Z01", "einheit": "H87" },
                     { "betrag": "0.35",  "art": "Z03", "einheit": "DAY" }
@@ -1529,7 +1645,7 @@ mod tests {
         edi_energy::EdiEnergyMessage::validate(&edi_energy::parse(wire.as_bytes()).expect("parse"))
             .expect("validate")
             .into_error_result()
-            .unwrap_or_else(|e| panic!("15003 Angebot must be MIG-conformant: {e}\n{wire}"));
+            .unwrap_or_else(|e| panic!("15003 Angebot must be MIG-conformant: {e:#?}\n{wire}"));
 
         // Ablehnung: reason as FTX+ACB (the only MIG-permitted DE 4451), no
         // Bindungsfrist.
@@ -1593,7 +1709,7 @@ mod tests {
             "korrelation_ref": "ESA-WA-1",
             "messprodukt": "9991000003056",
             "currency": "EUR",
-            "artikel_ids": ["9990001100002"],
+            "artikel_ids": ["9990001100000002"],
             "obis": ["1-1:1.29.0"],
             "preise": [{ "betrag": "0.004500", "art": "Z03", "einheit": "DAY" }],
         }));
@@ -1611,7 +1727,7 @@ mod tests {
             .expect("the Betriebspreis survives the round trip");
         assert_eq!(preis.betrag, "0.004500");
         assert_eq!(preis.einheit, "DAY");
-        assert_eq!(preis.artikel_id, "9990001100002");
+        assert_eq!(preis.artikel_id, "9990001100000002");
 
         // Ablehnung — no priced position, grounds in `FTX+ACB`.
         let ablehnung = render(serde_json::json!({
@@ -1643,6 +1759,7 @@ mod tests {
                 "sender_mp_id": "9900357000004",
                 "receiver_mp_id": esa,
                 "malo_id": "51238696781",
+                "order_reference": "BESTELLUNG-2026-1",
                 "korrelation_ref": "ORDERDOC0001",
                 "reads": [
                     { "dtm_from": "202603100000+00", "dtm_to": "202603100015+00",
@@ -1674,9 +1791,10 @@ mod tests {
         );
         assert!(wire.contains(":303'"), "DTM+137 format 303: {wire}");
         assert!(wire.contains("RFF+AGI:ORDERDOC0001"), "{wire}");
-        // Both quarter-hour Wirkarbeit values, under one OBIS line item.
-        assert!(wire.contains("QTY+220:0.250:KWH"), "{wire}");
-        assert!(wire.contains("QTY+220:0.310:KWH"), "{wire}");
+        // Both quarter-hour Wirkarbeit values, under one OBIS line item; the
+        // 13027 column lists no DE 6411.
+        assert!(wire.contains("QTY+220:0.250'"), "{wire}");
+        assert!(wire.contains("QTY+220:0.310'"), "{wire}");
         assert_eq!(wire.matches("LIN+").count(), 1, "one OBIS register: {wire}");
 
         // The message re-parses cleanly.
@@ -1692,6 +1810,7 @@ mod tests {
             serde_json::json!({
                 "pid": 13015_u32,
                 "malo_id": "51238696781",
+                "order_reference": "BESTELLUNG-2026-1",
                 "arbeit": { "quantity": "1", "from": "202601010000+00", "to": "202602010000+00" },
                 "leistungsmaxima": [
                     { "quantity": "1", "period": "202601" },
@@ -1723,6 +1842,7 @@ mod tests {
                 serde_json::json!({
                     "pid": pid,
                     "mabis_zp_id": "DE0004030099000000000000000012345",
+                "obis_code": "1-1:1.29.0",
                 "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
                     "balancing_period": "202606",
                     "version": "20260714050000+00",
@@ -1734,6 +1854,7 @@ mod tests {
                 serde_json::json!({
                     "pid": pid,
                     "malo_id": "51238696781",
+                "order_reference": "BESTELLUNG-2026-1",
                     "arbeit": {
                         "quantity": "1",
                         "from": "202601010000+00",
@@ -1762,6 +1883,7 @@ mod tests {
             serde_json::json!({
                 "pid": 13019_u32,
                 "malo_id": "51238696781",
+                "order_reference": "BESTELLUNG-2026-1",
                 "arbeit": { "quantity": "1", "from": "202601010000+00", "to": "202602010000+00" },
                 "leistungsmaxima": [{ "quantity": "5", "period": "202601" }],
             }),
@@ -1783,6 +1905,7 @@ mod tests {
             serde_json::json!({
                 "pid": 13015_u32,
                 "malo_id": "51238696781",
+                "order_reference": "BESTELLUNG-2026-1",
                 "arbeit": {
                     "quantity": "1",
                     "from": "202601010000+00",
@@ -1809,6 +1932,7 @@ mod tests {
             serde_json::json!({
                 "pid": 13021_u32,
                 "mabis_zp_id": "DE0004030099000000000000000012345",
+                "obis_code": "1-1:1.29.0",
                 "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
                 "balancing_period": "202606",
                 "version": "20260714050000+00",
@@ -1834,6 +1958,7 @@ mod tests {
             serde_json::json!({
                 "pid": 13023_u32,
                 "mabis_zp_id": "DE0004030099000000000000000012345",
+                "obis_code": "1-1:1.29.0",
                 "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
                 "balancing_period": "202606",
                 "version": "20260714050000+00",
@@ -1860,6 +1985,7 @@ mod tests {
                 "sender_mp_id": "9900357000004",
                 "receiver_mp_id": "9900077000006",
                 "mabis_zp_id": "DE0004030099000000000000000012345",
+                "obis_code": "1-1:1.29.0",
                 "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
                 "balancing_period": "202606",
                 "version": "20260714050000+00",
@@ -1875,8 +2001,10 @@ mod tests {
 
         assert!(wire.contains("DTM+492:202606:610"), "{wire}");
         assert!(wire.contains("DTM+293:20260714050000?+00:304"), "{wire}");
-        assert!(wire.contains("QTY+79:12.5:KWH"), "{wire}");
-        assert!(wire.contains("QTY+79:13.0:KWH"), "{wire}");
+        // The 13003 column lists no DE 6411: the Summenzeitreihe is in kWh
+        // by definition, so the unit stays off the wire.
+        assert!(wire.contains("QTY+79:12.5'"), "{wire}");
+        assert!(wire.contains("QTY+79:13.0'"), "{wire}");
         // Every quantity carries its own slot bounds.
         assert_eq!(wire.matches("DTM+163:").count(), 2, "{wire}");
         assert_eq!(wire.matches("DTM+164:").count(), 2, "{wire}");

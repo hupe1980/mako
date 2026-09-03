@@ -16,6 +16,7 @@ name       = "makotest_native"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+edifact-rs   = { workspace = true }
 mako-events  = { workspace = true }
 mako-fristen = { workspace = true }
 # The Antwortcode catalogue for every prüfende Rolle: a test toolkit resolves a

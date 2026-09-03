@@ -27,8 +27,9 @@ from makotest import (
 )
 from makotest.plugin import LF_ID, NB_ID
 
-#: Itemized Strom rejection — the use case that carries Positionsfehler.
+#: Strom rejection at Kopf und Summe (33003); the position-level one is 33004.
 RUECKMELDUNG_PID = 33003
+POSITIONS_PID = 33004
 RECHNUNG = dict(
     rechnungsnummer="RE-2026-001",
     faelliger_betrag="1234.56",
@@ -36,10 +37,10 @@ RECHNUNG = dict(
 )
 
 
-def rueckmeldung(**kw) -> bytes:
+def rueckmeldung(pid: int = RUECKMELDUNG_PID, **kw) -> bytes:
     """A REMADV refusing an invoice — nothing is transferred."""
     message = build_remadv(
-        RUECKMELDUNG_PID,
+        pid,
         LF_ID,
         NB_ID,
         ueberweisungsbetrag="0",
@@ -78,11 +79,11 @@ class TestRueckmeldung:
 class TestPositionsfehler:
     def test_a_refused_position_carries_its_own_reason(self):
         wire = rueckmeldung(
-            kopf_gruende=[("A70", "E_0406")],
+            POSITIONS_PID,
             positionsfehler=[Positionsfehler(1, [("A70", "E_0406")], "Summenpruefung")],
         )
         text = wire.decode()
-        assert text.count("AJT+") == 2, "one at Kopfebene, one at the position"
+        assert text.count("AJT+") == 1, "on the position; 33004 carries no Kopf-AJT"
         assert "DLI+1" in text
         assert_edifact_valid(wire, on=ON)
 
@@ -90,13 +91,13 @@ class TestPositionsfehler:
         """`SG10` repeats up to 9999 times — one per refused Rechnungsposition.
 
         REMADV MIG 2.9e segment 0410 makes „Rückmeldungen auf Positionsebene"
-        `C … 9999`, which is the whole point of the itemized rejection 33003 /
-        33004. The groups sit *before* `UNS`, so an order check that treated the
+        `C … 9999`, which is the whole point of the itemized rejection 33004.
+        The groups sit *before* `UNS`, so an order check that treated the
         header as a flat sequence rejected every second `DLI`.
         """
         for count in (1, 2, 5):
             wire = rueckmeldung(
-                kopf_gruende=[("A70", "E_0406")],
+                POSITIONS_PID,
                 positionsfehler=[
                     Positionsfehler(n + 1, [("A70", "E_0406")]) for n in range(count)
                 ],

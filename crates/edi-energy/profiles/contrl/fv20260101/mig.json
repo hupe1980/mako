@@ -1,197 +1,713 @@
 {
-  "schema_version": 1,
+  "ahb_version": "1.0",
+  "envelope": [],
   "message_type": "CONTRL",
-  "release": "2.0b",
-  "valid_from": "2026-01-01",
-  "supersedes_directory": "fv20251001",
   "pid_exempt": true,
-  "segments": [
+  "pid_source": "bgm_de1004",
+  "release": "2.0b",
+  "schema_version": 2,
+  "source": {
+    "file": "CONTRL_MIG_2.0b_-_ausserordentliche_Veroeffentlichung_Stand_11.12.2025.pdf",
+    "sha256": "1c795e927f8451238df05a0a7ba5ae2ce88b731a5a38ed358446c6760ce3abb9",
+    "title": "CONTRL MIG 2.0b - außerordentliche Veröffentlichung Stand: 11.12.2025"
+  },
+  "structure": [
     {
-      "tag": "UNH",
-      "name": "Nachrichten-Kopfsegment",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "format": "an..14",
           "id": "0062",
-          "status": "M",
-          "components": 1
+          "name": "Nachrichten-Referenznummer",
+          "note": "Eindeutige Nachrichtenreferenz des Absenders. Laufende Nummer der Nachrichten im Datenaustausch. Identisch mit DE0062 im UNT, i. d. R. vom sendenden Konverter vergeben.",
+          "status": "M"
         },
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "CONTRL",
+                  "name": "Syntax- und Servicebericht"
+                }
+              ],
+              "format": "an..6",
+              "id": "0065",
+              "name": "Nachrichtentyp-Kennung",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "D",
+                  "name": "Entwurfs-Version"
+                }
+              ],
+              "format": "an..3",
+              "id": "0052",
+              "name": "Versionsnummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "3",
+                  "name": "Dritte Ausgabe (CONTRL-Nachricht)"
+                }
+              ],
+              "format": "an..3",
+              "id": "0054",
+              "name": "Freigabenummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "UN",
+                  "name": "UN/CEFACT"
+                }
+              ],
+              "format": "an..2",
+              "id": "0051",
+              "name": "Verwaltende Organisation",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "2.0b",
+                  "name": "Versionsnummer der zugrundeliegenden BDEW-Nachrichtenbeschreibung"
+                }
+              ],
+              "format": "an..6",
+              "id": "0057",
+              "name": "Anwendungscode der zuständigen Organisation",
+              "status": "R"
+            }
+          ],
           "id": "S009",
-          "status": "M",
-          "components": 6
-        }
-      ]
-    },
-    {
-      "tag": "UCI",
-      "name": "Übertragungsdatei-Antwort",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "0020",
-          "status": "M",
-          "components": 1
-        },
-        {
-          "id": "S002",
-          "status": "M",
-          "components": 4
-        },
-        {
-          "id": "S003",
-          "status": "M",
-          "components": 4
-        },
-        {
-          "id": "0083",
-          "status": "M",
-          "components": 1
-        },
-        {
-          "id": "0085",
-          "status": "C",
-          "components": 1
-        },
-        {
-          "id": "0013",
-          "status": "C",
-          "components": 1
-        },
-        {
-          "id": "S011",
-          "status": "C",
-          "components": 2
+          "name": "Nachrichten-Kennung",
+          "status": "M"
         }
       ],
-      "qualifier_restrictions": {
-        "0083": [
-          "4",
-          "7"
-        ]
-      }
+      "example": "UNH+hji78+CONTRL:D:3:UN:2.0b'",
+      "max": 1,
+      "name": "Nachrichten-Kopfsegment",
+      "nr": "00001",
+      "status": "M",
+      "tag": "UNH",
+      "zaehler": "0010"
     },
     {
-      "tag": "UNT",
-      "name": "Nachrichten-Endesegment",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
-          "id": "0074",
-          "status": "M",
-          "components": 1
+          "format": "an..14",
+          "id": "0020",
+          "name": "Datenaustauschreferenz",
+          "note": "Eindeutige Referenz zur Identifikation der Übertragungsdatei, vergeben vom Absender. Diese bezieht sich auf den Inhalt des DE0020 im UNB- Segment der Übertragungsdatei deren Syntaxprüfergebnis übermittelt wird.",
+          "status": "M"
         },
         {
-          "id": "0062",
-          "status": "M",
-          "components": 1
-        }
-      ]
-    }
-  ],
-  "segment_groups": [
-    {
-      "id": "SG1",
-      "trigger_segment": "UCM",
-      "mandatory": false,
-      "max_occurrences": 999999,
-      "segments": [
+          "components": [
+            {
+              "format": "an..35",
+              "id": "0004",
+              "name": "Absenderbezeichnung",
+              "note": "MP-ID",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "14",
+                  "name": "GS1"
+                },
+                {
+                  "code": "500",
+                  "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                },
+                {
+                  "code": "502",
+                  "name": "DE, DVGW (Deutsche Vereinigung des Gas- und Wasserfaches e.V.)"
+                }
+              ],
+              "format": "an..3",
+              "id": "0007",
+              "name": "Teilnehmerbezeichnung, Qualifier",
+              "status": "R"
+            }
+          ],
+          "id": "S002",
+          "name": "Absender der Übertragungsdatei",
+          "status": "M"
+        },
         {
-          "tag": "UCM",
-          "name": "Nachrichtenantwort",
-          "mandatory": true,
-          "max_occurrences": 1,
+          "components": [
+            {
+              "format": "an..35",
+              "id": "0010",
+              "name": "Empfängerbezeichnung",
+              "note": "MP-ID",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "14",
+                  "name": "GS1"
+                },
+                {
+                  "code": "500",
+                  "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                },
+                {
+                  "code": "502",
+                  "name": "DE, DVGW (Deutsche Vereinigung des Gas- und Wasserfaches e.V.)"
+                }
+              ],
+              "format": "an..3",
+              "id": "0007",
+              "name": "Teilnehmerbezeichnung, Qualifier",
+              "status": "R"
+            }
+          ],
+          "id": "S003",
+          "name": "Empfänger der Übertragungsdatei",
+          "status": "M"
+        },
+        {
+          "codes": [
+            {
+              "code": "4",
+              "name": "Diese Ebene und alle tieferen Ebenen zurückgewiesen"
+            },
+            {
+              "code": "7",
+              "name": "Übertragung bestätigt (keine Syntaxfehler)"
+            }
+          ],
+          "format": "n1",
+          "id": "0083",
+          "name": "Aktion, codiert",
+          "status": "M"
+        },
+        {
+          "codes": [
+            {
+              "code": "2",
+              "name": "Syntax-Version oder -ebene nicht unterstützt Mitteilung, dass die Syntax-Version und/oder - ebene vom Empfänger nicht unterstützt wird."
+            },
+            {
+              "code": "7",
+              "name": "Empfänger der Übertragungsdatei ist nicht der tatsächliche Empfänger Mitteilung, dass der Empfänger der Übertragungsdatei (S003) vom tatsächlichen Empfänger abweicht."
+            },
+            {
+              "code": "12",
+              "name": "Ungültiger Wert Mitteilung, dass der Wert eines einfachen Datenelements, einer Datenelementgruppe oder eines Gruppendatenelements nicht den entsprechenden Spezifikationen entspricht."
+            },
+            {
+              "code": "13",
+              "name": "Fehlt Mitteilung, dass ein mit M oder R gekennzeichnetes Service- oder Nutzdaten- Segment, Datenelement, eine Datenelementgruppe oder ein Gruppendatenelement fehlt."
+            },
+            {
+              "code": "16",
+              "name": "Zu viele Bestandteile Mitteilung, dass das identifizierte Segment zu viele Datenelemente oder die identifizierte Datenelementgruppe zu viele Gruppendatenelemente enthält."
+            },
+            {
+              "code": "20",
+              "name": "Zeichen ungültig als Service-Zeichen Mitteilung, dass ein im UNA angezeigtes Zeichen als Service-Zeichen ungültig ist."
+            },
+            {
+              "code": "21",
+              "name": "Ungültige(s) Zeichen Mitteilung, dass ein oder mehrere in der Übertragungsdatei verwendete Zeichen nach der definierten Syntax-Ebene im Segment UNB ungültig sind. Das ungültige Zeichen ist Teil der Bezugsebene oder folgt unmittelbar dem identifizierten Teil der Übertragungsdatei."
+            },
+            {
+              "code": "23",
+              "name": "Unbekannter Absender der Übertragungsdatei Mitteilung, dass der Absender der Übertragungsdatei (S002) unbekannt ist (MP- ID bei Empfänger nicht bekannt)."
+            },
+            {
+              "code": "25",
+              "name": "Test-Kennzeichen nicht unterstützt Mitteilung, dass die Test-Verarbeitung für die angegebene Übertragungsdatei, Nachrichtengruppe oder Nachricht nicht durchgeführt werden konnte."
+            },
+            {
+              "code": "26",
+              "name": "Duplikat gefunden Mitteilung, dass ein mögliches Duplikat einer früher empfangenen Übertragungsdatei gefunden wurde. Die frühere Übertragung kann zurückgewiesen worden sein (Datenaustauschreferenz des Absenders bei Empfänger bereits bekannt)."
+            },
+            {
+              "code": "28",
+              "name": "Referenzen stimmen nicht überein Mitteilung, dass die Prüfreferenzen im Segment UNB nicht denen in den Segment UNZ entsprechen."
+            },
+            {
+              "code": "29",
+              "name": "Kontrollzähler entspricht nicht der Anzahl empfangender Fälle Mitteilung, dass die Anzahl der Nachrichten nicht der im Segment UNZ angegebenen Anzahl entspricht."
+            },
+            {
+              "code": "32",
+              "name": "Tiefere Ebene leer Mitteilung, dass die Übertragungsdatei keine Nachrichten enthielt."
+            }
+          ],
+          "format": "n..2",
+          "id": "0085",
+          "name": "Syntax-Fehler, codiert",
+          "status": "D"
+        },
+        {
+          "codes": [
+            {
+              "code": "UNA",
+              "name": "Trennzeichenvorgabe"
+            },
+            {
+              "code": "UNB",
+              "name": "Nutzdaten-Kopfsegment"
+            },
+            {
+              "code": "UNZ",
+              "name": "Nutzdaten-Endesegment"
+            }
+          ],
+          "format": "a3",
+          "id": "0013",
+          "name": "Service-Segmentbezeichner, codiert",
+          "status": "D"
+        },
+        {
+          "components": [
+            {
+              "format": "n..3",
+              "id": "0098",
+              "name": "Segmentposition des fehlerhaften Datenelements",
+              "note": "Segmentposition des fehlerhaften Datenelements / Datenelementgruppe",
+              "status": "M"
+            },
+            {
+              "format": "n..3",
+              "id": "0104",
+              "name": "Position des fehlerhaften Gruppendatenelements",
+              "status": "D"
+            }
+          ],
+          "id": "S011",
+          "name": "Datenelement-Identifikation",
+          "status": "D"
+        }
+      ],
+      "example": "UCI+hfdaölksa+4012345000023:14+4078901000029:14+4+2+UNB+2:2'",
+      "max": 1,
+      "name": "Übertragungsdatei-Antwort",
+      "nr": "00002",
+      "status": "M",
+      "tag": "UCI",
+      "zaehler": "0020"
+    },
+    {
+      "children": [
+        {
           "elements": [
             {
+              "format": "an..14",
               "id": "0062",
-              "status": "C",
-              "components": 1
+              "name": "Nachrichten-Referenznummer",
+              "status": "M"
             },
             {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "APERAK",
+                      "name": "Anwendungsfehler- und Bestätigungs- Nachricht"
+                    },
+                    {
+                      "code": "COMDIS",
+                      "name": "Handelsunstimmigkeit"
+                    },
+                    {
+                      "code": "IFTSTA",
+                      "name": "Multimodaler Statusbericht"
+                    },
+                    {
+                      "code": "INSRPT",
+                      "name": "Prüfbericht"
+                    },
+                    {
+                      "code": "INVOIC",
+                      "name": "Rechnung"
+                    },
+                    {
+                      "code": "MSCONS",
+                      "name": "Bericht über den Verbrauch messbarer Dienstleistungen"
+                    },
+                    {
+                      "code": "ORDCHG",
+                      "name": "Bestelländerung"
+                    },
+                    {
+                      "code": "ORDERS",
+                      "name": "Bestellung"
+                    },
+                    {
+                      "code": "ORDRSP",
+                      "name": "Bestellantwort"
+                    },
+                    {
+                      "code": "PARTIN",
+                      "name": "Partnerstammdaten"
+                    },
+                    {
+                      "code": "PRICAT",
+                      "name": "Preisliste/Katalog"
+                    },
+                    {
+                      "code": "QUOTES",
+                      "name": "Angebot"
+                    },
+                    {
+                      "code": "REMADV",
+                      "name": "Zahlungsavis"
+                    },
+                    {
+                      "code": "REQOTE",
+                      "name": "Anfrage"
+                    },
+                    {
+                      "code": "UTILMD",
+                      "name": "Netzanschluss-Stammdaten"
+                    },
+                    {
+                      "code": "UTILTS",
+                      "name": "Netznutzungszeiten-Nachricht"
+                    }
+                  ],
+                  "format": "a..6",
+                  "id": "0065",
+                  "name": "Nachrichtentyp-Kennung",
+                  "status": "M"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "D",
+                      "name": "Entwurfs-Version"
+                    }
+                  ],
+                  "format": "a1",
+                  "id": "0052",
+                  "name": "Versionsnummer des Nachrichtentyps",
+                  "status": "M"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "XYZ",
+                      "name": "Beispielcode Beispielcode - dieser Code ist in der Anwendung durch einen zulässigen Code zu ersetzen!"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "0054",
+                  "name": "Freigabenummer des Nachrichtentyps",
+                  "note": "Freigabenummer des Nachrichtentyps der zugrundeliegenden BDEW-Nachrichtenbeschreibung",
+                  "status": "M"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "UN",
+                      "name": "UN/CEFACT"
+                    }
+                  ],
+                  "format": "a2",
+                  "id": "0051",
+                  "name": "Verwaltende Organisation",
+                  "status": "M"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "XYZ",
+                      "name": "Beispielcode Beispielcode - dieser Code ist in der Anwendung durch einen zulässigen Code zu ersetzen!"
+                    }
+                  ],
+                  "format": "an..6",
+                  "id": "0057",
+                  "name": "Anwendungscode der zuständigen Organisation",
+                  "note": "Versionsnummer der zugrundeliegenden BDEW- Nachrichtenbeschreibung",
+                  "status": "R"
+                }
+              ],
               "id": "S009",
-              "status": "M",
-              "components": 6
+              "name": "Nachrichten-Kennung",
+              "status": "M"
             },
             {
+              "codes": [
+                {
+                  "code": "4",
+                  "name": "Diese Ebene und alle tieferen Ebenen zurückgewiesen"
+                }
+              ],
+              "format": "n1",
               "id": "0083",
-              "status": "M",
-              "components": 1
+              "name": "Aktion, codiert",
+              "status": "M"
             },
             {
+              "codes": [
+                {
+                  "code": "12",
+                  "name": "Ungültiger Wert Mitteilung, dass der Wert eines einfachen Datenelements, einer Datenelementgruppe oder eines Gruppendatenelements nicht den entsprechenden Spezifikationen entspricht."
+                },
+                {
+                  "code": "13",
+                  "name": "Fehlt Mitteilung, dass ein Servicesegment, Datenelement, eine Datenelementgruppe oder ein Gruppendatenelement fehlt."
+                },
+                {
+                  "code": "16",
+                  "name": "Zu viele Bestandteile Mitteilung, dass das identifizierte Segment zu viele Datenelemente oder die identifizierte Datenelementgruppe zu viele Gruppendatenelemente enthält."
+                },
+                {
+                  "code": "21",
+                  "name": "Ungültige(s) Zeichen Mitteilung, dass ein oder mehrere in der Übertragungsdatei verwendete Zeichen nach der definierten Syntax-Ebene im Segment UNB ungültig sind. Das ungültige Zeichen ist Teil der Bezugsebene oder folgt unmittelbar dem identifizierten Teil der Übertragungsdatei."
+                },
+                {
+                  "code": "22",
+                  "name": "Ungültige(s) Service-Zeichen Mitteilung, dass die in der Übertragungsdatei verwendeten Service-Zeichen nicht als Service- Zeichen gültig sind. Diese Zeichen werden entweder im UNA angezeigt oder nach der in UNB angezeigten Syntax-Kennung definiert oder in einer Datenaustauschvereinbarung definiert. Wenn dieser Code in den Segmenten UCS oder UCD verwendet wird, folgt das ungültige Zeichen unmittelbar dem identifizierten Teil der Übertragungsdatei."
+                },
+                {
+                  "code": "26",
+                  "name": "Duplikat gefunden Mitteilung, dass ein Duplikat einer Nachricht in der zugrundeliegenden Übertragungsdatei gefunden wurde."
+                },
+                {
+                  "code": "28",
+                  "name": "Referenzen stimmen nicht überein Mitteilung, dass die Prüfreferenzen im Segment UNH nicht denen im Segment UNT entsprechen."
+                },
+                {
+                  "code": "29",
+                  "name": "Kontrollzähler entspricht nicht der Anzahl empfangender Fälle Mitteilung, dass die Anzahl der Segmente nicht der im Segmenten UNT angegebenen Anzahl entspricht."
+                },
+                {
+                  "code": "39",
+                  "name": "Datenelement zu lang Mitteilung, dass die Länge eines empfangenen Datenelements die maximale Länge nach der Datenelementbeschreibung überschreitet."
+                }
+              ],
+              "format": "n..2",
               "id": "0085",
-              "status": "C",
-              "components": 1
+              "name": "Syntax-Fehler, codiert",
+              "status": "D"
             },
             {
+              "codes": [
+                {
+                  "code": "UNH",
+                  "name": "Nachrichten-Kopfsegment"
+                },
+                {
+                  "code": "UNT",
+                  "name": "Nachrichten-Endesegment"
+                }
+              ],
+              "format": "a3",
               "id": "0013",
-              "status": "C",
-              "components": 1
+              "name": "Service-Segmentbezeichner, codiert",
+              "status": "D"
             },
             {
+              "components": [
+                {
+                  "format": "n..3",
+                  "id": "0098",
+                  "name": "Segmentposition des fehlerhaften Datenelements",
+                  "note": "Segmentposition des fehlerhaften Datenelements / Datenelementgruppe",
+                  "status": "M"
+                },
+                {
+                  "format": "n..3",
+                  "id": "0104",
+                  "name": "Position des fehlerhaften Gruppendatenelements",
+                  "status": "D"
+                }
+              ],
               "id": "S011",
-              "status": "C",
-              "components": 2
+              "name": "Datenelement-Identifikation",
+              "status": "D"
             }
           ],
-          "qualifier_restrictions": {
-            "0083": [
-              "4"
-            ]
-          }
+          "example": "UCM+5zg7989jhz+APERAK:D:XYZ:UN:XYZ+4+12+UNH+3:2'",
+          "max": 1,
+          "name": "Nachrichtenantwort",
+          "nr": "00003",
+          "status": "M",
+          "tag": "UCM",
+          "zaehler": "0040"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "format": "n..6",
+                  "id": "0096",
+                  "name": "Segmentposition in der Nachricht",
+                  "status": "M"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "13",
+                      "name": "Fehlt Mitteilung, dass ein mit M oder R gekennzeichnetes Nutzdaten-Segment fehlt."
+                    },
+                    {
+                      "code": "15",
+                      "name": "Nicht unterstützt an dieser Position Mitteilung, dass der Empfänger die Verwendung des Typs von Segment, an der identifizierten Position nicht unterstützt."
+                    },
+                    {
+                      "code": "16",
+                      "name": "Zu viele Bestandteile Mitteilung, dass das identifizierte Segment zu viele Datenelemente oder Datenelementgruppen enthält."
+                    },
+                    {
+                      "code": "22",
+                      "name": "Ungültige(s) Service-Zeichen Mitteilung, dass die in der Übertragungsdatei verwendeten Service-Zeichen nicht als Service- Zeichen gültig sind. Diese Zeichen werden entweder im UNA angezeigt oder nach der in UNB angezeigten Syntax-Kennung definiert oder in einer Datenaustauschvereinbarung definiert. Wenn dieser Code in den Segmenten UCS oder UCD verwendet wird, folgt das ungültige Zeichen unmittelbar dem identifizierten Teil der Übertragungsdatei."
+                    },
+                    {
+                      "code": "35",
+                      "name": "Zu viele Segment-Wiederholungen Mitteilung, dass ein Segment zu oft wiederholt wurde."
+                    },
+                    {
+                      "code": "36",
+                      "name": "Zu viele Segmentgruppen-Wiederholungen Mitteilung, dass eine Segmentgruppe zu oft wiederholt wurde."
+                    }
+                  ],
+                  "format": "n..2",
+                  "id": "0085",
+                  "name": "Syntax-Fehler, codiert",
+                  "status": "D"
+                }
+              ],
+              "example": "UCS+9+13'",
+              "max": 1,
+              "name": "Segment-Fehleranzeige",
+              "nr": "00004",
+              "status": "M",
+              "tag": "UCS",
+              "zaehler": "0060"
+            },
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "12",
+                      "name": "Ungültiger Wert Mitteilung, dass der Wert eines einfachen Datenelements, einer Datenelementgruppe oder eines Gruppendatenelements nicht den entsprechenden Spezifikationen entspricht (z. B. Qualifier nicht aus erlaubtem Wertebereich oder ungültiges Datumsformat)."
+                    },
+                    {
+                      "code": "13",
+                      "name": "Fehlt Mitteilung, dass ein mit M oder R gekennzeichnetes Datenelement, eine Datenelementgruppe oder ein Gruppendatenelement fehlt."
+                    },
+                    {
+                      "code": "16",
+                      "name": "Zu viele Bestandteile Mitteilung, dass die identifizierte Datenelementgruppe zu viele Gruppendatenelemente enthält."
+                    },
+                    {
+                      "code": "19",
+                      "name": "Ungültige Dezimalbeschreibung Mitteilung, dass die im Datenelement verwendete Dezimalschreibung nicht mit derjenigen im UNA angezeigten übereinstimmt."
+                    },
+                    {
+                      "code": "21",
+                      "name": "Ungültige(s) Zeichen Mitteilung, dass ein oder mehrere in der Übertragungsdatei verwendete Zeichen nach der definierten Syntax-Ebene im Segment UNB ungültig sind. Das ungültige Zeichen ist Teil der Bezugsebene oder folgt unmittelbar dem identifizierten Teil der Übertragungsdatei."
+                    },
+                    {
+                      "code": "22",
+                      "name": "Ungültige(s) Service-Zeichen Mitteilung, dass die in der Übertragungsdatei verwendeten Service-Zeichen nicht als Service- Zeichen gültig sind. Diese Zeichen werden entweder im UNA angezeigt oder nach der in UNB angezeigten Syntax-Kennung definiert oder in einer Datenaustauschvereinbarung definiert. Wenn dieser Code in den Segmenten UCS oder UCD verwendet wird, folgt das ungültige Zeichen unmittelbar dem identifizierten Teil der Übertragungsdatei."
+                    },
+                    {
+                      "code": "37",
+                      "name": "Ungültige Zeichenart Mitteilung, dass ein oder mehrere numerische Zeichen in einem alphabetischen (Gruppen-) Datenelement oder ein oder mehrere alphabetische Zeichen in einem numerischen (Gruppen-)Datenelement verwendet wurden."
+                    },
+                    {
+                      "code": "38",
+                      "name": "Fehlende Ziffer vor dem Dezimalzeichen Mitteilung, dass vor einem Dezimalzeichen nicht eine oder mehrere Ziffern stehen."
+                    },
+                    {
+                      "code": "39",
+                      "name": "Datenelement zu lang Mitteilung, dass die Länge eines empfangenen Datenelements die maximale Länge nach der Datenelementbeschreibung überschreitet."
+                    },
+                    {
+                      "code": "40",
+                      "name": "Datenelement zu kurz Mitteilung, dass die Länge eines empfangenen Datenelements die Mindestlänge nach der Datenelementbeschreibung unterschreitet."
+                    }
+                  ],
+                  "format": "n..2",
+                  "id": "0085",
+                  "name": "Syntax-Fehler, codiert",
+                  "status": "M"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "n..3",
+                      "id": "0098",
+                      "name": "Segmentposition des fehlerhaften Datenelements",
+                      "note": "Segmentposition des fehlerhaften Datenelements / Datenelementgruppe",
+                      "status": "M"
+                    },
+                    {
+                      "format": "n..3",
+                      "id": "0104",
+                      "name": "Position des fehlerhaften Gruppendatenelements",
+                      "status": "D"
+                    }
+                  ],
+                  "id": "S011",
+                  "name": "Datenelement-Identifikation",
+                  "status": "M"
+                }
+              ],
+              "example": "UCD+12+3:2'",
+              "max": 99,
+              "name": "Datenelement-Fehleranzeige",
+              "nr": "00005",
+              "status": "D",
+              "tag": "UCD",
+              "zaehler": "0070"
+            }
+          ],
+          "group": "SG2",
+          "max": 999,
+          "name": "UCS-UCD",
+          "status": "D",
+          "zaehler": "0050"
         }
       ],
-      "groups": [
+      "group": "SG1",
+      "max": 999999,
+      "name": "UCM-SG2",
+      "status": "D",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
         {
-          "id": "SG2",
-          "trigger_segment": "UCS",
-          "mandatory": false,
-          "max_occurrences": 999,
-          "segments": [
-            {
-              "tag": "UCS",
-              "name": "Segment-Fehleranzeige",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
-                {
-                  "id": "0096",
-                  "status": "M",
-                  "components": 1
-                },
-                {
-                  "id": "0085",
-                  "status": "C",
-                  "components": 1
-                }
-              ]
-            },
-            {
-              "tag": "UCD",
-              "name": "Datenelement-Fehleranzeige",
-              "mandatory": false,
-              "max_occurrences": 99,
-              "elements": [
-                {
-                  "id": "0085",
-                  "status": "M",
-                  "components": 1
-                },
-                {
-                  "id": "S011",
-                  "status": "M",
-                  "components": 2
-                }
-              ]
-            }
-          ],
-          "groups": []
+          "format": "n..6",
+          "id": "0074",
+          "name": "Anzahl der Segmente in einer Nachricht",
+          "note": "Hier wird die Gesamtzahl der Segmente einer Nachricht angegeben.",
+          "status": "M"
+        },
+        {
+          "format": "an..14",
+          "id": "0062",
+          "name": "Nachrichten-Referenznummer",
+          "note": "Die Referenznummer aus dem UNH-Segment muss hier wiederholt werden.",
+          "status": "M"
         }
-      ]
+      ],
+      "example": "UNT+6+hji78'",
+      "max": 1,
+      "name": "Nachrichten-Endesegment",
+      "nr": "00006",
+      "status": "M",
+      "tag": "UNT",
+      "zaehler": "0150"
     }
   ],
-  "ahb_revision": "1.0",
-  "source_document": "CONTRL MIG 2.0b, Stand 01.01.2026"
+  "valid_from": "2026-01-01"
 }

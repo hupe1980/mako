@@ -30,13 +30,11 @@ pub fn wim_invoic_registry() -> AdapterRegistry<WimInvoicWorkflow> {
                 ));
             };
 
-            let pid = inv
-                .bgm()
-                .and_then(|b| b.pruefidentifikator())
-                .ok_or_else(|| {
-                    EngineError::Deserialization(
-                        "WiM Rechnung adapter: PID not found in INVOIC BGM".into(),
-                    )
+            let pid = edi_energy::EdiEnergyMessage::detect_pruefidentifikator(inv)
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "WiM Rechnung adapter: no Prüfidentifikator in the INVOIC ({e})"
+                    ))
                 })
                 .and_then(convert_pid)?;
             let (validation_passed, validation_errors) = super::ahb_verdict(msg);
@@ -1103,7 +1101,9 @@ fn extract_angebot(msg: &AnyMessage) -> mako_wim::esa::Angebot {
                 let Some(betrag) = seg.component_str(0, 1) else {
                     continue;
                 };
-                let Some(preistyp) = seg.component_str(0, 2).and_then(Preistyp::from_pri_code)
+                // C509: 5125, 5118, 5375, 5387, 5284, 6411 — the Preisart
+                // code is component 3, the unit component 5.
+                let Some(preistyp) = seg.component_str(0, 3).and_then(Preistyp::from_pri_code)
                 else {
                     continue;
                 };
@@ -1112,8 +1112,6 @@ fn extract_angebot(msg: &AnyMessage) -> mako_wim::esa::Angebot {
                     artikel_id: artikel_id.cloned().unwrap_or_default(),
                     preistyp,
                     betrag: betrag.to_owned(),
-                    // C509: 5125, 5118, 5387, 5284, 6411 — the unit is
-                    // component 5 of the first element.
                     einheit: seg.component_str(0, 5).unwrap_or_default().to_owned(),
                 });
                 naechster += 1;

@@ -8,16 +8,16 @@
 //!
 //! ## Vacuous validation
 //!
-//! `ahb_rule_pack` returns a stand-in pack named `unknown-pid` for a code it
-//! does not know, carrying a single *warning* rule. A message with such a PID
-//! therefore validates — `is_valid` comes back `True` having checked nothing.
+//! A code the profile has no column for validates with the `AHB-UNKNOWN-PID`
+//! warning and no AHB rules. A message with such a PID therefore validates —
+//! `is_valid` comes back `True` having checked nothing.
 //! [`pid_has_ahb_rules`] is the only sound way to ask whether a PID is really
 //! known; `rule_count() > 0` is true for every code, including nonsense.
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use edi_energy::registry::{ProcessContext, ReleaseRegistry, UNKNOWN_PID_PACK};
+use edi_energy::registry::{ProcessContext, ReleaseRegistry};
 use edi_energy::{MessageType, Pruefidentifikator, Release, ReleaseTrack};
 
 use crate::fristen::parse_date;
@@ -153,7 +153,7 @@ fn known_on(
         Some(t) => ctx.active_profile_for_track(mt, t),
         None => ctx.active_profile(mt),
     };
-    profile.is_some_and(|p| p.ahb_rule_pack(Some(pid)).name() != UNKNOWN_PID_PACK)
+    profile.is_some_and(|p| p.has_anwendungsfall(pid))
 }
 
 /// `True` when the compiled profiles carry real AHB rules for `pid`.
@@ -480,7 +480,8 @@ mod tests {
         let strom = release_for("UTILMD", "2025-10-01", Some("STROM"))
             .unwrap()
             .expect("a UTILMD Strom profile is active");
-        let gas = release_for("UTILMD", "2025-10-01", Some("GAS"))
+        // UTILMD Gas G1.1 applies from 2026-04-01.
+        let gas = release_for("UTILMD", "2026-04-01", Some("GAS"))
             .unwrap()
             .expect("a UTILMD Gas profile is active");
         assert!(strom.starts_with('S'), "{strom}");

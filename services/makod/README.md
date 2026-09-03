@@ -20,7 +20,7 @@ All three ports are optional and independently enabled via CLI flags or environm
 
 ## Domain modules
 
-Seven modules, **70 workflows** over 467 Prüfidentifikatoren. `startup_smoke`
+Seven modules, **71 workflows** over 469 Prüfidentifikatoren. `startup_smoke`
 holds both figures against the registered engine, so a module added or dropped
 without updating this table fails the build.
 
@@ -30,7 +30,7 @@ without updating this table fails the build.
 | `WimModule` | WiM — 14 workflows, **Strom und Gas** in one module: MSB-Wechsel, Geräteübernahme, Gerätewechsel, Ersteinbau iMS, Weiterverpflichtung, Stammdaten, Technik-Änderung, Preisanfrage/Preisliste, Rechnungsabwicklung, INVOIC, INSRPT, iMS-Steuerungsauftrag, Wertebestellung (WiM + ESA) | 55039/55042/55051/55168 und die Gas-Zwillinge 44039/44042/44051/44168/44183, ORDERS 17001–17133, INVOIC 31003/31004/31009, INSRPT 23001–23012 |
 | `GeliGasModule` | GeLi Gas 3.0 — 12 workflows: UTILMD G Lieferantenwechsel, LFN-Anmeldung, Stornierung (LF+GNB), Sperrung (LF+GNB), Stammdatenänderung, Zuordnungsmeldung, MSCONS Messdaten, Datenabruf, INVOIC 31011 (AWH), PARTIN Gas | 44001–44024, 17103/17104, MSCONS 13002/13007–13009, ORDERS 17115–17117 (Gas), INVOIC 31011, PARTIN 37008–37014 |
 | `MabisModule` | MaBiS — 6 workflows: Bilanzkreisabrechnung Strom (BKV↔ÜNB), Profile, Clearingliste, Listenabgleich, ZP-Lifecycle (Aktivierung/Deaktivierung MaBiS-ZP, Zuordnungsermächtigung, AAÜZ/LF-AASZR), Anforderungen | MSCONS 13003/13010–13012, IFTSTA 21000–21005, UTILMD 55062–55064/55071–55072/55195–55196/55197–55214/55223–55224, 55065/55069/55070, ORDERS 17201–17208 |
-| `GaBiGasModule` | GaBi Gas — 4 workflows: INVOIC 31007/31008/31010, MSCONS 13013 (Allokationsliste MMMA), ALOCAT, NOMINT/NOMRES | INVOIC 31007/31008/31010, REMADV 33001, COMDIS 29001, ORDERS 17110, MSCONS 13013, DVGW 70001–70023 (ALOCAT) / 70030–70039 (NOMINT/NOMRES) |
+| `GaBiGasModule` | GaBi Gas — 5 workflows: INVOIC 31007/31008/31010, MSCONS 13013 (Allokationsliste MMMA), ALOCAT, NOMINT/NOMRES, SSQNOT | INVOIC 31007/31008/31010, REMADV 33001, COMDIS 29001, ORDERS 17110, MSCONS 13013, DVGW 70001–70023 (ALOCAT) / 70030–70039 (NOMINT/NOMRES) / 70095–70096 (SSQNOT) |
 | `EmobModule` | NZR-EMob / Modell 2 — 3 Modellwechsel-Workflows: Anmeldung, Zuordnungsende, Abmeldung | 55238/55239, 55240/55241, 55242/55243 |
 | `RedispatchModule` | Redispatch 2.0 — congestion management (§§ 13/13a/14 EnWG); 8 workflows, XML document-type routing plus the IFTSTA/MSCONS/ORDERS legs | 21037/21038, MSCONS 13021/13022, ORDERS 17209 (NB/ÜNB/ANB roles only) |
 
@@ -417,7 +417,7 @@ End-to-end tests covering all process families live in `tests/`:
 | `e2e_lieferende_gas.rs` | GeLi Gas Lieferende bilateral |
 | `e2e_mabis.rs` | MaBiS Bilanzkreisabrechnung (PID 13003) |
 | `e2e_ahb_conformance.rs` | Cross-PID AHB rule enforcement |
-| `e2e_dispatch_coverage_guard.rs` | **Every registered PID must reach a dispatch arm.** Dispatches a real fixture per registered PID (318 of 383; fixtures resolved by filename, then by scanning content for the PID) and fails on any silent `pid_not_in_*` drop. Send-only PIDs — where mako initiates and no receiver exists — are enumerated in `SEND_ONLY_PIDS`; the guard fails if one starts being handled, so the list only shrinks. The 44 it cannot reach are the PIDs with no AHB profile entry |
+| `e2e_dispatch_coverage_guard.rs` | **Every registered PID must reach a dispatch arm.** Dispatches the profile's own skeleton of each registered Anwendungsfall and fails on any silent `pid_not_in_*` drop. Send-only PIDs — where mako initiates and no receiver exists — are enumerated in `SEND_ONLY_PIDS`; the guard fails if one starts being handled, so the list only shrinks |
 | `e2e_outbox_type_coverage_guard.rs` | **Every emitted outbox `message_type` must reach a worker** — the EDIFACT renderer or the ERP adapter. A type in neither is enqueued and goes nowhere: the AS4 sender substitutes raw domain JSON for the interchange, so the partner receives something it cannot parse and nothing errors |
 | `e2e_outbox_render_contract.rs` | Renders GeLi Gas answers (44002/44003/44007) and the WiM Störungsmeldung (23001) and parses the bytes back; the INSRPT case also asserts **AHB validity**, not just parseability |
 | `e2e_anmeldung_answer_routing.rs` | Every answer PID on the supplier-change success paths reaches its arm — GeLi Gas `ANTWORT_PIDS_LF`, GPKE `UTILMD_ANFRAGE_PIDS`. Both arms read the module's own constant, so the dispatch table cannot drift from the router registration |

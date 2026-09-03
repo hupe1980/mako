@@ -1,6 +1,6 @@
 +++
 title = "Validation"
-description = "Five-layer EDIFACT validation: schema, code lists, MIG, AHB, and semantic rules. How to read the ValidationReport, handle PIDs, and validate in strict mode."
+description = "EDIFACT validation against the MIG and the AHB column: the checks, the ValidationReport, rule ids, Prüfidentifikatoren and release dates."
 weight = 11
 [extra]
 mermaid = true
@@ -11,37 +11,36 @@ Every EDI@Energy message can be validated against the officially registered BDEW
 
 ---
 
-## The Five Validation Layers
+## The Validation Layers
 
-A message runs through the layers in order, from raw syntax to business meaning.
-Each layer appends its issues to one `ValidationReport`; a later layer runs even
-when an earlier one raised warnings, so a single pass reports every problem at once
-rather than stopping at the first.
+A message runs through three layers, each appending its issues to one
+`ValidationReport`; a later layer runs even when an earlier one found
+something, so a single pass reports every problem at once rather than
+stopping at the first.
 
 ```mermaid
 flowchart LR
     RAW["EDIFACT bytes<br/>UNB…UNZ"] --> L1
-    subgraph pipe ["Five validation layers — one ValidationReport"]
+    subgraph pipe ["three layers — one ValidationReport"]
         direction LR
-        L1["1 · Schema<br/>mandatory segments<br/>repetition limits"]
-        L2["2 · Code lists<br/>value ∈ permitted list"]
-        L3["3 · MIG<br/>segment order · group<br/>nesting · cardinality"]
-        L4["4 · AHB<br/>Prüfidentifikator rules<br/>mandatory/conditional/forbidden"]
-        L5["5 · Semantic<br/>cross-field business rules<br/>date coherence · references"]
-        L1 --> L2 --> L3 --> L4 --> L5
+        L1["1 · MIG<br/>every segment resolved to its Nr ·<br/>cardinality · layout · format · codes"]
+        L2["2 · AHB<br/>the Prüfschablone of the column:<br/>Muss/Soll/Kann with Bedingungen · operands"]
+        L3["3 · Semantic<br/>cross-field rules<br/>period order · check digits · date shape"]
+        L1 --> L2 --> L3
     end
-    L5 --> REP["ValidationReport<br/>issues by layer + severity"]
+    L3 --> REP["ValidationReport<br/>issues by layer + severity"]
     REP -->|is_valid| OK["accept"]
     REP -->|has errors| ERR["reject / route to APERAK"]
 ```
 
 | Layer | Checks |
 |---|---|
-| **1 — Schema** | Mandatory segments and data elements are present; repetition limits respected |
-| **2 — Code lists** | Data element values are members of the permitted code list |
-| **3 — MIG** | Message structure rules from the Marktkommunikation Implementation Guide (segment order, group nesting, cardinality, `DTM` date formats) |
-| **4 — AHB** | Pruefidentifikator-specific rules from the Anwendungshandbuch: mandatory/conditional/forbidden field presence |
-| **5 — Semantic** | Cross-field business rules (date coherence, reference completeness, syntax acknowledgement validity, date-value shape) |
+| **1 — MIG** | Every segment is resolved to its place in the Nachrichtenstruktur (the MIG's running number `Nr`; `SG5 LOC+Z16` and `SG5 LOC+Z17` are two places). Mandatory places and groups, repetition limits, the Segmentlayout of each place — mandatory data elements, elements not used, representations (`n11`, `an..35`), code lists. A stray segment is reported and skipped, not allowed to unresolve the rest. |
+| **2 — AHB** | The Prüfschablone of the selected Anwendungsfall: every segment and group the column marks `Muss`/`Soll`/`Kann`, with its Bedingungen evaluated against the message; every data element's operands (`X`, `M [7]`, the codes admitted); a place or element the column does not list is not to be used. |
+| **3 — Semantic** | Cross-field rules the documents state in prose: period order (`DTM+163` ≤ `DTM+164`), Lokations-ID check digits, that a value declaring format `303` carries `CCYYMMDDHHMMZZZ`. |
+
+MIG `M` always binds; MIG `R` (BDEW-erforderlich) is the union over all
+Anwendungsfälle and yields to the selected column.
 
 ### Before the layers — the envelope
 
@@ -69,8 +68,8 @@ omission is legal is an AHB (layer 4) question.
 
 ### Date formats — DE 2379
 
-Membership in a code list is not the whole story for a `DTM`. Each MIG segment
-layout fixes DE 2005 (the qualifier) **and** DE 2379 (the format) together:
+Each `DTM` place's layout fixes DE 2005 (the qualifier) **and** DE 2379 (the
+format) together:
 
 ```
 2005  Datums- oder Uhrzeit-Funktion, Qualifier   M an..3   137 Dokumenten-/Nachrichtendatum
@@ -79,26 +78,12 @@ layout fixes DE 2005 (the qualifier) **and** DE 2379 (the format) together:
 
 so `DTM+137` is `303` in every EDI@Energy MIG, written on the wire as
 `DTM+137:202610011200?+00:303'` — the `?` is the release character escaping the
-zone's `+`.
+zone's `+`. The admissible formats are the place's own code list in `mig.json`;
+a qualifier with several places (`DTM+157` is `610` on a Clearingliste and
+`303` as „Änderung zum") has several places, each with its list.
 
-DE 2379 has no code list of its own, so the admissible formats live per
-qualifier in each profile's `mig.json`:
-
-```json
-"dtm_formats": {
-  "137": ["303"],
-  "154": ["102"],
-  "157": ["303", "610"],
-  "Z10": ["106"]
-}
-```
-
-A qualifier maps to a **set** because a few are context-dependent — UTILMD
-`DTM+157` is `610` (`CCYYMM`) on a Clearingliste and `303` as „Änderung zum".
-A qualifier the table does not name is not constrained.
-
-`MIG-DTM-2379` checks the code; `SEM-DTM-VALUE` checks that a value declaring
-`303` really carries `CCYYMMDDHHMMZZZ`.
+`MIG-{Nr}-DTM-2379-CODE` checks the code; `SEM-DTM-VALUE` checks that a value
+declaring `303` really carries `CCYYMMDDHHMMZZZ`.
 
 ---
 
@@ -277,62 +262,60 @@ Reports then implement `miette::Diagnostic`, giving annotated terminal output wi
 
 ## Rule ID Naming Convention
 
-Rule identifiers are stable, machine-readable strings generated by the
-`cargo xtask codegen` pipeline from the BDEW profile JSON files.
-They encode enough information to trace a fired rule back to its source.
+Rule identifiers name the **place** in the MIG's Nachrichtenstruktur a finding
+is about — the running segment number `Nr` every BDEW MIG prints — so a fired
+rule can be looked up in the profile and in the published document.
 
-### AHB rules (Application Handbook)
+### MIG rules (Nachrichtenbeschreibung)
 
-Format: `AHB-{PID}-[{SEGMENT_GROUP}-]{SEGMENT_TAG}-{QUALIFIER}{INDEX}`
+| Rule id | Meaning |
+|---|---|
+| `MIG-STRUCTURE` | a segment fits no place of the structure from here on — out of order, in a wrong group, or with a qualifier no place admits; it is skipped and the rest of the message is still resolved |
+| `MIG-{Nr}-{TAG}-REQUIRED` | a mandatory segment (`M`, or `R` the selected column lists) is missing |
+| `MIG-{SGn}-{Nr}-REQUIRED` | a mandatory segment group (named by its trigger's `Nr`) is missing |
+| `MIG-{Nr}-{TAG}-MAX`, `MIG-{SGn}-{Nr}-MAX` | more repetitions than the MIG allows |
+| `MIG-{Nr}-{TAG}-{DE}-REQUIRED` | a mandatory data element is empty |
+| `MIG-{Nr}-{TAG}-{DE}-NOTUSED` | a data element the MIG marks `N` carries a value |
+| `MIG-{Nr}-{TAG}-{DE}-FORMAT` | the value does not fit the representation (`n11`, `an..35`) |
+| `MIG-{Nr}-{TAG}-{DE}-CODE` | the value is not in the MIG's code list |
+| `MIG-{Nr}-{TAG}-{DE}-EXTRA`, `MIG-{Nr}-{TAG}-EXTRA` | more components or elements than the MIG defines |
 
-| Component | Meaning | Example |
-|---|---|---|
-| `AHB` | Layer prefix — Application Handbook rule | `AHB` |
-| `{PID}` | BDEW Prüfidentifikator | `55001`, `17102`, `55555` |
-| `{SEGMENT_GROUP}` | Optional: segment group path (omitted for top-level segs) | `SG4`, `SG11` |
-| `{SEGMENT_TAG}` | EDIFACT segment mnemonic | `DTM`, `STS`, `NAD`, `IMD` |
-| `{QUALIFIER}` | Condition type: `I`=conditional-if, `M`=mandatory | `I`, `M` |
-| `{INDEX}` | Zero-based occurrence counter (disambiguates multiple rules on the same segment) | `0`, `1`, `2` |
+### AHB rules (Prüfschablone)
+
+| Rule id | Meaning |
+|---|---|
+| `AHB-{PID}-{Nr}-{TAG}-MISSING` | the column marks the segment `Muss` (and its Voraussetzung holds) but it is absent |
+| `AHB-{PID}-{Nr}-{TAG}-NOT-PERMITTED` | the segment is present but the column does not list it, or its Voraussetzung does not hold |
+| `AHB-{PID}-{SGn}-{Nr}-MISSING`, `…-NOT-PERMITTED` | the same for a segment group |
+| `AHB-{PID}-{Nr}-{TAG}-{DE}-MISSING` | a data element the column marks `X`/`M` is empty |
+| `AHB-{PID}-{Nr}-{TAG}-{DE}-CODE` | the value is not one of the codes the column admits |
+| `AHB-{PID}-{Nr}-{TAG}-{DE}-NOT-PERMITTED` | a data element the column does not list carries a value |
+| `AHB-UNKNOWN-PID` | the Prüfidentifikator is not a column of this profile — AHB rules were not applied (warning) |
+| `AHB-SKIP-NO-PID` | no column could be selected (warning) |
+
+`{PID}` is the Prüfidentifikator; a message type published without them
+(CONTRL, APERAK) names its column `col1`, `col2`, …
 
 Examples:
 ```
-AHB-55001-STS-I0          # PID 55001, STS segment (top-level), first conditional rule
-AHB-55001-SG4-DTM-I0      # PID 55001, DTM inside SG4, first conditional rule
-AHB-55002-SG4-FTX-I0      # PID 55002, FTX inside SG4, first conditional rule
-AHB-17102-IMD-I0           # ORDERS PID 17102, IMD segment, first conditional rule
-AHB-UNKNOWN-PID            # Fallback: fired when incoming PID has no AHB profile
+AHB-55001-00036-STS-MISSING        # 55001: SG4 STS Transaktionsgrund is Muss but absent
+AHB-55001-SG6-00057-MISSING        # 55001: SG6 RFF+Z13 is Muss but absent
+AHB-13002-00028-QTY-6411-NOT-PERMITTED   # 13002 lists no unit on QTY+220
+MIG-00050-LOC-3225-FORMAT          # LOC+Z16 DE 3225 is not an n11
 ```
 
-**Locating the rule in the profile JSON**:
-
-1. Find the profile: `crates/edi-energy/profiles/{msg_type}/fv{YYYYMMDD}/ahb.json`
-2. Search for the `{PID}` in the top-level `"pruefidentifikatoren"` object.
-3. Within the PID entry, look for the segment group path (e.g. `"SG4"`) and
-   segment tag (e.g. `"DTM"`).
-4. The `"qualifier"` and `"condition"` fields of the matching entry generate
-   the `{QUALIFIER}{INDEX}` suffix via codegen.
-
-Example profile path for `AHB-55001-SG4-DTM-I0`:
-```
-crates/edi-energy/profiles/utilmd/fv20250606/ahb.json
-  → pruefidentifikatoren → "55001" → "SG4" → "DTM"
-```
-
-### MIG rules (Message Implementation Guide)
-
-Format: `MIG-{SEGMENT_TAG}-REQ` or `MIG-{MSG_TYPE}-{MIG_VERSION}-GROUP-{SG}-{SEG}-CARD-{BOUND}`
-
-| Pattern | Meaning | Example |
-|---|---|---|
-| `MIG-{SEG}-REQ` | Mandatory segment absent | `MIG-BGM-REQ`, `MIG-DTM-REQ` |
-| `MIG-{MSG}-{VER}-GROUP-{SG}-{SEG}-CARD-MAX` | Maximum cardinality exceeded | `MIG-ORDERS-MIG-1.4b-GROUP-SG2-NAD-CARD-MAX` |
-| `MIG-{MSG}-{VER}-GROUP-{SG}-{SEG}-CARD-MIN` | Minimum cardinality not met | `MIG-ORDERS-MIG-1.4b-GROUP-SG1-RFF-CARD-MIN` |
+**Locating the rule in the profile**: `crates/edi-energy/profiles/{type}/fv{YYYYMMDD}/`
+— `mig.json` → `structure` → the node with that `nr` (its layout lists the data
+elements); `ahb.json` → `anwendungsfaelle` → the column with that `pid` → `rows`
+(segment statuses) and `elements` (operands per `nr` and data element).
+`cargo run -p edi-energy --all-features --example 07_resolve -- <file>` prints
+the same for a message: every segment's `Nr` and every finding.
 
 ### Semantic and engine rules
 
 | Prefix | Layer | Example |
 |---|---|---|
-| `SEM-` | Cross-segment semantic check | `SEM-UTILMD-DATE-COH` |
+| `SEM-` | Cross-segment semantic check | `SEM-MSCONS-PERIOD-ORDER` |
 | `EE-` | Engine-level check (e.g. PID check) | `EE-PID-001` |
 
 ### Filtering by rule prefix
@@ -374,24 +357,32 @@ let report = msg.validate()?;
 
 ---
 
-## AHB Conditional Rules Explained
+## The Prüfschablone
 
-AHB rules specify whether a field is:
+An AHB column states, for every segment and group, one of
 
-| Code | Meaning |
+| Status | Meaning |
 |---|---|
-| `M` | Mandatory — must be present |
-| `C` | Conditional — presence depends on another field |
-| `N` | Not used — must be absent |
-| `O` | Optional — may be present |
-| `S` | Situational — present in some process variants |
-| `X` | Exclusive — used in exclusive-or conditions |
+| `Muss` | required — its absence is `AHB-…-MISSING` |
+| `Soll` | required for the sender, not checkable by the receiver |
+| `Kann` | optional |
+| *(blank)* | not part of the column — its presence is `AHB-…-NOT-PERMITTED` |
 
-Conditional (`C`) rules have an associated expression such as:
+and, per data element, an operand on the element or on each of its codes:
+`X` (used), `M` (required), `S` (required for the sender), `K` (optional). Any
+of them may carry Bedingungen — `Muss [10]`, `X [UB1] ∧ [496]`,
+`Soll ([92] ⊻ [93]) ∧ [126]` — whose texts the profile carries as printed:
 
-> "Must be present when STS DE 0061 qualifies the state as active"
+| Range | Kind | Evaluated? |
+|---|---|---|
+| `[1]`–`[499]` | Voraussetzung — „Wenn SG10 QTY DE6063 mit Wert 67 vorhanden", „Wenn SG5 LOC+Z17 nicht vorhanden", „mehr als einmal vorhanden", „… DE7140 bei der die letzten beiden Stellen mit dem Wert "01" …" (a suffix), `PIA+5+1-b?:1.9.e` (a lowercase letter stands for any one character) | against the message; the status binds when the expression holds |
+| `[500]`–`[899]` | Hinweis | neutral |
+| `[901]`–`[999]` | Formatbedingung | neutral (formats are the MIG's) |
+| `[2000]`–`[2499]`, `[UB1]`–`[UB3]` | Wiederholbarkeit, Zeitpunkt | neutral |
+| `[nP..]` | Paket | undecidable; the status is not enforced |
 
-The AHB profiles encode these as structured `ConditionalRule` objects with `operator`, `tag`, and optional `secondary_tag` fields.
+A Voraussetzung the evaluator cannot read is undecidable and never a ground
+for rejection. `profile.pruefschablone(pid)` prints the whole column.
 
 ---
 

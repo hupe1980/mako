@@ -38,7 +38,7 @@
 //!
 //! ```text
 //! New
-//!  └─ NominationSent (NOMINT dispatched outbound)
+//!  └─ Open (the NOMINT this tenant sent, or the one it received)
 //!       ├─ Accepted   (NOMRES status = Accepted)           [terminal]
 //!       ├─ PartiallyAccepted (NOMRES with curtailment)      [terminal]
 //!       ├─ Rejected   (NOMRES status = Rejected)            [terminal]
@@ -54,6 +54,7 @@
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
+    outbox::PendingOutbox,
     types::MessageRef,
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
@@ -155,6 +156,8 @@ impl NomresAcceptance {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NominationData {
+    /// Which end of the nomination this process holds.
+    pub richtung: NominationRichtung,
     /// The Prüfidentifikator that initiated this nomination (70030–70034).
     pub pruefidentifikator: u32,
     /// Whether the counterparty is an FNB or MGV.
@@ -173,6 +176,10 @@ pub struct NominationData {
     /// (e.g. a cancellation or renomination-to-zero).
     pub quantity: Option<NominationQuantity>,
 
+    /// The positions this tenant nominated — what its NOMINT states, empty
+    /// for a nomination received from a counterparty.
+    pub positions: Vec<NominationPosition>,
+
     /// Reference to the prior NOMINT that this re-nomination corrects.
     ///
     /// Per KoV §3.2: the BKV may submit corrections within the intraday
@@ -189,13 +196,195 @@ pub struct NominationData {
     pub correction_sequence: u32,
 }
 
+/// Which end of the nomination a process holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NominationRichtung {
+    /// This tenant nominated (BKV): the NOMINT went out, the NOMRES is owed.
+    Gesendet,
+    /// A Transportkunde nominated at this tenant (NB/MGV): the NOMRES is ours to send.
+    Empfangen,
+}
+
+/// One `LIN` position of a NOMINT: a point, a direction, the Bilanzkreise and
+/// the rates per period (NOMINT 4.6 §2 — `LOC`, `QTY`, `SG41 NAD`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NominationPosition {
+    /// `LOC` DE 3227 — `Z19` Netzkopplungspunkt, `172` Meldepunkt, `Z17` Marktlokation.
+    pub ort_qualifier: String,
+    /// `LOC` DE 3225 — the point's code.
+    pub ort: String,
+    /// `QTY` DE 6063 — `Z02` Einspeisung or `Z03` Ausspeisung.
+    pub richtung: String,
+    /// `SG41 NAD+ZEU` — Bilanzkreis des internen Transportkunden.
+    pub bilanzkreis_intern: String,
+    /// `SG41 NAD+ZES` — Bilanzkreis des externen Transportkunden, where the
+    /// nomination names one.
+    pub bilanzkreis_extern: Option<String>,
+    /// The rates, one `LOC`/`DTM+2`/`QTY` group per period.
+    pub mengen: Vec<NominationMenge>,
+}
+
+/// One rate of a nomination: kWh/h over `[von, bis)`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NominationMenge {
+    /// Start of the period, UTC.
+    pub von: time::OffsetDateTime,
+    /// End of the period, exclusive, UTC.
+    pub bis: time::OffsetDateTime,
+    /// `QTY` DE 6060 in `KW1` — kilowatt-hours per hour.
+    pub kwh_pro_h: rust_decimal::Decimal,
+}
+
+impl NominationMenge {
+    /// The energy of this rate over its period, in kWh.
+    #[must_use]
+    pub fn energie_kwh(&self) -> rust_decimal::Decimal {
+        let seconds = rust_decimal::Decimal::from((self.bis - self.von).whole_seconds().max(0));
+        self.kwh_pro_h * seconds / rust_decimal::Decimal::from(3600)
+    }
+}
+
+/// A re-nomination names the nomination it corrects (`RFF+AGO`) and when
+/// that one was processed (`DTM+9`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Renominierung {
+    /// The corrected nomination's Dokumentennummer.
+    pub nomination_ref: MessageRef,
+    /// When the corrected nomination was processed, UTC.
+    pub processed_at: time::OffsetDateTime,
+}
+
+/// The process key a nomination is filed under — the business key the NOMRES
+/// answering it also resolves to (`dvgw_edi::CorrelationKey::nominierung`).
+///
+/// The pair has no published Zuordnungstupel, so the sender assembling the key
+/// and the receiver reading it off the wire must land on the same string; both
+/// build it through `dvgw-edi` rather than formatting it twice.
+///
+/// The key names the nomination's **first** position, which is what the
+/// receiver reads: `LOC` of the first `LIN` and its Bilanzkreise.
+#[must_use]
+pub fn nomination_process_key(gas_day: GasDay, positions: &[NominationPosition]) -> String {
+    let first = positions.first();
+    dvgw_edi::CorrelationKey::nominierung(
+        gas_day.date,
+        first.map_or("", |p| p.ort.as_str()),
+        first.map_or("", |p| p.bilanzkreis_intern.as_str()),
+        first
+            .and_then(|p| p.bilanzkreis_extern.as_deref())
+            .unwrap_or_default(),
+    )
+    .to_string()
+}
+
+/// Σ(rate × duration) across `positions`, but only when they state one
+/// direction: a purchase and a sale in one message are a net position, not a
+/// total, so the figure is withheld rather than netted.
+#[must_use]
+pub fn single_direction_energy(positions: &[NominationPosition]) -> Option<rust_decimal::Decimal> {
+    let mut by_direction: std::collections::BTreeMap<&str, rust_decimal::Decimal> =
+        std::collections::BTreeMap::new();
+    for p in positions {
+        let kwh: rust_decimal::Decimal = p.mengen.iter().map(NominationMenge::energie_kwh).sum();
+        *by_direction.entry(p.richtung.as_str()).or_default() += kwh;
+    }
+    (by_direction.len() == 1)
+        .then(|| by_direction.into_values().next())
+        .flatten()
+}
+
+/// The outbox payload `makod` renders as the NOMRES: the nomination's own
+/// positions, each labelled with what the answer makes of it (`IMD` DE 7009).
+#[must_use]
+pub fn nomres_payload(
+    pruefidentifikator: u32,
+    sender_eic: &str,
+    receiver_eic: &str,
+    gas_day: GasDay,
+    nomres_ref: &MessageRef,
+    positions: &[NominationPosition],
+    imd_label: &str,
+) -> serde_json::Value {
+    let mut payload = nomint_payload(
+        pruefidentifikator,
+        sender_eic,
+        receiver_eic,
+        gas_day,
+        nomres_ref,
+        positions,
+        None,
+    );
+    if let Some(items) = payload["positions"].as_array_mut() {
+        for item in items {
+            item["description"] = serde_json::Value::String(imd_label.to_owned());
+        }
+    }
+    payload
+}
+
+/// The outbox payload `makod` renders as the NOMINT (its `dvgw` renderer).
+#[must_use]
+pub fn nomint_payload(
+    pruefidentifikator: u32,
+    sender_eic: &str,
+    receiver_eic: &str,
+    gas_day: GasDay,
+    nomination_ref: &MessageRef,
+    positions: &[NominationPosition],
+    corrects: Option<&Renominierung>,
+) -> serde_json::Value {
+    let rfc3339 = |t: time::OffsetDateTime| {
+        t.format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_default()
+    };
+    let positions: Vec<serde_json::Value> = positions
+        .iter()
+        .map(|p| {
+            let mut parties =
+                vec![serde_json::json!({ "role": "ZEU", "code": p.bilanzkreis_intern })];
+            if let Some(extern_) = &p.bilanzkreis_extern {
+                parties.push(serde_json::json!({ "role": "ZES", "code": extern_ }));
+            }
+            serde_json::json!({
+                "location": { "qualifier": p.ort_qualifier, "code": p.ort },
+                "quantities": p.mengen.iter().map(|m| serde_json::json!({
+                    "qualifier": p.richtung,
+                    "value": m.kwh_pro_h.normalize().to_string(),
+                    "period": { "start": rfc3339(m.von), "end": rfc3339(m.bis) },
+                })).collect::<Vec<_>>(),
+                "parties": parties,
+            })
+        })
+        .collect();
+    let mut payload = serde_json::json!({
+        "pid": pruefidentifikator,
+        "sender": sender_eic,
+        "receiver": receiver_eic,
+        "document_number": nomination_ref.as_str(),
+        "message_ref": nomination_ref.as_str(),
+        "validity_period": { "start": rfc3339(gas_day.start_utc()), "end": rfc3339(gas_day.end_utc()) },
+        "positions": positions,
+    });
+    if let Some(c) = corrects {
+        payload["original_nomination"] = serde_json::json!({
+            "reference": c.nomination_ref.as_str(),
+            "processed_at": rfc3339(c.processed_at),
+        });
+    }
+    payload
+}
+
 // ── Events ────────────────────────────────────────────────────────────────────
 
 /// Events emitted by the GaBi Gas Nomination workflow.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum NominationEvent {
-    /// BKV dispatched a NOMINT nomination to FNB or MGV.
+    /// This tenant nominated: the NOMINT is in the outbox.
     NominationSent {
         /// The Prüfidentifikator (70030–70034).
         pruefidentifikator: u32,
@@ -216,6 +405,40 @@ pub enum NominationEvent {
         /// integrated — a curtailment then cannot be detected, and the workflow
         /// records that rather than assuming none.
         nominated_kwh: Option<rust_decimal::Decimal>,
+        /// What the NOMINT states, position by position.
+        positions: Vec<NominationPosition>,
+        /// The nomination this one corrects, for a re-nomination.
+        corrects: Option<Renominierung>,
+    },
+    /// A Transportkunde's NOMINT arrived at this tenant (NB/MGV).
+    NominationReceived {
+        /// The Prüfidentifikator (70030–70034).
+        pruefidentifikator: u32,
+        /// Whether this tenant answers as FNB or MGV.
+        counterparty: NominationCounterparty,
+        /// EIC code of the nominating BKV.
+        sender_eic: String,
+        /// EIC code of this tenant.
+        receiver_eic: String,
+        /// Gas day / nomination period.
+        gas_day: GasDay,
+        /// NOMINT document reference.
+        nomination_ref: MessageRef,
+        /// Nominated energy in kWh, integrated over the nominated periods.
+        nominated_kwh: Option<rust_decimal::Decimal>,
+        /// What the NOMINT states, position by position.
+        positions: Vec<NominationPosition>,
+    },
+    /// This tenant answered a received NOMINT; the NOMRES is in the outbox.
+    NomresSent {
+        /// The answering Prüfidentifikator (70035–70039).
+        pruefidentifikator: u32,
+        /// NOMRES document reference.
+        nomres_ref: MessageRef,
+        /// What the answer decides.
+        acceptance: NomresAcceptance,
+        /// Confirmed energy in kWh, where the answer states one figure.
+        confirmed_kwh: Option<rust_decimal::Decimal>,
     },
     /// FNB/MGV accepted the nomination in full.
     Accepted {
@@ -257,6 +480,8 @@ impl EventPayload for NominationEvent {
     fn event_type(&self) -> &'static str {
         match self {
             Self::NominationSent { .. } => "GaBiGasNominationSent",
+            Self::NominationReceived { .. } => "GaBiGasNominationReceived",
+            Self::NomresSent { .. } => "GaBiGasNomresSent",
             Self::Accepted { .. } => "GaBiGasNominationAccepted",
             Self::PartiallyAccepted { .. } => "GaBiGasNominationPartiallyAccepted",
             Self::Rejected { .. } => "GaBiGasNominationRejected",
@@ -273,20 +498,24 @@ impl EventPayload for NominationEvent {
 ///
 /// ```text
 /// New
-///  └─ NominationSent ──── Accepted         (terminal)
-///                    ├─── PartiallyAccepted (terminal)
-///                    ├─── Rejected          (terminal)
-///                    └─── DeadlineExpired   (terminal)
+///  └─ Open ──── Accepted          (terminal)
+///          ├─── PartiallyAccepted (terminal)
+///          ├─── Rejected          (terminal)
+///          └─── DeadlineExpired   (terminal)
 /// ```
+///
+/// `Open` holds either end: the NOMINT this tenant sent and awaits the NOMRES
+/// for, or the one a Transportkunde sent this tenant, which owes the NOMRES
+/// ([`NominationRichtung`]).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
 #[derive(Default)]
 pub enum NominationState {
-    /// No NOMINT dispatched yet.
+    /// No NOMINT yet.
     #[default]
     New,
-    /// NOMINT dispatched; awaiting NOMRES from FNB/MGV.
-    NominationSent(NominationData),
+    /// A NOMINT is on file and its NOMRES outstanding.
+    Open(NominationData),
     /// NOMRES received — nomination accepted in full (terminal).
     Accepted(NominationData),
     /// NOMRES received — nomination partially accepted, curtailment applied (terminal).
@@ -308,7 +537,7 @@ impl NominationState {
     pub fn label(&self) -> &'static str {
         match self {
             Self::New => "New",
-            Self::NominationSent(_) => "NominationSent",
+            Self::Open(_) => "Open",
             Self::Accepted(_) => "Accepted",
             Self::PartiallyAccepted(_) => "PartiallyAccepted",
             Self::Rejected { .. } => "Rejected",
@@ -343,14 +572,38 @@ pub enum NominationCommand {
     SendNomination {
         /// The Prüfidentifikator (70030–70034).
         pruefidentifikator: u32,
-        /// EIC code of the sending BKV.
+        /// EIC code of the sending BKV — this tenant.
         sender_eic: String,
         /// EIC code of the receiving FNB/MGV.
         receiver_eic: String,
         /// Gas day / nomination period.
         gas_day: GasDay,
+        /// NOMINT document reference (`BGM` DE 1004).
+        nomination_ref: MessageRef,
+        /// What is nominated: the NOMINT's positions. At least one.
+        positions: Vec<NominationPosition>,
+        /// The nomination this one corrects, for a re-nomination.
+        corrects: Option<Renominierung>,
+    },
+
+    /// A Transportkunde's NOMINT arrived (PIDs 70030–70034) — this tenant is
+    /// the NB or MGV it is addressed to and owes the NOMRES.
+    ///
+    /// Constructed by the DVGW adapter in `makod`.
+    ReceiveNomint {
+        /// The Prüfidentifikator (70030–70034).
+        pruefidentifikator: u32,
+        /// EIC code of the nominating BKV.
+        sender_eic: String,
+        /// EIC code of this tenant.
+        receiver_eic: String,
+        /// Gas day / nomination period.
+        gas_day: GasDay,
         /// NOMINT document reference.
         nomination_ref: MessageRef,
+        /// What the NOMINT states, position by position — the answer is built
+        /// from it, so it is read off the wire rather than reconstructed.
+        positions: Vec<NominationPosition>,
         /// Nominated energy in kWh, integrated over the nominated periods.
         ///
         /// A DVGW `QTY` is a rate in kWh/h, so this is Σ(rate × duration) for the
@@ -358,6 +611,23 @@ pub enum NominationCommand {
         /// integrated — a curtailment then cannot be detected, and the workflow
         /// records that rather than assuming none.
         nominated_kwh: Option<rust_decimal::Decimal>,
+    },
+
+    /// Answer a received NOMINT: the NOMRES this tenant owes as the NB or MGV.
+    ///
+    /// The answer restates the nomination's own positions under the `IMD`
+    /// label that says what they are — `16G` Bestätigt where it decides,
+    /// `17G` Nominiert where it only reports the state of the match.
+    SendNomres {
+        /// The answering Prüfidentifikator (70035–70039).
+        pruefidentifikator: u32,
+        /// NOMRES document reference.
+        nomres_ref: MessageRef,
+        /// What the answer decides.
+        acceptance: NomresAcceptance,
+        /// The positions as the match produced them, where it curtailed the
+        /// nomination. `None` confirms it as stated.
+        confirmed: Option<Vec<NominationPosition>>,
     },
 
     /// Inbound NOMRES received from the NB or MGV (PIDs 70035–70039).
@@ -401,6 +671,14 @@ impl CommandPayload for NominationCommand {}
 /// NOMRES reply for the BKV → FNB/MGV nomination cycle (KoV §5).
 pub struct GaBiGasNominationWorkflow;
 
+fn nomint_counterparty(pid: u32) -> Result<NominationCounterparty, WorkflowError> {
+    NominationCounterparty::from_pid(pid).ok_or_else(|| {
+        WorkflowError::rejected(format!(
+            "PID {pid} is not a NOMINT Prüfidentifikator (expected one of 70030–70034)"
+        ))
+    })
+}
+
 impl Workflow for GaBiGasNominationWorkflow {
     type State = NominationState;
     type Event = NominationEvent;
@@ -411,17 +689,16 @@ impl Workflow for GaBiGasNominationWorkflow {
     ///
     /// The command, the event and the terminal `DeadlineExpired` state were all
     /// there; this hook was not, so a NOMINT that never drew a NOMRES stayed in
-    /// `NominationSent` forever and the missed D+1 window was invisible.
+    /// `Open` forever and the missed D+1 window was invisible.
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
-        (deadline.label() == NOMRES_DEADLINE_LABEL
-            && matches!(state, NominationState::NominationSent(_)))
-        .then(|| NominationCommand::NomresDeadlineExpired {
-            deadline_id: deadline.deadline_id(),
-            label: deadline.label().to_owned(),
-        })
+        (deadline.label() == NOMRES_DEADLINE_LABEL && matches!(state, NominationState::Open(_)))
+            .then(|| NominationCommand::NomresDeadlineExpired {
+                deadline_id: deadline.deadline_id(),
+                label: deadline.label().to_owned(),
+            })
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
@@ -434,7 +711,10 @@ impl Workflow for GaBiGasNominationWorkflow {
                 gas_day,
                 nomination_ref,
                 nominated_kwh,
-            } => NominationState::NominationSent(NominationData {
+                positions,
+                corrects,
+            } => NominationState::Open(NominationData {
+                richtung: NominationRichtung::Gesendet,
                 pruefidentifikator: *pruefidentifikator,
                 counterparty: *counterparty,
                 sender_eic: sender_eic.clone(),
@@ -442,12 +722,61 @@ impl Workflow for GaBiGasNominationWorkflow {
                 gas_day: *gas_day,
                 nomination_ref: nomination_ref.clone(),
                 quantity: nominated_kwh.map(NominationQuantity::submitted),
-                corrects_nomination_ref: None, // set by handle() when correcting a prior NOMINT
+                positions: positions.clone(),
+                corrects_nomination_ref: corrects.as_ref().map(|c| c.nomination_ref.clone()),
+                correction_sequence: u32::from(corrects.is_some()),
+            }),
+            NominationEvent::NominationReceived {
+                pruefidentifikator,
+                counterparty,
+                sender_eic,
+                receiver_eic,
+                gas_day,
+                nomination_ref,
+                nominated_kwh,
+                positions,
+            } => NominationState::Open(NominationData {
+                richtung: NominationRichtung::Empfangen,
+                pruefidentifikator: *pruefidentifikator,
+                counterparty: *counterparty,
+                sender_eic: sender_eic.clone(),
+                receiver_eic: receiver_eic.clone(),
+                gas_day: *gas_day,
+                nomination_ref: nomination_ref.clone(),
+                quantity: nominated_kwh.map(NominationQuantity::submitted),
+                positions: positions.clone(),
+                corrects_nomination_ref: None,
                 correction_sequence: 0,
             }),
+            NominationEvent::NomresSent {
+                acceptance,
+                confirmed_kwh,
+                ..
+            } => match state {
+                NominationState::Open(mut data) => {
+                    data.quantity = match (data.quantity, confirmed_kwh) {
+                        (Some(q), Some(confirmed)) => Some(q.accept_partial(*confirmed, None)),
+                        (Some(q), None) => Some(q.accept_in_full()),
+                        (None, _) => None,
+                    };
+                    match acceptance {
+                        NomresAcceptance::Accepted => NominationState::Accepted(data),
+                        NomresAcceptance::PartiallyAccepted => {
+                            NominationState::PartiallyAccepted(data)
+                        }
+                        NomresAcceptance::Rejected | NomresAcceptance::Other(_) => {
+                            NominationState::Rejected {
+                                data,
+                                reason: acceptance.as_str().to_owned(),
+                            }
+                        }
+                    }
+                }
+                other => other,
+            },
 
             NominationEvent::Accepted { .. } => match state {
-                NominationState::NominationSent(mut data) => {
+                NominationState::Open(mut data) => {
                     data.quantity = data.quantity.map(NominationQuantity::accept_in_full);
                     NominationState::Accepted(data)
                 }
@@ -458,7 +787,7 @@ impl Workflow for GaBiGasNominationWorkflow {
                 confirmed_kwh: Some(confirmed),
                 ..
             } => match state {
-                NominationState::NominationSent(mut data) => {
+                NominationState::Open(mut data) => {
                     data.quantity = data
                         .quantity
                         .map(|q| q.accept_partial(*confirmed, Some("curtailed by NOMRES".into())));
@@ -468,12 +797,12 @@ impl Workflow for GaBiGasNominationWorkflow {
             },
 
             NominationEvent::PartiallyAccepted { .. } => match state {
-                NominationState::NominationSent(data) => NominationState::PartiallyAccepted(data),
+                NominationState::Open(data) => NominationState::PartiallyAccepted(data),
                 other => other,
             },
 
             NominationEvent::Rejected { reason, .. } => match state {
-                NominationState::NominationSent(data) => NominationState::Rejected {
+                NominationState::Open(data) => NominationState::Rejected {
                     data,
                     reason: reason.clone(),
                 },
@@ -481,7 +810,7 @@ impl Workflow for GaBiGasNominationWorkflow {
             },
 
             NominationEvent::DeadlineExpired { .. } => match state {
-                NominationState::NominationSent(data) => NominationState::DeadlineExpired(data),
+                NominationState::Open(data) => NominationState::DeadlineExpired(data),
                 other => other,
             },
         }
@@ -498,19 +827,63 @@ impl Workflow for GaBiGasNominationWorkflow {
                 receiver_eic,
                 gas_day,
                 nomination_ref,
+                positions,
+                corrects,
+            } => {
+                if !matches!(state, NominationState::New) {
+                    return Err(WorkflowError::invalid_state("New", state.label()));
+                }
+                let counterparty = nomint_counterparty(pruefidentifikator)?;
+                if positions.is_empty() || positions.iter().any(|p| p.mengen.is_empty()) {
+                    return Err(WorkflowError::rejected(
+                        "a NOMINT states at least one position with at least one Menge",
+                    ));
+                }
+                let nominated_kwh = single_direction_energy(&positions);
+                let outbox = PendingOutbox::new(
+                    "NOMINT",
+                    receiver_eic.as_str(),
+                    nomint_payload(
+                        pruefidentifikator,
+                        &sender_eic,
+                        &receiver_eic,
+                        gas_day,
+                        &nomination_ref,
+                        &positions,
+                        corrects.as_ref(),
+                    ),
+                );
+                Ok(WorkflowOutput {
+                    events: vec![NominationEvent::NominationSent {
+                        pruefidentifikator,
+                        counterparty,
+                        sender_eic,
+                        receiver_eic,
+                        gas_day,
+                        nomination_ref,
+                        nominated_kwh,
+                        positions,
+                        corrects,
+                    }],
+                    outbox: vec![outbox],
+                    deadlines: Vec::new(),
+                })
+            }
+
+            NominationCommand::ReceiveNomint {
+                pruefidentifikator,
+                sender_eic,
+                receiver_eic,
+                gas_day,
+                nomination_ref,
+                positions,
                 nominated_kwh,
             } => {
                 if !matches!(state, NominationState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
                 }
-                let counterparty = NominationCounterparty::from_pid(pruefidentifikator)
-                    .ok_or_else(|| {
-                        WorkflowError::rejected(format!(
-                            "PID {pruefidentifikator} is not a NOMINT Prüfidentifikator \
-                             (expected one of 70030–70034)"
-                        ))
-                    })?;
-                Ok(vec![NominationEvent::NominationSent {
+                let counterparty = nomint_counterparty(pruefidentifikator)?;
+                Ok(vec![NominationEvent::NominationReceived {
                     pruefidentifikator,
                     counterparty,
                     sender_eic,
@@ -518,8 +891,69 @@ impl Workflow for GaBiGasNominationWorkflow {
                     gas_day,
                     nomination_ref,
                     nominated_kwh,
+                    positions,
                 }]
                 .into())
+            }
+
+            NominationCommand::SendNomres {
+                pruefidentifikator,
+                nomres_ref,
+                acceptance,
+                confirmed,
+            } => {
+                let NominationState::Open(open) = state else {
+                    return Err(WorkflowError::invalid_state("Open", state.label()));
+                };
+                if open.richtung != NominationRichtung::Empfangen {
+                    return Err(WorkflowError::rejected(
+                        "this process holds a nomination this tenant sent; the NOMRES \
+                         answering it comes from the counterparty",
+                    ));
+                }
+                if !NOMRES_PIDS.contains(&pruefidentifikator) {
+                    return Err(WorkflowError::rejected(format!(
+                        "PID {pruefidentifikator} is not a NOMRES Prüfidentifikator \
+                         (expected one of 70035–70039)"
+                    )));
+                }
+                // `16G` Bestätigt where the answer decides, `17G` Nominiert
+                // where it only reports the state of the match.
+                let label = match acceptance {
+                    NomresAcceptance::Accepted | NomresAcceptance::PartiallyAccepted => "16G",
+                    NomresAcceptance::Rejected | NomresAcceptance::Other(_) => "17G",
+                };
+                let positions = confirmed.as_ref().unwrap_or(&open.positions);
+                if positions.is_empty() {
+                    return Err(WorkflowError::rejected(
+                        "the answer restates the nomination's positions, and none are on \
+                         file — pass `confirmed`",
+                    ));
+                }
+                let confirmed_kwh = single_direction_energy(positions);
+                let outbox = PendingOutbox::new(
+                    "NOMRES",
+                    open.sender_eic.as_str(),
+                    nomres_payload(
+                        pruefidentifikator,
+                        &open.receiver_eic,
+                        &open.sender_eic,
+                        open.gas_day,
+                        &nomres_ref,
+                        positions,
+                        label,
+                    ),
+                );
+                Ok(WorkflowOutput {
+                    events: vec![NominationEvent::NomresSent {
+                        pruefidentifikator,
+                        nomres_ref,
+                        acceptance,
+                        confirmed_kwh,
+                    }],
+                    outbox: vec![outbox],
+                    deadlines: Vec::new(),
+                })
             }
 
             NominationCommand::ReceiveNomres {
@@ -529,12 +963,15 @@ impl Workflow for GaBiGasNominationWorkflow {
                 confirmed_kwh,
                 rejection_reason,
             } => {
-                let NominationState::NominationSent(sent) = state else {
-                    return Err(WorkflowError::invalid_state(
-                        "NominationSent",
-                        state.label(),
-                    ));
+                let NominationState::Open(sent) = state else {
+                    return Err(WorkflowError::invalid_state("Open", state.label()));
                 };
+                if sent.richtung != NominationRichtung::Gesendet {
+                    return Err(WorkflowError::rejected(
+                        "this process holds a nomination addressed to this tenant; it owes \
+                         the NOMRES rather than receiving one",
+                    ));
+                }
 
                 // NOMRES has no status segment: a curtailment shows up **only** as
                 // a confirmed quantity below the nominated one. So a stated
@@ -552,25 +989,72 @@ impl Workflow for GaBiGasNominationWorkflow {
                     other => other,
                 };
 
-                let event = match &acceptance {
-                    NomresAcceptance::Accepted => NominationEvent::Accepted {
-                        nomres_ref,
-                        gas_day,
-                    },
-                    NomresAcceptance::PartiallyAccepted => NominationEvent::PartiallyAccepted {
-                        nomres_ref,
-                        gas_day,
-                        confirmed_kwh,
-                    },
-                    NomresAcceptance::Rejected | NomresAcceptance::Other(_) => {
-                        NominationEvent::Rejected {
+                // What the answer decides is the ERP's business: a shortfall
+                // leaves the portfolio short by the difference, and a refusal
+                // means nothing flows at all. Recording either without saying
+                // so leaves the fact in the event stream and nowhere else.
+                let notice = |kind: &'static str, data: serde_json::Value| {
+                    PendingOutbox::new(kind, sent.sender_eic.as_str(), data)
+                };
+                let nominated = sent.quantity.as_ref().map(|q| q.submitted_kwh);
+                let parties = serde_json::json!({
+                    "gas_day": gas_day,
+                    "sender_eic": sent.sender_eic,
+                    "receiver_eic": sent.receiver_eic,
+                    "pruefidentifikator": sent.pruefidentifikator,
+                    "nomination_ref": sent.nomination_ref,
+                });
+                let with = |extra: serde_json::Value| {
+                    let mut data = parties.clone();
+                    if let (Some(map), Some(extra)) = (data.as_object_mut(), extra.as_object()) {
+                        map.extend(extra.clone());
+                    }
+                    data
+                };
+                let (event, outbox) = match &acceptance {
+                    NomresAcceptance::Accepted => (
+                        NominationEvent::Accepted {
                             nomres_ref,
-                            reason: rejection_reason
-                                .unwrap_or_else(|| acceptance.as_str().to_owned()),
-                        }
+                            gas_day,
+                        },
+                        Vec::new(),
+                    ),
+                    NomresAcceptance::PartiallyAccepted => {
+                        let curtailed = nominated
+                            .zip(confirmed_kwh)
+                            .map(|(nominated, confirmed)| nominated - confirmed);
+                        let data = with(serde_json::json!({
+                            "nominated_kwh": nominated,
+                            "confirmed_kwh": confirmed_kwh,
+                            "curtailed_kwh": curtailed,
+                        }));
+                        (
+                            NominationEvent::PartiallyAccepted {
+                                nomres_ref,
+                                gas_day,
+                                confirmed_kwh,
+                            },
+                            vec![notice("GabiNominationCurtailed", data)],
+                        )
+                    }
+                    NomresAcceptance::Rejected | NomresAcceptance::Other(_) => {
+                        let reason =
+                            rejection_reason.unwrap_or_else(|| acceptance.as_str().to_owned());
+                        let data = with(serde_json::json!({
+                            "reason": reason,
+                            "nominated_kwh": nominated,
+                        }));
+                        (
+                            NominationEvent::Rejected { nomres_ref, reason },
+                            vec![notice("GabiNominationRejected", data)],
+                        )
                     }
                 };
-                Ok(vec![event].into())
+                Ok(WorkflowOutput {
+                    events: vec![event],
+                    outbox,
+                    deadlines: Vec::new(),
+                })
             }
 
             NominationCommand::NomresDeadlineExpired { deadline_id, label } => {
@@ -578,7 +1062,30 @@ impl Workflow for GaBiGasNominationWorkflow {
                     // Deadline fired after NOMRES already received — absorb silently.
                     return Ok(WorkflowOutput::events(vec![]));
                 }
-                Ok(vec![NominationEvent::DeadlineExpired { deadline_id, label }].into())
+                // At gas-day start the nomination's status is unknown: the
+                // counterparty owes an answer and has not sent one. That is an
+                // operator call, so it leaves the platform rather than sitting
+                // in the stream.
+                let outbox = match state {
+                    NominationState::Open(data) => vec![PendingOutbox::new(
+                        "GabiNomresMissing",
+                        data.sender_eic.as_str(),
+                        serde_json::json!({
+                            "gas_day": data.gas_day,
+                            "sender_eic": data.sender_eic,
+                            "receiver_eic": data.receiver_eic,
+                            "pruefidentifikator": data.pruefidentifikator,
+                            "nomination_ref": data.nomination_ref,
+                            "deadline_label": label,
+                        }),
+                    )],
+                    _ => Vec::new(),
+                };
+                Ok(WorkflowOutput {
+                    events: vec![NominationEvent::DeadlineExpired { deadline_id, label }],
+                    outbox,
+                    deadlines: Vec::new(),
+                })
             }
         }
     }

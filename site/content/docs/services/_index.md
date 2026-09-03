@@ -31,7 +31,7 @@ graph TB
     ext["BDEW Counterparty<br/>(NB · LF · MSB · BKV)"]
 
     subgraph protocol ["Protocol & Market Data"]
-        makod[":8080 makod<br/>EDIFACT runtime · 70 workflows<br/>AS4 · SlateDB · MCP"]
+        makod[":8080 makod<br/>EDIFACT runtime · 71 workflows<br/>AS4 · SlateDB · MCP"]
         marktd[":8180 marktd<br/>MaLo/MeLo/NeLo · contracts<br/>VersorgungsStatus · fan-out"]
         processd[":8580 processd<br/>Anmeldung STP ≥95%<br/>LF answers · §14a"]
     end
@@ -80,7 +80,7 @@ graph TB
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [makod](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 70 workflows over 467 Prüfidentifikatoren, AS4/REST/iMS |
+| [makod](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 71 workflows over 469 Prüfidentifikatoren, AS4/REST/iMS |
 | [marktd](@/docs/services/marktd.md) | `:8180` | All | Market Data Hub — MaLo/MeLo/contracts, VersorgungsStatus, typed BO4E API, durable fan-out, MMMA monthly import worker |
 | [processd](@/docs/services/processd.md) | `:8580` | NB + LF + MSB | Process Decision Engine — Anmeldung STP ≥95%, LF answers to the NB-initiated GPKE processes, MSB REQOTE auto-response, §14a Steuerungsauftrag produktcode check; role-gated binaries (§ 7 EnWG) |
 
@@ -108,7 +108,7 @@ graph TB
 | [productd](@/docs/services/productd.md) | `:9080` | LF | Product & Tariff Catalog — user-defined energy products, EPEX Spot for §41a, B2B Angebote/quotations |
 | [billingd](@/docs/services/billingd.md) | `:9280` | LF | Energy Billing Engine — 13 categories, §41a dynamic, §42b EnWG GGV community solar, EN 16931 e-invoicing (XRechnung 3.0 CII / PEPPOL UBL); the ZUGFeRD PDF renders via outputd |
 | [outputd](@/docs/services/outputd.md) | `:9880` | — | Customer Communications — operator Typst templates (content-addressed, append-only, publish gated by proof), ZUGFeRD PDF/A-3 carrier around the caller's CII, Textform kinds (Mahnung § 126b BGB, Preisanpassung § 41 Abs. 5 EnWG), the append-only store of issued documents, and delivery over portal, e-mail, print spool and ERP with per-channel evidence |
-| [accountingd](@/docs/services/accountingd.md) | `:9380` | LF | Customer Account Ledger — tamper-evident double-entry ledger (the `doubleentry` crate: Merkle proofs + period seals for GoBD/§146 AO Festschreibung); per-MaLo Kontokorrent + GL contras; Abschläge as receivables against Erhaltene Anzahlungen; FIFO open-item clearing; Summen- und Saldenliste §238 HGB; aging analysis; Verzugszinsen §288 BGB; Zahlungsvereinbarung; SEPA pain.008 (FRST/RCUR separated, Gläubiger-ID EPC AT-02); CAMT.054 dedup; keyed-BLAKE3 IBAN hash; OIDC/JWT + inbound HMAC; auto-dunning that renders and delivers each Mahnung through outputd; §40b Abs. 1 Jahresabschluss worker; GDPR Art. 17 |
+| [accountingd](@/docs/services/accountingd.md) | `:9380` | LF | Customer Account Ledger — tamper-evident double-entry ledger (`doubleentry`: Merkle proofs, period seals for GoBD/§146 AO); per-MaLo Kontokorrent, FIFO open-item clearing, Summen- und Saldenliste §238 HGB, Verzugszinsen §288 BGB, Zahlungsvereinbarung; SEPA pain.008 and CAMT.054; dunning delivered through outputd; §40b Abs. 1 Jahresabschluss; GDPR Art. 17 |
 
 ## B2C & AI
 

@@ -52,49 +52,88 @@ fn assert_valid(report: &edi_energy::EdiEnergyReport) {
 /// A minimal UTILMD interchange with a valid 11-char Marktlokations-ID.
 #[cfg(feature = "utilmd")]
 const UTILMD_VALID_MALO: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+261001:0700+1'\
 UNH+1+UTILMD:D:11A:UN:S2.1'\
-BGM+E01:::+00055001::+9'\
-DTM+137:202301010000?+00:303'\
-RFF+Z13:REF001'\
-NAD+MS+4012345000023::293'\
-IDE+24+VORGANG-0001'\
-DTM+92:202302010000?+00:303'\
-STS+7++E03+ZW4'\
+BGM+E01+DOK55001'\
+DTM+137:202610010000?+00:303'\
+NAD+MS+4012345000023::9'\
+NAD+MR+9900357000004::9'\
+IDE+24+VORGANG0001'\
+DTM+92:202610010000?+00:303'\
+STS+7++E01+ZW4'\
 LOC+Z16+51238696781'\
+RFF+Z13:55001'\
 SEQ+Z79+1'\
 PIA+5+9991000002082:Z11'\
 CCI+Z66'\
-CAV+ZV4:::11XBK-EEG-----1'\
-UNT+14+1'\
+SEQ+ZH0+1'\
+CCI+Z65+++Z01'\
+SEQ+Z01'\
+CCI+++Z15'\
+SEQ+Z75'\
+CCI+Z61++ZF9'\
+CAV+ZU5'\
+NAD+Z09+++Mustermann:::::Z01'\
+NAD+Z04+++Mustermann:::::Z01+Musterstr. 1+Berlin+++DE'\
+UNT+23+1'\
 UNZ+1+1'";
 
 /// A UTILMD interchange where the `LOC+Z16` ID is too short (7 chars).
 #[cfg(feature = "utilmd")]
 const UTILMD_BAD_MALO_SHORT: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+261001:0700+1'\
 UNH+1+UTILMD:D:11A:UN:S2.1'\
-BGM+E01:::+00055001::+9'\
-DTM+137:202301010000?+00:303'\
-RFF+Z13:REF001'\
-NAD+MS+4012345000023::293'\
-IDE+24+VORGANG-0001'\
-LOC+Z16+MELO001'\
-UNT+8+1'\
+BGM+E01+DOK55001'\
+DTM+137:202610010000?+00:303'\
+NAD+MS+4012345000023::9'\
+NAD+MR+9900357000004::9'\
+IDE+24+VORGANG0001'\
+DTM+92:202610010000?+00:303'\
+STS+7++E01+ZW4'\
+LOC+Z16+5123869678'\
+RFF+Z13:55001'\
+SEQ+Z79+1'\
+PIA+5+9991000002082:Z11'\
+CCI+Z66'\
+SEQ+ZH0+1'\
+CCI+Z65+++Z01'\
+SEQ+Z01'\
+CCI+++Z15'\
+SEQ+Z75'\
+CCI+Z61++ZF9'\
+CAV+ZU5'\
+NAD+Z09+++Mustermann:::::Z01'\
+NAD+Z04+++Mustermann:::::Z01+Musterstr. 1+Berlin+++DE'\
+UNT+23+1'\
 UNZ+1+1'";
 
 /// A UTILMD interchange where the `LOC+Z16` ID contains a lowercase letter.
 #[cfg(feature = "utilmd")]
 const UTILMD_BAD_MALO_LOWERCASE: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+261001:0700+1'\
 UNH+1+UTILMD:D:11A:UN:S2.1'\
-BGM+E01:::+00055001::+9'\
-DTM+137:202301010000?+00:303'\
-RFF+Z13:REF001'\
-NAD+MS+4012345000023::293'\
-IDE+24+VORGANG-0001'\
+BGM+E01+DOK55001'\
+DTM+137:202610010000?+00:303'\
+NAD+MS+4012345000023::9'\
+NAD+MR+9900357000004::9'\
+IDE+24+VORGANG0001'\
+DTM+92:202610010000?+00:303'\
+STS+7++E01+ZW4'\
 LOC+Z16+5123869678a'\
-UNT+8+1'\
+RFF+Z13:55001'\
+SEQ+Z79+1'\
+PIA+5+9991000002082:Z11'\
+CCI+Z66'\
+SEQ+ZH0+1'\
+CCI+Z65+++Z01'\
+SEQ+Z01'\
+CCI+++Z15'\
+SEQ+Z75'\
+CCI+Z61++ZF9'\
+CAV+ZU5'\
+NAD+Z09+++Mustermann:::::Z01'\
+NAD+Z04+++Mustermann:::::Z01+Musterstr. 1+Berlin+++DE'\
+UNT+23+1'\
 UNZ+1+1'";
 
 /// A UTILMD interchange whose Vorgangsnummer looks nothing like a location ID.
@@ -103,19 +142,30 @@ UNZ+1+1'";
 /// this file exercises only reads `SG5 LOC`.
 #[cfg(feature = "utilmd")]
 const UTILMD_FREEFORM_VORGANGSNUMMER: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+261001:0700+1'\
 UNH+1+UTILMD:D:11A:UN:S2.1'\
-BGM+E01:::+00055001::+9'\
-DTM+137:202301010000?+00:303'\
-RFF+Z13:REF001'\
-NAD+MS+4012345000023::293'\
-IDE+24+lfn-2026-000042'\
+BGM+E01+DOK55001'\
+DTM+137:202610010000?+00:303'\
+NAD+MS+4012345000023::9'\
+NAD+MR+9900357000004::9'\
+IDE+24+VG-2026-000017'\
+DTM+92:202610010000?+00:303'\
+STS+7++E01+ZW4'\
 LOC+Z16+51238696781'\
+RFF+Z13:55001'\
 SEQ+Z79+1'\
 PIA+5+9991000002082:Z11'\
 CCI+Z66'\
-CAV+ZV4:::11XBK-EEG-----1'\
-UNT+12+1'\
+SEQ+ZH0+1'\
+CCI+Z65+++Z01'\
+SEQ+Z01'\
+CCI+++Z15'\
+SEQ+Z75'\
+CCI+Z61++ZF9'\
+CAV+ZU5'\
+NAD+Z09+++Mustermann:::::Z01'\
+NAD+Z04+++Mustermann:::::Z01+Musterstr. 1+Berlin+++DE'\
+UNT+23+1'\
 UNZ+1+1'";
 
 #[cfg(feature = "utilmd")]
@@ -167,31 +217,47 @@ fn a_freeform_vorgangsnummer_is_not_a_location_id() {
 /// Minimal MSCONS interchange with a valid 11-character Marktlokations-ID.
 #[cfg(feature = "mscons")]
 const MSCONS_VALID_MALO: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+261001:0700+1'\
 UNH+1+MSCONS:D:04B:UN:2.4c'\
-BGM+7:::+00013003::+9'\
-DTM+137:202301010000?+00:303'\
-RFF+ACE:REF001'\
-NAD+MS+4012345000023::293'\
+BGM+BK+DOK13003+9'\
+DTM+137:202610010000?+00:303'\
+RFF+Z13:13003'\
+NAD+MS+4012345000023::9'\
+NAD+MR+9900357000004::9'\
 UNS+D'\
+NAD+DP'\
 LOC+172+51238696781'\
-QTY+220:100:KWH'\
-UNT+9+1'\
+DTM+492:202610:610'\
+DTM+293:202610010000:304'\
+LIN+1'\
+PIA+5+1-1?:1.8.0:SRW'\
+QTY+79:100'\
+DTM+163:202610010000?+00:303'\
+DTM+164:202612310000?+00:303'\
+UNT+17+1'\
 UNZ+1+1'";
 
 /// MSCONS interchange with a Meldepunkt matching neither location-ID scheme.
 #[cfg(feature = "mscons")]
 const MSCONS_BAD_LOCATION_ID: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+261001:0700+1'\
 UNH+1+MSCONS:D:04B:UN:2.4c'\
-BGM+7:::+00013003::+9'\
-DTM+137:202301010000?+00:303'\
-RFF+ACE:REF001'\
-NAD+MS+4012345000023::293'\
+BGM+BK+DOK13003+9'\
+DTM+137:202610010000?+00:303'\
+RFF+Z13:13003'\
+NAD+MS+4012345000023::9'\
+NAD+MR+9900357000004::9'\
 UNS+D'\
-LOC+172+BADID'\
-QTY+220:100:KWH'\
-UNT+9+1'\
+NAD+DP'\
+LOC+172+BADID000'\
+DTM+492:202610:610'\
+DTM+293:202610010000:304'\
+LIN+1'\
+PIA+5+1-1?:1.8.0:SRW'\
+QTY+79:100'\
+DTM+163:202610010000?+00:303'\
+DTM+164:202612310000?+00:303'\
+UNT+17+1'\
 UNZ+1+1'";
 
 #[cfg(feature = "mscons")]
@@ -222,16 +288,24 @@ fn mscons_bad_location_id_triggers_sem_rule() {
 /// the segment, so it must validate.
 #[cfg(feature = "mscons")]
 const MSCONS_MELO_33: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+261001:0700+1'\
 UNH+1+MSCONS:D:04B:UN:2.4c'\
-BGM+7:::+00013003::+9'\
-DTM+137:202301010000?+00:303'\
-RFF+ACE:REF001'\
-NAD+MS+4012345000023::293'\
+BGM+BK+DOK13003+9'\
+DTM+137:202610010000?+00:303'\
+RFF+Z13:13003'\
+NAD+MS+4012345000023::9'\
+NAD+MR+9900357000004::9'\
 UNS+D'\
+NAD+DP'\
 LOC+172+DE00014559929E00856996N5139699L01'\
-QTY+220:100:KWH'\
-UNT+9+1'\
+DTM+492:202610:610'\
+DTM+293:202610010000:304'\
+LIN+1'\
+PIA+5+1-1?:1.8.0:SRW'\
+QTY+79:100'\
+DTM+163:202610010000?+00:303'\
+DTM+164:202612310000?+00:303'\
+UNT+17+1'\
 UNZ+1+1'";
 
 #[cfg(feature = "mscons")]
@@ -247,35 +321,47 @@ fn mscons_33char_melo_in_loc172_is_accepted() {
 /// MSCONS with correct period order (start before end).
 #[cfg(feature = "mscons")]
 const MSCONS_VALID_PERIOD: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+261001:0700+1'\
 UNH+1+MSCONS:D:04B:UN:2.4c'\
-BGM+7:::+00013003::+9'\
-DTM+137:202301010000?+00:303'\
-DTM+163:202301010000?+00:303'\
-DTM+164:202312310000?+00:303'\
-RFF+ACE:REF001'\
-NAD+MS+4012345000023::293'\
+BGM+BK+DOK13003+9'\
+DTM+137:202610010000?+00:303'\
+RFF+Z13:13003'\
+NAD+MS+4012345000023::9'\
+NAD+MR+9900357000004::9'\
 UNS+D'\
+NAD+DP'\
 LOC+172+51238696781'\
-QTY+220:100:KWH'\
-UNT+11+1'\
+DTM+492:202610:610'\
+DTM+293:202610010000:304'\
+LIN+1'\
+PIA+5+1-1?:1.8.0:SRW'\
+QTY+79:100'\
+DTM+163:202610010000?+00:303'\
+DTM+164:202612310000?+00:303'\
+UNT+17+1'\
 UNZ+1+1'";
 
 /// MSCONS where start date is after end date.
 #[cfg(feature = "mscons")]
 const MSCONS_BAD_PERIOD_ORDER: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+261001:0700+1'\
 UNH+1+MSCONS:D:04B:UN:2.4c'\
-BGM+7:::+00013003::+9'\
-DTM+137:202301010000?+00:303'\
-DTM+163:202312310000?+00:303'\
-DTM+164:202301010000?+00:303'\
-RFF+ACE:REF001'\
-NAD+MS+4012345000023::293'\
+BGM+BK+DOK13003+9'\
+DTM+137:202610010000?+00:303'\
+RFF+Z13:13003'\
+NAD+MS+4012345000023::9'\
+NAD+MR+9900357000004::9'\
 UNS+D'\
+NAD+DP'\
 LOC+172+51238696781'\
-QTY+220:100:KWH'\
-UNT+11+1'\
+DTM+492:202610:610'\
+DTM+293:202610010000:304'\
+LIN+1'\
+PIA+5+1-1?:1.8.0:SRW'\
+QTY+79:100'\
+DTM+163:202612310000?+00:303'\
+DTM+164:202610010000?+00:303'\
+UNT+17+1'\
 UNZ+1+1'";
 
 #[cfg(feature = "mscons")]
@@ -303,42 +389,35 @@ fn mscons_inverted_period_order_triggers_sem_rule() {
 /// MSCONS with an unknown unit code in QTY.
 #[cfg(feature = "mscons")]
 const MSCONS_BAD_UNIT: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+261001:0700+1'\
 UNH+1+MSCONS:D:04B:UN:2.4c'\
-BGM+7:::+00013003::+9'\
-DTM+137:202301010000?+00:303'\
-RFF+ACE:REF001'\
-NAD+MS+4012345000023::293'\
+BGM+BK+DOK13003+9'\
+DTM+137:202610010000?+00:303'\
+RFF+Z13:13003'\
+NAD+MS+4012345000023::9'\
+NAD+MR+9900357000004::9'\
 UNS+D'\
+NAD+DP'\
 LOC+172+51238696781'\
-QTY+220:100:BADUNIT'\
-UNT+9+1'\
+DTM+492:202610:610'\
+DTM+293:202610010000:304'\
+LIN+1'\
+PIA+5+1-1?:1.8.0:SRW'\
+QTY+79:100:BADUNIT'\
+DTM+163:202610010000?+00:303'\
+DTM+164:202612310000?+00:303'\
+UNT+17+1'\
 UNZ+1+1'";
 
 #[cfg(feature = "mscons")]
 #[test]
-fn mscons_unknown_unit_triggers_sem_rule() {
+fn mscons_unit_the_column_does_not_list_is_refused() {
+    // 13003 states no DE 6411 for its `QTY+79`: the unit is not to be sent.
     let msg = Platform::with_all_profiles()
         .parse(MSCONS_BAD_UNIT)
         .unwrap();
     let report = msg.validate().unwrap();
-    assert_has_rule(&report, "SEM-MSCONS-UNIT-UNKNOWN");
-}
-
-#[cfg(feature = "mscons")]
-#[test]
-fn mscons_valid_unit_kwh_passes() {
-    let msg = Platform::with_all_profiles()
-        .parse(MSCONS_VALID_MALO)
-        .unwrap();
-    let report = msg.validate().unwrap();
-    // KWH is in the approved list — no unit error expected.
-    let unit_errors = report.filter_by_rule_id("SEM-MSCONS-UNIT-UNKNOWN");
-    assert!(
-        !unit_errors.has_errors(),
-        "KWH should be approved; got errors: {:#?}",
-        unit_errors.errors()
-    );
+    assert_has_rule(&report, "AHB-13003-00028-QTY-6411-NOT-PERMITTED");
 }
 
 // ── PID coverage fixtures ─────────────────────────────────────────────────────
@@ -553,43 +632,55 @@ fn mscons_pid_fixtures_parse() {
 
 // ── APERAK (MIG 2.1i / AHB fv20251001) ──────────────────────────────────────
 
-/// APERAK with mandatory RFF+ACW reference present (valid).
+/// A Fehlermeldung (BGM 313) as its column demands it: `SG2 RFF+ACE`, `SG4 ERC`,
+/// `SG5 RFF+ACW` and `RFF+AGO`.
 #[cfg(feature = "aperak")]
 const APERAK_VALID_WITH_REF: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
-UNH+1+APERAK:D:07B:UN:2.1i'\
-BGM+313+00029001+9'\
-DTM+137:202301010000?+00:303'\
-RFF+ACW:MSG-REF-001'\
-NAD+MS+4012345000023::293'\
-NAD+MR+9900357000004::293'\
-ERC+Z20'\
-UNT+8+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+261001:0700+1'\
+UNH+1+APERAK:D:07B:UN:2.2'\
+BGM+313+DOK29001'\
+DTM+137:202610010000?+00:303'\
+RFF+ACE:00055001'\
+DTM+171:202610010000?+00:303'\
+NAD+MS+4012345000023::9'\
+NAD+MR+9900357000004::9'\
+ERC+Z10'\
+RFF+ACW:VORGANG0001'\
+RFF+AGO:VORGANG0001'\
+UNT+11+1'\
 UNZ+1+1'";
 
-/// APERAK missing the mandatory RFF+ACW reference (invalid).
+/// The Fehlermeldung without its `SG5 RFF+ACW`.
 #[cfg(feature = "aperak")]
 const APERAK_MISSING_REF: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
-UNH+1+APERAK:D:07B:UN:2.1i'\
-BGM+313+00029001+9'\
-DTM+137:202301010000?+00:303'\
-NAD+MS+4012345000023::293'\
-NAD+MR+9900357000004::293'\
-UNT+6+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+261001:0700+1'\
+UNH+1+APERAK:D:07B:UN:2.2'\
+BGM+313+DOK29001'\
+DTM+137:202610010000?+00:303'\
+RFF+ACE:00055001'\
+DTM+171:202610010000?+00:303'\
+NAD+MS+4012345000023::9'\
+NAD+MR+9900357000004::9'\
+ERC+Z10'\
+RFF+AGO:VORGANG0001'\
+UNT+10+1'\
 UNZ+1+1'";
 
-/// APERAK with a different RFF qualifier (not ACW) — invalid per AHB-29001-RFF-1153-Q.
+/// `RFF+ACE` where the `SG5 RFF+ACW` belongs: the group is still missing.
 #[cfg(feature = "aperak")]
 const APERAK_WRONG_RFF_QUALIFIER: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
-UNH+1+APERAK:D:07B:UN:2.1i'\
-BGM+313+00029001+9'\
-DTM+137:202301010000?+00:303'\
-RFF+ACE:REF001'\
-NAD+MS+4012345000023::293'\
-NAD+MR+9900357000004::293'\
-UNT+7+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+261001:0700+1'\
+UNH+1+APERAK:D:07B:UN:2.2'\
+BGM+313+DOK29001'\
+DTM+137:202610010000?+00:303'\
+RFF+ACE:00055001'\
+DTM+171:202610010000?+00:303'\
+NAD+MS+4012345000023::9'\
+NAD+MR+9900357000004::9'\
+ERC+Z10'\
+RFF+ACE:VORGANG0001'\
+RFF+AGO:VORGANG0001'\
+UNT+11+1'\
 UNZ+1+1'";
 
 #[cfg(feature = "aperak")]
@@ -609,7 +700,7 @@ fn aperak_missing_ref_triggers_sem_rule() {
         .parse(APERAK_MISSING_REF)
         .unwrap();
     let report = msg.validate().unwrap();
-    assert_has_rule(&report, "AHB-29001-RFF-M");
+    assert_has_rule(&report, "AHB-29001-SG5-00012-MISSING");
 }
 
 #[cfg(feature = "aperak")]
@@ -619,7 +710,7 @@ fn aperak_wrong_rff_qualifier_triggers_sem_rule() {
         .parse(APERAK_WRONG_RFF_QUALIFIER)
         .unwrap();
     let report = msg.validate().unwrap();
-    assert_has_rule(&report, "AHB-29001-RFF-1153-Q");
+    assert_has_rule(&report, "AHB-29001-SG5-00012-MISSING");
 }
 
 /// Smoke-test: APERAK PID fixtures must parse.
@@ -636,16 +727,16 @@ fn aperak_pid_fixtures_parse() {
 
 // ── CONTRL (MIG 2.0b / AHB fv20251001) ──────────────────────────────────────
 
-/// CONTRL with a valid UCI acknowledgement code (4 = accepted).
+/// CONTRL Syntaxfehlermeldung: UCI DE 0083 `4` with the error (DE 0085) and its segment.
 #[cfg(feature = "contrl")]
 const CONTRL_VALID_CODE_4: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
 UNH+1+CONTRL:D:3:UN:2.0b'\
-UCI+1+4012345000023:14+9900357000004:14+4'\
+UCI+1+4012345000023:14+9900357000004:14+4+12+UNB'\
 UNT+3+1'\
 UNZ+1+1'";
 
-/// CONTRL with valid UCI code 7 (rejected with errors — per MIG 2.0b code list).
+/// CONTRL Empfangsbestätigung: UCI DE 0083 `7`.
 #[cfg(feature = "contrl")]
 const CONTRL_VALID_CODE_7: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
@@ -654,18 +745,18 @@ UCI+1+4012345000023:14+9900357000004:14+7'\
 UNT+3+1'\
 UNZ+1+1'";
 
-/// CONTRL missing the mandatory UCI segment (invalid — triggers MIG-UCI-REQ).
+/// CONTRL missing the mandatory UCI segment (invalid — triggers MIG-00002-UCI-REQUIRED).
 #[cfg(feature = "contrl")]
 /// A CONTRL with a body but no `UCI`.
 ///
 /// The body must not be empty: ISO 9735-1 §7.3 requires content between `UNH`
-/// and `UNT`, and an empty message is rejected at parse — before `MIG-UCI-REQ`
+/// and `UNT`, and an empty message is rejected at parse — before `MIG-00002-UCI-REQUIRED`
 /// could ever be reached. A `UCM` keeps the message well-formed while leaving
 /// the `UCI` absent, which is what this fixture is for.
 const CONTRL_MISSING_UCI: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
 UNH+1+CONTRL:D:3:UN:2.0b'\
-UCM+1+UTILMD:D:11A:UN:S1.2e+4'\
+UCM+1+UTILMD:D:11A:UN:S2.2+4+12+UNH'\
 UNT+3+1'\
 UNZ+1+1'";
 
@@ -696,7 +787,7 @@ fn contrl_missing_uci_triggers_mig_rule() {
         .parse(CONTRL_MISSING_UCI)
         .unwrap();
     let report = msg.validate().unwrap();
-    assert_has_rule(&report, "MIG-UCI-REQ");
+    assert_has_rule(&report, "MIG-00002-UCI-REQUIRED");
 }
 
 /// CONTRL has no Pruefidentifikatoren — detect_pruefidentifikator() must fail.

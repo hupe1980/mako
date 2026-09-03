@@ -8,12 +8,6 @@
 /// A profile that lacks a `valid_until` field is treated as open-ended (valid
 /// from `valid_from` until the next profile takes over, or indefinitely).
 ///
-/// Profiles with `"archived": true` are excluded from coverage checks (they
-/// have been intentionally retired and are expected to have gaps).
-///
-/// Exit codes:
-///   0 — all checked message types have at least one profile covering `date`
-///   1 — one or more message types have no profile covering `date`
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -25,8 +19,6 @@ struct MigJson {
     valid_from: Option<String>,
     valid_until: Option<String>,
     release: Option<String>,
-    #[serde(default)]
-    archived: bool,
     /// `pid_exempt` profiles (CONTRL) can be exempt from coverage warnings
     /// because they are protocol-level messages, not domain FV-tracked ones.
     #[serde(default)]
@@ -39,7 +31,6 @@ struct ProfileSpan {
     release: String,
     valid_from: Option<time::Date>,
     valid_until: Option<time::Date>,
-    archived: bool,
     pid_exempt: bool,
 }
 
@@ -128,7 +119,6 @@ pub fn check_release_coverage() {
                     release: mig.release.unwrap_or_default(),
                     valid_from,
                     valid_until,
-                    archived: mig.archived,
                     pid_exempt: mig.pid_exempt,
                 });
         }
@@ -155,16 +145,13 @@ pub fn check_release_coverage() {
         }
 
         // Find profiles that cover `check_date` (non-archived).
-        let covering: Vec<&ProfileSpan> = spans
-            .iter()
-            .filter(|s| !s.archived && covers(s, check_date))
-            .collect();
+        let covering: Vec<&ProfileSpan> = spans.iter().filter(|s| covers(s, check_date)).collect();
 
         if covering.is_empty() {
             // Report the nearest future profile as context.
             let future: Vec<&ProfileSpan> = spans
                 .iter()
-                .filter(|s| !s.archived && s.valid_from.is_some_and(|vf| vf > check_date))
+                .filter(|s| s.valid_from.is_some_and(|vf| vf > check_date))
                 .collect();
 
             let hint = if let Some(next) = future.iter().min_by_key(|s| s.valid_from) {
@@ -177,7 +164,7 @@ pub fn check_release_coverage() {
                 String::new()
             };
 
-            let past: Vec<&ProfileSpan> = spans.iter().filter(|s| !s.archived).collect();
+            let past: Vec<&ProfileSpan> = spans.iter().collect();
             let available = past
                 .iter()
                 .map(|s| format!("{} ({})", s.dir, s.release))

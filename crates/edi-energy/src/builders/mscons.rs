@@ -73,6 +73,14 @@ struct LineItemSpec {
     /// Validated at construction — malformed OBIS codes are rejected.
     obis_code: Option<ObisCode>,
     quantities: Vec<QuantitySpec>,
+    /// `STS+Z32+<Verfahren>` and `STS+Z40+<Grund>` — an Ersatzwert's
+    /// Bildungsverfahren and Grund.
+    ersatzwert: Option<(String, String)>,
+    /// `STS+10+<4405>` — the Messklassifizierung of an Energiemenge.
+    messklassifizierung: Option<String>,
+    /// `PIA` DE 7143: `SRW` OBIS-Kennzahl unless the column says otherwise
+    /// (`Z08` Medium on the Redispatch Ausfallarbeits-SZR).
+    pia_type: Option<String>,
     /// Period a power maximum fell in (`DTM+306`).
     leistungsperiode: Option<LeistungsperiodeSpec>,
 }
@@ -81,13 +89,6 @@ struct LineItemSpec {
 struct MeteringPointSpec {
     malo_id: String,
     location_id: Option<String>,
-    /// Bilanzierungsgebiet EIC — `LOC+107`.
-    ///
-    /// Distinct from `location_id` (`LOC+172` Meldepunkt). MSCONS AHB 3.2 gives
-    /// the Summenzeitreihe PIDs three separate SG6 LOC qualifiers: `172`
-    /// Meldepunkt, `107` Bilanzierungsgebiet, `237` Bilanzkreis. Putting the
-    /// Bilanzierungsgebiet under `172` claims it is the Meldepunkt.
-    bilanzierungsgebiet: Option<String>,
     /// Bilanzierungsmonat as `CCYYMM` (`DTM+492`, format 610).
     balancing_period: Option<String>,
     /// Versionsangabe as `CCYYMMDDHHMMSSZZZ` (`DTM+293`, format 304).
@@ -272,7 +273,6 @@ impl<S, R> MsconsBuilder<S, R> {
             spec: MeteringPointSpec {
                 malo_id: malo_id.into(),
                 location_id: None,
-                bilanzierungsgebiet: None,
                 balancing_period: None,
                 version: None,
                 line_items: Vec::new(),
@@ -283,6 +283,7 @@ impl<S, R> MsconsBuilder<S, R> {
 }
 
 impl<S, R> MsconsBuilder<S, R> {
+    #[allow(clippy::too_many_lines)]
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         let pid_str = self
             .inner
@@ -324,11 +325,12 @@ impl<S, R> MsconsBuilder<S, R> {
         // The `?+` escapes the plus for the EDIFACT release character, which
         // the writer applies.
         emit_comp!(w, "DTM", ["137", &super::ccyymmddhhmm_utc(&dtm_val), "303"]);
-        if !pid_str.is_empty() {
-            emit_comp!(w, "RFF", ["Z13", &pid_str]);
-        }
+        // The MIG lists `SG1 RFF` Referenz (`AGI`, …) before the Prüfidentifikator's.
         for (qualifier, value) in &self.inner.header_references {
             emit_comp!(w, "RFF", [qualifier, value]);
+        }
+        if !pid_str.is_empty() {
+            emit_comp!(w, "RFF", ["Z13", &pid_str]);
         }
         if let Some(id) = &self.inner.sender_id {
             emit_comp!(
@@ -349,18 +351,15 @@ impl<S, R> MsconsBuilder<S, R> {
         if !self.inner.metering_points.is_empty() {
             emit_seg!(w, "UNS", "D");
             for mp in &self.inner.metering_points {
-                emit_comp!(w, "NAD", ["DP"], [&mp.malo_id, "", "293"]);
+                // `NAD+DP` carries the qualifier only; the Lokation is the
+                // `SG6 LOC+172` that follows.
+                emit_seg!(w, "NAD", "DP");
                 if !mp.line_items.is_empty() {
                     // LOC+172 is mandatory. Falling back to the metering point
                     // keeps a caller that set no separate location from emitting
                     // a message the profile rejects for a missing segment.
                     let loc_id = mp.location_id.as_deref().unwrap_or(mp.malo_id.as_str());
                     emit_seg!(w, "LOC", "172", loc_id);
-                    // SG6 LOC+107 — the Bilanzierungsgebiet the Meldepunkt sits
-                    // in. Its own qualifier, not a second use of 172.
-                    if let Some(bg) = &mp.bilanzierungsgebiet {
-                        emit_seg!(w, "LOC", "107", bg);
-                    }
                     if let Some(period) = &mp.balancing_period {
                         emit_comp!(w, "DTM", ["492", period, "610"]);
                     }
@@ -378,10 +377,18 @@ impl<S, R> MsconsBuilder<S, R> {
                             // active UNA because the component boundary is
                             // structural here, not inferred from `:`.
                             let pia_value = obis.to_pia_string();
-                            emit_comp!(w, "PIA", ["5"], [&pia_value, PIA_TYPE_OBIS]);
+                            let pia_type = item.pia_type.as_deref().unwrap_or(PIA_TYPE_OBIS);
+                            emit_comp!(w, "PIA", ["5"], [&pia_value, pia_type]);
                         }
                         for qty in &item.quantities {
-                            emit_comp!(w, "QTY", [&qty.qualifier, &qty.value, &qty.unit]);
+                            // No AHB column lists DE 6411 on `QTY`: the unit
+                            // is the OBIS-Kennzahl's. It goes out only when a
+                            // caller states one.
+                            if qty.unit.is_empty() {
+                                emit_comp!(w, "QTY", [&qty.qualifier, &qty.value]);
+                            } else {
+                                emit_comp!(w, "QTY", [&qty.qualifier, &qty.value, &qty.unit]);
+                            }
                             // DE 2005 163/164 = Beginn/Ende Messperiode. Emitted
                             // immediately after the QTY they bound, which is what
                             // associates them with that quantity.
@@ -398,6 +405,21 @@ impl<S, R> MsconsBuilder<S, R> {
                         // maximum, so it follows that item's quantities.
                         if let Some(lp) = &item.leistungsperiode {
                             emit_comp!(w, "DTM", ["306", &lp.value, &lp.format]);
+                        }
+                        // `SG10 STS` — the Ersatzwertbildungsverfahren (`Z32`)
+                        // and the Grund der Ersatzwertbildung (`Z40`), Muss
+                        // beside a `QTY+67`; the Messklassifizierung (`STS+10`)
+                        // on an Energiemenge.
+                        // DE 9013 is `C556` at element 3; `C555` (element 2) is
+                        // not used on these two.
+                        if let Some((verfahren, grund)) = &item.ersatzwert {
+                            emit_seg!(w, "STS", "Z32", "", verfahren);
+                            if !grund.is_empty() {
+                                emit_seg!(w, "STS", "Z40", "", grund);
+                            }
+                        }
+                        if let Some(k) = &item.messklassifizierung {
+                            emit_comp!(w, "STS", ["10"], [k]);
                         }
                     }
                 }
@@ -462,15 +484,6 @@ impl<S, R> MeteringPointBuilder<S, R> {
         self
     }
 
-    /// Set the Bilanzierungsgebiet EIC (`LOC+107`).
-    ///
-    /// Required for the `MaBiS` Summenzeitreihe PIDs; the Meldepunkt itself goes
-    /// to [`location_id`](MeteringPointBuilder::location_id) as `LOC+172`.
-    pub fn bilanzierungsgebiet(mut self, id: impl Into<String>) -> Self {
-        self.spec.bilanzierungsgebiet = Some(id.into());
-        self
-    }
-
     /// Set the Bilanzierungsmonat (`DTM+492`, format 610, `CCYYMM`).
     pub fn balancing_period(mut self, period: impl Into<String>) -> Self {
         self.spec.balancing_period = Some(period.into());
@@ -495,6 +508,9 @@ impl<S, R> MeteringPointBuilder<S, R> {
                 obis_code: None,
                 quantities: Vec::new(),
                 leistungsperiode: None,
+                ersatzwert: None,
+                messklassifizierung: None,
+                pia_type: None,
             })
             .obis_code = Some(code);
         self
@@ -511,6 +527,9 @@ impl<S, R> MeteringPointBuilder<S, R> {
             obis_code: Some(obis_code),
             quantities: Vec::new(),
             leistungsperiode: None,
+            ersatzwert: None,
+            messklassifizierung: None,
+            pia_type: None,
         });
         self
     }
@@ -542,6 +561,9 @@ impl<S, R> MeteringPointBuilder<S, R> {
                 obis_code: None,
                 quantities: Vec::new(),
                 leistungsperiode: None,
+                ersatzwert: None,
+                messklassifizierung: None,
+                pia_type: None,
             });
         }
         if let Some(item) = &mut self.current_item {
@@ -576,6 +598,9 @@ impl<S, R> MeteringPointBuilder<S, R> {
                 obis_code: None,
                 quantities: Vec::new(),
                 leistungsperiode: None,
+                ersatzwert: None,
+                messklassifizierung: None,
+                pia_type: None,
             });
         }
         if let Some(item) = &mut self.current_item {
@@ -603,6 +628,9 @@ impl<S, R> MeteringPointBuilder<S, R> {
                 obis_code: None,
                 quantities: Vec::new(),
                 leistungsperiode: None,
+                ersatzwert: None,
+                messklassifizierung: None,
+                pia_type: None,
             });
         }
         if let Some(item) = &mut self.current_item {
@@ -610,6 +638,38 @@ impl<S, R> MeteringPointBuilder<S, R> {
                 value: value.into(),
                 format: format.into(),
             });
+        }
+        self
+    }
+
+    /// `SG10 STS+Z32+<Verfahren>` and `STS+Z40+<Grund>` on the current line
+    /// item — Muss beside an Ersatzwert (`QTY+67`): the Ersatzwertbildungs-
+    /// verfahren (`Z88` geeichte Vergleichsmessung, `Z89` nicht geeichte,
+    /// `Z92` Interpolation, `ZJ2` statistische Methode) and the Grund (`Z74`
+    /// kein Zugang, `Z75` Kommunikationsstörung, `Z76` Netzausfall, `Z77`
+    /// Spannungsausfall).
+    pub fn ersatzwert(mut self, verfahren: impl Into<String>, grund: impl Into<String>) -> Self {
+        if let Some(item) = &mut self.current_item {
+            item.ersatzwert = Some((verfahren.into(), grund.into()));
+        }
+        self
+    }
+
+    /// `SG10 STS+10+<4405>` — the Messklassifizierung of an Energiemenge
+    /// (`Z36`…`Z39`: whether a Zählerstand stood at the period's beginning
+    /// and end).
+    pub fn messklassifizierung(mut self, code: impl Into<String>) -> Self {
+        if let Some(item) = &mut self.current_item {
+            item.messklassifizierung = Some(code.into());
+        }
+        self
+    }
+
+    /// `PIA` DE 7143 of the current line item — `Z08` where the column names
+    /// the series as a Medium rather than an OBIS-Kennzahl.
+    pub fn pia_type(mut self, code: impl Into<String>) -> Self {
+        if let Some(item) = &mut self.current_item {
+            item.pia_type = Some(code.into());
         }
         self
     }
@@ -631,7 +691,7 @@ impl<S, R> MeteringPointBuilder<S, R> {
 #[cfg(test)]
 mod summenzeitreihe_tests {
     use super::*;
-    use crate::generated::releases;
+    use crate::releases;
 
     /// A `MaBiS` Summenzeitreihe (PID 13003) must carry its identifying 3-tuple
     /// and a time reference for every quantity.

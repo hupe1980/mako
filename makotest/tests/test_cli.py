@@ -40,7 +40,7 @@ class TestValidate:
 
     def test_an_invalid_interchange_exits_one_and_names_the_rule(self, capsys, tmp_path):
         path = tmp_path / "bad.edi"
-        path.write_bytes(utilmd_interchange(melo="NOTAMELO"))
+        path.write_bytes(utilmd_interchange(lokation="NOTAMELO"))
         code, out = run(capsys, "validate", str(path), "--on", ON)
         assert code == 1
         assert "INVALID" in out
@@ -60,7 +60,7 @@ class TestValidate:
 
     def test_the_json_report_carries_the_findings(self, capsys, tmp_path):
         path = tmp_path / "bad.edi"
-        path.write_bytes(utilmd_interchange(melo="NOTAMELO"))
+        path.write_bytes(utilmd_interchange(lokation="NOTAMELO"))
         code, payload = run_json(capsys, "validate", str(path), "--on", ON)
         assert code == 1
         assert payload["valid"] is False

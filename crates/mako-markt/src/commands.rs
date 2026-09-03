@@ -212,6 +212,16 @@ pub const GABI_RECHNUNG_ANNEHMEN: &str = "gabi.rechnung.annehmen";
 /// Dispute one.
 pub const GABI_RECHNUNG_ABLEHNEN: &str = "gabi.rechnung.ablehnen";
 
+/// Nominate a gas day at a physical point or the Virtueller Handelspunkt —
+/// the DVGW NOMINT a Transportkunde sends its NB or the MGV (`KoV` §5).
+pub const GABI_NOMINIERUNG_SENDEN: &str = "gabi.nominierung.senden";
+/// Answer a nomination addressed to this tenant with the NOMRES it owes as
+/// the NB or MGV — confirmed, curtailed, or refused.
+pub const GABI_NOMINIERUNG_BEANTWORTEN: &str = "gabi.nominierung.beantworten";
+/// Report a Netzkonto's Mehr-/Mindermenge for an Abrechnungszeitraum — the
+/// DVGW SSQNOT a Netzbetreiber sends the Marktgebietsverantwortlichen.
+pub const GABI_MEHRMINDERMENGEN_MELDEN: &str = "gabi.mehrmindermengen.melden";
+
 /// Settle an inbound Stornorechnung (PID 31004) — Sparte-neutral and
 /// cross-process (INVOIC AHB § 3.1.2), so it cancels an invoice from any family.
 pub const INVOIC_STORNORECHNUNG_ANNEHMEN: &str = "invoic.stornorechnung.annehmen";

@@ -1,201 +1,1219 @@
 {
-  "schema_version": 1,
-  "message_type": "APERAK",
-  "release": "2.1i",
-  "source_document": "APERAK AHB, wire release 2.1i (Stand 01.10.2025)",
-  "pruefidentifikatoren": [
+  "ahb_version": "1.0",
+  "anwendungsfaelle": [
     {
-      "code": 29001,
-      "name": "Verarbeitbarkeitsfehler (Fehler bei der Anwendung)",
-      "segment_rules": [
+      "chapter": "3.2 Tabellarische Darstellung der APERAK",
+      "elements": [
         {
-          "tag": "BGM",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "1001": [
-              "313"
-            ]
-          },
-          "field_rules": [
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
             {
-              "element": "C106",
-              "requirement": "M",
-              "element_index": 0
+              "operand": "X"
             }
           ]
         },
         {
-          "tag": "DTM",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "2005": [
-              "137"
-            ]
-          },
-          "field_rules": []
-        },
-        {
-          "tag": "NAD",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "3035": [
-              "MS",
-              "MR"
-            ]
-          },
-          "field_rules": [
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
             {
-              "element": "C082",
-              "requirement": "M",
-              "element_index": 0
+              "code": "APERAK",
+              "operand": "X"
             }
           ]
         },
         {
-          "tag": "RFF",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "1153": [
-              "ACW"
-            ]
-          },
-          "field_rules": [
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
             {
-              "element": "1154",
-              "requirement": "M",
-              "element_index": 0
+              "code": "D",
+              "operand": "X"
             }
           ]
         },
         {
-          "tag": "ERC",
-          "requirement": "M",
-          "qualifier_restrictions": {},
-          "field_rules": [
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
             {
-              "element": "9321",
-              "requirement": "M",
-              "element_index": 0
+              "code": "07B",
+              "operand": "X"
             }
           ]
         },
         {
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG 2.1i (no AHB constraint for PID 29001)"
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG 2.1i (no AHB constraint for PID 29001)"
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "2.1i",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "FTX",
-          "requirement": "O",
-          "_description": "FTX is optional per MIG 2.1i (no AHB constraint for PID 29001)"
+          "de": "1001",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "313",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X [931] [494]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "ACE",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "171",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00005",
+          "operands": [
+            {
+              "operand": "X [931]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00008",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00008",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00008",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3139",
+          "nr": "00009",
+          "operands": [
+            {
+              "code": "IC",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3412",
+          "nr": "00009",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3148",
+          "nr": "00010",
+          "operands": [
+            {
+              "operand": "X ∨"
+            }
+          ]
+        },
+        {
+          "de": "3155",
+          "nr": "00010",
+          "operands": [
+            {
+              "code": "TE",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "EM",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "FX",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AJ",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AL",
+              "operand": "X [1P0..1]"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00011",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "9321",
+          "nr": "00012",
+          "operands": [
+            {
+              "code": "Z10",
+              "operand": "X [500]"
+            },
+            {
+              "code": "Z17",
+              "operand": "X [500]"
+            },
+            {
+              "code": "Z18",
+              "operand": "X [500]"
+            },
+            {
+              "code": "Z19",
+              "operand": "X [500]"
+            },
+            {
+              "code": "Z20",
+              "operand": "X [500]"
+            },
+            {
+              "code": "Z21",
+              "operand": "X [500]"
+            },
+            {
+              "code": "Z24",
+              "operand": "X [500]"
+            },
+            {
+              "code": "Z25",
+              "operand": "X [500]"
+            },
+            {
+              "code": "Z26",
+              "operand": "X [500]"
+            },
+            {
+              "code": "Z27",
+              "operand": "X [500]"
+            },
+            {
+              "code": "Z30",
+              "operand": "X [500]"
+            },
+            {
+              "code": "Z33",
+              "operand": "X [500]"
+            },
+            {
+              "code": "Z42",
+              "operand": "X [500]"
+            },
+            {
+              "code": "Z43",
+              "operand": "X [500]"
+            },
+            {
+              "code": "Z44",
+              "operand": "X [500]"
+            },
+            {
+              "code": "Z14",
+              "operand": "X [501]"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00013",
+          "operands": [
+            {
+              "code": "ABO",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00013",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00014",
+          "operands": [
+            {
+              "code": "ACW",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00014",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00015",
+          "operands": [
+            {
+              "code": "AGO",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00015",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00016",
+          "operands": [
+            {
+              "code": "AAO",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00016",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "Z02",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00017",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00018",
+          "operands": [
+            {
+              "code": "TN",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00018",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00019",
+          "operands": [
+            {
+              "code": "AAO",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00019",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "Z02",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00020",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00021",
+          "operands": [
+            {
+              "code": "Z08",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00021",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00022",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00022",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         }
       ],
-      "group_rules": [
+      "name": "Fehlermeldung",
+      "pid": 29001,
+      "rows": [
         {
-          "group_id": "SG2",
-          "tag": "DTM",
-          "requirement": "O",
-          "_description": "MIG: DTM in SG2 marked mandatory per MIG 2.1i; actual AHB req is O (valid APERAK can omit DTM in SG2)"
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00004",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00005",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00008",
+          "group": "SG3",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00008",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00009",
+          "status": [
+            "Kann"
+          ]
+        },
+        {
+          "nr": "00010",
+          "status": [
+            "Muss [1]"
+          ]
+        },
+        {
+          "before": "00011",
+          "group": "SG3",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00011",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00012",
+          "group": "SG4",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00012",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00013",
+          "status": [
+            "Soll [2]"
+          ]
+        },
+        {
+          "before": "00014",
+          "group": "SG5",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00014",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00015",
+          "group": "SG5",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00015",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00016",
+          "status": [
+            "Soll [3] ∧ [4]"
+          ]
+        },
+        {
+          "nr": "00017",
+          "status": [
+            "Muss [4] ∧ ([5] ∨ [9] ∨ [10] ∨ [11] ∨ [12] ∨ [13])"
+          ]
+        },
+        {
+          "before": "00018",
+          "group": "SG5",
+          "status": [
+            "Soll [6]"
+          ]
+        },
+        {
+          "nr": "00018",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00019",
+          "status": [
+            "Kann"
+          ]
+        },
+        {
+          "nr": "00020",
+          "status": [
+            "Muss [5] ∨ [7] ∨ [9] ∨ [10] ∨ [11] ∨ [12] ∨ [13]"
+          ]
+        },
+        {
+          "before": "00021",
+          "group": "SG5",
+          "status": [
+            "Muss [8]"
+          ]
+        },
+        {
+          "nr": "00021",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00022",
+          "status": [
+            "Muss"
+          ]
         }
       ]
     },
     {
-      "code": 29002,
-      "name": "Anerkennungsmeldung",
-      "segment_rules": [
+      "chapter": "3.2 Tabellarische Darstellung der APERAK",
+      "elements": [
         {
-          "tag": "BGM",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "1001": [
-              "312"
-            ]
-          },
-          "field_rules": [
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
             {
-              "element": "C106",
-              "requirement": "M",
-              "element_index": 0
+              "operand": "X"
             }
           ]
         },
         {
-          "tag": "DTM",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "2005": [
-              "137"
-            ]
-          },
-          "field_rules": []
-        },
-        {
-          "tag": "NAD",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "3035": [
-              "MS",
-              "MR"
-            ]
-          },
-          "field_rules": [
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
             {
-              "element": "C082",
-              "requirement": "M",
-              "element_index": 0
+              "code": "APERAK",
+              "operand": "X"
             }
           ]
         },
         {
-          "tag": "RFF",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "1153": [
-              "ACW"
-            ]
-          },
-          "field_rules": [
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
             {
-              "element": "1154",
-              "requirement": "M",
-              "element_index": 0
+              "code": "D",
+              "operand": "X"
             }
           ]
         },
         {
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG 2.1i (no AHB constraint for PID 29002)"
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "07B",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG 2.1i (no AHB constraint for PID 29002)"
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "ERC",
-          "requirement": "O",
-          "_description": "ERC is optional per MIG 2.1i (no AHB constraint for PID 29002)"
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "2.1i",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "FTX",
-          "requirement": "O",
-          "_description": "FTX is optional per MIG 2.1i (no AHB constraint for PID 29002)"
+          "de": "1001",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "312",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X [931] [494]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "ACE",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "171",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00005",
+          "operands": [
+            {
+              "operand": "X [931]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "AGO",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00006",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "TN",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00007",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00008",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00008",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00008",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3139",
+          "nr": "00009",
+          "operands": [
+            {
+              "code": "IC",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3412",
+          "nr": "00009",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3148",
+          "nr": "00010",
+          "operands": [
+            {
+              "operand": "X ∨"
+            }
+          ]
+        },
+        {
+          "de": "3155",
+          "nr": "00010",
+          "operands": [
+            {
+              "code": "TE",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "EM",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "FX",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AJ",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AL",
+              "operand": "X [1P0..1]"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00011",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00022",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00022",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         }
       ],
-      "group_rules": [
+      "name": "Anerkennungsmeldung",
+      "pid": 29002,
+      "rows": [
         {
-          "group_id": "SG2",
-          "tag": "DTM",
-          "requirement": "O",
-          "_description": "MIG: DTM in SG2 marked mandatory per MIG 2.1i; actual AHB req is O (valid APERAK can omit DTM in SG2)"
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00004",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00005",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00006",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00007",
+          "group": "SG2",
+          "status": [
+            "Soll [16]"
+          ]
+        },
+        {
+          "nr": "00007",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00008",
+          "group": "SG3",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00008",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00009",
+          "status": [
+            "Kann"
+          ]
+        },
+        {
+          "nr": "00010",
+          "status": [
+            "Muss [1]"
+          ]
+        },
+        {
+          "before": "00011",
+          "group": "SG3",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00011",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00022",
+          "status": [
+            "Muss"
+          ]
         }
       ]
     }
-  ]
+  ],
+  "conditions": {
+    "1": "Wenn SG3 CTA+IC vorhanden.",
+    "10": "Wenn SG4 ERC+Z38 vorhanden.",
+    "11": "Wenn SG4 ERC+Z39 vorhanden.",
+    "12": "Wenn SG4 ERC+Z41 vorhanden.",
+    "13": "Wenn SG4 ERC+Z40 vorhanden.",
+    "14": "Wenn im DE3155 in demselben COM der Code EM vorhanden ist",
+    "15": "Wenn im DE3155 in demselben COM der Code TE / FX / AJ / AL vorhanden ist",
+    "16": "Wenn der referenzierte Nachrichtentyp IFTSTA, INSRPT, UTILMD oder UTILTS ist.",
+    "2": "Wenn fehlerhafter Inhalt vorhanden.",
+    "3": "Wenn für weitere Fehlerangabe benötigt.",
+    "4": "Wenn in dieser SG4, RFF+TN nicht vorhanden.",
+    "494": "Das hier genannte Datum muss der Zeitpunkt sein, zu dem das Dokument erstellt wurde, oder ein Zeitpunkt, der davor liegt",
+    "5": "Wenn SG4 ERC+Z29 vorhanden.",
+    "500": "Hinweis: Für Folgeprozesse.",
+    "501": "Hinweis: Für Initialprozesse.",
+    "502": "Hinweis: Es darf nur eine Information im DE3148 übermittelt werden",
+    "6": "Wenn Fehler innerhalb der Vorgangsebene von IFTSTA, INSRPT, UTILMD oder UTILTS vorhanden.",
+    "7": "Wenn SG4 ERC+Z21 vorhanden.",
+    "8": "Wenn SG4 ERC+Z16 vorhanden.",
+    "9": "Wenn SG4 ERC+Z35 vorhanden.",
+    "931": "Format: ZZZ = +00",
+    "939": "Format: Die Zeichenkette muss die Zeichen @ und . enthalten",
+    "940": "Format: Die Zeichenkette muss mit dem Zeichen + beginnen und danach dürfen nur noch Ziffern folgen"
+  },
+  "message_type": "APERAK",
+  "packages": {
+    "1P": "--                                                  Hinweis:       Das    ist  das   Standardpaket,             wenn      keine     Bedingung         zum     Tragen       kommt,        z. B."
+  },
+  "release": "2.1i",
+  "schema_version": 2,
+  "source": {
+    "file": "APERAK_AHB_1.0_-_konsolidierte_Lesefassung_Stand_30.09.2025.pdf",
+    "sha256": "d3190fcd375843d356e59b7ffe808d5ed9cf9148a97c7d54944dd2d116f5ec79",
+    "title": "APERAK AHB 1.0 - konsolidierte Lesefassung mit Fehlerkorrekturen Stand: 30.09.2025"
+  }
 }

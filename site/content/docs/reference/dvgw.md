@@ -1,6 +1,6 @@
 +++
 title = "DVGW EDI"
-description = "dvgw-edi: parsing, validating and writing ALOCAT, NOMINT and NOMRES for GaBi Gas 2.1. Covers message identity (carrier vs. document code), the Prüfidentifikator catalogue, DTM format codes, the position model, validation rules, and GaBi Gas workflow integration."
+description = "dvgw-edi: parsing, validating and writing ALOCAT, NOMINT, NOMRES and SSQNOT for GaBi Gas 2.1. Covers message identity (carrier vs. document code), the Prüfidentifikator catalogue, DTM format codes, the position model, validation rules, and GaBi Gas workflow integration."
 weight = 14
 +++
 # DVGW EDI
@@ -73,8 +73,10 @@ used only as a cross-check: a `01G` arriving on `ORDRSP` is refused as
 | **ALOCAT** — Allokationsnachricht | `ORDRSP` | `X1G` SLP-Allokation · `X2G` korr. Mengenmeldung NKP · `X3G` SLP-Ersatzwerte · `X4G` untertägig · `X5G` endgültig · `X6G`/`X7G` korr. Allokation · `XBG` tägl. Mengenmeldung NKP | 70001–70023 |
 | **NOMINT** — Nominierung | `ORDERS` | `01G` Transportkunde · `55G` VHP · `Y1G` Flexibilitätsübertragung · `Y6G` gebündelte Kapazität · `Y7G` Weitergabe zwischen NB | 70030–70034 |
 | **NOMRES** — Nominierungsantwort | `ORDRSP` | `07G` Matching · `08G` Bestätigung · `19G` VHP-Matching · `20G` VHP-Bestätigung · `Y2G` Bestätigung FlexÜbertragung | 70035–70039 |
+| **SSQNOT** — Mehr-/Mindermengenmeldung | `ORDRSP` | `BAG` Mehr-/Mindermengenmeldung zur Führung des Netzkontos | 70095 (SLP), 70096 (RLM) |
 
-DE 3055 is `332` (DVGW Service & Consult) on every coded value.
+DE 3055 is `332` (DVGW Service & Consult) on every DVGW-coded value; a party
+identified by a GLN carries `9` (GS1), which the `NAD` rows admit beside it.
 
 ### 2.3 Acknowledgement layer
 
@@ -97,13 +99,12 @@ a counterparty's test ALOCAT would allocate quantities against a real gas day.
 
 ### 2.5 Formats not implemented
 
-SCHEDL, IMBNOT, TRANOT, DELORD, DELRES, SSQNOT, CHACAP, NUEVOR, SLPASP and
-TSIMSG are not parsed, and `mako-gabi-gas` carries no workflow and no
-Prüfidentifikator for them. Implementing one starts with its
-Nachrichtenbeschreibung: the shape is predictable — the three implemented
-formats share a header and a `LIN`/`LOC`/`QTY` body — but which `BGM` DE 1001
-codes and which Prüfidentifikatoren a format publishes is not derivable from the
-others.
+SCHEDL, IMBNOT, TRANOT, DELORD, DELRES, CHACAP, NUEVOR, SLPASP and TSIMSG are
+not parsed, and `mako-gabi-gas` carries no workflow and no Prüfidentifikator
+for them. Implementing one starts with its Nachrichtenbeschreibung: the shape
+is predictable — the four implemented formats share a header and a
+`LIN`/`LOC`/`QTY` body — but which `BGM` DE 1001 codes and which
+Prüfidentifikatoren a format publishes is not derivable from the others.
 
 ---
 
@@ -117,12 +118,13 @@ in it without distinguishing them syntactically:
 
 | Message | DE 0057 | Meaning |
 |---|---|---|
-| NOMINT 4.6, NOMRES 4.7 | `DVGW17` | Nachrichtentypen-Paket 17 |
+| NOMINT 4.6, NOMRES 4.7, SSQNOT 5.7 | `DVGW17` | Nachrichtentypen-Paket 17 |
 | ALOCAT 5.11a | `5.11a` | the message version itself |
 
 It is therefore **not** a uniform version key. `DvgwVersion` captures it verbatim
 so it round-trips and operators can see what a counterparty claims, and nothing
-in the crate selects behaviour from it.
+in the crate selects behaviour from it; the builder writes the family's value
+(`DvgwMessageType::anwendungscode`) unless told otherwise.
 
 A *Fehlerkorrektur* (`FK`) is an editorial correction: the version string is
 unchanged and no parser change is required.
@@ -138,8 +140,9 @@ code says how to read the value:
 |---|---|---|
 | `DTM+Z05` | Zeitzonen-Definition (`0` = UTC) | `805` whole hours |
 | `DTM+137` | Datum und Zeit der Nachricht | `203` `CCYYMMDDHHMM` |
-| `DTM+Z01` | Gültigkeitszeitraum der Nachricht — **the gas day** | `719` `CCYYMMDDHHMMCCYYMMDDHHMM` |
-| `DTM+2` | period for the quantities that follow it | `719` |
+| `DTM+Z01` | Gültigkeitszeitraum der Nachricht — **the gas day** (SSQNOT: the Abrechnungszeitraum) | `719` `CCYYMMDDHHMMCCYYMMDDHHMM` |
+| `DTM+9` | Bearbeitungsdatum of the original nomination, beside `RFF+AGO` (NOMINT) | `203` |
+| `DTM+2` | period for the quantity that follows it | `719` |
 
 `DTM+137` is the moment the message was written, not the day it reports on. The
 gas day is `DTM+Z01`, and it is a *period*: `201801010500201801020500` is 05:00
@@ -156,33 +159,41 @@ whole message against the wrong gas day, silently.
 
 ```text
 BGM DTM×3 RFF+ NAD+MS NAD+MR
-└─ LIN                          ← LineItem (Positionsnummer, Zeitreihentyp)
-   ├─ IMD                       ← NOMRES: 17G nominiert / 18G Gegenseite / 16G gematcht
-   ├─ LOC                       ← LocationGroup, repeats
-   │  ├─ DTM+2                  ← period for the quantities that follow
-   │  └─ QTY (+STS)             ← Quantity, repeats — a time series
-   └─ NAD+ZEU / NAD+ZES / …     ← Bilanzkreis, Netzkonto, VHP
+└─ LIN                          ← LineItem (Positionsnummer)
+   ├─ IMD                       ← NOMRES: 16G gematcht / 12G–15G akzeptiert, verarbeitet / 17G nominiert / 18G Gegenseite
+   ├─ LOC                       ← LocationGroup, repeats — one per period
+   │  ├─ DTM+2                  ← the period of the quantity that follows
+   │  └─ QTY (+STS)             ← Quantity; STS = Zeitreihentyp (ALOCAT) / Verfahren (SSQNOT)
+   └─ NAD+ZEU / NAD+ZSH / …     ← Bilanzkreis, Netzkonto, VHP
 ```
 
-Three properties of this shape are easy to get wrong:
+Four properties of this shape are easy to get wrong:
 
-- **A `LOC` group carries many `QTY`.** Edig@s `SG37` repeats up to 199 times, so
-  an hourly profile is many quantities under one location. Keeping only the last
-  loses the series.
-- **A `LOC` may carry no code.** ALOCAT sends `LOC+Z99` when the message needs no
-  specific place. Requiring an identifier drops the whole position.
+- **A profile is a run of `LOC` groups.** The DVGW column of every
+  Nachrichtenstruktur caps `DTM+2` and `SG37 QTY` at one per `LOC`, so an hourly
+  profile repeats the `LOC` per hour. The reader keeps every `QTY` it meets
+  under a `LOC` all the same — a counterparty that packs a series under one
+  `LOC` loses nothing — and `DVGW-LOC-MAX` reports the excess; the builder
+  writes the conformant shape.
+- **A `LOC` may carry no code.** ALOCAT and SSQNOT send `LOC+Z99` when the
+  message needs no specific place. Requiring an identifier drops the whole
+  position.
 - **NOMRES positions are only separable by their `IMD`.** Without it the
   counterparty's quantity is indistinguishable from your own — same location,
   same period, often the same number.
+- **The Zeitreihentyp is the `STS`.** `LIN` C212 DE 7143 is `Z01` „allokiert"
+  on every ALOCAT position; the Zeitreihentyp the Zuordnungstupel name is the
+  `STS` DE 9015 under the quantity (`09G` SLP synthetisch, `14G` RLM, …).
 
-`STS` DE 9015 attaches to a quantity (ALOCAT: `09G` Lastprofil, `15G`, …).
+### 5.1 A quantity is a rate — unless its unit says otherwise
 
-### 5.1 A quantity is a rate
-
-`KW1` is **kWh/h**, so a `QTY` states a rate over the period its own `DTM+2`
-names, and the energy is `Σ(rate × duration)`. Summing the values of a profile
-adds rates together — a number in no unit at all, and one that happens to be
-correct whenever every step is an hour long.
+`KW1` is **kWh/h** and `KW2` **kWh/d**, so such a `QTY` states a rate over the
+period its own `DTM+2` names, and the energy is `Σ(rate × duration)`. Summing
+the values of a profile adds rates together — a number in no unit at all, and
+one that happens to be correct whenever every step is an hour long. `KWH` is
+the energy itself. Which units a family admits is the Segmentlayout's
+(`DvgwMessageType::admitted_units`): ALOCAT `KW1`/`KW2`, NOMINT and NOMRES
+`KW1`/`KWH`, SSQNOT `KWH` only.
 
 | Accessor | Returns |
 |---|---|
@@ -199,9 +210,18 @@ understates the gas day.
 
 The position filter is for NOMRES, which reports **both** sides of a match:
 `IMD` `17G` is what the recipient nominated, `18G` the counterparty's mirror,
-`16G` the matched result. A message may carry `17G` and `16G` for the same
-position, so exactly one label may be counted — `16G` when present, since the
-matched quantity is what flows.
+`16G` the matched result, `12G`/`13G` what the (neighbouring) Netzbetreiber
+accepted and `14G`/`15G` what it processed. A message may carry several for the
+same position, so exactly one label may be counted — `16G` first when present,
+since the matched quantity is what flows.
+
+### 5.2 SSQNOT as one record
+
+`dvgw_edi::ssqnot::MehrMindermengenmeldung::from_message` reads a SSQNOT as
+its business record — Netzkonto (`SG39 NAD+ZSH`), Netzbetreiber (`NAD+MS`),
+Abrechnungszeitraum (`DTM+Z01`), Verfahren (`STS` `A1G` SLP / `A2G` RLM) and
+the Mehrmenge (`QTY+ZY0`) and Mindermenge (`QTY+ZY2`) in kWh — and refuses a
+message the Segmentlayout refuses rather than booking a partial figure.
 
 Values are `Decimal`, since gas settles to at least three decimal places (DVGW
 G 685 §7) and binary floating point cannot hold those fractions exactly.
@@ -231,7 +251,7 @@ Two neighbouring references are *not* the PID and are easy to confuse with it:
 
 ### 6.0 The cycle around one gas day
 
-The three implemented formats are one loop: the BKV nominates, the FNB/MGV
+ALOCAT, NOMINT and NOMRES are one loop: the BKV nominates, the FNB/MGV
 matches and answers, and the allocation lands three times — preliminary, then
 corrected, then final — each with its own deadline out of the
 Kooperationsvereinbarung.
@@ -277,18 +297,21 @@ exact segments each element is read from:
 | `ZO-T3` | Bilanzkreis, Netzkontonummer, Zeitreihentyp | `SG39 NAD+ZEU`, `SG39 NAD+ZSH`, `SG36 SG37 STS` | an object |
 | `ZO-T4` | Bilanzkreis, Virtueller Handelspunkt, Zeitreihentyp | `SG39 NAD+ZEU`, `SG39 NAD+VHP`, `SG36 SG37 STS` | an object |
 | `ZG-T1` | Clearingnummer | `SG1 RFF+ANX` | a Geschäftsvorfall |
+| `ZO-T1:SSQNOT` | Netzkonto, Netzbetreiber | `SG39 NAD+ZSH`, `SG3 NAD+MS` (SSQNOT 5.7 §3.3) | an object |
 
 `DvgwMessage::correlation_key()` resolves the tuple its Prüfidentifikator is
 assigned and reads its values; a code with no published assignment yields `None`
-rather than a guessed key.
+rather than a guessed key. SSQNOT names its 2-Tupel `ZO-T1` as well; the label
+keeps the family so the two cannot collide in one registry.
 
 The last column is load-bearing. A `ZO-T*` tuple identifies an **object** — an
 account, not one day of it — while `ZG-T1` identifies an open **Clearingfall**.
 So `DvgwMessage::process_key()` composes the tuple with the gas day for the
-`ZO-T*` cases and leaves `ZG-T1` alone: an allocation process holds one gas day's
-record and one KoV §6.4 deadline, so a key without the day would let the second
-day overwrite both of the first's, while a clearing case legitimately spans
-several days under one number.
+`ZO-T*` cases — with the whole Abrechnungszeitraum for a SSQNOT, which reports
+a month rather than a day — and leaves `ZG-T1` alone: an allocation process
+holds one gas day's record and one KoV §6.4 deadline, so a key without the day
+would let the second day overwrite both of the first's, while a clearing case
+legitimately spans several days under one number.
 
 Nominations have no published tuple, because a NOMRES carries no reference back
 to the NOMINT it answers — its single `RFF` is the Prüfidentifikator. They are
@@ -312,48 +335,85 @@ are returned as `Err`.
 | `DVGW-DTM-UNDECODABLE` | all | Error | value contradicts its own DE 2379 format |
 | `DVGW-PERIOD-INVERTED` | all | Error | a period must run forwards |
 | `DVGW-RFF-Z13` / `-RANGE` | all | Error | Prüfidentifikator present and in `70000–79999` |
-| `DVGW-NAD-MS` / `-MR` | all | Error | Absender / Empfänger |
-| `DVGW-LIN-REQUIRED` | all | Error | at least one Positionsnummer |
-| `DVGW-QTY-REQUIRED` / `-NUMERIC` | all | Error | every `LOC` group carries a numeric Menge |
-| `DVGW-DTM-2-REQUIRED` | all | Error | every Menge is preceded by the period it applies to |
-| `DVGW-QTY-UNIT` | all | Warning | C186 DE 6411 is `KW1` |
-| `DVGW-NAD-ITEM-PAIR` | all | Error | two position-level `NAD` |
-| `DVGW-RFF-ANX` | ALOCAT | Error | Clearingnummer |
-| `DVGW-IMD-REQUIRED` | NOMRES | Warning | `IMD` labels which side a position reports |
 | `DVGW-PID-FAMILY` | all | Warning | the `RFF+Z13` code belongs to this family |
+| `DVGW-PID-DOCUMENT` | all | Error | `BGM` DE 1001 is the code the Anwendungsfall publishes (`DvgwDocument::for_pid`) |
+| `DVGW-PID-RETIRED` | SSQNOT | Warning | 70096 / `STS+A2G` only for Zeiträume before 1.10.2015 (Hinweise [500]/[501]) |
+| `DVGW-RFF-ANX` | ALOCAT Clearing | Error | Clearingnummer — the `D` group the six Clearing columns (70008–70010, 70018–70020) mark `Muss` |
+| `DVGW-RFF-AGO-DTM` | NOMINT | Error | `DTM+9` beside `RFF+AGO` |
+| `DVGW-NAD-MS` / `-MR` | all | Error | Absender / Empfänger |
+| `DVGW-LIN-REQUIRED` / `DVGW-LOC-REQUIRED` | all | Error | at least one Positionsnummer, a `LOC` group per position |
+| `DVGW-LOC-QUALIFIER` | all | Warning | `LOC` DE 3227 is one the family lists (`Z99`; `172`/`Z17`/`Z19`) |
+| `DVGW-QTY-REQUIRED` / `-NUMERIC` | all | Error | every `LOC` group carries a numeric Menge |
+| `DVGW-QTY-QUALIFIER` / `-UNIT` | all | Warning | C186 DE 6063 and DE 6411 are ones the family lists |
+| `DVGW-QTY-INTEGER` | SSQNOT | Warning | natürliche Zahlen in kWh |
+| `DVGW-DTM-2-REQUIRED` | all | Error | every Menge is preceded by the period it applies to |
+| `DVGW-LOC-MAX` | all | Warning | one `DTM+2` and one `QTY` per `LOC` group |
+| `DVGW-STS-REQUIRED` / `-CODE` | SSQNOT | Error / Warning | the Verfahren `A1G`/`A2G` on every Menge |
+| `DVGW-NAD-ITEM` | all | Error | the position-level `NAD` rows the family marks `R` — ALOCAT both (`ZEU`/`ZET` and `ZSH`/`ZSO`/`ZSZ`/`VHP`), NOMINT/NOMRES `ZEU`, SSQNOT `ZSH` |
+| `DVGW-IMD-REQUIRED` | NOMRES | Warning | `IMD` labels which side a position reports |
 
-There is no compiled-in MIG/AHB profile layer as in `edi-energy`: DVGW does
-publish per-PID Anwendungsfall tables, but they are not imported.
+The rows that depend on the Anwendungsfall — the document code, the
+Clearingnummer, the retired RLM case — are keyed on the Prüfidentifikator.
+There is no compiled-in per-PID profile layer as in `edi-energy`: the DVGW
+Anwendungsfall tables are not imported, so the rows that differ between
+columns of one family are the ones listed above rather than the full
+Prüfschablone.
 
 ---
 
 ## 8. Writing
 
 `MessageBuilder` renders outbound messages, so the crate that reads a NOMRES can
-produce the NOMINT it answers:
+produce the NOMINT it answers, and a Netzbetreiber can report its
+Mehr-/Mindermengen:
 
 ```rust
 let wire = MessageBuilder::new(DvgwDocument::NominierungTransportkunde)
     .document_number("NOMINT00052")
-    .version("DVGW17")
     .pruefidentifikator(70030)
     .message_datetime(sent_at)
     .validity_period(gas_day)
+    .original_nomination("NOMINT00051", processed_at)   // RFF+AGO with its DTM+9
     .sender("9870009700005")
-    .receiver("9870009700006")
+    .receiver_coded("4012345000023", "9")                // a GLN is coded under GS1
     .position(
         Position::new()
             .location("Z19", Some("ABCD1234"))
-            .quantity("Z03", "6782", gas_day)
+            .quantity("Z03", "6782", gas_day)            // KW1, the family default
             .party("ZEU", "BK-CODE-1")
             .party("ZES", "BK-CODE-2"),
     )
     .build()?;
+
+let ssqnot = MessageBuilder::new(DvgwDocument::MehrMindermengenmeldung)
+    .document_number("SSQNOT00052")
+    .pruefidentifikator(70095)
+    .message_datetime(sent_at)
+    .validity_period(abrechnungsmonat)
+    .sender("9870012345678")
+    .receiver("9800505300009")
+    .position(
+        Position::new()
+            .location("Z99", None)
+            .quantity("ZY2", "6782", abrechnungsmonat)   // KWH
+            .status("A1G")                               // SLP
+            .party("ZSH", "THE0NKH712345678"),
+    )
+    .build()?;
 ```
 
-`build()` refuses rather than emitting a message missing a `Muss` field. The
-`UNB`/`UNZ` envelope is deliberately not written — the AS4 layer owns it and its
-control reference.
+`build()` refuses rather than emitting a message missing a `Muss` field, writes
+`SG1` in the order each Nachrichtenstruktur lists it, stamps every coded value
+with its agency, and repeats the `LOC` per period. The `UNB`/`UNZ` envelope is
+deliberately not written — the AS4 layer owns it and its control reference.
+
+`makod` renders the four families from its outbox: an entry whose
+`message_type` is `ALOCAT`, `NOMINT`, `NOMRES` or `SSQNOT` carries `pid`,
+`validity_period` and `positions` (the `BGM` code follows the column,
+`DvgwDocument::for_pid`), goes through this builder, and is validated against
+its Nachrichtenbeschreibung before the AS4 layer sees it. The Mehr-/
+Mindermengen workflow enqueues its own SSQNOT that way
+(`MehrMindermengenCommand::Melden`).
 
 ---
 
@@ -378,15 +438,19 @@ stops; `makod::dvgw_ingest::try_ingest` calls it first on all three inbound path
 
 | Workflow | PIDs | Direction |
 |---|---|---|
-| `gabi-gas-nomination` | 70030–70034 (NOMINT), 70035–70039 (NOMRES) | Transportkunde ↔ NB/MGV |
+| `gabi-gas-nomination` | 70030–70034 (NOMINT), 70035–70039 (NOMRES) | Transportkunde ↔ NB/MGV — both ends: `SendNomination` states the positions and enqueues this tenant's NOMINT, `ReceiveNomint` records a Transportkunde's and `SendNomres` answers it; either opens the process the NOMRES closes |
 | `gabi-gas-allocation` | 70001–70023 (ALOCAT) | NB → MGV, MGV → BKV, ENB/ANB → NB, MGV → NB, NB → BKV |
+| `gabi-gas-mehr-mindermengen` | 70095 (SLP), 70096 (RLM) (SSQNOT) | NB → MGV — one process per Netzkonto and Abrechnungszeitraum, hosting both ends: `ReceiveSsqnot` records what a Netzbetreiber reports, `Melden` enqueues this tenant's own SSQNOT; a later report for the same period stands, and a RLM report for a Zeitraum from 1.10.2015 is refused |
 
 Three properties of the dispatch are worth stating:
 
 - **The gas day comes from `DTM+Z01`** and a message without a usable one is
   refused, not booked against today.
 - **Only the NOMINT initiates.** A NOMRES resumes the nomination it answers and
-  is skipped when there is none.
+  is skipped when there is none. A received NOMINT opens the process on the
+  NB/MGV side (`ReceiveNomint`); a BKV tenant's own nomination opens it on the
+  sending side (`SendNomination`), whose positions — point, direction,
+  Bilanzkreise, one rate per period — become the NOMINT in the outbox.
 - **A curtailment is detected from the numbers.** NOMRES has no status segment, so
   `08G`/`20G`/`Y2G` say only *that* the nomination was confirmed. The workflow
   compares the confirmed energy against what it stored at nomination time and
@@ -448,6 +512,7 @@ messages validated through the AHB/MIG profile layer:
 | ALOCAT specification | DVGW-Nachrichtenbeschreibung ALOCAT 5.11a — ORDRSP / UN D.07A S3 |
 | NOMINT specification | DVGW-Nachrichtenbeschreibung NOMINT 4.6 — ORDERS / UN D.07A S3 |
 | NOMRES specification | DVGW-Nachrichtenbeschreibung NOMRES 4.7 — ORDRSP / UN D.07A S3 |
+| SSQNOT specification | DVGW-Nachrichtenbeschreibung SSQNOT 5.7 — ORDRSP / UN D.07A S3 |
 | GaBi Gas 2.1 Festlegung | BNetzA BK7-24-01-008 |
 | `dvgw-edi` source | [crates/dvgw-edi/](https://github.com/hupe1980/mako/tree/main/crates/dvgw-edi) |
 | `mako-gabi-gas` source | [crates/mako-gabi-gas/](https://github.com/hupe1980/mako/tree/main/crates/mako-gabi-gas) |

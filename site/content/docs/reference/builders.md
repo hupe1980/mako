@@ -29,7 +29,7 @@ The `edi_energy::builders` module provides a fluent, type-state builder API for 
 | `InvoicBuilder` | INVOIC (invoices) *(requires `invoic` feature)* |
 | `RemadvBuilder` | REMADV (remittance advice) *(requires `remadv` feature)* |
 | `OrdersBuilder` | ORDERS (orders, e.g. Sperrung/Konfiguration; **ESA Bestellung/Abbestellung 17007/17008 — full MIG conformance** via `.reference()` (SG1 RFF+Z13), `.item_description()` (IMD), `.location()` (LOC+172), plus the mandatory `UNS`) *(requires `orders` feature)* |
-| `OrdrespBuilder` | ORDRSP (order responses; **ESA-Antwort 19011–19014 — full MIG+AHB conformance**; BGM DE 1001 = `7`, `.pruefidentifikator()` sets the PID in BGM DE 1004, `.order_reference()` the SG1 RFF+ACW that echoes the answered order, `.adjustment()` → SG2 AJT, `.adjustment_reason()` → SG2 coded FTX, `.item_description()` → IMD, `.line_item()` → SG27 LIN). ORDRSP carries **no** LOC — the ESA correlates the answer by the RFF+ACW echo *(requires `ordrsp` feature)* |
+| `OrdrespBuilder` | ORDRSP — the ESA-Antworten 19011–19014: `.order_reference()` writes the `SG1 RFF+ACW`/`ON` echo the ESA correlates by, `.adjustment()` the `SG2 AJT`, `.item_description()` the `IMD`, `.line_item()` the `SG27 LIN`; no `LOC` *(requires `ordrsp` feature)* |
 | `OrdchgBuilder` | ORDCHG (order changes/cancellations; **ESA Stornierung 39002 — full MIG conformance**; `.reference()` emits the mandatory SG1 RFF — ORDCHG carries **no** LOC) *(requires `ordchg` feature)* |
 | `IftstaBuilder` | IFTSTA (status reports) *(requires `iftsta` feature)* |
 | `InsrptBuilder` | INSRPT (Störungsmeldung / Ablesesteuerung; **AHB-conformant** — `.doc_reference()` → SG3 `DOC`, `.pruefidentifikator()` → SG4 `RFF+Z13`, `.position()` → SG7 `LIN`, `.status()` → `STS`, `.location()` → SG8 `LOC+172`. The AHB marks `BGM`/`DOC`/`DTM`/`LIN`/`LOC`/`NAD`/`RFF`/`STS` mandatory for every PID, so a message missing any of them parses but fails validation) *(requires `insrpt` feature)* |
@@ -44,32 +44,54 @@ The `edi_energy::builders` module provides a fluent, type-state builder API for 
 
 ## UTILMD Example
 
-```rust
-use edi_energy::{
-    builders::UtilmdBuilder,
-    EdiEnergyMessage, ObjectType, Pruefidentifikator,
-    releases,
-};
+The AHB column of a Prüfidentifikator says what the message must carry —
+`profile.pruefschablone(55001)` prints it — and the builder emits what it is
+given. A 55001 Anmeldung, complete:
 
-let bytes = UtilmdBuilder::new(releases::utilmd_fv20261001().clone())
+```rust
+use edi_energy::builders::UtilmdBuilder;
+use edi_energy::utilmd_codes::{Produktpaket, Transaktionsgrund, dtm, transaktionsgrund};
+use edi_energy::{Pruefidentifikator, Release};
+
+let bytes = UtilmdBuilder::new(Release::new("S2.2"))
     .pruefidentifikator(Pruefidentifikator::new(55001)?)
     .sender("4012345000023")
     .receiver("9900357000004")
     .message_ref("MSG-001")
-    .document_code("E01")
     .document_date("20261001")
-    // One SG4 transaction per metering-point / supply-point process
-    .transaction(ObjectType::Messlokation, "51238696012")
-        .process_date("163", "20261001")      // delivery start
-        .reference("Z13", "55001")            // per-transaction PID ref
-        .done()
-    .build()?
+    // `IDE+24` DE 7402 is the Vorgangsnummer, never a Lokations-ID.
+    .transaction("VORGANG-0001")
+    // `SG4 DTM+92` — the Lieferbeginn.
+    .date(dtm::BEGINN_ZUM, "20261101")
+    .transaktionsgrund(Transaktionsgrund::verbrauchende_malo(transaktionsgrund::WECHSEL))
+    // `SG8 SEQ+Z79` Produktpaket with the Bilanzkreis, and its `SEQ+ZH0`.
+    .produktpaket(Produktpaket::bilanzkreis("11XBK-STD-----9"))
+    // `SG5 LOC+Z16`.
+    .marktlokation("51238696012")
+    // Stammdaten blocks the column demands: `SEQ+Z01` Daten der
+    // Marktlokation, `SEQ+Z75` Daten des Kunden.
+    .stammdaten("Z01").cci("", "Z15").done()
+    .stammdaten("Z75").cci("Z61", "ZF9").cav("ZU5").done()
+    // `SG12 NAD+Z09` Kunde des LF and `NAD+Z04` Korrespondenzanschrift.
+    .kunde_des_lf(["Mustermann".to_owned()], "Z01")
+    .anschrift("Z04", ["Mustermann".to_owned()], "Z01", "Musterstr. 1", "Berlin", "10115", "DE")
+    .done()
     .serialize()?;
 
-// Validate the output immediately
+// Validate the output immediately — every place still missing is named.
 let msg = edi_energy::parse(&bytes)?;
 msg.validate()?.into_error_result()?;
 ```
+
+The Prüfidentifikator goes out in `SG6 RFF+Z13` of the Vorgang, `BGM` DE 1004
+carries the Dokumentennummer (the message reference unless `document_number`
+is given). Gas has no Produktpaket: a 44001 carries its Bilanzkreis as
+`SG10 CCI+Z19` inside `SEQ+Z01` (`.merkmal(produkt::CCI_BILANZKREIS_GAS, …)`),
+an `IMD` (`.imd("Z36", "Z12")`), a dated `RFF+Z18`
+(`.reference_dated("Z18", "", "Z20", "2026", "802")`) and a `SEQ+Z12` with a
+`QTY` (`.stammdaten("Z12").qty("Z16", "100", "P1").done()`). The generic
+`stammdaten` blocks go out in the MIG's order of `SEQ` places whatever order
+they are given in.
 
 ### Release constants
 

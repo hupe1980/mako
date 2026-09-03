@@ -125,12 +125,11 @@ fn every_generated_fixture_stamps_the_agency_its_mp_id_implies() {
                 dirs.push(path);
                 continue;
             }
-            if path.extension().is_none_or(|e| e != "edi")
-                || !path.to_string_lossy().contains("/gen/")
-            {
+            if path.extension().is_none_or(|e| e != "edi") {
                 continue;
             }
-            let raw = std::fs::read_to_string(&path).expect("fixture is UTF-8");
+            let raw = String::from_utf8_lossy(&std::fs::read(&path).expect("fixture is readable"))
+                .into_owned();
             for seg in raw.split('\'').map(str::trim) {
                 let Some(rest) = seg.strip_prefix("NAD+") else {
                     continue;

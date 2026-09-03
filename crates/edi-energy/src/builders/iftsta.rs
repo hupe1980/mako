@@ -249,7 +249,13 @@ impl<S, R> IftstaBuilder<S, R> {
         let mut buf = Vec::new();
         let mut w = Writer::new(&mut buf);
 
-        let doc_id = self.inner.document_id.as_deref().unwrap_or("");
+        // `BGM` DE 1004 is the Dokumentennummer — the message reference unless
+        // one is given.
+        let doc_id = self
+            .inner
+            .document_id
+            .as_deref()
+            .unwrap_or(&self.inner.message_ref);
         emit_comp!(
             w,
             "UNH",
@@ -262,20 +268,24 @@ impl<S, R> IftstaBuilder<S, R> {
         // `+00`; `[494]` requires the stamp to be the creation moment or
         // earlier. There is no Anwendungsfall in any AHB that takes `102`.
         emit_comp!(w, "DTM", ["137", &super::ccyymmddhhmm_utc(&dtm_val), "303"]);
-        if let Some(id) = &self.inner.sender_id {
-            emit_comp!(
-                w,
-                "NAD",
-                ["MS"],
-                [id, "", super::agency_for(self.inner.sender_agency, id)]
-            );
-        }
+        // IFTSTA is the one message type whose MIG lists the Empfänger before
+        // the Absender: `SG1 NAD+MR` is Nr 00004 and `SG1 NAD+MS` Nr 00005
+        // (IFTSTA MIG 2.1 Nachrichtenstruktur), and the Nachrichtenstruktur is
+        // the order on the wire.
         if let Some(id) = &self.inner.receiver_id {
             emit_comp!(
                 w,
                 "NAD",
                 ["MR"],
                 [id, "", super::agency_for(self.inner.receiver_agency, id)]
+            );
+        }
+        if let Some(id) = &self.inner.sender_id {
+            emit_comp!(
+                w,
+                "NAD",
+                ["MS"],
+                [id, "", super::agency_for(self.inner.sender_agency, id)]
             );
         }
 
@@ -292,13 +302,16 @@ impl<S, R> IftstaBuilder<S, R> {
         }
         // ── SG15 STS — DE9015 category, DE4405 reason, DE9013 Prüfschritt,
         //    DE1131 Codeliste ──────────────────────────────────────────────────
+        // `C555` is the second element and DE 4405 its first component, so the
+        // reason rides `STS+Z21+105`, not `STS+Z21+:105` (IFTSTA MIG 2.1
+        // example `STS+Z21+Z13+A01:E_0526'`).
         if let (Some(cat), Some(reason)) = (&self.inner.sts_category, &self.inner.sts_reason) {
             if let (Some(code), Some(liste)) =
                 (&self.inner.sts_pruefschritt, &self.inner.sts_codeliste)
             {
-                emit_comp!(w, "STS", [cat], ["", reason], [code, liste]);
+                emit_comp!(w, "STS", [cat], [reason], [code, liste]);
             } else {
-                emit_comp!(w, "STS", [cat], ["", reason]);
+                emit_comp!(w, "STS", [cat], [reason]);
             }
         }
         // ── SG15 RFF+Z13 — Prüfidentifikator ─────────────────────────────────
@@ -394,7 +407,7 @@ mod tests {
             "PID in SG15 RFF+Z13: {wire}"
         );
         assert!(
-            wire.contains("STS+Z21+:105"),
+            wire.contains("STS+Z21+105"),
             "STS Z21/105 „beendet\": {wire}"
         );
         assert!(wire.contains("CNI+1"), "Vorgangsnummer SG14 CNI: {wire}");

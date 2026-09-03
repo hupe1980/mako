@@ -1,6 +1,6 @@
 +++
 title = "Annual Release Workflow"
-description = "Step-by-step engineering playbook for incorporating a new BDEW annual release: extract-pdf, import-xml-ahb, codegen, validate-pruefids, add-release, check-release-coverage."
+description = "Step-by-step engineering playbook for incorporating a new BDEW release: sync-regulatories, sources.json, import-profiles, validate-profiles, check-pid-coverage, rollout and migration."
 weight = 12
 +++
 # Annual Release Workflow
@@ -41,272 +41,110 @@ against its manifest without the network.
 
 ---
 
-## Step 1 — Extract draft profiles from PDFs
+## Step 1 — Name the profile
 
-Run the PDF extractor for each **changed** message type, once per source PDF.
-Each run writes both `mig.draft.json` and `ahb.draft.json`; run it against the
-MIG PDF to populate the MIG draft, then against the AHB PDF for the AHB draft
-(a run that extracts zero entries leaves any existing draft untouched):
-
-```bash
-cargo xtask extract-pdf --file path/to/UTILMD_MIG_S2.3.pdf \
-    --message-type <TYPE> --release <fvYYYYMMDD>
-cargo xtask extract-pdf --file path/to/UTILMD_AHB_S2.3.pdf \
-    --message-type <TYPE> --release <fvYYYYMMDD>
-```
-
-This creates **draft** JSON files in `profiles/<type>/<fvYYYYMMDD>/`:
-```
-profiles/utilmd/fv20271001/mig.draft.json
-profiles/utilmd/fv20271001/ahb.draft.json
-profiles/utilmd/fv20271001/codelists.json   ← if codelists changed
-```
-
-### ⚠ Mandatory extraction quality check
-
-Before continuing, verify that the extraction produced reasonable output:
-
-```bash
-python3 -c "
-import json
-for f in ['mig.draft.json', 'ahb.draft.json']:
-    with open(f'profiles/utilmd/fv20271001/{f}') as fp:
-        d = json.load(fp)
-    segs = len(d.get('segments', []))
-    pids = len(d.get('pruefidentifikatoren', []))
-    print(f'{f}: {segs} segments, {pids} PIDs')
-"
-```
-
-**Expected minimum counts** (adjust per message type):
-
-| Message type | Min MIG segments | Min AHB PIDs |
-|---|---|---|
-| UTILMD | 40 | 15 |
-| MSCONS | 25 | 5 |
-| APERAK | 15 | 2 |
-| CONTRL | 8 | – |
-| INVOIC | 30 | 8 |
-| REMADV | 20 | 5 |
-
-If counts are below threshold, the PDF layout changed.  Edit the extractor
-heuristics in `xtask/src/extract_pdf.rs` and re-run.  Do **not** promote a
-partial draft to production.
-
----
-
-## Step 2 — Manual review and editing
-
-Open the draft files alongside the BDEW PDF specification and review each entry:
-
-1. **`mig.draft.json`** — Verify segment order, cardinality (`max_occurrences`),
-   and group membership against the MIG table in the PDF.
-2. **`ahb.draft.json`** — Check each Prüfidentifikator's `segment_rules`.
-   Pay special attention to changed `requirement` codes (`M`/`S`/`C`/`N`/`O`/`X`)
-   and conditional rule operators (`I`/`V`/`E`/`X`/`U`/`O`/`G`/`Z`).
-3. **`codelists.json`** — Verify code additions/removals against the AHB annex.
-4. **`mig.json` → `dtm_formats`** — DE 2005 qualifier → the DE 2379 format codes
-   the MIG admits. `validate-profiles` refuses a profile that carries `DTM` and
-   declares none, because DE 2379 has no code list and would otherwise go
-   unchecked.
-
-   Read it off the MIG segment-layout tables — each `DTM` block fixes both, in
-   the BDEW code column:
-
-   ```text
-    2005  …Funktion, Qualifier  M an..3  M an..3   137 Dokumentendatum
-    2379  …Format, Code         C an..3  R an..3   303 CCYYMMDDHHMMZZZ
-   ```
-
-   A qualifier can admit several formats, written as **continuation rows** whose
-   left half still carries the element label — read the whole block, not the
-   first row:
-
-   ```text
-    2379  Datums- oder Uhrzeit- oder   C an..3  R an..3   802 Monat
-          Zeitspannen-Format, Code                        803 Woche
-                                                          804 Tag
-   ```
-
-   Reading only the first row makes a conformant `DTM+273:14:804` a validation
-   error — the failure direction that rejects good messages.
-
-The extractor embeds `"_WARNING"` fields in draft output.  Remove all `_WARNING`
-fields before promoting.
-
-> `extract-pdf` does not populate `dtm_formats` — its `lopdf` text extraction
-> does not preserve the column layout the continuation rows depend on. Extract
-> it with `pdftotext -layout` and review against the PDF.
-
-**Typical review time:**
-- Minor update (codelists only): 30 minutes
-- Full MIG/AHB update: 2–3 hours per message type
-
----
-
-## Step 3 — Promote drafts to production
-
-Rename draft files to production names:
-
-```bash
-mv profiles/utilmd/fv20271001/mig.draft.json profiles/utilmd/fv20271001/mig.json
-mv profiles/utilmd/fv20271001/ahb.draft.json profiles/utilmd/fv20271001/ahb.json
-```
-
-Set `valid_from` and `publikationsdatum` in `mig.json`, and close the previous
-release with a `valid_until`:
+Add one entry per moving message type (Strom and Gas are separate entries for
+UTILMD) to `crates/edi-energy/profiles/sources.json`:
 
 ```json
-// profiles/utilmd/fv20261001/mig.json — add or confirm:
-"valid_until": "2027-09-30"
-
-// profiles/utilmd/fv20271001/mig.json:
-"publikationsdatum": "2027-04-01",   // the title page's Publikationsdatum
-"valid_from":        "2027-10-01"    // the Anwendungszeitpunkt — six months later
+"utilmd/fv20271001": {
+  "release": "S2.3",
+  "track": "Strom",
+  "valid_from": "2027-10-01",
+  "publikationsdatum": "2027-04-01",
+  "ahb_version": "2.3",
+  "mig": "UTILMD_MIG_Strom_S2.3.pdf",
+  "ahb": "UTILMD_AHB_Strom_2.3.pdf"
+}
 ```
 
-> **Rule:** `valid_from` is the **Anwendungszeitpunkt**, never the date on the
-> title page. A document published on 01.04. applies from 01.10. of the same
-> year, one published on 01.10. from 01.04. of the next (Allgemeine Festlegungen
-> 6.1d §2.5.1/§2.5.2). Name the directory after that date. Codegen refuses a
-> `valid_from` that does not follow from a stated `publikationsdatum`. Omit
-> `publikationsdatum` only for an ausserordentliche Veröffentlichung, whose
-> Anwendungszeitpunkt the BNetzA Mitteilung names directly.
-
-> **Rule:** every profile that is superseded by a new one **must** have a
-> `valid_until` date, and it must be the day before its successor's
-> `valid_from` — `validate-profiles` errors on an overlap and warns on a gap.
-> Open-ended profiles (`valid_until` absent) are treated as permanently valid.
+The directory name is the Anwendungszeitpunkt; the two documents are the file
+names `sync-regulatories` mirrored. Give the predecessor its `valid_until`
+(the day before).
 
 ---
 
-## Step 4 — Validate profiles
+## Step 2 — Import it from the PDFs
 
 ```bash
-cargo xtask validate-profiles --message-type <TYPE>
+cargo xtask import-profiles --profile utilmd/fv20271001
 ```
 
-Fix every reported violation before continuing.  Common errors:
-- Code values referenced in AHB qualifier rules that do not exist in `codelists.json`
-- `element_index` values that exceed the segment's element count
-- PID codes outside the valid range 10000–99999
-- `_WARNING` fields still present (marks incomplete extraction)
-
----
-
-## Step 5 — Regenerate code
+The importer reads the MIG's Nachrichtenstruktur and every Segmentlayout, and
+the AHB's tables column by column, and writes `mig.json` and `ahb.json`. It
+refuses what it cannot read rather than guessing — a status that lands between
+two columns, an AHB row naming a segment `Nr` the MIG has no place for, a column
+without `UNH`. When it refuses:
 
 ```bash
-cargo xtask codegen
+BDEW_DEBUG=1 cargo xtask import-profiles --profile utilmd/fv20271001   # every row, its columns and cells
+cargo xtask pdf-grid regulatories/bdew-mako/UTILMD_AHB_Strom_2.3.pdf     # the grid the reader sees
 ```
 
-This rewrites all `src/generated/*.rs` files and `src/generated/mod.rs`.
+The fix belongs in `xtask/src/bdew/`, never in the JSON.
 
-Verify the file count increased as expected:
-```bash
-ls crates/edi-energy/src/generated/*.rs | wc -l
-```
+A document defect the importer works around is printed as `warn` — an `SG27
+MOA` row without any status in INVOIC AHB 1.0b gets its status from the MIG.
+Read those lines; they are the places where the AHB and the profile differ.
 
 ---
 
-## Step 6 — Verify CI drift gate
-
-```bash
-cargo xtask codegen --check
-```
-
-This regenerates in memory and compares against committed files.  Must exit 0.
-If it exits 1, you have uncommitted changes or a codegen inconsistency — check
-`git diff crates/edi-energy/src/generated/`.
-
----
-
-## Step 7 — Compile and test
+## Step 3 — Prove it
 
 ```bash
-RUSTFLAGS='-D warnings -D deprecated' cargo check --all-targets --all-features
-cargo test --all-features
+cargo test -p edi-energy --all-features
 ```
 
-Both must succeed with zero errors.
+`tests/skeletons.rs` generates the minimal message of every column and
+validates it against that column: an extraction gap (a lost row, a mis-assigned
+status) or a validator gap shows up as a failing Anwendungsfall, with its
+skeleton and findings. The fixture snapshot names every verdict that moved.
 
 ---
 
-## Step 8 — Run release-diff for the PR audit trail
+## Step 4 — Validate the set
 
 ```bash
-cargo xtask release-diff \
-    --message-type UTILMD \
-    --from fv20261001 \
-    --to fv20271001
+cargo xtask validate-profiles            # sources ↔ files, dates and continuity, PIDs, AHB rows ↔ MIG
+cargo xtask check-pid-coverage           # the shipped columns against the Anwendungsübersicht
+cargo xtask check-release-coverage --date 2027-10-01
 ```
 
-Review the output to confirm only the expected segment rules changed.
+A Prüfidentifikator carried by the predecessor and absent from the new profile
+fails `validate-profiles`. Confirm the retirement in the AHB's Änderungshistorie
+and record it in `RETIRED_PIDS` (`xtask/src/validate_profiles.rs`) with the
+Änd-ID; without that entry it is an import regression. Update
+`pid-overview.json` when BDEW publishes a new Anwendungsübersicht
+(`cargo xtask import-pid-overview <xlsx>`).
 
 ---
 
-## Step 9 — Check PID fixture coverage
+## Step 5 — What the senders must now fill
 
 ```bash
-cargo xtask validate-pruefids
+cargo run -p edi-energy --all-features --example 07_resolve -- --pruefschablone UTILMD S2.3 55001
 ```
 
-For the updated message type, add at least one `.edi` fixture per **new or
-changed** PID under `crates/edi-energy/tests/fixtures/`.  Use the BDEW test
-message examples as a starting point.  Run again to confirm the MISSING count
-decreased for the updated types.
+prints the column: every segment the Anmeldung must carry and every data
+element with its operands. Hold the renderers in `makod` and the builders
+against it — a new Muss segment in the AHB is a new field the sender has to
+fill, and `07_resolve <file>` on a rendered message says which places are still
+missing.
 
 ---
 
-## Step 10 — Archive expired profiles
+## Step 6 — PR checklist
 
-After adding the new release profiles, mark any that are now more than 90 days
-past their `valid_until` as archived so they are excluded from the default build:
-
-```bash
-cargo xtask codegen --prune-expired
-```
-
-This sets `"archived": true` in the `mig.json` of each expired profile and
-regenerates `mod.rs` with archive-gated `#[cfg]` attributes.  Archived profiles
-continue to compile — but only when the `{type}-archive` or `archive` Cargo
-feature is enabled — so historical validation tooling still works.
-
-The `archived` flag is an explicit JSON marker, not computed from the current
-date.  This keeps `cargo xtask codegen --check` deterministic in CI.
-
-> **Default grace period:** 90 days after `valid_until`.  Override with
-> `--grace-days N` if your deployment needs a different retention window.
-
-Commit the updated `mig.json` files and regenerated `mod.rs` together.
+- [ ] `sources.json` names the documents by their mirrored file names and the predecessor has its `valid_until`
+- [ ] `import-profiles` ran clean; every `warn` line is a documented AHB defect
+- [ ] `cargo test -p edi-energy --all-features` — skeletons 100 %, snapshot re-blessed with the diff read
+- [ ] `validate-profiles`, `check-pid-coverage`, `check-release-coverage --date <new fv>` green
+- [ ] retired Prüfidentifikatoren recorded with their Änd-ID
+- [ ] `just ci` green
 
 ---
 
-## Step 11 — PR checklist
-
-Before merging:
-
-- [ ] All `_WARNING` fields removed from profile JSON files
-- [ ] `valid_until` set on previous release profile
-- [ ] `valid_from` (Anwendungszeitpunkt) and `publikationsdatum` set on new profile
-- [ ] `cargo xtask codegen --prune-expired` run; expired profiles archived
-- [ ] `cargo xtask validate-profiles` exits 0
-- [ ] `cargo xtask import-pid-overview <Anwendungsübersicht.xlsx>` re-run when the release ships a new PID overview, and `cargo xtask check-pid-coverage` exits 0 — a Prüfidentifikator that is published and never imported is invisible to `validate-profiles`, which only compares consecutive releases
-- [ ] `cargo xtask codegen --check` exits 0
-- [ ] `cargo xtask validate-release-codes` exits 0 — every release code a counterparty can still send matches a UNH 0057 value in a fixture. Both sides of a cutover need one: the outgoing version stays receivable until its `valid_until`.
-- [ ] `cargo test --all-features` exits 0
-- [ ] At least one `.edi` fixture added for newly introduced PIDs
-- [ ] If any workflow state schema changed: bespoke `StateMigration` impl added
-  in the domain crate and dispatch table in `services/makod/src/api/migration_api.rs`
-  updated with the new concrete migration type (replacing the `identity!` entry).
-- [ ] If any `#[ignore = "... until FVYYYYMMDD"]` tests exist past their date,
-  un-ignore them.
-- [ ] PIDs marked ⚠️ in the new PID overview (absent from next FV) removed from
-  their owning `*_PIDS` arrays and any generated FV profiles updated.
-
----
-
-## Step 12 — Deploy new binary with both FVs active (zero-downtime rollout)
+## Step 7 — Deploy new binary with both FVs active (zero-downtime rollout)
 
 Deploy the new binary so that **both** format versions are registered in the
 adapter registry simultaneously. The new binary can accept both old-FV and new-FV
@@ -356,7 +194,7 @@ deployment gap.
 
 ---
 
-## Step 13 — Run in-flight process migration (online, no downtime)
+## Step 8 — Run in-flight process migration (online, no downtime)
 
 While the daemon is running, call the migration endpoint to advance all
 in-flight processes from the old FV snapshot to the new FV.
@@ -413,9 +251,9 @@ and update `services/makod/src/api/migration_api.rs` to use it.
 
 ---
 
-## Step 14 — Retire old FV from adapter registry and redeploy
+## Step 9 — Retire old FV from adapter registry and redeploy
 
-After a successful migration (Step 13, `errors == []`), remove the old FV from
+After a successful migration (Step 8, `errors == []`), remove the old FV from
 the adapter config and do a final rolling restart:
 
 ```bash
@@ -484,10 +322,9 @@ format is the binding one.
 
 Every EDI@Energy document prints its `Publikationsdatum` on the title page. It
 goes in the profile's `publikationsdatum` field; `valid_from` and the directory
-name carry the Anwendungszeitpunkt six months later. `cargo xtask codegen`
-refuses a `valid_from` that does not follow §2.5 from a stated
-`publikationsdatum`, and `validate-profiles` errors on two profiles claiming the
-same day.
+name carry the Anwendungszeitpunkt six months later. `validate-profiles` refuses two
+profiles claiming the same day, a gap between consecutive profiles of a track,
+and a chain whose newest profile is not open-ended.
 
 Corrections issued in between ("Konsolidierte Lesefassung mit Fehlerkorrektur")
 take effect without a further BNetzA Mitteilung and do not move the
@@ -502,14 +339,9 @@ Anwendungszeitpunkt; the latest consolidated version is the one to implement.
 cargo xtask validate-profiles          # prints gaps and overlaps
 ```
 
-Two exceptions to the six-month rule, both by regulation rather than cycle:
+One exception to the six-month rule, by regulation rather than cycle:
 `contrl`/`insrpt` run on the ausserordentliche Veröffentlichung of 11.12.2025
-(applies 2026-01-01), and UTILMD Strom on BK6-22-024's LFW24 date, which
-`fv20250606` carries. Those profiles state no `publikationsdatum`.
-
-MSCONS has a gap between `fv20240401` and `fv20260401`: AHB 3.1, applying
-2025-10-01, was never authored. `validate-profiles` warns about it on every run.
-A gap is a coverage statement; an overlap is an error.
+(applies 2026-01-01). Those profiles state no `publikationsdatum`.
 
 ### Date or wire code?
 
@@ -553,27 +385,3 @@ Both commands must exit 0 for the workspace to be considered FV2026-ready.
 
 The wire release code comes from UNH segment, data element 0057 (association-
 assigned code).  It must match the `release` field in `mig.json` exactly.
-
-## Appendix E — Archive features
-
-Profiles marked `"archived": true` in `mig.json` are excluded from the default
-build.  They can still be compiled for historical validation by enabling the
-matching Cargo feature:
-
-| Scenario | Feature to enable |
-|---|---|
-| Validate old MSCONS messages | `mscons-archive` |
-| Validate old CONTRL messages | `contrl-archive` |
-| All archived profiles at once | `archive` |
-
-The `archive` meta-feature activates all per-type archive features:
-
-```bash
-cargo add edi-energy --features archive
-```
-
-Archive features always imply their base type feature (`mscons-archive` implies
-`mscons`), so you never need to list both.
-
-See [Schema Versioning](@/docs/compliance/schema-versioning.md) for the full policy on how the `archived` flag
-is set and what the codegen guarantees are.

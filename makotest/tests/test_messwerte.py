@@ -19,7 +19,6 @@ from makotest import (
     assert_edifact_valid,
     build_interchange,
     build_mscons,
-    validate_edifact,
 )
 from makotest.generators import LastgangGenerator
 from makotest.plugin import IMSYS_MELO, LF_ID, NB_ID
@@ -61,18 +60,19 @@ class TestIntervalQuantities:
 
         text = wire.decode()
         assert text.count("QTY+") == gang.mtu_count
-        assert text.count("DTM+163") == gang.mtu_count, "each QTY states its start"
-        assert text.count("DTM+164") == gang.mtu_count, "and its end"
+        # Each QTY states its start and end; the 13025 column adds the SG6
+        # Übertragungszeitraum (`DTM+163`/`164` once, before the positions).
+        assert text.count("DTM+163") == gang.mtu_count + 1, "each QTY states its start"
+        assert text.count("DTM+164") == gang.mtu_count + 1, "and its end"
 
-    def test_a_bare_quantity_states_no_period_and_the_ahb_allows_it(self):
-        """Why the bridge exists, pinned as the hazard it is.
+    def test_a_bare_quantity_on_a_lastgang_is_refused(self):
+        """A Lastgang value without its period cannot be placed on the grid.
 
-        This message validates. It is still not a Lastgang: nothing on it says
-        which quarter-hour the figure belongs to, so a receiver cannot settle
-        against it. No rule catches that, which is precisely why the toolkit
-        must not make it the easy thing to build.
+        The 13025 column makes the SG10 Messperiode Muss on every QTY; filling
+        one in would be inventing settlement data, so the builder refuses and
+        names `intervals=` instead.
         """
-        wire = wrap(
+        with pytest.raises(ValueError, match="intervals="):
             build_mscons(
                 LASTGANG_PID,
                 NB_ID,
@@ -82,10 +82,6 @@ class TestIntervalQuantities:
                 on=ON,
                 obis="1-0:1.29.0",
             )
-        )
-        report = validate_edifact(wire, ON)
-        assert report.is_valid and report.messages[0].rules_applied
-        assert "DTM+163" not in wire.decode()
 
     def test_an_mscons_with_no_quantity_at_all_is_refused(self):
         """A delivery that delivers nothing is a test defect, not a message."""

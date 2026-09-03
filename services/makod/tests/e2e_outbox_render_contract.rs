@@ -174,7 +174,8 @@ fn the_lf_stornierung_renders_to_parseable_utilmd() {
     assert_eq!(pid_of(&wire.bytes), 44_022);
     // `BGM` DE 1001 names the Anwendungsfall being cancelled, and `SG5 LOC+172`
     // the Meldepunkt — UTILMD AHB Gas uses `172` for every Lokation.
-    assert!(text.contains("BGM+E01+44022"), "{text}");
+    assert!(text.contains("BGM+E01+"), "{text}");
+    assert!(text.contains("RFF+Z13:44022"), "{text}");
     assert!(text.contains(&format!("LOC+172+{MALO}")), "{text}");
 }
 
@@ -267,7 +268,7 @@ fn summenzeitreihe_separates_meldepunkt_from_bilanzierungsgebiet() {
         serde_json::json!({
             "pid": 13003,
             "mabis_zp_id": MABIS_ZP,
-            "bilanzierungsgebiet_id": BILANZIERUNGSGEBIET,
+            "obis_code": "1-1:1.29.0",
             "balancing_period": "202606",
             "version": "20260714050000+00",
             "sender_mp_id": GNB,
@@ -285,49 +286,16 @@ fn summenzeitreihe_separates_meldepunkt_from_bilanzierungsgebiet() {
         wire.contains(&format!("LOC+172+{MABIS_ZP}")),
         "LOC+172 must carry the MaBiS-Zählpunkt:\n{wire}"
     );
-    assert!(
-        wire.contains(&format!("LOC+107+{BILANZIERUNGSGEBIET}")),
-        "LOC+107 must carry the Bilanzierungsgebiet:\n{wire}"
-    );
+    // No MSCONS place carries a Bilanzierungsgebiet: the MaBiS-Zählpunkt
+    // identifies it, and a `LOC+107` would fit no place of the structure.
+    assert!(!wire.contains("LOC+107"), "{wire}");
     assert!(
         !wire.contains(&format!("LOC+172+{BILANZIERUNGSGEBIET}")),
         "the Bilanzierungsgebiet must never appear as the Meldepunkt:\n{wire}"
     );
 }
 
-/// Passing the same value for both is refused at the boundary.
-///
-/// That is exactly the original defect — one identifier standing in for two —
-/// and it is silent on the wire, so it has to fail before rendering.
-#[test]
-fn the_same_identifier_cannot_serve_as_both_loc_qualifiers() {
-    const BOTH: &str = "11YAPG4CTRDNZ--P";
-    let msg = outbox(
-        "MSCONS",
-        LFN,
-        serde_json::json!({
-            "pid": 13003,
-            "mabis_zp_id": BOTH,
-            "bilanzierungsgebiet_id": BOTH,
-            "balancing_period": "202606",
-            "version": "20260714050000+00",
-            "intervals": [
-                { "from": "202606010000+00", "to": "202606010015+00", "quantity_kwh": "7.5" },
-            ],
-        }),
-    );
-    assert!(
-        render_to_wire_bytes(&msg, &registry()).is_err(),
-        "the territory EIC standing in for the Meldepunkt must be refused"
-    );
-}
-
-/// The rendered Summenzeitreihe must still satisfy the AHB.
-///
-/// The shipped MSCONS profile restricts SG6 `LOC` DE3227 to `172` — it was
-/// imported before the `107`/`237` qualifiers were noticed — so emitting the
-/// Bilanzierungsgebiet under `107` could be rejected by mako's own validator
-/// even though the AHB permits it.
+/// The rendered Summenzeitreihe satisfies its own column.
 #[test]
 fn the_rendered_summenzeitreihe_still_validates() {
     use edi_energy::EdiEnergyMessage as _;
@@ -337,11 +305,12 @@ fn the_rendered_summenzeitreihe_still_validates() {
         serde_json::json!({
             "pid": 13003,
             "mabis_zp_id": "DE0004030099000000000000000012345",
-            "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
+            "obis_code": "1-1:1.29.0",
             "balancing_period": "202606",
             "version": "20260714050000+00",
-            "sender_mp_id": GNB,
-            "receiver_mp_id": LFN,
+            // A Strom Summenzeitreihe: BDEW-issued MP-IDs (`::293`).
+            "sender_mp_id": "9900357000004",
+            "receiver_mp_id": "9900077000006",
             "intervals": [
                 { "from": "202606010000+00", "to": "202606010015+00", "quantity_kwh": "7.5" },
             ],
@@ -409,7 +378,7 @@ fn an_ersteinbau_status_names_its_messlokation_and_its_own_anwendungsfall() {
         "SG14 LOC+172 is Muss and carries the Zählpunktbezeichnung:\n{text}"
     );
     assert!(
-        text.contains("STS+Z19+:Z17"),
+        text.contains("STS+Z19+Z17"),
         "the Planungsstatus is „Ersteinbau iMS / geplant\u{201c}, not \u{201e}Bestellung / beendet\u{201c}:\n{text}"
     );
     assert!(
@@ -442,8 +411,8 @@ fn the_ersteinbau_answers_carry_their_status_and_their_e_0233_code() {
         let wire = render_to_wire_bytes(&msg, &registry()).expect("renders");
         let text = String::from_utf8_lossy(&wire.bytes);
         assert!(
-            text.contains(&format!("STS+Z19+:{sts}+{code}:E_0233")),
-            "{pid} wants STS+Z19+:{sts}+{code}:E_0233:\n{text}"
+            text.contains(&format!("STS+Z19+{sts}+{code}:E_0233")),
+            "{pid} wants STS+Z19+{sts}+{code}:E_0233:\n{text}"
         );
         assert!(text.contains(&format!("LOC+172+{MELO}")), "{text}");
     }
@@ -636,7 +605,7 @@ fn a_mabis_korrekturliste_renders_as_a_list_with_its_positions() {
     let text = String::from_utf8_lossy(&wire.bytes);
 
     // Message level: `BGM+Z05` Clearingliste and the Bilanzierungsmonat in 610.
-    assert!(text.contains("BGM+Z05+55066"), "{text}");
+    assert!(text.contains("BGM+Z05+"), "{text}");
     assert!(text.contains("DTM+157:202701:610"), "{text}");
     // The head: the list, its Zählpunkt, the PID, the answered list's number,
     // and the Version der Zeitreihe.

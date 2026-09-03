@@ -36,13 +36,11 @@ pub fn gabi_gas_invoic_registry() -> AdapterRegistry<GaBiGasInvoicWorkflow> {
                 ));
             };
 
-            let pid = inv
-                .bgm()
-                .and_then(|b| b.pruefidentifikator())
-                .ok_or_else(|| {
-                    EngineError::Deserialization(
-                        "GaBi Gas INVOIC adapter: PID not found in INVOIC BGM".into(),
-                    )
+            let pid = edi_energy::EdiEnergyMessage::detect_pruefidentifikator(inv)
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GaBi Gas INVOIC adapter: no Prüfidentifikator in the INVOIC ({e})"
+                    ))
                 })
                 .and_then(convert_pid)?;
             let (validation_passed, validation_errors) = super::ahb_verdict(msg);
@@ -173,12 +171,17 @@ pub fn gabi_gas_nomination_registry() -> AdapterRegistry<GaBiGasNominationWorkfl
                         .document_number
                         .as_deref()
                         .map_or_else(|| message_ref.clone(), MessageRef::new);
-                    Ok(NominationCommand::SendNomination {
+                    // This tenant is the NB/MGV the NOMINT is addressed to: it
+                    // records the nomination and owes the NOMRES.
+                    Ok(NominationCommand::ReceiveNomint {
                         pruefidentifikator: pid.as_u32(),
                         sender_eic,
                         receiver_eic,
                         gas_day,
                         nomination_ref,
+                        // The answer restates these, so they are read off the
+                        // wire rather than reconstructed from a total.
+                        positions: nomination_positions(msg),
                         // Every position of a NOMINT is the nomination itself, so
                         // all of them count.
                         nominated_kwh: msg.single_energy_kwh(|_| true),
@@ -201,29 +204,41 @@ pub fn gabi_gas_nomination_registry() -> AdapterRegistry<GaBiGasNominationWorkfl
                     };
 
                     // Only the recipient's own side counts, and only **one** label
-                    // of it. A NOMRES states the nominated quantities under `IMD`
-                    // `17G`, the counterparty's mirror under `18G`, and the matched
-                    // result under `16G`; a message may carry `17G` *and* `16G` for
-                    // the same position. Selecting both sums two figures for one
-                    // quantity, which is the same double-count as including `18G`
-                    // — a curtailment then reads as an over-confirmation.
+                    // of it. NOMRES 4.7 §3.2 labels a position `16G` Bestätigt,
+                    // `12G`/`13G` Akzeptiert vom (benachbarten) Netzbetreiber,
+                    // `14G`/`15G` Verarbeitet, `17G` Nominiert vom Empfänger and
+                    // `18G` Nominiert vom Geschäftspartner; a message may carry
+                    // several for the same position. Selecting two sums two
+                    // figures for one quantity, which is the same double-count as
+                    // including `18G` — a curtailment then reads as an
+                    // over-confirmation.
                     //
-                    // `16G` wins when present: the matched quantity is what will
-                    // actually flow.
+                    // The first label present wins, closest to what will flow
+                    // first: the matched result, then what the (neighbouring)
+                    // Netzbetreiber accepted or processed, then the nomination
+                    // itself as the NOMRES restates it.
+                    use dvgw_edi::model::imd;
+                    const OWN_SIDE: [&str; 6] = [
+                        imd::GEMATCHT,
+                        imd::AKZEPTIERT_NB,
+                        imd::AKZEPTIERT_NACHBAR_NB,
+                        imd::VERARBEITET_NB,
+                        imd::VERARBEITET_NACHBAR_NB,
+                        imd::NOMINIERT,
+                    ];
                     let label = |code: &'static str| {
                         move |item: &dvgw_edi::LineItem| item.description_code() == Some(code)
                     };
-                    let has = |code: &'static str| msg.items.iter().any(label(code));
-                    let confirmed_kwh = if has(dvgw_edi::model::imd::GEMATCHT) {
-                        msg.single_energy_kwh(label(dvgw_edi::model::imd::GEMATCHT))
-                    } else if has(dvgw_edi::model::imd::NOMINIERT) {
-                        msg.single_energy_kwh(label(dvgw_edi::model::imd::NOMINIERT))
-                    } else {
+                    let chosen = OWN_SIDE
+                        .into_iter()
+                        .find(|code| msg.items.iter().any(label(code)));
+                    let confirmed_kwh = match chosen {
+                        Some(code) => msg.single_energy_kwh(label(code)),
                         // Unlabelled: the message states one side only, so every
                         // position is that side.
-                        msg.single_energy_kwh(|item: &dvgw_edi::LineItem| {
+                        None => msg.single_energy_kwh(|item: &dvgw_edi::LineItem| {
                             item.description_code().is_none()
-                        })
+                        }),
                     };
 
                     Ok(NominationCommand::ReceiveNomres {
@@ -234,9 +249,11 @@ pub fn gabi_gas_nomination_registry() -> AdapterRegistry<GaBiGasNominationWorkfl
                         rejection_reason: None,
                     })
                 }
-                DvgwMessageType::Alocat => Err(EngineError::Deserialization(
-                    "GaBi Gas Nomination adapter: expected NOMINT or NOMRES, got ALOCAT".into(),
-                )),
+                other @ (DvgwMessageType::Alocat | DvgwMessageType::Ssqnot) => {
+                    Err(EngineError::Deserialization(format!(
+                        "GaBi Gas Nomination adapter: expected NOMINT or NOMRES, got {other}"
+                    )))
+                }
             }
         },
     ));
@@ -323,4 +340,105 @@ pub fn gabi_gas_allocation_registry() -> AdapterRegistry<GaBiGasAllocationWorkfl
         },
     ));
     registry
+}
+
+// ── GaBi Gas Mehr-/Mindermengen — SSQNOT (DVGW PIDs 70095/70096) ─────────────
+
+/// Build an [`AdapterRegistry`] for [`GaBiGasMehrMindermengenWorkflow`].
+///
+/// Handles the inbound SSQNOT the Netzbetreiber sends the MGV. No response is
+/// sent — a receive-and-record workflow, one process per Netzkonto and
+/// Abrechnungszeitraum (SSQNOT 5.7 §3.3, `ZO-T1:SSQNOT` plus the `DTM+Z01`
+/// period).
+///
+/// Regulatory basis: BNetzA BK7-24-01-008 (GaBi Gas 2.1), DVGW SSQNOT 5.7.
+#[must_use]
+pub fn gabi_gas_mehr_mindermengen_registry() -> AdapterRegistry<GaBiGasMehrMindermengenWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<DvgwMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected DvgwMessage for GaBi Gas Mehr-/Mindermengen adapter".into(),
+                )
+            })?;
+            let pid = msg.pruefidentifikator.ok_or_else(|| {
+                EngineError::Deserialization(
+                    "GaBi Gas Mehr-/Mindermengen adapter: no Prüfidentifikator in SG1 RFF+Z13"
+                        .into(),
+                )
+            })?;
+            // The record reader refuses what the Segmentlayout refuses: no
+            // Netzkonto, no Verfahren, a non-numeric Menge, a foreign
+            // qualifier. Booking any of those against a Netzkonto would be a
+            // settlement error nothing downstream can detect.
+            let record =
+                dvgw_edi::ssqnot::MehrMindermengenmeldung::from_message(msg).map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GaBi Gas Mehr-/Mindermengen adapter: {e}"
+                    ))
+                })?;
+            Ok(MehrMindermengenCommand::ReceiveSsqnot(
+                mako_gabi_gas::MehrMindermengenData {
+                    pruefidentifikator: pid.as_u32(),
+                    netzbetreiber: record.netzbetreiber,
+                    marktgebietsverantwortlicher: msg
+                        .receiver()
+                        .map(|p| p.id.clone())
+                        .unwrap_or_default(),
+                    netzkonto: record.netzkonto,
+                    zeitraum_von: record.zeitraum.start.date(),
+                    zeitraum_bis: record.zeitraum.end.date(),
+                    verfahren: record.verfahren.into(),
+                    mehrmenge_kwh: record.mehrmenge_kwh,
+                    mindermenge_kwh: record.mindermenge_kwh,
+                    message_ref: MessageRef::new(msg.message_ref.as_str()),
+                },
+            ))
+        },
+    ));
+    registry
+}
+
+/// The `LIN` positions of a DVGW message as the nomination workflow holds them.
+///
+/// A `LOC` group is one period of one point (the DVGW column admits one
+/// `DTM+2` and one `QTY` per group), so the groups of a point are folded back
+/// into one position with its rates in wire order.
+fn nomination_positions(msg: &DvgwMessage) -> Vec<mako_gabi_gas::NominationPosition> {
+    use dvgw_edi::model::nad;
+    let mut out: Vec<mako_gabi_gas::NominationPosition> = Vec::new();
+    for item in &msg.items {
+        let party = |role: &str| item.party(role).map(|p| p.id.clone());
+        for location in &item.locations {
+            for quantity in &location.quantities {
+                let (Some(value), Some(period)) = (quantity.value, quantity.period) else {
+                    continue;
+                };
+                let menge = mako_gabi_gas::NominationMenge {
+                    von: period.start,
+                    bis: period.end,
+                    kwh_pro_h: value,
+                };
+                let ort = location.code.clone().unwrap_or_default();
+                match out.iter_mut().find(|p| {
+                    p.ort == ort
+                        && p.ort_qualifier == location.qualifier
+                        && p.richtung == quantity.qualifier
+                }) {
+                    Some(position) => position.mengen.push(menge),
+                    None => out.push(mako_gabi_gas::NominationPosition {
+                        ort_qualifier: location.qualifier.clone(),
+                        ort,
+                        richtung: quantity.qualifier.clone(),
+                        bilanzkreis_intern: party(nad::BILANZKREIS_INTERN).unwrap_or_default(),
+                        bilanzkreis_extern: party(nad::BILANZKREIS_EXTERN),
+                        mengen: vec![menge],
+                    }),
+                }
+            }
+        }
+    }
+    out
 }

@@ -50,10 +50,18 @@ pub(super) fn render_contrl(
         .receiver(receiver)
         .interchange_ref(interchange_ref)
         .message_ref(message_ref);
+    // A Syntaxfehlermeldung names the error in `UCI` DE 0085 (CONTRL AHB
+    // 1.0 Kap. 3.1). `12` „Ungültiger Wert" is the catch-all the ingest uses
+    // when the parser reported no finer code.
     builder = if accepted {
         builder.accept()
     } else {
-        builder.reject()
+        builder.reject(
+            p.get("syntax_error")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("12"),
+        )
     };
 
     finish_interchange(builder.serialize(), sender, receiver, msg)

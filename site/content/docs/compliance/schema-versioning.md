@@ -1,156 +1,70 @@
 +++
-title = "Schema Versioning"
-description = "Profile JSON schema versioning policy: additive changes, breaking changes, MIN_SCHEMA_VERSION / MAX_SCHEMA_VERSION, and the codegen compatibility matrix."
+title = "Profile Files"
+description = "What a profile is: mig.json and ahb.json, generated from the BDEW MIG and AHB PDFs, keyed by the MIG's running segment number."
 weight = 10
-[extra]
-mermaid = true
 +++
-# Profile Schema Versioning
+# Profile Files
 
-Each profile file (`mig.json`, `ahb.json`, `codelists.json`) carries a top-level
-`schema_version` integer that describes the structure of that file.  The codegen
-in `xtask/src/codegen.rs` enforces a **range** — it rejects profiles whose version
-is below `MIN_SCHEMA_VERSION` (format too old) or above `MAX_SCHEMA_VERSION` (format
-too new for this tool version).
+A profile is one MIG and one AHB of one format version, as two files under
+`crates/edi-energy/profiles/<type>/<fvYYYYMMDD>/`. Both are **generated** by
+`cargo xtask import-profiles` from the BDEW PDFs named in
+`profiles/sources.json`, and both carry `schema_version: 2`.
 
-```
-MIN_SCHEMA_VERSION  ≤  schema_version  ≤  MAX_SCHEMA_VERSION
-```
+## `mig.json` — the Nachrichtenbeschreibung
 
-Both constants live in `xtask/src/codegen.rs` inside `discover_profiles()`.
-
----
-
-## Versioning policy
-
-### Additive-only change (new optional field) — **do NOT bump version**
-
-New optional fields are added to the Rust `struct` with `#[serde(default)]` so
-existing JSON files without the field continue to parse cleanly under the
-`deny_unknown_fields` policy.
-
-**Procedure:**
-
-1. Add the new field to the struct with a `#[serde(default)]` annotation.
-2. Add the field to the JSON Schema with `"default": …` (see `profiles/schemas/`).
-3. Optionally populate the field in affected JSON files.
-4. No version bump required; `--check` remains green without touching every profile.
-
-**Example:** The `archived` field (v1 addition).
-
----
-
-### Structural / breaking change — **bump `MAX_SCHEMA_VERSION`**
-
-A breaking change removes or renames an existing field, changes its type, or
-alters its semantics in a way that requires all profiles to be updated.
-
-**Procedure:**
-
-1. Bump `MAX_SCHEMA_VERSION` in `xtask/src/codegen.rs`.
-2. Add conditional deserialization in `discover_profiles()` to handle both the
-   old and new version (or drop support for the old version by raising
-   `MIN_SCHEMA_VERSION`).
-3. Update every profile JSON file to the new `schema_version`.
-4. Run `cargo xtask codegen` and commit the regenerated output.
-
----
-
-## Error messages
-
-| Situation | Message |
+| Field | Content |
 |---|---|
-| `schema_version < MIN_SCHEMA_VERSION` | "has schema_version N (minimum is M) — update the profile JSON file to at least schema_version M" |
-| `schema_version > MAX_SCHEMA_VERSION` | "has schema_version N (maximum supported is M) — this profile was authored for a newer codegen; update xtask/src/codegen.rs to support schema version N" |
+| `message_type`, `release`, `track` | `UTILMD`, the `UNH` DE 0057 wire code, `Strom`/`Gas` where one message type has two MIGs |
+| `valid_from`, `valid_until`, `publikationsdatum`, `ahb_version` | the Anwendungszeitpunkt window and the AHB the MIG pairs with |
+| `pid_source`, `pid_exempt` | where the Prüfidentifikator travels (`rff_z13` or `bgm_de1004`); CONTRL/APERAK carry none |
+| `source` | the PDF's file name, title and SHA-256 |
+| `structure` | the Nachrichtenstruktur as a tree of groups (`group`, `status`, `max`, `children`) and segments (`nr`, `tag`, `status`, `max`, `elements`) |
+| `envelope` | the `UNB`/`UNZ` layouts, outside the message |
 
----
+Every segment carries the MIG's running number `Nr` (`00047`) and its
+Segmentlayout: data elements with BDEW status (`M`/`R`/`D`/`O`/`N`), format
+(`an..35`, `n11`), note and admitted codes, composites with their components.
+The `Nr` is what tells two places of the same tag apart — `SG5 LOC+Z16`
+Marktlokation and `SG5 LOC+Z17` Messlokation are two nodes with two layouts.
 
-## The `archived` field (profile lifecycle)
+## `ahb.json` — the Anwendungshandbuch
 
-Profiles have an optional `valid_until` date (ISO 8601, e.g. `"2026-09-30"`).
-Once a profile's `valid_until` has passed — plus whatever receive tolerance the
-deployment configures — it is not compiled by default.
-
-A profile moves through three compilation states over its lifetime:
-
-```mermaid
-stateDiagram-v2
-    [*] --> Active : profile registered
-    Active --> Expired : valid_until date passes
-    Expired --> Archived : cargo xtask codegen --prune-expired<br/>(valid_until + grace_days elapsed, default 90 days)
-```
-
-- **Active** — compiled under the plain feature (e.g. `mscons`).
-- **Expired** — past `valid_until` but still compiled; `archived` is not yet set.
-- **Archived** — `archived: true` in `mig.json`; now gated behind the
-  `{type}-archive` / `archive` feature instead of the plain feature.
-
-The `archived` boolean field in `mig.json` is the explicit, deterministic marker
-for the final transition.  It is set by `cargo xtask codegen --prune-expired`:
-
-```
-cargo xtask codegen --prune-expired [--grace-days N]
-```
-
-Default grace period: **90 days** after `valid_until`.
-
-### What happens when a profile is archived
-
-- `mod.rs` gates it behind `#[cfg(any(feature = "{type}-archive", feature = "archive"))]`
-  instead of the plain `#[cfg(feature = "{type}")]`.
-- A build enabling only `mscons` compiles no expired MSCONS profile.
-- Historical validation enables `mscons-archive`, or `archive` for every type.
-
-### Why use an explicit JSON flag (not a date comparison at codegen time)?
-
-If `mod.rs` were generated by comparing `valid_until` against `now()`, the output
-would differ every time the clock passed another expiry.  This would cause
-`cargo xtask codegen --check` (the CI drift guard) to fail on an unrelated PR
-just because calendar time advanced.
-
-The explicit `"archived": true` JSON field makes the generated `mod.rs` **fully
-deterministic** — identical output on every run until someone explicitly calls
-`--prune-expired` and commits the updated JSON and regenerated `mod.rs`.
-
-### Annual workflow
-
-```
-# 1. Mark newly expired profiles as archived
-cargo xtask codegen --prune-expired
-
-# 2. Review which profiles were archived
-git diff profiles/
-
-# 3. Regenerate (already done by --prune-expired, but re-run for --check confirmation)
-cargo xtask codegen
-
-# 4. Verify everything still compiles
-cargo check --all-features --all-targets
-
-# 5. Commit both the mig.json updates and the regenerated mod.rs
-git add crates/edi-energy/profiles/*/mig.json crates/edi-energy/src/generated/mod.rs
-git commit -m "chore: archive expired profiles after BDEW format update"
-```
-
-### Cargo features
-
-| Feature | Effect |
+| Field | Content |
 |---|---|
-| `utilmd` | Current UTILMD profiles only |
-| `utilmd-archive` | Current + archived UTILMD profiles |
-| `archive` | Current + archived profiles for **all** message types |
+| `conditions` | every Bedingung as printed, by number: Voraussetzungen `1`–`499`, Hinweise `500`–`899`, Formatbedingungen `901`–`999`, Wiederholbarkeiten `2000`–`2499`, `UB1`–`UB3` |
+| `packages` | Pakete (`1P`) with their Paketvoraussetzung |
+| `anwendungsfaelle` | one entry per AHB column — the Prüfschablone |
 
-See `crates/edi-energy/Cargo.toml` for the full feature list.
+A Prüfschablone has `pid`, `name`, `communication`, `chapter`, `rows` (the
+status of each segment `nr` or group — `Muss`, `Muss [10]`, `Soll [3] ∧ [4]`)
+and `elements` (per `nr` and data element, the operands on its codes or on the
+value — `X`, `X [UB1]`, `M [7]`). Message types published without
+Prüfidentifikatoren (CONTRL, APERAK) have columns without `pid`; they are
+selected by `BGM` DE 1001 or, for CONTRL, by best fit.
 
----
+## What the runtime does with them
 
-## Schema version
+- `Structure` compiles the MIG into a resolver that assigns every segment of a
+  message to its `Nr` — the leading qualifier tells places apart, a stray
+  segment is reported and skipped rather than derailing the rest.
+- `Profile::validate` runs the MIG checks (structure, cardinality, layout) and
+  the column's Prüfschablone, and evaluates Voraussetzungen against the message
+  (`Wenn SG5 LOC+Z17 nicht vorhanden`, `Wenn SG10 QTY DE6063 mit Wert 67
+  vorhanden`, `mehr als einmal vorhanden`).
+- `Profile::skeleton` generates the minimal message a column admits; every
+  Anwendungsfall's skeleton validating against its own column is the test that
+  extraction and validator agree (`tests/skeletons.rs`).
+- `Profile::pruefschablone(pid)` prints the column for a reader.
 
-Every generated profile JSON carries a `schema_version` so the codegen can reject a
-profile written for an incompatible shape. The current schema is **version 1**, which
-defines the base fields `release`, `valid_from`, `valid_until`, `archived`, `segments`,
-`pruefidentifikatoren`, `conditional_rules`, `segment_rules`, and `group_rules`.
+## Versioning
 
-The accepted range is bounded by `MIN_SCHEMA_VERSION` and `MAX_SCHEMA_VERSION`
-(both `1`) in `discover_profiles()` (`xtask/src/codegen.rs`); a profile outside that
-range fails codegen rather than being silently misread.
+`schema_version` is the shape of these files. A new shape is a new number, a
+re-import of every profile and a matching change in `crates/edi-energy/src/profile/model.rs`;
+nothing reads an older shape. Additive fields are `#[serde(default)]` and need
+no bump.
+
+`validate-profiles` holds the committed files against `sources.json` (release,
+dates, AHB version, document names), against each other (every AHB row names a
+`Nr` the MIG has, every column lists `UNH`, Prüfidentifikatoren are five digits
+and unique) and, where the document mirror is present, against the mirror's
+SHA-256. `import-profiles --check` re-reads the PDFs and fails on any drift.

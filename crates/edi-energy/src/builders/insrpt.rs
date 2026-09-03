@@ -22,6 +22,8 @@ struct InsrptBuilderInner {
     document_date: Option<String>,
     /// SG3 `DOC` — Referenz auf das Dokument (qualifier, id).
     doc_reference: Option<(String, String)>,
+    /// `SG5 NAD+MS` + `SG6 CTA`/`COM`: (Kontakt, Kommunikationsadresse).
+    contact: Option<(String, String)>,
     /// SG4 `RFF+Z13` — Prüfidentifikator.
     pruefidentifikator: Option<u32>,
     /// SG7 `LIN` — Positionsnummer.
@@ -78,6 +80,7 @@ impl InsrptBuilder<Unset, Unset> {
                 document_id: None,
                 document_date: None,
                 doc_reference: None,
+                contact: None,
                 pruefidentifikator: None,
                 position: None,
                 status: None,
@@ -179,6 +182,13 @@ impl<S, R> InsrptBuilder<S, R> {
         self
     }
 
+    /// `SG5 NAD+MS` with `SG6 CTA+IC` and `COM+…:EM` — the sender's
+    /// Ansprechpartner, Muss on the Störungsmeldung.
+    pub fn contact(mut self, name: impl Into<String>, comm: impl Into<String>) -> Self {
+        self.inner.contact = Some((name.into(), comm.into()));
+        self
+    }
+
     /// Set the document date for DTM+137 (`YYYYMMDD`).
     pub fn document_date(mut self, date: impl Into<String>) -> Self {
         self.inner.document_date = Some(date.into());
@@ -195,12 +205,18 @@ impl<S, R> InsrptBuilder<S, R> {
         let mut buf = Vec::new();
         let mut w = Writer::new(&mut buf);
 
-        let doc_id = self.inner.document_id.as_deref().unwrap_or("");
+        // `BGM` DE 1004 is the Dokumentennummer — the message reference unless
+        // one is given.
+        let doc_id = self
+            .inner
+            .document_id
+            .as_deref()
+            .unwrap_or(&self.inner.message_ref);
         emit_comp!(
             w,
             "UNH",
             [&self.inner.message_ref],
-            ["INSRPT", "D", "96A", "UN", self.inner.release.as_str()]
+            ["INSRPT", "D", "10A", "UN", self.inner.release.as_str()]
         );
         emit_seg!(w, "BGM", &self.inner.document_code, doc_id);
         // `DTM+137` Dokumentendatum. Every EDI@Energy AHB gives DE 2379 as
@@ -208,20 +224,21 @@ impl<S, R> InsrptBuilder<S, R> {
         // `+00`; `[494]` requires the stamp to be the creation moment or
         // earlier. There is no Anwendungsfall in any AHB that takes `102`.
         emit_comp!(w, "DTM", ["137", &super::ccyymmddhhmm_utc(&dtm_val), "303"]);
-        if let Some(id) = &self.inner.sender_id {
-            emit_comp!(
-                w,
-                "NAD",
-                ["MS"],
-                [id, "", super::agency_for(self.inner.sender_agency, id)]
-            );
-        }
+        // The INSRPT MIG lists `NAD+MR` before `NAD+MS`.
         if let Some(id) = &self.inner.receiver_id {
             emit_comp!(
                 w,
                 "NAD",
                 ["MR"],
                 [id, "", super::agency_for(self.inner.receiver_agency, id)]
+            );
+        }
+        if let Some(id) = &self.inner.sender_id {
+            emit_comp!(
+                w,
+                "NAD",
+                ["MS"],
+                [id, "", super::agency_for(self.inner.sender_agency, id)]
             );
         }
         // MIG order: SG3 DOC → SG4 RFF → SG7 LIN → STS → SG8 LOC.
@@ -231,13 +248,28 @@ impl<S, R> InsrptBuilder<S, R> {
         if let Some(pid) = self.inner.pruefidentifikator {
             emit_comp!(w, "RFF", ["Z13", &pid.to_string()]);
         }
+        // `SG5 NAD+MS` Ansprechpartner beim Nachrichtenabsender with its `SG6`
+        // `CTA`/`COM` — Muss on the Störungsmeldung.
+        if let (Some(id), Some((name, comm))) = (&self.inner.sender_id, &self.inner.contact) {
+            emit_comp!(
+                w,
+                "NAD",
+                ["MS"],
+                [id, "", super::agency_for(self.inner.sender_agency, id)]
+            );
+            emit_comp!(w, "CTA", ["IC"], ["", name]);
+            emit_comp!(w, "COM", [comm, "EM"]);
+        }
+        // `SG7 LIN` with the Gerätestatus `STS+Z06+<4405>` and `SG8 NAD+DP` +
+        // `LOC+172` Meldepunkt.
         if let Some(pos) = &self.inner.position {
             emit_seg!(w, "LIN", pos);
         }
         if let Some(code) = &self.inner.status {
-            emit_seg!(w, "STS", code);
+            emit_seg!(w, "STS", "Z06", code);
         }
         if let Some((qual, id)) = &self.inner.location {
+            emit_seg!(w, "NAD", "DP");
             emit_comp!(w, "LOC", [qual], [id]);
         }
 

@@ -22,18 +22,27 @@ use makod::ingest_dispatcher::{EdifactIngestDispatcher, IngestOutcome};
 
 const OWN_MP: &str = "9900357000004";
 
+/// The profile's own skeleton of the Anwendungsfall, addressed to `OWN_MP`.
 fn fixture(pid: u32) -> String {
-    let base = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../crates/edi-energy/tests/fixtures/utilmd"
-    );
-    [
-        format!("{base}/valid/pid_{pid}.edi"),
-        format!("{base}/gen/pid_{pid}.gen.edi"),
-    ]
-    .into_iter()
-    .find_map(|p| std::fs::read_to_string(p).ok())
-    .unwrap_or_else(|| panic!("no UTILMD fixture for PID {pid}"))
+    use edi_energy::profile::SkeletonParties;
+    let code = edi_energy::Pruefidentifikator::new(pid).expect("a Prüfidentifikator");
+    let profile = edi_energy::ReleaseRegistry::global()
+        .all_profiles()
+        .iter()
+        .filter(|p| p.has_anwendungsfall(code))
+        .max_by_key(|p| p.valid_from())
+        .unwrap_or_else(|| panic!("no profile carries PID {pid}"));
+    let af = profile.anwendungsfall(pid).expect("the column");
+    let bytes = profile
+        .skeleton_interchange(
+            af,
+            &SkeletonParties {
+                sender: "4012345000023".to_owned(),
+                receiver: OWN_MP.to_owned(),
+            },
+        )
+        .expect("skeleton");
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 async fn dispatcher() -> EdifactIngestDispatcher {

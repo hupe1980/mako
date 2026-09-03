@@ -1,521 +1,3582 @@
 {
-  "schema_version": 1,
+  "ahb_version": "1.1",
+  "envelope": [],
   "message_type": "UTILTS",
-  "release": "1.1e",
-  "valid_from": "2026-10-01",
-  "supersedes_directory": "fv20250401",
   "pid_source": "rff_z13",
-  "ordering_hint": [],
-  "dtm_formats": {
-    "137": [
-      "303"
-    ],
-    "157": [
-      "303"
-    ],
-    "293": [
-      "304"
-    ],
-    "Z25": [
-      "303"
-    ],
-    "Z26": [
-      "303"
-    ],
-    "Z33": [
-      "303",
-      "401"
-    ],
-    "Z34": [
-      "303"
-    ],
-    "Z35": [
-      "303"
-    ],
-    "Z44": [
-      "303",
-      "401"
-    ],
-    "Z45": [
-      "303",
-      "401"
-    ]
+  "publikationsdatum": "2026-04-01",
+  "release": "1.1e",
+  "schema_version": 2,
+  "source": {
+    "file": "UTILTS_MIG_1.1e_-_konsolidierte_Lesefassung_Stand_13.12.2024.pdf",
+    "sha256": "b1a8bb10328c03c0ceca5c56bcc8d75d79bac3b58d1d639cc57cf12fda93929c",
+    "title": "UTILTS MIG 1.1e  - konsolidierte Lesefassung mit Fehlerkorrekturen Stand: 13.12.2024"
   },
-  "segments": [
+  "structure": [
     {
-      "tag": "UNH",
-      "name": "Nachrichten-Kopfsegment",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "format": "an..14",
           "id": "0062",
+          "name": "Nachrichten-Referenznummer",
+          "note": "Eindeutige Nachrichtenreferenz in einer Nachricht des Absenders. Nummer der Nachrichten einer Übertragungsdatei im Datenaustausch. Identisch mit DE0062 im UNT, i. d. R. vom sendenden Konverter vergeben.",
           "status": "M"
         },
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "UTILTS",
+                  "name": "Netznutzungszeiten-Nachricht"
+                }
+              ],
+              "format": "an..6",
+              "id": "0065",
+              "name": "Nachrichtentyp-Kennung",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "D",
+                  "name": "Entwurfs-Version"
+                }
+              ],
+              "format": "an..3",
+              "id": "0052",
+              "name": "Versionsnummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "18A",
+                  "name": "Ausgabe 2018 - A"
+                }
+              ],
+              "format": "an..3",
+              "id": "0054",
+              "name": "Freigabenummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "UN",
+                  "name": "UN/CEFACT"
+                }
+              ],
+              "format": "an..2",
+              "id": "0051",
+              "name": "Verwaltende Organisation",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "1.1e",
+                  "name": "Versionsnummer der zugrundeliegenden BDEW-Nachrichtenbeschreibung"
+                }
+              ],
+              "format": "an..6",
+              "id": "0057",
+              "name": "Anwendungscode der zuständigen Organisation",
+              "status": "R"
+            }
+          ],
           "id": "S009",
+          "name": "Nachrichten-Kennung",
           "status": "M"
         }
       ],
-      "qualifier_restrictions": {}
+      "example": "UNH+1+UTILTS:D:18A:UN:1.1e'",
+      "max": 1,
+      "name": "Nachrichten-Kopfsegment",
+      "nr": "00001",
+      "status": "M",
+      "tag": "UNH",
+      "zaehler": "0010"
     },
     {
-      "tag": "BGM",
-      "name": "Beginn der Nachricht",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "Z36",
+                  "name": "Berechnungsformel"
+                },
+                {
+                  "code": "Z59",
+                  "name": "Ausgerollte Zählzeitdefinition"
+                },
+                {
+                  "code": "Z60",
+                  "name": "Übersicht Zählzeitdefinitionen"
+                },
+                {
+                  "code": "Z78",
+                  "name": "Übersicht Schaltzeitdefinitionen"
+                },
+                {
+                  "code": "Z79",
+                  "name": "Übersicht Leistungskurvendefinitionen"
+                },
+                {
+                  "code": "Z80",
+                  "name": "Ausgerollte Schaltzeitdefinition"
+                },
+                {
+                  "code": "Z81",
+                  "name": "Ausgerollte Leistungskurvendefinition"
+                }
+              ],
+              "format": "an..3",
+              "id": "1001",
+              "name": "Dokumentenname, Code",
+              "status": "R"
+            }
+          ],
           "id": "C002",
-          "status": "C"
+          "name": "Dokumenten-/ Nachrichtenname",
+          "status": "R"
         },
         {
+          "components": [
+            {
+              "format": "an..35",
+              "id": "1004",
+              "name": "Dokumentennummer",
+              "note": "EDI-Nachrichtennummer vergeben vom Absender des Dokuments",
+              "status": "R"
+            }
+          ],
           "id": "C106",
-          "status": "C"
+          "name": "Dokumenten-/Nachrichten- Identifikation",
+          "status": "R"
         }
       ],
-      "qualifier_restrictions": {
-        "1001": [
-          "Z36",
-          "Z59",
-          "Z60",
-          "Z78",
-          "Z79",
-          "Z80",
-          "Z81"
-        ]
-      }
+      "example": "BGM+Z36+MKIDI5422'",
+      "max": 1,
+      "name": "Beginn der Nachricht",
+      "nr": "00002",
+      "status": "M",
+      "tag": "BGM",
+      "zaehler": "0020"
     },
     {
-      "tag": "DTM",
-      "name": "Nachrichtendatum",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "137",
+                  "name": "Dokumenten-/Nachrichtendatum/-zeit"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
           "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
           "status": "M"
         }
       ],
-      "qualifier_restrictions": {
-        "2005": [
-          "137"
-        ]
-      }
+      "example": "DTM+137:202106071515?+00:303'",
+      "max": 1,
+      "name": "Nachrichtendatum",
+      "nr": "00003",
+      "status": "M",
+      "tag": "DTM",
+      "zaehler": "0030"
     },
     {
-      "tag": "UNT",
-      "name": "Nachrichten-Endesegment",
-      "mandatory": true,
-      "max_occurrences": 1,
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "MS",
+                  "name": "Dokumenten-/Nachrichtenaussteller bzw. - absender"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+MS+9900259000002::293'",
+          "max": 1,
+          "name": "MP-ID Absender",
+          "nr": "00004",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0100"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "IC",
+                      "name": "Informationskontakt"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3139",
+                  "name": "Funktion des Ansprechpartners, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "3413",
+                      "name": "Kontakt, Nummer",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..256",
+                      "id": "3412",
+                      "name": "Kontakt",
+                      "note": "Name vom Ansprechpartner",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C056",
+                  "name": "Kontaktangaben",
+                  "status": "R"
+                }
+              ],
+              "example": "CTA+IC+:Max Mustermann'",
+              "max": 1,
+              "name": "Ansprechpartner",
+              "nr": "00005",
+              "status": "M",
+              "tag": "CTA",
+              "zaehler": "0140"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "3148",
+                      "name": "Kommunikationsadresse, Identifikation",
+                      "note": "Nummer / Adresse",
+                      "status": "M"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "EM",
+                          "name": "Elektronische Post"
+                        },
+                        {
+                          "code": "FX",
+                          "name": "Telefax"
+                        },
+                        {
+                          "code": "TE",
+                          "name": "Telefon"
+                        },
+                        {
+                          "code": "AJ",
+                          "name": "weiteres Telefon"
+                        },
+                        {
+                          "code": "AL",
+                          "name": "Handy"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "3155",
+                      "name": "Art des Kommunikationsmittels, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C076",
+                  "name": "Kommunikationsverbindung",
+                  "status": "M"
+                }
+              ],
+              "example": "COM+?+49322227120:TE'",
+              "max": 5,
+              "name": "Kommunikationsverbindung",
+              "nr": "00006",
+              "status": "R",
+              "tag": "COM",
+              "zaehler": "0150"
+            }
+          ],
+          "group": "SG3",
+          "max": 1,
+          "name": "Kontaktinformationen",
+          "status": "D",
+          "zaehler": "0130"
+        }
+      ],
+      "group": "SG2",
+      "max": 1,
+      "name": "MP-ID Absender",
+      "status": "R",
+      "zaehler": "0090"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "MR",
+                  "name": "Nachrichtenempfänger"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+MR+9900259000002::293'",
+          "max": 1,
+          "name": "MP-ID Empfänger",
+          "nr": "00007",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0100"
+        }
+      ],
+      "group": "SG2",
+      "max": 1,
+      "name": "MP-ID Empfänger",
+      "status": "R",
+      "zaehler": "0090"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "24",
+                  "name": "Transaktion"
+                }
+              ],
+              "format": "an..3",
+              "id": "7495",
+              "name": "Objekt, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "7402",
+                  "name": "Objekt, Identifikation",
+                  "note": "Vorgangsnummer",
+                  "status": "M"
+                }
+              ],
+              "id": "C206",
+              "name": "Identifikationsnummer",
+              "status": "R"
+            }
+          ],
+          "example": "IDE+24+VorgangsId12345'",
+          "max": 1,
+          "name": "Vorgang",
+          "nr": "00008",
+          "status": "M",
+          "tag": "IDE",
+          "zaehler": "0210"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "172",
+                  "name": "Meldepunkt"
+                }
+              ],
+              "format": "an..3",
+              "id": "3227",
+              "name": "Ortsangabe, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3225",
+                  "name": "Ortsangabe, Nummer",
+                  "note": "Identifikator",
+                  "status": "R"
+                }
+              ],
+              "id": "C517",
+              "name": "Ortsangabe",
+              "status": "R"
+            }
+          ],
+          "example": "LOC+172+57685676748'",
+          "max": 1,
+          "name": "Meldepunkt",
+          "nr": "00009",
+          "status": "D",
+          "tag": "LOC",
+          "zaehler": "0220"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z09",
+                  "name": "Code der Definition"
+                }
+              ],
+              "format": "an..3",
+              "id": "3227",
+              "name": "Ortsangabe, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..3",
+                  "id": "3225",
+                  "name": "Ortsangabe, Nummer",
+                  "note": "Code der Definition",
+                  "status": "R"
+                }
+              ],
+              "id": "C517",
+              "name": "Ortsangabe",
+              "status": "R"
+            }
+          ],
+          "example": "LOC+Z09+ZZ1'",
+          "max": 1,
+          "name": "Code der Definition",
+          "nr": "00010",
+          "status": "D",
+          "tag": "LOC",
+          "zaehler": "0220"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "157",
+                      "name": "Gültigkeit, Beginndatum"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2005",
+                  "name": "Datums- oder Uhrzeit- oder Zeitspannen-Funktion, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "2380",
+                  "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "303",
+                      "name": "CCYYMMDDHHMMZZZ"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2379",
+                  "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C507",
+              "name": "Datum/Uhrzeit/Zeitspanne",
+              "status": "M"
+            }
+          ],
+          "example": "DTM+157:202106071515?+00:303'",
+          "max": 1,
+          "name": "Gültig ab",
+          "nr": "00011",
+          "status": "D",
+          "tag": "DTM",
+          "zaehler": "0280"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z34",
+                      "name": "Gültigkeitsbeginn"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2005",
+                  "name": "Datums- oder Uhrzeit- oder Zeitspannen-Funktion, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "2380",
+                  "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "303",
+                      "name": "CCYYMMDDHHMMZZZ"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2379",
+                  "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C507",
+              "name": "Datum/Uhrzeit/Zeitspanne",
+              "status": "M"
+            }
+          ],
+          "example": "DTM+Z34:202106071515?+00:303'",
+          "max": 1,
+          "name": "Gültigkeitsbeginn der ausgerollten Definition",
+          "nr": "00012",
+          "status": "D",
+          "tag": "DTM",
+          "zaehler": "0280"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z35",
+                      "name": "Gültigkeitsende"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2005",
+                  "name": "Datums- oder Uhrzeit- oder Zeitspannen-Funktion, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "2380",
+                  "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "303",
+                      "name": "CCYYMMDDHHMMZZZ"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2379",
+                  "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C507",
+              "name": "Datum/Uhrzeit/Zeitspanne",
+              "status": "M"
+            }
+          ],
+          "example": "DTM+Z35:202109091515?+00:303'",
+          "max": 1,
+          "name": "Gültigkeitsende der ausgerollten Definition",
+          "nr": "00013",
+          "status": "D",
+          "tag": "DTM",
+          "zaehler": "0280"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "293",
+                      "name": "Fertigstellungsdatum/-zeit"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2005",
+                  "name": "Datums- oder Uhrzeit- oder Zeitspannen-Funktion, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "2380",
+                  "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "304",
+                      "name": "CCYYMMDDHHMMSSZZZ"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2379",
+                  "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C507",
+              "name": "Datum/Uhrzeit/Zeitspanne",
+              "status": "M"
+            }
+          ],
+          "example": "DTM+293:20210607151545?+00:304'",
+          "max": 1,
+          "name": "Versionsangabe",
+          "nr": "00014",
+          "status": "D",
+          "tag": "DTM",
+          "zaehler": "0280"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "E01",
+                      "name": "Status der Antwort"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "9015",
+                  "name": "Statuskategorie, Code",
+                  "status": "M"
+                }
+              ],
+              "id": "C601",
+              "name": "Statuskategorie",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..3",
+                  "id": "4405",
+                  "name": "Status, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C555",
+              "name": "Status",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..3",
+                  "id": "9013",
+                  "name": "Statusanlass, Code",
+                  "note": "Code des Prüfschritts",
+                  "status": "M"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "E_0218",
+                      "name": "EBD Nr. E_0218"
+                    }
+                  ],
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "status": "R"
+                },
+                {
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "format": "n1",
+                  "id": "9012",
+                  "name": "Statusanlass",
+                  "note": "Zeitraum-ID aus der Übermittlung der Berechnungsformel",
+                  "status": "R"
+                }
+              ],
+              "id": "C556",
+              "name": "Statusanlaß",
+              "status": "R"
+            }
+          ],
+          "example": "STS+E01++A01:E_0218::1'",
+          "max": 9,
+          "name": "Status der Antwort",
+          "nr": "00015",
+          "status": "D",
+          "tag": "STS",
+          "zaehler": "0300"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z23",
+                      "name": "Status der Berechnungsformel"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "9015",
+                  "name": "Statuskategorie, Code",
+                  "status": "M"
+                }
+              ],
+              "id": "C601",
+              "name": "Statuskategorie",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z33",
+                      "name": "Berechnungsformel angefügt Die Berechnungsformel zur Ermittlung der Energiemenge einer Markt- oder Netzlokation ist in diesem Vorgang der UTILTS enthalten"
+                    },
+                    {
+                      "code": "Z34",
+                      "name": "Berechnungsformel muss beim Absender angefragt werden Die Berechnungsformel zur Ermittlung der Energiemenge der Markt- oder Netzlokation ist komplex und kann mit der UTILTS nicht übermittelt werden"
+                    },
+                    {
+                      "code": "Z40",
+                      "name": "Berechnungsformel besitzt keine Rechenoperation Die Berechnungsformel zur Ermittlung der Energiemenge der Markt- oder Netzlokation besitzt keine Rechenoperation, da es sich um eine 1:1 Beziehung zwischen der Markt- und Messlokation oder zwischen Netz- und Messlokation handelt."
+                    },
+                    {
+                      "code": "Z41",
+                      "name": "Berechnungsformel nicht erforderlich Die Berechnungsformel zur Ermittlung der Energiemenge der Markt- oder Netzlokation ist nicht erforderlich, da keine Messlokation der Marktlokation (pauschale Marktlokation) oder da keine Messlokation der Netzlokation zugeordnet ist."
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "4405",
+                  "name": "Status, Code",
+                  "status": "M"
+                }
+              ],
+              "id": "C555",
+              "name": "Status",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "n1",
+                  "id": "9013",
+                  "name": "Statusanlass, Code",
+                  "note": "Referenz auf Zeitraum-ID",
+                  "status": "M"
+                }
+              ],
+              "id": "C556",
+              "name": "Statusanlaß",
+              "status": "R"
+            }
+          ],
+          "example": "STS+Z23+Z33+2'",
+          "max": 9,
+          "name": "Status der Berechnungsformel",
+          "nr": "00016",
+          "status": "D",
+          "tag": "STS",
+          "zaehler": "0300"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z36",
+                      "name": "Nutzung von Definitionen"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "9015",
+                  "name": "Statuskategorie, Code",
+                  "status": "M"
+                }
+              ],
+              "id": "C601",
+              "name": "Statuskategorie",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z45",
+                      "name": "Definitionen werden verwendet Bei Zählzeitdefinitionen: Der NB bzw. LF nutzt Zählzeitdefinitionen für die Tarifierung von Werten. Die Liste der Zählzeitdefinitionen enthält somit Zählzeitdefinitionen. Bei Schaltzeitdefinitionen: Der NB bzw. LF nutzt Schaltzeitdefinitionen. Die Liste der Schaltzeitdefinitionen enthält somit Schaltzeitdefinitionen. Bei Leistungskurvendefinitionen: Der NB bzw. LF nutzt Leistungskurvendefinitionen. Die Liste der Leistungskurvendefinitionen enthält somit Leistungskurven."
+                    },
+                    {
+                      "code": "Z46",
+                      "name": "Definitionen werden nicht verwendet Bei Zählzeitdefinitionen: Der NB nutzt keine Zählzeitdefinitionen für die Tarifierung von Werten. Die Liste der Zählzeitdefinitionen enthält somit keine Zählzeitdefinitionen. Bei Schaltzeitdefinitionen: Der NB bzw. LF nutzt keine Schaltzeitdefinitionen. Die Liste der Schaltzeitdefinitionen enthält somit keine Schaltzeitdefinitionen. Bei Leistungskurvendefinitionen: Der NB bzw. LF nutzt keine Leistungskurven. Die Liste der Leistungskurvendefinitionen enthält somit keine Leistungskurven."
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "4405",
+                  "name": "Status, Code",
+                  "status": "M"
+                }
+              ],
+              "id": "C555",
+              "name": "Status",
+              "status": "R"
+            }
+          ],
+          "example": "STS+Z36+Z45'",
+          "max": 1,
+          "name": "Status der Nutzung von Definitionen",
+          "nr": "00017",
+          "status": "D",
+          "tag": "STS",
+          "zaehler": "0300"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "ACB",
+                  "name": "Zusätzliche Informationen (für allgemeine Hinweise)"
+                }
+              ],
+              "format": "an..3",
+              "id": "4451",
+              "name": "Textbezug, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..3",
+              "id": "4453",
+              "name": "Textfunktion, Code",
+              "note": "Nicht benutzt",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "n1",
+                  "id": "4441",
+                  "name": "Freier Text, Code",
+                  "note": "Zeitraum-ID aus der Übermittlung der Berechnungsformel",
+                  "status": "M"
+                }
+              ],
+              "id": "C107",
+              "name": "Text-Referenz",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "note": "Text für allgemeine Information",
+                  "status": "M"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "status": "D"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "status": "D"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "status": "D"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "status": "D"
+                }
+              ],
+              "id": "C108",
+              "name": "Text",
+              "status": "R"
+            }
+          ],
+          "example": "FTX+ACB++3+Die Ablehnung erfolgte, weil ...:die Netzlokation:keine ID:besitzt:X'",
+          "max": 9,
+          "name": "Bemerkung (Feld für allgemeine Hinweise)",
+          "nr": "00018",
+          "status": "D",
+          "tag": "FTX",
+          "zaehler": "0330"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z13",
+                          "name": "Prüfidentifikator"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "25001",
+                          "name": "Berechnungsformel"
+                        },
+                        {
+                          "code": "25004",
+                          "name": "Übersicht Zählzeitdefinitionen"
+                        },
+                        {
+                          "code": "25005",
+                          "name": "Ausgerollte Zählzeitdefinition"
+                        },
+                        {
+                          "code": "25006",
+                          "name": "Übersicht Schaltzeitdefinitionen"
+                        },
+                        {
+                          "code": "25007",
+                          "name": "Übersicht Leistungskurvendefinitionen"
+                        },
+                        {
+                          "code": "25008",
+                          "name": "Ausgerollte Schaltzeitdefinition"
+                        },
+                        {
+                          "code": "25009",
+                          "name": "Ausgerollte Leistungskurvendefinition"
+                        },
+                        {
+                          "code": "25010",
+                          "name": "Antwort auf Berechnungsformel"
+                        }
+                      ],
+                      "format": "n5",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+Z13:25001'",
+              "max": 1,
+              "name": "Prüfidentifikator",
+              "nr": "00019",
+              "status": "M",
+              "tag": "RFF",
+              "zaehler": "0350"
+            }
+          ],
+          "group": "SG6",
+          "max": 1,
+          "name": "Prüfidentifikator",
+          "status": "R",
+          "zaehler": "0340"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "AGI",
+                          "name": "Beantragungsnummer"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..35",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+AGI:FGEFW566TTDF123E'",
+              "max": 1,
+              "name": "Referenz auf Reklamation",
+              "nr": "00020",
+              "status": "M",
+              "tag": "RFF",
+              "zaehler": "0350"
+            }
+          ],
+          "group": "SG6",
+          "max": 1,
+          "name": "Referenz auf Reklamation",
+          "status": "D",
+          "zaehler": "0340"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "TN",
+                          "name": "Transaktions-Referenznummer"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..35",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "Vorgangsnummer",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+TN:NNV12345'",
+              "max": 1,
+              "name": "Referenz Vorgangsnummer (aus Berechnungsformel)",
+              "nr": "00021",
+              "status": "M",
+              "tag": "RFF",
+              "zaehler": "0350"
+            }
+          ],
+          "group": "SG6",
+          "max": 1,
+          "name": "Referenz-Vorgangsnummer (aus Berechnungsformel)",
+          "status": "D",
+          "zaehler": "0340"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z49",
+                          "name": "Gültige Daten"
+                        },
+                        {
+                          "code": "Z53",
+                          "name": "Keine Daten"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "note": "Qualität des Zeitraums",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..70",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "n1",
+                      "id": "1156",
+                      "name": "Zeilennummer",
+                      "note": "Zeitraum-ID",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+Z49::1'",
+              "max": 1,
+              "name": "Verwendungszeitraum der Daten",
+              "nr": "00022",
+              "status": "M",
+              "tag": "RFF",
+              "zaehler": "0350"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z25",
+                          "name": "Verwendung der Daten ab"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2005",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Funktion, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..35",
+                      "id": "2380",
+                      "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "303",
+                          "name": "CCYYMMDDHHMMZZZ"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2379",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C507",
+                  "name": "Datum/Uhrzeit/Zeitspanne",
+                  "status": "M"
+                }
+              ],
+              "example": "DTM+Z25:202704012200???+00:303'",
+              "max": 1,
+              "name": "Verwendung der Daten ab",
+              "nr": "00023",
+              "status": "R",
+              "tag": "DTM",
+              "zaehler": "0360"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z26",
+                          "name": "Verwendung der Daten bis"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2005",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Funktion, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..35",
+                      "id": "2380",
+                      "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "303",
+                          "name": "CCYYMMDDHHMMZZZ"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2379",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C507",
+                  "name": "Datum/Uhrzeit/Zeitspanne",
+                  "status": "M"
+                }
+              ],
+              "example": "DTM+Z26:202806012200?+00:303'",
+              "max": 1,
+              "name": "Verwendung der Daten bis",
+              "nr": "00024",
+              "status": "D",
+              "tag": "DTM",
+              "zaehler": "0360"
+            }
+          ],
+          "group": "SG6",
+          "max": 9,
+          "name": "Verwendungszeitraum der Daten",
+          "status": "D",
+          "zaehler": "0340"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z36",
+                      "name": "Energiemenge der Markt- bzw. Netzlokation"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1229",
+                  "name": "Handlung, Code",
+                  "status": "R"
+                }
+              ],
+              "example": "SEQ+Z36'",
+              "max": 1,
+              "name": "Energiemenge der Markt- bzw. Netzlokation",
+              "nr": "00025",
+              "status": "M",
+              "tag": "SEQ",
+              "zaehler": "0410"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z46",
+                          "name": "Referenz auf Zeitraum-ID"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "n1",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "Referenz auf Zeitraum-ID",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+Z46:1'",
+              "max": 1,
+              "name": "Referenz auf eine Zeitraum-ID",
+              "nr": "00026",
+              "status": "R",
+              "tag": "RFF",
+              "zaehler": "0430"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z23",
+                          "name": "Rechenschritt"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "n..5",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "Rechenschrittidentifikator",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+Z23:3'",
+              "max": 1,
+              "name": "Referenz auf einen Rechenschritt",
+              "nr": "00027",
+              "status": "R",
+              "tag": "RFF",
+              "zaehler": "0430"
+            }
+          ],
+          "group": "SG8",
+          "max": 9,
+          "name": "Energiemenge der Markt- bzw. Netzlokation",
+          "status": "D",
+          "zaehler": "0400"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z37",
+                      "name": "Bestandteil des Rechenschritts"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1229",
+                  "name": "Handlung, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "n..5",
+                      "id": "1050",
+                      "name": "Folgenummer",
+                      "note": "Rechenschrittidentifikator",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C286",
+                  "name": "Information über eine Folge",
+                  "status": "R"
+                }
+              ],
+              "example": "SEQ+Z37+1'",
+              "max": 1,
+              "name": "Bestandteil des Rechenschritts",
+              "nr": "00028",
+              "status": "M",
+              "tag": "SEQ",
+              "zaehler": "0410"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z46",
+                          "name": "Referenz auf Zeitraum-ID"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "n1",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "Referenz auf Zeitraum-ID",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+Z46:6'",
+              "max": 1,
+              "name": "Referenz auf eine Zeitraum-ID",
+              "nr": "00029",
+              "status": "R",
+              "tag": "RFF",
+              "zaehler": "0430"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z19",
+                          "name": "Messlokation"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..70",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "ID einer Messlokation",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+Z19:DE00014545768S0000000000000003054'",
+              "max": 1,
+              "name": "Referenz auf die ID einer Messlokation",
+              "nr": "00030",
+              "status": "D",
+              "tag": "RFF",
+              "zaehler": "0430"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z23",
+                          "name": "Rechenschritt"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "n..5",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "Rechenschrittidentifikator",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+Z23:1'",
+              "max": 1,
+              "name": "Referenz auf einen Rechenschritt",
+              "nr": "00031",
+              "status": "D",
+              "tag": "RFF",
+              "zaehler": "0430"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "format": "an..3",
+                      "id": "7059",
+                      "name": "Klassentyp, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..3",
+                          "id": "6313",
+                          "name": "Gemessene Dimension, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        }
+                      ],
+                      "id": "C502",
+                      "name": "Einzelheiten zu Maßangaben",
+                      "status": "N"
+                    },
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "Z86",
+                              "name": "Mathematischer Operator"
+                            }
+                          ],
+                          "format": "an..17",
+                          "id": "7037",
+                          "name": "Merkmal, Code",
+                          "status": "M"
+                        }
+                      ],
+                      "id": "C240",
+                      "name": "Merkmalsbeschreibung",
+                      "status": "R"
+                    }
+                  ],
+                  "example": "CCI+++Z86'",
+                  "max": 1,
+                  "name": "Mathematischer Operator",
+                  "nr": "00032",
+                  "status": "M",
+                  "tag": "CCI",
+                  "zaehler": "0480"
+                },
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "Z69",
+                              "name": "Addition Die gemessene Energiemenge der referenzierten Messlokation oder das Ergebnis des referenzierten Rechenschritts wird in diesem Rechenschritt mittels Addition berücksichtigt."
+                            },
+                            {
+                              "code": "Z70",
+                              "name": "Subtraktion Die gemessene Energiemenge der referenzierten Messlokation oder das Ergebnis des referenzierten Rechenschritts wird in diesem Rechenschritt mittels Subtraktion berücksichtigt."
+                            },
+                            {
+                              "code": "Z80",
+                              "name": "Divisor Die gemessene Energiemenge der referenzierten Messlokation oder das Ergebnis des referenzierten Rechenschritts ist in diesem Rechenschritt der Divisor (Nenner des Bruchs)."
+                            },
+                            {
+                              "code": "Z81",
+                              "name": "Dividend Die gemessene Energiemenge der referenzierten Messlokation oder das Ergebnis des referenzierten Rechenschritts ist in diesem Rechenschritt der Dividend (Zähler des Bruchs)."
+                            },
+                            {
+                              "code": "Z82",
+                              "name": "Faktor Die gemessene Energiemenge der referenzierten Messlokation oder das Ergebnis des Rechenschritts wird in diesem Rechenschritt als ein Faktor einer Multiplikation berücksichtigt."
+                            },
+                            {
+                              "code": "Z83",
+                              "name": "Positivwert Auf das Ergebnis des referenzierten Rechenschritts ist die Funktion Positivwert anzuwenden (d. h. ist das Ergebnis des referenzierten Rechenschritts ein negativer Wert, so ergibt sich durch das Anwenden der Funktion Positivwert der Wert 0. Ist das Ergebnis des referenzierten Rechenschritts ein positiver Wert, so ergibt sich durch das Anwenden der Funktion Positivwert genau dieser Wert als Ergebnis dieses Rechenschritts)."
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7111",
+                          "name": "Merkmalswert, Code",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C889",
+                      "name": "Merkmalswert",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "CAV+Z69'",
+                  "max": 1,
+                  "name": "Operator / Operation",
+                  "nr": "00033",
+                  "status": "R",
+                  "tag": "CAV",
+                  "zaehler": "0490"
+                }
+              ],
+              "group": "SG9",
+              "max": 1,
+              "name": "Mathematischer Operator",
+              "status": "R",
+              "zaehler": "0470"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "format": "an..3",
+                      "id": "7059",
+                      "name": "Klassentyp, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..3",
+                          "id": "6313",
+                          "name": "Gemessene Dimension, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        }
+                      ],
+                      "id": "C502",
+                      "name": "Einzelheiten zu Maßangaben",
+                      "status": "N"
+                    },
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "Z87",
+                              "name": "Energieflussrichtung"
+                            }
+                          ],
+                          "format": "an..17",
+                          "id": "7037",
+                          "name": "Merkmal, Code",
+                          "status": "M"
+                        }
+                      ],
+                      "id": "C240",
+                      "name": "Merkmalsbeschreibung",
+                      "status": "R"
+                    }
+                  ],
+                  "example": "CCI+++Z87'",
+                  "max": 1,
+                  "name": "Energieflussrichtung",
+                  "nr": "00034",
+                  "status": "M",
+                  "tag": "CCI",
+                  "zaehler": "0480"
+                },
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "Z71",
+                              "name": "Verbrauch"
+                            },
+                            {
+                              "code": "Z72",
+                              "name": "Erzeugung"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7111",
+                          "name": "Merkmalswert, Code",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C889",
+                      "name": "Merkmalswert",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "CAV+Z71'",
+                  "max": 1,
+                  "name": "Energieflussrichtung",
+                  "nr": "00035",
+                  "status": "R",
+                  "tag": "CAV",
+                  "zaehler": "0490"
+                }
+              ],
+              "group": "SG9",
+              "max": 1,
+              "name": "Energieflussrichtung",
+              "status": "D",
+              "zaehler": "0470"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "format": "an..3",
+                      "id": "7059",
+                      "name": "Klassentyp, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..3",
+                          "id": "6313",
+                          "name": "Gemessene Dimension, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        }
+                      ],
+                      "id": "C502",
+                      "name": "Einzelheiten zu Maßangaben",
+                      "status": "N"
+                    },
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "Z16",
+                              "name": "Verlustfaktor Trafo"
+                            }
+                          ],
+                          "format": "an..17",
+                          "id": "7037",
+                          "name": "Merkmal, Code",
+                          "status": "M"
+                        }
+                      ],
+                      "id": "C240",
+                      "name": "Merkmalsbeschreibung",
+                      "status": "R"
+                    }
+                  ],
+                  "example": "CCI+++Z16'",
+                  "max": 1,
+                  "name": "Verlustfaktor Trafo",
+                  "nr": "00036",
+                  "status": "M",
+                  "tag": "CCI",
+                  "zaehler": "0480"
+                },
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "Z28",
+                              "name": "Verlustfaktor"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7111",
+                          "name": "Merkmalswert, Code",
+                          "status": "R"
+                        },
+                        {
+                          "format": "an..17",
+                          "id": "1131",
+                          "name": "Codeliste, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "format": "an..3",
+                          "id": "3055",
+                          "name": "Verantwortliche Stelle für die Codepflege, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "format": "n..35",
+                          "id": "7110",
+                          "name": "Merkmalswert",
+                          "note": "Verlustfaktor Trafo",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C889",
+                      "name": "Merkmalswert",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "CAV+Z28:::1.04'",
+                  "max": 1,
+                  "name": "Verlustfaktor Trafo",
+                  "nr": "00037",
+                  "status": "R",
+                  "tag": "CAV",
+                  "zaehler": "0490"
+                }
+              ],
+              "group": "SG9",
+              "max": 1,
+              "name": "Verlustfaktor Trafo",
+              "status": "D",
+              "zaehler": "0470"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "format": "an..3",
+                      "id": "7059",
+                      "name": "Klassentyp, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..3",
+                          "id": "6313",
+                          "name": "Gemessene Dimension, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        }
+                      ],
+                      "id": "C502",
+                      "name": "Einzelheiten zu Maßangaben",
+                      "status": "N"
+                    },
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "ZB2",
+                              "name": "Verlustfaktor Leitung"
+                            }
+                          ],
+                          "format": "an..17",
+                          "id": "7037",
+                          "name": "Merkmal, Code",
+                          "status": "M"
+                        }
+                      ],
+                      "id": "C240",
+                      "name": "Merkmalsbeschreibung",
+                      "status": "R"
+                    }
+                  ],
+                  "example": "CCI+++ZB2'",
+                  "max": 1,
+                  "name": "Verlustfaktor Leitung",
+                  "nr": "00038",
+                  "status": "M",
+                  "tag": "CCI",
+                  "zaehler": "0480"
+                },
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "Z28",
+                              "name": "Verlustfaktor"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7111",
+                          "name": "Merkmalswert, Code",
+                          "status": "R"
+                        },
+                        {
+                          "format": "an..17",
+                          "id": "1131",
+                          "name": "Codeliste, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "format": "an..3",
+                          "id": "3055",
+                          "name": "Verantwortliche Stelle für die Codepflege, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "format": "n..35",
+                          "id": "7110",
+                          "name": "Merkmalswert",
+                          "note": "Verlustfaktor Leitung",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C889",
+                      "name": "Merkmalswert",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "CAV+Z28:::1.04'",
+                  "max": 1,
+                  "name": "Verlustfaktor Leitung",
+                  "nr": "00039",
+                  "status": "R",
+                  "tag": "CAV",
+                  "zaehler": "0490"
+                }
+              ],
+              "group": "SG9",
+              "max": 1,
+              "name": "Verlustfaktor Leitung",
+              "status": "D",
+              "zaehler": "0470"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "format": "an..3",
+                      "id": "7059",
+                      "name": "Klassentyp, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..3",
+                          "id": "6313",
+                          "name": "Gemessene Dimension, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        }
+                      ],
+                      "id": "C502",
+                      "name": "Einzelheiten zu Maßangaben",
+                      "status": "N"
+                    },
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "ZG6",
+                              "name": "Aufteilungsfaktor Energiemenge"
+                            }
+                          ],
+                          "format": "an..17",
+                          "id": "7037",
+                          "name": "Merkmal, Code",
+                          "status": "M"
+                        }
+                      ],
+                      "id": "C240",
+                      "name": "Merkmalsbeschreibung",
+                      "status": "R"
+                    }
+                  ],
+                  "example": "CCI+++ZG6'",
+                  "max": 1,
+                  "name": "Aufteilungsfaktor Energiemenge",
+                  "nr": "00040",
+                  "status": "M",
+                  "tag": "CCI",
+                  "zaehler": "0480"
+                },
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "ZH6",
+                              "name": "Aufteilungsfaktor Energiemenge"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7111",
+                          "name": "Merkmalswert, Code",
+                          "status": "R"
+                        },
+                        {
+                          "format": "an..17",
+                          "id": "1131",
+                          "name": "Codeliste, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "format": "an..3",
+                          "id": "3055",
+                          "name": "Verantwortliche Stelle für die Codepflege, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "format": "n..35",
+                          "id": "7110",
+                          "name": "Merkmalswert",
+                          "note": "Aufteilungsfaktor Energiemenge",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C889",
+                      "name": "Merkmalswert",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "CAV+ZH6:::0.2'",
+                  "max": 1,
+                  "name": "Aufteilungsfaktor Energiemenge",
+                  "nr": "00041",
+                  "status": "R",
+                  "tag": "CAV",
+                  "zaehler": "0490"
+                }
+              ],
+              "group": "SG9",
+              "max": 1,
+              "name": "Aufteilungsfaktor Energiemenge",
+              "status": "D",
+              "zaehler": "0470"
+            }
+          ],
+          "group": "SG8",
+          "max": 99999,
+          "name": "Bestandteil des Rechenschritts",
+          "status": "D",
+          "zaehler": "0400"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z42",
+                      "name": "Zählzeitdefinition"
+                    },
+                    {
+                      "code": "Z43",
+                      "name": "Ausgerollte Zählzeitdefinition"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1229",
+                  "name": "Handlung, Code",
+                  "status": "R"
+                }
+              ],
+              "example": "SEQ+Z43'",
+              "max": 1,
+              "name": "Zählzeitdefinition",
+              "nr": "00042",
+              "status": "M",
+              "tag": "SEQ",
+              "zaehler": "0410"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z33",
+                          "name": "Zählzeitänderungszeitpunkt"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2005",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Funktion, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..35",
+                      "id": "2380",
+                      "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "303",
+                          "name": "CCYYMMDDHHMMZZZ"
+                        },
+                        {
+                          "code": "401",
+                          "name": "HHMM"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2379",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C507",
+                  "name": "Datum/Uhrzeit/Zeitspanne",
+                  "status": "M"
+                }
+              ],
+              "example": "DTM+Z33:202110070605?+00:303'",
+              "max": 1,
+              "name": "Zählzeitänderungszeitpunkt",
+              "nr": "00043",
+              "status": "D",
+              "tag": "DTM",
+              "zaehler": "0420"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z28",
+                          "name": "Code des zählenden Registers"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..3",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "Code des zählenden Registers",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+Z28:RZ1'",
+              "max": 1,
+              "name": "Zählendes Register",
+              "nr": "00044",
+              "status": "D",
+              "tag": "RFF",
+              "zaehler": "0430"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z39",
+                          "name": "Code der Zählzeitdefinition"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7059",
+                      "name": "Klassentyp, Code",
+                      "status": "R"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..3",
+                          "id": "6313",
+                          "name": "Gemessene Dimension, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        }
+                      ],
+                      "id": "C502",
+                      "name": "Einzelheiten zu Maßangaben",
+                      "status": "N"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..3",
+                          "id": "7037",
+                          "name": "Merkmal, Code",
+                          "note": "Code der Zählzeitdefinition",
+                          "status": "M"
+                        }
+                      ],
+                      "id": "C240",
+                      "name": "Merkmalsbeschreibung",
+                      "status": "R"
+                    }
+                  ],
+                  "example": "CCI+Z39++ZZ1'",
+                  "max": 1,
+                  "name": "Code der Zählzeitdefinition",
+                  "nr": "00045",
+                  "status": "M",
+                  "tag": "CCI",
+                  "zaehler": "0480"
+                },
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "ZE0",
+                              "name": "Häufigkeit der Übermittlung"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7111",
+                          "name": "Merkmalswert, Code",
+                          "status": "R"
+                        },
+                        {
+                          "format": "an..17",
+                          "id": "1131",
+                          "name": "Codeliste, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "format": "an..3",
+                          "id": "3055",
+                          "name": "Verantwortliche Stelle für die Codepflege, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "codes": [
+                            {
+                              "code": "Z33",
+                              "name": "einmalig zu übermittelnde ausgerollte Definition Es handelt sich um eine Zählzeitdefinition mit einem Zählzeitänderungszeitpunkt an allen Tagen je Zählzeitregister über den gesamten Gültigkeitszeitraum. Diese Zählzeitdefinition einmalig ausgerollt und übermittelt werden."
+                            },
+                            {
+                              "code": "Z34",
+                              "name": "jährlich zu übermittelnde ausgerollte Definition Es handelt sich um eine Zählzeitdefinition mit unterschiedlichen Zählzeitänderungszeitpunkt je Zählzeitregister an den einzelnen Tagen über den gesamten Gültigkeitszeitraum. Diese Zählzeitdefinition muss jedes Jahr ausgerollt und übermittelt werden."
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7110",
+                          "name": "Merkmalswert",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C889",
+                      "name": "Merkmalswert",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "CAV+ZE0:::Z33'",
+                  "max": 1,
+                  "name": "Häufigkeit der Übermittlung",
+                  "nr": "00046",
+                  "status": "R",
+                  "tag": "CAV",
+                  "zaehler": "0490"
+                },
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "ZD5",
+                              "name": "Übermittelbarkeit der ausgerollten Definition"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7111",
+                          "name": "Merkmalswert, Code",
+                          "status": "R"
+                        },
+                        {
+                          "format": "an..17",
+                          "id": "1131",
+                          "name": "Codeliste, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "format": "an..3",
+                          "id": "3055",
+                          "name": "Verantwortliche Stelle für die Codepflege, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "codes": [
+                            {
+                              "code": "Z23",
+                              "name": "elektronisch übermittelbar Der LF bzw. NB übermittelt die ausgerollte Zählzeitdefinition per EDIFACT mit dem Nachrichtenformat UTILTS."
+                            },
+                            {
+                              "code": "Z24",
+                              "name": "elektronisch nicht übermittelbar Der LF bzw.NB übermittelt die ausgerollte Zählzeitdefinition auf einem bilateral vereinbarten Weg. Dieser Weg wird hier nicht weiter beschrieben."
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7110",
+                          "name": "Merkmalswert",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C889",
+                      "name": "Merkmalswert",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "CAV+ZD5:::Z23'",
+                  "max": 1,
+                  "name": "Übermittelbarkeit der ausgerollten Zählzeitdefinition",
+                  "nr": "00047",
+                  "status": "R",
+                  "tag": "CAV",
+                  "zaehler": "0490"
+                },
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "ZD4",
+                              "name": "Ermittlung des Leistungsmaximums bei atypischer Netznutzung"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7111",
+                          "name": "Merkmalswert, Code",
+                          "status": "R"
+                        },
+                        {
+                          "format": "an..17",
+                          "id": "1131",
+                          "name": "Codeliste, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "format": "an..3",
+                          "id": "3055",
+                          "name": "Verantwortliche Stelle für die Codepflege, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "codes": [
+                            {
+                              "code": "Z25",
+                              "name": "Verwendung des Hochlastzeitfensters"
+                            },
+                            {
+                              "code": "Z26",
+                              "name": "keine Verwendung des Hochlastzeitfensters"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7110",
+                          "name": "Merkmalswert",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C889",
+                      "name": "Merkmalswert",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "CAV+ZD4:::Z25'",
+                  "max": 1,
+                  "name": "Ermittlung des Leistungsmaximums bei atypischer Netznutzung",
+                  "nr": "00048",
+                  "status": "D",
+                  "tag": "CAV",
+                  "zaehler": "0490"
+                },
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "ZD7",
+                              "name": "Bestellbarkeit der Zählzeitdefinition"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7111",
+                          "name": "Merkmalswert, Code",
+                          "status": "R"
+                        },
+                        {
+                          "format": "an..17",
+                          "id": "1131",
+                          "name": "Codeliste, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "format": "an..3",
+                          "id": "3055",
+                          "name": "Verantwortliche Stelle für die Codepflege, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "codes": [
+                            {
+                              "code": "Z27",
+                              "name": "Zählzeitdefinition ist bestellbar"
+                            },
+                            {
+                              "code": "Z28",
+                              "name": "Zählzeitdefinition ist nicht bestellbar"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7110",
+                          "name": "Merkmalswert",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C889",
+                      "name": "Merkmalswert",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "CAV+ZD7:::Z27'",
+                  "max": 1,
+                  "name": "Bestellbarkeit der Zählzeitdefinition",
+                  "nr": "00049",
+                  "status": "D",
+                  "tag": "CAV",
+                  "zaehler": "0490"
+                },
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "ZD3",
+                              "name": "Zählzeitdefinitionstyp"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7111",
+                          "name": "Merkmalswert, Code",
+                          "status": "R"
+                        },
+                        {
+                          "format": "an..17",
+                          "id": "1131",
+                          "name": "Codeliste, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "format": "an..3",
+                          "id": "3055",
+                          "name": "Verantwortliche Stelle für die Codepflege, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "codes": [
+                            {
+                              "code": "Z29",
+                              "name": "Wärmepumpe"
+                            },
+                            {
+                              "code": "Z30",
+                              "name": "Nachtspeicherheizung"
+                            },
+                            {
+                              "code": "Z31",
+                              "name": "Schwachlastzeitfenster"
+                            },
+                            {
+                              "code": "Z32",
+                              "name": "sonstiger Zählzeitdefinitionstyp"
+                            },
+                            {
+                              "code": "Z35",
+                              "name": "Hochlastzeitfenster"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7110",
+                          "name": "Merkmalswert",
+                          "status": "R"
+                        },
+                        {
+                          "format": "an..35",
+                          "id": "7110",
+                          "name": "Merkmalswert",
+                          "note": "Beschreibung Zählzeitdefinitionstyp",
+                          "status": "D"
+                        }
+                      ],
+                      "id": "C889",
+                      "name": "Merkmalswert",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "CAV+ZD3:::Z32:Beschreibungstext'",
+                  "max": 1,
+                  "name": "Zählzeitdefinitionstyp",
+                  "nr": "00050",
+                  "status": "D",
+                  "tag": "CAV",
+                  "zaehler": "0490"
+                }
+              ],
+              "group": "SG9",
+              "max": 1,
+              "name": "Zählzeitdefinition",
+              "status": "D",
+              "zaehler": "0470"
+            }
+          ],
+          "group": "SG8",
+          "max": 99999,
+          "name": "Zählzeitdefinition",
+          "status": "D",
+          "zaehler": "0400"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z41",
+                      "name": "Register der Zählzeitdefinition"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1229",
+                  "name": "Handlung, Code",
+                  "status": "R"
+                }
+              ],
+              "example": "SEQ+Z41'",
+              "max": 1,
+              "name": "Register der Zählzeitdefinition",
+              "nr": "00051",
+              "status": "M",
+              "tag": "SEQ",
+              "zaehler": "0410"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z27",
+                          "name": "Code der Zählzeitdefinition"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..3",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "Code der Zählzeitdefinition",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+Z27:ZZ1'",
+              "max": 1,
+              "name": "Referenz auf eine Zählzeitdefinition",
+              "nr": "00052",
+              "status": "R",
+              "tag": "RFF",
+              "zaehler": "0430"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z38",
+                          "name": "Code des Zählzeitregisters"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7059",
+                      "name": "Klassentyp, Code",
+                      "status": "R"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..3",
+                          "id": "6313",
+                          "name": "Gemessene Dimension, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        }
+                      ],
+                      "id": "C502",
+                      "name": "Einzelheiten zu Maßangaben",
+                      "status": "N"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..3",
+                          "id": "7037",
+                          "name": "Merkmal, Code",
+                          "note": "Code des Zählzeitregisters",
+                          "status": "M"
+                        }
+                      ],
+                      "id": "C240",
+                      "name": "Merkmalsbeschreibung",
+                      "status": "R"
+                    }
+                  ],
+                  "example": "CCI+Z38++RZ1'",
+                  "max": 1,
+                  "name": "Code des Zählzeitregister",
+                  "nr": "00053",
+                  "status": "M",
+                  "tag": "CCI",
+                  "zaehler": "0480"
+                }
+              ],
+              "group": "SG9",
+              "max": 1,
+              "name": "Register",
+              "status": "R",
+              "zaehler": "0470"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z10",
+                          "name": "Schwachlastfähigkeit"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7059",
+                      "name": "Klassentyp, Code",
+                      "status": "R"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..3",
+                          "id": "6313",
+                          "name": "Gemessene Dimension, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        }
+                      ],
+                      "id": "C502",
+                      "name": "Einzelheiten zu Maßangaben",
+                      "status": "N"
+                    },
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "Z59",
+                              "name": "Nicht-Schwachlast fähig"
+                            },
+                            {
+                              "code": "Z60",
+                              "name": "Schwachlast fähig"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7037",
+                          "name": "Merkmal, Code",
+                          "status": "M"
+                        }
+                      ],
+                      "id": "C240",
+                      "name": "Merkmalsbeschreibung",
+                      "status": "R"
+                    }
+                  ],
+                  "example": "CCI+Z10++Z59'",
+                  "max": 1,
+                  "name": "Schwachlastfähigkeit",
+                  "nr": "00054",
+                  "status": "M",
+                  "tag": "CCI",
+                  "zaehler": "0480"
+                }
+              ],
+              "group": "SG9",
+              "max": 1,
+              "name": "Schwachlastfähigkeit",
+              "status": "D",
+              "zaehler": "0470"
+            }
+          ],
+          "group": "SG8",
+          "max": 99999,
+          "name": "Register der Zählzeitdefinition",
+          "status": "D",
+          "zaehler": "0400"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z69",
+                      "name": "Schaltzeitdefinition"
+                    },
+                    {
+                      "code": "Z73",
+                      "name": "Ausgerollte Schaltzeitdefinition"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1229",
+                  "name": "Handlung, Code",
+                  "status": "R"
+                }
+              ],
+              "example": "SEQ+Z69'",
+              "max": 1,
+              "name": "Schaltzeitdefinition",
+              "nr": "00055",
+              "status": "M",
+              "tag": "SEQ",
+              "zaehler": "0410"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z44",
+                          "name": "Schaltzeitänderungszeitpunkt"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2005",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Funktion, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..35",
+                      "id": "2380",
+                      "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "303",
+                          "name": "CCYYMMDDHHMMZZZ"
+                        },
+                        {
+                          "code": "401",
+                          "name": "HHMM"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2379",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C507",
+                  "name": "Datum/Uhrzeit/Zeitspanne",
+                  "status": "M"
+                }
+              ],
+              "example": "DTM+Z44:202110070605?+00:303'",
+              "max": 1,
+              "name": "Schaltzeitänderungszeitpunkt",
+              "nr": "00056",
+              "status": "D",
+              "tag": "DTM",
+              "zaehler": "0420"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z52",
+                          "name": "Code der Schaltzeitdefinition"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7059",
+                      "name": "Klassentyp, Code",
+                      "status": "R"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..3",
+                          "id": "6313",
+                          "name": "Gemessene Dimension, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        }
+                      ],
+                      "id": "C502",
+                      "name": "Einzelheiten zu Maßangaben",
+                      "status": "N"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..3",
+                          "id": "7037",
+                          "name": "Merkmal, Code",
+                          "note": "Code der Schaltzeitdefinition",
+                          "status": "M"
+                        }
+                      ],
+                      "id": "C240",
+                      "name": "Merkmalsbeschreibung",
+                      "status": "R"
+                    }
+                  ],
+                  "example": "CCI+Z52++EDF'",
+                  "max": 1,
+                  "name": "Code der Schaltzeitdefinition",
+                  "nr": "00057",
+                  "status": "M",
+                  "tag": "CCI",
+                  "zaehler": "0480"
+                },
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "ZE0",
+                              "name": "Häufigkeit der Übermittlung"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7111",
+                          "name": "Merkmalswert, Code",
+                          "status": "R"
+                        },
+                        {
+                          "format": "an..17",
+                          "id": "1131",
+                          "name": "Codeliste, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "format": "an..3",
+                          "id": "3055",
+                          "name": "Verantwortliche Stelle für die Codepflege, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "codes": [
+                            {
+                              "code": "Z33",
+                              "name": "einmalig zu übermittelnde ausgerollte Definition Es handelt sich um eine Schaltzeitdefinition mit identischen Schaltzeitänderungszeitpunkten an allen Tagen über den gesamten Gültigkeitszeitraum. Diese Schaltzeitdefinitiont wird einmalig ausgerollt und übermittelt."
+                            },
+                            {
+                              "code": "Z34",
+                              "name": "jährlich zu übermittelnde ausgerollte Definition Es handelt sich um eine Schaltzeitdefinition mit unterschiedlichen Schaltzeitänderungszeitpunkten an den einzelnen Tagen über den gesamten Gültigkeitszeitraum. Diese Schaltzeitdefinition muss jedes Jahr ausgerollt und übermittelt werden."
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7110",
+                          "name": "Merkmalswert",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C889",
+                      "name": "Merkmalswert",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "CAV+ZE0:::Z33'",
+                  "max": 1,
+                  "name": "Häufigkeit der Übermittlung",
+                  "nr": "00058",
+                  "status": "R",
+                  "tag": "CAV",
+                  "zaehler": "0490"
+                },
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "ZD5",
+                              "name": "Übermittelbarkeit der ausgerollten Definition"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7111",
+                          "name": "Merkmalswert, Code",
+                          "status": "R"
+                        },
+                        {
+                          "format": "an..17",
+                          "id": "1131",
+                          "name": "Codeliste, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "format": "an..3",
+                          "id": "3055",
+                          "name": "Verantwortliche Stelle für die Codepflege, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "codes": [
+                            {
+                              "code": "Z23",
+                              "name": "elektronisch übermittelbar Der LF bzw. NB übermittelt die ausgerollte Schaltzeitdefinition per EDIFACT mit dem Nachrichtenformat UTILTS."
+                            },
+                            {
+                              "code": "Z24",
+                              "name": "elektronisch nicht übermittelbar Der LF bzw. NB übermittelt die ausgerollte Schaltzeitdefinition auf einem bilateral vereinbarten Weg. Dieser Weg wird hier nicht weiter beschrieben."
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7110",
+                          "name": "Merkmalswert",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C889",
+                      "name": "Merkmalswert",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "CAV+ZD5:::Z23'",
+                  "max": 1,
+                  "name": "Übermittelbarkeit der ausgerollten Schaltzeitdefinition",
+                  "nr": "00059",
+                  "status": "R",
+                  "tag": "CAV",
+                  "zaehler": "0490"
+                }
+              ],
+              "group": "SG9",
+              "max": 1,
+              "name": "Schaltzeitdefinition",
+              "status": "D",
+              "zaehler": "0470"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z58",
+                          "name": "Schalthandlung"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7059",
+                      "name": "Klassentyp, Code",
+                      "status": "R"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..3",
+                          "id": "6313",
+                          "name": "Gemessene Dimension, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        }
+                      ],
+                      "id": "C502",
+                      "name": "Einzelheiten zu Maßangaben",
+                      "status": "N"
+                    },
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "ZF4",
+                              "name": "Leistung an der Lokation an"
+                            },
+                            {
+                              "code": "ZF5",
+                              "name": "Leistung an der Lokation aus"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7037",
+                          "name": "Merkmal, Code",
+                          "status": "M"
+                        }
+                      ],
+                      "id": "C240",
+                      "name": "Merkmalsbeschreibung",
+                      "status": "R"
+                    }
+                  ],
+                  "example": "CCI+Z58++ZF4'",
+                  "max": 1,
+                  "name": "Schalthandlung an der Lokation",
+                  "nr": "00060",
+                  "status": "M",
+                  "tag": "CCI",
+                  "zaehler": "0480"
+                }
+              ],
+              "group": "SG9",
+              "max": 1,
+              "name": "Schalthandlung an der Lokation",
+              "status": "D",
+              "zaehler": "0470"
+            }
+          ],
+          "group": "SG8",
+          "max": 99999,
+          "name": "Schaltzeitdefinition",
+          "status": "D",
+          "zaehler": "0400"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z70",
+                      "name": "Leistungskurvendefinition"
+                    },
+                    {
+                      "code": "Z74",
+                      "name": "Ausgerollte Leistungskurvendefinition"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1229",
+                  "name": "Handlung, Code",
+                  "status": "R"
+                }
+              ],
+              "example": "SEQ+Z70'",
+              "max": 1,
+              "name": "Leistungskurvendefinition",
+              "nr": "00061",
+              "status": "M",
+              "tag": "SEQ",
+              "zaehler": "0410"
+            },
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z45",
+                          "name": "Leistungskurvenänderungszeitpunkt"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2005",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Funktion, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..35",
+                      "id": "2380",
+                      "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "303",
+                          "name": "CCYYMMDDHHMMZZZ"
+                        },
+                        {
+                          "code": "401",
+                          "name": "HHMM"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "2379",
+                      "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C507",
+                  "name": "Datum/Uhrzeit/Zeitspanne",
+                  "status": "M"
+                }
+              ],
+              "example": "DTM+Z45:202110070605?+00:303'",
+              "max": 1,
+              "name": "Leistungskurvenänderungszeitpunkt",
+              "nr": "00062",
+              "status": "D",
+              "tag": "DTM",
+              "zaehler": "0420"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z53",
+                          "name": "Code der Leistungskurvendefinition"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7059",
+                      "name": "Klassentyp, Code",
+                      "status": "R"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..3",
+                          "id": "6313",
+                          "name": "Gemessene Dimension, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        }
+                      ],
+                      "id": "C502",
+                      "name": "Einzelheiten zu Maßangaben",
+                      "status": "N"
+                    },
+                    {
+                      "components": [
+                        {
+                          "format": "an..3",
+                          "id": "7037",
+                          "name": "Merkmal, Code",
+                          "note": "Code der Leistungskurvendefinition",
+                          "status": "M"
+                        }
+                      ],
+                      "id": "C240",
+                      "name": "Merkmalsbeschreibung",
+                      "status": "R"
+                    }
+                  ],
+                  "example": "CCI+Z53++ES1'",
+                  "max": 1,
+                  "name": "Code der Leistungskurvendefinition",
+                  "nr": "00063",
+                  "status": "M",
+                  "tag": "CCI",
+                  "zaehler": "0480"
+                },
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "ZE0",
+                              "name": "Häufigkeit der Übermittlung"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7111",
+                          "name": "Merkmalswert, Code",
+                          "status": "R"
+                        },
+                        {
+                          "format": "an..17",
+                          "id": "1131",
+                          "name": "Codeliste, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "format": "an..3",
+                          "id": "3055",
+                          "name": "Verantwortliche Stelle für die Codepflege, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "codes": [
+                            {
+                              "code": "Z33",
+                              "name": "einmalig zu übermittelnde ausgerollte Definition Es handelt sich um eine Leistungskurvendefinition mit identischen Leistungskurvenänderungszeitpunkten an allen Tagen über den gesamten Gültigkeitszeitraum. Diese Leistungskurvendefinition wird einmalig ausgerollt und übermittelt."
+                            },
+                            {
+                              "code": "Z34",
+                              "name": "jährlich zu übermittelnde ausgerollte Definition Es handelt sich um eine Leistungskurvendefinition mit unterschiedlichen Leistungskurvenänderungszeitpunkten an den einzelnen Tagen über den gesamten Gültigkeitszeitraum. Diese Leistungskurvendefinition muss jedes Jahr ausgerollt und übermittelt werden."
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7110",
+                          "name": "Merkmalswert",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C889",
+                      "name": "Merkmalswert",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "CAV+ZE0:::Z33'",
+                  "max": 1,
+                  "name": "Häufigkeit der Übermittlung",
+                  "nr": "00064",
+                  "status": "R",
+                  "tag": "CAV",
+                  "zaehler": "0490"
+                },
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "ZD5",
+                              "name": "Übermittelbarkeit der ausgerollten Definition"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7111",
+                          "name": "Merkmalswert, Code",
+                          "status": "R"
+                        },
+                        {
+                          "format": "an..17",
+                          "id": "1131",
+                          "name": "Codeliste, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "format": "an..3",
+                          "id": "3055",
+                          "name": "Verantwortliche Stelle für die Codepflege, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "codes": [
+                            {
+                              "code": "Z23",
+                              "name": "elektronisch übermittelbar Der LF bzw. NB übermittelt die ausgerollte Leistungskurvendefinition per EDIFACT mit dem Nachrichtenformat UTILTS."
+                            },
+                            {
+                              "code": "Z24",
+                              "name": "elektronisch nicht übermittelbar Der LF bzw. NB übermittelt die ausgerollte Leistungskurvendefinition auf einem bilateral vereinbarten Weg. Dieser Weg wird hier nicht weiter beschrieben."
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "7110",
+                          "name": "Merkmalswert",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C889",
+                      "name": "Merkmalswert",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "CAV+ZD5:::Z23'",
+                  "max": 1,
+                  "name": "Übermittelbarkeit der ausgerollten Leistungskurvendefinition",
+                  "nr": "00065",
+                  "status": "R",
+                  "tag": "CAV",
+                  "zaehler": "0490"
+                }
+              ],
+              "group": "SG9",
+              "max": 1,
+              "name": "Leistungskurvendefinition",
+              "status": "D",
+              "zaehler": "0470"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "Z40",
+                              "name": "oberer Schwellwert"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "6063",
+                          "name": "Menge, Qualifier",
+                          "status": "M"
+                        },
+                        {
+                          "format": "n..6",
+                          "id": "6060",
+                          "name": "Menge",
+                          "note": "Mengenangabe in %",
+                          "status": "M"
+                        },
+                        {
+                          "codes": [
+                            {
+                              "code": "P1",
+                              "name": "Prozent"
+                            }
+                          ],
+                          "format": "an..2",
+                          "id": "6411",
+                          "name": "Maßeinheit, Code",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C186",
+                      "name": "Mengenangaben",
+                      "status": "M"
+                    }
+                  ],
+                  "example": "QTY+Z40:70.00:P1'",
+                  "max": 1,
+                  "name": "oberer Schwellwert",
+                  "nr": "00066",
+                  "status": "M",
+                  "tag": "QTY",
+                  "zaehler": "0540"
+                }
+              ],
+              "group": "SG11",
+              "max": 1,
+              "name": "oberer Schwellwert",
+              "status": "D",
+              "zaehler": "0530"
+            }
+          ],
+          "group": "SG8",
+          "max": 99999,
+          "name": "Leistungskurvendefinition",
+          "status": "D",
+          "zaehler": "0400"
+        }
+      ],
+      "group": "SG5",
+      "max": 99999,
+      "name": "Vorgang",
+      "status": "R",
+      "zaehler": "0200"
+    },
+    {
       "elements": [
         {
+          "format": "n..6",
           "id": "0074",
+          "name": "Anzahl der Segmente in einer Nachricht",
+          "note": "Hier wird die Gesamtzahl der Segmente einer Nachricht angegeben.",
           "status": "M"
         },
         {
+          "format": "an..14",
           "id": "0062",
+          "name": "Nachrichten-Referenznummer",
+          "note": "Die Referenznummer aus dem UNH-Segment muss hier wiederholt werden.",
           "status": "M"
         }
       ],
-      "qualifier_restrictions": {}
+      "example": "UNT+67+1'",
+      "max": 1,
+      "name": "Nachrichten-Endesegment",
+      "nr": "00067",
+      "status": "M",
+      "tag": "UNT",
+      "zaehler": "0640"
     }
   ],
-  "segment_groups": [
-    {
-      "id": "SG2",
-      "trigger_segment": "NAD",
-      "mandatory": true,
-      "max_occurrences": 2,
-      "segments": [
-        {
-          "tag": "NAD",
-          "name": "MP-ID Absender/Empfänger",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "3035",
-              "status": "M"
-            },
-            {
-              "id": "C082",
-              "status": "C"
-            }
-          ],
-          "qualifier_restrictions": {
-            "3035": [
-              "MS",
-              "MR"
-            ]
-          }
-        }
-      ],
-      "groups": [
-        {
-          "id": "SG3",
-          "trigger_segment": "CTA",
-          "mandatory": false,
-          "max_occurrences": 1,
-          "segments": [
-            {
-              "tag": "CTA",
-              "name": "Ansprechpartner",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
-                {
-                  "id": "3139",
-                  "status": "C"
-                },
-                {
-                  "id": "C056",
-                  "status": "C"
-                }
-              ],
-              "qualifier_restrictions": {
-                "3139": [
-                  "IC"
-                ]
-              }
-            },
-            {
-              "tag": "COM",
-              "name": "Kommunikationsverbindung",
-              "mandatory": false,
-              "max_occurrences": 5,
-              "elements": [
-                {
-                  "id": "C076",
-                  "status": "M"
-                }
-              ],
-              "qualifier_restrictions": {
-                "3155": [
-                  "EM",
-                  "FX",
-                  "TE",
-                  "AJ",
-                  "AL"
-                ]
-              }
-            }
-          ],
-          "groups": []
-        }
-      ]
-    },
-    {
-      "id": "SG5",
-      "trigger_segment": "IDE",
-      "mandatory": true,
-      "max_occurrences": 99999,
-      "segments": [
-        {
-          "tag": "IDE",
-          "name": "Vorgang",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "7495",
-              "status": "M"
-            },
-            {
-              "id": "C206",
-              "status": "C"
-            }
-          ],
-          "qualifier_restrictions": {
-            "7495": [
-              "24"
-            ]
-          }
-        },
-        {
-          "tag": "LOC",
-          "name": "Standort/Definition",
-          "mandatory": false,
-          "max_occurrences": 2,
-          "elements": [
-            {
-              "id": "3227",
-              "status": "M"
-            },
-            {
-              "id": "C517",
-              "status": "C"
-            }
-          ],
-          "qualifier_restrictions": {
-            "3227": [
-              "172",
-              "Z09"
-            ]
-          }
-        },
-        {
-          "tag": "DTM",
-          "name": "Datums-/Zeitangabe",
-          "mandatory": false,
-          "max_occurrences": 4,
-          "elements": [
-            {
-              "id": "C507",
-              "status": "M"
-            }
-          ],
-          "qualifier_restrictions": {
-            "2005": [
-              "157",
-              "Z34",
-              "Z35",
-              "293"
-            ]
-          }
-        },
-        {
-          "tag": "STS",
-          "name": "Statusinformation",
-          "mandatory": false,
-          "max_occurrences": 9,
-          "elements": [
-            {
-              "id": "C601",
-              "status": "C"
-            },
-            {
-              "id": "C555",
-              "status": "C"
-            },
-            {
-              "id": "C556",
-              "status": "C"
-            }
-          ],
-          "qualifier_restrictions": {
-            "9015": [
-              "E01",
-              "Z23",
-              "Z36"
-            ]
-          }
-        },
-        {
-          "tag": "FTX",
-          "name": "Bemerkung",
-          "mandatory": false,
-          "max_occurrences": 9,
-          "elements": [
-            {
-              "id": "4451",
-              "status": "M"
-            },
-            {
-              "id": "C107",
-              "status": "C"
-            },
-            {
-              "id": "C108",
-              "status": "C"
-            }
-          ],
-          "qualifier_restrictions": {
-            "4451": [
-              "ACB"
-            ]
-          }
-        }
-      ],
-      "groups": [
-        {
-          "id": "SG6",
-          "trigger_segment": "RFF",
-          "mandatory": true,
-          "max_occurrences": 99999,
-          "segments": [
-            {
-              "tag": "RFF",
-              "name": "Referenz",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
-                {
-                  "id": "C506",
-                  "status": "M"
-                }
-              ],
-              "qualifier_restrictions": {
-                "1153": [
-                  "Z13",
-                  "TN",
-                  "AGI",
-                  "Z49",
-                  "Z53"
-                ]
-              }
-            },
-            {
-              "tag": "DTM",
-              "name": "Verwendungszeitraum",
-              "mandatory": false,
-              "max_occurrences": 2,
-              "elements": [
-                {
-                  "id": "C507",
-                  "status": "M"
-                }
-              ],
-              "qualifier_restrictions": {
-                "2005": [
-                  "Z25",
-                  "Z26"
-                ]
-              }
-            }
-          ],
-          "groups": []
-        },
-        {
-          "id": "SG8",
-          "trigger_segment": "SEQ",
-          "mandatory": false,
-          "max_occurrences": 99999,
-          "segments": [
-            {
-              "tag": "SEQ",
-              "name": "Folge",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
-                {
-                  "id": "1229",
-                  "status": "C"
-                },
-                {
-                  "id": "C286",
-                  "status": "C"
-                }
-              ],
-              "qualifier_restrictions": {
-                "1229": [
-                  "Z36",
-                  "Z37",
-                  "Z41",
-                  "Z42",
-                  "Z43",
-                  "Z69",
-                  "Z70",
-                  "Z74"
-                ]
-              }
-            },
-            {
-              "tag": "DTM",
-              "name": "Datums-/Zeitangabe",
-              "mandatory": false,
-              "max_occurrences": 1,
-              "elements": [
-                {
-                  "id": "C507",
-                  "status": "M"
-                }
-              ],
-              "qualifier_restrictions": {}
-            },
-            {
-              "tag": "RFF",
-              "name": "Referenz",
-              "mandatory": false,
-              "max_occurrences": 9,
-              "elements": [
-                {
-                  "id": "C506",
-                  "status": "M"
-                }
-              ],
-              "qualifier_restrictions": {
-                "1153": [
-                  "Z46",
-                  "Z19",
-                  "Z23",
-                  "Z28"
-                ]
-              }
-            }
-          ],
-          "groups": [
-            {
-              "id": "SG9",
-              "trigger_segment": "CCI",
-              "mandatory": false,
-              "max_occurrences": 99,
-              "segments": [
-                {
-                  "tag": "CCI",
-                  "name": "Charakteristikum/Klasse-Information",
-                  "mandatory": true,
-                  "max_occurrences": 1,
-                  "elements": [
-                    {
-                      "id": "7059",
-                      "status": "C"
-                    },
-                    {
-                      "id": "C502",
-                      "status": "C"
-                    },
-                    {
-                      "id": "C240",
-                      "status": "C"
-                    }
-                  ],
-                  "qualifier_restrictions": {}
-                },
-                {
-                  "tag": "CAV",
-                  "name": "Charakteristikum-Wert",
-                  "mandatory": false,
-                  "max_occurrences": 99,
-                  "elements": [
-                    {
-                      "id": "C889",
-                      "status": "M"
-                    }
-                  ],
-                  "qualifier_restrictions": {}
-                }
-              ],
-              "groups": []
-            },
-            {
-              "id": "SG11",
-              "trigger_segment": "QTY",
-              "mandatory": false,
-              "max_occurrences": 99999,
-              "segments": [
-                {
-                  "tag": "QTY",
-                  "name": "Mengendaten",
-                  "mandatory": true,
-                  "max_occurrences": 1,
-                  "elements": [
-                    {
-                      "id": "C186",
-                      "status": "M"
-                    }
-                  ],
-                  "qualifier_restrictions": {}
-                }
-              ],
-              "groups": []
-            }
-          ]
-        }
-      ]
-    }
-  ],
-  "ahb_revision": "1.1",
-  "source_document": "UTILTS MIG 1.1e, Publikationsdatum 01.04.2026",
-  "publikationsdatum": "2026-04-01"
+  "valid_from": "2026-10-01"
 }

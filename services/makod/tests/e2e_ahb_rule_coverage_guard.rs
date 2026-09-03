@@ -1,11 +1,10 @@
 //! Guard: every routed Prüfidentifikator must carry AHB rules.
 //!
-//! For a PID it does not know, `Profile::ahb_rule_pack` returns a stand-in pack
-//! named `unknown-pid` whose only rule raises a **warning** —
-//! "Pruefidentifikator is not registered for this release — AHB rules were not
-//! applied". `report.is_valid()` stays `true`, so a PID that mako routes but
-//! that never made it into the profile passes the AHB layer unchecked. The MIG
-//! layer still applies, and the warning is the only trace.
+//! For a Prüfidentifikator the profile has no column for, validation raises
+//! `AHB-UNKNOWN-PID` as a **warning** and applies no AHB rules;
+//! `report.is_valid()` stays `true`, so a PID that mako routes but that never
+//! made it into the profile passes the AHB layer unchecked. The MIG layer
+//! still applies, and the warning is the only trace.
 //!
 //! That is not hypothetical. ORDERS 17008/17116/17117 were lost because only the
 //! first column of each multi-PID AHB table survived import, and the UTILMD
@@ -32,61 +31,11 @@ const RULELESS_BY_DESIGN: &[(u32, &str)] = &[
     // Prüfidentifikatoren for it at all (its profiles are `pid_exempt`).
 ];
 
-/// Routed PIDs whose AHB rules were never imported — an acknowledged backlog.
-///
-/// Cross-checked against the BDEW **PID overview 4.0 (01.04.2026)**: the UTILMD
-/// profiles carry 110 of 189 published Strom PIDs and 50 of 88 Gas PIDs, and
-/// ORDERS 35 of 44. These are the subset that a workflow actually routes, so
-/// they are the ones with live consequences: the message is accepted and its AHB
-/// rules are not applied.
-///
-/// This list must only ever shrink. Clear entries by re-importing the profile
-/// (`cargo xtask extract-pdf`, then complete each draft with the MIG segments as
-/// `O`). A PID *not* in this list that lacks rules is a new regression.
-const KNOWN_PROFILE_GAPS: &[u32] = &[
-    // GeLi Gas Bestandsliste / Änderungsmeldung (UTILMD AHB Gas § 5.8).
-    // 44007–44016 — the four processes an LF must answer — were curated from
-    // UTILMD AHB Gas 1.2 §§ 5.3/5.4/5.6/5.7 and so are absent from this list.
-    44019, 44020, 44021, // GeLi Gas Stammdatenänderung band
-    44137, 44138, 44139, 44140, 44142, 44143, 44145, 44146, 44147, 44148, 44149, 44150, 44151,
-    44152, 44156, 44157, 44162, 44163, 44164, 44165, 44166, 44167, 44180, 44181, 44182,
-    // GPKE: NB-initiated Lieferende, erzeugende MaLo, MSB-Abrechnungsdaten,
-    // Stammdatenänderung. 55230/55232 (Blindarbeits-Abrechnungsdaten der NeLo,
-    // LF → NB) and 55557/55559 (MSB-Abrechnungsdaten der MaLo, MSB → NB) are
-    // GPKE Teil 4 Stammdaten-Prozessschritte 1/2 like the rest of the band.
-    // 55156/55220/55673 are the GPKE Teil 2 § 3.1 Rückmeldung/Bestellung
-    // Abrechnungsdaten answered by IFTSTA 21047.
-    // 55007/55607 (with their answers) were curated from UTILMD AHB Strom 2.2
-    // §§ 8.10 and 8.15 and so are absent from this list.
-    55077, 55078, 55080, 55156, 55220, 55230, 55232, 55557, 55559, 55673,
-    // MaBiS-ZP lifecycle (`mabis-zp-lifecycle`) — Aktivierung/Deaktivierung of
-    // the MaBiS-Zählpunkt, the Zuordnungsermächtigung and the AAÜZ/LF-AASZR
-    // series, with their Antwort and Weiterleitung codes.
-    //
-    // The UTILMD AHB Strom PDF carries all of these, and `extract-pdf`
-    // reproduces them — but the drafts mark strictly more segments `M` than the
-    // AHB requires (the group-flattening margin), so promoting them unreviewed
-    // would reject valid messages rather than merely fail to check them. They
-    // are routed because the workflow is real and the alternative is dropping
-    // the message entirely; validation stays vacuous until the entries are
-    // curated.
-    55062, 55063, 55064, 55071, 55072, 55197, 55198, 55199, 55200, 55203, 55204, 55205, 55206,
-    55207, 55208, 55209, 55210, 55211, 55212, 55213, 55214,
-    // MaBiS Anforderungen (`mabis-anforderung`) — ORDERS 17201–17208. 17210 is
-    // curated and so is absent from this list. Same curation gate as the UTILMD
-    // band above: the ORDERS AHB carries them, the extracted drafts are
-    // stricter than the AHB, so they stay uncurated.
-    17201, 17202, 17203, 17204, 17205, 17206, 17207, 17208,
-    // MaBiS Listenabgleich (`mabis-listenabgleich`) — the four list/correction
-    // pairs. 55065 itself is curated; its Korrekturliste 55066 is not, which is
-    // consistent with 55065 having been filed as record-only until now, so
-    // nothing ever needed the answer leg's rules.
-    55066, 55195, 55196, 55201, 55202, 55223, 55224,
-    // MaBiS record-only lists (`mabis-clearingliste`) — 55067
-    // Bilanzkreiszuordnungsliste (the delivery leg of ORDERS 17203) and 55073
-    // Liste der Profildefinitionen. Neither was routed at all before.
-    55067, 55073,
-];
+/// Routed PIDs whose AHB column is not in the profiles — an acknowledged
+/// backlog. Every column of every AHB in `profiles/sources.json` is imported,
+/// so this is empty; a PID *not* in this list that lacks rules is a regression
+/// (a column the importer lost, or a PID routed that no AHB defines).
+const KNOWN_PROFILE_GAPS: &[u32] = &[];
 
 /// Message type a PID belongs to, from its leading digits.
 ///
@@ -167,7 +116,7 @@ async fn every_routed_pid_has_ahb_rules() {
         let has_rules = platform
             .registry()
             .profiles_for(mt)
-            .any(|prof| prof.ahb_rule_pack(Some(p)).name() != "unknown-pid");
+            .any(|prof| prof.has_anwendungsfall(p));
 
         if has_rules {
             with_rules += 1;

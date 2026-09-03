@@ -161,24 +161,24 @@ impl ReleaseKind {
     #[must_use]
     pub fn parse(s: &str) -> Self {
         // S<major>.<minor> or S<major>.<minor><letter>  e.g. "S2.1", "S1.1a"
-        if let Some(rest) = s.strip_prefix('S') {
-            if let Some((major, minor, letter)) = split_two_numeric_with_suffix(rest) {
-                return ReleaseKind::Strom {
-                    major,
-                    minor,
-                    letter,
-                };
-            }
+        if let Some(rest) = s.strip_prefix('S')
+            && let Some((major, minor, letter)) = split_two_numeric_with_suffix(rest)
+        {
+            return ReleaseKind::Strom {
+                major,
+                minor,
+                letter,
+            };
         }
         // G<major>.<minor> or G<major>.<minor><letter>  e.g. "G1.1", "G1.0a"
-        if let Some(rest) = s.strip_prefix('G') {
-            if let Some((major, minor, letter)) = split_two_numeric_with_suffix(rest) {
-                return ReleaseKind::Gas {
-                    major,
-                    minor,
-                    letter,
-                };
-            }
+        if let Some(rest) = s.strip_prefix('G')
+            && let Some((major, minor, letter)) = split_two_numeric_with_suffix(rest)
+        {
+            return ReleaseKind::Gas {
+                major,
+                minor,
+                letter,
+            };
         }
         // <major>.<minor>.<patch><letter>  e.g. "5.5.3a"
         if let Some(k) = parse_dotted(s) {

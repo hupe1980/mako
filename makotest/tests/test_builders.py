@@ -11,7 +11,7 @@ date** and resolve the release from it.
 
 import pytest
 
-from conftest import MELO, ON, utilmd_interchange
+from conftest import MALO, ON, utilmd_interchange
 from makotest import (
     UtilmdTransaction,
     assert_edifact_valid,
@@ -74,7 +74,7 @@ class TestRoundTrips:
             NB_ID,
             LF_ID,
             metering_point="51238696012",
-            quantities=[("220", "1234.567", "KWH")],
+            intervals=[("79", "1234.567", "KWH", "202604010000+00", "202604010015+00")],
             on=ON,
         )
         report = validate_edifact(message, ON)
@@ -149,11 +149,12 @@ class TestBusinessAnswer:
         """
         answer = build_answer(anmeldung, 55002, on=ON, process_dates=[("92", "20260501")])
         text = answer.decode("latin-1")
-        assert "BGM+E01+55002" in text
+        assert "BGM+E01+" in text, text
+        assert "RFF+Z13:55002" in text, "the answer carries its own Prüfidentifikator"
         assert f"NAD+MS+{NB_ID}" in text, "the request's receiver answers"
-        assert f"LOC+Z17+{MELO}" in text, "the Messlokation rides SG5 LOC"
+        assert f"LOC+Z16+{MALO}" in text, "the Marktlokation rides SG5 LOC"
         assert "IDE+24+" in text, "IDE carries the Vorgangsnummer, not a location"
-        assert "RFF+Z13:55001" in text, "the request's reference is echoed"
+        assert "RFF+Z13:55001" not in text, "the request's PID is not echoed"
         assert "DTM+92:20260501" in text
 
     def test_the_answer_validates_on_the_same_format_version(self, anmeldung):
@@ -167,7 +168,7 @@ class TestBusinessAnswer:
             NB_ID,
             LF_ID,
             metering_point="51238696012",
-            quantities=[("220", "1", "KWH")],
+            intervals=[("79", "1", "KWH", "202604010000+00", "202604010015+00")],
             on=ON,
         )
         wire = build_interchange(
@@ -206,7 +207,7 @@ class TestProduktpaket:
             NB_ID,
             LF_ID,
             on=ON,
-            transactions=[UtilmdTransaction("VORGANG-1", locations=[("melo", MELO)])],
+            transactions=[UtilmdTransaction("VORGANG-1", locations=[("malo", MALO)])],
         )
         assert "SEQ+" not in message.decode()
 
@@ -221,9 +222,8 @@ def utilmd_interchange_with_bilanzkreis(eic: str) -> bytes:
         transactions=[
             UtilmdTransaction(
                 "VORGANG-1",
-                locations=[("melo", MELO)],
+                locations=[("malo", MALO)],
                 dates=[("92", "20260501")],
-                references=[("Z13", "55001")],
                 bilanzkreis=eic,
             )
         ],
@@ -260,15 +260,15 @@ class TestAntwortDritter:
         assert antwort_code("E_0624", "A32") is not None
         assert antwort_code("E_0623", "A32") is None
 
-    def test_an_ablehnung_without_it_still_validates(self):
-        """The compiled profile carries no rule for this conditional.
+    def test_an_ablehnung_naming_none_gets_the_third_party_status_filled_in(self):
+        """`STS+Z35` is Muss beside `A50` (UTILMD AHB Strom, Bedingung [356]).
 
-        Pinned as the known limitation it is: the AHB states the condition, the
-        authored profile does not, so a 55003 stating `A50` with no `STS+Z35`
-        passes here while a conformant counterparty would refuse it.
+        A caller who names no Dritter status gets the column's placeholder:
+        the message is completed to its Prüfschablone rather than shipped
+        short of a Muss segment.
         """
         wire = ablehnung_mit_widerspruch("A50", None)
-        assert "STS+Z35" not in wire.decode()
+        assert "STS+Z35" in wire.decode()
         assert_edifact_valid(wire, on=ON)
 
 
@@ -282,7 +282,6 @@ def ablehnung_mit_widerspruch(code: str, dritter: str | None) -> bytes:
         transactions=[
             UtilmdTransaction(
                 "VORGANG-1",
-                locations=[("melo", MELO)],
                 antwort_code=code,
                 antwort_ebd="E_0623",
                 antwort_dritter=dritter,

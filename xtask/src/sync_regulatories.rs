@@ -33,7 +33,7 @@
 //! present and no longer matches its hash is an error.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -702,25 +702,6 @@ fn today_iso() -> String {
         u8::from(now.month()),
         now.day()
     )
-}
-
-/// The mirror's manifest, for other checks that need document provenance.
-///
-/// Returns an empty map when the manifest is absent, so a caller can treat "no
-/// manifest yet" and "no entry for this file" the same way.
-#[must_use]
-pub fn load_manifest(workspace_root: &Path) -> BTreeMap<String, String> {
-    let path: PathBuf = workspace_root.join(MIRROR_DIR).join(MANIFEST);
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<Manifest>(&s).ok())
-        .map(|m| {
-            m.files
-                .into_iter()
-                .map(|(name, e)| (name, e.title))
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 #[cfg(test)]

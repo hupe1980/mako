@@ -578,8 +578,12 @@ fn rule_sem_period_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<
         }
     }
 
-    if let (Some((start_val, start_span)), Some((end_val, _))) = (start, end) {
-        if !start_val.is_empty() && !end_val.is_empty() && start_val > end_val {
+    if let (Some((start_val, start_span)), Some((end_val, _))) = (start, end)
+        && !start_val.is_empty()
+        && !end_val.is_empty()
+        && start_val > end_val
+    {
+        {
             issues.push(
                 ValidationIssue::new(
                     ValidationSeverity::Error,

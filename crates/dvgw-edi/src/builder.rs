@@ -1,8 +1,15 @@
 //! Writing DVGW messages.
 //!
-//! A BKV that only parses cannot nominate. [`MessageBuilder`] renders the
+//! A BKV that only parses cannot nominate, and a Netzbetreiber that only
+//! parses cannot report its Mehr-/Mindermengen. [`MessageBuilder`] renders the
 //! header and `LIN` loops the Nachrichtenbeschreibungen prescribe, so the same
-//! crate that reads a NOMRES can produce the NOMINT it answers.
+//! crate that reads a NOMRES can produce the NOMINT it answers and the SSQNOT
+//! the MGV expects.
+//!
+//! Every coded value is stamped with the agency the Segmentlayout names —
+//! `332` (DVGW) by default, `9` (GS1) where a party is a GLN — and a profile
+//! is written the way the DVGW column caps it: one `DTM+2` and one `QTY` per
+//! `LOC` group, the `LOC` repeated per period.
 //!
 //! ```rust
 //! use dvgw_edi::{DvgwDocument, DvgwPeriod, MessageBuilder, Position};
@@ -51,7 +58,14 @@ pub struct Position {
     item_type: Option<String>,
     description: Option<String>,
     locations: Vec<LocationDraft>,
-    parties: Vec<(String, String)>,
+    parties: Vec<PartyDraft>,
+}
+
+#[derive(Debug, Clone)]
+struct PartyDraft {
+    role: String,
+    code: String,
+    agency: String,
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +79,7 @@ struct LocationDraft {
 struct QuantityDraft {
     qualifier: String,
     value: String,
+    unit: Option<String>,
     period: DvgwPeriod,
     status: Vec<String>,
 }
@@ -109,9 +124,12 @@ impl Position {
         self
     }
 
-    /// Add a quantity to the open `LOC` group, with the period it applies to.
+    /// Add a quantity to the open `LOC` group, with the period it applies to,
+    /// in the family's default unit (`KW1` kWh/h; `KWH` for SSQNOT).
     ///
-    /// Repeat to transmit a profile: each call emits its own `DTM+2` and `QTY`.
+    /// Repeat to transmit a profile: the DVGW column admits one `DTM+2` and
+    /// one `QTY` per `LOC` group, so every quantity after the first is
+    /// written under a repeated `LOC`.
     ///
     /// # Panics
     ///
@@ -119,9 +137,36 @@ impl Position {
     /// quantity outside a `LOC` group has nowhere to go on the wire.
     #[must_use]
     pub fn quantity(
-        mut self,
+        self,
         qualifier: impl Into<String>,
         value: impl Into<String>,
+        period: DvgwPeriod,
+    ) -> Self {
+        self.push_quantity(qualifier.into(), value.into(), None, period)
+    }
+
+    /// [`quantity`](Self::quantity) in an explicit C186 DE 6411 unit —
+    /// `KW2` (kWh/d) on an ALOCAT, `KWH` on a nomination.
+    ///
+    /// # Panics
+    ///
+    /// As [`quantity`](Self::quantity).
+    #[must_use]
+    pub fn quantity_in(
+        self,
+        qualifier: impl Into<String>,
+        value: impl Into<String>,
+        unit: impl Into<String>,
+        period: DvgwPeriod,
+    ) -> Self {
+        self.push_quantity(qualifier.into(), value.into(), Some(unit.into()), period)
+    }
+
+    fn push_quantity(
+        mut self,
+        qualifier: String,
+        value: String,
+        unit: Option<String>,
         period: DvgwPeriod,
     ) -> Self {
         let location = self
@@ -129,15 +174,17 @@ impl Position {
             .last_mut()
             .expect("call Position::location before Position::quantity");
         location.quantities.push(QuantityDraft {
-            qualifier: qualifier.into(),
-            value: value.into(),
+            qualifier,
+            value,
+            unit,
             period,
             status: Vec::new(),
         });
         self
     }
 
-    /// Attach an `STS` DE 9015 status to the last quantity (ALOCAT).
+    /// Attach an `STS` DE 9015 code to the last quantity — the Zeitreihentyp
+    /// of an ALOCAT (`09G`, `14G`, …), the Verfahren of a SSQNOT (`A1G`/`A2G`).
     ///
     /// # Panics
     ///
@@ -153,10 +200,27 @@ impl Position {
         self
     }
 
-    /// Add a position-level `NAD` — Bilanzkreis, Netzkonto, VHP, Netzbetreiber.
+    /// Add a position-level `NAD` — Bilanzkreis, Netzkonto, VHP, Netzbetreiber —
+    /// coded under the DVGW agency (`332`).
     #[must_use]
-    pub fn party(mut self, role: impl Into<String>, code: impl Into<String>) -> Self {
-        self.parties.push((role.into(), code.into()));
+    pub fn party(self, role: impl Into<String>, code: impl Into<String>) -> Self {
+        self.party_coded(role, code, DVGW_AGENCY_CODE)
+    }
+
+    /// [`party`](Self::party) under an explicit DE 3055 agency — `9` for a GLN,
+    /// which ALOCAT admits on the `ZSO`/`VHP` row.
+    #[must_use]
+    pub fn party_coded(
+        mut self,
+        role: impl Into<String>,
+        code: impl Into<String>,
+        agency: impl Into<String>,
+    ) -> Self {
+        self.parties.push(PartyDraft {
+            role: role.into(),
+            code: code.into(),
+            agency: agency.into(),
+        });
         self
     }
 }
@@ -191,8 +255,10 @@ pub struct MessageBuilder {
     pruefidentifikator: Option<u32>,
     message_datetime: Option<OffsetDateTime>,
     validity_period: Option<DvgwPeriod>,
+    clearingnummer: Option<String>,
+    original_nomination: Option<(String, OffsetDateTime)>,
     references: Vec<(String, String)>,
-    parties: Vec<(String, String)>,
+    parties: Vec<PartyDraft>,
     positions: Vec<Position>,
 }
 
@@ -209,6 +275,8 @@ impl MessageBuilder {
             pruefidentifikator: None,
             message_datetime: None,
             validity_period: None,
+            clearingnummer: None,
+            original_nomination: None,
             references: Vec::new(),
             parties: Vec::new(),
             positions: Vec::new(),
@@ -230,6 +298,8 @@ impl MessageBuilder {
     }
 
     /// `UNH` S009 DE 0057 — the package code (`DVGW17`) or version (`5.11a`).
+    /// Defaults to what the family's Nachrichtenbeschreibung prescribes
+    /// ([`DvgwMessageType::anwendungscode`](crate::DvgwMessageType::anwendungscode)).
     #[must_use]
     pub fn version(mut self, value: impl Into<String>) -> Self {
         self.version = Some(value.into());
@@ -250,47 +320,81 @@ impl MessageBuilder {
         self
     }
 
-    /// `DTM+Z01` Gültigkeitszeitraum — the gas day for ALOCAT and NOMINT.
+    /// `DTM+Z01` Gültigkeitszeitraum — the gas day for ALOCAT, NOMINT and
+    /// NOMRES, the Abrechnungszeitraum for SSQNOT.
     #[must_use]
     pub fn validity_period(mut self, period: DvgwPeriod) -> Self {
         self.validity_period = Some(period);
         self
     }
 
-    /// `NAD+MS` Absender.
+    /// `NAD+MS` Absender, coded under the DVGW agency (`332`).
     #[must_use]
-    pub fn sender(mut self, code: impl Into<String>) -> Self {
-        self.parties.push((nad::ABSENDER.to_owned(), code.into()));
+    pub fn sender(self, code: impl Into<String>) -> Self {
+        self.party(nad::ABSENDER, code)
+    }
+
+    /// `NAD+MS` Absender under an explicit DE 3055 agency (`9` for a GLN).
+    #[must_use]
+    pub fn sender_coded(self, code: impl Into<String>, agency: impl Into<String>) -> Self {
+        self.party_coded(nad::ABSENDER, code, agency)
+    }
+
+    /// `NAD+MR` Empfänger, coded under the DVGW agency (`332`).
+    #[must_use]
+    pub fn receiver(self, code: impl Into<String>) -> Self {
+        self.party(nad::EMPFAENGER, code)
+    }
+
+    /// `NAD+MR` Empfänger under an explicit DE 3055 agency (`9` for a GLN).
+    #[must_use]
+    pub fn receiver_coded(self, code: impl Into<String>, agency: impl Into<String>) -> Self {
+        self.party_coded(nad::EMPFAENGER, code, agency)
+    }
+
+    /// Any further header `NAD`, e.g. `ZSY` (zusätzlicher BKV), under `332`.
+    #[must_use]
+    pub fn party(self, role: impl Into<String>, code: impl Into<String>) -> Self {
+        self.party_coded(role, code, DVGW_AGENCY_CODE)
+    }
+
+    /// [`party`](Self::party) under an explicit DE 3055 agency.
+    #[must_use]
+    pub fn party_coded(
+        mut self,
+        role: impl Into<String>,
+        code: impl Into<String>,
+        agency: impl Into<String>,
+    ) -> Self {
+        self.parties.push(PartyDraft {
+            role: role.into(),
+            code: code.into(),
+            agency: agency.into(),
+        });
         self
     }
 
-    /// `NAD+MR` Empfänger.
+    /// `RFF+ANX` Clearingnummer (ALOCAT), written first in `SG1` as the
+    /// Nachrichtenstruktur orders it.
     #[must_use]
-    pub fn receiver(mut self, code: impl Into<String>) -> Self {
-        self.parties.push((nad::EMPFAENGER.to_owned(), code.into()));
+    pub fn clearingnummer(mut self, value: impl Into<String>) -> Self {
+        self.clearingnummer = Some(value.into());
         self
     }
 
-    /// Any further header `NAD`, e.g. `ZSY` (zusätzlicher BKV).
+    /// `RFF+AGO` — the nomination this one corrects (NOMINT) — with the
+    /// `DTM+9` Bearbeitungsdatum NOMINT 4.6 marks Erforderlich beside it.
     #[must_use]
-    pub fn party(mut self, role: impl Into<String>, code: impl Into<String>) -> Self {
-        self.parties.push((role.into(), code.into()));
+    pub fn original_nomination(
+        mut self,
+        value: impl Into<String>,
+        processed_at: OffsetDateTime,
+    ) -> Self {
+        self.original_nomination = Some((value.into(), processed_at));
         self
     }
 
-    /// `RFF+ANX` Clearingnummer (ALOCAT).
-    #[must_use]
-    pub fn clearingnummer(self, value: impl Into<String>) -> Self {
-        self.reference(rff::CLEARINGNUMMER, value)
-    }
-
-    /// `RFF+AGO` — the nomination this one corrects (NOMINT).
-    #[must_use]
-    pub fn original_nomination_ref(self, value: impl Into<String>) -> Self {
-        self.reference(rff::ORIGINAL_NOMINIERUNG, value)
-    }
-
-    /// Any further header `RFF`.
+    /// Any further header `RFF`, written after the ones the structure orders.
     #[must_use]
     pub fn reference(mut self, qualifier: impl Into<String>, value: impl Into<String>) -> Self {
         self.references.push((qualifier.into(), value.into()));
@@ -331,7 +435,7 @@ impl MessageBuilder {
             .validity_period
             .ok_or_else(|| missing("DTM+Z01 Gültigkeitszeitraum"))?;
         for role in [nad::ABSENDER, nad::EMPFAENGER] {
-            if !self.parties.iter().any(|(r, _)| r == role) {
+            if !self.parties.iter().any(|p| p.role == role) {
                 return Err(missing(&format!("NAD+{role}")));
             }
         }
@@ -342,7 +446,11 @@ impl MessageBuilder {
         let agency = DVGW_AGENCY_CODE;
         let mut segments: Vec<String> = Vec::new();
 
-        let version = self.version.as_deref().unwrap_or_default();
+        let family = self.document.message_type();
+        let version = self
+            .version
+            .as_deref()
+            .unwrap_or_else(|| family.anwendungscode());
         segments.push(format!(
             "UNH+{}+{}:D:07A:UN:{}",
             esc(&self.message_ref),
@@ -364,16 +472,39 @@ impl MessageBuilder {
             "DTM+Z01:{}:719",
             format_period(validity, self.timezone)
         ));
+        // `SG1` in the order the Nachrichtenstrukturen list it: ALOCAT puts
+        // the Clearingnummer before the Prüfidentifikator, NOMINT the
+        // Original-Nominierung (with its `DTM+9`) after it.
+        if let Some(clearing) = &self.clearingnummer {
+            segments.push(format!("RFF+{}:{}", rff::CLEARINGNUMMER, esc(clearing)));
+        }
+        segments.push(format!("RFF+{}:{pid}", rff::PRUEFIDENTIFIKATOR));
+        if let Some((original, processed_at)) = &self.original_nomination {
+            segments.push(format!(
+                "RFF+{}:{}",
+                rff::ORIGINAL_NOMINIERUNG,
+                esc(original)
+            ));
+            segments.push(format!(
+                "DTM+9:{}:203",
+                format_instant(*processed_at, self.timezone)
+            ));
+        }
         for (qualifier, value) in &self.references {
             segments.push(format!("RFF+{}:{}", esc(qualifier), esc(value)));
         }
-        segments.push(format!("RFF+{}:{pid}", rff::PRUEFIDENTIFIKATOR));
-        for (role, code) in &self.parties {
-            segments.push(format!("NAD+{}+{}::{agency}", esc(role), esc(code)));
+        for party in &self.parties {
+            segments.push(format!(
+                "NAD+{}+{}::{}",
+                esc(&party.role),
+                esc(&party.code),
+                esc(&party.agency)
+            ));
         }
 
+        let default_unit = family.admitted_units()[0];
         for (index, position) in self.positions.iter().enumerate() {
-            self.render_position(position, index, agency, &mut segments);
+            self.render_position(position, index, agency, default_unit, &mut segments);
         }
 
         segments.push("UNS+S".to_owned());
@@ -399,6 +530,7 @@ impl MessageBuilder {
         position: &Position,
         index: usize,
         agency: &str,
+        default_unit: &str,
         segments: &mut Vec<String>,
     ) {
         {
@@ -417,31 +549,41 @@ impl MessageBuilder {
                 segments.push(format!("IMD++05G+{}::{agency}", esc(code)));
             }
             for location in &position.locations {
-                match &location.code {
-                    Some(code) => segments.push(format!(
-                        "LOC+{}+{}::{agency}",
-                        esc(&location.qualifier),
-                        esc(code)
-                    )),
-                    None => segments.push(format!("LOC+{}", esc(&location.qualifier))),
-                }
+                let loc = match &location.code {
+                    Some(code) => {
+                        format!("LOC+{}+{}::{agency}", esc(&location.qualifier), esc(code))
+                    }
+                    None => format!("LOC+{}", esc(&location.qualifier)),
+                };
+                // One `DTM+2` and one `QTY` per `LOC` group (the DVGW MaxWdh),
+                // so a profile repeats the `LOC`.
                 for quantity in &location.quantities {
+                    segments.push(loc.clone());
                     segments.push(format!(
                         "DTM+2:{}:719",
                         format_period(quantity.period, self.timezone)
                     ));
                     segments.push(format!(
-                        "QTY+{}:{}:KW1",
+                        "QTY+{}:{}:{}",
                         esc(&quantity.qualifier),
-                        esc(&quantity.value)
+                        esc(&quantity.value),
+                        esc(quantity.unit.as_deref().unwrap_or(default_unit))
                     ));
                     for status in &quantity.status {
                         segments.push(format!("STS+{}::{agency}", esc(status)));
                     }
                 }
+                if location.quantities.is_empty() {
+                    segments.push(loc);
+                }
             }
-            for (role, code) in &position.parties {
-                segments.push(format!("NAD+{}+{}::{agency}", esc(role), esc(code)));
+            for party in &position.parties {
+                segments.push(format!(
+                    "NAD+{}+{}::{}",
+                    esc(&party.role),
+                    esc(&party.code),
+                    esc(&party.agency)
+                ));
             }
         }
     }

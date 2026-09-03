@@ -1,306 +1,907 @@
 {
-  "schema_version": 1,
+  "ahb_version": "1.0h",
+  "envelope": [],
   "message_type": "COMDIS",
-  "release": "1.0g",
-  "valid_from": "2026-04-01",
-  "supersedes_directory": "fv20251001",
   "pid_source": "rff_z13",
-  "ordering_hint": [],
-  "dtm_formats": {
-    "137": [
-      "303"
-    ]
+  "publikationsdatum": "2025-10-01",
+  "release": "1.0g",
+  "schema_version": 2,
+  "source": {
+    "file": "COMDIS_MIG_1.0g.pdf",
+    "sha256": "674a8c42546231e55dba25b34413ddce1228738a7fe0a979dee475156b4e8037",
+    "title": "COMDIS MIG 1.0g"
   },
-  "segments": [
+  "structure": [
     {
-      "tag": "UNH",
-      "name": "Nachrichten-Kopfsegment",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "format": "an..14",
           "id": "0062",
+          "name": "Nachrichten-Referenznummer",
+          "note": "Eindeutige Nachrichtenreferenz in einer Übertragungsdatei des Absenders. Nummer der Nachrichten einer Übertragungsdatei im Datenaustausch. Identisch mit DE0062 im UNT, i. d. R. vom sendenden Konverter vergeben.",
           "status": "M"
         },
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "COMDIS",
+                  "name": "Handelsunstimmigkeit"
+                }
+              ],
+              "format": "an..6",
+              "id": "0065",
+              "name": "Nachrichtentyp-Kennung",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "D",
+                  "name": "Entwurfs-Version"
+                }
+              ],
+              "format": "an..3",
+              "id": "0052",
+              "name": "Versionsnummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "17A",
+                  "name": "Ausgabe 2017 - A"
+                }
+              ],
+              "format": "an..3",
+              "id": "0054",
+              "name": "Freigabenummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "UN",
+                  "name": "UN/CEFACT"
+                }
+              ],
+              "format": "an..2",
+              "id": "0051",
+              "name": "Verwaltende Organisation",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "1.0g",
+                  "name": "Versionsnummer der zugrundeliegenden BDEW-Nachrichtenbeschreibung"
+                }
+              ],
+              "format": "an..6",
+              "id": "0057",
+              "name": "Anwendungscode der zuständigen Organisation",
+              "status": "R"
+            }
+          ],
           "id": "S009",
+          "name": "Nachrichten-Kennung",
           "status": "M"
         }
       ],
-      "qualifier_restrictions": {}
+      "example": "UNH+1+COMDIS:D:17A:UN:1.0g'",
+      "max": 1,
+      "name": "Nachrichten-Kopfsegment",
+      "nr": "00001",
+      "status": "M",
+      "tag": "UNH",
+      "zaehler": "0010"
     },
     {
-      "tag": "BGM",
-      "name": "Beginn der Nachricht",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "456",
+                  "name": "Belastungsanzeige"
+                },
+                {
+                  "code": "739",
+                  "name": "MSCONS, die eine INVOIC unterstützt"
+                }
+              ],
+              "format": "an..3",
+              "id": "1001",
+              "name": "Dokumentenname, Code",
+              "status": "R"
+            }
+          ],
           "id": "C002",
-          "status": "C"
+          "name": "Dokumenten-/ Nachrichtenname",
+          "status": "R"
         },
         {
+          "components": [
+            {
+              "format": "an..70",
+              "id": "1004",
+              "name": "Dokumentennummer",
+              "note": "Eindeutige EDI-Nachrichtennummer, vergeben vom Absender des Dokuments",
+              "status": "R"
+            }
+          ],
           "id": "C106",
-          "status": "C"
+          "name": "Dokumenten-/Nachrichten- Identifikation",
+          "status": "R"
         }
       ],
-      "qualifier_restrictions": {
-        "1001": [
-          "456",
-          "739"
-        ]
-      }
+      "example": "BGM+456+12345'",
+      "max": 1,
+      "name": "Beginn der Nachricht",
+      "nr": "00002",
+      "status": "M",
+      "tag": "BGM",
+      "zaehler": "0020"
     },
     {
-      "tag": "RFF",
-      "name": "Prüfidentifikator",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "Z13",
+                  "name": "Prüfidentifikator"
+                }
+              ],
+              "format": "an..3",
+              "id": "1153",
+              "name": "Referenz, Qualifier",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "29001",
+                  "name": "Ablehnung REMADV Prüfidentifikator"
+                },
+                {
+                  "code": "29002",
+                  "name": "Ablehnung IFTSTA Prüfidentifikator"
+                }
+              ],
+              "format": "n5",
+              "id": "1154",
+              "name": "Referenz, Identifikation",
+              "status": "R"
+            }
+          ],
           "id": "C506",
+          "name": "Referenz",
           "status": "M"
         }
       ],
-      "qualifier_restrictions": {
-        "1153": [
-          "Z13"
-        ]
-      }
+      "example": "RFF+Z13:29001'",
+      "max": 1,
+      "name": "Prüfidentifikator",
+      "nr": "00003",
+      "status": "R",
+      "tag": "RFF",
+      "zaehler": "0030"
     },
     {
-      "tag": "DTM",
-      "name": "Dokumentendatum",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "137",
+                  "name": "Dokumenten-/Nachrichtendatum/-zeit"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
           "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
           "status": "M"
         }
       ],
-      "qualifier_restrictions": {
-        "2005": [
-          "137"
-        ]
-      }
+      "example": "DTM+137:202107302200?+00:303'",
+      "max": 1,
+      "name": "Dokumentendatum",
+      "nr": "00004",
+      "status": "R",
+      "tag": "DTM",
+      "zaehler": "0040"
     },
     {
-      "tag": "CUX",
-      "name": "Währungsangaben",
-      "mandatory": false,
-      "max_occurrences": 1,
       "elements": [
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "2",
+                  "name": "Referenzwährung"
+                }
+              ],
+              "format": "an..3",
+              "id": "6347",
+              "name": "Währungsverwendung, Qualifier",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "EUR",
+                  "name": "Euro"
+                }
+              ],
+              "format": "an..3",
+              "id": "6345",
+              "name": "Währung, Code",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "4",
+                  "name": "Währung der Rechnung"
+                }
+              ],
+              "format": "an..3",
+              "id": "6343",
+              "name": "Währung, Qualifier",
+              "status": "R"
+            }
+          ],
           "id": "C504",
-          "status": "C"
+          "name": "Währungsangaben",
+          "status": "R"
         }
       ],
-      "qualifier_restrictions": {
-        "6343": [
-          "4"
-        ],
-        "6347": [
-          "2"
-        ]
-      }
+      "example": "CUX+2:EUR:4'",
+      "max": 1,
+      "name": "Währungsangaben",
+      "nr": "00005",
+      "status": "D",
+      "tag": "CUX",
+      "zaehler": "0050"
     },
     {
-      "tag": "UNT",
-      "name": "Nachrichten-Endesegment",
-      "mandatory": true,
-      "max_occurrences": 1,
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "MS",
+                  "name": "Dokumenten-/Nachrichtenaussteller bzw. - absender"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    },
+                    {
+                      "code": "332",
+                      "name": "DE, DVGW Service & Consult GmbH"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+MS+1234567000008::9'",
+          "max": 1,
+          "name": "MP-ID Absender",
+          "nr": "00006",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0070"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "IC",
+                  "name": "Informationsstelle"
+                }
+              ],
+              "format": "an..3",
+              "id": "3139",
+              "name": "Funktion des Ansprechpartners, Code",
+              "status": "R"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..17",
+                  "id": "3413",
+                  "name": "Kontakt, Nummer",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "format": "an..256",
+                  "id": "3412",
+                  "name": "Kontakt",
+                  "note": "Abteilung oder Bearbeiter",
+                  "status": "R"
+                }
+              ],
+              "id": "C056",
+              "name": "Kontaktangaben",
+              "status": "R"
+            }
+          ],
+          "example": "CTA+IC+:Mustermann'",
+          "max": 1,
+          "name": "Ansprechpartner",
+          "nr": "00007",
+          "status": "R",
+          "tag": "CTA",
+          "zaehler": "0080"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "format": "an..512",
+                  "id": "3148",
+                  "name": "Kommunikationsadresse, Identifikation",
+                  "status": "M"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "EM",
+                      "name": "E-Mail"
+                    },
+                    {
+                      "code": "FX",
+                      "name": "Telefax"
+                    },
+                    {
+                      "code": "TE",
+                      "name": "Telefon"
+                    },
+                    {
+                      "code": "AJ",
+                      "name": "weiteres Telefon"
+                    },
+                    {
+                      "code": "AL",
+                      "name": "Handy"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3155",
+                  "name": "Art des Kommunikationsmittels, Code",
+                  "status": "M"
+                }
+              ],
+              "id": "C076",
+              "name": "Kommunikationsverbindung",
+              "status": "M"
+            }
+          ],
+          "example": "COM+?+3222271020:TE'",
+          "max": 5,
+          "name": "Kommunikationsverbindung",
+          "nr": "00008",
+          "status": "R",
+          "tag": "COM",
+          "zaehler": "0090"
+        }
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "MP-ID Absender",
+      "status": "R",
+      "zaehler": "0060"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "MR",
+                  "name": "Nachrichtenempfänger"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    },
+                    {
+                      "code": "332",
+                      "name": "DE, DVGW Service & Consult GmbH"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+MR+1234567000008::9'",
+          "max": 1,
+          "name": "MP-ID Empfänger",
+          "nr": "00009",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0070"
+        }
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "MP-ID Empfänger",
+      "status": "R",
+      "zaehler": "0060"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "380",
+                      "name": "Handelsrechnung"
+                    },
+                    {
+                      "code": "Z41",
+                      "name": "Lieferschein Grund- / Arbeitspreis"
+                    },
+                    {
+                      "code": "Z42",
+                      "name": "Lieferschein Arbeits- / Leistungspreis"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1001",
+                  "name": "Dokumentenname, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C002",
+              "name": "Dokumenten-/ Nachrichtenname",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..70",
+                  "id": "1004",
+                  "name": "Dokumentennummer",
+                  "note": "Rechnungsnummer der abgelehnten Rechnung oder Dokumentennummer des abgelehnten Lieferscheins",
+                  "status": "R"
+                }
+              ],
+              "id": "C503",
+              "name": "Dokument-/Nachricht- Einzelheiten",
+              "status": "R"
+            }
+          ],
+          "example": "DOC+380+12345'",
+          "max": 1,
+          "name": "Dokument-/Nachricht-Einzelheiten",
+          "nr": "00010",
+          "status": "M",
+          "tag": "DOC",
+          "zaehler": "0110"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "Fälliger Betrag (inkl. USt.)"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "5025",
+                  "name": "Geldbetrag, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "n..35",
+                  "id": "5004",
+                  "name": "Geldbetrag",
+                  "note": "Geforderter Rechnungsbetrag aus der abgelehnten Rechnung",
+                  "status": "R"
+                }
+              ],
+              "id": "C516",
+              "name": "Geldbetrag",
+              "status": "M"
+            }
+          ],
+          "example": "MOA+9:50'",
+          "max": 1,
+          "name": "angeforderter Betrag",
+          "nr": "00011",
+          "status": "D",
+          "tag": "MOA",
+          "zaehler": "0130"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "format": "an..3",
+                  "id": "4465",
+                  "name": "Anpassungsgrund, Code",
+                  "note": "Code des Prüfschritts",
+                  "status": "M"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "E_0265",
+                      "name": "EBD Nr. E_0265"
+                    },
+                    {
+                      "code": "E_0271",
+                      "name": "EBD Nr. E_0271"
+                    },
+                    {
+                      "code": "E_0274",
+                      "name": "EBD Nr. E_0274"
+                    },
+                    {
+                      "code": "E_0504",
+                      "name": "EBD Nr. E_0504"
+                    },
+                    {
+                      "code": "E_0516",
+                      "name": "EBD Nr. E_0516"
+                    },
+                    {
+                      "code": "E_0520",
+                      "name": "EBD Nr. E_0520"
+                    },
+                    {
+                      "code": "E_0567",
+                      "name": "EBD Nr. E_0567"
+                    },
+                    {
+                      "code": "E_1008",
+                      "name": "EBD Nr. E_1008"
+                    },
+                    {
+                      "code": "S_0108",
+                      "name": "Codeliste Strom Nr. S_0108"
+                    },
+                    {
+                      "code": "S_0109",
+                      "name": "Codeliste Strom Nr. S_0109"
+                    },
+                    {
+                      "code": "G_0089",
+                      "name": "Codeliste Gas Nr. G_0089"
+                    }
+                  ],
+                  "format": "an..6",
+                  "id": "1082",
+                  "name": "Positionsnummer",
+                  "status": "R"
+                }
+              ],
+              "example": "AJT+Z58+S_0109'",
+              "max": 1,
+              "name": "Begründung der Korrektheit",
+              "nr": "00012",
+              "status": "M",
+              "tag": "AJT",
+              "zaehler": "0150"
+            },
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "ACD",
+                      "name": "Begründung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "4451",
+                  "name": "Textbezug, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..3",
+                  "id": "4453",
+                  "name": "Textfunktion, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z07",
+                          "name": "MSCONS"
+                        },
+                        {
+                          "code": "Z08",
+                          "name": "UTILMD"
+                        },
+                        {
+                          "code": "Z09",
+                          "name": "INVOIC"
+                        },
+                        {
+                          "code": "Z10",
+                          "name": "ORDERS"
+                        },
+                        {
+                          "code": "Z11",
+                          "name": "PRICAT"
+                        },
+                        {
+                          "code": "Z12",
+                          "name": "IFTSTA"
+                        },
+                        {
+                          "code": "Z13",
+                          "name": "ORDCHG"
+                        }
+                      ],
+                      "format": "an..17",
+                      "id": "4441",
+                      "name": "Freier Text, Code",
+                      "status": "M"
+                    }
+                  ],
+                  "id": "C107",
+                  "name": "Text-Referenz",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "4440",
+                      "name": "Freier Text",
+                      "note": "Datenaustauschreferenz der referenzierten Datei",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..512",
+                      "id": "4440",
+                      "name": "Freier Text",
+                      "note": "Nachrichten-/Vorgangsnummer",
+                      "status": "R"
+                    },
+                    {
+                      "format": "an..512",
+                      "id": "4440",
+                      "name": "Freier Text",
+                      "note": "Datenaustauschreferenz der Empfangsbestätigung (CONTRL) oder der Anerkennungsmeldung (APERAK)",
+                      "status": "R"
+                    },
+                    {
+                      "format": "an..70",
+                      "id": "4440",
+                      "name": "Freier Text",
+                      "note": "Nachrichtennummer aus der Anerkennungsmeldung (APERAK)",
+                      "status": "D"
+                    }
+                  ],
+                  "id": "C108",
+                  "name": "Text",
+                  "status": "R"
+                }
+              ],
+              "example": "FTX+ACD++Z07+0815:4711:110:X'",
+              "max": 1,
+              "name": "Begründung Richtigkeit mit Angabe einer Nachrichtenreferenz",
+              "nr": "00013",
+              "status": "D",
+              "tag": "FTX",
+              "zaehler": "0160"
+            },
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "ACB",
+                      "name": "Zusätzliche Informationen (für allgemeine Hinweise)"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "4451",
+                  "name": "Textbezug, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..3",
+                  "id": "4453",
+                  "name": "Textfunktion, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "4441",
+                      "name": "Freier Text, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C107",
+                  "name": "Text-Referenz",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "4440",
+                      "name": "Freier Text",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C108",
+                  "name": "Text",
+                  "status": "R"
+                }
+              ],
+              "example": "FTX+ACB+++Erläuterung der Ablehnung im Klartext'",
+              "max": 1,
+              "name": "Begründung Richtigkeit mit Angabe von Freitext",
+              "nr": "00014",
+              "status": "D",
+              "tag": "FTX",
+              "zaehler": "0160"
+            }
+          ],
+          "group": "SG3",
+          "max": 1,
+          "name": "Begründung der Korrektheit",
+          "status": "R",
+          "zaehler": "0140"
+        }
+      ],
+      "group": "SG2",
+      "max": 9999,
+      "name": "Dokument-/Nachricht-Einzelheiten",
+      "status": "R",
+      "zaehler": "0100"
+    },
+    {
       "elements": [
         {
+          "format": "n..6",
           "id": "0074",
+          "name": "Anzahl der Segmente in einer Nachricht",
+          "note": "Hier wird die Gesamtzahl der Segmente einer Nachricht angegeben.",
           "status": "M"
         },
         {
+          "format": "an..14",
           "id": "0062",
+          "name": "Nachrichten-Referenznummer",
+          "note": "Die Referenznummer aus dem UNH-Segment muss hier wiederholt werden.",
           "status": "M"
         }
       ],
-      "qualifier_restrictions": {}
+      "example": "UNT+20+X'",
+      "max": 1,
+      "name": "Nachrichten-Endesegment",
+      "nr": "00015",
+      "status": "M",
+      "tag": "UNT",
+      "zaehler": "0260"
     }
   ],
-  "segment_groups": [
-    {
-      "id": "SG1",
-      "trigger_segment": "NAD",
-      "mandatory": true,
-      "max_occurrences": 99,
-      "segments": [
-        {
-          "tag": "NAD",
-          "name": "MP-ID Absender/Empfänger",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "3035",
-              "status": "M"
-            },
-            {
-              "id": "C082",
-              "status": "C"
-            }
-          ],
-          "qualifier_restrictions": {
-            "3035": [
-              "MS",
-              "MR"
-            ]
-          }
-        },
-        {
-          "tag": "CTA",
-          "name": "Ansprechpartner",
-          "mandatory": false,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "3139",
-              "status": "C"
-            },
-            {
-              "id": "C056",
-              "status": "C"
-            }
-          ],
-          "qualifier_restrictions": {
-            "3139": [
-              "IC"
-            ]
-          }
-        },
-        {
-          "tag": "COM",
-          "name": "Kommunikationsverbindung",
-          "mandatory": false,
-          "max_occurrences": 5,
-          "elements": [
-            {
-              "id": "C076",
-              "status": "M"
-            }
-          ],
-          "qualifier_restrictions": {
-            "3155": [
-              "EM",
-              "FX",
-              "TE",
-              "AJ",
-              "AL"
-            ]
-          }
-        }
-      ],
-      "groups": []
-    },
-    {
-      "id": "SG2",
-      "trigger_segment": "DOC",
-      "mandatory": true,
-      "max_occurrences": 9999,
-      "segments": [
-        {
-          "tag": "DOC",
-          "name": "Dokument-/Nachricht-Einzelheiten",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "C002",
-              "status": "M"
-            },
-            {
-              "id": "C503",
-              "status": "C"
-            }
-          ],
-          "qualifier_restrictions": {
-            "1001": [
-              "380",
-              "Z41",
-              "Z42"
-            ]
-          }
-        },
-        {
-          "tag": "MOA",
-          "name": "angeforderter Betrag",
-          "mandatory": false,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "C516",
-              "status": "M"
-            }
-          ],
-          "qualifier_restrictions": {
-            "5025": [
-              "9"
-            ]
-          }
-        }
-      ],
-      "groups": [
-        {
-          "id": "SG3",
-          "trigger_segment": "AJT",
-          "mandatory": true,
-          "max_occurrences": 9,
-          "segments": [
-            {
-              "tag": "AJT",
-              "name": "Begründung der Korrektheit",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
-                {
-                  "id": "4465",
-                  "status": "M"
-                },
-                {
-                  "id": "1082",
-                  "status": "C"
-                }
-              ],
-              "qualifier_restrictions": {}
-            },
-            {
-              "tag": "FTX",
-              "name": "Begründung Richtigkeit",
-              "mandatory": false,
-              "max_occurrences": 1,
-              "elements": [
-                {
-                  "id": "4451",
-                  "status": "M"
-                },
-                {
-                  "id": "C107",
-                  "status": "C"
-                },
-                {
-                  "id": "C108",
-                  "status": "C"
-                }
-              ],
-              "qualifier_restrictions": {
-                "4451": [
-                  "ACD",
-                  "ACB"
-                ]
-              }
-            }
-          ],
-          "groups": []
-        }
-      ]
-    }
-  ],
-  "ahb_revision": "1.0h",
-  "source_document": "COMDIS MIG 1.0g, Publikationsdatum 01.10.2025",
-  "publikationsdatum": "2025-10-01"
+  "valid_from": "2026-04-01"
 }

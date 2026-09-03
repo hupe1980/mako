@@ -205,7 +205,21 @@ fn collect(dir: &Path, findings: &mut Vec<Finding>) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            if path.file_name().is_some_and(|n| n == "target") {
+            // Build output and vendored trees carry no identifiers of mako's
+            // own: `target`, a maturin `.dSYM` bundle, a Python venv.
+            // `crates/edi-energy/profiles` mirrors the BDEW MIGs, whose printed
+            // example segments carry placeholder EICs without a valid check
+            // character; they are the publication's, not mako's.
+            let skip = path.file_name().is_some_and(|n| {
+                let name = n.to_string_lossy();
+                name == "target"
+                    || name == ".venv"
+                    || name == "node_modules"
+                    || name.ends_with(".dSYM")
+                    || (name == "profiles"
+                        && path.parent().is_some_and(|d| d.ends_with("edi-energy")))
+            });
+            if skip {
                 continue;
             }
             collect(&path, findings);

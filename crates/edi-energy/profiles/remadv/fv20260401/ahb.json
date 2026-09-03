@@ -1,276 +1,2960 @@
 {
-  "schema_version": 1,
-  "message_type": "REMADV",
-  "release": "2.9e",
-  "source_document": "REMADV AHB 1.0a (Stand MIG: REMADV 2.9e), BDEW, Publikationsdatum 01.10.2025 — §3.1.1 Bestätigung und Abweisung (33001/33002), §3.1.2 Abweisung auf Kopf/Summen- und Positionsebene (33003/33004)",
-  "pruefidentifikatoren": [
+  "ahb_version": "1.0a",
+  "anwendungsfaelle": [
     {
-      "code": 33001,
-      "name": "Bestätigung",
-      "segment_rules": [
+      "chapter": "3.1.1 Bestätigung und Abweisung",
+      "communication": "ReEmpf an",
+      "elements": [
         {
-          "tag": "BGM",
-          "requirement": "M"
+          "de": "0062",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "CUX",
-          "requirement": "M"
+          "de": "0065",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DOC",
-          "requirement": "M"
+          "de": "0052",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DTM",
-          "requirement": "M"
+          "de": "0054",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "05A",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "MOA",
-          "requirement": "M"
+          "de": "0051",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "NAD",
-          "requirement": "M"
+          "de": "0057",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "2.9e",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "RFF",
-          "requirement": "M"
+          "de": "1001",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "481",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "UNS",
-          "requirement": "M",
-          "_description": "UNS+S 'Trennung von Positions- und Summenteil' is Muss on all four use cases (segment 00026), followed by the Summenbetrag MOA+12."
+          "de": "1004",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "SG3 (Ansprechpartner) is Kann on every use case; COM is Muss only within it (see CTA)."
+          "de": "2005",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "CTA",
-          "requirement": "O",
-          "_description": "SG3 (Ansprechpartner) is Kann on every use case; [503] only recommends it on an Abweisung. CTA is Muss *within* SG3, so a flat M refuses every conformant REMADV that omits the optional group."
+          "de": "2380",
+          "nr": "00005",
+          "operands": [
+            {
+              "operand": "X [931]"
+            }
+          ]
         },
         {
-          "tag": "FTX",
-          "requirement": "O",
-          "_description": "FTX is optional per MIG 2.9e (no AHB constraint for PID 33001)"
+          "de": "2379",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "33001",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00007",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3139",
+          "nr": "00008",
+          "operands": [
+            {
+              "code": "IC",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3412",
+          "nr": "00008",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3148",
+          "nr": "00009",
+          "operands": [
+            {
+              "operand": "X ∨ [549]"
+            }
+          ]
+        },
+        {
+          "de": "3155",
+          "nr": "00009",
+          "operands": [
+            {
+              "code": "EM",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "FX",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "TE",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AJ",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AL",
+              "operand": "X [1P0..1]"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00010",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00010",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00010",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "6347",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "2",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "6345",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "EUR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "6343",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "11",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00012",
+          "operands": [
+            {
+              "code": "380",
+              "operand": "X"
+            },
+            {
+              "code": "389",
+              "operand": "X"
+            },
+            {
+              "code": "457",
+              "operand": "X"
+            },
+            {
+              "code": "Z25",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00012",
+          "operands": [
+            {
+              "operand": "X [515]"
+            }
+          ]
+        },
+        {
+          "de": "5025",
+          "nr": "00013",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "5004",
+          "nr": "00013",
+          "operands": [
+            {
+              "operand": "X [930] [501]"
+            }
+          ]
+        },
+        {
+          "de": "5025",
+          "nr": "00014",
+          "operands": [
+            {
+              "code": "12",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "5004",
+          "nr": "00014",
+          "operands": [
+            {
+              "operand": "X [930] ([3] ⊻ [4])"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00015",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00015",
+          "operands": [
+            {
+              "operand": "X [931]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00015",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0081",
+          "nr": "00026",
+          "operands": [
+            {
+              "code": "S",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "5025",
+          "nr": "00027",
+          "operands": [
+            {
+              "code": "12",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "5004",
+          "nr": "00027",
+          "operands": [
+            {
+              "operand": "X [930] [502]"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00028",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00028",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         }
       ],
-      "group_rules": [
+      "name": "Bestätigung ReErst",
+      "pid": 33001,
+      "rows": [
         {
-          "group_id": "SG5",
-          "tag": "MOA",
-          "requirement": "O",
-          "_description": "MIG: MOA is mandatory in SG5 per MIG 1.0b; AHB requirement unverified - O for safety"
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00005",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00007",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00007",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00008",
+          "group": "SG3",
+          "status": [
+            "Kann"
+          ]
+        },
+        {
+          "nr": "00008",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00009",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00010",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00010",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00011",
+          "group": "SG4",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00011",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00012",
+          "group": "SG5",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00012",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00013",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00014",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00015",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00026",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00027",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00028",
+          "status": [
+            "Muss"
+          ]
         }
       ]
     },
     {
-      "code": 33002,
-      "name": "Abweisung",
-      "segment_rules": [
+      "chapter": "3.1.1 Bestätigung und Abweisung",
+      "communication": "ReEmpf an",
+      "elements": [
         {
-          "tag": "AJT",
-          "requirement": "M",
-          "_description": "SG7 AJT (Abweichungsgrund) is Muss only on an Abweisung. The Bestätigung 33001 carries no AJT at all — agreement needs no Antwortcode (REMADV AHB 1.0a §3.1.1)."
+          "de": "0062",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "BGM",
-          "requirement": "M"
+          "de": "0065",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "CUX",
-          "requirement": "M"
+          "de": "0052",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DOC",
-          "requirement": "M"
+          "de": "0054",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "05A",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DTM",
-          "requirement": "M"
+          "de": "0051",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "MOA",
-          "requirement": "M"
+          "de": "0057",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "2.9e",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "NAD",
-          "requirement": "M"
+          "de": "1001",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "239",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "RFF",
-          "requirement": "M"
+          "de": "1004",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "UNS",
-          "requirement": "M",
-          "_description": "UNS+S 'Trennung von Positions- und Summenteil' is Muss on all four use cases (segment 00026), followed by the Summenbetrag MOA+12."
+          "de": "2005",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "SG3 (Ansprechpartner) is Kann on every use case; COM is Muss only within it (see CTA)."
+          "de": "2380",
+          "nr": "00005",
+          "operands": [
+            {
+              "operand": "X [931]"
+            }
+          ]
         },
         {
-          "tag": "CTA",
-          "requirement": "O",
-          "_description": "SG3 (Ansprechpartner) is Kann on every use case; [503] only recommends it on an Abweisung. CTA is Muss *within* SG3, so a flat M refuses every conformant REMADV that omits the optional group."
+          "de": "2379",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "FTX",
-          "requirement": "O",
-          "_description": "FTX is optional per MIG 2.9e (no AHB constraint for PID 33002)"
+          "de": "1153",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "33002",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00007",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3139",
+          "nr": "00008",
+          "operands": [
+            {
+              "code": "IC",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3412",
+          "nr": "00008",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3148",
+          "nr": "00009",
+          "operands": [
+            {
+              "operand": "X ∨ [549]"
+            }
+          ]
+        },
+        {
+          "de": "3155",
+          "nr": "00009",
+          "operands": [
+            {
+              "code": "EM",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "FX",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "TE",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AJ",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AL",
+              "operand": "X [1P0..1]"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00010",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00010",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00010",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "6347",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "2",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "6345",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "EUR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "6343",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "11",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00012",
+          "operands": [
+            {
+              "code": "380",
+              "operand": "X"
+            },
+            {
+              "code": "389",
+              "operand": "X"
+            },
+            {
+              "code": "457",
+              "operand": "X"
+            },
+            {
+              "code": "Z25",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00012",
+          "operands": [
+            {
+              "operand": "X [511]"
+            }
+          ]
+        },
+        {
+          "de": "5025",
+          "nr": "00013",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "5004",
+          "nr": "00013",
+          "operands": [
+            {
+              "operand": "X [930] [501]"
+            }
+          ]
+        },
+        {
+          "de": "5025",
+          "nr": "00014",
+          "operands": [
+            {
+              "code": "12",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "5004",
+          "nr": "00014",
+          "operands": [
+            {
+              "operand": "X [926]"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00015",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00015",
+          "operands": [
+            {
+              "operand": "X [931]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00015",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00016",
+          "operands": [
+            {
+              "code": "ACW",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00016",
+          "operands": [
+            {
+              "operand": "X [512]"
+            }
+          ]
+        },
+        {
+          "de": "4465",
+          "nr": "00017",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "E_0243",
+              "operand": "X [492]"
+            },
+            {
+              "code": "E_0259",
+              "operand": "X [492]"
+            },
+            {
+              "code": "E_0261",
+              "operand": "X [492]"
+            },
+            {
+              "code": "E_0267",
+              "operand": "X [492]"
+            },
+            {
+              "code": "E_0272",
+              "operand": "X [492]"
+            },
+            {
+              "code": "E_0275",
+              "operand": "X [492]"
+            },
+            {
+              "code": "E_0459",
+              "operand": "X [492]"
+            },
+            {
+              "code": "E_0503",
+              "operand": "X [492]"
+            },
+            {
+              "code": "E_0505",
+              "operand": "X [492]"
+            },
+            {
+              "code": "E_0506",
+              "operand": "X [492]"
+            },
+            {
+              "code": "E_0518",
+              "operand": "X [492]"
+            },
+            {
+              "code": "E_0522",
+              "operand": "X [492]"
+            },
+            {
+              "code": "E_0569",
+              "operand": "X [492]"
+            },
+            {
+              "code": "E_0804",
+              "operand": "X"
+            },
+            {
+              "code": "E_0806",
+              "operand": "X [493]"
+            },
+            {
+              "code": "E_1007",
+              "operand": "X [493]"
+            },
+            {
+              "code": "E_1009",
+              "operand": "X [493]"
+            },
+            {
+              "code": "E_1010",
+              "operand": "X [493]"
+            },
+            {
+              "code": "E_3038",
+              "operand": "X [493]"
+            },
+            {
+              "code": "G_0079",
+              "operand": "X [493]"
+            },
+            {
+              "code": "G_0080",
+              "operand": "X [493]"
+            },
+            {
+              "code": "G_0081",
+              "operand": "X [493]"
+            },
+            {
+              "code": "G_0083",
+              "operand": "X [493]"
+            },
+            {
+              "code": "G_0084",
+              "operand": "X [493]"
+            },
+            {
+              "code": "G_0085",
+              "operand": "X [493]"
+            },
+            {
+              "code": "G_0086",
+              "operand": "X [493]"
+            },
+            {
+              "code": "GS_002",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00019",
+          "operands": [
+            {
+              "code": "ABO",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00019",
+          "operands": [
+            {
+              "operand": "X [548]"
+            }
+          ]
+        },
+        {
+          "de": "0081",
+          "nr": "00026",
+          "operands": [
+            {
+              "code": "S",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "5025",
+          "nr": "00027",
+          "operands": [
+            {
+              "code": "12",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "5004",
+          "nr": "00027",
+          "operands": [
+            {
+              "operand": "X [926]"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00028",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00028",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         }
       ],
-      "group_rules": [
+      "name": "Abweisung ReErst",
+      "pid": 33002,
+      "rows": [
         {
-          "group_id": "SG5",
-          "tag": "MOA",
-          "requirement": "O",
-          "_description": "MIG: MOA is mandatory in SG5 per MIG 1.0b; AHB requirement unverified - O for safety"
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00005",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00007",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00007",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00008",
+          "group": "SG3",
+          "status": [
+            "Kann [503]"
+          ]
+        },
+        {
+          "nr": "00008",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00009",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00010",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00010",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00011",
+          "group": "SG4",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00011",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00012",
+          "group": "SG5",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00012",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00013",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00014",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00015",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00016",
+          "status": [
+            "Soll [510]"
+          ]
+        },
+        {
+          "before": "00017",
+          "group": "SG7",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00017",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00019",
+          "status": [
+            "Muss ([2] ∨ [8] ∨ [9] ∨ [59] ∨ [60] ∨ [61] ∨ [62] ∨ [63] ∨ [72] ∨ [73] ∨ [74] ∨ [93] ∨ [94] ∨ [95] ∨ [121] ∨ ([96] ∧ [100]) ∨ [118] ∨ [119])",
+            "Kann"
+          ]
+        },
+        {
+          "nr": "00026",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00027",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00028",
+          "status": [
+            "Muss"
+          ]
         }
       ]
     },
     {
-      "code": 33003,
-      "name": "Abweisung Kopf- und Summenebene",
-      "segment_rules": [
+      "chapter": "3.1.2 Abweisung auf Kopf/Summen- und Positionsebene",
+      "communication": "ReEmpf an",
+      "elements": [
         {
-          "tag": "AJT",
-          "requirement": "M",
-          "_description": "SG7 AJT (Abweichungsgrund) is Muss only on an Abweisung. The Bestätigung 33001 carries no AJT at all — agreement needs no Antwortcode (REMADV AHB 1.0a §3.1.1)."
+          "de": "0062",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "BGM",
-          "requirement": "M"
+          "de": "0065",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "CUX",
-          "requirement": "M"
+          "de": "0052",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DOC",
-          "requirement": "M"
+          "de": "0054",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "05A",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DTM",
-          "requirement": "M"
+          "de": "0051",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "MOA",
-          "requirement": "M"
+          "de": "0057",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "2.9e",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "NAD",
-          "requirement": "M"
+          "de": "1001",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "239",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "RFF",
-          "requirement": "M"
+          "de": "1004",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "UNS",
-          "requirement": "M",
-          "_description": "UNS+S 'Trennung von Positions- und Summenteil' is Muss on all four use cases (segment 00026), followed by the Summenbetrag MOA+12."
+          "de": "2005",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "SG3 (Ansprechpartner) is Kann on every use case; COM is Muss only within it (see CTA)."
+          "de": "2380",
+          "nr": "00005",
+          "operands": [
+            {
+              "operand": "X [931]"
+            }
+          ]
         },
         {
-          "tag": "CTA",
-          "requirement": "O",
-          "_description": "SG3 (Ansprechpartner) is Kann on every use case; [503] only recommends it on an Abweisung. CTA is Muss *within* SG3, so a flat M refuses every conformant REMADV that omits the optional group."
+          "de": "2379",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "FTX",
-          "requirement": "O",
-          "_description": "FTX is optional per MIG 2.9e (no AHB constraint for PID 33003)"
+          "de": "1153",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "33003",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00007",
+          "operands": [
+            {
+              "operand": "X [45]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3139",
+          "nr": "00008",
+          "operands": [
+            {
+              "code": "IC",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3412",
+          "nr": "00008",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3148",
+          "nr": "00009",
+          "operands": [
+            {
+              "operand": "X ∨ [549]"
+            }
+          ]
+        },
+        {
+          "de": "3155",
+          "nr": "00009",
+          "operands": [
+            {
+              "code": "EM",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "FX",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "TE",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AJ",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AL",
+              "operand": "X [1P0..1]"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00010",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00010",
+          "operands": [
+            {
+              "operand": "X [45]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00010",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "6347",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "2",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "6345",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "EUR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "6343",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "11",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00012",
+          "operands": [
+            {
+              "code": "380",
+              "operand": "X"
+            },
+            {
+              "code": "389",
+              "operand": "X"
+            },
+            {
+              "code": "457",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00012",
+          "operands": [
+            {
+              "operand": "X [511]"
+            }
+          ]
+        },
+        {
+          "de": "5025",
+          "nr": "00013",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "5004",
+          "nr": "00013",
+          "operands": [
+            {
+              "operand": "X [930] [501]"
+            }
+          ]
+        },
+        {
+          "de": "5025",
+          "nr": "00014",
+          "operands": [
+            {
+              "code": "12",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "5004",
+          "nr": "00014",
+          "operands": [
+            {
+              "operand": "X [926]"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00015",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00015",
+          "operands": [
+            {
+              "operand": "X [931]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00015",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00016",
+          "operands": [
+            {
+              "code": "ACW",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00016",
+          "operands": [
+            {
+              "operand": "X [512]"
+            }
+          ]
+        },
+        {
+          "de": "4465",
+          "nr": "00017",
+          "operands": [
+            {
+              "operand": "X ([14] ⊻ [16]) ∧ ([11] ⊻ [12] ⊻ [47] ⊻ [48] ⊻ [75] ⊻ [76] ⊻ [77] ⊻ [78] ⊻ [79] ⊻ [80] [105] ⊻ [106] ⊻ [107] ⊻ [108])"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "E_0210",
+              "operand": "X"
+            },
+            {
+              "code": "E_0259",
+              "operand": "X"
+            },
+            {
+              "code": "E_0264",
+              "operand": "X"
+            },
+            {
+              "code": "E_0266",
+              "operand": "X"
+            },
+            {
+              "code": "E_0406",
+              "operand": "X"
+            },
+            {
+              "code": "E_0270",
+              "operand": "X"
+            },
+            {
+              "code": "E_0273",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00018",
+          "operands": [
+            {
+              "code": "AFL",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00018",
+          "operands": [
+            {
+              "operand": "X [536]"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00019",
+          "operands": [
+            {
+              "code": "ABO",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00019",
+          "operands": [
+            {
+              "operand": "X [548]"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "Z14",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00020",
+          "operands": [
+            {
+              "operand": "X [523]"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00021",
+          "operands": [
+            {
+              "code": "Z16",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00021",
+          "operands": [
+            {
+              "operand": "X [538]"
+            }
+          ]
+        },
+        {
+          "de": "0081",
+          "nr": "00026",
+          "operands": [
+            {
+              "code": "S",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "5025",
+          "nr": "00027",
+          "operands": [
+            {
+              "code": "12",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "5004",
+          "nr": "00027",
+          "operands": [
+            {
+              "operand": "X [926]"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00028",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00028",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         }
       ],
-      "group_rules": [
+      "name": "Strom Abweisung Kopf und Summe ReErst",
+      "pid": 33003,
+      "rows": [
         {
-          "group_id": "SG5",
-          "tag": "MOA",
-          "requirement": "O",
-          "_description": "MIG: MOA is mandatory in SG5 per MIG 1.0b; AHB requirement unverified - O for safety"
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00005",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00007",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00007",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00008",
+          "group": "SG3",
+          "status": [
+            "Kann [503]"
+          ]
+        },
+        {
+          "nr": "00008",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00009",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00010",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00010",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00011",
+          "group": "SG4",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00011",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00012",
+          "group": "SG5",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00012",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00013",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00014",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00015",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00016",
+          "status": [
+            "Muss [42]"
+          ]
+        },
+        {
+          "before": "00017",
+          "group": "SG7",
+          "status": [
+            "Muss [517] ⊻"
+          ]
+        },
+        {
+          "nr": "00017",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00018",
+          "status": [
+            "Muss ([36] ∧ ([88] ∧ ([105] ⊻ [106] ⊻ [107] ⊻"
+          ]
+        },
+        {
+          "nr": "00019",
+          "status": [
+            "Muss ⊻ [41]) ∧ [22]) ⊻ [112] ⊻ [113]) ∧ [39]) ⊻ ([49] ∧ [57]) ⊻ ([50] ∧ [82] ⊻ [83] ⊻ [84] ⊻ [85] ⊻ [86] ⊻ [101] ⊻ [102]) ∧ [87]) ⊻ [86]) ∧ ([120] ⊻ ⊻ [111] ⊻ [112] ⊻ [113]) ∧ [109])",
+            "Kann"
+          ]
+        },
+        {
+          "nr": "00020",
+          "status": [
+            "Muss [18] ∧ [529]"
+          ]
+        },
+        {
+          "nr": "00021",
+          "status": [
+            "Muss [56] ∧ ([57] ⊻ [81] ⊻ [82] ⊻ [83] ⊻ [84] ⊻ [85] ⊻ [86] ⊻ [105] ⊻ [106] ⊻ [107] ⊻ [108]) ∧ [544]"
+          ]
+        },
+        {
+          "nr": "00026",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00027",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00028",
+          "status": [
+            "Muss"
+          ]
         }
       ]
     },
     {
-      "code": 33004,
-      "name": "Abweisung Positionsebene",
-      "segment_rules": [
+      "chapter": "3.1.2 Abweisung auf Kopf/Summen- und Positionsebene",
+      "communication": "ReEmpf an",
+      "elements": [
         {
-          "tag": "AJT",
-          "requirement": "M",
-          "_description": "SG7 AJT (Abweichungsgrund) is Muss only on an Abweisung. The Bestätigung 33001 carries no AJT at all — agreement needs no Antwortcode (REMADV AHB 1.0a §3.1.1)."
+          "de": "0062",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "BGM",
-          "requirement": "M"
+          "de": "0065",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "CUX",
-          "requirement": "M"
+          "de": "0052",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DLI",
-          "requirement": "M",
-          "_description": "SG10 (Identifikation der Position) exists only on 33004 'Abweisung Position', repeated until every position-level defect is named (§3.1.2, condition [525]). 33003 is the Kopf/Summen Abweisung and has no Positionsebene."
+          "de": "0054",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "05A",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DOC",
-          "requirement": "M"
+          "de": "0051",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DTM",
-          "requirement": "M"
+          "de": "0057",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "2.9e",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "MOA",
-          "requirement": "M"
+          "de": "1001",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "239",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "NAD",
-          "requirement": "M"
+          "de": "1004",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "RFF",
-          "requirement": "M"
+          "de": "2005",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "UNS",
-          "requirement": "M",
-          "_description": "UNS+S 'Trennung von Positions- und Summenteil' is Muss on all four use cases (segment 00026), followed by the Summenbetrag MOA+12."
+          "de": "2380",
+          "nr": "00005",
+          "operands": [
+            {
+              "operand": "X [931]"
+            }
+          ]
         },
         {
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "SG3 (Ansprechpartner) is Kann on every use case; COM is Muss only within it (see CTA)."
+          "de": "2379",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "CTA",
-          "requirement": "O",
-          "_description": "SG3 (Ansprechpartner) is Kann on every use case; [503] only recommends it on an Abweisung. CTA is Muss *within* SG3, so a flat M refuses every conformant REMADV that omits the optional group."
+          "de": "1153",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "FTX",
-          "requirement": "O",
-          "_description": "FTX is optional per MIG 2.9e (no AHB constraint for PID 33004)"
+          "de": "1154",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "33004",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00007",
+          "operands": [
+            {
+              "operand": "X [45]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3139",
+          "nr": "00008",
+          "operands": [
+            {
+              "code": "IC",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3412",
+          "nr": "00008",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3148",
+          "nr": "00009",
+          "operands": [
+            {
+              "operand": "X ∨ [549]"
+            }
+          ]
+        },
+        {
+          "de": "3155",
+          "nr": "00009",
+          "operands": [
+            {
+              "code": "EM",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "FX",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "TE",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AJ",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AL",
+              "operand": "X [1P0..1]"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00010",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00010",
+          "operands": [
+            {
+              "operand": "X [45]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00010",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "6347",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "2",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "6345",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "EUR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "6343",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "11",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00012",
+          "operands": [
+            {
+              "code": "380",
+              "operand": "X"
+            },
+            {
+              "code": "389",
+              "operand": "X"
+            },
+            {
+              "code": "457",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00012",
+          "operands": [
+            {
+              "operand": "X [511]"
+            }
+          ]
+        },
+        {
+          "de": "5025",
+          "nr": "00013",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "5004",
+          "nr": "00013",
+          "operands": [
+            {
+              "operand": "X [930] [501]"
+            }
+          ]
+        },
+        {
+          "de": "5025",
+          "nr": "00014",
+          "operands": [
+            {
+              "code": "12",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "5004",
+          "nr": "00014",
+          "operands": [
+            {
+              "operand": "X [926]"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00015",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00015",
+          "operands": [
+            {
+              "operand": "X [931]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00015",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00016",
+          "operands": [
+            {
+              "code": "ACW",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00016",
+          "operands": [
+            {
+              "operand": "X [512]"
+            }
+          ]
+        },
+        {
+          "de": "1073",
+          "nr": "00022",
+          "operands": [
+            {
+              "code": "1",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00022",
+          "operands": [
+            {
+              "operand": "X [526]"
+            }
+          ]
+        },
+        {
+          "de": "4465",
+          "nr": "00023",
+          "operands": [
+            {
+              "operand": "X ([15] ∧ ([11] ⊻ [12] ⊻ [47] ⊻ [48] ⊻ [75] ⊻ [76] ⊻ [77] ⊻ [78] ⊻ [79] ⊻ [80] ⊻ [91] ⊻ [92] ⊻ [105] ⊻ [106] ⊻ [107] ⊻ [34]"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00023",
+          "operands": [
+            {
+              "code": "E_0210",
+              "operand": "X"
+            },
+            {
+              "code": "E_0259",
+              "operand": "X"
+            },
+            {
+              "code": "E_0264",
+              "operand": "X"
+            },
+            {
+              "code": "E_0266",
+              "operand": "X"
+            },
+            {
+              "code": "E_0270",
+              "operand": "X"
+            },
+            {
+              "code": "E_0273",
+              "operand": "X"
+            },
+            {
+              "code": "E_0276",
+              "operand": "X"
+            },
+            {
+              "code": "E_0277",
+              "operand": "X"
+            },
+            {
+              "code": "E_0406",
+              "operand": "X"
+            },
+            {
+              "code": "E_0407",
+              "operand": "X"
+            },
+            {
+              "code": "E_0515",
+              "operand": "X"
+            },
+            {
+              "code": "E_0517",
+              "operand": "X"
+            },
+            {
+              "code": "E_0519",
+              "operand": "X"
+            },
+            {
+              "code": "E_0521",
+              "operand": "X"
+            },
+            {
+              "code": "E_0566",
+              "operand": "X"
+            },
+            {
+              "code": "E_0568",
+              "operand": "X"
+            },
+            {
+              "code": "S_0103",
+              "operand": "X"
+            },
+            {
+              "code": "S_0104",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00024",
+          "operands": [
+            {
+              "code": "AFL",
+              "operand": "X [26] ⊻ ([70] ∧ ([65] ⊻ [68] ⊻ [66] ⊻ [69] ⊻ [64] ⊻ [67] ⊻ [114] ⊻ [115] ⊻ ([97] ∧ ([51] ⊻"
+            },
+            {
+              "code": "ACW",
+              "operand": "X [35]"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00024",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00025",
+          "operands": [
+            {
+              "code": "ABO",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00025",
+          "operands": [
+            {
+              "operand": "X [548]"
+            }
+          ]
+        },
+        {
+          "de": "0081",
+          "nr": "00026",
+          "operands": [
+            {
+              "code": "S",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "5025",
+          "nr": "00027",
+          "operands": [
+            {
+              "code": "12",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "5004",
+          "nr": "00027",
+          "operands": [
+            {
+              "operand": "X [926]"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00028",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00028",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         }
       ],
-      "group_rules": [
+      "name": "Strom Abweisung Position ReErst",
+      "pid": 33004,
+      "rows": [
         {
-          "group_id": "SG5",
-          "tag": "MOA",
-          "requirement": "O",
-          "_description": "MIG: MOA is mandatory in SG5 per MIG 1.0b; AHB requirement unverified - O for safety"
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00005",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00007",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00007",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00008",
+          "group": "SG3",
+          "status": [
+            "Kann [503]"
+          ]
+        },
+        {
+          "nr": "00008",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00009",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00010",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00010",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00011",
+          "group": "SG4",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00011",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00012",
+          "group": "SG5",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00012",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00013",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00014",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00015",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00016",
+          "status": [
+            "Muss [98] ⊻ [99]"
+          ]
+        },
+        {
+          "before": "00022",
+          "group": "SG10",
+          "status": [
+            "Muss [525]"
+          ]
+        },
+        {
+          "nr": "00022",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00023",
+          "group": "SG12",
+          "status": [
+            "Muss [533] ⊻ [534]"
+          ]
+        },
+        {
+          "nr": "00023",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00024",
+          "status": [
+            "Muss [26] ⊻ [35] ⊻ ([70] ∧ ([65] ⊻ [68] ⊻ [66] ⊻ [69] ⊻ [64] ⊻ [67] ⊻ [114] ⊻ [115] ⊻ [116] ⊻"
+          ]
+        },
+        {
+          "nr": "00025",
+          "status": [
+            "Muss [43] ⊻ ([28] ∧ ([51] ⊻ ([54] ⊻ [55] ⊻ ([71] ∧ ([64] ⊻ [65] ⊻ [66] ⊻ [67] ⊻ [68] ⊻ [69] ⊻ [114] ⊻ [115] ⊻",
+            "Kann"
+          ]
+        },
+        {
+          "nr": "00026",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00027",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00028",
+          "status": [
+            "Muss"
+          ]
         }
       ]
     }
-  ]
+  ],
+  "conditions": {
+    "103": "Wenn in dieser SG12 AJT DE1082 = E_0566",
+    "104": "Wenn in dieser SG12 AJT DE1082 = E_0568",
+    "105": "Wenn in diesem AJT DE1082 = E_0270",
+    "106": "Wenn in diesem AJT DE1082 = E_0273",
+    "107": "Wenn in diesem AJT DE1082 = E_0276",
+    "108": "Wenn in diesem AJT DE1082 = E_0277",
+    "11": "Wenn in diesem AJT DE1082 = E_0406",
+    "114": "Wenn in dieser SG12 AJT DE1082 = E_0270",
+    "115": "Wenn in dieser SG12 AJT DE1082 = E_0273",
+    "116": "Wenn in dieser SG12 AJT DE1082 = E_0276",
+    "117": "Wenn in dieser SG12 AJT DE1082 = E_0277",
+    "12": "Wenn in diesem AJT DE1082 = E_0407",
+    "14": "A-Code aus Cluster Ablehnung auf Kopfebene",
+    "15": "A-Code aus Cluster Ablehnung auf Positionsebene",
+    "16": "A-Code aus Cluster Ablehnung auf Summenebene",
+    "18": "Wenn in dieser SG7 AJT DE4465 = A74/A75/A76/AC5",
+    "2": "Wenn SG7 AJT+28 vorhanden",
+    "22": "Wenn in dieser SG7 AJT DE4465 = A02/A06/A16/ A66/A67/A68/A69/A78/A90/ A95/A96/AC3/AC4",
+    "26": "Wenn in dieser SG12 AJT DE4465 = A51/A62/A82/ AA1/AA6/AA7/AB8/AD6",
+    "28": "Wenn in dieser SG12 AJT DE4465 = A23/A26/A35/ A36/A38/A46/A47/A48/A50/ A58/A59/A61/A77/A84/A99",
+    "3": "Bei SG5 DOC+389 / Z25 ist der Wert aus derselben SG5 MOA+9 mit (-1) multipliziert anzugeben.",
+    "33": "Wenn in diesem AJT DE1082 = S_0103",
+    "34": "Wenn in diesem AJT DE1082 = S_0104",
+    "35": "Wenn in dieser SG12 AJT DE4465 = A34/A39/AA2/AB2",
+    "36": "Wenn in dieser SG7 AJT DE4465 = A12/A75/A80/AE1",
+    "39": "Wenn in dieser SG7 AJT DE4465 = AC1",
+    "4": "Bei SG5 DOC+380 / 457 ist der Wert aus derselben SG5 MOA+9 unverändert anzugeben.",
+    "40": "Wenn in dieser SG7 AJT DE1082 = E_0406",
+    "41": "Wenn in dieser SG7 AJT DE1082 = E_0407",
+    "42": "Wenn in SG7 AJT DE1082 = E_0407/E_0568/E_0521/ E_0517/E_0266",
+    "43": "Wenn in SG12 AJT DE4465=28 Wenn in dieser SG12 AJT DE1082 = E_0406",
+    "45": "Nur MP-ID aus Sparte",
+    "47": "Wenn in diesem AJT DE1082 = E_0210",
+    "48": "Wenn in diesem AJT DE1082 = E_0259",
+    "49": "Wenn in dieser SG7 AJT DE4465 = A01/A05/A22/ A23/A90/A96",
+    "492": "Wenn MP-ID in NAD+MR (Nachrichtenempfänger) aus Sparte Strom",
+    "493": "Wenn MP-ID in NAD+MR (Nachrichtenempfänger) aus Sparte Gas 3 Ausprägungen von REMADV-Nachrichten Für die Verwendung der REMADV-Nachrichten wird die nachfolgend beschriebene Vorgehensweise empfohlen: › Um eine eindeutige Auflösung von offenen Forderungen zu gewährleisten, werden Rechnungen nach dem Prinzip „ganz oder gar nicht“ ausgeglichen, d. h. es werden keine Teilzahlungen geleistet. › Es kann nicht davon ausgegangen werden, dass eine 1:1-Beziehung zwischen empfangener INVOIC-Datei und versendeter REMADV-Datei besteht, da die INVOIC-Nachrichten beim Empfänger unterschiedliche Bearbeitungswege in den DV-Systemen haben, abhängig davon, ob der Zahlung zugestimmt wird oder ob die Zahlung abgewiesen wird. Die Übertragung der Nachrichten kann also nur entkoppelt erfolgen. › In einer REMADV-Nachricht 1 werden entweder nur Zustimmungen oder nur Ablehnungen zu Zahlungen übertragen. › Aus Gründen einer höchstmöglichen Automatisierung und Fehlerminimierung sind die Forderungen und Rückerstattungen der Einzel-INVOIC in einer REMADV zu verrechnen, so dass sich in der Regel eine Forderung des NB an den Lieferanten ergibt. › In Fällen, in denen sich im Rahmen der Verrechnung eine Rückerstattung ergibt, ist eine REMADV (mit negativem Zahlbetrag) vom Lieferanten an den Netzbetreiber zu senden. Der Netzbetreiber zahlt genau diesen Betrag an den Lieferanten aus. Der Überweisungsbetrag muss identisch sein mit der Summe aller in einer Zahlungs-REMADV enthaltenen Zahlbeträge. › Auf der Überweisung wird immer eine Referenz zur REMADV mitgegeben: Die in der REMADV angegebene Avisnummer aus dem BGM DE1004 wird im Verwendungszweck angegeben, um eine eindeutige Zahlungszuordnung zu den in der REMADV genannten Rechnungen zu gewährleisten. Dies gilt sowohl im Fall, dass der Summenbetrag der REMADV positiv ist und somit die Überweisung vom LF an den NB erfolgt, als auch im Fall, dass der Summenbetrag der REMADV negativ ist und somit die Überweisung vom NB an den LF erfolgt. Um den administrativen Aufwand zur Erfassung und Buchung der Zahlungseingänge gering zu halten, ist sicherzustellen, dass keine markt- bzw. messlokationsscharfen Überweisungen erfolgen. 1 Eine REMADV-Datei enthält genau eine REMADV-Nachricht. Eine INVOIC-Datei enthält üblicher- weise mehr als eine INVOIC-Nachricht. › Bei einer nicht gerechtfertigten Abweisung der Rechnung (= Nicht-Zahlungsavis) hat der Sender der REMADV, nach erfolgter bilateraler Klärung, eine Bestätigung der Rechnung mit Zahlungsavis nachzuliefern und die Nachricht zu prozessieren. › Muss der Rechnungsempfänger aufgrund eines von ihm verursachten Fehlers eine Nachricht erneut in sein System prozessieren, so hat er sicherzustellen, dass in derartigen Fällen seine Systeme keine Fehlermeldung \"doppelte Rechnung\" versenden. Die folgenden Tabellen zeigen Anwendungsmöglichkeiten der REMADV-Nachricht. Sie verstehen sich als verbindliche Vorgabe zur Verwendung der einzelnen Segmente / Datenelemente / Qualifier / Codes je Anwendungsfall. Sie haben zum Zwecke des Datenaustausches im deutschen Energiemarkt verbindlichen Charakter. Weitere Einzelheiten zu den Inhalten der jeweiligen Segmente entnehmen Sie bitte den Segmentbeschreibungen (BDEW - UN/EDIFACT D.05A - REMADV) sowie dem Dokument „Allgemeine Festlegungen“ in der jeweils gültigen Version.",
+    "50": "Wenn in dieser SG7 AJT DE4465 = A01/A05/A18/ A19/A20/A90/A96",
+    "501": "Hinweis: An dieser Stelle ist der Betrag aus SG50 MOA+9 der zugrundeliegenden INVOIC zu übernehmen.",
+    "502": "Hinweis: Bei positivem Betrag ergibt sich eine Forderung des Rechnungsstellers. Bei negativem Betrag ergibt sich eine Forderung für den Rechnungsempfänger.",
+    "503": "Hinweis: Empfohlen, um bei Abweisung Ansprechpartner für Rückfragen zu erreichen.",
+    "51": "Wenn in dieser SG12 AJT DE1082 = E_0406",
+    "510": "Hinweis: Bei Ablehnung einer vorherigen COMDIS",
+    "511": "Hinweis: BGM DE1004 aus der abgelehnten INVOIC- Nachricht",
+    "512": "Hinweis: BGM DE1004 aus der abgelehnten COMDIS-Nachricht",
+    "515": "Hinweis: BGM DE1004 aus der bestätigten INVOIC- Nachricht",
+    "517": "Hinweis: Wenn in dieser",
+    "52": "Wenn in dieser SG12 AJT DE1082 = E_0407",
+    "523": "Hinweis: Jede Rechnungsnummer einer Abschlagsrechnung muss in einem separaten DE4440 angegeben werden. Reichen die fünf DE4440 für die Rechnungsnummern aller anzugebenden Abschlagrechnungen nicht aus, ist das FTX+Z14 zu wiederholen.",
+    "525": "Hinweis: Diese SG10 ist so oft zu wiederholen, bis alle Fehler der Positionsebene genannt sind.",
+    "526": "Hinweis: Wert aus DE1082 der SG26 in der sich der nachfolgende Fehler in der INVOIC befindet, die in diesem SG5 DOC DE1004 genannt ist.",
+    "529": "Hinweis: Wenn in dieser SG7 AJT DE4465 = A75 vorhanden, dann dürfen in den DE4440 dieses FTX- Segments nur Abschlagsrechnungsnummern genannt sein, welche in der Rechnung enthalten sind, deren Nummer in dieser SG7",
+    "53": "Wenn in dieser SG12 AJT DE4465 = A25/A31/A99/AF1",
+    "533": "Hinweis: Wenn in dieser SG12 AJT DE4465 = AA1/ AA6/AA7/AB8/AD6, ist diese SG12 so oft mit AJT DE4465 = Code zu wiederholen, bis alle Rechnungsnummern im RFF- Segment dieser SG12 genannt sind.",
+    "534": "Hinweis: Wenn in dieser SG12 AJT DE4465 = A34/ A39/AA2/AB2, ist diese SG12 ist so oft mit AJT DE4465 = Code zu wiederholen, bis alle Nummern der Reklamationen im RFF-Segment dieser SG12 genannt sind.",
+    "536": "Hinweis: Dieses DE darf keine Abschlagsrechnungsnummer enthalten",
+    "538": "Hinweis: Jede Positionsnummer eines Angebotes muss in einem separaten DE4440 angegeben",
+    "54": "Wenn in dieser SG12 AJT DE1082 = E_0210",
+    "544": "Hinweis: Wenn in dieser SG7 AJT DE4465 = A21 vorhanden, dann darf in den DE4440 dieses FTX-Segments jeweils nur eine Positionsnummer genannt sein, welche aus dem bestätigten Angebot nicht in der Rechnung enthalten sind.",
+    "548": "Hinweis: Die Befüllung des Datenelements ergibt sich aus dem zugehörigen EBD.",
+    "549": "Hinweis: Es darf nur eine Information im DE3148 übermittelt werden",
+    "55": "Wenn in dieser SG12 AJT DE1082 = E_0259",
+    "56": "Wenn in dieser SG7 AJT DE4465 = A21",
+    "57": "Wenn in dieser SG7 AJT DE1082 = E_0210",
+    "59": "Wenn SG7 AJT+A08/ A99+E_0459 vorhanden",
+    "60": "Wenn SG7 AJT+A99+E_0243 vorhanden",
+    "61": "Wenn SG7 AJT+A99+E_0261 vorhanden",
+    "62": "Wenn SG7 AJT+A99+E_1007 vorhanden",
+    "64": "Wenn in dieser SG12 AJT DE1082 = E_0264",
+    "65": "Wenn in dieser SG12 AJT DE1082 = E_0515",
+    "66": "Wenn in dieser SG12 AJT DE1082 = E_0519",
+    "67": "Wenn in dieser SG12 AJT DE1082 = E_0266",
+    "68": "Wenn in dieser SG12 AJT DE1082 = E_0517",
+    "69": "Wenn in dieser SG12 AJT DE1082 = E_0521",
+    "70": "Wenn in dieser SG12 AJT DE4465 = A15",
+    "71": "Wenn in dieser SG12 AJT DE4465 = A99",
+    "75": "Wenn in diesem AJT DE1082 = E_0264",
+    "76": "Wenn in diesem AJT DE1082 = E_0266",
+    "77": "Wenn in diesem AJT DE1082 = E_0515",
+    "78": "Wenn in diesem AJT DE1082 = E_0517",
+    "79": "Wenn in diesem AJT DE1082 = E_0519",
+    "8": "Wenn SG7 AJT+A01/ A02+E_0505 vorhanden",
+    "80": "Wenn in diesem AJT DE1082 = E_0521",
+    "81": "Wenn in dieser SG7 AJT DE1082 = E_0264",
+    "82": "Wenn in dieser SG7 AJT DE1082 = E_0515",
+    "83": "Wenn in dieser SG7 AJT DE1082 = E_0519",
+    "84": "Wenn in dieser SG7 AJT DE1082 = E_0266",
+    "85": "Wenn in dieser SG7 AJT DE1082 = E_0517",
+    "86": "Wenn in dieser SG7 AJT DE1082 = E_0521",
+    "88": "Wenn in dieser SG7 AJT DE4465 = A25",
+    "89": "wenn im DE3155 in demselben COM der Code EM vorhanden ist",
+    "9": "Wenn SG7 AJT+A32/ A99+E_0503 vorhanden",
+    "90": "wenn im DE3155 in demselben COM der Code TE / FX / AJ / AL vorhanden ist",
+    "91": "Wenn in diesem AJT DE1082 = E_0566",
+    "92": "Wenn in diesem AJT DE1082 = E_0568",
+    "926": "Format: Möglicher Wert: 0",
+    "930": "Format: max. 2 Nachkommastellen",
+    "931": "Format: ZZZ = +00",
+    "939": "Format: Die Zeichenkette muss die Zeichen @ und . enthalten",
+    "940": "Format: Die Zeichenkette muss mit dem Zeichen + beginnen und danach dürfen nur noch Ziffern folgen",
+    "97": "Wenn in dieser SG12 AJT DE4465 = A27",
+    "98": "Wenn in SG12 AJT DE1082 = E_0407",
+    "99": "Wenn in SG12 AJT DE1082 = E_0568"
+  },
+  "message_type": "REMADV",
+  "packages": {
+    "1P": "--                                                 Hinweis:       Das    ist  das   Standardpaket,             wenn      keine     Bedingung         zum     Tragen       kommt,        z. B.",
+    "2P": "[492]",
+    "3P": "[493]"
+  },
+  "release": "2.9e",
+  "schema_version": 2,
+  "source": {
+    "file": "REMADV_AHB_1.0a.pdf",
+    "sha256": "a0e23c0a6af6d48c308511fa5c6be65b227e7cb98409c9bc341915de99f7cd64",
+    "title": "REMADV AHB 1.0a"
+  }
 }

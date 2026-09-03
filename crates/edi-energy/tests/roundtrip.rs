@@ -66,10 +66,14 @@ mod utilmd_roundtrip {
             let pid = Pruefidentifikator::new(pid_u32).unwrap();
             let release = Release::new(UTILMD_RELEASES[release_idx]);
 
+            // The Prüfidentifikator travels in `SG4 SG6 RFF+Z13`: a UTILMD
+            // without a Vorgang carries none.
             let bytes = UtilmdBuilder::new(release.clone())
                 .pruefidentifikator(pid)
                 .sender(sender.as_str())
                 .receiver(receiver.as_str())
+                .transaction("VORGANG0001")
+                .done()
                 .serialize()
                 .expect("serialize must not fail for valid inputs");
 
@@ -246,7 +250,7 @@ mod contrl_roundtrip {
                 .receiver("9900357000004")
                 .interchange_ref("REF001");
 
-            let builder = if accept { builder.accept() } else { builder.reject() };
+            let builder = if accept { builder.accept() } else { builder.reject("12") };
 
             let bytes = builder.serialize().expect("serialize must not fail");
             let reparsed = Platform::with_all_profiles().parse(&bytes).expect("serialized CONTRL must re-parse");
@@ -1951,6 +1955,26 @@ fn a_strom_anmeldung_round_trips_its_bilanzkreis_produktpaket() {
         ))
         .produktpaket(Produktpaket::bilanzkreis("11XBK-STD-----9"))
         .marktlokation("51238696781")
+        // What the 55001 column demands beyond the Bilanzkreis: the
+        // Marktlokation's Stammdaten (`SEQ+Z01`), the Kunde's (`SEQ+Z75`),
+        // and the Kunde with a Korrespondenzanschrift (`SG12`).
+        .stammdaten("Z01")
+        .cci("", "Z15")
+        .done()
+        .stammdaten("Z75")
+        .cci("Z61", "ZF9")
+        .cav("ZU5")
+        .done()
+        .kunde_des_lf(["Mustermann".to_owned()], "Z01")
+        .anschrift(
+            "Z04",
+            ["Mustermann".to_owned()],
+            "Z01",
+            "Musterstr. 1",
+            "Berlin",
+            "10115",
+            "DE",
+        )
         .done()
         .serialize()
         .expect("serialises");
@@ -2087,16 +2111,55 @@ fn a_gas_anmeldung_round_trips_its_bilanzkreis_cci() {
 
     let bytes = edi_energy::builders::UtilmdBuilder::new(Release::new("G1.1"))
         .pruefidentifikator(Pruefidentifikator::new(44001).expect("valid PID"))
+        // DVGW-issued MP-IDs (`98…`): the Gas column admits DE 3055 `9` and
+        // `332` only.
         .sender("9870000000006")
-        .receiver("9900357000004")
+        .receiver("9870000000014")
         .document_date("202608280900")
         .transaction("VORGANG-0001")
         .date(dtm::BEGINN_ZUM, "20261101")
-        .transaktionsgrund(Transaktionsgrund::verbrauchende_malo(
-            transaktionsgrund::WECHSEL,
-        ))
+        // Gas states no Transaktionsgrundergänzung: `STS+7++E01`.
+        .transaktionsgrund(Transaktionsgrund {
+            grund: transaktionsgrund::WECHSEL.to_owned(),
+            ergaenzung: None,
+            befristet: None,
+        })
         .merkmal(produkt::CCI_BILANZKREIS_GAS, "9870000000006")
-        .marktlokation("51238696781")
+        .location(
+            edi_energy::Lokationstyp::Meldepunkt,
+            "DE00056266802AO6G56M11SN51G21M24S",
+        )
+        // What the 44001 column demands beyond the Bilanzkreis.
+        .imd("Z36", "Z12")
+        .reference_dated("Z18", "", "Z20", "2026", "802")
+        .stammdaten("Z01")
+        .cci("", "Z15")
+        .cci("", "Z88")
+        .cav_wert("Z74", "Z08")
+        .cav_wert("Z73", "Z11")
+        .done()
+        .stammdaten("Z12")
+        .qty("Z16", "100", "P1")
+        .done()
+        .kunde_des_lf(["Mustermann".to_owned()], "Z01")
+        .anschrift(
+            "Z04",
+            ["Mustermann".to_owned()],
+            "Z01",
+            "Musterstr. 1",
+            "Berlin",
+            "10115",
+            "DE",
+        )
+        .anschrift(
+            "Z05",
+            ["Mustermann".to_owned()],
+            "Z01",
+            "Musterstr. 1",
+            "Berlin",
+            "10115",
+            "DE",
+        )
         .done()
         .serialize()
         .expect("serialises");

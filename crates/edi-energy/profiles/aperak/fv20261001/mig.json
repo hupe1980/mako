@@ -1,283 +1,1200 @@
 {
-  "schema_version": 1,
+  "ahb_version": "1.1",
+  "envelope": [],
   "message_type": "APERAK",
+  "pid_source": "bgm_de1004",
+  "publikationsdatum": "2026-04-01",
   "release": "2.2",
-  "valid_from": "2026-10-01",
-  "ordering_hint": [],
-  "dtm_formats": {
-    "137": [
-      "303"
-    ],
-    "171": [
-      "303"
-    ]
+  "schema_version": 2,
+  "source": {
+    "file": "APERAK_MIG_2.2.pdf",
+    "sha256": "d4255b19d9b60db49475717ad1c0314c05dd6bb2665a4cca5799a0d0415fc83f",
+    "title": "APERAK MIG 2.2"
   },
-  "segments": [
+  "structure": [
     {
-      "tag": "UNH",
-      "name": "Nachrichten-Kopfsegment",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "format": "an..14",
           "id": "0062",
-          "status": "M",
-          "components": 1
+          "name": "Nachrichten-Referenznummer",
+          "note": "Eindeutige Nachrichtenreferenz des Absenders. Laufende Nummer der Nachrichten im Datenaustausch. Identisch mit DE0062 im UNT, i. d. R. vom sendenden Konverter vergeben.",
+          "status": "M"
         },
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "APERAK",
+                  "name": "Anwendungsfehler- und Bestätigungs- Nachricht"
+                }
+              ],
+              "format": "an..6",
+              "id": "0065",
+              "name": "Nachrichtentyp-Kennung",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "D",
+                  "name": "Entwurfs-Version"
+                }
+              ],
+              "format": "an..3",
+              "id": "0052",
+              "name": "Versionsnummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "07B",
+                  "name": "Ausgabe 2007 - B"
+                }
+              ],
+              "format": "an..3",
+              "id": "0054",
+              "name": "Freigabenummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "UN",
+                  "name": "UN/CEFACT"
+                }
+              ],
+              "format": "an..2",
+              "id": "0051",
+              "name": "Verwaltende Organisation",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "2.2",
+                  "name": "Versionsnummer der zugrundeliegenden BDEW-Nachrichtenbeschreibung"
+                }
+              ],
+              "format": "an..6",
+              "id": "0057",
+              "name": "Anwendungscode der zuständigen Organisation",
+              "status": "R"
+            }
+          ],
           "id": "S009",
-          "status": "M",
-          "components": 6
+          "name": "Nachrichten-Kennung",
+          "status": "M"
         }
-      ]
+      ],
+      "example": "UNH+1+APERAK:D:07B:UN:2.2'",
+      "max": 1,
+      "name": "Nachrichten-Kopfsegment",
+      "nr": "00001",
+      "status": "M",
+      "tag": "UNH",
+      "zaehler": "0010"
     },
     {
-      "tag": "BGM",
-      "name": "Beginn der Nachricht",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "312",
+                  "name": "Anerkennungsmeldung"
+                },
+                {
+                  "code": "313",
+                  "name": "Anwendungssystemfehlermeldung"
+                }
+              ],
+              "format": "an..3",
+              "id": "1001",
+              "name": "Dokumentenname, Code",
+              "status": "R"
+            }
+          ],
           "id": "C002",
-          "status": "M",
-          "components": 4
+          "name": "Dokumenten-/ Nachrichtenname",
+          "status": "R"
         },
         {
+          "components": [
+            {
+              "format": "an..35",
+              "id": "1004",
+              "name": "Dokumentennummer",
+              "note": "EDI-Nachrichtennummer vergeben vom Absender des Dokuments.",
+              "status": "R"
+            }
+          ],
           "id": "C106",
-          "status": "C",
-          "components": 3
-        },
-        {
-          "id": "1225",
-          "status": "C",
-          "components": 1
+          "name": "Dokumenten-/Nachrichten- Identifikation",
+          "status": "R"
         }
       ],
-      "qualifier_restrictions": {
-        "1001": [
-          "312",
-          "313"
-        ]
-      }
+      "example": "BGM+313+AFBM5422'",
+      "max": 1,
+      "name": "Beginn der Nachricht",
+      "nr": "00002",
+      "status": "M",
+      "tag": "BGM",
+      "zaehler": "0020"
     },
     {
-      "tag": "DTM",
-      "name": "Dokumentendatum",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "137",
+                  "name": "Dokumenten-/Nachrichtendatum/-zeit"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
+            }
+          ],
           "id": "C507",
-          "status": "M",
-          "components": 3
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
         }
       ],
-      "qualifier_restrictions": {
-        "2005": [
-          "137"
-        ]
-      }
+      "example": "DTM+137:202104081015?+00:303'",
+      "max": 1,
+      "name": "Dokumentendatum",
+      "nr": "00003",
+      "status": "R",
+      "tag": "DTM",
+      "zaehler": "0030"
     },
     {
-      "tag": "UNT",
-      "name": "Nachrichten-Endesegment",
-      "mandatory": true,
-      "max_occurrences": 1,
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "ACE",
+                      "name": "Nummer des zugehörigen Dokuments"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "status": "R"
+                }
+              ],
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
+            }
+          ],
+          "example": "RFF+ACE:TG9523'",
+          "max": 1,
+          "name": "Referenzangaben",
+          "nr": "00004",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0100"
+        },
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "171",
+                      "name": "Referenzdatum/-zeit"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2005",
+                  "name": "Datums- oder Uhrzeits- oder Zeitspannen-Funktion, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "2380",
+                  "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "303",
+                      "name": "CCYYMMDDHHMMZZZ"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "2379",
+                  "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C507",
+              "name": "Datum/Uhrzeit/Zeitspanne",
+              "status": "M"
+            }
+          ],
+          "example": "DTM+171:202104081015?+00:303'",
+          "max": 1,
+          "name": "Referenzdatum",
+          "nr": "00005",
+          "status": "R",
+          "tag": "DTM",
+          "zaehler": "0110"
+        }
+      ],
+      "group": "SG2",
+      "max": 1,
+      "name": "Referenznummer/-version mit Datum",
+      "status": "R",
+      "zaehler": "0090"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "AGO",
+                      "name": "Absenderreferenz für die Original-Nachricht"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "note": "Dokumentennummer der referenzierten Nachricht",
+                  "status": "R"
+                }
+              ],
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
+            }
+          ],
+          "example": "RFF+AGO:12312'",
+          "max": 1,
+          "name": "Dokumentennummer der referenzierten Nachricht",
+          "nr": "00006",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0100"
+        }
+      ],
+      "group": "SG2",
+      "max": 1,
+      "name": "Dokumentennummer der referenzierten Nachricht",
+      "status": "D",
+      "zaehler": "0090"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "TN",
+                      "name": "Transaktions-Referenznummer"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "note": "Vorgangsnummer des referenzierten Vorgangs",
+                  "status": "R"
+                }
+              ],
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
+            }
+          ],
+          "example": "RFF+TN:1'",
+          "max": 1,
+          "name": "Referenznummer des Vorgangs",
+          "nr": "00007",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0100"
+        }
+      ],
+      "group": "SG2",
+      "max": 1,
+      "name": "Referenznummer des Vorgangs",
+      "status": "D",
+      "zaehler": "0090"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "MS",
+                  "name": "Dokumenten-/Nachrichtenaussteller bzw. - absender"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    },
+                    {
+                      "code": "332",
+                      "name": "DE, DVGW Service & Consult GmbH"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+MS+4078901000029::9'\nNAD+MS+9900204000002::293'",
+          "max": 1,
+          "name": "MP-ID Absender",
+          "nr": "00008",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0130"
+        }
+      ],
+      "group": "SG3",
+      "max": 1,
+      "name": "MP-ID Absender",
+      "status": "R",
+      "zaehler": "0120"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "MR",
+                  "name": "Nachrichtenempfänger"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    },
+                    {
+                      "code": "332",
+                      "name": "DE, DVGW Service & Consult GmbH"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+MR+4012345000023::9'",
+          "max": 1,
+          "name": "MP-ID Empfänger",
+          "nr": "00009",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0130"
+        }
+      ],
+      "group": "SG3",
+      "max": 1,
+      "name": "MP-ID Empfänger",
+      "status": "R",
+      "zaehler": "0120"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z10",
+                      "name": "ID unbekannt"
+                    },
+                    {
+                      "code": "Z17",
+                      "name": "Absender ist zum angegebenen Zeitintervall / Zeitpunkt dem Objekt nicht zugeordnet"
+                    },
+                    {
+                      "code": "Z18",
+                      "name": "Empfänger ist zum angegebenen Zeitintervall / Zeitpunkt dem Objekt nicht zugeordnet"
+                    },
+                    {
+                      "code": "Z19",
+                      "name": "Gerätenummer zum angegebenen Zeitintervall / Zeitpunkt an der Messlokation nicht bekannt"
+                    },
+                    {
+                      "code": "Z20",
+                      "name": "OBIS-Kennzahl zum angegebenen Zeitintervall / Zeitpunkt am Objekt nicht bekannt"
+                    },
+                    {
+                      "code": "Z21",
+                      "name": "Geschäftsvorfallinterne Referenzierung fehlerhaft"
+                    },
+                    {
+                      "code": "Z24",
+                      "name": "Zuordnungs-Tupel unbekannt"
+                    },
+                    {
+                      "code": "Z25",
+                      "name": "Absender ist zum angegebenen Zeitintervall / Zeitpunkt dem durch das Zuordnungs-Tupel identifizierten Objekt nicht zugeordnet"
+                    },
+                    {
+                      "code": "Z26",
+                      "name": "Empfänger ist zum angegebenen Zeitintervall / Zeitpunkt dem durch das Zuordnungs-Tupel identifizierten Objekt nicht zugeordnet"
+                    },
+                    {
+                      "code": "Z27",
+                      "name": "Vorkomma-Stellenzahl des Zählwertes ist zu lang"
+                    },
+                    {
+                      "code": "Z30",
+                      "name": "Zeitreihe unvollständig"
+                    },
+                    {
+                      "code": "Z33",
+                      "name": "Referenziertes Geschäftsvorfall-Tupel nicht vorhanden"
+                    },
+                    {
+                      "code": "Z42",
+                      "name": "Konfigurations-ID zum angegebenen Zeitintervall / Zeitpunkt nicht bekannt"
+                    },
+                    {
+                      "code": "Z43",
+                      "name": "Geschäftsvorfall für Objekt mit der Eigenschaft nicht erlaubt"
+                    },
+                    {
+                      "code": "Z44",
+                      "name": "Eigenschaft des Objekts weicht von der im Geschäftsvorfall codierten Eigenschaft ab"
+                    },
+                    {
+                      "code": "Z14",
+                      "name": "Objekt im IT-System nicht gefunden"
+                    },
+                    {
+                      "code": "Z15",
+                      "name": "Objekt im IT-System nicht eindeutig"
+                    },
+                    {
+                      "code": "Z16",
+                      "name": "Objekt nicht mehr im Netzgebiet"
+                    },
+                    {
+                      "code": "Z29",
+                      "name": "Erforderliche Angabe für diesen Anwendungsfall fehlt"
+                    },
+                    {
+                      "code": "Z31",
+                      "name": "Geschäftsvorfall wird vom Empfänger zurückgewiesen"
+                    },
+                    {
+                      "code": "Z34",
+                      "name": "Zeitintervall negativ oder Null"
+                    },
+                    {
+                      "code": "Z35",
+                      "name": "Format nicht eingehalten"
+                    },
+                    {
+                      "code": "Z37",
+                      "name": "Geschäftsvorfall darf vom Sender nicht gesendet werden"
+                    },
+                    {
+                      "code": "Z38",
+                      "name": "Anzahl der übermittelten Codes überschreitet Paketdefinition"
+                    },
+                    {
+                      "code": "Z39",
+                      "name": "Code nicht aus erlaubtem Wertebereich"
+                    },
+                    {
+                      "code": "Z40",
+                      "name": "Segment- bzw. Segmentgruppenwiederholbarkeit überschritten"
+                    },
+                    {
+                      "code": "Z41",
+                      "name": "Zeitangabe unplausibel"
+                    }
+                  ],
+                  "format": "an..8",
+                  "id": "9321",
+                  "name": "Anwendungsfehler, Code",
+                  "note": "Nur für Folgeprozesse:",
+                  "status": "M"
+                }
+              ],
+              "id": "C901",
+              "name": "Anwendungsfehler",
+              "status": "M"
+            }
+          ],
+          "example": "ERC+Z10'",
+          "max": 1,
+          "name": "Fehlercode",
+          "nr": "00010",
+          "status": "M",
+          "tag": "ERC",
+          "zaehler": "0170"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "ABO",
+                  "name": "Information über Abweichung"
+                }
+              ],
+              "format": "an..3",
+              "id": "4451",
+              "name": "Textbezug, Qualifier",
+              "status": "M"
+            },
+            {
+              "format": "an..3",
+              "id": "4453",
+              "name": "Textfunktion, Code",
+              "note": "Nicht benutzt",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..17",
+                  "id": "4441",
+                  "name": "Freier Text, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                }
+              ],
+              "id": "C107",
+              "name": "Text-Referenz",
+              "status": "N"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "note": "Wird das negative Zeitintervall in zwei Segmenten angegeben, so wird in diesem Datenelement das Segment des Beginns des Zeitintervalls angegeben. Wird das negative Zeitintervall in einem Segment angegeben, so wird in diesem Datenelement das Segment des negativen Zeitintervalls angegeben.",
+                  "status": "M"
+                },
+                {
+                  "format": "an..512",
+                  "id": "4440",
+                  "name": "Freier Text",
+                  "note": "Falls die Prüfung des im Geschäftsvorfall enthaltenen Zeitpunkts/Zeitintervalls zum Fehler führte, wird der/das Zeitpunkt/Zeitintervall hier angegeben. Wird das negative Zeitintervall in zwei Segmenten angegeben, so wird in diesem Datenelement das Segment des Endes des Zeitintervalls angegeben. Wird das negative Zeitintervall in einem Segment angegeben, so wird dieses Datenelement nicht genutzt.",
+                  "status": "D"
+                }
+              ],
+              "id": "C108",
+              "name": "Text",
+              "note": "Falls ein fehlerhafter Inhalt vorhanden ist, wird dieser hier wiedergegeben.",
+              "status": "R"
+            }
+          ],
+          "example": "FTX+ABO+++DE00056266802AO6G56M11SN51G21M24S:201204181115?+00?:303'",
+          "max": 1,
+          "name": "Freier Text",
+          "nr": "00011",
+          "status": "D",
+          "tag": "FTX",
+          "zaehler": "0180"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "ACW",
+                          "name": "Referenznummer einer vorangegangenen Nachricht"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..70",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "Hier wird die Referenz(nummer) angegeben.",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+ACW:9878u7987gh7'",
+              "max": 1,
+              "name": "Referenznummer der Nachricht",
+              "nr": "00012",
+              "status": "M",
+              "tag": "RFF",
+              "zaehler": "0200"
+            }
+          ],
+          "group": "SG5",
+          "max": 1,
+          "name": "Referenznummer der Nachricht",
+          "status": "R",
+          "zaehler": "0190"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "AGO",
+                          "name": "Absenderreferenz für die Original-Nachricht"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..70",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "Hier wird die Referenz(nummer) angegeben.",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+AGO:798790034532'",
+              "max": 1,
+              "name": "Dokumentennummer der referenzierten Nachricht",
+              "nr": "00013",
+              "status": "M",
+              "tag": "RFF",
+              "zaehler": "0200"
+            },
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "AAO",
+                      "name": "Fehlerbeschreibung (Freier Text)"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "4451",
+                  "name": "Textbezug, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..3",
+                  "id": "4453",
+                  "name": "Textfunktion, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "4441",
+                      "name": "Freier Text, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C107",
+                  "name": "Text-Referenz",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "4440",
+                      "name": "Freier Text",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..512",
+                      "id": "4440",
+                      "name": "Freier Text",
+                      "status": "D"
+                    }
+                  ],
+                  "id": "C108",
+                  "name": "Text",
+                  "status": "R"
+                }
+              ],
+              "example": "FTX+AAO+++Die Marktlokation ist bei Netzbetreiber Gasverteilung AG:ggf. weiterer Text'",
+              "max": 1,
+              "name": "Fehlerbeschreibung",
+              "nr": "00014",
+              "status": "O",
+              "tag": "FTX",
+              "zaehler": "0210"
+            },
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z02",
+                      "name": "Ortsangabe des AHB-Fehlers"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "4451",
+                  "name": "Textbezug, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..3",
+                  "id": "4453",
+                  "name": "Textfunktion, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "4441",
+                      "name": "Freier Text, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C107",
+                  "name": "Text-Referenz",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "4440",
+                      "name": "Freier Text",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..512",
+                      "id": "4440",
+                      "name": "Freier Text",
+                      "status": "O"
+                    }
+                  ],
+                  "id": "C108",
+                  "name": "Text",
+                  "status": "R"
+                }
+              ],
+              "example": "FTX+Z02+++Referenz Vorgangsnummer (aus Anfragenachricht):RFF?+TN?:TG9523'",
+              "max": 1,
+              "name": "Ortsangabe des AHB-Fehlers",
+              "nr": "00015",
+              "status": "D",
+              "tag": "FTX",
+              "zaehler": "0210"
+            }
+          ],
+          "group": "SG5",
+          "max": 1,
+          "name": "Information zur fehlerhaften Nachricht",
+          "status": "R",
+          "zaehler": "0190"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "TN",
+                          "name": "Transaktions-Referenznummer"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..70",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "Vorgangsnummer des referenzierten Vorgangs Hier wird die Referenz(nummer) angegeben.",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+TN:200815'",
+              "max": 1,
+              "name": "Referenznummer des Vorgangs",
+              "nr": "00016",
+              "status": "M",
+              "tag": "RFF",
+              "zaehler": "0200"
+            },
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "AAO",
+                      "name": "Fehlerbeschreibung (Freier Text)"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "4451",
+                  "name": "Textbezug, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..3",
+                  "id": "4453",
+                  "name": "Textfunktion, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "4441",
+                      "name": "Freier Text, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C107",
+                  "name": "Text-Referenz",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "4440",
+                      "name": "Freier Text",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..512",
+                      "id": "4440",
+                      "name": "Freier Text",
+                      "status": "D"
+                    }
+                  ],
+                  "id": "C108",
+                  "name": "Text",
+                  "status": "R"
+                }
+              ],
+              "example": "FTX+AAO+++Die Marktlokation ist bei Netzbetreiber Gasverteilung AG:ggf. weiterer Text'",
+              "max": 1,
+              "name": "Fehlerbeschreibung",
+              "nr": "00017",
+              "status": "O",
+              "tag": "FTX",
+              "zaehler": "0210"
+            },
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z02",
+                      "name": "Ortsangabe des AHB-Fehlers"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "4451",
+                  "name": "Textbezug, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..3",
+                  "id": "4453",
+                  "name": "Textfunktion, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..17",
+                      "id": "4441",
+                      "name": "Freier Text, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    }
+                  ],
+                  "id": "C107",
+                  "name": "Text-Referenz",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..512",
+                      "id": "4440",
+                      "name": "Freier Text",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..512",
+                      "id": "4440",
+                      "name": "Freier Text",
+                      "status": "O"
+                    }
+                  ],
+                  "id": "C108",
+                  "name": "Text",
+                  "status": "R"
+                }
+              ],
+              "example": "FTX+Z02+++Referenz Vorgangsnummer (aus Anfragenachricht):RFF?+TN?:TG9523'",
+              "max": 1,
+              "name": "Ortsangabe des AHB-Fehlers",
+              "nr": "00018",
+              "status": "D",
+              "tag": "FTX",
+              "zaehler": "0210"
+            }
+          ],
+          "group": "SG5",
+          "max": 1,
+          "name": "Informationen zum fehlerhaften Vorgang",
+          "status": "D",
+          "zaehler": "0190"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z08",
+                          "name": "MP-ID des nachfolgenden Netzbetreibers"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "1153",
+                      "name": "Referenz, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "format": "an..35",
+                      "id": "1154",
+                      "name": "Referenz, Identifikation",
+                      "note": "MP-ID",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C506",
+                  "name": "Referenz",
+                  "status": "M"
+                }
+              ],
+              "example": "RFF+Z08:4399901957459'",
+              "max": 1,
+              "name": "Netzbetreiber",
+              "nr": "00019",
+              "status": "M",
+              "tag": "RFF",
+              "zaehler": "0200"
+            }
+          ],
+          "group": "SG5",
+          "max": 1,
+          "name": "Netzbetreiber",
+          "status": "D",
+          "zaehler": "0190"
+        }
+      ],
+      "group": "SG4",
+      "max": 99999,
+      "name": "Fehlerbeschreibung",
+      "status": "D",
+      "zaehler": "0160"
+    },
+    {
       "elements": [
         {
+          "format": "n..6",
           "id": "0074",
-          "status": "M",
-          "components": 1
+          "name": "Anzahl der Segmente in einer Nachricht",
+          "note": "Hier wird die Gesamtzahl der Segmente einer Nachricht angegeben.",
+          "status": "M"
         },
         {
+          "format": "an..14",
           "id": "0062",
-          "status": "M",
-          "components": 1
+          "name": "Nachrichten-Referenznummer",
+          "note": "Die Referenznummer aus dem UNH-Segment muss hier wiederholt werden.",
+          "status": "M"
         }
-      ]
+      ],
+      "example": "UNT+20+1'",
+      "max": 1,
+      "name": "Nachrichten-Endesegment",
+      "nr": "00020",
+      "status": "M",
+      "tag": "UNT",
+      "zaehler": "0220"
     }
   ],
-  "segment_groups": [
-    {
-      "id": "SG2",
-      "trigger_segment": "RFF",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "segments": [
-        {
-          "tag": "RFF",
-          "name": "Referenzangaben",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "C506",
-              "status": "M",
-              "components": 5
-            }
-          ],
-          "qualifier_restrictions": {
-            "1153": [
-              "ACW",
-              "AWR",
-              "ACD",
-              "Z13",
-              "TN"
-            ]
-          }
-        },
-        {
-          "tag": "DTM",
-          "name": "Referenzdatum",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "C507",
-              "status": "M",
-              "components": 3
-            }
-          ]
-        }
-      ],
-      "groups": []
-    },
-    {
-      "id": "SG3",
-      "trigger_segment": "NAD",
-      "mandatory": true,
-      "max_occurrences": 2,
-      "segments": [
-        {
-          "tag": "NAD",
-          "name": "MP-ID Absender/Empfänger",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "3035",
-              "status": "M",
-              "components": 1
-            },
-            {
-              "id": "C082",
-              "status": "C",
-              "components": 3
-            }
-          ],
-          "qualifier_restrictions": {
-            "3035": [
-              "MS",
-              "MR"
-            ]
-          }
-        }
-      ],
-      "groups": []
-    },
-    {
-      "id": "SG4",
-      "trigger_segment": "ERC",
-      "mandatory": false,
-      "max_occurrences": 99999,
-      "segments": [
-        {
-          "tag": "ERC",
-          "name": "Fehlercode",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "C901",
-              "status": "M",
-              "components": 3
-            }
-          ]
-        },
-        {
-          "tag": "FTX",
-          "name": "Freier Text",
-          "mandatory": false,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "4451",
-              "status": "M",
-              "components": 1
-            },
-            {
-              "id": "4453",
-              "status": "C",
-              "components": 1
-            },
-            {
-              "id": "C107",
-              "status": "C",
-              "components": 3
-            },
-            {
-              "id": "C108",
-              "status": "C",
-              "components": 5
-            }
-          ]
-        }
-      ],
-      "groups": [
-        {
-          "id": "SG5",
-          "trigger_segment": "RFF",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "segments": [
-            {
-              "tag": "RFF",
-              "name": "Referenznummer der Nachricht",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
-                {
-                  "id": "C506",
-                  "status": "M",
-                  "components": 5
-                }
-              ]
-            },
-            {
-              "tag": "FTX",
-              "name": "Fehlerbeschreibung",
-              "mandatory": false,
-              "max_occurrences": 1,
-              "elements": [
-                {
-                  "id": "4451",
-                  "status": "M",
-                  "components": 1
-                },
-                {
-                  "id": "4453",
-                  "status": "C",
-                  "components": 1
-                },
-                {
-                  "id": "C107",
-                  "status": "C",
-                  "components": 3
-                },
-                {
-                  "id": "C108",
-                  "status": "C",
-                  "components": 5
-                }
-              ]
-            }
-          ],
-          "groups": []
-        }
-      ]
-    }
-  ],
-  "ahb_revision": "1.1",
-  "source_document": "APERAK MIG 2.2, Publikationsdatum 01.04.2026",
-  "publikationsdatum": "2026-04-01"
+  "valid_from": "2026-10-01"
 }

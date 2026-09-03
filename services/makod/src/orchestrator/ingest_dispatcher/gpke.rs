@@ -397,9 +397,11 @@ impl EdifactIngestDispatcher {
                 }
             }
             // ── GPKE LF-Anmeldung — LF side ─────────────────────────────────
-            // PIDs 55003–55006, 55017, 55018: ANTWORT from NB — resume.
+            // The NB's (or LFA's) Antwort — resume: 55002/55003 Bestätigung/
+            // Ablehnung Anmeldung verb. MaLo, 55078/55080 the same for an erz.
+            // MaLo, 55005/55006 Abmeldung, 55017/55018 Kündigung.
             "gpke-lf-anmeldung" => match pid {
-                55003 | 55004 | 55005 | 55006 | 55017 | 55018 => {
+                55002 | 55003 | 55004 | 55005 | 55006 | 55017 | 55018 | 55078 | 55080 => {
                     let cmd = adapters::gpke_lf_anmeldung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_key::<GpkeLfAnmeldungWorkflow>(

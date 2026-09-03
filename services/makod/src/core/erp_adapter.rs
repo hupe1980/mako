@@ -670,6 +670,10 @@ fn map_message_type_to_erp_event(msg_type: &str) -> Option<mako_engine::erp::Erp
         "DispatchConfirmed" => ErpEventType::VppDispatchConfirmed,
         // GaBi Gas KoV §6.4 final-allocation window closed unsettled.
         "GabiFinalAllocationOverdue" => ErpEventType::GabiFinalAllocationOverdue,
+        // The three nomination outcomes a BKV has to act on.
+        "GabiNominationCurtailed" => ErpEventType::GabiNominationCurtailed,
+        "GabiNominationRejected" => ErpEventType::GabiNominationRejected,
+        "GabiNomresMissing" => ErpEventType::GabiNomresMissing,
         // GPKE Teil 2 § 2.1.2 Nr. 4 — the LFA released the Marktlokation, or
         // its window lapsed and the Festlegung released it for them.
         "LfaAntwortAufAbmeldeanfrage" => ErpEventType::AbmeldeanfrageBeantwortet,

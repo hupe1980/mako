@@ -12,7 +12,7 @@
 //! a single PID router can carry both markets without a synthetic encoding.
 //!
 //! Source: DVGW-Nachrichtenbeschreibungen ALOCAT 5.11a §3.3/§4, NOMINT 4.6 §4,
-//! NOMRES 4.7 §4.
+//! NOMRES 4.7 §4, SSQNOT 5.7 §3.3/§4.
 
 use std::{fmt, str::FromStr};
 
@@ -139,7 +139,15 @@ static CATALOGUE: &[PidInfo] = pid_catalogue![
     70037, Nomres, "VHP Matching Benachrichtigung", "MGV an Transportkunde";
     70038, Nomres, "VHP Bestätigung", "MGV an Transportkunde";
     70039, Nomres, "Bestätigung Flexibilitätsübertragung", "NB an Transportkunde";
+    // ── SSQNOT 5.7 ───────────────────────────────────────────────────────────
+    70095, Ssqnot, "Mehr-/Mindermengenmeldung SLP", "NB an MGV";
+    70096, Ssqnot, "Mehr-/Mindermengenmeldung RLM", "NB an MGV";
 ];
+
+/// The Anwendungsfall SSQNOT 5.7 §4 Hinweis \[500\] retires: 70096
+/// (Mehr-/Mindermengenmeldung RLM) is admitted only for Zeiträume before this
+/// day, as is the `STS+A2G` RLM marker (Hinweis \[501\]).
+pub const SSQNOT_RLM_CUTOFF: time::Date = time::macros::date!(2015 - 10 - 01);
 
 /// Every catalogued Anwendungsfall, ascending by Prüfidentifikator.
 #[must_use]
@@ -191,6 +199,10 @@ mod tests {
     fn a_code_resolves_to_its_family() {
         let pid = Pruefidentifikator::new(70_031).unwrap();
         assert_eq!(pid.message_type(), Some(DvgwMessageType::Nomint));
+        assert_eq!(
+            Pruefidentifikator::new(70_095).unwrap().message_type(),
+            Some(DvgwMessageType::Ssqnot)
+        );
         assert_eq!(pid.to_string(), "70031");
         // In range but not published — not an error, just uncatalogued.
         assert_eq!(Pruefidentifikator::new(70_500).unwrap().info(), None);

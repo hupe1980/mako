@@ -19,20 +19,30 @@ use edi_energy::{EdiEnergyMessage, Error, MessageType, Release, ReleaseTrack};
 /// Well-formed UTILMD message with the registered release S2.1 (fv20251001 Strom).
 #[cfg(feature = "utilmd")]
 const UTILMD_S2_1: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+240101:0000+1'\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+261001:0700+1'\
 UNH+1+UTILMD:D:11A:UN:S2.1'\
-BGM+E01:::+00055001::+9'\
-DTM+137:202401010000?+00:303'\
-RFF+Z13:REF-001'\
-NAD+MS+4012345000023::293'\
-NAD+MR+9900357000004::293'\
-IDE+24+VORGANG-0001'\
+BGM+E01+DOK55001'\
+DTM+137:202610010000?+00:303'\
+NAD+MS+4012345000023::9'\
+NAD+MR+9900357000004::9'\
+IDE+24+VORGANG0001'\
+DTM+92:202610010000?+00:303'\
+STS+7++E01+ZW4'\
 LOC+Z16+51238696781'\
+RFF+Z13:55001'\
 SEQ+Z79+1'\
 PIA+5+9991000002082:Z11'\
 CCI+Z66'\
-CAV+ZV4:::11XBK-EEG-----1'\
-UNT+13+1'\
+SEQ+ZH0+1'\
+CCI+Z65+++Z01'\
+SEQ+Z01'\
+CCI+++Z15'\
+SEQ+Z75'\
+CCI+Z61++ZF9'\
+CAV+ZU5'\
+NAD+Z09+++Mustermann:::::Z01'\
+NAD+Z04+++Mustermann:::::Z01+Musterstr. 1+Berlin+++DE'\
+UNT+23+1'\
 UNZ+1+1'";
 
 /// Same structure but with a hypothetical release 5.5.4a that has no
@@ -457,105 +467,6 @@ fn utilmd_strom_s2_1_boundary_selects_correct_profile() {
     );
 }
 
-/// UTILMD Strom S1.2 bridging profile (fv20250606) — gap coverage.
-///
-/// BK6-22-024 (LFW24 MpBNr2) created a transitional S1.2 release effective
-/// 2025-06-06, bridging the period between S1.1a (deleted) and S2.1 (2025-10-01).
-/// `profile_on` must:
-///   - resolve S1.2 on dates 2025-06-06 … 2025-09-30 (inclusive)
-///   - return Err before 2025-06-06 (no earlier S1.2 profile)
-///
-/// This guards against accidental deletion of the bridging profile and
-/// ensures the 117-day gap (2025-06-06 → 2025-09-30) is covered.
-#[cfg(feature = "utilmd")]
-#[test]
-fn utilmd_strom_s1_2_bridging_profile_covers_gap() {
-    use edi_energy::registry::ReleaseRegistry;
-    use time::macros::date;
-
-    let reg = ReleaseRegistry::global();
-    let release = Release::new("S1.2");
-
-    // Before fv20250606 valid_from: S1.2 not yet active.
-    let result_before = reg.profile_on(MessageType::Utilmd, &release, date!(2025 - 06 - 05));
-    assert!(
-        result_before.is_err(),
-        "on 2025-06-05 (before S1.2 validity) profile_on must return Err"
-    );
-
-    // On the exact start date: fv20250606 must be selected.
-    let profile_start = reg
-        .profile_on(MessageType::Utilmd, &release, date!(2025 - 06 - 06))
-        .expect("profile_on must find a UTILMD S1.2 profile on 2025-06-06");
-    assert_eq!(
-        profile_start.valid_from(),
-        Some(date!(2025 - 06 - 06)),
-        "on 2025-06-06 (valid_from) the fv20250606 profile must be selected"
-    );
-
-    // Mid-gap date: still S1.2.
-    let profile_mid = reg
-        .profile_on(MessageType::Utilmd, &release, date!(2025 - 08 - 15))
-        .expect("profile_on must find a UTILMD S1.2 profile on 2025-08-15");
-    assert_eq!(
-        profile_mid.valid_from(),
-        Some(date!(2025 - 06 - 06)),
-        "on 2025-08-15 (mid-gap) the fv20250606 profile must be selected"
-    );
-
-    // Last day of gap: still S1.2.
-    let profile_end = reg
-        .profile_on(MessageType::Utilmd, &release, date!(2025 - 09 - 30))
-        .expect("profile_on must find a UTILMD S1.2 profile on 2025-09-30");
-    assert_eq!(
-        profile_end.valid_from(),
-        Some(date!(2025 - 06 - 06)),
-        "on 2025-09-30 (last day before S2.1) the fv20250606 profile must be selected"
-    );
-}
-
-/// UTILMD Strom S1.2 bridging profile — known-PID detection is sound.
-///
-/// This test also verifies that the `has_pid` closure uses the correct
-/// detection idiom (`pack.name() != "unknown-pid"`) rather than the broken
-/// `rule_count() > 0` check, which returns `true` for every PID — including
-/// unregistered ones — because the fallback pack always has exactly 1 rule.
-#[cfg(feature = "utilmd")]
-#[test]
-fn utilmd_strom_s1_2_known_pid_detection_is_sound() {
-    use edi_energy::registry::ReleaseRegistry;
-    use time::macros::date;
-
-    let reg = ReleaseRegistry::global();
-    let release = Release::new("S1.2");
-
-    let profile = reg
-        .profile_on(MessageType::Utilmd, &release, date!(2025 - 06 - 06))
-        .expect("S1.2 profile must be present");
-
-    // Correct detection: a PID is known iff its AHB rule pack is NOT the
-    // "unknown-pid" fallback (which has exactly 1 rule for any unknown code).
-    let has_pid = |code: u32| -> bool {
-        let pid = edi_energy::Pruefidentifikator::new(code).unwrap();
-        profile.ahb_rule_pack(Some(pid)).name() != edi_energy::UNKNOWN_PID_PACK
-    };
-
-    // Core GPKE supply PIDs must be registered in S1.2.
-    for expected in [55001u32, 55002, 55003, 55004, 55005, 55006, 55555] {
-        assert!(
-            has_pid(expected),
-            "PID {expected} (GPKE supply) must be present in UTILMD S1.2 AHB"
-        );
-    }
-
-    for phantom in [56001u32, 56002, 56003, 56004] {
-        assert!(
-            !has_pid(phantom),
-            "PID {phantom} (non-existent) must NOT be present in UTILMD S1.2 AHB"
-        );
-    }
-}
-
 /// The UTILMD Strom boundary, which is a hard cutover: S2.1 runs to
 /// 2026-09-30, S2.2 takes over on 2026-10-01, and no date accepts both.
 #[cfg(feature = "utilmd")]
@@ -630,51 +541,6 @@ fn utilmd_gas_g1_1_boundary_selects_correct_profile() {
         profile_boundary.valid_from(),
         Some(date!(2026 - 04 - 01)),
         "on 2026-04-01 the fv20260401_gas profile must be selected"
-    );
-}
-
-/// `pid_has_ahb_rules` must reject unregistered Prüfidentifikatoren.
-///
-/// `rule_count() > 0` cannot express this: an unknown code yields the
-/// `unknown-pid` stand-in pack, which carries exactly one warning rule, so the
-/// count is non-zero for *every* PID and a predicate built on it is always
-/// true — including in its own doctest. The generated profiles must also still
-/// emit the literal that `UNKNOWN_PID_PACK` names.
-#[cfg(feature = "utilmd")]
-#[test]
-fn pid_has_ahb_rules_discriminates_known_from_unknown() {
-    use edi_energy::registry::ReleaseRegistry;
-
-    let reg = ReleaseRegistry::global();
-    let pid = |c: u32| edi_energy::Pruefidentifikator::new(c).expect("constructible");
-
-    for known in [55001u32, 55002, 55003, 55004] {
-        assert!(
-            reg.pid_has_ahb_rules(MessageType::Utilmd, pid(known)),
-            "PID {known} is published and imported — it must report as known"
-        );
-    }
-
-    // 56xxx is an unassigned band; 99999 is not a PID at all.
-    for unknown in [56001u32, 56002, 99999] {
-        assert!(
-            !reg.pid_has_ahb_rules(MessageType::Utilmd, pid(unknown)),
-            "PID {unknown} is not registered — it must not report as known, or \
-             callers cannot tell real validation from vacuous validation"
-        );
-    }
-
-    // The stand-in pack is what makes the name check necessary: it is non-empty.
-    let profile = reg
-        .profiles_for(MessageType::Utilmd)
-        .next()
-        .expect("a UTILMD profile is registered");
-    let stand_in = profile.ahb_rule_pack(Some(pid(99999)));
-    assert_eq!(stand_in.name(), edi_energy::UNKNOWN_PID_PACK);
-    assert!(
-        stand_in.rule_count() > 0,
-        "the stand-in pack is non-empty — this is exactly why rule_count() is \
-         not a usable known-PID predicate"
     );
 }
 

@@ -1,140 +1,1329 @@
 {
-  "schema_version": 1,
-  "message_type": "ORDCHG",
-  "release": "1.1",
-  "source_document": "ORDCHG AHB, wire release 1.1 (Stand 01.10.2024)",
-  "pruefidentifikatoren": [
+  "ahb_version": "1.0a",
+  "anwendungsfaelle": [
     {
-      "code": 39000,
+      "chapter": "4.1 Stornierung des Auftrags zur Sperrung/Entsperrung",
+      "communication": "LF an NB",
+      "elements": [
+        {
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "20B",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "1.1",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "Z51",
+              "operand": "X"
+            },
+            {
+              "code": "Z52",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1225",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "1",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X [931] [494]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "ON",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X [500]"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "39000",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00007",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3139",
+          "nr": "00008",
+          "operands": [
+            {
+              "code": "IC",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3412",
+          "nr": "00008",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3148",
+          "nr": "00009",
+          "operands": [
+            {
+              "operand": "X [4]) ∨ [503]"
+            }
+          ]
+        },
+        {
+          "de": "3155",
+          "nr": "00009",
+          "operands": [
+            {
+              "code": "EM",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "FX",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "TE",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AJ",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AL",
+              "operand": "X [1P0..1]"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00010",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00010",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00010",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0081",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "S",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00012",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00012",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        }
+      ],
       "name": "Stornierung Sperr-/Entsperrauftrag",
-      "segment_rules": [
+      "pid": 39000,
+      "rows": [
         {
-          "tag": "BGM",
-          "requirement": "M"
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "tag": "DTM",
-          "requirement": "M"
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "tag": "NAD",
-          "requirement": "M"
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "tag": "RFF",
-          "requirement": "M",
-          "conditional_rules": [
+          "before": "00004",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00006",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00007",
+          "group": "SG3",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00007",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00008",
+          "group": "SG6",
+          "status": [
+            "Kann"
+          ]
+        },
+        {
+          "nr": "00008",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00009",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00010",
+          "group": "SG3",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00010",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00011",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00012",
+          "status": [
+            "Muss"
+          ]
+        }
+      ]
+    },
+    {
+      "chapter": "4.1 Stornierung des Auftrags zur Sperrung/Entsperrung",
+      "communication": "NB an MSB",
+      "elements": [
+        {
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
             {
-              "when_tag": "BGM",
-              "when_element_index": 0,
-              "when_value": "Z52",
-              "then_requirement": "M",
-              "then_qualifier_index": 0,
-              "then_qualifier_value": "TN",
-              "_description": "[3] Wenn BGM+Z52 (Entsperrung) vorhanden, ist RFF+TN (Transaktions-Referenznummer) Pflicht"
+              "operand": "X"
             }
           ]
         },
         {
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG 1.1 (no AHB constraint for PID 39000)"
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG 1.1 (no AHB constraint for PID 39000)"
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "20B",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "1.1",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "Z51",
+              "operand": "X"
+            },
+            {
+              "code": "Z52",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1225",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "1",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X [931] [494]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "ON",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X ([2] ∧ [500]) ⊻ ([3] ∧ [501])"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "TN",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00005",
+          "operands": [
+            {
+              "operand": "X [502]"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "39001",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00007",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3139",
+          "nr": "00008",
+          "operands": [
+            {
+              "code": "IC",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3412",
+          "nr": "00008",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3148",
+          "nr": "00009",
+          "operands": [
+            {
+              "operand": "X [4]) ∨ [503]"
+            }
+          ]
+        },
+        {
+          "de": "3155",
+          "nr": "00009",
+          "operands": [
+            {
+              "code": "EM",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "FX",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "TE",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AJ",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AL",
+              "operand": "X [1P0..1]"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00010",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00010",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00010",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0081",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "S",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00012",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00012",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         }
       ],
-      "group_rules": []
-    },
-    {
-      "code": 39001,
       "name": "Weiterleitung der Stornierung",
-      "segment_rules": [
+      "pid": 39001,
+      "rows": [
         {
-          "tag": "BGM",
-          "requirement": "M"
-        },
-        {
-          "tag": "DTM",
-          "requirement": "M"
-        },
-        {
-          "tag": "NAD",
-          "requirement": "M"
-        },
-        {
-          "tag": "RFF",
-          "requirement": "M",
-          "conditional_rules": [
-            {
-              "when_tag": "BGM",
-              "when_element_index": 0,
-              "when_value": "Z52",
-              "then_requirement": "M",
-              "then_qualifier_index": 0,
-              "then_qualifier_value": "TN",
-              "_description": "[3] Wenn BGM+Z52 (Entsperrung) vorhanden, ist RFF+TN (Transaktions-Referenznummer) Pflicht"
-            }
+          "nr": "00001",
+          "status": [
+            "Muss"
           ]
         },
         {
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG 1.1 (no AHB constraint for PID 39001)"
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG 1.1 (no AHB constraint for PID 39001)"
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00004",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00005",
+          "group": "SG1",
+          "status": [
+            "Muss [3]"
+          ]
+        },
+        {
+          "nr": "00005",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00006",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00007",
+          "group": "SG3",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00007",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00008",
+          "group": "SG6",
+          "status": [
+            "Kann"
+          ]
+        },
+        {
+          "nr": "00008",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00009",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00010",
+          "group": "SG3",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00010",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00011",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00012",
+          "status": [
+            "Muss"
+          ]
         }
-      ],
-      "group_rules": []
+      ]
     },
     {
-      "code": 39002,
-      "name": "Stornierung der Bestellung von Werten",
-      "segment_rules": [
+      "chapter": "4.2 Stornierung der Bestellung von Werten",
+      "communication": "ESA an MSB",
+      "elements": [
         {
-          "tag": "BGM",
-          "requirement": "M"
-        },
-        {
-          "tag": "DTM",
-          "requirement": "M"
-        },
-        {
-          "tag": "NAD",
-          "requirement": "M"
-        },
-        {
-          "tag": "RFF",
-          "requirement": "M",
-          "conditional_rules": [
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
             {
-              "when_tag": "BGM",
-              "when_element_index": 0,
-              "when_value": "Z52",
-              "then_requirement": "M",
-              "then_qualifier_index": 0,
-              "then_qualifier_value": "TN",
-              "_description": "[3] Wenn BGM+Z52 (Entsperrung) vorhanden, ist RFF+TN (Transaktions-Referenznummer) Pflicht"
+              "operand": "X"
             }
           ]
         },
         {
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG 1.1 (no AHB constraint for PID 39002)"
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG 1.1 (no AHB constraint for PID 39002)"
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "20B",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "1.1",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "Z57",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1225",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "1",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X [931] [494]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "ON",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X [500]"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "39002",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00007",
+          "operands": [
+            {
+              "operand": "X [1]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3139",
+          "nr": "00008",
+          "operands": [
+            {
+              "code": "IC",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3412",
+          "nr": "00008",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3148",
+          "nr": "00009",
+          "operands": [
+            {
+              "operand": "[4]) ∨ ([940] ∧ [503]"
+            }
+          ]
+        },
+        {
+          "de": "3155",
+          "nr": "00009",
+          "operands": [
+            {
+              "code": "EM",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "FX",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "TE",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AJ",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AL",
+              "operand": "X [1P0..1]"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00010",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00010",
+          "operands": [
+            {
+              "operand": "X [1]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00010",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0081",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "S",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00012",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00012",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         }
       ],
-      "group_rules": []
+      "name": "Stornierung der Bestellung",
+      "pid": 39002,
+      "rows": [
+        {
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00004",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00006",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00007",
+          "group": "SG3",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00007",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00008",
+          "group": "SG6",
+          "status": [
+            "Kann"
+          ]
+        },
+        {
+          "nr": "00008",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00009",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00010",
+          "group": "SG3",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00010",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00011",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00012",
+          "status": [
+            "Muss"
+          ]
+        }
+      ]
     }
-  ]
+  ],
+  "conditions": {
+    "1": "MP-ID nur aus Sparte Strom",
+    "2": "Wenn BGM+Z51 (Sperrung) vorhanden",
+    "3": "Wenn BGM+Z52 (Entsperrung) vorhanden",
+    "4": "wenn im DE3155 in demselben COM der Code EM vorhanden ist",
+    "494": "Das hier genannte Datum muss der Zeitpunkt sein, zu dem das Dokument erstellt wurde, oder ein Zeitpunkt, der davor liegt.",
+    "5": "wenn im DE3155 in demselben COM der Code TE / FX / AJ / AL vorhanden ist",
+    "500": "Hinweis: Dokumentennummer aus BGM DE1004 der ORDERS",
+    "501": "Hinweis: Wert aus BGM+Z33 DE1004 der IFTSTA mit der die Information über den Entsperrauftrag übermittelt wurde",
+    "502": "Hinweis: Vorgangsnummer aus CNI DE1490 der IFTSTA mit BGM+Z33 mit der die Information über den Entsperrauftrag übermittelt wurde",
+    "503": "Hinweis: Es darf nur eine Information im DE3148 übermittelt werden",
+    "931": "Format: ZZZ = +00",
+    "939": "Format: Die Zeichenkette muss die Zeichen @ und . enthalten",
+    "940": "Format: Die Zeichenkette muss mit dem Zeichen + beginnen und danach dürfen nur noch Ziffern folgen"
+  },
+  "message_type": "ORDCHG",
+  "packages": {
+    "1P": "--                                                  Hinweis:       Das    ist  das   Standardpaket,             wenn      keine     Bedingung         zum     Tragen       kommt,       z.  B."
+  },
+  "release": "1.1",
+  "schema_version": 2,
+  "source": {
+    "file": "ORDCHG_AHB_1.0a.pdf",
+    "sha256": "38a279be25df5aa8279b7a1ee68d9fe600638037d4fdd688e0f42b70b5d0a07e",
+    "title": "ORDCHG AHB 1.0a"
+  }
 }

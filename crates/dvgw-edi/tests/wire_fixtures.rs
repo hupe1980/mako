@@ -8,6 +8,7 @@
 //! Sources:
 //! - DVGW-Nachrichtenbeschreibung ALOCAT 5.11a (ORDRSP / UN D.07A S3), §3.2
 //! - DVGW-Nachrichtenbeschreibung NOMINT 4.6 (ORDERS / UN D.07A S3), §3.2
+//! - DVGW-Nachrichtenbeschreibung SSQNOT 5.7 (ORDRSP / UN D.07A S3), §3.2
 //! - Trading Hub Europe, "Quick guide for Edig@s message formats at the
 //!   THE Virtual Trading Point", §3.2 (NOMINT 4.6) and §3.3.1 (NOMRES 4.7)
 
@@ -94,6 +95,34 @@ UNS+S'\
 UNT+24+0123456789'\
 UNZ+1+THE123456789'";
 
+/// SSQNOT 5.7 §3.2 — the segment examples of the Segmentlayout, wrapped in an
+/// interchange. The Absender the specification prints has twelve digits; it is
+/// carried as printed.
+const SSQNOT: &[u8] = b"UNB+UNOA:3+987004760000:502+9870112500011:502+180104:2056+IC5'\
+UNH+123456+ORDRSP:D:07A:UN:DVGW17'\
+BGM+BAG::332+SSQNOT00052'\
+DTM+Z05:0:805'\
+DTM+137:201801042056:203'\
+DTM+Z01:201801010500201802010500:719'\
+RFF+Z13:70095'\
+NAD+MS+987004760000::332'\
+NAD+MR+9870112500011::332'\
+LIN+1'\
+LOC+Z99'\
+DTM+2:201801010500201802010500:719'\
+QTY+ZY2:6782:KWH'\
+STS+A1G::332'\
+NAD+ZSH+NETZKONTONR::332'\
+LIN+2'\
+LOC+Z99'\
+DTM+2:201801010500201802010500:719'\
+QTY+ZY0:120:KWH'\
+STS+A1G::332'\
+NAD+ZSH+NETZKONTONR::332'\
+UNS+S'\
+UNT+22+123456'\
+UNZ+1+IC5'";
+
 // ── Identity ─────────────────────────────────────────────────────────────────
 
 #[test]
@@ -121,6 +150,270 @@ fn nomint_and_nomres_are_identified_by_their_document_codes() {
     assert_eq!(nomres.message_type, DvgwMessageType::Nomres);
     assert_eq!(nomres.document, DvgwDocument::VhpMatchingBenachrichtigung);
     assert_eq!(nomres.carrier.as_str(), "ORDRSP");
+
+    let ssqnot = platform.parse(SSQNOT).expect("SSQNOT must parse");
+    assert_eq!(ssqnot.message_type, DvgwMessageType::Ssqnot);
+    assert_eq!(ssqnot.document, DvgwDocument::MehrMindermengenmeldung);
+    assert_eq!(ssqnot.carrier.as_str(), "ORDRSP");
+    assert_eq!(ssqnot.pruefidentifikator.unwrap().as_u32(), 70_095);
+}
+
+// ── SSQNOT ───────────────────────────────────────────────────────────────────
+
+/// The Mehr-/Mindermengenmeldung reads as one record: Netzkonto, Zeitraum,
+/// Verfahren and the two energies in kWh — not rates, so no integration.
+#[test]
+fn a_ssqnot_reads_as_one_mehr_mindermengen_record() {
+    use dvgw_edi::ssqnot::{MehrMindermengenmeldung, Verfahren};
+
+    let msg = DvgwPlatform::default().parse(SSQNOT).unwrap();
+    let record = MehrMindermengenmeldung::from_message(&msg).expect("a clean SSQNOT reads");
+    assert_eq!(record.netzkonto, "NETZKONTONR");
+    assert_eq!(record.netzbetreiber, "987004760000");
+    assert_eq!(record.verfahren, Verfahren::Slp);
+    assert_eq!(record.zeitraum.start, datetime!(2018-01-01 05:00 UTC));
+    assert_eq!(record.zeitraum.end, datetime!(2018-02-01 05:00 UTC));
+    assert_eq!(record.mehrmenge_kwh.to_string(), "120");
+    assert_eq!(record.mindermenge_kwh.to_string(), "6782");
+    assert_eq!(record.saldo_kwh().to_string(), "-6662");
+
+    // `KWH` is an energy: a month-long period must not multiply it.
+    let totals = msg.energy_by_qualifier();
+    assert_eq!(totals["ZY2"].to_string(), "6782");
+    assert_eq!(totals["ZY0"].to_string(), "120");
+}
+
+/// SSQNOT 5.7 §3.3: the 2-Tupel (Netzkonto, Netzbetreiber) assigns the message,
+/// and the process is one Abrechnungszeitraum of that Netzkonto.
+#[test]
+fn a_ssqnot_correlates_by_netzkonto_and_netzbetreiber() {
+    use dvgw_edi::Zuordnung;
+
+    let msg = DvgwPlatform::default().parse(SSQNOT).unwrap();
+    let key = msg
+        .correlation_key()
+        .expect("70095 has a published Zuordnung");
+    assert_eq!(key.zuordnung, Zuordnung::MehrMindermengen);
+    assert_eq!(key.to_string(), "ZO-T1:SSQNOT|NETZKONTONR|987004760000");
+    assert_eq!(
+        msg.process_key().as_deref(),
+        Some("ZO-T1:SSQNOT|NETZKONTONR|987004760000|2018-01-01..2018-02-01")
+    );
+}
+
+/// The Segmentlayout rows SSQNOT adds: the Verfahren is Muss, the Menge is a
+/// natural number in kWh, and the RLM Anwendungsfall is retired.
+#[test]
+fn a_ssqnot_is_held_to_its_own_rows() {
+    let platform = DvgwPlatform::default();
+    let clean = platform.validate(SSQNOT).unwrap();
+    assert!(clean.is_valid(), "{:?}", clean.errors().collect::<Vec<_>>());
+    assert_eq!(
+        clean.warnings().count(),
+        0,
+        "{:?}",
+        clean.warnings().collect::<Vec<_>>()
+    );
+
+    let no_sts = String::from_utf8(SSQNOT.to_vec())
+        .unwrap()
+        .replacen("STS+A1G::332'", "", 1);
+    let report = platform.validate(no_sts.as_bytes()).unwrap();
+    assert!(
+        report
+            .errors()
+            .any(|i| i.rule_id == Some("DVGW-STS-REQUIRED"))
+    );
+
+    let fraction = String::from_utf8(SSQNOT.to_vec())
+        .unwrap()
+        .replace("QTY+ZY2:6782:KWH", "QTY+ZY2:6782.5:KWH");
+    let report = platform.validate(fraction.as_bytes()).unwrap();
+    assert!(
+        report
+            .warnings()
+            .any(|i| i.rule_id == Some("DVGW-QTY-INTEGER"))
+    );
+
+    let rlm = String::from_utf8(SSQNOT.to_vec())
+        .unwrap()
+        .replace("RFF+Z13:70095", "RFF+Z13:70096")
+        .replace("STS+A1G", "STS+A2G");
+    let report = platform.validate(rlm.as_bytes()).unwrap();
+    assert!(
+        report
+            .warnings()
+            .filter(|i| i.rule_id == Some("DVGW-PID-RETIRED"))
+            .count()
+            >= 2,
+        "70096 and STS+A2G are both retired for a 2018 Zeitraum"
+    );
+}
+
+/// A Netzbetreiber writes the SSQNOT the MGV expects, and reads it back.
+#[test]
+fn a_built_ssqnot_parses_back_and_validates() {
+    use dvgw_edi::model::{qty, sts};
+
+    let zeitraum = dvgw_edi::DvgwPeriod {
+        start: datetime!(2026-03-01 05:00 UTC),
+        end: datetime!(2026-04-01 05:00 UTC),
+    };
+    let wire = MessageBuilder::new(DvgwDocument::MehrMindermengenmeldung)
+        .document_number("SSQNOT00052")
+        .pruefidentifikator(70_095)
+        .message_datetime(datetime!(2026-04-10 09:00 UTC))
+        .validity_period(zeitraum)
+        .sender("9870012345678")
+        .receiver("9800505300009")
+        .position(
+            Position::new()
+                .location("Z99", None)
+                .quantity(qty::MEHRMENGE, "120", zeitraum)
+                .status(sts::SLP)
+                .party(nad::NETZKONTO_ZO_T3, "THE0NKH712345678"),
+        )
+        .position(
+            Position::new()
+                .location("Z99", None)
+                .quantity(qty::MINDERMENGE, "6782", zeitraum)
+                .status(sts::SLP)
+                .party(nad::NETZKONTO_ZO_T3, "THE0NKH712345678"),
+        )
+        .build()
+        .expect("builds");
+    let rendered = String::from_utf8(wire.clone()).unwrap();
+    assert!(
+        rendered.starts_with("UNH+1+ORDRSP:D:07A:UN:DVGW17'"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("BGM+BAG::332+SSQNOT00052'"), "{rendered}");
+    assert!(
+        rendered.contains("QTY+ZY0:120:KWH'STS+A1G::332'"),
+        "{rendered}"
+    );
+
+    let report = DvgwPlatform::default().validate(&wire).unwrap();
+    assert!(
+        report.is_valid(),
+        "{:?}",
+        report.errors().collect::<Vec<_>>()
+    );
+    let record = dvgw_edi::ssqnot::MehrMindermengenmeldung::from_message(
+        &DvgwPlatform::default().parse(&wire).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record.saldo_kwh().to_string(), "-6662");
+}
+
+// ── Rows that depend on the Anwendungsfall ───────────────────────────────────
+
+/// `RFF+ANX` is a `D` group: only the six Allokationsclearing columns mark it
+/// Muss. A SLP-Allokation without one is conformant.
+#[test]
+fn the_clearingnummer_is_required_by_the_clearing_columns_only() {
+    let without = String::from_utf8(ALOCAT.to_vec())
+        .unwrap()
+        .replace("RFF+ANX:CLEARINGNUMMER'", "");
+    let platform = DvgwPlatform::default();
+    let report = platform.validate(without.as_bytes()).unwrap();
+    assert!(
+        report.is_valid(),
+        "70001 lists no RFF+ANX: {:?}",
+        report.errors().collect::<Vec<_>>()
+    );
+    let clearing = without.replace("RFF+Z13:70001", "RFF+Z13:70008");
+    let report = platform.validate(clearing.as_bytes()).unwrap();
+    assert!(report.errors().any(|i| i.rule_id == Some("DVGW-RFF-ANX")));
+}
+
+/// The Anwendungsfall fixes the document: a code from another column of the
+/// same family is family-consistent and still the wrong business message.
+#[test]
+fn the_document_must_be_the_one_the_anwendungsfall_publishes() {
+    let platform = DvgwPlatform::default();
+    // 70001 publishes `X1G` (SLP-Allokation); `X5G` is the endgültige, 70005's.
+    let wrong = String::from_utf8(ALOCAT.to_vec())
+        .unwrap()
+        .replace("BGM+X1G", "BGM+X5G");
+    let report = platform.validate(wrong.as_bytes()).unwrap();
+    assert!(
+        report
+            .errors()
+            .any(|i| i.rule_id == Some("DVGW-PID-DOCUMENT")),
+        "{:?}",
+        report.errors().collect::<Vec<_>>()
+    );
+    // The same code under its own Prüfidentifikator is conformant.
+    let right = wrong.replace("RFF+Z13:70001", "RFF+Z13:70005");
+    assert!(platform.validate(right.as_bytes()).unwrap().is_valid());
+}
+
+/// NOMINT 4.6 §2: `DTM+9` is Erforderlich beside `RFF+AGO`.
+#[test]
+fn a_re_nomination_names_when_the_original_was_processed() {
+    let msg = DvgwPlatform::default().parse(NOMINT).unwrap();
+    assert_eq!(
+        msg.original_nomination_datetime,
+        Some(datetime!(2018-01-04 20:56 UTC))
+    );
+    let without = String::from_utf8(NOMINT.to_vec())
+        .unwrap()
+        .replace("DTM+9:201801042056:203'", "");
+    let report = DvgwPlatform::default()
+        .validate(without.as_bytes())
+        .unwrap();
+    assert!(
+        report
+            .errors()
+            .any(|i| i.rule_id == Some("DVGW-RFF-AGO-DTM"))
+    );
+}
+
+/// The position `NAD` rows follow the family: a NOMRES for a physical point
+/// names only the interne Bilanzkreis (`ZES` is `D`), an ALOCAT names both.
+#[test]
+fn the_position_nad_rows_follow_the_family() {
+    let nomres = String::from_utf8(NOMRES_VHP.to_vec())
+        .unwrap()
+        .replace("NAD+ZES+THE0BFH000000002::332'", "");
+    let platform = DvgwPlatform::default();
+    let report = platform.validate(nomres.as_bytes()).unwrap();
+    assert!(
+        report.is_valid(),
+        "ZES is dependent on a NOMRES: {:?}",
+        report.errors().collect::<Vec<_>>()
+    );
+    let alocat = String::from_utf8(ALOCAT.to_vec())
+        .unwrap()
+        .replace("NAD+ZSZ+THE0NKH712345678::332'", "");
+    let report = platform.validate(alocat.as_bytes()).unwrap();
+    assert!(report.errors().any(|i| i.rule_id == Some("DVGW-NAD-ITEM")));
+}
+
+/// A nomination may state energy (`KWH`); an ALOCAT may state a daily rate
+/// (`KW2`). Neither is a foreign unit.
+#[test]
+fn the_admitted_units_follow_the_family() {
+    let platform = DvgwPlatform::default();
+    let kwh = String::from_utf8(NOMINT.to_vec())
+        .unwrap()
+        .replace("QTY+Z03:6782:KW1", "QTY+Z03:6782:KWH");
+    let report = platform.validate(kwh.as_bytes()).unwrap();
+    assert!(
+        !report
+            .warnings()
+            .any(|i| i.rule_id == Some("DVGW-QTY-UNIT"))
+    );
+    let msg = platform.parse(kwh.as_bytes()).unwrap();
+    assert_eq!(msg.energy_by_qualifier()["Z03"].to_string(), "6782");
+
+    let kw2 = String::from_utf8(ALOCAT.to_vec())
+        .unwrap()
+        .replace("QTY+Z03:4000:KW1", "QTY+Z03:4000:KW2");
+    let msg = platform.parse(kw2.as_bytes()).unwrap();
+    // 4000 kWh/d over one gas day.
+    assert_eq!(msg.energy_by_qualifier()["Z03"].to_string(), "4000");
 }
 
 #[test]
@@ -384,7 +677,8 @@ fn a_quantity_in_the_wrong_unit_warns_without_failing_the_message() {
     assert!(
         report
             .warnings()
-            .any(|i| i.rule_id == Some("DVGW-QTY-UNIT") && i.severity == Severity::Warning)
+            .any(|i| i.rule_id == Some("DVGW-QTY-UNIT") && i.severity == Severity::Warning),
+        "an ALOCAT states rates: KWH is not admitted there"
     );
 }
 
@@ -418,7 +712,7 @@ fn a_built_nomint_parses_back_and_validates() {
         .validity_period(gas_day)
         .sender("9870009700005")
         .receiver("9870009700006")
-        .original_nomination_ref("1234")
+        .original_nomination("1234", datetime!(2026-02-28 18:00 UTC))
         .position(
             Position::new()
                 .location("Z19", Some("ABCD1234"))
@@ -436,7 +730,7 @@ fn a_built_nomint_parses_back_and_validates() {
     );
     assert!(rendered.contains("BGM+01G::332+NOMINT00052'"));
     assert!(rendered.contains("DTM+Z01:202603010500202603020500:719'"));
-    assert!(rendered.contains("RFF+Z13:70030'"));
+    assert!(rendered.contains("RFF+Z13:70030'RFF+AGO:1234'DTM+9:202602281800:203'"));
 
     let report = DvgwPlatform::default().validate(&wire).unwrap();
     let errors: Vec<String> = report.errors().map(ToString::to_string).collect();
@@ -610,19 +904,20 @@ fn the_alocat_fixture_correlates_by_its_published_tuple() {
         .correlation_key()
         .expect("70001 has a published Zuordnung");
     assert_eq!(key.zuordnung, Zuordnung::ZoT3);
-    // Bilanzkreis from NAD+ZEU, Zeitreihentyp from LIN C212. The fixture carries
-    // NAD+ZSZ (Netzkonto) rather than NAD+ZSH, so that slot is empty — and the
-    // key says so rather than shifting the Zeitreihentyp into its place.
+    // Bilanzkreis from NAD+ZEU, Zeitreihentyp from the STS under the quantity
+    // (§3.3: `SG36 SG37 STS`, not LIN C212, which is always `Z01`). The fixture
+    // carries NAD+ZSZ (Netzkonto) rather than NAD+ZSH, so that slot is empty —
+    // and the key says so rather than shifting the Zeitreihentyp into its place.
     assert_eq!(
         key.elements,
         vec![
             "THE0BFH123456789".to_owned(),
             String::new(),
-            "Z01".to_owned()
+            "09G".to_owned()
         ]
     );
     assert!(!key.is_complete());
-    assert_eq!(key.to_string(), "ZO-T3|THE0BFH123456789||Z01");
+    assert_eq!(key.to_string(), "ZO-T3|THE0BFH123456789||09G");
     assert!(!key.zuordnung.assigns_to_geschaeftsvorfall());
 }
 
@@ -682,6 +977,18 @@ fn a_nomint_and_its_nomres_share_a_correlation_key() {
     assert_eq!(
         nomint_key.to_string(),
         "Nominierung|2026-03-01|37Z005053MH0000D|THE0BFH000000001|THE0BFH000000002"
+    );
+    // The key already names the gas day, so the process key adds nothing —
+    // and a sender that assembles it must land on the same string.
+    assert_eq!(nomint.process_key(), Some(nomint_key.to_string()));
+    assert_eq!(
+        dvgw_edi::CorrelationKey::nominierung(
+            time::macros::date!(2026 - 03 - 01),
+            "37Z005053MH0000D",
+            "THE0BFH000000001",
+            "THE0BFH000000002",
+        ),
+        nomint_key
     );
 }
 
@@ -807,15 +1114,16 @@ UNZ+1+IC4'";
 /// A quantity that cannot be integrated is omitted, and the message says so.
 #[test]
 fn an_unconvertible_quantity_makes_the_total_a_floor() {
+    // `MWH` is a unit no DVGW Segmentlayout lists.
     let wrong_unit = String::from_utf8(ALOCAT.to_vec())
         .unwrap()
-        .replace("QTY+Z03:4000:KW1", "QTY+Z03:4000:KWH");
+        .replace("QTY+Z03:4000:KW1", "QTY+Z03:4000:MWH");
     let msg = DvgwPlatform::default()
         .parse(wrong_unit.as_bytes())
         .unwrap();
     assert!(
         msg.energy_by_qualifier().is_empty(),
-        "an unknown unit must not be assumed to be a rate"
+        "an unknown unit must not be assumed to be a rate or an energy"
     );
     assert!(
         !msg.energy_is_complete(),
@@ -900,4 +1208,48 @@ fn a_quantity_without_its_period_is_an_error() {
     assert_eq!(msg.quantities().next().unwrap().period, None);
     assert!(msg.energy_by_qualifier().is_empty());
     assert!(!msg.energy_is_complete());
+}
+
+/// The DVGW column admits one `DTM+2` and one `QTY` per `LOC` group, so a
+/// profile the builder writes repeats the `LOC` — and a profile packed under
+/// one `LOC` is read whole and reported.
+#[test]
+fn a_profile_is_written_as_one_loc_group_per_period() {
+    let hour = |h: i64| dvgw_edi::DvgwPeriod {
+        start: datetime!(2026-03-01 05:00 UTC) + time::Duration::hours(h),
+        end: datetime!(2026-03-01 06:00 UTC) + time::Duration::hours(h),
+    };
+    let wire = MessageBuilder::new(DvgwDocument::NominierungTransportkunde)
+        .document_number("NOMINT77")
+        .pruefidentifikator(70_030)
+        .message_datetime(datetime!(2026-02-28 20:56 UTC))
+        .validity_period(dvgw_edi::DvgwPeriod {
+            start: hour(0).start,
+            end: hour(2).end,
+        })
+        .sender("A")
+        .receiver("B")
+        .position(
+            Position::new()
+                .location("Z19", Some("P"))
+                .quantity("Z02", "100", hour(0))
+                .quantity("Z02", "200", hour(1))
+                .quantity("Z02", "300", hour(2))
+                .party(nad::BILANZKREIS_INTERN, "BK1"),
+        )
+        .build()
+        .expect("builds");
+    let rendered = String::from_utf8(wire.clone()).unwrap();
+    assert_eq!(rendered.matches("LOC+Z19+P::332'").count(), 3, "{rendered}");
+    let report = DvgwPlatform::default().validate(&wire).unwrap();
+    assert!(report.is_valid());
+    assert!(!report.warnings().any(|i| i.rule_id == Some("DVGW-LOC-MAX")));
+    assert_eq!(
+        DvgwPlatform::default()
+            .parse(&wire)
+            .unwrap()
+            .energy_by_qualifier()["Z02"]
+            .to_string(),
+        "600"
+    );
 }

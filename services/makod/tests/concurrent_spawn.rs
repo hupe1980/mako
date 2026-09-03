@@ -39,17 +39,24 @@ const PID: u32 = 55001;
 const WORKFLOW: &str = "gpke-supplier-change";
 
 fn fixture() -> String {
-    let base = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../crates/edi-energy/tests/fixtures/utilmd"
-    );
-    [
-        format!("{base}/valid/pid_{PID}.edi"),
-        format!("{base}/gen/pid_{PID}.gen.edi"),
-    ]
-    .into_iter()
-    .find_map(|p| std::fs::read_to_string(p).ok())
-    .unwrap_or_else(|| panic!("no UTILMD fixture for PID {PID}"))
+    use edi_energy::profile::SkeletonParties;
+    let code = edi_energy::Pruefidentifikator::new(PID).expect("five digits");
+    let profile = edi_energy::ReleaseRegistry::global()
+        .profiles_for(edi_energy::MessageType::Utilmd)
+        .filter(|p| p.has_anwendungsfall(code))
+        .max_by_key(|p| p.valid_from())
+        .unwrap_or_else(|| panic!("no UTILMD profile carries {PID}"));
+    let af = profile.anwendungsfall(PID).expect("carried");
+    let bytes = profile
+        .skeleton_interchange(
+            af,
+            &SkeletonParties {
+                sender: "4012345000023".to_owned(),
+                receiver: OWN_MP.to_owned(),
+            },
+        )
+        .unwrap_or_else(|e| panic!("skeleton for {PID}: {e}"));
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 /// Dispatch the same initiating message twice concurrently through one

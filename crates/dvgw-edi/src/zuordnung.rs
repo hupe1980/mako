@@ -12,6 +12,16 @@
 //! | `ZO-T4` | Bilanzkreis, Virtueller Handelspunkt, Zeitreihentyp | `SG39 NAD+ZEU`, `SG39 NAD+VHP`, `SG36 SG37 STS` |
 //! | `ZG-T1` | Clearingnummer | `SG1 RFF+ANX` |
 //!
+//! The Zeitreihentyp is the `STS` DE 9015 code under the quantity (`09G` SLP
+//! synthetisch, `14G` RLM Tagesregime, …) — not `LIN` C212 DE 7143, which is
+//! `Z01` „allokiert" on every ALOCAT position.
+//!
+//! SSQNOT 5.7 §3.3 publishes its own tuple, also named `ZO-T1` there:
+//!
+//! | Tuple | Elements | Segments |
+//! |---|---|---|
+//! | `ZO-T1:SSQNOT` | Netzkonto, Netzbetreiber | `SG39 NAD+ZSH`, `SG3 NAD+MS` |
+//!
 //! `ZO-T*` assigns the message to an **object**, `ZG-T1` to an existing
 //! **Geschäftsvorfall** (an open Clearingfall) — keying both the same way merges
 //! a clearing correction into the stream it corrects.
@@ -24,7 +34,7 @@ use std::fmt;
 
 use crate::{
     message::DvgwMessage,
-    model::{nad, rff},
+    model::{LineItem, nad, rff},
     pruefidentifikator::Pruefidentifikator,
 };
 
@@ -42,6 +52,10 @@ pub enum Zuordnung {
     ZoT4,
     /// `ZG-T1` — (Clearingnummer). Assigns to an open Geschäftsvorfall.
     ZgT1,
+    /// SSQNOT `ZO-T1` — (Netzkonto, Netzbetreiber): the 2-Tupel der
+    /// Mehr-/Mindermengenmeldung Gas (SSQNOT 5.7 §3.3). Labelled apart from
+    /// ALOCAT's `ZO-T1`, which is a different tuple under the same name.
+    MehrMindermengen,
     /// Nomination pairing: (Gastag, Ort, Bilanzkreis intern, Bilanzkreis extern).
     ///
     /// Not a DVGW-published tuple — NOMINT/NOMRES publish none, because a NOMRES
@@ -60,6 +74,7 @@ impl Zuordnung {
             Self::ZoT3 => "ZO-T3",
             Self::ZoT4 => "ZO-T4",
             Self::ZgT1 => "ZG-T1",
+            Self::MehrMindermengen => "ZO-T1:SSQNOT",
             Self::Nominierung => "Nominierung",
         }
     }
@@ -72,11 +87,19 @@ impl Zuordnung {
         matches!(self, Self::ZgT1)
     }
 
+    /// `true` when the tuple already names the period it belongs to, so a
+    /// process key needs nothing added: a Clearingnummer identifies one case,
+    /// and the nomination key carries the gas day as its first element.
+    #[must_use]
+    pub fn scopes_its_own_period(self) -> bool {
+        matches!(self, Self::ZgT1 | Self::Nominierung)
+    }
+
     /// The tuple DVGW assigns to a Prüfidentifikator.
     ///
-    /// Source: ALOCAT 5.11a §3.3. Returns `None` for a code with no published
-    /// assignment — including any ALOCAT code outside the shipped package, which
-    /// must not be guessed at.
+    /// Source: ALOCAT 5.11a §3.3, SSQNOT 5.7 §3.3. Returns `None` for a code
+    /// with no published assignment — including any ALOCAT code outside the
+    /// shipped package, which must not be guessed at.
     #[must_use]
     pub fn for_pid(pid: Pruefidentifikator) -> Option<Self> {
         let zuordnung = match pid.as_u32() {
@@ -98,6 +121,8 @@ impl Zuordnung {
             70008..=70010 | 70018..=70020 => Self::ZgT1,
             // NOMINT / NOMRES.
             70030..=70039 => Self::Nominierung,
+            // SSQNOT — Mehr-/Mindermengenmeldung SLP / RLM.
+            70095 | 70096 => Self::MehrMindermengen,
             _ => return None,
         };
         Some(zuordnung)
@@ -125,6 +150,32 @@ pub struct CorrelationKey {
 }
 
 impl CorrelationKey {
+    /// The nomination key both ends build: (Gastag, Ort, Bilanzkreis intern,
+    /// Bilanzkreis extern).
+    ///
+    /// NOMINT and NOMRES publish no Zuordnungstupel — a NOMRES carries no
+    /// reference to the nomination it answers — so the pair meets on this
+    /// business key. A sender that assembles it by hand and a receiver that
+    /// reads it off the wire have to agree character for character, which is
+    /// why both call this.
+    #[must_use]
+    pub fn nominierung(
+        gas_day: time::Date,
+        ort: &str,
+        bilanzkreis_intern: &str,
+        bilanzkreis_extern: &str,
+    ) -> Self {
+        Self {
+            zuordnung: Zuordnung::Nominierung,
+            elements: vec![
+                gas_day.to_string(),
+                ort.to_owned(),
+                bilanzkreis_intern.to_owned(),
+                bilanzkreis_extern.to_owned(),
+            ],
+        }
+    }
+
     /// `true` when every element carries a value.
     ///
     /// A partial key still identifies *something*, but on fewer facts than DVGW
@@ -168,7 +219,13 @@ impl DvgwMessage {
                 .map(|p| p.id.clone())
                 .unwrap_or_default()
         };
-        let zeitreihentyp = || item.and_then(|i| i.item_type.clone()).unwrap_or_default();
+        // `SG36 SG37 STS` — the Zeitreihentyp is the status code under the
+        // quantity, not `LIN` C212 DE 7143 (which is always `Z01` „allokiert").
+        let zeitreihentyp = || {
+            item.and_then(LineItem::status_code)
+                .map(str::to_owned)
+                .unwrap_or_default()
+        };
         let gas_day = || {
             self.validity_period
                 .map(|p| p.start.date().to_string())
@@ -201,6 +258,10 @@ impl DvgwMessage {
                     .unwrap_or_default()
                     .to_owned(),
             ],
+            Zuordnung::MehrMindermengen => vec![
+                item_party(nad::NETZKONTO_ZO_T3),
+                self.sender().map(|p| p.id.clone()).unwrap_or_default(),
+            ],
             Zuordnung::Nominierung => vec![
                 gas_day(),
                 item.and_then(|i| i.locations.first())
@@ -226,21 +287,33 @@ impl DvgwMessage {
 
     /// The key identifying the *process* this message belongs to.
     ///
-    /// The [`correlation_key`](Self::correlation_key) plus the gas day, which the
-    /// published tuples leave out: a `ZO-T*` tuple identifies an **object** — an
-    /// account, not one day of it — while a process is one gas day of that
-    /// object, holding that day's record and its `KoV` §6.4 deadline.
+    /// The [`correlation_key`](Self::correlation_key) plus the period the
+    /// published tuples leave out: a `ZO-T*` tuple identifies an **object** —
+    /// an account, not one day of it — while a process is one gas day of that
+    /// object, holding that day's record and its `KoV` §6.4 deadline. A
+    /// Mehr-/Mindermengenmeldung reports an Abrechnungszeitraum rather than a
+    /// gas day, so its key carries the whole `DTM+Z01` period.
     ///
-    /// `ZG-T1` is returned unchanged: a Clearingnummer already identifies one
-    /// Geschäftsvorfall, which may span several days.
+    /// A tuple that already names its period is returned unchanged
+    /// ([`Zuordnung::scopes_its_own_period`]): a Clearingnummer identifies one
+    /// Geschäftsvorfall, which may span several days, and the nomination key
+    /// carries the gas day as its first element.
     ///
     /// Returns `None` when the message has no published Zuordnung, or when a
-    /// tuple that needs a gas day has none to read.
+    /// tuple that needs a period has none to read.
     #[must_use]
     pub fn process_key(&self) -> Option<String> {
         let key = self.correlation_key()?;
-        if key.zuordnung.assigns_to_geschaeftsvorfall() {
+        if key.zuordnung.scopes_its_own_period() {
             return Some(key.to_string());
+        }
+        if key.zuordnung == Zuordnung::MehrMindermengen {
+            let period = self.validity_period?;
+            return Some(format!(
+                "{key}|{}..{}",
+                period.start.date(),
+                period.end.date()
+            ));
         }
         let gas_day = self.gas_day()?;
         Some(format!("{key}|{gas_day}"))
@@ -303,6 +376,10 @@ mod tests {
         // Nominations pair on the business key.
         for pid in 70030..=70039 {
             assert_eq!(z(pid), Zuordnung::Nominierung, "{pid}");
+        }
+        // Mehr-/Mindermengen — SSQNOT 5.7 §3.3.
+        for pid in [70095, 70096] {
+            assert_eq!(z(pid), Zuordnung::MehrMindermengen, "{pid}");
         }
         // An uncatalogued code in range has no assignment to guess at.
         assert_eq!(
@@ -374,6 +451,7 @@ mod process_key_tests {
                     .item_type("Z01")
                     .location("Z99", None)
                     .quantity("Z03", "4000", gas_day)
+                    .status("09G")
                     .party(nad::BILANZKREIS_INTERN, "BK1")
                     .party(nad::NETZKONTO_ZO_T3, "NK1"),
             )
@@ -399,7 +477,7 @@ mod process_key_tests {
         assert_ne!(day_one.process_key(), day_two.process_key());
         assert_eq!(
             day_one.process_key().as_deref(),
-            Some("ZO-T3|BK1|NK1|Z01|2026-03-01")
+            Some("ZO-T3|BK1|NK1|09G|2026-03-01")
         );
     }
 

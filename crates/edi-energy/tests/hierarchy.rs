@@ -287,10 +287,10 @@ NAD+MS+9900777888999::293'\
 NAD+MR+9900333444555::293'\
 RFF+ACW:REF-APER-001'\
 ERC+Z01'\
-FTX+AAI+++Fehlerhafter Pruefidentifikator'\
+FTX+ABO+++Fehlerhafter Pruefidentifikator'\
 RFF+TN:ORIG-001'\
 ERC+Z02'\
-FTX+AAI+++Ungueltige Marktlokation'\
+FTX+ABO+++Ungueltige Marktlokation'\
 UNT+11+MSG003'";
 
 #[cfg(feature = "aperak")]

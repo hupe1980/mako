@@ -1,67 +1,71 @@
-//! Regression guards for the ORDERS Sperrung/Entsperrung AHB profile.
+//! Regression guards for the ORDERS Sperrung/Entsperrung columns.
 //!
-//! Two defects were fixed here and both are cheap to re-break and expensive to
-//! notice, so they are pinned:
+//! Two defects the import used to have, pinned against the shipped profiles:
 //!
-//! 1. PIDs 17008/17116/17117 were lost on import — only the first column of each
-//!    multi-PID AHB table survived. A missing PID is silent: `ahb_rule_pack`
-//!    returns an empty pack for an unknown PID, so validation passes everything.
-//! 2. The `IMD` requirement was attributed one column to the left, marking it
-//!    mandatory for 17115 (Sperrauftrag) instead of 17117 (Entsperrauftrag).
+//! 1. PIDs 17008/17116/17117 were lost — only the first column of each
+//!    multi-column table survived.
+//! 2. `IMD` was read as mandatory for 17115 (Sperrauftrag) instead of 17117
+//!    (Entsperrauftrag).
 
-use std::fs;
+// The ORDERS profiles are embedded only with the `orders` feature.
+#![cfg(feature = "orders")]
 
-fn segment_requirement(release: &str, pid: u32, tag: &str) -> Option<String> {
-    let raw = fs::read_to_string(format!(
-        "{}/profiles/orders/{release}/ahb.json",
-        env!("CARGO_MANIFEST_DIR")
-    ))
-    .expect("profile readable");
-    let v: serde_json::Value = serde_json::from_str(&raw).expect("profile parses");
-    let entry = v["pruefidentifikatoren"]
-        .as_array()?
-        .iter()
-        .find(|e| e["code"].as_u64() == Some(u64::from(pid)))?;
-    entry["segment_rules"]
-        .as_array()?
-        .iter()
-        .find(|r| r["tag"].as_str() == Some(tag))?["requirement"]
-        .as_str()
-        .map(ToOwned::to_owned)
+use edi_energy::{MessageType, Profile, ReleaseRegistry};
+
+/// The ORDERS profile with wire release `release`.
+fn orders(release: &str) -> &'static Profile {
+    ReleaseRegistry::global()
+        .profiles_for(MessageType::Orders)
+        .find(|p| p.release().as_str() == release)
+        .unwrap_or_else(|| panic!("ORDERS {release} is shipped"))
 }
 
-/// Every Sperrung/Entsperrung PID must carry rules, not an empty pack.
-///
+/// The AHB status of the `tag` place the `pid` column lists, if any.
+fn segment_status(profile: &Profile, pid: u32, tag: &str) -> Option<Vec<String>> {
+    let af = profile.anwendungsfall(pid)?;
+    profile
+        .structure
+        .layouts
+        .iter()
+        .filter(|l| l.tag == tag)
+        .find_map(|l| af.segment_status(&l.nr).map(<[String]>::to_vec))
+}
+
 /// 17116/17117 are routed by `mako-geli-gas::sperrung_nb::SPERRUNG_PIDS`, so an
-/// empty pack disables AHB enforcement on that path without any error.
+/// ORDERS profile that lost them would leave those workflows without rules.
 #[test]
 fn sperrung_pids_have_rules_in_the_current_release() {
-    for pid in [17007, 17008, 17115, 17116, 17117] {
-        assert_eq!(
-            segment_requirement("fv20261001", pid, "BGM").as_deref(),
-            Some("M"),
-            "PID {pid} must carry AHB rules in fv20260401"
-        );
+    for release in ["1.4b", "1.4c"] {
+        let profile = orders(release);
+        for pid in [17007, 17008, 17115, 17116, 17117] {
+            let af = profile
+                .anwendungsfall(pid)
+                .unwrap_or_else(|| panic!("PID {pid} must be a column of ORDERS {release}"));
+            assert!(
+                !af.rows.is_empty(),
+                "{release}: PID {pid} must carry AHB rules"
+            );
+        }
     }
 }
 
 /// `IMD` is required for the **Entsperrauftrag** (17117) only.
 ///
-/// The AHB carries `IMD 00010 Muss` solely in the 17117 column — its `Z53`/`Z54`
-/// values ("innerhalb/außerhalb der Arbeitszeit") only make sense for an
-/// unblocking order, and 17115 (Sperrauftrag) must not carry the mark.
+/// The AHB carries `IMD Muss` solely in the 17117 column — its `Z53`/`Z54`
+/// codes say whether the Entsperrung is an Auftrag or a Wiederinbetriebnahme.
 #[test]
 fn imd_is_mandatory_only_for_the_entsperrauftrag() {
-    for release in ["fv20260401", "fv20261001"] {
+    for release in ["1.4b", "1.4c"] {
+        let profile = orders(release);
         assert_eq!(
-            segment_requirement(release, 17117, "IMD").as_deref(),
-            Some("M"),
+            segment_status(profile, 17117, "IMD").as_deref(),
+            Some(&["Muss".to_owned()][..]),
             "{release}: 17117 Entsperrauftrag requires IMD"
         );
         assert_eq!(
-            segment_requirement(release, 17115, "IMD").as_deref(),
-            Some("O"),
-            "{release}: 17115 Sperrauftrag must not require IMD"
+            segment_status(profile, 17115, "IMD"),
+            None,
+            "{release}: 17115 Sperrauftrag does not carry IMD"
         );
     }
 }

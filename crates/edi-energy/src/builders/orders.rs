@@ -255,11 +255,13 @@ impl<S, R> OrdersBuilder<S, R> {
             emit_comp!(w, "IMD", ["A"]);
         }
         // ── SG1: references (RFF+AAG / RFF+ACW / RFF+Z13) ────────────────────
-        if let Some(pid) = self.inner.pruefidentifikator {
-            emit_comp!(w, "RFF", ["Z13", &pid.to_string()]);
-        }
+        // The MIG lists the Referenz places (`RFF+AAG`, `RFF+ON`, `RFF+AAV`)
+        // before the Prüfidentifikator's.
         for (q, v) in &self.inner.references {
             emit_comp!(w, "RFF", [q, v]);
+        }
+        if let Some(pid) = self.inner.pruefidentifikator {
+            emit_comp!(w, "RFF", ["Z13", &pid.to_string()]);
         }
         // ── SG2: parties + location ──────────────────────────────────────────
         if let Some(id) = &self.inner.sender_id {
@@ -279,10 +281,13 @@ impl<S, R> OrdersBuilder<S, R> {
             );
         }
         if let Some(loc) = &self.inner.location {
+            // `SG2` Meldepunkt: the `NAD+DP` opens the group the `LOC+172`
+            // belongs to (ORDERS MIG Nr 00028/00029).
+            emit_seg!(w, "NAD", "DP");
             emit_seg!(w, "LOC", "172", loc);
         }
         // Section control — ORDERS requires UNS between header and summary.
-        emit_seg!(w, "UNS", "D");
+        emit_seg!(w, "UNS", "S");
         w.finish_unt(&self.inner.message_ref)
             .map_err(Error::Parse)?;
         Ok(buf)

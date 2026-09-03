@@ -12,7 +12,7 @@ import pytest
 from hypothesis import HealthCheck, settings
 from hypothesis.stateful import RuleBasedStateMachine, invariant, precondition, rule
 
-from conftest import MELO, ON, utilmd_interchange
+from conftest import MALO, ON, utilmd_interchange
 from makotest import (
     MarktpartnerSim,
     assert_edifact_valid,
@@ -37,7 +37,7 @@ class TestVorgangOnTheWire:
         report = validate_edifact(utilmd_interchange(55001), ON)
         vorgang = report.messages[0].vorgaenge[0]
         assert vorgang.vorgangsnummer == "VORGANG-1"
-        assert vorgang.location("melo") == MELO
+        assert vorgang.location("malo") == MALO
         # Format 303 on the wire, so the raw value carries time and zone.
         assert vorgang.date("92") == "202605010000+00"
         assert vorgang.iso_date("92") == "2026-05-01"
@@ -50,8 +50,8 @@ class TestVorgangOnTheWire:
         why the Vorgang resolves the qualifier rather than the caller.
         """
         vorgang = validate_edifact(utilmd_interchange(55001), ON).messages[0].vorgaenge[0]
-        assert vorgang.location("melo") == MELO
-        assert vorgang.location("malo") is None
+        assert vorgang.location("malo") == MALO
+        assert vorgang.location("melo") is None
 
     def test_a_message_type_with_no_vorgaenge_reports_none(self):
         sim = nb()
@@ -74,8 +74,8 @@ class TestDuplicateAnmeldung:
         sim = nb()
         assert len(sim.vorgaenge) == 0
         sim.receive(utilmd_interchange(55001))
-        assert [v.lokation for v in sim.vorgaenge.offene] == [MELO]
-        assert sim.vorgaenge.offen(MELO).antwort_pid == 55002
+        assert [v.lokation for v in sim.vorgaenge.offene] == [MALO]
+        assert sim.vorgaenge.offen(MALO).antwort_pid == 55002
 
     def test_a_refusal_leaves_the_lokation_free(self):
         """A counterparty that held it would refuse the corrected resubmission.
@@ -91,15 +91,16 @@ class TestDuplicateAnmeldung:
     def test_closing_the_vorgang_restores_the_first_request_answer(self):
         sim = nb()
         sim.receive(utilmd_interchange(55001, dar="R1"))
-        assert sim.vorgaenge.schliessen(MELO) is not None
+        assert sim.vorgaenge.schliessen(MALO) is not None
         assert sim.receive(utilmd_interchange(55001, dar="R2")).pid == 55002
 
     def test_a_different_lokation_is_a_first_request(self):
         """The register is keyed per Lokation, not per counterparty."""
-        other = "DE00014559929E00856996N5139699L02"
+        other = "51238696781"
         sim = nb()
         sim.receive(utilmd_interchange(55001, dar="R1"))
-        assert sim.receive(utilmd_interchange(55001, melo=other, dar="R2")).pid == 55002
+        reply = sim.receive(utilmd_interchange(55001, lokation=other, dar="R2"))
+        assert reply.pid == 55002
 
     def test_binding_only_the_repeat_case_still_answers_the_first(self):
         """Falling back is what keeps a partial binding from answering nothing."""
@@ -141,19 +142,20 @@ class VorgangLifecycle(RuleBasedStateMachine):
     def _send(self, melo: str) -> tuple[int | None, bool]:
         self.dar += 1
         occupied = self.sim.vorgaenge.offen(melo) is not None
-        reply = self.sim.receive(utilmd_interchange(55001, melo=melo, dar=f"R{self.dar}"))
+        request = utilmd_interchange(55001, lokation=melo, dar=f"R{self.dar}")
+        reply = self.sim.receive(request)
         return reply.pid, occupied
 
     @rule()
     def anmeldung(self) -> None:
-        pid, was_occupied = self._send(MELO)
+        pid, was_occupied = self._send(MALO)
         # Occupied → the repeat binding refuses; free → the first one confirms.
         assert pid == (55003 if was_occupied else 55002)
 
     @rule()
     @precondition(lambda self: len(self.sim.vorgaenge) > 0)
     def storno(self) -> None:
-        self.sim.vorgaenge.schliessen(MELO)
+        self.sim.vorgaenge.schliessen(MALO)
 
     @invariant()
     def a_held_lokation_was_confirmed(self) -> None:

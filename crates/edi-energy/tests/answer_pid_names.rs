@@ -46,8 +46,8 @@ fn pid_names() -> BTreeMap<u32, Vec<String>> {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
                 continue;
             };
-            for e in v["pruefidentifikatoren"].as_array().into_iter().flatten() {
-                if let (Some(code), Some(name)) = (e["code"].as_u64(), e["name"].as_str()) {
+            for e in v["anwendungsfaelle"].as_array().into_iter().flatten() {
+                if let (Some(code), Some(name)) = (e["pid"].as_u64(), e["name"].as_str()) {
                     out.entry(code as u32)
                         .or_default()
                         .push(name.trim().to_owned());
@@ -133,8 +133,10 @@ fn asymmetric_families_agree_with_the_ahb() {
     let b = bestaetigung_pid(44020).expect("44020 has a Bestätigung");
     assert_eq!(b, 44021);
     if let Some(n) = names.get(&b) {
+        // The AHB names 44021 „Antwort auf Änderungsmeldung zur
+        // Bestandsliste": one answer that carries both outcomes.
         assert!(
-            any_starts_with(n, "Bestätigung"),
+            any_starts_with(n, "Bestätigung") || any_starts_with(n, "Antwort"),
             "44020 → Bestätigung {b}, but the AHB names it {n:?}"
         );
     }

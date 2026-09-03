@@ -391,10 +391,10 @@ pub(crate) fn parse_interchange_impl(
             MessageWindows::new(from_bufread_with_config(BufReader::new(d), cfg))
                 .enumerate()
                 .map(move |(index, window)| {
-                    if let Some(lim) = limit {
-                        if index >= lim {
-                            return Err(Error::TooManyMessages { limit: lim });
-                        }
+                    if let Some(lim) = limit
+                        && index >= lim
+                    {
+                        return Err(Error::TooManyMessages { limit: lim });
                     }
                     let window = window.map_err(Error::Parse)?;
                     if let Some(lim) = per_msg_limit {
@@ -743,11 +743,11 @@ impl Iterator for InterchangeIter {
             self.actual_count += 1;
 
             // Check per-interchange message limit.
-            if let Some(lim) = self.limit {
-                if index >= lim {
-                    self.done = true;
-                    return Some(Err(Error::TooManyMessages { limit: lim }));
-                }
+            if let Some(lim) = self.limit
+                && index >= lim
+            {
+                self.done = true;
+                return Some(Err(Error::TooManyMessages { limit: lim }));
             }
 
             let result = (|| {
@@ -777,14 +777,15 @@ impl Iterator for InterchangeIter {
             }
             self.unz_checked = true;
             // Validate UNZ control reference.
-            if let Some(ref uref) = self.unz_ref {
-                if !uref.is_empty() && uref.as_str() != self.header.control_ref.as_ref() {
-                    self.done = true;
-                    return Some(Err(Error::InterchangeRefMismatch {
-                        unb_ref: self.header.control_ref.to_string(),
-                        unz_ref: uref.clone(),
-                    }));
-                }
+            if let Some(ref uref) = self.unz_ref
+                && !uref.is_empty()
+                && uref.as_str() != self.header.control_ref.as_ref()
+            {
+                self.done = true;
+                return Some(Err(Error::InterchangeRefMismatch {
+                    unb_ref: self.header.control_ref.to_string(),
+                    unz_ref: uref.clone(),
+                }));
             }
             // Validate UNZ message count.
             if self.declared_count != 0 && self.declared_count != self.actual_count {
@@ -954,10 +955,10 @@ fn parse_interchange_full_from_segments_with_registry(
     let mut messages: Vec<MessageEnvelope> = Vec::new();
     for (index, window_result) in msg_iter.enumerate() {
         // enforce max_messages_per_interchange before parsing the next message.
-        if let Some(limit) = config.max_messages_per_interchange {
-            if index >= limit {
-                return Err(Error::TooManyMessages { limit });
-            }
+        if let Some(limit) = config.max_messages_per_interchange
+            && index >= limit
+        {
+            return Err(Error::TooManyMessages { limit });
         }
         let window = window_result.map_err(Error::Parse)?;
         let message = dispatch_message_on_date(window.segments, &registry, config.reference_date)?;

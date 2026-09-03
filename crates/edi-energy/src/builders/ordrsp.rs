@@ -265,15 +265,24 @@ impl<S, R> OrdrespBuilder<S, R> {
             emit_comp!(w, "IMD", ["A"]);
         }
         // ── SG1: references ──────────────────────────────────────────────────
-        if let Some(pid) = self.inner.pruefidentifikator {
-            emit_comp!(w, "RFF", ["Z13", &pid.to_string()]);
-        }
+        // The MIG lists the Referenz places (`RFF+AAG`, `RFF+ON`, `RFF+AAV`)
+        // before the Prüfidentifikator's.
         for (q, v) in &self.inner.references {
             emit_comp!(w, "RFF", [q, v]);
         }
+        if let Some(pid) = self.inner.pruefidentifikator {
+            emit_comp!(w, "RFF", ["Z13", &pid.to_string()]);
+        }
         // ── SG2: adjustment (Prüfschritt + EBD) + coded reason ───────────────
         if let Some(code) = &self.inner.adjustment {
-            if let Some(ebd) = &self.inner.adjustment_ebd {
+            // DE 1082 only where the column lists a Codeliste (19013 marks
+            // DE 4465 alone).
+            if let Some(ebd) = self
+                .inner
+                .adjustment_ebd
+                .as_deref()
+                .filter(|e| !e.is_empty())
+            {
                 emit_comp!(w, "AJT", [code], [ebd]);
             } else {
                 emit_comp!(w, "AJT", [code]);
@@ -303,7 +312,7 @@ impl<S, R> OrdrespBuilder<S, R> {
         if self.inner.line_item {
             emit_seg!(w, "LIN", "1");
         }
-        emit_seg!(w, "UNS", "D");
+        emit_seg!(w, "UNS", "S");
         w.finish_unt(&self.inner.message_ref)
             .map_err(Error::Parse)?;
         Ok(buf)

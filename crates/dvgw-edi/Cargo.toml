@@ -1,7 +1,7 @@
 [package]
 name         = "dvgw-edi"
 version.workspace     = true
-description  = "DVGW EDIFACT parser, validator and writer for the German gas transport and balancing market (ALOCAT, NOMINT, NOMRES)"
+description  = "DVGW EDIFACT parser, validator and writer for the German gas transport and balancing market (ALOCAT, NOMINT, NOMRES, SSQNOT)"
 authors.workspace     = true
 edition.workspace     = true
 license.workspace     = true

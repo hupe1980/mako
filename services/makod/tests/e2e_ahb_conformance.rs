@@ -93,7 +93,7 @@ const VALIDATION_DATE: time::Date = date!(2026 - 10 - 01);
 /// GLN of the netzunabhängiger Lieferant (nLFN) — NAD+MS in the Gas fixture.
 const GAS_NLFN_ID: &str = "4012345000023";
 /// GLN of the Gasnetzbetreiber (GNB) — NAD+MR in the Gas fixture.
-const GAS_GNB_ID: &str = "9907317000007";
+const GAS_GNB_ID: &str = "9807317000007";
 /// Marktlokation from IDE+24 in the Gas fixture.
 const GAS_MALO_ID: &str = "51238696781";
 /// BDEW FV matching the Gas fixture's G1.1 release.
@@ -104,7 +104,7 @@ const GAS_FV_2025: &str = "FV2025-10-01";
 /// GLN of the MSBA (MSB Auftraggeber / Initiator) — NAD+MS in the WiM Gas fixture.
 const WIM_GAS_MSBA_ID: &str = "4012345000023";
 /// GLN of the NB (Netzbetreiber / Recipient) — NAD+MR in the WiM Gas fixture.
-const WIM_GAS_NB_ID: &str = "9907317000007";
+const WIM_GAS_NB_ID: &str = "9807317000007";
 
 /// Date on which G1.1 is the valid release for UTILMD Gas (first day of FV2025-10-01).
 // UTILMD AHB Gas 1.1 (G1.1) was published 01.10.2025; its Anwendungszeitpunkt is
@@ -600,10 +600,11 @@ async fn ahb_44039_kuendigung_msb_gas_validates_and_dispatches() {
 
 /// AHB-conformant INVOIC 2.8e PID 31001 (Abschlagsrechnung, MSB → NB).
 ///
-/// Source: `crates/edi-energy/tests/fixtures/invoic/valid/pid_31001.edi`
+/// Source: `crates/edi-energy/tests/fixtures/invoic/valid/beispiel_31001_abschlagsrechnung.edi`
 /// Release: 2.8e (BDEW INVOIC AHB 1.0a / FV2026-04-01, BK6-22-024)
-const INVOIC_31001_VALID: &[u8] =
-    include_bytes!("../../../crates/edi-energy/tests/fixtures/invoic/valid/pid_31001.edi");
+const INVOIC_31001_VALID: &[u8] = include_bytes!(
+    "../../../crates/edi-energy/tests/fixtures/invoic/valid/beispiel_31001_abschlagsrechnung.edi"
+);
 
 /// GLN of the MSB sender in the INVOIC 31001 fixture (NAD+MS).
 const INVOIC_MSB_ID: &str = "4012345000023";
@@ -740,9 +741,9 @@ const UTILMD_44024_STORNIERUNG_ABLEHNUNG_VALID: &[u8] = include_bytes!(
 /// GLN of the LFN sender in the GeLi Gas Stornierung 44022 fixture.
 const STORNO_LFN_ID: &str = "4012345000023";
 /// GLN of the GNB receiver in the GeLi Gas Stornierung 44022 fixture.
-const STORNO_GNB_ID: &str = "9907317000007";
+const STORNO_GNB_ID: &str = "9807317000007";
 /// Vorgangsnummer (IDE+24) in the GeLi Gas Stornierung 44022 fixture.
-const STORNO_VORGANG_ID: &str = "STORNO0000A";
+const STORNO_VORGANG_ID: &str = "VORGANG0001";
 
 // ── Test: GeLi Gas 44022 Stornierung Anfrage — real AHB validation passes ─────
 
@@ -905,7 +906,7 @@ const UTILMD_44044_ANMELDUNG_ABLEHNUNG_VALID: &[u8] = include_bytes!(
 /// GLN of the MSBA sender in the WiM Gas Anmeldung 44042 fixture.
 const ANMELDUNG_MSBA_ID: &str = "4012345000023";
 /// GLN of the NB receiver in the WiM Gas Anmeldung 44042 fixture.
-const ANMELDUNG_NB_ID: &str = "9907317000007";
+const ANMELDUNG_NB_ID: &str = "9807317000007";
 
 /// Drive a WiM MSB-Wechsel fixture through the shared adapter and workflow.
 ///
@@ -1075,7 +1076,7 @@ const UTILMD_44170_VERPFLICHTUNGSANFRAGE_ABLEHNUNG_VALID: &[u8] = include_bytes!
 );
 
 /// GLN of the NB sender in the Verpflichtungsanfrage 44168 fixture (NB → gMSB).
-const VERPFL_NB_ID: &str = "9907317000007";
+const VERPFL_NB_ID: &str = "9807317000007";
 /// GLN of the gMSB receiver in the Verpflichtungsanfrage 44168 fixture.
 const VERPFL_GMSB_ID: &str = "4012345000023";
 

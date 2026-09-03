@@ -22,7 +22,7 @@ use super::*;
 /// | `document_date` | no       | Document date (defaults to today at dispatch time) |
 /// | `message_ref`   | no       | Derived from `causation_event_id` when absent  |
 /// | `transaktionsgrund` | no   | `SG4 STS+7` DE 9013 element 2                  |
-/// | `transaktionsgrund_ergaenzung` | no | `STS+7` DE 9013 element 3 (`ZW3`…`ZAP`); defaults to `ZW4` when a Grund is present |
+/// | `transaktionsgrund_ergaenzung` | no | `STS+7` DE 9013 element 3 (`ZW3`…`ZAP`); defaults to `ZW4` where the column lists it |
 /// | `antwort_code`  | no       | `SG4 STS+E01` DE 9013 — **required on every Antwort-PID** |
 /// | `antwort_codeliste` | no   | `STS+E01` DE 1131, the **Codeliste** the code comes from (`E_0622`, `S_0090`, `G_0051`, …) |
 /// | `bemerkung`     | no       | `FTX+ACB` free text (mandatory alongside a catch-all Ablehnungscode) |
@@ -32,6 +32,10 @@ use super::*;
 /// | `beteiligte_marktpartner` | on 55036/55038, 44036/44038 | `SG12 NAD+VY` — every Altlieferant, or the auslösender Marktpartner |
 /// | `kunde_name` | on 55010 (`ZW4`/`ZAP`) | `SG12 NAD+Z09` „Kunde des LF" — a **name**, in `C080`, not an MP-ID |
 /// | `kunde_namensformat` | with `kunde_name` | `NAD` DE 3045 — `Z01` Person, `Z02` Firma; defaults to `Z01` |
+/// | `kunde_anschrift` | on 55001 | `SG12 NAD+Z04` Korrespondenzanschrift — `{strasse, plz, ort, land}` beside `kunde_name` |
+/// | `kundengruppe` | on 55001 | `SG8 SEQ+Z01 CCI+++<code>` Gruppenzuordnung nach EnWG — `Z15` Haushaltskunde, `Z18` kein Haushaltskunde |
+/// | `enfg_grundlage` | on 55001 | `SG8 SEQ+Z75 CCI+Z61++<code>` — `ZF9` erfüllt die Voraussetzung nach EnFG, `ZG0` erfüllt nicht, `ZG1` keine Angabe |
+/// | `enfg_grund` | with `ZF9` | `CAV+<code>` the § of the privilege (`ZU5` § 21 Stromspeicher … `ZV3` § 39 Landstrom) |
 /// | `dritter_antwortcode` | **on `A50` / `A57`** | `SG4 STS+Z35` — the LFA's own `E_0624` code, restated |
 /// | `dritter_referenz_lokation` | erzeugende Ablehnung | `STS+Z35` `C555` DE 9012 — which MaLo/Tranche the restated answer is about |
 /// | `dritter_objekt` | erzeugende Ablehnung | the second DE 9013 — `ZW3` Erzeugende MaLo / `ZW5` Tranche |
@@ -168,7 +172,7 @@ pub(super) fn render_utilmd(
     // `SG4 SG6 RFF+Z13` carries the Prüfidentifikator and the builder emits it
     // per Vorgang from `pruefidentifikator` — DE 1154 is `R n5`, so nothing but
     // the five-digit code belongs there.
-    let mut builder = builders::UtilmdBuilder::new(release)
+    let mut builder = builders::UtilmdBuilder::new(release.clone())
         .sender(sender)
         .receiver(receiver)
         .pruefidentifikator(edifact_pid)
@@ -266,7 +270,10 @@ pub(super) fn render_utilmd(
     // single `SG4 STS 9013` row. Defaulting `ZW4` onto a Gas Vorgang writes a
     // code the receiving AHB does not define into an element it does not use.
     if let Some(grund) = p.get("transaktionsgrund").and_then(|v| v.as_str()) {
-        let t = if names_messlokation || track == ReleaseTrack::Gas {
+        let t = if names_messlokation
+            || track == ReleaseTrack::Gas
+            || !column_lists_ergaenzung(&release, pid)
+        {
             Transaktionsgrund::bare(grund)
         } else {
             let erg = p
@@ -381,15 +388,81 @@ pub(super) fn render_utilmd(
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .unwrap_or(edi_energy::utilmd_codes::namensformat::PERSON);
-        // A `Z01` Personenname splits across the five DE 3036 components as
-        // Nachname, Vorname, …; a `Z02` Firmenbezeichnung is one line. The
-        // separator is the caller's, so an unsplit name still renders.
-        let parts: Vec<String> = if format == edi_energy::utilmd_codes::namensformat::PERSON {
-            name.splitn(5, ',').map(|s| s.trim().to_owned()).collect()
-        } else {
-            vec![name.to_owned()]
+        // A `Z01` Personenname splits across the DE 3036 components the
+        // column lists (Nachname, Vorname, …); a column marking one component
+        // or a `Z02` Firmenbezeichnung takes the name in one line.
+        let listed = |code: &str| {
+            super::column_occurrences(
+                MessageType::Utilmd,
+                &release,
+                pid,
+                "NAD",
+                Some(code),
+                "3036",
+            )
         };
+        let parts = parts_of(
+            name,
+            format,
+            listed(edi_energy::utilmd_codes::nad::KUNDE_DES_LF),
+        );
         tx = tx.kunde_des_lf(parts, format);
+        // `SG12 NAD+Z04` Korrespondenzanschrift des Kunden — Muss on a 55001
+        // beside the name.
+        if let Some(a) = p.get("kunde_anschrift").filter(|v| v.is_object()) {
+            let field = |k: &str| a.get(k).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+            tx = tx.anschrift(
+                edi_energy::utilmd_codes::nad::KORRESPONDENZANSCHRIFT_KUNDE,
+                parts_of(
+                    name,
+                    format,
+                    listed(edi_energy::utilmd_codes::nad::KORRESPONDENZANSCHRIFT_KUNDE),
+                ),
+                format,
+                field("strasse"),
+                field("ort"),
+                field("plz"),
+                a.get("land")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("DE")
+                    .to_owned(),
+            );
+        }
+    }
+
+    // `SG8 SEQ+Z01` Daten der Marktlokation — the Gruppenzuordnung nach EnWG
+    // (`CCI+++Z15` Haushaltskunde / `Z18` kein Haushaltskunde), Muss on a
+    // 55001.
+    if let Some(gruppe) = p
+        .get("kundengruppe")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        tx = tx
+            .stammdaten(edi_energy::utilmd_codes::SEQ_DATEN_DER_MARKTLOKATION)
+            .cci("", gruppe)
+            .done();
+    }
+    // `SG8 SEQ+Z75` Daten des Kunden des Lieferanten — `CCI+Z61` Grundlage
+    // zur Verringerung der Umlagen nach EnFG (`ZF9` erfüllt, `ZG0` erfüllt
+    // nicht, `ZG1` keine Angabe) and, where a privilege is claimed, `CAV` with
+    // its § (`ZU5` … `ZV3`).
+    if let Some(grundlage) = p
+        .get("enfg_grundlage")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        let mut block = tx
+            .stammdaten(edi_energy::utilmd_codes::SEQ_DATEN_DES_KUNDEN)
+            .cci("Z61", grundlage);
+        if let Some(grund) = p
+            .get("enfg_grund")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            block = block.cav(grund);
+        }
+        tx = block.done();
     }
 
     // `SG12 NAD+VY` — the beteiligte Marktpartner a Vorgang names beside sender
@@ -525,7 +598,7 @@ fn render_utilmd_liste(
         .map(msg_ref_from_uuid)
         .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
 
-    let mut builder = builders::UtilmdBuilder::new(release)
+    let mut builder = builders::UtilmdBuilder::new(release.clone())
         .sender(sender)
         .receiver(receiver)
         .pruefidentifikator(edifact_pid)
@@ -718,4 +791,50 @@ pub(super) fn utilmd_dtm_qualifier(pid: u32) -> &'static str {
         // honest for everything mako actually sends.
         _ => dtm::BEGINN_ZUM,
     }
+}
+
+/// A `Z01` Personenname splits across the five DE 3036 components as Nachname,
+/// Vorname, …; a `Z02` Firmenbezeichnung is one line. The separator is the
+/// caller's, so an unsplit name still renders.
+fn parts_of(name: &str, format: &str, components: u8) -> Vec<String> {
+    if format == edi_energy::utilmd_codes::namensformat::PERSON && components >= 2 {
+        name.splitn(usize::from(components.min(5)), ',')
+            .map(|s| s.trim().to_owned())
+            .collect()
+    } else {
+        vec![name.to_owned()]
+    }
+}
+
+/// Whether the column of `pid` lists the Transaktionsgrundergänzung — `STS+7`
+/// DE 9013, second occurrence. Strom's Anmeldungen do (`ZW4` verbrauchende
+/// Marktlokation); a Zuordnungs- or Stammdatenmeldung does not, and a code in
+/// an element the column does not list is refused.
+fn column_lists_ergaenzung(release: &edi_energy::Release, pid: u32) -> bool {
+    let Ok(code) = edi_energy::Pruefidentifikator::new(pid) else {
+        return true;
+    };
+    let Some(profile) = edi_energy::ReleaseRegistry::global()
+        .profiles_for(MessageType::Utilmd)
+        .find(|p| p.release() == release)
+    else {
+        return true;
+    };
+    let Some(af) = profile.anwendungsfall(code.as_u32()) else {
+        return true;
+    };
+    profile
+        .structure
+        .layouts
+        .iter()
+        .filter(|l| {
+            l.tag == "STS"
+                && l.leaves()
+                    .next()
+                    .is_some_and(|(_, _, e)| e.codes.iter().any(|c| c.code == "7"))
+        })
+        .any(|l| {
+            af.element_rules(&l.nr)
+                .any(|r| r.de == "9013" && r.occurrence == 1)
+        })
 }

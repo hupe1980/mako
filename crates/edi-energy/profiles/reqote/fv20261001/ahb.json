@@ -1,311 +1,3850 @@
 {
-  "schema_version": 1,
-  "message_type": "REQOTE",
-  "release": "1.3c",
-  "source_document": "REQOTE AHB, wire release 1.3c (Stand 01.04.2026)",
-  "pruefidentifikatoren": [
+  "ahb_version": "1.2",
+  "anwendungsfaelle": [
     {
-      "code": 35001,
-      "name": "Anforderung Angebot",
-      "segment_rules": [
+      "chapter": "4.1.2 Anforderung eines Geräteübernahmeangebotes",
+      "communication": "MSBN an MSBA",
+      "elements": [
         {
-          "tag": "BGM",
-          "requirement": "M"
-        },
-        {
-          "tag": "COM",
-          "requirement": "M"
-        },
-        {
-          "tag": "CTA",
-          "requirement": "M"
-        },
-        {
-          "tag": "DTM",
-          "requirement": "M"
-        },
-        {
-          "tag": "LIN",
-          "requirement": "M"
-        },
-        {
-          "tag": "LOC",
-          "requirement": "M"
-        },
-        {
-          "tag": "NAD",
-          "requirement": "M"
-        },
-        {
-          "tag": "RFF",
-          "requirement": "M"
-        },
-        {
-          "tag": "CCI",
-          "requirement": "O",
-          "_description": "CCI is optional per MIG 1.3c (no AHB constraint for PID 35001)"
-        },
-        {
-          "tag": "FTX",
-          "requirement": "O",
-          "_description": "FTX is optional per MIG 1.3c (no AHB constraint for PID 35001)"
-        },
-        {
-          "tag": "IMD",
-          "requirement": "O",
-          "_description": "IMD is optional per MIG 1.3c (no AHB constraint for PID 35001)"
-        },
-        {
-          "tag": "PIA",
-          "requirement": "O",
-          "_description": "PIA is optional per MIG 1.3c (no AHB constraint for PID 35001)"
-        }
-      ],
-      "group_rules": []
-    },
-    {
-      "code": 35002,
-      "name": "Anfrage",
-      "segment_rules": [
-        {
-          "tag": "BGM",
-          "requirement": "M"
-        },
-        {
-          "tag": "COM",
-          "requirement": "M"
-        },
-        {
-          "tag": "CTA",
-          "requirement": "M"
-        },
-        {
-          "tag": "DTM",
-          "requirement": "M"
-        },
-        {
-          "tag": "LIN",
-          "requirement": "M"
-        },
-        {
-          "tag": "LOC",
-          "requirement": "M"
-        },
-        {
-          "tag": "NAD",
-          "requirement": "M"
-        },
-        {
-          "tag": "RFF",
-          "requirement": "M"
-        },
-        {
-          "tag": "CCI",
-          "requirement": "O",
-          "_description": "CCI is optional per MIG 1.3c (no AHB constraint for PID 35002)"
-        },
-        {
-          "tag": "FTX",
-          "requirement": "O",
-          "_description": "FTX is optional per MIG 1.3c (no AHB constraint for PID 35002)"
-        },
-        {
-          "tag": "IMD",
-          "requirement": "O",
-          "_description": "IMD is optional per MIG 1.3c (no AHB constraint for PID 35002)"
-        },
-        {
-          "tag": "PIA",
-          "requirement": "O",
-          "_description": "PIA is optional per MIG 1.3c (no AHB constraint for PID 35002)"
-        }
-      ],
-      "group_rules": []
-    },
-    {
-      "code": 35003,
-      "name": "Anfrage von Werten für Rechnungsabwicklung",
-      "segment_rules": [
-        {
-          "tag": "BGM",
-          "requirement": "M"
-        },
-        {
-          "tag": "COM",
-          "requirement": "M"
-        },
-        {
-          "tag": "CTA",
-          "requirement": "M"
-        },
-        {
-          "tag": "DTM",
-          "requirement": "M"
-        },
-        {
-          "tag": "LOC",
-          "requirement": "M"
-        },
-        {
-          "tag": "NAD",
-          "requirement": "M"
-        },
-        {
-          "tag": "RFF",
-          "requirement": "M"
-        },
-        {
-          "tag": "CCI",
-          "requirement": "O",
-          "_description": "SG28 CCI+Z60 (Schwellwerte) is Muss only for a Schwellwert-triggered SMGW Messprodukt [43]"
-        },
-        {
-          "tag": "FTX",
-          "requirement": "O",
-          "_description": "FTX+ACB is Kann; FTX+Z17/Z23/Z24 belong to the SG27 of an SMGW Messprodukt"
-        },
-        {
-          "tag": "IMD",
-          "requirement": "O",
-          "_description": "IMD is optional per MIG 1.3c (no AHB constraint for PID 35003)"
-        },
-        {
-          "tag": "LIN",
-          "requirement": "S",
-          "_description": "SG27 is Soll [24] — when a Messprodukt is ordered"
-        },
-        {
-          "tag": "PIA",
-          "requirement": "S",
-          "_description": "SG27 PIA+5 is Muss inside the SG27 that Soll [24] introduces"
-        }
-      ],
-      "group_rules": []
-    },
-    {
-      "code": 35004,
-      "name": "Anfrage einer Konfiguration",
-      "segment_rules": [
-        {
-          "tag": "BGM",
-          "requirement": "M"
-        },
-        {
-          "tag": "CCI",
-          "requirement": "M"
-        },
-        {
-          "tag": "COM",
-          "requirement": "M"
-        },
-        {
-          "tag": "CTA",
-          "requirement": "M"
-        },
-        {
-          "tag": "DTM",
-          "requirement": "M"
-        },
-        {
-          "tag": "FTX",
-          "requirement": "M"
-        },
-        {
-          "tag": "IMD",
-          "requirement": "M"
-        },
-        {
-          "tag": "LIN",
-          "requirement": "M"
-        },
-        {
-          "tag": "LOC",
-          "requirement": "M"
-        },
-        {
-          "tag": "NAD",
-          "requirement": "M",
-          "conditional_rules": [
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
             {
-              "when_tag": "RFF",
-              "when_element_index": 0,
-              "when_value": "Z41",
-              "then_requirement": "M",
-              "_description": "[17] Wenn SG1 RFF+Z41 (Referenznummer des Vorgangs der Anmeldung nach WiM) vorhanden, ist SG11 NAD (NB) Pflicht"
+              "operand": "X"
             }
           ]
         },
         {
-          "tag": "PIA",
-          "requirement": "M"
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "REQOTE",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "RFF",
-          "requirement": "M"
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "10A",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "1.3c",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "311",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X [931] [494]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "76",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X [UB3]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "35001",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00016",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00016",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00016",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3139",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "IC",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3412",
+          "nr": "00017",
+          "operands": [
+            {
+              "operand": "X [500]"
+            }
+          ]
+        },
+        {
+          "de": "3148",
+          "nr": "00018",
+          "operands": [
+            {
+              "operand": "X [39]) ⊻ ([940]"
+            }
+          ]
+        },
+        {
+          "de": "3155",
+          "nr": "00018",
+          "operands": [
+            {
+              "code": "EM",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "FX",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "TE",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AJ",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AL",
+              "operand": "X [1P0..1]"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00019",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00019",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00019",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "DP",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3227",
+          "nr": "00021",
+          "operands": [
+            {
+              "code": "172",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3225",
+          "nr": "00021",
+          "operands": [
+            {
+              "operand": "X [951] [503]"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00027",
+          "operands": [
+            {
+              "operand": "X [903]"
+            }
+          ]
+        },
+        {
+          "de": "0081",
+          "nr": "00051",
+          "operands": [
+            {
+              "code": "S",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00052",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00052",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         }
       ],
-      "group_rules": []
+      "name": "Anfrage Geräteübernahmeangebot",
+      "pid": 35001,
+      "rows": [
+        {
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00011",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00011",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00016",
+          "group": "SG11",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00016",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00017",
+          "group": "SG14",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00017",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00018",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00019",
+          "group": "SG11",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00019",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00020",
+          "group": "SG11",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00020",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00021",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00027",
+          "group": "SG27",
+          "status": [
+            "Muss [2005]"
+          ]
+        },
+        {
+          "nr": "00027",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00051",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00052",
+          "status": [
+            "Muss"
+          ]
+        }
+      ]
     },
     {
-      "code": 35005,
-      "name": "Anfrage Angebot Änderung",
-      "segment_rules": [
+      "chapter": "4.2 Anfrage zur Rechnungsabwicklung des Messstellenbetriebs über den LF",
+      "communication": "LF an MSB",
+      "elements": [
         {
-          "tag": "BGM",
-          "requirement": "M"
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "COM",
-          "requirement": "M"
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "REQOTE",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DTM",
-          "requirement": "M"
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "LIN",
-          "requirement": "M"
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "10A",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "LOC",
-          "requirement": "M"
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "NAD",
-          "requirement": "M"
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "1.3c",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "PIA",
-          "requirement": "M"
+          "de": "1001",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "Z29",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "RFF",
-          "requirement": "M"
+          "de": "1004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "CCI",
-          "requirement": "O",
-          "_description": "CCI is optional per MIG 1.3c (no AHB constraint for PID 35005)"
+          "de": "2005",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG 1.3c (no AHB constraint for PID 35005)"
+          "de": "2380",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X [931] [494]"
+            }
+          ]
         },
         {
-          "tag": "FTX",
-          "requirement": "O",
-          "_description": "FTX is optional per MIG 1.3c (no AHB constraint for PID 35005)"
+          "de": "2379",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "IMD",
-          "requirement": "O",
-          "_description": "IMD is optional per MIG 1.3c (no AHB constraint for PID 35005)"
+          "de": "2005",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "203",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00005",
+          "operands": [
+            {
+              "operand": "X [UB1]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "469",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00006",
+          "operands": [
+            {
+              "operand": "X [UB1]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "35002",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00016",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00016",
+          "operands": [
+            {
+              "operand": "X [10]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00016",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3139",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "IC",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3412",
+          "nr": "00017",
+          "operands": [
+            {
+              "operand": "X [501]"
+            }
+          ]
+        },
+        {
+          "de": "3148",
+          "nr": "00018",
+          "operands": [
+            {
+              "operand": "X [39]) ⊻ ([940]"
+            }
+          ]
+        },
+        {
+          "de": "3155",
+          "nr": "00018",
+          "operands": [
+            {
+              "code": "EM",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "FX",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "TE",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AJ",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AL",
+              "operand": "X [1P0..1]"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00019",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00019",
+          "operands": [
+            {
+              "operand": "X [10]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00019",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "DP",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3227",
+          "nr": "00021",
+          "operands": [
+            {
+              "code": "172",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3225",
+          "nr": "00021",
+          "operands": [
+            {
+              "operand": "X [950] [502]"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00027",
+          "operands": [
+            {
+              "operand": "X [903]"
+            }
+          ]
+        },
+        {
+          "de": "0081",
+          "nr": "00051",
+          "operands": [
+            {
+              "code": "S",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00052",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00052",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         }
       ],
-      "group_rules": []
+      "name": "Anfrage Rechnungsabwicklung MSB über LF",
+      "pid": 35002,
+      "rows": [
+        {
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00005",
+          "status": [
+            "Muss [2]"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss [1]"
+          ]
+        },
+        {
+          "before": "00011",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00011",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00016",
+          "group": "SG11",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00016",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00017",
+          "group": "SG14",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00017",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00018",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00019",
+          "group": "SG11",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00019",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00020",
+          "group": "SG11",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00020",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00021",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00027",
+          "group": "SG27",
+          "status": [
+            "Muss [2005]"
+          ]
+        },
+        {
+          "nr": "00027",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00051",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00052",
+          "status": [
+            "Muss"
+          ]
+        }
+      ]
+    },
+    {
+      "chapter": "4.3 Anfrage von Werten",
+      "communication": "ESA an MSB",
+      "elements": [
+        {
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "REQOTE",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "10A",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "1.3c",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "Z57",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X [931] [494]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "76",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X [931]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00009",
+          "operands": [
+            {
+              "code": "ACB",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00009",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "35003",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00016",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00016",
+          "operands": [
+            {
+              "operand": "X [10]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00016",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3139",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "IC",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3412",
+          "nr": "00017",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3148",
+          "nr": "00018",
+          "operands": [
+            {
+              "operand": "X [39]) ⊻ ([940]"
+            }
+          ]
+        },
+        {
+          "de": "3155",
+          "nr": "00018",
+          "operands": [
+            {
+              "code": "EM",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "FX",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "TE",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AJ",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AL",
+              "operand": "X [1P0..1]"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00019",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00019",
+          "operands": [
+            {
+              "operand": "X [10]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00019",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "DP",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3227",
+          "nr": "00021",
+          "operands": [
+            {
+              "code": "172",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3225",
+          "nr": "00021",
+          "operands": [
+            {
+              "operand": "X ([950] [502]) ⊻ ([951] [503]) ⊻ ([950] [504]) ⊻ ([960] [510])"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00036",
+          "operands": [
+            {
+              "operand": "X [903]"
+            }
+          ]
+        },
+        {
+          "de": "1229",
+          "nr": "00036",
+          "operands": [
+            {
+              "code": "Z67",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4347",
+          "nr": "00037",
+          "operands": [
+            {
+              "code": "5",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "7140",
+          "nr": "00037",
+          "operands": [
+            {
+              "operand": "X [41]"
+            }
+          ]
+        },
+        {
+          "de": "7143",
+          "nr": "00037",
+          "operands": [
+            {
+              "code": "Z11",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00038",
+          "operands": [
+            {
+              "operand": "X [903]"
+            }
+          ]
+        },
+        {
+          "de": "1229",
+          "nr": "00038",
+          "operands": [
+            {
+              "code": "Z68",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4347",
+          "nr": "00039",
+          "operands": [
+            {
+              "code": "5",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "7140",
+          "nr": "00039",
+          "operands": [
+            {
+              "operand": "X [42]"
+            }
+          ]
+        },
+        {
+          "de": "7143",
+          "nr": "00039",
+          "operands": [
+            {
+              "code": "Z11",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00040",
+          "operands": [
+            {
+              "code": "Z17",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00040",
+          "operands": [
+            {
+              "operand": "X [515]"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00040",
+          "occurrence": 1,
+          "operands": [
+            {
+              "operand": "X [516]"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00041",
+          "operands": [
+            {
+              "code": "Z24",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00041",
+          "operands": [
+            {
+              "operand": "X [967]"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00042",
+          "operands": [
+            {
+              "code": "Z23",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00042",
+          "operands": [
+            {
+              "operand": "X [967]"
+            }
+          ]
+        },
+        {
+          "de": "7059",
+          "nr": "00044",
+          "operands": [
+            {
+              "code": "Z60",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "7037",
+          "nr": "00044",
+          "operands": [
+            {
+              "operand": "X [37]"
+            }
+          ]
+        },
+        {
+          "de": "7036",
+          "nr": "00044",
+          "operands": [
+            {
+              "operand": "X [906] ∧ [962]"
+            }
+          ]
+        },
+        {
+          "de": "7036",
+          "nr": "00044",
+          "occurrence": 1,
+          "operands": [
+            {
+              "operand": "X [906] ∧ [962]"
+            }
+          ]
+        },
+        {
+          "de": "0081",
+          "nr": "00051",
+          "operands": [
+            {
+              "code": "S",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00052",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00052",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        }
+      ],
+      "name": "Anfrage von Werten",
+      "pid": 35003,
+      "rows": [
+        {
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00009",
+          "status": [
+            "Kann"
+          ]
+        },
+        {
+          "before": "00011",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00011",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00016",
+          "group": "SG11",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00016",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00017",
+          "group": "SG14",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00017",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00018",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00019",
+          "group": "SG11",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00019",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00020",
+          "group": "SG11",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00020",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00021",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00036",
+          "group": "SG27",
+          "status": [
+            "Soll [24] ∧ [2063]"
+          ]
+        },
+        {
+          "nr": "00036",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00037",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00038",
+          "group": "SG27",
+          "status": [
+            "Soll [24] ∧ [2064]"
+          ]
+        },
+        {
+          "nr": "00038",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00039",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00040",
+          "status": [
+            "Muss [512]"
+          ]
+        },
+        {
+          "nr": "00041",
+          "status": [
+            "Muss [512]"
+          ]
+        },
+        {
+          "nr": "00042",
+          "status": [
+            "Muss [512]"
+          ]
+        },
+        {
+          "before": "00044",
+          "group": "SG28",
+          "status": [
+            "Muss [2066] ∧ [43]"
+          ]
+        },
+        {
+          "nr": "00044",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00051",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00052",
+          "status": [
+            "Muss"
+          ]
+        }
+      ]
+    },
+    {
+      "chapter": "4.4.2 Anfrage einer Konfiguration",
+      "communication": "NB, LF an MSB",
+      "elements": [
+        {
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "REQOTE",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "10A",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "1.3c",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "Z74",
+              "operand": "X [36]"
+            },
+            {
+              "code": "Z82",
+              "operand": "X [35]"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X [931] [494]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "76",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X [UB1]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "7081",
+          "nr": "00008",
+          "operands": [
+            {
+              "code": "Z55",
+              "operand": "X"
+            },
+            {
+              "code": "Z64",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "35004",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00012",
+          "operands": [
+            {
+              "code": "Z41",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00012",
+          "operands": [
+            {
+              "operand": "X [507]"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00013",
+          "operands": [
+            {
+              "code": "Z42",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00013",
+          "operands": [
+            {
+              "operand": "X [508]"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00014",
+          "operands": [
+            {
+              "code": "Z43",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00014",
+          "operands": [
+            {
+              "operand": "X [509]"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00015",
+          "operands": [
+            {
+              "code": "DDM",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00015",
+          "operands": [
+            {
+              "operand": "X [10]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00015",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00016",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00016",
+          "operands": [
+            {
+              "operand": "X [10]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00016",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3139",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "IC",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3412",
+          "nr": "00017",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3148",
+          "nr": "00018",
+          "operands": [
+            {
+              "operand": "X [39]) ⊻ ([940]"
+            }
+          ]
+        },
+        {
+          "de": "3155",
+          "nr": "00018",
+          "operands": [
+            {
+              "code": "EM",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "FX",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "TE",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AJ",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AL",
+              "operand": "X [1P0..1]"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00019",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00019",
+          "operands": [
+            {
+              "operand": "X [10]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00019",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "DP",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3227",
+          "nr": "00021",
+          "operands": [
+            {
+              "code": "172",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3225",
+          "nr": "00021",
+          "operands": [
+            {
+              "operand": "X ([950] [502] ∧ ([20] ∨ [510] ∧ ([20] ∨ [21] ∨"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00028",
+          "operands": [
+            {
+              "operand": "X [903]"
+            }
+          ]
+        },
+        {
+          "de": "1229",
+          "nr": "00028",
+          "operands": [
+            {
+              "code": "Z64",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4347",
+          "nr": "00029",
+          "operands": [
+            {
+              "code": "5",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "7140",
+          "nr": "00029",
+          "operands": [
+            {
+              "operand": "X [29]"
+            }
+          ]
+        },
+        {
+          "de": "7143",
+          "nr": "00029",
+          "operands": [
+            {
+              "code": "Z11",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "7059",
+          "nr": "00030",
+          "operands": [
+            {
+              "code": "Z52",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "7037",
+          "nr": "00030",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00031",
+          "operands": [
+            {
+              "operand": "X [903]"
+            }
+          ]
+        },
+        {
+          "de": "1229",
+          "nr": "00031",
+          "operands": [
+            {
+              "code": "Z65",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4347",
+          "nr": "00032",
+          "operands": [
+            {
+              "code": "5",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "7140",
+          "nr": "00032",
+          "operands": [
+            {
+              "operand": "X [30]"
+            }
+          ]
+        },
+        {
+          "de": "7143",
+          "nr": "00032",
+          "operands": [
+            {
+              "code": "Z11",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "7059",
+          "nr": "00033",
+          "operands": [
+            {
+              "code": "Z53",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "7037",
+          "nr": "00033",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00034",
+          "operands": [
+            {
+              "operand": "X [903]"
+            }
+          ]
+        },
+        {
+          "de": "1229",
+          "nr": "00034",
+          "operands": [
+            {
+              "code": "Z66",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4347",
+          "nr": "00035",
+          "operands": [
+            {
+              "code": "5",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "7140",
+          "nr": "00035",
+          "operands": [
+            {
+              "operand": "X [31]"
+            }
+          ]
+        },
+        {
+          "de": "7143",
+          "nr": "00035",
+          "operands": [
+            {
+              "code": "Z11",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00036",
+          "operands": [
+            {
+              "operand": "X [903]"
+            }
+          ]
+        },
+        {
+          "de": "1229",
+          "nr": "00036",
+          "operands": [
+            {
+              "code": "Z67",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4347",
+          "nr": "00037",
+          "operands": [
+            {
+              "code": "5",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "7140",
+          "nr": "00037",
+          "operands": [
+            {
+              "operand": "X [32]"
+            }
+          ]
+        },
+        {
+          "de": "7143",
+          "nr": "00037",
+          "operands": [
+            {
+              "code": "Z11",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00038",
+          "operands": [
+            {
+              "operand": "X [903]"
+            }
+          ]
+        },
+        {
+          "de": "1229",
+          "nr": "00038",
+          "operands": [
+            {
+              "code": "Z68",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4347",
+          "nr": "00039",
+          "operands": [
+            {
+              "code": "5",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "7140",
+          "nr": "00039",
+          "operands": [
+            {
+              "operand": "X [33]"
+            }
+          ]
+        },
+        {
+          "de": "7143",
+          "nr": "00039",
+          "operands": [
+            {
+              "code": "Z11",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00040",
+          "operands": [
+            {
+              "code": "Z17",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00040",
+          "operands": [
+            {
+              "operand": "X [515]"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00040",
+          "occurrence": 1,
+          "operands": [
+            {
+              "operand": "X [516]"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00041",
+          "operands": [
+            {
+              "code": "Z24",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00041",
+          "operands": [
+            {
+              "operand": "X [967]"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00042",
+          "operands": [
+            {
+              "code": "Z23",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00042",
+          "operands": [
+            {
+              "operand": "X [967]"
+            }
+          ]
+        },
+        {
+          "de": "7059",
+          "nr": "00043",
+          "operands": [
+            {
+              "code": "Z54",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "7037",
+          "nr": "00043",
+          "operands": [
+            {
+              "code": "ZF7",
+              "operand": "X"
+            },
+            {
+              "code": "ZF8",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "7059",
+          "nr": "00044",
+          "operands": [
+            {
+              "code": "Z60",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "7037",
+          "nr": "00044",
+          "operands": [
+            {
+              "operand": "X [37]"
+            }
+          ]
+        },
+        {
+          "de": "7036",
+          "nr": "00044",
+          "operands": [
+            {
+              "operand": "X [906] ∧ [962]"
+            }
+          ]
+        },
+        {
+          "de": "7036",
+          "nr": "00044",
+          "occurrence": 1,
+          "operands": [
+            {
+              "operand": "X [906] ∧ [962]"
+            }
+          ]
+        },
+        {
+          "de": "0081",
+          "nr": "00051",
+          "operands": [
+            {
+              "code": "S",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00052",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00052",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        }
+      ],
+      "name": "Anfrage einer Konfiguration",
+      "pid": 35004,
+      "rows": [
+        {
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss [16]"
+          ]
+        },
+        {
+          "nr": "00008",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00011",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00011",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00012",
+          "group": "SG1",
+          "status": [
+            "Muss [15]"
+          ]
+        },
+        {
+          "nr": "00012",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00013",
+          "group": "SG1",
+          "status": [
+            "Muss [18]"
+          ]
+        },
+        {
+          "nr": "00013",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00014",
+          "group": "SG1",
+          "status": [
+            "Muss [18]"
+          ]
+        },
+        {
+          "nr": "00014",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00015",
+          "group": "SG11",
+          "status": [
+            "Muss [17]"
+          ]
+        },
+        {
+          "nr": "00015",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00016",
+          "group": "SG11",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00016",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00017",
+          "group": "SG14",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00017",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00018",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00019",
+          "group": "SG11",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00019",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00020",
+          "group": "SG11",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00020",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00021",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00028",
+          "group": "SG27",
+          "status": [
+            "Soll [24] ∧ [2060] ∧ [28]"
+          ]
+        },
+        {
+          "nr": "00028",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00029",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00030",
+          "group": "SG28",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00030",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00031",
+          "group": "SG27",
+          "status": [
+            "Soll [24] ∧ [2061] ∧ ([25] ⊻ [27] ⊻ [28])"
+          ]
+        },
+        {
+          "nr": "00031",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00032",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00033",
+          "group": "SG28",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00033",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00034",
+          "group": "SG27",
+          "status": [
+            "Soll [24] ∧ [2062] ∧ ([27] ⊻ [28])"
+          ]
+        },
+        {
+          "nr": "00034",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00035",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00036",
+          "group": "SG27",
+          "status": [
+            "Soll [24] ∧ [2063] ∧ ([25] ⊻ [26] ⊻ [27])"
+          ]
+        },
+        {
+          "nr": "00036",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00037",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00038",
+          "group": "SG27",
+          "status": [
+            "Soll [24] ∧ [2064] ∧ [26]"
+          ]
+        },
+        {
+          "nr": "00038",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00039",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00040",
+          "status": [
+            "Muss [512]"
+          ]
+        },
+        {
+          "nr": "00041",
+          "status": [
+            "Muss [512]"
+          ]
+        },
+        {
+          "nr": "00042",
+          "status": [
+            "Muss [512]"
+          ]
+        },
+        {
+          "before": "00043",
+          "group": "SG28",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00043",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00044",
+          "group": "SG28",
+          "status": [
+            "Muss [2065] ∧ [38]"
+          ]
+        },
+        {
+          "nr": "00044",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00051",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00052",
+          "status": [
+            "Muss"
+          ]
+        }
+      ]
+    },
+    {
+      "chapter": "4.5 Anfrage Änderung der Technik der Lokation",
+      "communication": "NB, LF an MSB",
+      "elements": [
+        {
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "REQOTE",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "10A",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "1.3c",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "Z93",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X [931] [494]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "469",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00006",
+          "operands": [
+            {
+              "operand": "X [UB1] [520]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "472",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00007",
+          "operands": [
+            {
+              "operand": "X [UB1] [521]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00010",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4441",
+          "nr": "00010",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00010",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "35005",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00016",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00016",
+          "operands": [
+            {
+              "operand": "X [10]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00016",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00019",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00019",
+          "operands": [
+            {
+              "operand": "X [10]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00019",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "DP",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3227",
+          "nr": "00021",
+          "operands": [
+            {
+              "code": "172",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3225",
+          "nr": "00021",
+          "operands": [
+            {
+              "operand": "X ([951] [503]) ⊻ ([961] [511]) ⊻ ([960] [510])"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00022",
+          "operands": [
+            {
+              "code": "Z18",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00022",
+          "operands": [
+            {
+              "operand": "X [950]"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00023",
+          "operands": [
+            {
+              "code": "Z37",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00023",
+          "operands": [
+            {
+              "operand": "X [922] [517]"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00024",
+          "operands": [
+            {
+              "code": "Z09",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3139",
+          "nr": "00025",
+          "operands": [
+            {
+              "code": "IC",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3412",
+          "nr": "00025",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3148",
+          "nr": "00026",
+          "operands": [
+            {
+              "operand": "X [39]) ∨ ([940]"
+            }
+          ]
+        },
+        {
+          "de": "3155",
+          "nr": "00026",
+          "operands": [
+            {
+              "code": "EM",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "TE",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AL",
+              "operand": "X [1P0..1]"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00045",
+          "operands": [
+            {
+              "operand": "X [911]"
+            }
+          ]
+        },
+        {
+          "de": "1229",
+          "nr": "00045",
+          "operands": [
+            {
+              "code": "Z19",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4347",
+          "nr": "00046",
+          "operands": [
+            {
+              "code": "5",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "7140",
+          "nr": "00046",
+          "operands": [
+            {
+              "operand": "X [47] ∧ ∧ [49]) ⊻"
+            }
+          ]
+        },
+        {
+          "de": "7143",
+          "nr": "00046",
+          "operands": [
+            {
+              "code": "Z11",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00047",
+          "operands": [
+            {
+              "operand": "X [911]"
+            }
+          ]
+        },
+        {
+          "de": "1229",
+          "nr": "00047",
+          "operands": [
+            {
+              "code": "Z55",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4347",
+          "nr": "00048",
+          "operands": [
+            {
+              "code": "5",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "7140",
+          "nr": "00048",
+          "operands": [
+            {
+              "operand": "X [50] ∧ ∧ [49]) ⊻"
+            }
+          ]
+        },
+        {
+          "de": "7143",
+          "nr": "00048",
+          "operands": [
+            {
+              "code": "Z11",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00049",
+          "operands": [
+            {
+              "operand": "X [911]"
+            }
+          ]
+        },
+        {
+          "de": "1229",
+          "nr": "00049",
+          "operands": [
+            {
+              "code": "Z56",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4347",
+          "nr": "00050",
+          "operands": [
+            {
+              "code": "5",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "7140",
+          "nr": "00050",
+          "operands": [
+            {
+              "operand": "X [51] ∧ ∧ [49]) ⊻"
+            }
+          ]
+        },
+        {
+          "de": "7143",
+          "nr": "00050",
+          "operands": [
+            {
+              "code": "Z11",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0081",
+          "nr": "00051",
+          "operands": [
+            {
+              "code": "S",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00052",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00052",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        }
+      ],
+      "name": "Anfrage Angebot Änderung Technik",
+      "pid": 35005,
+      "rows": [
+        {
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00007",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00010",
+          "status": [
+            "Soll [35] ∧ [53]"
+          ]
+        },
+        {
+          "before": "00011",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00011",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00016",
+          "group": "SG11",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00016",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00019",
+          "group": "SG11",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00019",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00020",
+          "group": "SG11",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00020",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00021",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00022",
+          "group": "SG12",
+          "status": [
+            "Muss [44]"
+          ]
+        },
+        {
+          "nr": "00022",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00023",
+          "group": "SG12",
+          "status": [
+            "Muss [2067] ∧ ([45] ⊻ [27])"
+          ]
+        },
+        {
+          "nr": "00023",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00024",
+          "group": "SG11",
+          "status": [
+            "Muss [35] ∧ [518]"
+          ]
+        },
+        {
+          "nr": "00024",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00025",
+          "group": "SG14",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00025",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00026",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00045",
+          "group": "SG27",
+          "status": [
+            "Muss [2068] ∧ [26]"
+          ]
+        },
+        {
+          "nr": "00045",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00046",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00047",
+          "group": "SG27",
+          "status": [
+            "Muss [2068] ∧ [27]"
+          ]
+        },
+        {
+          "nr": "00047",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00048",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00049",
+          "group": "SG27",
+          "status": [
+            "Muss [2068] ∧ [28]"
+          ]
+        },
+        {
+          "nr": "00049",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00050",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00051",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00052",
+          "status": [
+            "Muss"
+          ]
+        }
+      ]
     }
   ],
-  "reviewed_by": "xtask/import-xml-ahb",
-  "reviewed_at": "2026-07-08"
+  "conditions": {
+    "1": "Wenn DTM+203 (Ausführungsdatum) nicht vorhanden.",
+    "10": "MP-ID nur aus Sparte Strom",
+    "15": "Wenn DTM+76 (Datum zum geplanten Leistungsbeginn) nicht vorhanden",
+    "16": "Wenn SG1 RFF+Z41 (Referenznummer des Vorgangs der Anmeldung nach WiM) nicht vorhanden.",
+    "17": "Wenn SG1 RFF+Z41 (Referenznummer des Vorgangs der Anmeldung nach WiM) vorhanden.",
+    "18": "Wenn IMD++Z55 (Änderung Konfiguration) vorhanden.",
+    "19": "Wenn SG27 LIN++Z64 (Erforderliches Produkt Schaltzeitdefinitionen) vorhanden.",
+    "2": "Wenn DTM+469 (Beginn zum (nächstmöglichen Termin)) nicht vorhanden.",
+    "20": "Wenn SG27 LIN++Z65 (Erforderliches Produkt Leistungskurvendefinitionen) vorhanden.",
+    "2005": "Pro Nachricht ist die SG27 genau einmal anzugeben.",
+    "2060": "Pro Nachricht ist die SG27 LIN+Z64 (Erforderliches Produkt Schaltzeitdefinitionen) maximal einmal anzugeben.",
+    "2061": "Pro Nachricht ist die SG27 LIN++Z65 (Erforderliches Produkt Leistungskurvendefinitionen) maximal einmal anzugeben.",
+    "2062": "Pro Nachricht ist die SG27 LIN++Z66 (Erforderliches Produkt Ad- hoc-Steuerkanal) maximal einmal anzugeben.",
+    "2063": "Pro Nachricht ist die SG27 LIN++Z67 (Erforderliches Messprodukt für Werte nach Typ 2 aus Backend) maximal einmal anzugeben.",
+    "2064": "Pro Nachricht ist die SG27 LIN++Z68 (Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW) maximal einmal anzugeben.",
+    "2065": "Diese SG28 ist so oft zu wiederholen, wie zu den unterschiedlichen Messprodukt- Position-Codes zu dem innerhalb derselben SG27 LIN im PIA+5 DE7140 (Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW) angegebenen Produkt ein Produkt angegeben ist, das in der Codeliste der Konfigurationen im Kapitel 4.4 „Messprodukte mit Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW“ in der Spalte \"Auslöser\" mit dem Wert \"Bei Schwellwertunter- / -überschreitung\" gekennzeichnet ist.",
+    "2066": "Diese SG28 ist so oft zu wiederholen, wie zu den unterschiedlichen Messprodukt- Position-Codes zu dem innerhalb derselben SG27 LIN im PIA+5 DE7140 (Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW) angegebenen Produkt ein Produkt angegeben ist, das in der Codeliste der Konfigurationen im Kapitel 4.6.2 „Werte nach Typ 2 aus SMGW“ in der Spalte \"Auslöser\" mit dem Wert \"Bei Schwellwertunter- / -überschreitung\" gekennzeichnet ist.",
+    "2067": "Die SG12 RFF+Z37 Referenz auf ID der Technischen Ressource ist so oft zu wiederholen, bis alle IDs der Technischen Ressourcen angegeben sind, die der Steuerbaren Ressource in LOC+172 DE3225 (Meldepunkt) mit diesem Vorgang zugeordnet werden sollen, genannt sind.",
+    "2068": "Diese SG27 ist so oft zu wiederholen, dass alle Produkte zur Lokation die innerhalb des gewünschten Umsetzungstermins (Zeitintervall aus DTM+469 (Startdatum oder Zeitpunkt) und DTM+472 (Endedatum oder Zeitpunkt)) aus Sicht des Anfragenden gewünscht sind und deren Kombination gemäß Codeliste der Konfigurationen Kapitel 7 \"Produkte zur Bestellung einer Änderung an einer Lokation\"möglich sind, genannt sind.",
+    "21": "Wenn SG27 LIN++Z66 (Erforderliches Produkt Ad-hoc- Steuerkanal) vorhanden.",
+    "22": "Wenn SG27 LIN++Z67 (Erforderliches Messprodukt für Werte nach Typ 2 aus Backend) vorhanden.",
+    "23": "Wenn SG27 LIN++Z68 (Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW) vorhanden.",
+    "24": "Wenn Produkt bestellt werden soll.",
+    "25": "Wenn in LOC+172 DE3225 (Meldepunkt) die ID einer Marktlokation angegeben ist.",
+    "26": "Wenn in LOC+172 DE3225 (Meldepunkt) die ID einer Messlokation angegeben ist.",
+    "27": "Wenn in LOC+172 DE3225 (Meldepunkt) die ID einer Netzlokation angegeben ist.",
+    "28": "Wenn in LOC+172 DE3225 (Meldepunkt) die ID einer Steuerbaren Ressource angegeben ist.",
+    "29": "Es sind nur die Konfigurations- Produkte erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.1 „Konfigurationsprodukte Schaltzeitdefinition“ enthalten sind.",
+    "30": "Es sind nur die Konfigurations- Produkte erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.2 „Konfigurationsprodukte Leistungskurvendefinition“ enthalten sind.",
+    "31": "Es sind nur die Konfigurations- Produkte erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.3 „Konfigurationsprodukte Ad-Hoc- Steuerkanal“ enthalten sind.",
+    "32": "Es sind nur die Messprodukte erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.5 „Messprodukte für Werte nach Typ 2 aus Backend für LF und NB“ enthalten sind.",
+    "33": "Es sind nur die Messprodukte erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.4 „Messprodukte mit Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW“ enthalten sind.",
+    "35": "Wenn MP-ID in SG11 NAD+MS mit Rolle LF vorhanden.",
+    "36": "Wenn MP-ID in SG11 NAD+MS mit Rolle NB vorhanden.",
+    "37": "Es sind nur die Messprodukt- Position-Codes erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.7 „Art der Werte für Messprodukte nach Typ 2“ enthalten sind.",
+    "38": "Wenn innerhalb derselben SG27 LIN im PIA+5 DE7140 (Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW) ein Produkt angegeben ist, das in der Codeliste der Konfigurationen im Kapitel 4.4 „Messprodukte mit Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW“ in der Spalte \"Auslöser\" mit dem Wert \"Bei Schwellwertunter- / -überschreitung\" gekennzeichnet ist.",
+    "39": "Wenn im DE3155 in demselben COM der Code EM vorhanden ist.",
+    "40": "Wenn im DE3155 in demselben COM der Code TE / FX / AJ / AL vorhanden ist.",
+    "41": "Es sind nur die Messprodukte erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.6.1 „Werte nach Typ 2 aus Backend“ enthalten sind.",
+    "42": "Es sind nur die Messprodukte erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.6.2 „Werte nach Typ 2 aus SMGW“ enthalten sind.",
+    "43": "Wenn innerhalb derselben SG27 LIN im PIA+5 DE7140 (Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW) ein Produkt angegeben ist, das in der Codeliste der Konfigurationen im Kapitel 4.6.2 „Werte nach Typ 2 aus SMGW“ in der Spalte \"Auslöser\" mit dem Wert \"Bei Schwellwertunter- / - überschreitung\" gekennzeichnet ist.",
+    "44": "Wenn in SG27 LIN (Erforderliches Produkt der Messlokation) das PIA+5 DE7140 mit einem Produkt-Code vorhanden ist der in der Codeliste der Konfigurationen im Kapitel 7 \"Produkte zur Bestellung einer Änderung an einer Lokation\" in der \"Spalte Bezeichnung\" mit dem Wert \"weitere Energieflussrichtung\" vorhanden ist.",
+    "45": "Wenn in LOC+172 DE3225 (Meldepunkt) die ID einer Steuerbaren Ressource angegeben ist.",
+    "47": "Es sind nur die Produkt-Codes erlaubt, die in der Codeliste der Konfigurationen im Kapitel 7 \"Produkte zur Bestellung einer Änderung an einer Lokation\" die in der Spalte \"Ebene\" mit dem Wert \"Messlokation\" vorhanden sind.",
+    "48": "Es sind weiterhin nur die Produkt- Codes erlaubt, die in der Codeliste der Konfigurationen im Kapitel 7 \"Produkte zur Bestellung einer Änderung an einer Lokation\" die in der Spalte \"Produkt gegenüber MSB von Marktrolle bestellbar\" mit einem \"X\" in der Spalte \"NB\" gekennzeichnet ist.",
+    "49": "Es sind weiterhin nur die Produkt- Codes erlaubt, die in der Codeliste der Konfigurationen im Kapitel 7 \"Produkte zur Bestellung einer Änderung an einer Lokation\" die in der Spalte \"Produkt gegenüber MSB von Marktrolle bestellbar\" mit einem \"X\" in der Spalte \"LF\" gekennzeichnet ist.",
+    "494": "Das hier genannte Datum muss der Zeitpunkt sein, zu dem das Dokument erstellt wurde, oder ein Zeitpunkt, der davor liegt.",
+    "50": "Es sind nur die Produkt-Codes erlaubt, die in der Codeliste der Konfigurationen im Kapitel 7 \"Produkte zur Bestellung einer Änderung an einer Lokation\" die in der Spalte \"Ebene\" mit dem Wert \"Netzlokation\" vorhanden sind.",
+    "500": "Hinweis: Angabe eines technischen Ansprechpartners für die Geräteübernahme",
+    "501": "Hinweis: Angabe eines Ansprechpartners für die Rechnungsabwicklung",
+    "502": "Hinweis: Verwendung der ID der Marktlokation",
+    "503": "Hinweis: Verwendung der ID der Messlokation",
+    "504": "Hinweis: Verwendung der ID der Tranche",
+    "507": "Hinweis: Vorgangsnummer aus SG4 IDE+24 DE7402 der UTILMD mit BGM+E01 mit der die Anmeldung des MSB-Wechsels erfolgt ist.",
+    "508": "Hinweis: Wert aus BGM+Z73 DE1004 der IFTSTA mit der die Antwort auf die Bestellung der Konfiguration übermittelt wurde",
+    "509": "Hinweis: Vorgangsnummer aus CNI DE1490 der IFTSTA mit BGM+Z73 mit der die Antwort auf die Bestellung der Konfiguration übermittelt wurde",
+    "51": "Es sind nur die Produkt-Codes erlaubt, die in der Codeliste der Konfigurationen im Kapitel 7 \"Produkte zur Bestellung einer Änderung an einer Lokation\" die in der Spalte \"Ebene\" mit dem Wert \"Steuerbare Ressource\" vorhanden sind.",
+    "510": "Hinweis: Verwendung der ID der Netzlokation",
+    "511": "Hinweis: Verwendung der ID der Steuerbaren Ressource",
+    "512": "Hinweis: Für den Empfang der Werte nach Typ 2 aus dem SMGW.",
+    "514": "Hinweis: Es darf nur eine Information im DE3148 übermittelt werden",
+    "515": "Hinweis: Es ist eine URI IPv4 für die Bereitstellung der Werte anzugeben.",
+    "516": "Hinweis: Es ist eine URI IPv6 für die Bereitstellung der Werte anzugeben.",
+    "517": "Hinweis: Verwendung der ID der Technischen Ressource",
+    "518": "Hinweis: zur Angabe von Kontaktdaten des Kunden des Lieferanten um die Änderung an der Technik zu vereinfachen.",
+    "52": "Wenn im DE3155 in demselben COM der Code TE / AL Worhanden ist.",
+    "520": "Hinweis: Angabe des Beginnzeitpunkts des gewünschten Umsetzungstermins aus Sicht des Anfragenden.",
+    "521": "Hinweis: Angabe des Endezeitpunkts des gewünschten Umsetzungstermins aus Sicht des Anfragenden.",
+    "53": "Wenn der LF der Marktlokation der genannten Lokation im gewünschten Umsetzungszeitraum nicht zugeordnet ist.",
+    "59": "Wenn SG27 LIN++ZH5 (Erforderliche Konfiguration Steuerbox) vorhanden.",
+    "903": "Format: Möglicher Wert: 1",
+    "906": "Format: max. 3 Nachkommastellen",
+    "911": "Format: Mögliche Werte: 1 bis n, je Nachricht oder Segmentgruppe bei 1 beginnend und fortlaufend aufsteigend",
+    "922": "Format: TR-ID",
+    "931": "Format: ZZZ = +00",
+    "939": "Format: Die Zeichenkette muss die Zeichen @ und . enthalten",
+    "940": "Format: Die Zeichenkette muss mit dem Zeichen + beginnen und danach dürfen nur noch Ziffern folgen",
+    "950": "Format: Marktlokations-ID",
+    "951": "Format: Zählpunktbezeichnung",
+    "960": "Format: Netzlokations-ID",
+    "961": "Format: SR-ID",
+    "962": "Format: max. 6 Vorkommastellen",
+    "967": "Format: Zertifikatskörper gemäß X509.1, BSI TR-03109-4"
+  },
+  "message_type": "REQOTE",
+  "packages": {
+    "1P": "--                                                  Hinweis:       Das    ist  das   Standardpaket,             wenn      keine     Bedingung         zum     Tragen       kommt,       z.  B."
+  },
+  "release": "1.3c",
+  "schema_version": 2,
+  "source": {
+    "file": "REQOTE_AHB_1.2_-_konsolidierte_Lesefassung_mit_Fehlerkorrekturen_Stand_29.06.2026.pdf",
+    "sha256": "1e3e7104bd3190247de91b86a83f44ff081e21315109cf75373d3298da89ec09",
+    "title": "REQOTE AHB 1.2 - konsolidierte Lesefassung mit Fehlerkorrekturen Stand: 29.06.2026"
+  }
 }

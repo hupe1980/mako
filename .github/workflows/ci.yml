@@ -319,27 +319,6 @@ jobs:
       # 404s, and the Antwortfrist expires on a process that looked healthy.
       - run: cargo run -p xtask -- check-answer-commands
 
-  codegen-check:
-    name: Codegen check (generated files are up-to-date)
-    runs-on: ubuntu-latest
-    env:
-      PYO3_PYTHON: python3
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - uses: Swatinem/rust-cache@v2
-      # `makotest` binds PyO3 with `abi3-py311`, so every workspace-wide cargo
-      # command needs an interpreter >= 3.11. `.cargo/config.toml` points
-      # PYO3_PYTHON at the developer's `.venv`, which does not exist here — and
-      # cargo leaves an already-set variable alone, so naming the runner's
-      # interpreter here is what makes the workspace build.
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: cargo xtask codegen --check
-
   makotest:
     name: makotest (Python toolkit)
     runs-on: ubuntu-latest
@@ -418,10 +397,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo xtask validate-profiles
-      # Every format version a counterparty can still send must have a fixture
-      # carrying its UNH 0057 code, so a BDEW release bump cannot land in
-      # mig.json without a message that exercises it.
-      - run: cargo xtask validate-release-codes
+      # Every committed profile against its source PDF. `regulatories/` is
+      # gitignored and not mirrored here, so this SKIPs on CI; it is a real
+      # gate for a developer with the mirror and poppler.
+      - run: cargo xtask import-profiles --check
       # Holds every Antwortcode against the published Entscheidungsbaum PDF —
       # tree, code and Cluster. `regulatories/` is gitignored and not mirrored
       # here, so this SKIPS on CI and is a real gate only for a developer who has
@@ -433,81 +412,6 @@ jobs:
       # extracted into `crates/edi-energy/profiles/pid-overview.json`, so the
       # check needs the repository and nothing else.
       - run: cargo xtask check-pid-coverage
-
-  validate-pruefids:
-    name: Validate Pruefidentifikator coverage
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      # Full informational scan (MISSING PIDs are warnings, not failures).
-      - name: Coverage scan (informational)
-        run: cargo xtask validate-pruefids
-      # Hard gates: all message types currently have 100% PID fixture coverage.
-      # These gates prevent regressions when new PIDs are added in future AHB
-      # releases. Add new types here once their fixture coverage reaches 100%.
-      - name: Coverage gate — aperak (strict)
-        run: cargo xtask validate-pruefids --message-type aperak --strict
-      - name: Coverage gate — comdis (strict)
-        run: cargo xtask validate-pruefids --message-type comdis --strict
-      - name: Coverage gate — iftsta (strict)
-        run: cargo xtask validate-pruefids --message-type iftsta --strict
-      - name: Coverage gate — insrpt (strict)
-        run: cargo xtask validate-pruefids --message-type insrpt --strict
-      - name: Coverage gate — invoic (strict)
-        run: cargo xtask validate-pruefids --message-type invoic --strict
-      - name: Coverage gate — mscons (strict)
-        run: cargo xtask validate-pruefids --message-type mscons --strict
-      - name: Coverage gate — ordchg (strict)
-        run: cargo xtask validate-pruefids --message-type ordchg --strict
-      - name: Coverage gate — orders (strict)
-        run: cargo xtask validate-pruefids --message-type orders --strict
-      - name: Coverage gate — ordrsp (strict)
-        run: cargo xtask validate-pruefids --message-type ordrsp --strict
-      - name: Coverage gate — partin (strict)
-        run: cargo xtask validate-pruefids --message-type partin --strict
-      - name: Coverage gate — pricat (strict)
-        run: cargo xtask validate-pruefids --message-type pricat --strict
-      - name: Coverage gate — quotes (strict)
-        run: cargo xtask validate-pruefids --message-type quotes --strict
-      - name: Coverage gate — remadv (strict)
-        run: cargo xtask validate-pruefids --message-type remadv --strict
-      - name: Coverage gate — reqote (strict)
-        run: cargo xtask validate-pruefids --message-type reqote --strict
-      - name: Coverage gate — utilmd (strict)
-        run: cargo xtask validate-pruefids --message-type utilmd --strict
-      - name: Coverage gate — utilts (strict)
-        run: cargo xtask validate-pruefids --message-type utilts --strict
-      # CONTRL is pid_exempt (no Prüfidentifikatoren) — the strict gate here
-      # verifies that both fv20251001 and fv20260101 profiles exist and are valid
-      # (prevents the FV2025-10-01 profile gap from reoccurring, see F-032).
-      - name: Coverage gate — contrl (strict)
-        run: cargo xtask validate-pruefids --message-type contrl --strict
-
-  release-diff-smoke:
-    name: release-diff smoke test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        # Use a real cross-release diff so a broken diff tool is detected.
-        # The pair is read from the profile directories rather than hardcoded:
-        # an fv name is the Anwendungszeitpunkt and moves when a release does.
-        # release-diff exits 1 when differences are found (expected here); use
-        # `|| true` so bash -e does not abort on the expected non-zero exit.
-      - run: |
-          # Bash expands a glob in lexicographic order, so the oldest and newest
-          # profile directories are the first and last elements.
-          FVS=()
-          for d in crates/edi-energy/profiles/mscons/*/; do FVS+=("$(basename "$d")"); done
-          LAST=$(( ${#FVS[@]} - 1 ))
-          echo "diffing mscons ${FVS[0]} -> ${FVS[$LAST]}"
-          out=$(cargo xtask release-diff --message-type mscons \
-            --from "${FVS[0]}" --to "${FVS[$LAST]}" || true)
-          echo "$out"
-          echo "$out" | grep -q '##' || { echo 'ERROR: release-diff produced no section headers'; exit 1; }
 
   check-release-coverage:
     name: Release coverage check

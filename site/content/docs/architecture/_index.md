@@ -159,7 +159,7 @@ Each is independently testable and suitable for crates.io publication.
 | `mako-markt` | Market data domain types + repo traits | `MaloId`, `MeloId`, `MarktpartnerId`, `VersorgungsStatus` |
 | `mako-fristen` | The German market calendar — every Frist, and what "today" means | `heute`/`berlin_date`/`berlin_midnight`; `add_werktage`, `deadline_at_werktage`, the BDEW holiday table; `antwort`/`meldung`/`vorlauf` per-Prüfidentifikator windows |
 | `grid-billing` | NNE/KA/MMM/MSB grid **settlement** engine | `calculate_nne_invoice`, `GridSettlement` (+ `CalculationTrace`, `LegalReference`); `Sparte` drives Gas/Strom refs; `calculate_reversal()`; rubo4e-free core, opt-in `bo4e` feature → `into_rechnung()` |
-| `energy-billing` | Pure multi-product retail energy billing (LF) | `Product` typed enum (13 categories, serde-tagged); `BillingEngine`/`BillingProvider` pipeline; `ControllableLoadProvider` (§14a); `validate()` + `bill_batch()`; `Invoice.warnings` + `§41a Abs. 1` guard; typed `StromsteuerTarif`/`EnergiesteuerTarif` (Befreiung vs. Ermäßigung) with `Steuerentlastung` kept out of the amounts; `EnergieQuellen` CO₂ label; HT/NT (`billing::TimeOfUsePricing`); block tariffs (`billing::RateSchedule`); **RLM demand charge**; **calendar-exact `billed_months`/`billed_years` proration**; **EN 16931 category `O`**; §41a EPEX; `Invoice::merge()`, `Invoice::allocate_proportionally()`; `eeg` optional feature; rubo4e-free core, opt-in `bo4e` feature → `Invoice::to_rechnung()`; zero I/O |
+| `energy-billing` | Pure multi-product retail energy billing (LF) | `Product` (13 categories) through `BillingEngine`; §14a controllable loads; Strom-/Energiesteuer Tarife with Entlastung kept out of the amounts; HT/NT, block tariffs, RLM demand charge; calendar-exact proration; EN 16931 category `O`; §41a EPEX; `Invoice::merge` / `allocate_proportionally`; optional `eeg` and `bo4e` features; zero I/O |
 | `eeg-billing` | Pure EEG/KWKG feed-in settlement (NB) | `calculate_settlement`, 10 settlement schemes, §51/§52 rules, `InbetriebnahmeTyp`, proptest invariants; statutory anzulegende Werte per §§40–45 with each Erzeugungsart's own annual Absenkung; opt-in `bo4e` feature → **§14 UStG Gutschrift** (`settlement_to_gutschrift` → BO4E `Rechnung` with per-rate USt breakdown) |
 | `mako-invoic` | The INVOIC settle/dispute process, once — shared by all four billing families (GPKE, WiM, GaBi Gas, GeLi Gas) | `InvoicFamily` (PID set · deadline label · the two role capabilities), `InvoicWorkflow<F>`, `InvoicState`/`InvoicEvent`/`InvoicCommand` |
 | `invoic-checker` | INVOIC plausibility 6-check pipeline | `InvoicCheckEngine::check`, `CheckOutcome` |
@@ -266,7 +266,7 @@ and `agentd`, which is the MCP *host* that calls the others.
 
 | Daemon | Port | Role | Config file |
 |--------|------|------|-------------|
-| [`makod`](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | Protocol gateway — EDIFACT ↔ BO4E, 70 workflows, AS4 ingest, deadlines | `makod.toml` |
+| [`makod`](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | Protocol gateway — EDIFACT ↔ BO4E, 71 workflows, AS4 ingest, deadlines | `makod.toml` |
 | [`marktd`](@/docs/services/marktd.md) | `:8180` | Market data hub — locations, registries, Versorgungsstatus, durable fan-out | `marktd.toml` |
 | [`processd`](@/docs/services/processd.md) | `:8580` | Process decision engine — the published Entscheidungsbäume, NB · LF · MSB · ESA | `processd.toml` |
 | [`edmd`](@/docs/services/edmd.md) | `:8380` | Energy data management — MSCONS, Zählerstandsgang, quality, Ablesesteuerung | `edmd.toml` |
@@ -286,29 +286,26 @@ and `agentd`, which is the MCP *host* that calls the others.
 
 ### `marktd` — Market Data Hub (`:8180`)
 
-`marktd` is the single source of truth for all market entity state.
-It stores Marktlokationen (MaLo) with typed columns (`netzebene`, `bilanzierungsgebiet`,
-`gasqualitaet`, `energierichtung`, `bilanzierungsmethode`, `regelzone`, `fallgruppe`)
-and **typed `rubo4e::current::Marktlokation`** API responses (every `PUT` crosses [the BO4E gate](@/docs/architecture/domain-model.md#the-bo4e-gate) — `_typ`, schema, out-of-schema enums by JSON-path, and the rules BO4E states in prose and enforces nowhere; every refusal is a 422 with the same `code`),
-Messlokationen (MeLo) with typed `netzebene_messung`, `regelzone`, `standorteigenschaften JSONB`,
-and **typed `rubo4e::current::Messlokation`** responses,
-contracts, trading partners, network contracts (`NbContractRecord`),
-price sheets (NNE, Messung, KA, Dienstleistung, Hardware),
-**VersorgungsStatus per MaLo** (with full history and `?at=YYYY-MM-DD` point-in-time queries),
-**MaLo grid topology** (`malo_grid`, provisioned via the NB-role `PUT /api/v1/malos/{malo_id}/grid` endpoint),
-**Netz-Element-Lokationen (NeLo)** with typed Redispatch 2.0 columns
-(`steuerkanal`, `eigenschaft_msb_lokation`, `grundzustaendiger_msb_codenr`),
-**TechnischeRessource** (E-mobility, generation, storage for iMS and Redispatch 2.0),
-**SteuerbareRessource** with `konfigurationsprodukte JSONB` (contracted iMS control products),
-**Zaehler** (meter registry) returning typed `rubo4e::current::Zaehler`, with
-`GET /api/v1/zaehler/{id}/zaehlwerke` for `Vec<Zaehlwerk>` OBIS register access,
-**ZaehlzeitRegister + ZaehlzeitSaison** for iMSys Time-of-Use (TOU) register definitions:
-`GET/PUT /api/v1/zaehler/{id}/register` stores HT/NT/EINZEL register records;
-`GET/PUT /api/v1/zaehler-register/{id}/saisons` stores seasonal time windows (SOMMER/WINTER/GESAMT)
-with ISO weekday bitmasks and local-time HH:MM bounds (PostgreSQL JSONB `@>` containment);
-`GET /api/v1/zaehler/{id}/tariff-zone?datetime=ISO` resolves the active zone with a single
-JOIN query — enabling `billingd` to automatically classify 15-min Lastgang intervals into
-HT/NT bands for §14a Modul 2 ToU billing without per-meter manual configuration.
+`marktd` is the single source of truth for market entity state. Every `PUT`
+crosses [the BO4E gate](@/docs/architecture/domain-model.md#the-bo4e-gate) and
+every refusal is a 422 with the same `code`; reads return typed
+`rubo4e::current` objects.
+
+| Entity | Stored beyond the BO4E object |
+|---|---|
+| **Marktlokation** | `netzebene`, `bilanzierungsgebiet`, `gasqualitaet`, `energierichtung`, `bilanzierungsmethode`, `regelzone`, `fallgruppe` |
+| **Messlokation** | `netzebene_messung`, `regelzone`, `standorteigenschaften` |
+| **VersorgungsStatus** | one row per MaLo with full history; `?at=YYYY-MM-DD` answers point-in-time |
+| **MaLo-Netztopologie** | `malo_grid`, written through the NB-role `PUT /api/v1/malos/{malo_id}/grid` |
+| **Netz-Element-Lokation** | Redispatch 2.0 columns `steuerkanal`, `eigenschaft_msb_lokation`, `grundzustaendiger_msb_codenr` |
+| **Technische / Steuerbare Ressource** | E-Mobilität, Erzeugung, Speicher; `konfigurationsprodukte` holds the contracted iMS control products |
+| **Zähler** | the register list at `GET /api/v1/zaehler/{id}/zaehlwerke` |
+| **Zählzeitregister + Saison** | HT/NT/EINZEL definitions with ISO weekday bitmasks and local-time bounds |
+| Contracts, Marktpartner, `NbContractRecord`, Preisblätter | NNE, Messung, KA, Dienstleistung, Hardware |
+
+`GET /api/v1/zaehler/{id}/tariff-zone?datetime=ISO` resolves the active zone in
+one join, which is what lets `billingd` classify quarter-hour intervals into
+HT/NT bands for §14a Modul 2 without per-meter configuration.
 
 **ZaehlzeitRegister auto-population from WiM Stammdaten:** when `makod` receives a WiM
 ORDERS response (PIDs 17102–17133) from the MSB, the `extract_zak_ze_zaehlwerke()` adapter

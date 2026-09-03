@@ -32,280 +32,59 @@ Because the cutover dates differ per message type, a running instance normally h
 
 ```
 crates/edi-energy/profiles/
+├── sources.json           # every profile: release, dates, AHB version, its MIG and AHB PDF
+├── pid-overview.json      # the published Prüfidentifikator inventory (check-pid-coverage)
 └── utilmd/
-    ├── fv20241001/        # Strom, valid Oct 2024 → Sep 2025 (archived)
-    │   ├── mig.json       # Message structure rules
-    │   ├── ahb.json       # AHB Pruefidentifikator rules
-    │   └── codelists.json # Code list values
-    ├── fv20241001_gas/    # Gas, valid Oct 2024 → Mar 2026
-    │   └── ...
-    ├── fv20251001/        # Strom, valid Oct 2025 → Sep 2026 (⭐ current production)
-    │   └── ...
-    ├── fv20260401_gas/    # Gas, valid Apr 2026 → Sep 2026 (⭐ current production)
-    │   └── ...
-    ├── fv20261001/        # Strom, valid Oct 2026 → Sep 2027 (🛠 next release)
-    │   └── ...
-    └── fv20261001_gas/    # Gas variant, same window (🛠 next release)
-        └── ...
+    ├── fv20251001/        # Strom S2.1, valid Oct 2025 → Sep 2026
+    │   ├── mig.json       # Nachrichtenstruktur + Segmentlayouts, by Nr
+    │   └── ahb.json       # one Prüfschablone per Anwendungsfall, by Nr
+    ├── fv20260401_gas/    # Gas G1.1, valid Apr 2026 → Sep 2026
+    ├── fv20261001/        # Strom S2.2, from Oct 2026
+    └── fv20261001_gas/    # Gas G1.2, from Oct 2026
 ```
 
-Every profile subdirectory follows the naming convention `fv<YYYYMMDD>`, where the date is the **Anwendungszeitpunkt** — never the Publikationsdatum printed on the document.
+Every profile subdirectory follows the naming convention `fv<YYYYMMDD>`, where the date is the **Anwendungszeitpunkt** — never the Publikationsdatum printed on the document. The files are generated from the PDFs and never edited by hand; see [Profile Files](@/docs/compliance/schema-versioning.md).
 
 ---
 
-## Step-by-Step: Adding a New Annual Release
-
-### 1. Download BDEW PDFs
-
-Download the new specification PDFs from [edi-energy.de](https://www.edi-energy.de/):
-
-- UTILMD-Strom MIG + AHB (German: *Nachrichtenstruktur, Anwendungshandbuch*)
-- UTILMD-Gas MIG + AHB
-- MSCONS MIG + AHB
-- etc.
-
-Place the PDFs in a local working directory.
-
-### 2. Extract profile data
+## Adding a Release
 
 ```bash
-cargo xtask extract-pdf --file <working-dir>/UTILMD_MIG_S3.1.pdf \
-    --message-type utilmd --release FV2027-10-01
+# 1. Mirror the new documents (regulatories/ is gitignored)
+cargo xtask sync-regulatories --download
 
-cargo xtask extract-pdf --file <working-dir>/UTILMD_AHB_S3.1.pdf \
-    --message-type utilmd --release FV2027-10-01
+# 2. Name the profile: release, dates, AHB version, the two PDFs
+$EDITOR crates/edi-energy/profiles/sources.json
 
-# Strom and Gas share a release, so the folder has to be named explicitly:
-cargo xtask extract-pdf --file <working-dir>/UTILMD_AHB_G2.0.pdf \
-    --message-type utilmd --release FV2027-10-01 --profile-dir fv20271001_gas
+# 3. Generate it from the PDFs
+cargo xtask import-profiles --profile utilmd/fv20271001
+
+# 4. The generated profile validates its own skeletons — every column's minimal
+#    message against its own Prüfschablone — and the corpus still holds
+cargo test -p edi-energy --all-features
+
+# 5. The committed profiles are consistent, and the inventory is covered
+cargo xtask validate-profiles
+cargo xtask check-pid-coverage
+cargo xtask check-release-coverage --date 2027-10-01
 ```
 
-> **The draft is written *beside* the curated profile it will be compared
-> against**, in `crates/edi-energy/profiles/<type>/<folder>/`. The folder name is
-> the compact form of the release (`FV2027-10-01` → `fv20271001`), and
-> `extract-pdf` refuses rather than creating a new directory: an unpaired draft
-> is invisible to `validate-extraction` and extracts without the neighbouring
-> `mig.json` that supplies the segments the AHB table never lists.
+`import-profiles` fails on a table it cannot read rather than guessing: a row whose statuses land between columns, a segment the AHB names that the MIG structure lacks, a column without `UNH`. `BDEW_DEBUG=1` traces every row the AHB reader assigns and `cargo xtask pdf-grid <pdf>` dumps the character grid it reads, which is how a new layout quirk is found. A Prüfidentifikator that leaves between two releases is an import regression unless `validate-profiles`' `RETIRED_PIDS` records BDEW's retirement.
 
-> **`pdftotext` is required for AHB extraction.** The AHB rule tables are column
-> layouts — a row's `Muss`/`Kann` belongs to whichever Prüfidentifikator column
-> it sits under — so the parser needs column-preserved text. `extract-pdf` shells
-> out to poppler's `pdftotext -layout` when available and warns when it is not.
-> Without it the MIG scan still works, but no Prüfidentifikatoren are found.
+The predecessor gets its `valid_until` (the day before the successor's `valid_from`) in `sources.json`; `validate-profiles` refuses a gap, an overlap and a chain whose newest profile is not open-ended. Nothing is archived: a profile stays compiled for as long as it is in `sources.json`, and is deleted when no deployment can still receive its format.
 
-The AHB parser reads one requirement per PID column:
+---
 
-| AHB mark | Profile requirement |
+## CI Gates
+
+| Gate | What it holds |
 |---|---|
-| `Muss` | `M` |
-| `Kann` | `O` |
-| `Soll` | `O` — a recommendation, never promoted |
-
-Four rules are easy to get wrong and are covered by tests:
-
-- **An unconditional `Kann` group downgrades the segments inside it.** A `Muss`
-  segment nested in a plain `Kann` group flattens to `O`: the group may be
-  absent entirely and takes the segment with it, so `M` would reject conformant
-  messages. UTILMD `SG3` is `Kann` with `SG3 CTA` marked `Muss`, and the shipped
-  profiles record `CTA` as `O`.
-- **A *conditioned* `Kann [n]` does not.** ORDERS `SG29` reads `Kann [2092]`,
-  and 2092 requires exactly one position per message — the group is effectively
-  mandatory, so `LIN` stays `M`.
-- **Column ownership follows the table's own spacing.** UTILMD heads its columns
-  about ten characters apart where ORDERS spreads them much wider, and cell
-  content drifts away from the header pitch. The parser derives per-column
-  ranges from the header and pairs a fully-populated row off one-to-one; a fixed
-  window copies one PID's `Muss` onto its neighbours.
-- **Optional segments are absent from the AHB table.** The AHB marks what is
-  *required*; `mig.json` lists what is *available*. `extract-pdf` completes this
-  for you: it reads the production `mig.json` beside the draft and adds every
-  segment the AHB never marks as `O` (envelope segments excluded). Without a
-  `mig.json` in place the step is skipped rather than guessed at, and the draft
-  carries only the AHB's own marks.
-
-Column arithmetic is in **characters, not bytes** — every header carries the `ü`
-of "Prüfidentifikator" while most data rows are ASCII, and mixing the units
-shifts every column by one.
-
-A conditional `Muss [n]` (e.g. "Wenn BGM+7 vorhanden") is reported as `M`; the
-XML encodes those as `C` with a `conditional_rules` entry. Review those by hand.
-
-The output directory is derived from `--message-type` and `--release`
-(`crates/edi-energy/profiles/utilmd/fv20271001/`). Each run writes
-`mig.draft.json` and `ahb.draft.json`. Review the drafts against the PDF, remove
-the `_WARNING` fields, and rename them to `mig.json` / `ahb.json` before
-continuing.
-
-**Measure the draft before trusting it.** `cargo xtask validate-extraction`
-compares every generated `ahb.draft.json` against the curated `ahb.json` beside
-it and classifies each Prüfidentifikator as `exact`, `superset`, `subset` or
-`differs`. A **`superset`** verdict means the draft marks more segments
-mandatory than the AHB requires — shipping it rejects valid messages.
-
-It also reports **how far off** each PID is, because that is what decides where
-review starts:
-
-```text
-utilmd/fv20261001   exact 12/123 (9%)  superset 110  subset 1  differs 0
-    superset: 110 PIDs, 451 excess mandatory segments in total (median +4)
-      review first (≤2 excess, 22 PIDs): 55005 (+1), 55009 (+1), …
-      worst: 55070 (+8), 55069 (+8), …
-    subset (1 PID — the draft under-marks; promoting accepts invalid messages): 55235
-```
-
-A `subset` is the quieter verdict and the one to read first: the draft marks
-*fewer* segments mandatory than the AHB, so promoting it accepts messages the
-AHB refuses rather than refusing valid ones. Both verdicts name their PIDs, so a
-count is never the end of the report.
-
-The report also says which **segments** drive the excess:
-
-```text
-      by segment (12 distinct tags): STS 88 (19%), SEQ 81 (17%), CCI 73 (16%),
-                                     CAV 70 (15%), PIA 43 (9%)  -> top 5 = 78%
-```
-
-That last line is the one to act on. The excess is not one judgement per PID —
-the same few tags recur, because `segment_rules` is flat and a tag that is `Muss`
-in one segment group and optional in another must still be given a single mark.
-The extractor keeps the strongest, which over-marks; keeping the weakest instead
-under-marks: it cuts the excess by roughly a third, and 21 PIDs then *lose*
-segments the AHB requires — a `subset` verdict, which is worse than a superset
-because nothing rejects the messages it lets through.
-
-Drafts emit `group_rules`, so the `(group, tag)` scoping need not be re-derived by
-hand — but that relocates marks rather than correcting them, and leaves the totals
-unchanged. `validate-extraction` compares the mandatory set across
-**both** `segment_rules` and `group_rules` for exactly that reason: a draft must
-not be able to score clean by moving its marks between the two lists. A draft is
-a starting point for review, never a drop-in profile.
-
-### What the extraction cannot decide for you
-
-Segment **requirements** are extracted exactly — validated against the
-hand-curated profiles at 597/597 (UTILMD Strom S2.2), 237/237 (UTILMD Gas G1.2)
-and 250/250 (ORDERS 1.1b) mandatory segments. Three things still need a human:
-
-- **Qualifier restrictions.** The table carries them (`BGM 1001 E01`), and they
-  extract at ~95% recall, but a tag appearing in several segment groups collapses
-  ambiguously. Which group a flat `segment_rules` entry is scoped to is a
-  curation decision the document does not determine.
-- **`conditional_rules`.** A `Muss [n]` is reported as `M`; whether condition *n*
-  makes it genuinely mandatory needs the condition text read. Note that condition
-  markers are sometimes column-positioned on a neighbouring line rather than
-  inline in the mark (`STS` under UTILMD 55004/55005 reads `Muss` with `[577]` a
-  line above), and those are read by no code path.
-- **Group flattening at the margins.** A `Muss` nested in a conditioned group is
-  kept as `M` — the safe direction for review, but stricter than some curated
-  profiles, which relaxed it after reading the condition.
-- **Whether the group itself is mandatory.** `requirement: "M"` on a `group_rules`
-  entry fires once per occurrence of that group, so a message omitting the group
-  entirely satisfies it. Where the AHB Bedingung makes the group Muss, set
-  `"group_required": true` on the entry and the absence is caught at message
-  level. It is off by default because a `Muss` on a segment does not by itself
-  say the enclosing group must appear, and turning it on for a conditional group
-  rejects valid messages — set it against the Bedingung, never by inference.
-
-Diff a freshly extracted draft against the shipped profile before promoting it;
-the mandatory set should match exactly, and every remaining difference is one of
-the three above.
-
-### 3. Import updated code lists
-
-Import the **whole** DE table from the MIG. A table split across a page break
-reads as complete on the first page, and a code copied from a neighbouring
-message type widens what mako accepts without any test noticing.
-
-`validate-profiles` cross-checks the result: every value an `ahb.json` rule
-demands must exist in the same profile's `codelists.json`, or no message can
-satisfy both layers. It runs only on profiles still in force — a lapsed one is
-frozen, kept so messages from its validity window still resolve.
-
-
-```bash
-cargo xtask import-codelists \
-    --file docs/codelists/DE_Qualifier_20271001.csv \
-    --message-type utilmd --release fv20271001
-```
-
-### 4. Update `valid_from` / `valid_until` in the JSON
-
-In `mig.json`:
-
-```json
-{
-  "valid_from":  "2027-10-01",
-  "valid_until": "2028-09-30",
-  "source_document": "UTILMD-Strom MIG S3.1, BDEW, 2027"
-}
-```
-
-Update the *previous* release's `valid_until` to `"2027-09-30"` as well.
-
-> **The AHB and the MIG carry independent version numbers.** For most message
-> types they differ — ORDERS ships MIG 1.4c alongside AHB 1.1b, MSCONS ships MIG
-> 2.5 alongside AHB 3.2. The `release` field holds the BDEW **wire release code**,
-> which tracks the MIG. Name the correct document in each file's
-> `source_document`: `mig.json` cites the MIG version, `ahb.json` cites the AHB.
-> Only UTILMD numbers the two alike (`S2.2`, `G1.2`).
-
-### 5. Validate the profiles
-
-```bash
-cargo xtask validate-profiles
-```
-
-This runs the JSON Schema checker against all profile files, and verifies **PID
-continuity**: a Prüfidentifikator present in one release but missing from its
-successor is reported as an error, because messages carrying it would validate
-against an empty AHB rule pack. When BDEW genuinely retires a PID, record it in
-`RETIRED_PIDS` (in `xtask/src/validate_profiles.rs`) with the AHB version that
-dropped it; a PID still published but lost during import belongs in
-`KNOWN_IMPORT_GAPS` until a re-import clears it. Fix any reported errors before
-proceeding.
-
-### 6. Regenerate source code
-
-```bash
-cargo xtask codegen
-```
-
-This regenerates all files under `crates/edi-energy/src/generated/`. Never edit these files by hand.
-
-### 7. Verify codegen is stable
-
-```bash
-cargo xtask codegen --check
-```
-
-Should report `xtask codegen --check: all generated files are up to date.`
-
-### 8. Run the test suite
-
-```bash
-cargo test --all-features
-cargo xtask validate-profiles
-cargo xtask validate-pruefids
-```
-
-### 9. Add fixtures
-
-Add at least one `.edi` fixture file for each new PID under `crates/edi-energy/tests/fixtures/<type>/valid/`.
-
-The directory must be a message type whose profiles declare that PID —
-`fixture_placement.rs` fails otherwise. A fixture filed under the wrong type
-still parses, so nothing else catches it, and it counts toward coverage while
-asserting a pairing no AHB defines.
-
-```bash
-# Verify fixture coverage
-cargo xtask validate-pruefids --message-type utilmd
-```
-
-Adding a fixture moves `crates/edi-energy/tests/validation_snapshot.txt`, which
-records every fixture's verdict as one `rule id + severity` line. Regenerate it
-with `BLESS_VALIDATION_SNAPSHOT=1` and read the diff — a line that disappears is
-a check that was lost.
+| `tests/skeletons.rs` | every Anwendungsfall's skeleton validates against its own Prüfschablone |
+| `tests/validation_snapshot.rs` | the verdict of every fixture, rule id by rule id |
+| `validate-profiles` | `sources.json` ↔ files, dates and continuity, Prüfidentifikatoren, AHB rows ↔ MIG structure |
+| `import-profiles --check` | a committed profile against its PDF — SKIPs where the mirror is absent |
+| `check-pid-coverage` | the shipped columns against BDEW's Anwendungsübersicht |
+| `check-release-coverage` | a profile covers the reference date for every message type |
 
 ---
 
@@ -316,8 +95,7 @@ When all profile and code changes are merged and `just ci` is green:
 1. **Bump the workspace version** with `cargo xtask bump-version <X.Y.Z>`.
 2. **Create and push a tag**: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. The `release.yml` GitHub Actions workflow runs automatically:
-   - Runs pre-flight `fmt` / `clippy` / `test`, `validate-profiles`,
-     `validate-pruefids`, and the `codegen --check` drift gate.
+   - Runs pre-flight `fmt` / `clippy` / `test` and `validate-profiles`.
    - Publishes the workspace's library crates to [crates.io](https://crates.io)
      via `cargo publish`, in dependency order.
    - Builds and pushes multi-arch Docker images (`linux/amd64`, `linux/arm64`)

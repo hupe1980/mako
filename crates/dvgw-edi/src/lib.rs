@@ -30,6 +30,7 @@
 //! | **ALOCAT** — Allokationsnachricht | `ORDRSP` | `X1G X2G X3G X4G X5G X6G X7G XBG` | 70001–70023 |
 //! | **NOMINT** — Nominierung | `ORDERS` | `01G 55G Y1G Y6G Y7G` | 70030–70034 |
 //! | **NOMRES** — Nominierungsantwort | `ORDRSP` | `07G 08G 19G 20G Y2G` | 70035–70039 |
+//! | **SSQNOT** — Mehr-/Mindermengenmeldung | `ORDRSP` | `BAG` | 70095–70096 |
 //!
 //! `CONTRL` and `APERAK` acknowledge DVGW interchanges but are BDEW formats;
 //! they live in `edi-energy` and are not reimplemented here.
@@ -112,6 +113,8 @@ mod zuordnung;
 
 /// The typed message model: positions, locations, quantities and parties.
 pub mod model;
+/// SSQNOT read as one Mehr-/Mindermengen record.
+pub mod ssqnot;
 
 pub use builder::{MessageBuilder, Position};
 pub use datetime::{DtmFormat, DtmValue, DvgwPeriod};
@@ -123,7 +126,7 @@ pub use model::{
 };
 pub use platform::{DvgwPlatform, sniff};
 pub use pruefidentifikator::{
-    PID_MAX, PID_MIN, PidInfo, Pruefidentifikator, catalogue, catalogue_for,
+    PID_MAX, PID_MIN, PidInfo, Pruefidentifikator, SSQNOT_RLM_CUTOFF, catalogue, catalogue_for,
 };
 pub use report::{DvgwIssue, DvgwReport, Severity};
 pub use version::DvgwVersion;

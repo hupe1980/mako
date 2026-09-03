@@ -1,364 +1,1464 @@
 {
-  "schema_version": 1,
+  "ahb_version": "2.1",
+  "envelope": [],
   "message_type": "PRICAT",
-  "release": "2.1",
-  "valid_from": "2026-10-01",
   "pid_source": "rff_z13",
-  "ordering_hint": [],
-  "dtm_formats": {
-    "137": [
-      "303"
-    ],
-    "157": [
-      "303"
-    ],
-    "163": [
-      "303"
-    ],
-    "492": [
-      "610"
-    ]
+  "publikationsdatum": "2026-04-01",
+  "release": "2.1",
+  "schema_version": 2,
+  "source": {
+    "file": "PRICAT_MIG_2.1.pdf",
+    "sha256": "553a608a4b77042f17452c8c2f58031ee16ded57bb1d026fe9aaedebfafba46c",
+    "title": "PRICAT MIG 2.1"
   },
-  "segments": [
+  "structure": [
     {
-      "tag": "UNH",
-      "name": "Nachrichten-Kopfsegment",
-      "mandatory": true,
-      "max_occurrences": 1,
       "elements": [
         {
+          "format": "an..14",
           "id": "0062",
+          "name": "Nachrichten-Referenznummer",
+          "note": "Eindeutige Nachrichtenreferenz des Absenders. Laufende Nummer der Nachrichten im Datenaustausch. Identisch mit DE0062 im UNT, i. d. R. vom sendenden Konverter vergeben.",
           "status": "M"
         },
         {
-          "id": "S009",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {}
-    },
-    {
-      "tag": "BGM",
-      "name": "Beginn der Nachricht",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "C002",
-          "status": "R"
-        },
-        {
-          "id": "C106",
-          "status": "R"
-        }
-      ],
-      "qualifier_restrictions": {
-        "1001": [
-          "Z04",
-          "Z32",
-          "Z54",
-          "Z64",
-          "Z67",
-          "Z70",
-          "Z77",
-          "Z94"
-        ]
-      }
-    },
-    {
-      "tag": "DTM",
-      "name": "Datum/Uhrzeit",
-      "mandatory": true,
-      "max_occurrences": 35,
-      "elements": [
-        {
-          "id": "C507",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {
-        "2005": [
-          "492",
-          "137",
-          "157"
-        ]
-      }
-    },
-    {
-      "tag": "UNT",
-      "name": "Nachrichten-Endesegment",
-      "mandatory": true,
-      "max_occurrences": 1,
-      "elements": [
-        {
-          "id": "0074",
-          "status": "M"
-        },
-        {
-          "id": "0062",
-          "status": "M"
-        }
-      ],
-      "qualifier_restrictions": {}
-    }
-  ],
-  "segment_groups": [
-    {
-      "id": "SG1",
-      "trigger_segment": "RFF",
-      "mandatory": false,
-      "max_occurrences": 99,
-      "segments": [
-        {
-          "tag": "RFF",
-          "name": "Referenz/Prüfidentifikator",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
+          "components": [
             {
-              "id": "C506",
-              "status": "M"
-            }
-          ],
-          "qualifier_restrictions": {
-            "1153": [
-              "ACW",
-              "Z56",
-              "Z13"
-            ]
-          }
-        }
-      ],
-      "groups": []
-    },
-    {
-      "id": "SG2",
-      "trigger_segment": "NAD",
-      "mandatory": true,
-      "max_occurrences": 99,
-      "segments": [
-        {
-          "tag": "NAD",
-          "name": "MP-ID Empfänger/Absender",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "3035",
+              "codes": [
+                {
+                  "code": "PRICAT",
+                  "name": "Preisliste/Katalog"
+                }
+              ],
+              "format": "an..6",
+              "id": "0065",
+              "name": "Nachrichtentyp-Kennung",
               "status": "M"
             },
             {
-              "id": "C082",
+              "codes": [
+                {
+                  "code": "D",
+                  "name": "Entwurfs-Version"
+                }
+              ],
+              "format": "an..3",
+              "id": "0052",
+              "name": "Versionsnummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "20B",
+                  "name": "Ausgabe 2020 - B"
+                }
+              ],
+              "format": "an..3",
+              "id": "0054",
+              "name": "Freigabenummer des Nachrichtentyps",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "UN",
+                  "name": "UN/CEFACT"
+                }
+              ],
+              "format": "an..2",
+              "id": "0051",
+              "name": "Verwaltende Organisation",
+              "status": "M"
+            },
+            {
+              "codes": [
+                {
+                  "code": "2.1",
+                  "name": "Versionsnummer der zugrundeliegenden BDEW-Nachrichtenbeschreibung"
+                }
+              ],
+              "format": "an..6",
+              "id": "0057",
+              "name": "Anwendungscode der zuständigen Organisation",
               "status": "R"
             }
           ],
-          "qualifier_restrictions": {
-            "3035": [
-              "MR",
-              "MS"
-            ]
-          }
+          "id": "S009",
+          "name": "Nachrichten-Kennung",
+          "status": "M"
+        }
+      ],
+      "example": "UNH+767097019+PRICAT:D:20B:UN:2.1'",
+      "max": 1,
+      "name": "Nachrichten-Kopfsegment",
+      "nr": "00001",
+      "status": "M",
+      "tag": "UNH",
+      "zaehler": "0010"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "Z04",
+                  "name": "Ausgleichsenergiepreis"
+                },
+                {
+                  "code": "Z32",
+                  "name": "Preisblatt Messstellenbetrieb"
+                },
+                {
+                  "code": "Z54",
+                  "name": "Preisblatt Sperren / Entsperren und Verzugskosten"
+                },
+                {
+                  "code": "Z64",
+                  "name": "Preisblatt Netznutzung ohne gemeindespezifische Konzessionsabgaben"
+                },
+                {
+                  "code": "Z67",
+                  "name": "Preisblatt Blindarbeit"
+                },
+                {
+                  "code": "Z70",
+                  "name": "Preisblatt Netznutzung: Gemeindespezifische Konzessionsabgaben"
+                },
+                {
+                  "code": "Z77",
+                  "name": "Preisblatt Konfigurationen"
+                },
+                {
+                  "code": "Z94",
+                  "name": "Preisblatt Technik"
+                }
+              ],
+              "format": "an..3",
+              "id": "1001",
+              "name": "Dokumentenname, Code",
+              "status": "R"
+            }
+          ],
+          "id": "C002",
+          "name": "Dokumenten-/ Nachrichtenname",
+          "status": "R"
         },
         {
-          "tag": "LOC",
-          "name": "Regelzone",
-          "mandatory": false,
-          "max_occurrences": 25,
-          "elements": [
+          "components": [
             {
-              "id": "3227",
+              "format": "an..70",
+              "id": "1004",
+              "name": "Dokumentennummer",
+              "note": "EDI-Nachrichtennummer vergeben vom Absender des Dokuments. Eindeutige Referenz zur Identifikation der Nachricht.",
+              "status": "R"
+            }
+          ],
+          "id": "C106",
+          "name": "Dokumenten-/Nachrichten- Identifikation",
+          "status": "R"
+        },
+        {
+          "format": "an..3",
+          "id": "1225",
+          "name": "Nachrichtenfunktion, Code",
+          "note": "Nicht benutzt",
+          "status": "N"
+        },
+        {
+          "format": "an..3",
+          "id": "4343",
+          "name": "Art der Antwort, Code",
+          "note": "Nicht benutzt",
+          "status": "N"
+        },
+        {
+          "codes": [
+            {
+              "code": "11",
+              "name": "Dokument nicht verfügbar"
+            }
+          ],
+          "format": "an..3",
+          "id": "1373",
+          "name": "Dokumentenstatus, Code",
+          "status": "D"
+        }
+      ],
+      "example": "BGM+Z54+1313+++11'",
+      "max": 1,
+      "name": "Beginn der Nachricht",
+      "nr": "00002",
+      "status": "M",
+      "tag": "BGM",
+      "zaehler": "0020"
+    },
+    {
+      "elements": [
+        {
+          "components": [
+            {
+              "codes": [
+                {
+                  "code": "492",
+                  "name": "Bilanzierungsdatum, -zeit, -periode"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Funktion, Qualifier",
               "status": "M"
             },
             {
-              "id": "C517",
-              "status": "C"
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "610",
+                  "name": "CCYYMM"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
             }
           ],
-          "qualifier_restrictions": {}
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
         }
       ],
-      "groups": []
+      "example": "DTM+492:201105:610'",
+      "max": 1,
+      "name": "Betrachtungszeitintervall",
+      "nr": "00003",
+      "status": "D",
+      "tag": "DTM",
+      "zaehler": "0030"
     },
     {
-      "id": "SG6",
-      "trigger_segment": "CUX",
-      "mandatory": false,
-      "max_occurrences": 20,
-      "segments": [
+      "elements": [
         {
-          "tag": "CUX",
-          "name": "Währungsangaben",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
+          "components": [
             {
-              "id": "C504",
-              "status": "C"
-            }
-          ],
-          "qualifier_restrictions": {
-            "6343": [
-              "4"
-            ],
-            "6347": [
-              "2"
-            ]
-          }
-        }
-      ],
-      "groups": []
-    },
-    {
-      "id": "SG17",
-      "trigger_segment": "PGI",
-      "mandatory": false,
-      "max_occurrences": 1000,
-      "segments": [
-        {
-          "tag": "PGI",
-          "name": "Produktgruppen-Information",
-          "mandatory": true,
-          "max_occurrences": 1,
-          "elements": [
-            {
-              "id": "5379",
+              "codes": [
+                {
+                  "code": "137",
+                  "name": "Dokumenten-/Nachrichtendatum/-zeit"
+                }
+              ],
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Funktion, Qualifier",
               "status": "M"
+            },
+            {
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
+            },
+            {
+              "codes": [
+                {
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
+                }
+              ],
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
             }
           ],
-          "qualifier_restrictions": {}
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
         }
       ],
-      "groups": [
+      "example": "DTM+137:201106031826?+00:303'",
+      "max": 1,
+      "name": "Nachrichtendatum",
+      "nr": "00004",
+      "status": "M",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "elements": [
         {
-          "id": "SG36",
-          "trigger_segment": "LIN",
-          "mandatory": true,
-          "max_occurrences": 999999,
-          "segments": [
+          "components": [
             {
-              "tag": "LIN",
-              "name": "Positionsdaten",
-              "mandatory": true,
-              "max_occurrences": 1,
-              "elements": [
+              "codes": [
                 {
-                  "id": "1082",
-                  "status": "C"
+                  "code": "157",
+                  "name": "Gültigkeit, Beginndatum"
                 }
               ],
-              "qualifier_restrictions": {}
+              "format": "an..3",
+              "id": "2005",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Funktion, Qualifier",
+              "status": "M"
             },
             {
-              "tag": "PIA",
-              "name": "Preisschlüsselstamm",
-              "mandatory": false,
-              "max_occurrences": 99,
-              "elements": [
-                {
-                  "id": "4347",
-                  "status": "M"
-                },
-                {
-                  "id": "C212",
-                  "status": "M"
-                }
-              ],
-              "qualifier_restrictions": {}
+              "format": "an..35",
+              "id": "2380",
+              "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+              "status": "R"
             },
             {
-              "tag": "IMD",
-              "name": "Produktbeschreibung",
-              "mandatory": false,
-              "max_occurrences": 999,
-              "elements": [
+              "codes": [
                 {
-                  "id": "7077",
-                  "status": "C"
-                },
-                {
-                  "id": "C272",
-                  "status": "C"
-                },
-                {
-                  "id": "C273",
-                  "status": "C"
+                  "code": "303",
+                  "name": "CCYYMMDDHHMMZZZ"
                 }
               ],
-              "qualifier_restrictions": {}
+              "format": "an..3",
+              "id": "2379",
+              "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+              "status": "R"
             }
           ],
-          "groups": [
+          "id": "C507",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "status": "M"
+        }
+      ],
+      "example": "DTM+157:201801012300?+00:303'",
+      "max": 1,
+      "name": "Gültigkeitsbeginn",
+      "nr": "00005",
+      "status": "D",
+      "tag": "DTM",
+      "zaehler": "0030"
+    },
+    {
+      "children": [
+        {
+          "elements": [
             {
-              "id": "SG40",
-              "trigger_segment": "PRI",
-              "mandatory": false,
-              "max_occurrences": 100,
-              "segments": [
+              "components": [
                 {
-                  "tag": "PRI",
-                  "name": "Preisangaben",
-                  "mandatory": true,
-                  "max_occurrences": 1,
-                  "elements": [
+                  "codes": [
                     {
-                      "id": "C509",
+                      "code": "ACW",
+                      "name": "Referenznummer einer vorangegangenen Nachricht"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..70",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "status": "R"
+                }
+              ],
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
+            }
+          ],
+          "example": "RFF+ACW:123GSDF3434'",
+          "max": 1,
+          "name": "Vorgängerversion",
+          "nr": "00006",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0070"
+        }
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "Vorgängerversion",
+      "status": "D",
+      "zaehler": "0060"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z56",
+                      "name": "Preise des Netzbetreibers"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "format": "an..35",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "note": "MP-ID",
+                  "status": "R"
+                }
+              ],
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
+            }
+          ],
+          "example": "RFF+Z56:9907165000001'",
+          "max": 1,
+          "name": "Preise des Netzbetreibers",
+          "nr": "00007",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0070"
+        }
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "Preise des Netzbetreibers",
+      "status": "D",
+      "zaehler": "0060"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "Z13",
+                      "name": "Prüfidentifikator"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "1153",
+                  "name": "Referenz, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "27001",
+                      "name": "Übermittlung der Ausgleichsenergiepreise"
+                    },
+                    {
+                      "code": "27002",
+                      "name": "Preisblatt MSB-Leistungen"
+                    },
+                    {
+                      "code": "27003",
+                      "name": "Preisblatt NB-Leistungen"
+                    }
+                  ],
+                  "format": "n5",
+                  "id": "1154",
+                  "name": "Referenz, Identifikation",
+                  "note": "Prüfidentifikator",
+                  "status": "R"
+                }
+              ],
+              "id": "C506",
+              "name": "Referenz",
+              "status": "M"
+            }
+          ],
+          "example": "RFF+Z13:27001'",
+          "max": 1,
+          "name": "Prüfidentifikator",
+          "nr": "00008",
+          "status": "M",
+          "tag": "RFF",
+          "zaehler": "0070"
+        }
+      ],
+      "group": "SG1",
+      "max": 1,
+      "name": "Prüfidentifikator",
+      "status": "R",
+      "zaehler": "0060"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "MR",
+                  "name": "Nachrichtenempfänger"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    },
+                    {
+                      "code": "332",
+                      "name": "DE, DVGW Service & Consult GmbH"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+MR+4078901000029::9'",
+          "max": 1,
+          "name": "Empfänger-ID",
+          "nr": "00009",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0100"
+        }
+      ],
+      "group": "SG2",
+      "max": 1,
+      "name": "Empfänger-ID",
+      "status": "R",
+      "zaehler": "0090"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "MS",
+                  "name": "Dokumenten-/Nachrichtenaussteller bzw. - absender"
+                }
+              ],
+              "format": "an..3",
+              "id": "3035",
+              "name": "Beteiligter, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3039",
+                  "name": "Beteiligter, Identifikation",
+                  "note": "MP-ID",
+                  "status": "M"
+                },
+                {
+                  "format": "an..17",
+                  "id": "1131",
+                  "name": "Codeliste, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "9",
+                      "name": "GS1"
+                    },
+                    {
+                      "code": "293",
+                      "name": "DE, BDEW (Bundesverband der Energie- und Wasserwirtschaft e.V.)"
+                    },
+                    {
+                      "code": "332",
+                      "name": "DE, DVGW Service & Consult GmbH"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "3055",
+                  "name": "Verantwortliche Stelle für die Codepflege, Code",
+                  "status": "R"
+                }
+              ],
+              "id": "C082",
+              "name": "Identifikation des Beteiligten",
+              "status": "R"
+            }
+          ],
+          "example": "NAD+MS+4012345000023::9'",
+          "max": 1,
+          "name": "Sender-ID",
+          "nr": "00010",
+          "status": "M",
+          "tag": "NAD",
+          "zaehler": "0100"
+        },
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "231",
+                  "name": "Regelzone"
+                }
+              ],
+              "format": "an..3",
+              "id": "3227",
+              "name": "Ortsangabe, Qualifier",
+              "status": "M"
+            },
+            {
+              "components": [
+                {
+                  "format": "an..35",
+                  "id": "3225",
+                  "name": "Ortsangabe, Nummer",
+                  "note": "Regelzone wird als EIC-Code übertragen",
+                  "status": "R"
+                }
+              ],
+              "id": "C517",
+              "name": "Ortsangabe",
+              "status": "R"
+            }
+          ],
+          "example": "LOC+231+10YDE-VNBNET---9'",
+          "max": 1,
+          "name": "Regelzone",
+          "nr": "00011",
+          "status": "D",
+          "tag": "LOC",
+          "zaehler": "0110"
+        }
+      ],
+      "group": "SG2",
+      "max": 1,
+      "name": "Sender-ID",
+      "status": "R",
+      "zaehler": "0090"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "components": [
+                {
+                  "codes": [
+                    {
+                      "code": "2",
+                      "name": "Referenzwährung"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "6347",
+                  "name": "Währungsverwendung, Qualifier",
+                  "status": "M"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "EUR",
+                      "name": "Euro"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "6345",
+                  "name": "Währung, Code",
+                  "status": "R"
+                },
+                {
+                  "codes": [
+                    {
+                      "code": "8",
+                      "name": "Währung der Preisliste"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "6343",
+                  "name": "Währung, Qualifier",
+                  "status": "R"
+                }
+              ],
+              "id": "C504",
+              "name": "Währungsangaben",
+              "status": "R"
+            }
+          ],
+          "example": "CUX+2:EUR:8'",
+          "max": 1,
+          "name": "Währungsangaben",
+          "nr": "00012",
+          "status": "M",
+          "tag": "CUX",
+          "zaehler": "0230"
+        }
+      ],
+      "group": "SG6",
+      "max": 1,
+      "name": "Währungsangaben",
+      "status": "D",
+      "zaehler": "0220"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "9",
+                  "name": "keine Gruppe genutzt"
+                }
+              ],
+              "format": "an..3",
+              "id": "5379",
+              "name": "Produktgruppen-Art, Code",
+              "status": "M"
+            }
+          ],
+          "example": "PGI+9'",
+          "max": 1,
+          "name": "Produktgruppen-Information",
+          "nr": "00013",
+          "status": "M",
+          "tag": "PGI",
+          "zaehler": "0600"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "format": "n..6",
+                  "id": "1082",
+                  "name": "Positionsnummer",
+                  "note": "Vom Programm vergebene Positionsnummer innerhalb der Nachricht (fortlaufende Nummer von 1 bis n)",
+                  "status": "R"
+                },
+                {
+                  "format": "an..3",
+                  "id": "1229",
+                  "name": "Handlung, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..35",
+                      "id": "7140",
+                      "name": "Produkt-/Leistungsnummer",
+                      "note": "Artikelnummer des BDEW / Artikel-ID des BDEW",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "Z01",
+                          "name": "Artikelnummer"
+                        },
+                        {
+                          "code": "Z09",
+                          "name": "Artikel-ID"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7143",
+                      "name": "Art der Produkt-/ Leistungsnummer, Code",
                       "status": "R"
                     }
                   ],
-                  "qualifier_restrictions": {
-                    "5125": [
-                      "CAL"
-                    ]
-                  }
+                  "id": "C212",
+                  "name": "Waren-/Leistungsnummer, Identifikation",
+                  "status": "R"
+                }
+              ],
+              "example": "LIN+1++9990001000631:Z01'",
+              "max": 1,
+              "name": "Positionsdaten",
+              "nr": "00014",
+              "status": "M",
+              "tag": "LIN",
+              "zaehler": "1320"
+            },
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "1",
+                      "name": "Zusätzliche Identifikation"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "4347",
+                  "name": "Produkt-/Erzeugnisnummer, Qualifier",
+                  "status": "M"
                 },
                 {
-                  "tag": "RNG",
-                  "name": "Angaben zum Wertebereich",
-                  "mandatory": false,
-                  "max_occurrences": 1,
+                  "components": [
+                    {
+                      "format": "an..35",
+                      "id": "7140",
+                      "name": "Produkt-/Leistungsnummer",
+                      "note": "Code des Preisschlüsselstamms",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "Z06",
+                          "name": "Preisschlüsselstamm"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7143",
+                      "name": "Art der Produkt-/ Leistungsnummer, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C212",
+                  "name": "Waren-/Leistungsnummer, Identifikation",
+                  "status": "M"
+                }
+              ],
+              "example": "PIA+1+FX12:Z06'",
+              "max": 1,
+              "name": "Preisschlüsselstamm",
+              "nr": "00015",
+              "status": "D",
+              "tag": "PIA",
+              "zaehler": "1330"
+            },
+            {
+              "elements": [
+                {
+                  "codes": [
+                    {
+                      "code": "C",
+                      "name": "Code (aus der Liste einer codepflegenden Organisation)"
+                    },
+                    {
+                      "code": "F",
+                      "name": "Freier Text"
+                    },
+                    {
+                      "code": "X",
+                      "name": "Teilstrukturiert (Code und Text)"
+                    }
+                  ],
+                  "format": "an..3",
+                  "id": "7077",
+                  "name": "Beschreibungsformat, Code",
+                  "status": "R"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z15",
+                          "name": "POG bei verbrauchender Marktlokation > 100.000 kWh/a mit iMS § 31 MsbG, Abs. 1 Punkt 1 Angemessenes Entgelt für mit iMS ausgestattete Marktlokation mit einem Jahresstromverbrauch von über 100 000 Kilowattstunden"
+                        },
+                        {
+                          "code": "Z16",
+                          "name": "POG bei verbrauchender Marktlokation ]50. 000 kWh/a; 100.000 kWh/a] mit iMS § 31 MsbG, Abs. 1 Punkt 2 Nicht mehr als 200 Euro brutto jährliches Entgelt für mit iMS ausgestattete Marktlokation mit einem Jahresstromverbrauch von über 50 000 bis einschließlich 100 000 Kilowattstunden"
+                        },
+                        {
+                          "code": "Z17",
+                          "name": "POG bei verbrauchender Marktlokation ]20. 000 kWh/a; 50.000 kWh/a] mit iMS § 31 MsbG, Abs. 1 Punkt 3 Nicht mehr als 170 Euro brutto jährliches Entgelt für mit iMS ausgestattete Marktlokation mit einem Jahresstromverbrauch von über 20 000 bis einschließlich 50 000 Kilowattstunden"
+                        },
+                        {
+                          "code": "Z18",
+                          "name": "POG bei verbrauchender Marktlokation ]10. 000 kWh/a; 20.000 kWh/a] mit iMS § 31 MsbG, Abs. 1 Punkt 4 Nicht mehr als 130 Euro brutto jährliches Entgelt für mit iMS ausgestattete Marktlokation mit einem Jahresstromverbrauch von über 10 000 bis einschließlich 20 000 Kilowattstunden"
+                        },
+                        {
+                          "code": "Z19",
+                          "name": "POG bei verbrauchender Marktlokation mit unterbrechbaren Verbrauchseinrichtung nach § 14a EnWG mit iMS § 31 MsbG, Abs. 1 Punkt 5 Nicht mehr als 100 Euro brutto jährliches Entgelt für mit iMS ausgestattete Marktlokation mit unterbrechbaren Verbrauchseinrichtung nach § 14a EnWG"
+                        },
+                        {
+                          "code": "Z20",
+                          "name": "POG bei verbrauchender Marktlokation ]6.000 kWh/a; 10.000 kWh/a] mit iMS § 31 MsbG, Abs. 1 Punkt 6 Nicht mehr als 100 Euro brutto jährliches Entgelt für mit iMS ausgestattete Marktlokation mit einem Jahresstromverbrauch von über 6 000 bis einschließlich 10 000 Kilowattstunden"
+                        },
+                        {
+                          "code": "Z21",
+                          "name": "POG bei erzeugender Marktlokation ]7 kW; 15 kW] mit iMS § 31 MsbG, Abs. 2 Punkt 1 Nicht mehr als 100 Euro brutto jährliches Entgelt für mit iMS ausgestattete Marktlokation mit installierter Leistung über 7 bis einschließlich 15 Kilowatt"
+                        },
+                        {
+                          "code": "Z22",
+                          "name": "POG bei erzeugender Marktlokation ]15 kW; 30 kW] mit iMS § 31 MsbG, Abs. 2 Punkt 2 Nicht mehr als 130 Euro brutto jährliches Entgelt für mit iMS ausgestattete Marktlokation mit installierter Leistung über 15 bis einschließlich 30 Kilowatt"
+                        },
+                        {
+                          "code": "Z23",
+                          "name": "POG bei erzeugender Marktlokation ]30 kW; 100 kW] mit iMS § 31 MsbG, Abs. 2 Punkt 3 Nicht mehr als 200 Euro brutto jährliches Entgelt für mit iMS ausgestattete Marktlokation mit installierter Leistung über 30 bis einschließlich 100 Kilowatt"
+                        },
+                        {
+                          "code": "Z24",
+                          "name": "POG bei erzeugender Marktlokation > 100 kW mit iMS § 31 MsbG, Abs. 2 Punkt 4 angemessenes Entgelt für mit iMS ausgestattete Marktlokation mit installierter Leistung über 100 Kilowatt"
+                        },
+                        {
+                          "code": "Z25",
+                          "name": "POG bei Marktlokation mit mME § 32 MsbG, nicht mehr als 20 Euro brutto jährlich für mit mME ausgestattete Marktlokation"
+                        },
+                        {
+                          "code": "Z28",
+                          "name": "POG bei verbrauchender Marktlokation ]4.000 kWh/a; 6.000 kWh/a] mit iMS § 31 MsbG, Abs. 3 Punkt 1 Ab 2020 nicht mehr als 60 Euro brutto jährliches Entgelt für mit iMS ausgestattete Marktlokation mit einem Jahresstromverbrauch von über 4 000 bis einschließlich 6 000 Kilowattstunden"
+                        },
+                        {
+                          "code": "Z29",
+                          "name": "POG bei verbrauchender Marktlokation ]3.000 kWh/a; 4.000 kWh/a] mit iMS § 31 MsbG, Abs. 3 Punkt 2 Ab 2020 nicht mehr als 40 Euro brutto jährliches Entgelt für mit iMS ausgestattete Marktlokation mit einem Jahresstromverbrauch von über 3 000 bis einschließlich 4 000 Kilowattstunden"
+                        },
+                        {
+                          "code": "Z30",
+                          "name": "POG bei verbrauchender Marktlokation ]2.000 kWh/a; 3.000 kWh/a] mit iMS § 31 MsbG, Abs. 3 Punkt 3 Ab 2020 nicht mehr als 30 Euro brutto jährliches Entgelt für mit iMS ausgestattete Marktlokation mit einem Jahresstromverbrauch von über 2 000 bis einschließlich 3 000 Kilowattstunden"
+                        },
+                        {
+                          "code": "Z31",
+                          "name": "POG bei verbrauchender Marktlokation [0 kWh/a; 2.000 kWh/a] mit iMS § 31 MsbG, Abs. 3 Punkt 4 Ab 2020 nicht mehr als 23 Euro brutto jährliches Entgelt für mit iMS ausgestattete Marktlokation mit einem Jahresstromverbrauch bis einschließlich 2 000 Kilowattstunden"
+                        },
+                        {
+                          "code": "Z32",
+                          "name": "POG bei optionaler Ausstattung mit iMS von Neuanlagen von erzeugender Marktlokation § 31 MsbG, Abs. 3 Ab 2018 nicht mehr als 60 Euro brutto jährlich für optional mit iMS ausgestattete Neuanlage einer Marktlokation"
+                        },
+                        {
+                          "code": "Z41",
+                          "name": "Zusatzleistung"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7081",
+                      "name": "Produkt/Leistung, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C272",
+                  "name": "Produkt/Leistung",
+                  "status": "D"
+                },
+                {
+                  "components": [
+                    {
+                      "codes": [
+                        {
+                          "code": "Z08",
+                          "name": "Höchstspannung"
+                        },
+                        {
+                          "code": "Z09",
+                          "name": "Hochspannung"
+                        },
+                        {
+                          "code": "Z10",
+                          "name": "Mittelspannung"
+                        },
+                        {
+                          "code": "Z11",
+                          "name": "Niederspannung"
+                        }
+                      ],
+                      "format": "an..17",
+                      "id": "7009",
+                      "name": "Produkt-/ Leistungsbeschreibung, Code",
+                      "note": "Spannungsebene der Primärwicklung des Wandlers",
+                      "status": "D"
+                    },
+                    {
+                      "format": "an..17",
+                      "id": "1131",
+                      "name": "Codeliste, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..3",
+                      "id": "3055",
+                      "name": "Verantwortliche Stelle für die Codepflege, Code",
+                      "note": "Nicht benutzt",
+                      "status": "N"
+                    },
+                    {
+                      "format": "an..256",
+                      "id": "7008",
+                      "name": "Produkt-/ Leistungsbeschreibung",
+                      "status": "D"
+                    },
+                    {
+                      "format": "an..256",
+                      "id": "7008",
+                      "name": "Produkt-/ Leistungsbeschreibung",
+                      "status": "D"
+                    }
+                  ],
+                  "id": "C273",
+                  "name": "Produkt-/ Leistungsbeschreibung",
+                  "status": "D"
+                }
+              ],
+              "example": "IMD+X+Z41+Z11:::Blockstromwandler und weitere Details zu diesem:X'",
+              "max": 1,
+              "name": "Produktbeschreibung",
+              "nr": "00016",
+              "status": "D",
+              "tag": "IMD",
+              "zaehler": "1340"
+            },
+            {
+              "children": [
+                {
                   "elements": [
                     {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "CAL",
+                              "name": "Berechnungspreis"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "5125",
+                          "name": "Preis, Qualifier",
+                          "status": "M"
+                        },
+                        {
+                          "format": "n..15",
+                          "id": "5118",
+                          "name": "Preis, Betrag",
+                          "status": "R"
+                        },
+                        {
+                          "format": "an..3",
+                          "id": "5375",
+                          "name": "Preisart, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "format": "an..3",
+                          "id": "5387",
+                          "name": "Preisart, Code",
+                          "note": "Nicht benutzt",
+                          "status": "N"
+                        },
+                        {
+                          "format": "n..9",
+                          "id": "5284",
+                          "name": "Einzelpreisbasis, Menge",
+                          "status": "D"
+                        },
+                        {
+                          "codes": [
+                            {
+                              "code": "ANN",
+                              "name": "Jahr"
+                            }
+                          ],
+                          "format": "an..8",
+                          "id": "6411",
+                          "name": "Maßeinheit, Code",
+                          "status": "D"
+                        }
+                      ],
+                      "id": "C509",
+                      "name": "Preisinformation",
+                      "status": "R"
+                    }
+                  ],
+                  "example": "PRI+CAL:168.06::::ANN'",
+                  "max": 1,
+                  "name": "Preisangaben",
+                  "nr": "00017",
+                  "status": "M",
+                  "tag": "PRI",
+                  "zaehler": "1570"
+                },
+                {
+                  "elements": [
+                    {
+                      "codes": [
+                        {
+                          "code": "10",
+                          "name": "jährlicher Mengenbereich"
+                        }
+                      ],
+                      "format": "an..3",
                       "id": "6167",
+                      "name": "Wertebereich, Qualifier",
                       "status": "M"
                     },
                     {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "H87",
+                              "name": "Stück"
+                            },
+                            {
+                              "code": "DAY",
+                              "name": "Tag"
+                            },
+                            {
+                              "code": "KWH",
+                              "name": "Kilowattstunde"
+                            }
+                          ],
+                          "format": "an..8",
+                          "id": "6411",
+                          "name": "Maßeinheit, Code",
+                          "status": "M"
+                        },
+                        {
+                          "format": "n..18",
+                          "id": "6162",
+                          "name": "Wertebereichsgrenze, untere",
+                          "status": "R"
+                        },
+                        {
+                          "format": "n..18",
+                          "id": "6152",
+                          "name": "Wertebereichsgrenze, obere",
+                          "status": "D"
+                        }
+                      ],
                       "id": "C280",
+                      "name": "Wertebereich",
                       "status": "R"
                     }
                   ],
-                  "qualifier_restrictions": {
-                    "6167": [
-                      "10"
-                    ]
-                  }
+                  "example": "RNG+10+H87:9:9'",
+                  "max": 1,
+                  "name": "Angaben zum Wertebereich",
+                  "nr": "00018",
+                  "status": "D",
+                  "tag": "RNG",
+                  "zaehler": "1600"
                 },
                 {
-                  "tag": "DTM",
-                  "name": "Gültigkeitszeitraum des Preises",
-                  "mandatory": false,
-                  "max_occurrences": 5,
                   "elements": [
                     {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "163",
+                              "name": "Verarbeitung, Beginndatum/-zeit"
+                            },
+                            {
+                              "code": "164",
+                              "name": "Verarbeitung, Endedatum/-zeit"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "2005",
+                          "name": "Datums- oder Uhrzeit- oder Zeitspannen-Funktion, Qualifier",
+                          "status": "M"
+                        },
+                        {
+                          "format": "an..35",
+                          "id": "2380",
+                          "name": "Datum oder Uhrzeit oder Zeitspanne, Wert",
+                          "status": "R"
+                        },
+                        {
+                          "codes": [
+                            {
+                              "code": "303",
+                              "name": "CCYYMMDDHHMMZZZ"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "2379",
+                          "name": "Datums- oder Uhrzeit- oder Zeitspannen-Format, Code",
+                          "status": "R"
+                        }
+                      ],
                       "id": "C507",
+                      "name": "Datum/Uhrzeit/Zeitspanne",
                       "status": "M"
                     }
                   ],
-                  "qualifier_restrictions": {
-                    "2005": [
-                      "163",
-                      "164"
-                    ]
-                  }
+                  "example": "DTM+163:201104010815?+00:303'",
+                  "max": 2,
+                  "name": "Datum/Uhrzeit/Zeitspanne",
+                  "nr": "00019",
+                  "status": "D",
+                  "tag": "DTM",
+                  "zaehler": "1610"
                 }
               ],
-              "groups": []
+              "group": "SG40",
+              "max": 100,
+              "name": "Preisangabe",
+              "status": "D",
+              "zaehler": "1560"
             }
-          ]
+          ],
+          "group": "SG36",
+          "max": 999999,
+          "name": "LIN-PIA-IMD-SG40",
+          "status": "R",
+          "zaehler": "1310"
         }
-      ]
+      ],
+      "group": "SG17",
+      "max": 1,
+      "name": "PGI-SG36",
+      "status": "D",
+      "zaehler": "0590"
+    },
+    {
+      "children": [
+        {
+          "elements": [
+            {
+              "codes": [
+                {
+                  "code": "Z01",
+                  "name": "Netzbetreiberindividuelle Artikel-ID"
+                }
+              ],
+              "format": "an..3",
+              "id": "5379",
+              "name": "Produktgruppen-Art, Code",
+              "status": "M"
+            }
+          ],
+          "example": "PGI+Z01'",
+          "max": 1,
+          "name": "Netzbetreiberindividuelle Artikel-ID",
+          "nr": "00020",
+          "status": "M",
+          "tag": "PGI",
+          "zaehler": "0600"
+        },
+        {
+          "children": [
+            {
+              "elements": [
+                {
+                  "format": "n..6",
+                  "id": "1082",
+                  "name": "Positionsnummer",
+                  "note": "Vom Programm vergebene Positionsnummer innerhalb der Nachricht (fortlaufende Nummer von 1 bis n)",
+                  "status": "R"
+                },
+                {
+                  "format": "an..3",
+                  "id": "1229",
+                  "name": "Handlung, Code",
+                  "note": "Nicht benutzt",
+                  "status": "N"
+                },
+                {
+                  "components": [
+                    {
+                      "format": "an..35",
+                      "id": "7140",
+                      "name": "Produkt-/Leistungsnummer",
+                      "status": "R"
+                    },
+                    {
+                      "codes": [
+                        {
+                          "code": "Z09",
+                          "name": "Artikel-ID"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "7143",
+                      "name": "Art der Produkt-/ Leistungsnummer, Code",
+                      "status": "R"
+                    }
+                  ],
+                  "id": "C212",
+                  "name": "Waren-/Leistungsnummer, Identifikation",
+                  "status": "R"
+                }
+              ],
+              "example": "LIN+1++1-08-1-03254005-01-3:Z09'",
+              "max": 1,
+              "name": "Positionsdaten",
+              "nr": "00021",
+              "status": "R",
+              "tag": "LIN",
+              "zaehler": "1320"
+            },
+            {
+              "children": [
+                {
+                  "elements": [
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "CAL",
+                              "name": "Berechnungspreis"
+                            }
+                          ],
+                          "format": "an..3",
+                          "id": "5125",
+                          "name": "Preis, Qualifier",
+                          "status": "M"
+                        },
+                        {
+                          "format": "n..15",
+                          "id": "5118",
+                          "name": "Preis, Betrag",
+                          "status": "R"
+                        }
+                      ],
+                      "id": "C509",
+                      "name": "Preisinformation",
+                      "status": "R"
+                    }
+                  ],
+                  "example": "PRI+CAL:168.06'",
+                  "max": 1,
+                  "name": "Preisangaben",
+                  "nr": "00022",
+                  "status": "M",
+                  "tag": "PRI",
+                  "zaehler": "1570"
+                },
+                {
+                  "elements": [
+                    {
+                      "codes": [
+                        {
+                          "code": "10",
+                          "name": "jährlicher Mengenbereich"
+                        }
+                      ],
+                      "format": "an..3",
+                      "id": "6167",
+                      "name": "Wertebereich, Qualifier",
+                      "status": "M"
+                    },
+                    {
+                      "components": [
+                        {
+                          "codes": [
+                            {
+                              "code": "KWH",
+                              "name": "Kilowattstunde"
+                            }
+                          ],
+                          "format": "an..8",
+                          "id": "6411",
+                          "name": "Maßeinheit, Code",
+                          "status": "R"
+                        },
+                        {
+                          "format": "n..18",
+                          "id": "6162",
+                          "name": "Wertebereichsgrenze, untere",
+                          "status": "R"
+                        },
+                        {
+                          "format": "n..18",
+                          "id": "6152",
+                          "name": "Wertebereichsgrenze, obere",
+                          "status": "D"
+                        }
+                      ],
+                      "id": "C280",
+                      "name": "Wertebereich",
+                      "status": "R"
+                    }
+                  ],
+                  "example": "RNG+10+KWH:0:12000'",
+                  "max": 1,
+                  "name": "Zonenintervallgrenzen",
+                  "nr": "00023",
+                  "status": "D",
+                  "tag": "RNG",
+                  "zaehler": "1600"
+                }
+              ],
+              "group": "SG40",
+              "max": 1,
+              "name": "Preisangabe",
+              "status": "R",
+              "zaehler": "1560"
+            }
+          ],
+          "group": "SG36",
+          "max": 999999,
+          "name": "Positionsdaten",
+          "status": "R",
+          "zaehler": "1310"
+        }
+      ],
+      "group": "SG17",
+      "max": 1,
+      "name": "Netzbetreiberindividuelle Artikel-ID",
+      "status": "D",
+      "zaehler": "0590"
+    },
+    {
+      "elements": [
+        {
+          "format": "n..6",
+          "id": "0074",
+          "name": "Anzahl der Segmente in einer Nachricht",
+          "note": "Hier wird die Gesamtzahl der Segmente einer Nachricht angegeben.",
+          "status": "M"
+        },
+        {
+          "format": "an..14",
+          "id": "0062",
+          "name": "Nachrichten-Referenznummer",
+          "note": "Die Referenznummer aus dem UNH-Segment muss hier wiederholt werden.",
+          "status": "M"
+        }
+      ],
+      "example": "UNT+24+767097019'",
+      "max": 1,
+      "name": "Nachrichten-Endesegment",
+      "nr": "00024",
+      "status": "M",
+      "tag": "UNT",
+      "zaehler": "2400"
     }
   ],
-  "ahb_revision": "2.1",
-  "source_document": "PRICAT MIG 2.1, Publikationsdatum 01.04.2026",
-  "publikationsdatum": "2026-04-01"
+  "valid_from": "2026-10-01"
 }

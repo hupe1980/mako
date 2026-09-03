@@ -72,13 +72,20 @@ use mako_wim::{DeviceChangeCommand, DeviceChangeProjection, WimDeviceChangeWorkf
 const UTILMD_GERAETEWECHSEL: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+WIM-2025-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:S2.1'\
-BGM+E01:::+00055042::+9'\
+BGM+E01+MSG-001'\
 DTM+137:202501150800?+00:303'\
-RFF+Z13:WIM-REF-001'\
-NAD+MS+4012345000023::293'\
+NAD+MS+4012345000023::9'\
 NAD+MR+9900357000004::293'\
-IDE+24+51238696781::'\
-UNT+8+MSG-001'\
+IDE+24+VORGANG-0001'\
+DTM+76:202502010000?+00:303'\
+STS+7++E01'\
+LOC+Z16+51238696781'\
+LOC+Z17+DE00056266802AO6G56M11SN51G21M24S'\
+RFF+Z13:55042'\
+NAD+Z07+++Mustermann:::::Z01'\
+NAD+Z08+++Mustermann:::::Z01+Musterstr. 1+Berlin+++DE'\
+NAD+Z05+++Mustermann:::::Z01+Musterstr. 1+Berlin+++DE'\
+UNT+15+MSG-001'\
 UNZ+1+WIM-2025-001'";
 
 // ── Main ──────────────────────────────────────────────────────────────────────

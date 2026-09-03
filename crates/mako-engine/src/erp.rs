@@ -205,6 +205,18 @@ pub enum ErpEventType {
     /// The CE `data` payload carries `gas_day`, `deadline_label` and
     /// `sender_eic` / `receiver_eic` of the last ALOCAT recorded for the stream.
     GabiFinalAllocationOverdue,
+    /// The FNB/MGV confirmed less gas than was nominated.
+    ///
+    /// NOMRES carries no status segment, so a curtailment shows up only as a
+    /// reduced quantity — and nothing downstream sees the shortfall unless it
+    /// is notified. The CE `data` payload carries `gas_day`, `nominated_kwh`,
+    /// `confirmed_kwh`, `curtailed_kwh` and the parties.
+    GabiNominationCurtailed,
+    /// The FNB/MGV refused the nomination; nothing flows on it.
+    GabiNominationRejected,
+    /// The `KoV` NOMRES window closed with no answer on file, so the
+    /// nomination's status is unknown at gas-day start.
+    GabiNomresMissing,
     /// The LFA answered the NB's Anfrage zur Beendigung der Zuordnung (55011 /
     /// 55012), or its 09:00 window lapsed unanswered — „gilt dies als
     /// Bestätigung nach Fall a)".
@@ -230,6 +242,9 @@ impl ErpEventType {
             Self::ProcessFailed { .. } => "process_failed",
             Self::VppDispatchConfirmed => "vpp_dispatch_confirmed",
             Self::GabiFinalAllocationOverdue => "gabi_final_allocation_overdue",
+            Self::GabiNominationCurtailed => "gabi_nomination_curtailed",
+            Self::GabiNominationRejected => "gabi_nomination_rejected",
+            Self::GabiNomresMissing => "gabi_nomres_missing",
             Self::AbmeldeanfrageBeantwortet => "abmeldeanfrage_beantwortet",
         }
     }
@@ -252,6 +267,9 @@ impl ErpEventType {
             Self::ProcessFailed { .. } => mako_events::mako::PROCESS_FAILED,
             Self::VppDispatchConfirmed => mako_events::vpp::DISPATCH_CONFIRMED,
             Self::GabiFinalAllocationOverdue => mako_events::gabi::ALOCAT_MISSING,
+            Self::GabiNominationCurtailed => mako_events::gabi::NOMINATION_CURTAILED,
+            Self::GabiNominationRejected => mako_events::gabi::NOMINATION_REJECTED,
+            Self::GabiNomresMissing => mako_events::gabi::NOMRES_MISSING,
             Self::AbmeldeanfrageBeantwortet => mako_events::mako::ABMELDEANFRAGE_BEANTWORTET,
         }
     }

@@ -753,6 +753,15 @@ pub async fn dispatch_migrations(
                 from,
                 to
             );
+            identity!(
+                report,
+                count,
+                store,
+                mako_gabi_gas::GaBiGasMehrMindermengenWorkflow,
+                "gabi-gas-mehr-mindermengen",
+                from,
+                to
+            );
 
             count.sort_unstable();
             Some((report, count))

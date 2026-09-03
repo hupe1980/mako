@@ -199,70 +199,36 @@ impl MessageCore {
             .collect();
         match registry.profile_on(self.message_type, release, date) {
             Ok(profile) => {
-                let dir_validator = profile.directory_validator();
-                let mig_pack = profile.mig_rule_pack();
-                // Layer 4: AHB rules — select the PID-specific pack when the PID is
-                // detectable.  When no PID can be extracted, skip AHB rules but inject
-                // a Warning-severity synthetic rule so audit logs know validation was
-                // structurally incomplete.  Running the union-of-all-PIDs pack would
-                // produce guaranteed false positives because mutually-exclusive qualifier
-                // constraints (e.g. BGM+E01 for PID 55001 vs BGM+E02 for PID 55004)
-                // all fire on the same message.
-                let pid_result = self.detect_pruefidentifikator();
-                let ahb_pack_opt = match pid_result {
-                    Ok(pid) => Some(profile.ahb_rule_pack(Some(pid))),
-                    Err(_) => None,
-                };
+                // Layers 2–4: the MIG (structure, cardinality, data elements)
+                // and the AHB (the Prüfschablone of the Anwendungsfall),
+                // evaluated by the profile. Without a Prüfidentifikator a
+                // message type published without one is matched by its BGM;
+                // any other message gets an advisory instead of rules that
+                // cannot be selected.
+                let pid = self.detect_pruefidentifikator().ok();
                 let mut ctx = edifact_rs::ValidationContext::builder()
                     .with_message_type(self.message_type.as_str())
                     .with_message_ref(&*self.message_ref)
-                    // Short-circuit the entire validation pass on the first Critical-severity
-                    // structural failure.  Critical issues indicate a segment is so malformed
-                    // that further validation would only produce noise (duplicate false positives
-                    // from downstream rules that assume the segment is well-formed).
-                    .bail_on_first_critical(true)
-                    .with_validator(
-                        edifact_rs::ValidationLayer::Structure,
-                        dir_validator.clone(),
-                    );
-                // When Pruefidentifikator cannot be determined, inject a Warning-severity
-                // advisory via with_static_issue so downstream audit logs
-                // know AHB Layer 4 was skipped.  Running the union-of-all-PIDs pack would
-                // produce guaranteed false positives from mutually-exclusive qualifier constraints.
-                if pid_result.is_err() {
-                    ctx = ctx.with_static_issue(
-                        edifact_rs::ValidationIssue::new(
-                            edifact_rs::ValidationSeverity::Warning,
-                            "AHB Layer 4 validation skipped: \
-                             Pruefidentifikator could not be determined \
-                             from BGM segment"
-                                .to_owned(),
-                        )
-                        .with_rule_id("AHB-SKIP-NO-PID".to_owned()),
-                    );
-                }
-                // The `303` value shape. Which code a qualifier takes is
-                // per-profile (`mig.json` `dtm_formats` → `MIG-DTM-2379`);
-                // whether the value matches the code it claims is the same
-                // check for every message type, so it lives here.
-                for issue in dtm_303_value_issues(&message_segments) {
+                    .bail_on_first_critical(true);
+                for issue in profile.validate(&message_segments, pid) {
                     ctx = ctx.with_static_issue(issue);
                 }
-                ctx = ctx.with_profile_pack_arc(mig_pack);
-                if let Some(ahb_pack) = ahb_pack_opt {
-                    ctx = ctx.with_profile_pack_arc(ahb_pack);
+                // The `303` value shape. Which code a qualifier takes is
+                // per-profile (the MIG layout of each DTM place); whether the
+                // value matches the code it claims is the same check for every
+                // message type, so it lives here.
+                for issue in dtm_303_value_issues(&message_segments) {
+                    ctx = ctx.with_static_issue(issue);
                 }
                 // Layer 5: message-type-specific semantic rule pack (optional, caller-supplied).
                 if let Some(sem) = semantic_pack {
                     ctx = ctx.with_profile_pack(sem);
                 }
-                // Build the segment-group tree from owned segments and validate using the
-                // fully-owned group-aware path.  group_segments_indexed avoids a
-                // second borrow allocation when no group rules are registered (the O(1) early
-                // exit in validate_grouped skips the borrow entirely).
-                let group_schema = profile.group_schema();
-                let group_tree =
-                    edifact_rs::group_segments_indexed(&message_segments, group_schema, "ROOT");
+                let group_tree = edifact_rs::group_segments_indexed(
+                    &message_segments,
+                    profile.group_schema(),
+                    "ROOT",
+                );
                 let report = ctx.build().validate_grouped(&group_tree, &message_segments);
                 #[cfg(feature = "tracing")]
                 {
@@ -279,7 +245,7 @@ impl MessageCore {
                     }
                 }
                 let mut report_out = EdiEnergyReport::new_with_pid(report, self.pruefidentifikator)
-                    .with_profile_meta(profile.release().clone(), profile.ahb_revision());
+                    .with_profile_meta(profile.release().clone(), Some(profile.ahb_version()));
                 if let Some(hdr) = interchange_header {
                     report_out = report_out.with_interchange_header(hdr);
                 }

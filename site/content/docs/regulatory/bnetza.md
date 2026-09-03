@@ -279,7 +279,7 @@ keine Antwortfrist; die Abmeldung hat dafür **7 WT** (Kap. 3.2.2).
 - Mehr-/Mindermengenbilanzierung Gas
 - Konvertierung im qualitätsübergreifenden Gasmarktgebiet
 - INVOIC Gas billing: Kapazitätsrechnung (PID 31010)
-- DVGW message types: ALOCAT, NOMINT, NOMRES
+- DVGW message types: ALOCAT, NOMINT, NOMRES, SSQNOT
 
 ---
 

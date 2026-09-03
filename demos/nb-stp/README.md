@@ -157,7 +157,7 @@ vary per run):
 ```
 UNB+UNOC:3+9900357000004:500+4012345000023:14+260830:0904+E8D66066D8E24B'
 UNH+5c9a7b9b2c084e+UTILMD:D:11A:UN:S2.1'
-BGM+E01+55002+9'
+BGM+E01+5c9a7b9b2c084e'
 DTM+137:202608300904?+00:303'
 NAD+MS+9900357000004::293'
 NAD+MR+4012345000023::9'
@@ -165,8 +165,9 @@ IDE+24+5c9a7b9b2c084e'
 DTM+92:202610010000?+00:303'   ← the Lieferbeginn, echoed from the Anmeldung
 STS+E01++A51'                  ← E_0623 „Zustimmung (Prüfschritt 60)"
 LOC+Z16+17880806920'
-RFF+Z13:55002'
-UNT+11+5c9a7b9b2c084e'
+RFF+Z13:55002'                 ← the Prüfidentifikator, in SG6 of the Vorgang
+RFF+TN:VORGANG-0001'           ← the Anmeldung's Vorgangsnummer being answered
+UNT+12+5c9a7b9b2c084e'
 UNZ+1+E8D66066D8E24B'
 ```
 
@@ -204,22 +205,30 @@ the wire as written. Segment by segment:
 
 ```
 UNB+UNOC:3+4012345000023:14+9900357000004:14+260701:0800+DEMO-2026-001'
-UNH+MSG-001+UTILMD:D:11A:UN:S2.1'      ← S2.1 is the release in force until 2026-10-01
-BGM+E01:::+00055001::+9'               ← E01 Anmeldung, Prüfidentifikator 55001
-DTM+137:202607010800?+00:303'          ← Dokumentendatum, DE 2379 = 303 CCYYMMDDHHMMZZZ
-RFF+Z13:REF-2026-001'
-NAD+MS+4012345000023::293'             ← sender must equal the UNB sender
-NAD+MR+9900357000004::293'
-IDE+24+VORGANG-0001'                   ← DE 7402 is the Vorgangsnummer, not the MaLo
-DTM+92:202610010000?+00:303'           ← „Beginn zum" — the Lieferbeginn
-LOC+Z16+51238696012'                   ← the Marktlokation lives here
-SEQ+Z79+1'                             ← SG8 Produktpaket (Muss on an Anmeldung)
-PIA+5+9991000002082:Z11'               ← Produkt-Code „Bilanzkreis"
+UNH+MSG-001+UTILMD:D:11A:UN:S2.1'       ← S2.1 is the release in force until 2026-10-01
+BGM+E01+00055001'                       ← E01 Anmeldung; DE 1004 is the Dokumentennummer
+DTM+137:202607010800?+00:303'           ← Dokumentendatum, DE 2379 = 303 CCYYMMDDHHMMZZZ
+NAD+MS+4012345000023::9'                ← sender must equal the UNB sender
+NAD+MR+9900357000004::9'
+IDE+24+VORGANG0001'                     ← DE 7402 is the Vorgangsnummer, not the MaLo
+DTM+92:202610010000?+00:303'            ← „Beginn zum" — the Lieferbeginn
+STS+7++E01+ZW4'                         ← Transaktionsgrund E01 Ein-/Auszug, verbrauchende MaLo (ZW4)
+LOC+Z16+51238696012'                    ← the Marktlokation lives here
+RFF+Z13:55001'                          ← the Prüfidentifikator, in SG6 of the Vorgang
+SEQ+Z79+1'                              ← Produktpaket …
+PIA+5+9991000002082:Z11'
 CCI+Z66'
-CAV+ZV4:::11XBK-EEG-----1'             ← the Bilanzkreis EIC itself
-SEQ+ZH0+1'
+CAV+ZV4:::11XBK-STD-----9'              ← … with the Bilanzkreis the NB assigns the MaLo to
+SEQ+ZH0+1'                              ← its Priorisierung
 CCI+Z65+++Z01'
-UNT+16+MSG-001'
+SEQ+Z01'                                ← Daten der Marktlokation
+CCI+++Z15'
+SEQ+Z75'                                ← Daten des Kunden des LF
+CCI+Z61++ZF9'
+CAV+ZU5'
+NAD+Z09+++Mustermann:::::Z01'           ← Kunde des LF
+NAD+Z04+++Mustermann:::::Z01+Musterstr. 1+Berlin+++DE'  ← Korrespondenzanschrift des Kunden
+UNT+24+MSG-001'
 UNZ+1+DEMO-2026-001'
 ```
 

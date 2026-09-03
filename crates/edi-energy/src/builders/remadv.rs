@@ -285,7 +285,13 @@ impl<S, R> RemadvBuilder<S, R> {
         let mut w = Writer::new(&mut buf);
 
         let code = self.inner.document_code.as_deref().unwrap_or("239");
-        let doc_id = self.inner.document_id.as_deref().unwrap_or("");
+        // `BGM` DE 1004 is the Dokumentennummer — the message reference unless
+        // one is given.
+        let doc_id = self
+            .inner
+            .document_id
+            .as_deref()
+            .unwrap_or(&self.inner.message_ref);
         emit_comp!(
             w,
             "UNH",
@@ -351,8 +357,8 @@ impl<S, R> RemadvBuilder<S, R> {
         // `SG10 DLI` + `SG12 AJT`/`FTX` — the Positionsebene, repeated until
         // every position-level defect is named (`[525]`).
         for pf in &self.inner.positionsfehler {
-            // `DLI` DE 1073/1082 are components of one composite: `DLI+1:7`.
-            emit_comp!(w, "DLI", ["1", &pf.positionsnummer.to_string()]);
+            // `DLI` DE 1073 and DE 1082 are two data elements: `DLI+1+7`.
+            emit_seg!(w, "DLI", "1", &pf.positionsnummer.to_string());
             for grund in &pf.gruende {
                 if let Some(ebd) = grund.ebd.as_deref() {
                     emit_seg!(w, "AJT", &grund.code, ebd);
@@ -361,7 +367,9 @@ impl<S, R> RemadvBuilder<S, R> {
                 }
             }
             if let Some(text) = pf.erlaeuterung.as_deref() {
-                emit_comp!(w, "FTX", ["ABO"], [], [text]);
+                // `FTX+ABO+++<text>` — the text is `C108` at element 4; `C107`
+                // (element 3) is not used.
+                emit_comp!(w, "FTX", ["ABO"], [], [], [text]);
             }
         }
         // `UNS+S` — Trennung von Positions- und Summenteil. Muss on every use

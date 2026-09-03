@@ -58,7 +58,7 @@ graph LR
 
     BK6_24 -->|"mako-gpke<br/>mako-wim<br/>mako-mabis"| GPKE_impl["GPKE Teil 1–4<br/>WiM Strom · MaBiS"]
     BK7_24 -->|"mako-geli-gas<br/>mako-wim"| GAS_impl["GeLi Gas 3.0<br/>WiM Gas"]
-    BK7_14 -->|"mako-gabi-gas<br/>dvgw-edi"| DVGW_impl["8 DVGW messages<br/>GaBi Gas 2.1"]
+    BK7_14 -->|"mako-gabi-gas<br/>dvgw-edi"| DVGW_impl["ALOCAT · NOMINT · NOMRES · SSQNOT<br/>GaBi Gas 2.1"]
     ENW41 -->|"vertragd"| LF_impl["B2C/B2B contracts<br/>GDPR Art. 15/17/20"]
     EEG -->|"eeg-billing<br/>einsd"| EEG_impl["10 settlement schemes<br/>§14 UStG Gutschrift"]
     BSI -->|"metering<br/>edmd"| IOT_impl["SmgwSession<br/>ClsChannel"]
@@ -110,14 +110,11 @@ graph LR
 > started under an older format version continues under those rules until it
 > completes — no data migration required.
 >
-> **PID coverage.** `cargo xtask validate-pruefids` checks that every
-> Prüfidentifikator the workspace registers has an `.edi` fixture behind it and
-> that no fixture is orphaned. CI runs it with `--strict --min-coverage 100`, so
-> the floor is full coverage and the command prints the count it reached.
->
-> Coverage is reported twice: total, and the curated subset. A synthetic `gen/`
-> fixture carries the Prüfidentifikator and nothing else the AHB marks Muss, so
-> it evidences that the PID is registered — only a curated `valid/` fixture,
+> **PID coverage.** Every Anwendungsfall the profiles carry has a witness:
+> `tests/skeletons.rs` generates its minimal message from the Prüfschablone
+> and validates it against that same column, and `cargo xtask
+> check-pid-coverage` holds the shipped columns against BDEW's published
+> Anwendungsübersicht (480 of 482). A curated `valid/` fixture,
 > asserted clean by the conformance suite, evidences that mako reads the
 > Anwendungsfall.
 >

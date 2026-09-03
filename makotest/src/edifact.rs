@@ -825,7 +825,7 @@ pub fn build_utilmd(
         _ => None,
     });
     let rel = resolve_release(MessageType::Utilmd, release, on, sparte)?;
-    let mut b = UtilmdBuilder::new(rel)
+    let mut b = UtilmdBuilder::new(rel.clone())
         .pruefidentifikator(pid(pruefidentifikator)?)
         .sender(sender)
         .receiver(receiver)
@@ -838,6 +838,9 @@ pub fn build_utilmd(
         b = b.rff(q, r);
     }
 
+    // A Gas UTILMD names the Marktlokation as the Meldepunkt (`LOC+172`);
+    // `Z16` is a Strom qualifier no Gas column lists.
+    let gas = rel.as_str().starts_with('G');
     for tx in transactions.unwrap_or_default() {
         let mut t = b.transaction(&tx.vorgangsnummer);
         for (q, d) in &tx.dates {
@@ -851,16 +854,22 @@ pub fn build_utilmd(
             t = t.transaktionsgrund(Transaktionsgrund::new(grund.as_str(), erg));
         }
         if let Some(code) = &tx.antwort_code {
-            t = t.antwort(match tx.antwort_ebd.as_deref() {
-                Some(codeliste) => AntwortStatus::from_codeliste(code.as_str(), codeliste),
-                None => AntwortStatus::bare(code.as_str()),
-            });
+            t = t.antwort(antwort_status(
+                code,
+                tx.antwort_ebd.as_deref(),
+                &rel,
+                pruefidentifikator,
+            ));
         }
         for (q, r) in &tx.references {
             t = t.reference(q.as_str(), r.as_str());
         }
         for (q, id) in &tx.locations {
-            t = t.location(lokationstyp_from_str(q)?, id.as_str());
+            let typ = match lokationstyp_from_str(q)? {
+                Lokationstyp::Marktlokation if gas => Lokationstyp::Meldepunkt,
+                other => other,
+            };
+            t = t.location(typ, id.as_str());
         }
         for (q, id) in &tx.customers {
             t = t.customer(q.as_str(), id.as_str());
@@ -882,10 +891,159 @@ pub fn build_utilmd(
         b = t.done();
     }
 
-    b.build()
+    let bytes = b
+        .build()
         .map_err(|e| PyValueError::new_err(format!("UTILMD build failed: {e}")))?
         .serialize()
-        .map_err(|e| PyRuntimeError::new_err(format!("UTILMD serialize failed: {e}")))
+        .map_err(|e| PyRuntimeError::new_err(format!("UTILMD serialize failed: {e}")))?;
+    complete_to_column(bytes, MessageType::Utilmd, &rel, pruefidentifikator)
+}
+
+/// `STS+E01` with the Codeliste where the column lists DE 1131 — the Strom
+/// columns name the EBD on the wire, the Gas columns do not.
+fn antwort_status(
+    code: &str,
+    codeliste: Option<&str>,
+    release: &edi_energy::Release,
+    pruefidentifikator: u32,
+) -> AntwortStatus {
+    match codeliste {
+        Some(codeliste)
+            if column_lists_de(
+                MessageType::Utilmd,
+                release,
+                pruefidentifikator,
+                "STS",
+                "1131",
+            ) =>
+        {
+            AntwortStatus::from_codeliste(code, codeliste)
+        }
+        _ => AntwortStatus::bare(code),
+    }
+}
+
+/// Whether the MSCONS column of `pruefidentifikator` makes the `SG10 DTM`
+/// „Beginn Messperiode" Muss without a Voraussetzung — a Lastgang, whose
+/// every `QTY` needs the period it belongs to.
+fn column_requires_messperiode(release: &edi_energy::Release, pruefidentifikator: u32) -> bool {
+    let Some(profile) = edi_energy::ReleaseRegistry::global()
+        .profiles_for(MessageType::Mscons)
+        .find(|p| p.release() == release)
+    else {
+        return false;
+    };
+    let Some(af) = profile.anwendungsfall(pruefidentifikator) else {
+        return false;
+    };
+    profile
+        .structure
+        .layouts
+        .iter()
+        .filter(|l| l.tag == "DTM" && l.name.starts_with("Beginn Messperiode"))
+        .any(|l| {
+            af.segment_status(&l.nr)
+                .is_some_and(|statuses| statuses.iter().any(|st| st.trim() == "Muss"))
+        })
+}
+
+/// The `BGM` DE 1001 document-name code the column of `pruefidentifikator`
+/// admits first, if the column lists one — the builders' default, since the
+/// code names the kind of document and the AHB fixes it per Anwendungsfall.
+fn column_bgm_code(
+    mt: MessageType,
+    release: &edi_energy::Release,
+    pruefidentifikator: u32,
+) -> Option<String> {
+    let profile = edi_energy::ReleaseRegistry::global()
+        .profiles_for(mt)
+        .find(|p| p.release() == release)?;
+    let af = profile.anwendungsfall(pruefidentifikator)?;
+    let bgm = profile.structure.layouts.iter().find(|l| l.tag == "BGM")?;
+    af.element_rules(&bgm.nr)
+        .find(|r| r.de == "1001")
+        .and_then(|r| r.operands.iter().find_map(|o| o.code.clone()))
+}
+
+/// Whether the column of `pruefidentifikator` lists data element `de` at any
+/// `tag` place — a `QTY` unit, say, goes out only where the column asks for it.
+fn column_lists_de(
+    mt: MessageType,
+    release: &edi_energy::Release,
+    pruefidentifikator: u32,
+    tag: &str,
+    de: &str,
+) -> bool {
+    let Some(profile) = edi_energy::ReleaseRegistry::global()
+        .profiles_for(mt)
+        .find(|p| p.release() == release)
+    else {
+        return true;
+    };
+    let Some(af) = profile.anwendungsfall(pruefidentifikator) else {
+        return true;
+    };
+    profile
+        .structure
+        .layouts
+        .iter()
+        .filter(|l| l.tag == tag)
+        .any(|l| af.element_rules(&l.nr).any(|r| r.de == de))
+}
+
+/// The APERAK Anwendungsfall by its `BGM` DE 1001: `313` Fehlermeldung
+/// (29001), `312` Anerkennungsmeldung (29002).
+fn aperak_pid(bytes: &[u8]) -> u32 {
+    let text = String::from_utf8_lossy(bytes);
+    if text.contains("BGM+312") {
+        29002
+    } else {
+        29001
+    }
+}
+
+/// Complete a built message to the Prüfschablone of its Anwendungsfall.
+///
+/// A builder states what the business case knows; the column asks for more
+/// (a 55001 carries the Kunde, the Stammdaten and the Transaktionsgrund). The
+/// profile fills every place and data element the column requires and the
+/// message lacks, and leaves out what it does not permit — so what a test
+/// feeds a simulator is what a conformant counterparty would send. A
+/// Prüfidentifikator without a column in `release` passes through unchanged.
+fn complete_to_column(
+    bytes: Vec<u8>,
+    mt: MessageType,
+    release: &edi_energy::Release,
+    pruefidentifikator: u32,
+) -> PyResult<Vec<u8>> {
+    let Some(profile) = edi_energy::ReleaseRegistry::global()
+        .profiles_for(mt)
+        .find(|p| p.release() == release)
+    else {
+        return Ok(bytes);
+    };
+    let Some(af) = profile.anwendungsfall(pruefidentifikator) else {
+        return Ok(bytes);
+    };
+    let segments: Vec<edifact_rs::OwnedSegment> = edifact_rs::from_bytes(&bytes)
+        .map(|s| s.map(edifact_rs::Segment::into_owned))
+        .collect::<Result<_, _>>()
+        .map_err(|e| PyRuntimeError::new_err(format!("{} re-parse failed: {e}", mt.as_str())))?;
+    let party = |role: &str| {
+        segments
+            .iter()
+            .find(|s| s.tag == "NAD" && s.element_str(0) == Some(role))
+            .and_then(|s| s.component_str(1, 0))
+            .map(str::to_owned)
+    };
+    let defaults = edi_energy::profile::SkeletonParties::default();
+    let parties = edi_energy::profile::SkeletonParties {
+        sender: party("MS").unwrap_or(defaults.sender),
+        receiver: party("MR").unwrap_or(defaults.receiver),
+    };
+    let done = profile.complete(&segments, af, &parties);
+    edifact_rs::segments_to_bytes(&done)
+        .map_err(|e| PyRuntimeError::new_err(format!("{} serialize failed: {e}", mt.as_str())))
 }
 
 /// One interval quantity: `(qualifier, value, unit, start, end)`, where the
@@ -907,15 +1065,11 @@ type IntervalQuantity = (String, String, String, String, String);
 /// receiver cannot place the value on the settlement grid — and the AHB does
 /// not catch it, so a Lastgang built from `quantities` validates while being
 /// unusable. `Zaehlerstandsgang.as_mscons()` renders them for a whole day.
-///
-/// `bilanzierungsgebiet` populates the SG6 `LOC+Z17`; pass a real EIC (see
-/// `bilanzierungsgebiet_from_prefix`) — the object-type character is what
-/// separates it from a Bilanzkreis.
 #[pyfunction]
 #[pyo3(signature = (
     pruefidentifikator, sender, receiver, metering_point, quantities=None, *,
     intervals=None, on=None, release=None, message_ref="1", document_date=None,
-    obis=None, bilanzierungsgebiet=None
+    obis=None
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn build_mscons(
@@ -930,14 +1084,16 @@ pub fn build_mscons(
     message_ref: &str,
     document_date: Option<&str>,
     obis: Option<&str>,
-    bilanzierungsgebiet: Option<&str>,
 ) -> PyResult<Vec<u8>> {
     let rel = resolve_release(MessageType::Mscons, release, on, None)?;
-    let mut b = MsconsBuilder::new(rel)
+    let mut b = MsconsBuilder::new(rel.clone())
         .pruefidentifikator(pid(pruefidentifikator)?)
         .sender(sender)
         .receiver(receiver)
         .message_ref(message_ref);
+    if let Some(c) = column_bgm_code(MessageType::Mscons, &rel, pruefidentifikator) {
+        b = b.document_code(c);
+    }
     if let Some(d) = document_date_for(document_date, on)? {
         b = b.document_date(d);
     }
@@ -948,35 +1104,51 @@ pub fn build_mscons(
             .map_err(|e| PyValueError::new_err(format!("invalid OBIS code {code:?}: {e}")))?;
         mp = mp.obis(parsed);
     }
-    if let Some(eic) = bilanzierungsgebiet {
-        mp = mp.bilanzierungsgebiet(eic);
-    }
     let quantities = quantities.unwrap_or_default();
     let intervals = intervals.unwrap_or_default();
+    if !quantities.is_empty() && column_requires_messperiode(&rel, pruefidentifikator) {
+        return Err(PyValueError::new_err(format!(
+            "{pruefidentifikator} is a Lastgang: its column makes the SG10 Messperiode \
+             (DTM+163/164) Muss on every QTY, so a bare quantity cannot be placed on the \
+             settlement grid — pass intervals= with the bounds of each value"
+        )));
+    }
     if quantities.is_empty() && intervals.is_empty() {
         return Err(PyValueError::new_err(
             "an MSCONS carries at least one quantity — pass quantities= for a \
              summed or point-in-time figure, or intervals= for a Lastgang",
         ));
     }
+    // `QTY` DE 6411 goes out where the column lists it; a Lastgang column
+    // (13025) states the unit through its OBIS-Kennzahl and lists none.
+    let lists_unit = column_lists_de(MessageType::Mscons, &rel, pruefidentifikator, "QTY", "6411");
+    let unit = |u: &str| {
+        if lists_unit {
+            u.to_owned()
+        } else {
+            String::new()
+        }
+    };
     for (q, v, u) in &quantities {
-        mp = mp.quantity(q.as_str(), v.as_str(), u.as_str());
+        mp = mp.quantity(q.as_str(), v.as_str(), unit(u));
     }
     for (q, v, u, start, end) in &intervals {
         mp = mp.quantity_for_period(
             q.as_str(),
             v.as_str(),
-            u.as_str(),
+            unit(u),
             start.as_str(),
             end.as_str(),
         );
     }
 
-    mp.done()
+    let bytes = mp
+        .done()
         .build()
         .map_err(|e| PyValueError::new_err(format!("MSCONS build failed: {e}")))?
         .serialize()
-        .map_err(|e| PyRuntimeError::new_err(format!("MSCONS serialize failed: {e}")))
+        .map_err(|e| PyRuntimeError::new_err(format!("MSCONS serialize failed: {e}")))?;
+    complete_to_column(bytes, MessageType::Mscons, &rel, pruefidentifikator)
 }
 
 /// Build an APERAK — the **application-level** acknowledgement.
@@ -1011,7 +1183,7 @@ pub fn build_aperak(
     document_code: Option<&str>,
 ) -> PyResult<Vec<u8>> {
     let rel = resolve_release(MessageType::Aperak, release, on, None)?;
-    let mut b = AperakBuilder::new(rel)
+    let mut b = AperakBuilder::new(rel.clone())
         .sender(sender)
         .receiver(receiver)
         .message_ref(message_ref);
@@ -1038,8 +1210,11 @@ pub fn build_aperak(
         None if error_code.is_some() => b = b.document_code("313"),
         None => b = b.document_code("312"),
     }
-    b.serialize()
-        .map_err(|e| PyRuntimeError::new_err(format!("APERAK serialize failed: {e}")))
+    let bytes = b
+        .serialize()
+        .map_err(|e| PyRuntimeError::new_err(format!("APERAK serialize failed: {e}")))?;
+    let aperak = aperak_pid(&bytes);
+    complete_to_column(bytes, MessageType::Aperak, &rel, aperak)
 }
 
 /// Build a CONTRL — the **syntax-level** acknowledgement for an interchange.
@@ -1050,7 +1225,7 @@ pub fn build_aperak(
 #[pyfunction]
 #[pyo3(signature = (
     sender, receiver, interchange_ref, *, on=None, release=None, accept=true,
-    message_ref="1", action_code=None
+    message_ref="1", action_code=None, syntax_error=None
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn build_contrl(
@@ -1062,14 +1237,19 @@ pub fn build_contrl(
     accept: bool,
     message_ref: &str,
     action_code: Option<&str>,
+    syntax_error: Option<&str>,
 ) -> PyResult<Vec<u8>> {
     let rel = resolve_release(MessageType::Contrl, release, on, None)?;
-    let mut b = ContrlBuilder::new(rel)
+    let mut b = ContrlBuilder::new(rel.clone())
         .sender(sender)
         .receiver(receiver)
         .interchange_ref(interchange_ref)
         .message_ref(message_ref);
-    b = if accept { b.accept() } else { b.reject() };
+    b = if accept {
+        b.accept()
+    } else {
+        b.reject(syntax_error.unwrap_or("12"))
+    };
     if let Some(code) = action_code {
         b = b.action_code(code);
     }
@@ -1117,7 +1297,7 @@ pub fn build_aperak_for(
             parsed.messages.len()
         ))
     })?;
-    let mut b = AperakBuilder::new(rel)
+    let mut b = AperakBuilder::new(rel.clone())
         .for_receipt(&envelope.receipt_context())
         .message_ref(message_ref);
     if let Some(p) = pruefidentifikator {
@@ -1132,8 +1312,11 @@ pub fn build_aperak_for(
         ensure_latin1("error_text", t)?;
         b = b.error_text(t);
     }
-    b.serialize()
-        .map_err(|e| PyRuntimeError::new_err(format!("APERAK serialize failed: {e}")))
+    let bytes = b
+        .serialize()
+        .map_err(|e| PyRuntimeError::new_err(format!("APERAK serialize failed: {e}")))?;
+    let aperak = aperak_pid(&bytes);
+    complete_to_column(bytes, MessageType::Aperak, &rel, aperak)
 }
 
 /// Build the UTILMD **business answer** to a received UTILMD request.
@@ -1209,7 +1392,7 @@ pub fn build_answer(
         ));
     };
 
-    let mut b = UtilmdBuilder::new(rel)
+    let mut b = UtilmdBuilder::new(rel.clone())
         .pruefidentifikator(pid(answer_pid)?)
         // Mirrored: the request's receiver is the one answering.
         .sender(envelope.header.receiver_id.to_string())
@@ -1237,9 +1420,12 @@ pub fn build_answer(
         // The answer echoes the request's Vorgangsnummer — that is what
         // correlates it on the counterparty's side.
         let mut a = b.transaction(vorgangsnummer);
-        // The Lokation travels with the answer: it lives in `SG5 LOC`, not in
-        // `IDE`, so it is echoed explicitly rather than riding the Vorgang.
-        for loc in &tx.locations {
+        // The Lokation travels with the answer where its column lists a
+        // `SG5 LOC` (a Bestätigung does; an Ablehnung Anmeldung names the
+        // Vorgang alone): it lives in `SG5 LOC`, not in `IDE`, so it is echoed
+        // explicitly rather than riding the Vorgang.
+        let column_has_loc = column_lists_de(MessageType::Utilmd, &rel, answer_pid, "LOC", "3227");
+        for loc in tx.locations.iter().filter(|_| column_has_loc) {
             if let (Some(lokationstyp), Some(id)) = (
                 Lokationstyp::from_qualifier_code(&loc.qualifier),
                 loc.location_id.as_deref(),
@@ -1251,12 +1437,10 @@ pub fn build_answer(
             a = a.date(q.as_str(), d.as_str());
         }
         if let Some(code) = antwort_code {
-            a = a.antwort(match antwort_ebd {
-                Some(codeliste) => AntwortStatus::from_codeliste(code, codeliste),
-                None => AntwortStatus::bare(code),
-            });
+            a = a.antwort(antwort_status(code, antwort_ebd, &rel, answer_pid));
         }
-        for rff in &tx.references {
+        // The answer carries its own `RFF+Z13`; the request's is not echoed.
+        for rff in tx.references.iter().filter(|r| r.qualifier != "Z13") {
             if let Some(reference) = rff.reference.as_deref() {
                 a = a.reference(rff.qualifier.as_str(), reference);
             }
@@ -1271,10 +1455,12 @@ pub fn build_answer(
         b = a.done();
     }
 
-    b.build()
+    let bytes = b
+        .build()
         .map_err(|e| PyValueError::new_err(format!("UTILMD answer build failed: {e}")))?
         .serialize()
-        .map_err(|e| PyRuntimeError::new_err(format!("UTILMD answer serialize failed: {e}")))
+        .map_err(|e| PyRuntimeError::new_err(format!("UTILMD answer serialize failed: {e}")))?;
+    complete_to_column(bytes, MessageType::Utilmd, &rel, answer_pid)
 }
 
 /// Build the CONTRL that acknowledges the interchange `received`.
@@ -1297,10 +1483,10 @@ pub fn build_contrl_for(
     let parsed = platform()
         .parse_interchange_full(received)
         .map_err(|e| PyValueError::new_err(format!("EDIFACT parse failed: {e}")))?;
-    let b = ContrlBuilder::new(rel)
+    let b = ContrlBuilder::new(rel.clone())
         .for_interchange(&parsed.header)
         .message_ref(message_ref);
-    let b = if accept { b.accept() } else { b.reject() };
+    let b = if accept { b.accept() } else { b.reject("12") };
     b.serialize()
         .map_err(|e| PyRuntimeError::new_err(format!("CONTRL serialize failed: {e}")))
 }
@@ -1390,7 +1576,7 @@ pub fn build_remadv(
     use edi_energy::builders::{Abweichungsgrund, Rechnungsbezug};
 
     let rel = resolve_release(MessageType::Remadv, release, on, None)?;
-    let mut b = RemadvBuilder::new(rel)
+    let mut b = RemadvBuilder::new(rel.clone())
         .sender(sender)
         .receiver(receiver)
         .pruefidentifikator(pruefidentifikator.to_string())
@@ -1439,8 +1625,10 @@ pub fn build_remadv(
         b = b.positionsfehler(positionen);
     }
 
-    b.serialize()
-        .map_err(|e| PyRuntimeError::new_err(format!("REMADV serialize failed: {e}")))
+    let bytes = b
+        .serialize()
+        .map_err(|e| PyRuntimeError::new_err(format!("REMADV serialize failed: {e}")))?;
+    complete_to_column(bytes, MessageType::Remadv, &rel, pruefidentifikator)
 }
 
 /// Build an ORDRSP — the answer to an ORDERS, in the WiM and ESA processes.
@@ -1482,7 +1670,7 @@ pub fn build_ordrsp(
     document_date: Option<&str>,
 ) -> PyResult<Vec<u8>> {
     let rel = resolve_release(MessageType::Ordrsp, release, on, None)?;
-    let mut b = edi_energy::builders::OrdrespBuilder::new(rel)
+    let mut b = edi_energy::builders::OrdrespBuilder::new(rel.clone())
         .sender(sender)
         .receiver(receiver)
         .pruefidentifikator(pruefidentifikator)
@@ -1502,8 +1690,11 @@ pub fn build_ordrsp(
     if let Some(r) = adjustment_reason {
         b = b.adjustment_reason(r);
     }
-    if let Some(c) = document_code {
-        b = b.document_code(c);
+    if let Some(c) = document_code
+        .map(str::to_owned)
+        .or_else(|| column_bgm_code(MessageType::Ordrsp, &rel, pruefidentifikator))
+    {
+        b = b.document_code(&c);
     }
     if let Some(id) = document_id {
         b = b.document_id(id);
@@ -1520,8 +1711,10 @@ pub fn build_ordrsp(
     if let Some(d) = document_date_for(document_date, on)? {
         b = b.document_date(d);
     }
-    b.serialize()
-        .map_err(|e| PyRuntimeError::new_err(format!("ORDRSP serialize failed: {e}")))
+    let bytes = b
+        .serialize()
+        .map_err(|e| PyRuntimeError::new_err(format!("ORDRSP serialize failed: {e}")))?;
+    complete_to_column(bytes, MessageType::Ordrsp, &rel, pruefidentifikator)
 }
 
 /// Build an ORDERS — the WiM / ESA / Sperrung request.
@@ -1556,7 +1749,7 @@ pub fn build_orders(
     document_date: Option<&str>,
 ) -> PyResult<Vec<u8>> {
     let rel = resolve_release(MessageType::Orders, release, on, None)?;
-    let mut b = edi_energy::builders::OrdersBuilder::new(rel)
+    let mut b = edi_energy::builders::OrdersBuilder::new(rel.clone())
         .sender(sender)
         .receiver(receiver)
         .pruefidentifikator(pruefidentifikator)
@@ -1570,8 +1763,11 @@ pub fn build_orders(
     if let Some(d) = ausfuehrungsdatum {
         b = b.ausfuehrungsdatum(d);
     }
-    if let Some(c) = document_code {
-        b = b.document_code(c);
+    if let Some(c) = document_code
+        .map(str::to_owned)
+        .or_else(|| column_bgm_code(MessageType::Orders, &rel, pruefidentifikator))
+    {
+        b = b.document_code(&c);
     }
     if let Some(id) = document_id {
         b = b.document_id(id);
@@ -1585,8 +1781,10 @@ pub fn build_orders(
     if let Some(d) = document_date_for(document_date, on)? {
         b = b.document_date(d);
     }
-    b.serialize()
-        .map_err(|e| PyRuntimeError::new_err(format!("ORDERS serialize failed: {e}")))
+    let bytes = b
+        .serialize()
+        .map_err(|e| PyRuntimeError::new_err(format!("ORDERS serialize failed: {e}")))?;
+    complete_to_column(bytes, MessageType::Orders, &rel, pruefidentifikator)
 }
 
 /// Build an IFTSTA — the WiM status message.
@@ -1619,7 +1817,7 @@ pub fn build_iftsta(
     document_date: Option<&str>,
 ) -> PyResult<Vec<u8>> {
     let rel = resolve_release(MessageType::Iftsta, release, on, None)?;
-    let mut b = edi_energy::builders::IftstaBuilder::new(rel)
+    let mut b = edi_energy::builders::IftstaBuilder::new(rel.clone())
         .sender(sender)
         .receiver(receiver)
         .pruefidentifikator(pruefidentifikator)
@@ -1636,8 +1834,11 @@ pub fn build_iftsta(
     if let Some(d) = vertragsende {
         b = b.vertragsende(d);
     }
-    if let Some(c) = document_code {
-        b = b.document_code(c);
+    if let Some(c) = document_code
+        .map(str::to_owned)
+        .or_else(|| column_bgm_code(MessageType::Iftsta, &rel, pruefidentifikator))
+    {
+        b = b.document_code(&c);
     }
     if let Some(id) = document_id {
         b = b.document_id(id);
@@ -1645,8 +1846,10 @@ pub fn build_iftsta(
     if let Some(d) = document_date_for(document_date, on)? {
         b = b.document_date(d);
     }
-    b.serialize()
-        .map_err(|e| PyRuntimeError::new_err(format!("IFTSTA serialize failed: {e}")))
+    let bytes = b
+        .serialize()
+        .map_err(|e| PyRuntimeError::new_err(format!("IFTSTA serialize failed: {e}")))?;
+    complete_to_column(bytes, MessageType::Iftsta, &rel, pruefidentifikator)
 }
 
 /// Build a QUOTES — the ESA Angebot answering a REQOTE Preisanfrage.
@@ -1691,7 +1894,7 @@ pub fn build_quotes(
     use edi_energy::builders::DauerEinheit;
 
     let rel = resolve_release(MessageType::Quotes, release, on, None)?;
-    let mut b = edi_energy::builders::QuotesBuilder::new(rel)
+    let mut b = edi_energy::builders::QuotesBuilder::new(rel.clone())
         .sender(sender)
         .receiver(receiver)
         .pruefidentifikator(pruefidentifikator)
@@ -1718,13 +1921,21 @@ pub fn build_quotes(
         b = b.product(pr);
     }
     if let Some(value) = price {
-        b = b.price(value);
+        // A priced position is an Artikel-ID (`PIA+Z02`, `an16`) with one
+        // `PRI+CAL` whose Preisart the ID's last two digits select (QUOTES
+        // AHB conditions [83]–[85]): one price is the Einrichtungspreis
+        // (`01` → `Z01`, per Stück).
+        let artikel_id = format!("{:0>14}01", product.unwrap_or("9991000000000"));
+        b = b.artikel_id(artikel_id).preis(value, "Z01", "H87");
     }
     if let Some((name, comm)) = contact {
         b = b.contact(name, comm);
     }
-    if let Some(c) = document_code {
-        b = b.document_code(c);
+    if let Some(c) = document_code
+        .map(str::to_owned)
+        .or_else(|| column_bgm_code(MessageType::Quotes, &rel, pruefidentifikator))
+    {
+        b = b.document_code(&c);
     }
     if let Some(id) = document_id {
         b = b.document_id(id);
@@ -1738,8 +1949,10 @@ pub fn build_quotes(
     if let Some(d) = document_date_for(document_date, on)? {
         b = b.document_date(d);
     }
-    b.serialize()
-        .map_err(|e| PyRuntimeError::new_err(format!("QUOTES serialize failed: {e}")))
+    let bytes = b
+        .serialize()
+        .map_err(|e| PyRuntimeError::new_err(format!("QUOTES serialize failed: {e}")))?;
+    complete_to_column(bytes, MessageType::Quotes, &rel, pruefidentifikator)
 }
 
 /// Wrap one or more messages in a UNB/UNZ interchange envelope.
@@ -1989,6 +2202,7 @@ mod tests {
                 false,
                 "1",
                 None,
+                None,
             ),
             "build_contrl",
         );
@@ -2081,7 +2295,8 @@ mod tests {
             "build_answer",
         );
         let text = String::from_utf8(answer.clone()).unwrap();
-        assert!(text.contains("BGM+E01+55002"), "{text}");
+        assert!(text.contains("BGM+E01+ANS-1"), "{text}");
+        assert!(text.contains("RFF+Z13:55002"), "{text}");
         assert!(
             text.contains("NAD+MS+9900357000003"),
             "mirrored sender: {text}"
@@ -2091,8 +2306,8 @@ mod tests {
             "the request's Vorgangsnummer is echoed: {text}"
         );
         assert!(
-            text.contains("RFF+Z13:55001"),
-            "the request's RFF is echoed: {text}"
+            !text.contains("RFF+Z13:55001"),
+            "the answer carries its own Prüfidentifikator, not the request's: {text}"
         );
         // `92` Beginn zum, not the Messperioden-Qualifier `163`.
         assert!(text.contains("DTM+92:20261101"), "{text}");

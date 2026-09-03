@@ -72,29 +72,41 @@ pub(super) fn render_insrpt(
                 .unwrap_or("1")
                 .to_owned(),
         )
+        // `SG7 STS+Z06` Gerätestatus: `Z11` gestört (the Störungsmeldung's
+        // own state), `Z12` the other one the column admits.
         .status(
             p.get("status_code")
                 .and_then(|v| v.as_str())
-                .unwrap_or("Z01")
+                .unwrap_or("Z11")
                 .to_owned(),
+        )
+        // `SG5 NAD+MS` + `CTA`/`COM` — the sender's Ansprechpartner, Muss.
+        .contact(
+            p.get("contact")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Service"),
+            p.get("contact_comm")
+                .and_then(|v| v.as_str())
+                .unwrap_or(sender),
         )
         .location("172", melo);
 
     // `DOC` is mandatory; default its reference to the process' own PID so a
     // caller that has no external Förderreferenz still produces a valid message.
+    // `SG3 DOC` — DE 1001 `21` is the one code the column admits.
     let (doc_qualifier, doc_id) = match p.get("doc_reference") {
-        Some(serde_json::Value::String(id)) => ("Z41".to_owned(), id.clone()),
+        Some(serde_json::Value::String(id)) => ("21".to_owned(), id.clone()),
         Some(serde_json::Value::Object(o)) => (
             o.get("qualifier")
                 .and_then(|v| v.as_str())
-                .unwrap_or("Z41")
+                .unwrap_or("21")
                 .to_owned(),
             o.get("id")
                 .and_then(|v| v.as_str())
                 .unwrap_or(&pid.to_string())
                 .to_owned(),
         ),
-        _ => ("Z41".to_owned(), pid.to_string()),
+        _ => ("21".to_owned(), pid.to_string()),
     };
     builder = builder.doc_reference(doc_qualifier, doc_id);
 

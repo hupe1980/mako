@@ -14,8 +14,9 @@ use crate::{
 
 /// A parsed DVGW message.
 ///
-/// One type serves ALOCAT, NOMINT and NOMRES: the three share a structure and
-/// differ only in which qualifiers are legal, which is a validation concern.
+/// One type serves ALOCAT, NOMINT, NOMRES and SSQNOT: the four share a
+/// structure and differ only in which qualifiers are legal, which is a
+/// validation concern.
 /// Match on [`message_type`](Self::message_type) or
 /// [`document`](Self::document) when the family matters.
 #[derive(Debug, Clone)]
@@ -42,8 +43,12 @@ pub struct DvgwMessage {
     pub message_datetime: Option<OffsetDateTime>,
     /// `DTM+Z01` — Gültigkeitszeitraum der Nachricht.
     ///
-    /// For ALOCAT and NOMINT this is the gas day the message reports on.
+    /// For ALOCAT, NOMINT and NOMRES this is the gas day the message reports
+    /// on; for SSQNOT the Abrechnungszeitraum of the Mehr-/Mindermenge.
     pub validity_period: Option<DvgwPeriod>,
+    /// `SG1 DTM+9` — Bearbeitungs-/Verarbeitungsdatum of the original
+    /// nomination a re-nomination corrects (NOMINT, beside `RFF+AGO`).
+    pub original_nomination_datetime: Option<OffsetDateTime>,
     /// Header `RFF` segments in wire order.
     pub references: Vec<Reference>,
     /// Header parties in wire order (`NAD+MS`, `NAD+MR`, `NAD+ZSY`).
@@ -259,6 +264,9 @@ impl DvgwMessage {
             .and_then(DtmValue::as_instant);
         let validity_period = header_dtm(&segments, "Z01", timezone, &mut undecodable_dtm)
             .and_then(DtmValue::as_period);
+        let original_nomination_datetime =
+            header_dtm(&segments, "9", timezone, &mut undecodable_dtm)
+                .and_then(DtmValue::as_instant);
 
         let header_end = segments
             .iter()
@@ -294,6 +302,7 @@ impl DvgwMessage {
             timezone,
             message_datetime,
             validity_period,
+            original_nomination_datetime,
             references,
             parties,
             items,

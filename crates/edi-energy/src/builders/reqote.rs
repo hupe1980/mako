@@ -360,17 +360,17 @@ impl<S, R> ReqoteBuilder<S, R> {
         // ── SG1: references ──────────────────────────────────────────────────
         // `RFF+Z13` carries the Prüfidentifikator; the AHB gives it its own
         // reference group rather than a slot in BGM.
-        if let Some(pid) = self.inner.pruefidentifikator {
-            emit_comp!(w, "RFF", ["Z13", &pid.to_string()]);
-        }
+        // The MIG lists the Referenz places (`RFF+AAG`, `RFF+ON`, `RFF+AAV`)
+        // before the Prüfidentifikator's.
         for (q, v) in &self.inner.references {
             emit_comp!(w, "RFF", [q, v]);
         }
+        if let Some(pid) = self.inner.pruefidentifikator {
+            emit_comp!(w, "RFF", ["Z13", &pid.to_string()]);
+        }
         // ── SG11: parties ────────────────────────────────────────────────────
-        // Segment sequence per the MIG: the SG11 parties, then the SG14
-        // contact, then the SG11 Meldepunkt — `NAD, CTA, COM, LOC`. (The
-        // AHB's 00016–00021 row numbers are guide positions, not a wire
-        // order; they interleave CTA/COM between the NADs.)
+        // Segment sequence per the MIG: `NAD+MS` with its `SG14 CTA`/`COM`,
+        // then `NAD+MR`, then `NAD+DP` with its `LOC+172`.
         if let Some(id) = &self.inner.sender_id {
             emit_comp!(
                 w,
@@ -378,6 +378,12 @@ impl<S, R> ReqoteBuilder<S, R> {
                 ["MS"],
                 [id, "", super::agency_for(self.inner.sender_agency, id)]
             );
+        }
+        // `SG14 CTA`/`COM` — the Ansprechpartner of the sender, inside the
+        // sender's `SG11`.
+        if let Some((name, comm)) = &self.inner.contact {
+            emit_comp!(w, "CTA", ["IC"], ["", name]);
+            emit_comp!(w, "COM", [comm, "EM"]);
         }
         if let Some(id) = &self.inner.receiver_id {
             emit_comp!(
@@ -390,10 +396,6 @@ impl<S, R> ReqoteBuilder<S, R> {
         // ── SG11: Liefer-/Bezugsort + Meldepunkt ─────────────────────────────
         if self.inner.delivery_party {
             emit_seg!(w, "NAD", "DP");
-        }
-        if let Some((name, comm)) = &self.inner.contact {
-            emit_comp!(w, "CTA", ["IC"], ["", name]);
-            emit_comp!(w, "COM", [comm, "EM"]);
         }
         if let Some(loc) = &self.inner.location {
             emit_seg!(w, "LOC", "172", loc);
@@ -440,6 +442,8 @@ impl<S, R> ReqoteBuilder<S, R> {
                 }
             }
         }
+        // `UNS+S` — Muss on every Anwendungsfall.
+        emit_seg!(w, "UNS", "S");
         w.finish_unt(&self.inner.message_ref)
             .map_err(Error::Parse)?;
         Ok(buf)

@@ -111,14 +111,37 @@ fn render_utilmd(
         .receiver(receiver)
         .message_ref(msg_ref)
         .document_date("20250115")
-        .rff("Z13", msg_ref)
         .transaction("VORGANG-0001")
+        .date(edi_energy::utilmd_codes::dtm::BEGINN_ZUM, "20261101")
+        .transaktionsgrund(
+            edi_energy::utilmd_codes::Transaktionsgrund::verbrauchende_malo(
+                edi_energy::utilmd_codes::transaktionsgrund::WECHSEL,
+            ),
+        )
         .marktlokation(malo)
         // `SG8 SEQ+Z79` is Muss on 55001 (UTILMD AHB Strom 2.1 §5.3): without a
         // Bilanzkreis the NB cannot assign the Marktlokation to the LF.
         .produktpaket(edi_energy::utilmd_codes::Produktpaket::bilanzkreis(
             "11XBK-EEG-----1",
         ))
+        // The rest of the 55001 column: Stammdaten of the Marktlokation and
+        // of the Kunde, and the Kunde with a Korrespondenzanschrift.
+        .stammdaten("Z01")
+        .cci("", "Z15")
+        .done()
+        .stammdaten("Z75")
+        .cci("Z61", "ZG0")
+        .done()
+        .kunde_des_lf(["Mustermann".to_owned()], "Z01")
+        .anschrift(
+            "Z04",
+            ["Mustermann".to_owned()],
+            "Z01",
+            "Musterstr. 1",
+            "Berlin",
+            "10115",
+            "DE",
+        )
         .done()
         .serialize()
         .unwrap_or_else(|e| panic!("UTILMD {pid_u32} serialization failed: {e}"))
@@ -160,7 +183,8 @@ fn render_utilmd(
 async fn cross_fv_response_accepted_on_fv_start_process() {
     let platform = Platform::with_all_profiles();
     let deadline_store = InMemoryDeadlineStore::new();
-    let anfrage_ref = "CROSS-FV-TEST-001";
+    // UNH DE 0062 is an..14.
+    let anfrage_ref = "CROSSFV-001";
 
     // ── Step 1: LFN initiates Lieferbeginn (FV2025-10-01) ────────────────────
 
@@ -411,7 +435,7 @@ async fn cross_fv_s2_2_response_accepted_on_s2_1_process() {
     const RELEASE_S2_2: &str = "S2.2";
 
     let platform = Platform::with_all_profiles();
-    let anfrage_ref = "CROSS-FV-S22-TEST-001";
+    let anfrage_ref = "CROSSFV-S22-01";
     let antwort_ref = "CROSS-FV-S22-ANTWORT-001";
 
     // ── Step 1: NB receives a UTILMD 55001 Anfrage encoded under S2.1 ────────

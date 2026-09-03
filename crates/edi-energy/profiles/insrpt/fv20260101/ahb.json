@@ -1,948 +1,4795 @@
 {
-  "schema_version": 1,
-  "message_type": "INSRPT",
-  "release": "1.1a",
-  "source_document": "INSRPT AHB, wire release 1.1a (Stand 01.01.2026)",
-  "pruefidentifikatoren": [
+  "ahb_version": "1.1g",
+  "anwendungsfaelle": [
     {
-      "code": 23001,
-      "name": "WiM / Störungsmeldung vom LF/NB/MSB an MSB",
-      "segment_rules": [
+      "chapter": "4.1 Anwendungsfälle: Störungsmeldung, Ablehnung bzw. Bestätigung der Störungsmeldung",
+      "communication": "LF/NB/MSB",
+      "elements": [
         {
-          "tag": "BGM",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DOC",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "INSRPT",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DTM",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "LIN",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "10A",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "LOC",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "NAD",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "1.1a",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "RFF",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "1001",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "4",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "STS",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "1004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "FTX",
-          "requirement": "O",
-          "conditional_rules": []
+          "de": "2005",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG 1.1a (no AHB constraint for PID 23001)"
+          "de": "2380",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X [931]"
+            }
+          ]
         },
         {
-          "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG 1.1a (no AHB constraint for PID 23001)"
+          "de": "2379",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00005",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "21",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00006",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "23001",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00009",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00009",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00009",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3139",
+          "nr": "00010",
+          "operands": [
+            {
+              "code": "IC",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3412",
+          "nr": "00010",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3148",
+          "nr": "00011",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3155",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "EM",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "FX",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "TE",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AJ",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AL",
+              "operand": "X [1P0..1]"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00012",
+          "operands": [
+            {
+              "code": "CC",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3139",
+          "nr": "00013",
+          "operands": [
+            {
+              "code": "IC",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3412",
+          "nr": "00013",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3148",
+          "nr": "00014",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3155",
+          "nr": "00014",
+          "operands": [
+            {
+              "code": "EM",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "FX",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "TE",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AJ",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AL",
+              "operand": "X [1P0..1]"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00015",
+          "operands": [
+            {
+              "operand": "X [908] [511]"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "163",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00017",
+          "operands": [
+            {
+              "operand": "X ([931] [495]) ⊻ ([495] ∧ [515])"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "102",
+              "operand": "X"
+            },
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "9015",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "Z06",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4405",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "Z11",
+              "operand": "X"
+            },
+            {
+              "code": "Z12",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00022",
+          "operands": [
+            {
+              "code": "ACD",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00022",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00023",
+          "operands": [
+            {
+              "code": "DP",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3227",
+          "nr": "00024",
+          "operands": [
+            {
+              "code": "172",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3225",
+          "nr": "00024",
+          "operands": [
+            {
+              "operand": "X [951] [509]"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00026",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00026",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         }
       ],
-      "group_rules": [
+      "name": "Störungsmeldung an MSB",
+      "pid": 23001,
+      "rows": [
         {
-          "group_id": "SG7",
-          "tag": "DTM",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "Z06",
-              "when_additional_elements": [
-                {
-                  "element_index": 1,
-                  "value": "Z10"
-                }
-              ],
-              "then_requirement": "M",
-              "then_qualifier_index": 0,
-              "then_qualifier_value": "164",
-              "_description": "[8] Wenn SG7 STS+Z06+Z10 vorhanden, DTM 164 (Verarbeitung Endedatum) ist Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG7",
-          "tag": "FTX",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "Z06",
-              "when_additional_elements": [
-                {
-                  "element_index": 1,
-                  "value": "Z10"
-                },
-                {
-                  "element_index": 2,
-                  "value": "ZC1"
-                }
-              ],
-              "then_requirement": "M",
-              "_description": "[2] Wenn SG7 STS+Z06+Z10+ZC1 (Ablehnung wegen bestimmter Ursache) vorhanden, ist FTX (AAO Fehlerbeschreibung) Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG8",
-          "tag": "LOC",
-          "requirement": "O",
-          "_description": "MIG: LOC is mandatory in SG8 per MIG 0.2a; AHB requirement unverified - O for safety"
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG6",
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "MIG: COM in SG6 (CTA) marked mandatory; AHB req unverified - O for safety"
+          "before": "00004",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00005",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00005",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00006",
+          "group": "SG3",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00007",
+          "group": "SG4",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00007",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00009",
+          "group": "SG5",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00009",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00010",
+          "group": "SG6",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00010",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00011",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00012",
+          "group": "SG5",
+          "status": [
+            "Soll [1]"
+          ]
+        },
+        {
+          "nr": "00012",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00013",
+          "group": "SG6",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00013",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00014",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00015",
+          "group": "SG7",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00015",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00017",
+          "status": [
+            "Kann"
+          ]
+        },
+        {
+          "nr": "00020",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00022",
+          "status": [
+            "Kann"
+          ]
+        },
+        {
+          "before": "00023",
+          "group": "SG8",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00023",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00024",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00026",
+          "status": [
+            "Muss"
+          ]
         }
       ]
     },
     {
-      "code": 23003,
-      "name": "WiM / Ablehnung vom MSB an LF/NB/MSB",
-      "segment_rules": [
+      "chapter": "4.1 Anwendungsfälle: Störungsmeldung, Ablehnung bzw. Bestätigung der Störungsmeldung",
+      "communication": "MSB an",
+      "elements": [
         {
-          "tag": "BGM",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DOC",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "INSRPT",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DTM",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "LIN",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "10A",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "LOC",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "NAD",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "1.1a",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "RFF",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "1001",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "4",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "STS",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "1004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "FTX",
-          "requirement": "O",
-          "conditional_rules": []
+          "de": "2005",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG 1.1a (no AHB constraint for PID 23003)"
+          "de": "2380",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X [931]"
+            }
+          ]
         },
         {
-          "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG 1.1a (no AHB constraint for PID 23003)"
+          "de": "2379",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00005",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "22",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00006",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "23003",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00008",
+          "operands": [
+            {
+              "code": "AAV",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00008",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00015",
+          "operands": [
+            {
+              "operand": "X [908] [511]"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "163",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00017",
+          "operands": [
+            {
+              "operand": "X ([931] [495]) ⊻ ([495] ∧ [515])"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "102",
+              "operand": "X"
+            },
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "9015",
+          "nr": "00021",
+          "operands": [
+            {
+              "code": "E01",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "9013",
+          "nr": "00021",
+          "operands": [
+            {
+              "code": "Z29",
+              "operand": "X"
+            },
+            {
+              "code": "ZB8",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00023",
+          "operands": [
+            {
+              "code": "DP",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3227",
+          "nr": "00024",
+          "operands": [
+            {
+              "code": "172",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3225",
+          "nr": "00024",
+          "operands": [
+            {
+              "operand": "X [951] [509]"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00026",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00026",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         }
       ],
-      "group_rules": [
+      "name": "Ablehnung LF/NB/MSB",
+      "pid": 23003,
+      "rows": [
         {
-          "group_id": "SG7",
-          "tag": "DTM",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "Z06",
-              "when_additional_elements": [
-                {
-                  "element_index": 1,
-                  "value": "Z10"
-                }
-              ],
-              "then_requirement": "M",
-              "then_qualifier_index": 0,
-              "then_qualifier_value": "164",
-              "_description": "[8] Wenn SG7 STS+Z06+Z10 vorhanden, DTM 164 (Verarbeitung Endedatum) ist Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG7",
-          "tag": "FTX",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "Z06",
-              "when_additional_elements": [
-                {
-                  "element_index": 1,
-                  "value": "Z10"
-                },
-                {
-                  "element_index": 2,
-                  "value": "ZC1"
-                }
-              ],
-              "then_requirement": "M",
-              "_description": "[2] Wenn SG7 STS+Z06+Z10+ZC1 (Ablehnung wegen bestimmter Ursache) vorhanden, ist FTX (AAO Fehlerbeschreibung) Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG8",
-          "tag": "LOC",
-          "requirement": "O",
-          "_description": "MIG: LOC is mandatory in SG8 per MIG 0.2a; AHB requirement unverified - O for safety"
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG6",
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "MIG: COM in SG6 (CTA) marked mandatory; AHB req unverified - O for safety"
+          "before": "00004",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00005",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00005",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00006",
+          "group": "SG3",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00007",
+          "group": "SG4",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00007",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00008",
+          "group": "SG4",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00008",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00015",
+          "group": "SG7",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00015",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00017",
+          "status": [
+            "Kann"
+          ]
+        },
+        {
+          "nr": "00021",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00023",
+          "group": "SG8",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00023",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00024",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00026",
+          "status": [
+            "Muss"
+          ]
         }
       ]
     },
     {
-      "code": 23004,
-      "name": "WiM / Bestätigung vom MSB an LF/NB/MSB",
-      "segment_rules": [
+      "chapter": "4.1 Anwendungsfälle: Störungsmeldung, Ablehnung bzw. Bestätigung der Störungsmeldung",
+      "communication": "MSB an",
+      "elements": [
         {
-          "tag": "BGM",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DOC",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "INSRPT",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DTM",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "LIN",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "10A",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "LOC",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "NAD",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "1.1a",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "RFF",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "1001",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "4",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "STS",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "1004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "FTX",
-          "requirement": "O",
-          "conditional_rules": []
+          "de": "2005",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG 1.1a (no AHB constraint for PID 23004)"
+          "de": "2380",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X [931]"
+            }
+          ]
         },
         {
-          "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG 1.1a (no AHB constraint for PID 23004)"
+          "de": "2379",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00005",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "22",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00006",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "23004",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00008",
+          "operands": [
+            {
+              "code": "AAV",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00008",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00015",
+          "operands": [
+            {
+              "operand": "X [908] [511]"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "163",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00017",
+          "operands": [
+            {
+              "operand": "X ([931] [495]) ⊻ ([495] ∧ [515])"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "102",
+              "operand": "X"
+            },
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00019",
+          "operands": [
+            {
+              "code": "292",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00019",
+          "operands": [
+            {
+              "operand": "X [931] [13]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00019",
+          "operands": [
+            {
+              "code": "102",
+              "operand": "X"
+            },
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "9015",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "Z06",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4405",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "Z10",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "9015",
+          "nr": "00021",
+          "operands": [
+            {
+              "code": "E01",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "9013",
+          "nr": "00021",
+          "operands": [
+            {
+              "code": "E15",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00022",
+          "operands": [
+            {
+              "code": "AAO",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00022",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00023",
+          "operands": [
+            {
+              "code": "DP",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3227",
+          "nr": "00024",
+          "operands": [
+            {
+              "code": "172",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3225",
+          "nr": "00024",
+          "operands": [
+            {
+              "operand": "X [951] [509]"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00026",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00026",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         }
       ],
-      "group_rules": [
+      "name": "Bestätigung LF/NB/MSB",
+      "pid": 23004,
+      "rows": [
         {
-          "group_id": "SG7",
-          "tag": "DTM",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "Z06",
-              "when_additional_elements": [
-                {
-                  "element_index": 1,
-                  "value": "Z10"
-                }
-              ],
-              "then_requirement": "M",
-              "then_qualifier_index": 0,
-              "then_qualifier_value": "164",
-              "_description": "[8] Wenn SG7 STS+Z06+Z10 vorhanden, DTM 164 (Verarbeitung Endedatum) ist Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG7",
-          "tag": "FTX",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "Z06",
-              "when_additional_elements": [
-                {
-                  "element_index": 1,
-                  "value": "Z10"
-                },
-                {
-                  "element_index": 2,
-                  "value": "ZC1"
-                }
-              ],
-              "then_requirement": "M",
-              "_description": "[2] Wenn SG7 STS+Z06+Z10+ZC1 (Ablehnung wegen bestimmter Ursache) vorhanden, ist FTX (AAO Fehlerbeschreibung) Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG8",
-          "tag": "LOC",
-          "requirement": "O",
-          "_description": "MIG: LOC is mandatory in SG8 per MIG 0.2a; AHB requirement unverified - O for safety"
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG6",
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "MIG: COM in SG6 (CTA) marked mandatory; AHB req unverified - O for safety"
+          "before": "00004",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00005",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00005",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00006",
+          "group": "SG3",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00007",
+          "group": "SG4",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00007",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00008",
+          "group": "SG4",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00008",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00015",
+          "group": "SG7",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00015",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00017",
+          "status": [
+            "Kann"
+          ]
+        },
+        {
+          "nr": "00019",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00020",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00021",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00022",
+          "status": [
+            "Kann"
+          ]
+        },
+        {
+          "before": "00023",
+          "group": "SG8",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00023",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00024",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00026",
+          "status": [
+            "Muss"
+          ]
         }
       ]
     },
     {
-      "code": 23005,
-      "name": "WiM / Informationsmeldung (Störungsmeldung) vom MSB an NB/MSB",
-      "segment_rules": [
+      "chapter": "4.1 Anwendungsfälle: Störungsmeldung, Ablehnung bzw. Bestätigung der Störungsmeldung",
+      "communication": "MSB an",
+      "elements": [
         {
-          "tag": "BGM",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DOC",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "INSRPT",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DTM",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "LIN",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "10A",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "LOC",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "NAD",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "1.1a",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "RFF",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "1001",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "4",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "STS",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "1004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "FTX",
-          "requirement": "O",
-          "conditional_rules": []
+          "de": "2005",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG 1.1a (no AHB constraint for PID 23005)"
+          "de": "2380",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X [931]"
+            }
+          ]
         },
         {
-          "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG 1.1a (no AHB constraint for PID 23005)"
+          "de": "2379",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00005",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00006",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "23008",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00008",
+          "operands": [
+            {
+              "code": "TN",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00008",
+          "operands": [
+            {
+              "operand": "X [500]"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00015",
+          "operands": [
+            {
+              "operand": "X [908] [511]"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00016",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00016",
+          "operands": [
+            {
+              "operand": "X ([931] [495]) ⊻ ([495] ∧ [515])"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00016",
+          "operands": [
+            {
+              "code": "102",
+              "operand": "X"
+            },
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "163",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00017",
+          "operands": [
+            {
+              "operand": "X ([931] [495]) ⊻ ([495] ∧ [515])"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "102",
+              "operand": "X"
+            },
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00018",
+          "operands": [
+            {
+              "code": "164",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00018",
+          "operands": [
+            {
+              "operand": "X ([931] [495]) ⊻ ([495] ∧ [515])"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00018",
+          "operands": [
+            {
+              "code": "102",
+              "operand": "X"
+            },
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "9015",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "Z06",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4405",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "Z09",
+              "operand": "X ([2P1..1] ⊻ [3P1..1])"
+            },
+            {
+              "code": "Z10",
+              "operand": "X ([3P1..1] ⊻ [4P1..1])"
+            }
+          ]
+        },
+        {
+          "de": "9013",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "Z75",
+              "operand": "X [11]"
+            },
+            {
+              "code": "Z78",
+              "operand": "X ([10] ∧ [12])"
+            },
+            {
+              "code": "Z81",
+              "operand": "X [11]"
+            },
+            {
+              "code": "ZB8",
+              "operand": "X ([10] ∧"
+            },
+            {
+              "code": "ZC1",
+              "operand": "X ([11] ∧ [507])"
+            },
+            {
+              "code": "ZS1",
+              "operand": "X ([10] ∧"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00022",
+          "operands": [
+            {
+              "code": "AAO",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00022",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00023",
+          "operands": [
+            {
+              "code": "DP",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3227",
+          "nr": "00024",
+          "operands": [
+            {
+              "code": "172",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3225",
+          "nr": "00024",
+          "operands": [
+            {
+              "operand": "X [951] [509]"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00026",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00026",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         }
       ],
-      "group_rules": [
+      "name": "Ergebnisbericht LF/NB/MSB",
+      "pid": 23008,
+      "rows": [
         {
-          "group_id": "SG7",
-          "tag": "FTX",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "Z06",
-              "when_additional_elements": [
-                {
-                  "element_index": 1,
-                  "value": "Z10"
-                },
-                {
-                  "element_index": 2,
-                  "value": "ZC1"
-                }
-              ],
-              "then_requirement": "M",
-              "_description": "[2] Wenn SG7 STS+Z06+Z10+ZC1 (Ablehnung wegen bestimmter Ursache) vorhanden, ist FTX (AAO Fehlerbeschreibung) Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG8",
-          "tag": "LOC",
-          "requirement": "O",
-          "_description": "MIG: LOC is mandatory in SG8 per MIG 0.2a; AHB requirement unverified - O for safety"
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG6",
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "MIG: COM in SG6 (CTA) marked mandatory; AHB req unverified - O for safety"
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00004",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00005",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00005",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00006",
+          "group": "SG3",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00007",
+          "group": "SG4",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00007",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00008",
+          "group": "SG4",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00008",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00015",
+          "group": "SG7",
+          "status": [
+            "Muss ([512] ⊻ [513] ⊻ [514])"
+          ]
+        },
+        {
+          "nr": "00015",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00016",
+          "status": [
+            "Soll [6] ⊻ [9]"
+          ]
+        },
+        {
+          "nr": "00017",
+          "status": [
+            "Muss [7]"
+          ]
+        },
+        {
+          "nr": "00018",
+          "status": [
+            "Muss [8]"
+          ]
+        },
+        {
+          "nr": "00020",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00022",
+          "status": [
+            "Muss [2]"
+          ]
+        },
+        {
+          "before": "00023",
+          "group": "SG8",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00023",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00024",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00026",
+          "status": [
+            "Muss"
+          ]
         }
       ]
     },
     {
-      "code": 23008,
-      "name": "WiM / Ergebnisbericht vom MSB an LF/NB/MSB",
-      "segment_rules": [
+      "chapter": "4.2 Anwendungsfälle: Informationsmeldungen des MSB (Sparten Gas und Strom)",
+      "communication": "MSB an NB",
+      "elements": [
         {
-          "tag": "BGM",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "COM",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "INSRPT",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "CTA",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DOC",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "10A",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DTM",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "LIN",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "1.1a",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "LOC",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "1001",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "4",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "NAD",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "1004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "RFF",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "2005",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "STS",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "2380",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X [931] [494]"
+            }
+          ]
         },
         {
-          "tag": "FTX",
-          "requirement": "O",
-          "conditional_rules": []
+          "de": "2379",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00005",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "23",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00006",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "23005",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00015",
+          "operands": [
+            {
+              "operand": "X [908] [511]"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "163",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00017",
+          "operands": [
+            {
+              "operand": "X ([931] [13] ∧ [515])"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "102",
+              "operand": "X"
+            },
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00019",
+          "operands": [
+            {
+              "code": "292",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00019",
+          "operands": [
+            {
+              "operand": "X [931] [13]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00019",
+          "operands": [
+            {
+              "code": "102",
+              "operand": "X"
+            },
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "9015",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "Z06",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4405",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "Z10",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00022",
+          "operands": [
+            {
+              "code": "AAO",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00022",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00023",
+          "operands": [
+            {
+              "code": "DP",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3227",
+          "nr": "00024",
+          "operands": [
+            {
+              "code": "172",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3225",
+          "nr": "00024",
+          "operands": [
+            {
+              "operand": "X [951] [509]"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00026",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00026",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         }
       ],
-      "group_rules": [
+      "name": "Informationsmeldung (Gas)/MSB (Strom)",
+      "pid": 23005,
+      "rows": [
         {
-          "group_id": "SG7",
-          "tag": "DTM",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "Z06",
-              "when_additional_elements": [
-                {
-                  "element_index": 1,
-                  "value": "Z10"
-                }
-              ],
-              "then_requirement": "M",
-              "then_qualifier_index": 0,
-              "then_qualifier_value": "164",
-              "_description": "[8] Wenn SG7 STS+Z06+Z10 vorhanden, DTM 164 (Verarbeitung Endedatum) ist Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG7",
-          "tag": "FTX",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "Z06",
-              "when_additional_elements": [
-                {
-                  "element_index": 1,
-                  "value": "Z10"
-                },
-                {
-                  "element_index": 2,
-                  "value": "ZC1"
-                }
-              ],
-              "then_requirement": "M",
-              "_description": "[2] Wenn SG7 STS+Z06+Z10+ZC1 (Ablehnung wegen bestimmter Ursache) vorhanden, ist FTX (AAO Fehlerbeschreibung) Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG8",
-          "tag": "LOC",
-          "requirement": "O",
-          "_description": "MIG: LOC is mandatory in SG8 per MIG 0.2a; AHB requirement unverified - O for safety"
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG6",
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "MIG: COM in SG6 (CTA) marked mandatory; AHB req unverified - O for safety"
+          "before": "00004",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00005",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00005",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00006",
+          "group": "SG3",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00007",
+          "group": "SG4",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00007",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00015",
+          "group": "SG7",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00015",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00017",
+          "status": [
+            "Kann"
+          ]
+        },
+        {
+          "nr": "00019",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00020",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00022",
+          "status": [
+            "Kann"
+          ]
+        },
+        {
+          "before": "00023",
+          "group": "SG8",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00023",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00024",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00026",
+          "status": [
+            "Muss"
+          ]
         }
       ]
     },
     {
-      "code": 23009,
-      "name": "WiM / Informationsmeldung (Störungsbehebung) vom MSB an NB/MSB",
-      "segment_rules": [
+      "chapter": "4.2 Anwendungsfälle: Informationsmeldungen des MSB (Sparten Gas und Strom)",
+      "communication": "MSB an NB",
+      "elements": [
         {
-          "tag": "BGM",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DOC",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "INSRPT",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DTM",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "LIN",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "10A",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "LOC",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "NAD",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "1.1a",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "RFF",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "1001",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "4",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "STS",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "1004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "FTX",
-          "requirement": "O",
-          "conditional_rules": []
+          "de": "2005",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG 1.1a (no AHB constraint for PID 23009)"
+          "de": "2380",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X [931] [494]"
+            }
+          ]
         },
         {
-          "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG 1.1a (no AHB constraint for PID 23009)"
+          "de": "2379",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00005",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00006",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "23009",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00008",
+          "operands": [
+            {
+              "code": "TN",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00008",
+          "operands": [
+            {
+              "operand": "X [508]"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00015",
+          "operands": [
+            {
+              "operand": "X [908] [511]"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00016",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00016",
+          "operands": [
+            {
+              "operand": "X ([931] [13] ∧ [515])"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00016",
+          "operands": [
+            {
+              "code": "102",
+              "operand": "X"
+            },
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "163",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00017",
+          "operands": [
+            {
+              "operand": "X ([931] [13] ∧ [515])"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "102",
+              "operand": "X"
+            },
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00018",
+          "operands": [
+            {
+              "code": "164",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00018",
+          "operands": [
+            {
+              "operand": "X ([931] [13] ∧ [515])"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00018",
+          "operands": [
+            {
+              "code": "102",
+              "operand": "X"
+            },
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "9015",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "Z06",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4405",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "Z09",
+              "operand": "X"
+            },
+            {
+              "code": "Z10",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "9013",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "Z75",
+              "operand": "X"
+            },
+            {
+              "code": "Z78",
+              "operand": "X"
+            },
+            {
+              "code": "Z81",
+              "operand": "X"
+            },
+            {
+              "code": "ZB8",
+              "operand": "X"
+            },
+            {
+              "code": "ZC1",
+              "operand": "X [506] ∧ [507]"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00022",
+          "operands": [
+            {
+              "code": "AAO",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00022",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00023",
+          "operands": [
+            {
+              "code": "DP",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3227",
+          "nr": "00024",
+          "operands": [
+            {
+              "code": "172",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3225",
+          "nr": "00024",
+          "operands": [
+            {
+              "operand": "X [951] [509]"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00026",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00026",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         }
       ],
-      "group_rules": [
+      "name": "Informationsmeldung (Gas)/MSB (Strom)",
+      "pid": 23009,
+      "rows": [
         {
-          "group_id": "SG7",
-          "tag": "FTX",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "Z06",
-              "when_additional_elements": [
-                {
-                  "element_index": 1,
-                  "value": "Z10"
-                },
-                {
-                  "element_index": 2,
-                  "value": "ZC1"
-                }
-              ],
-              "then_requirement": "M",
-              "_description": "[2] Wenn SG7 STS+Z06+Z10+ZC1 (Ablehnung wegen bestimmter Ursache) vorhanden, ist FTX (AAO Fehlerbeschreibung) Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG8",
-          "tag": "LOC",
-          "requirement": "O",
-          "_description": "MIG: LOC is mandatory in SG8 per MIG 0.2a; AHB requirement unverified - O for safety"
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG6",
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "MIG: COM in SG6 (CTA) marked mandatory; AHB req unverified - O for safety"
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00004",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00005",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00005",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00006",
+          "group": "SG3",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00007",
+          "group": "SG4",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00007",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00008",
+          "group": "SG4",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00008",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00015",
+          "group": "SG7",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00015",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00016",
+          "status": [
+            "Soll [3]"
+          ]
+        },
+        {
+          "nr": "00017",
+          "status": [
+            "Kann"
+          ]
+        },
+        {
+          "nr": "00018",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00020",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00022",
+          "status": [
+            "Muss [2]"
+          ]
+        },
+        {
+          "before": "00023",
+          "group": "SG8",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00023",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00024",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00026",
+          "status": [
+            "Muss"
+          ]
         }
       ]
     },
     {
-      "code": 23011,
-      "name": "WiM / Informationsmeldung (Störungsmeldung) vom MSB der MaLo",
-      "segment_rules": [
+      "chapter": "4.3 Anwendungsfälle: Informationsmeldungen des MSB in der Sparte Strom",
+      "communication": "MSB an",
+      "elements": [
         {
-          "tag": "BGM",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DOC",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "INSRPT",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DTM",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "LIN",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "10A",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "LOC",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "NAD",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "1.1a",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "RFF",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "1001",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "4",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "STS",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "1004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "FTX",
-          "requirement": "O",
-          "conditional_rules": []
+          "de": "2005",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG 1.1a (no AHB constraint for PID 23011)"
+          "de": "2380",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X [931] [494]"
+            }
+          ]
         },
         {
-          "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG 1.1a (no AHB constraint for PID 23011)"
+          "de": "2379",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X [14]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00005",
+          "operands": [
+            {
+              "operand": "X [14]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "23",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00006",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "23011",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00015",
+          "operands": [
+            {
+              "operand": "X [908] [511]"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "163",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00017",
+          "operands": [
+            {
+              "operand": "X ([931] [13] ∧ [515])"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "102",
+              "operand": "X"
+            },
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00019",
+          "operands": [
+            {
+              "code": "292",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00019",
+          "operands": [
+            {
+              "operand": "X [931] [13]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00019",
+          "operands": [
+            {
+              "code": "102",
+              "operand": "X"
+            },
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "9015",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "Z06",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4405",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "Z10",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00022",
+          "operands": [
+            {
+              "code": "AAO",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00022",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00023",
+          "operands": [
+            {
+              "code": "DP",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3227",
+          "nr": "00024",
+          "operands": [
+            {
+              "code": "172",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3225",
+          "nr": "00024",
+          "operands": [
+            {
+              "operand": "X [950] [510]"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00025",
+          "operands": [
+            {
+              "code": "Z21",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00025",
+          "operands": [
+            {
+              "operand": "X [951] [509]"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00026",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00026",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         }
       ],
-      "group_rules": [
+      "name": "Informationsmeldung NB/LF/ÜNB",
+      "pid": 23011,
+      "rows": [
         {
-          "group_id": "SG7",
-          "tag": "DTM",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "Z06",
-              "when_additional_elements": [
-                {
-                  "element_index": 1,
-                  "value": "Z10"
-                }
-              ],
-              "then_requirement": "M",
-              "then_qualifier_index": 0,
-              "then_qualifier_value": "164",
-              "_description": "[8] Wenn SG7 STS+Z06+Z10 vorhanden, DTM 164 (Verarbeitung Endedatum) ist Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG7",
-          "tag": "FTX",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "Z06",
-              "when_additional_elements": [
-                {
-                  "element_index": 1,
-                  "value": "Z10"
-                },
-                {
-                  "element_index": 2,
-                  "value": "ZC1"
-                }
-              ],
-              "then_requirement": "M",
-              "_description": "[2] Wenn SG7 STS+Z06+Z10+ZC1 (Ablehnung wegen bestimmter Ursache) vorhanden, ist FTX (AAO Fehlerbeschreibung) Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG8",
-          "tag": "LOC",
-          "requirement": "O",
-          "_description": "MIG: LOC is mandatory in SG8 per MIG 0.2a; AHB requirement unverified - O for safety"
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG6",
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "MIG: COM in SG6 (CTA) marked mandatory; AHB req unverified - O for safety"
+          "before": "00004",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00005",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00005",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00006",
+          "group": "SG3",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00007",
+          "group": "SG4",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00007",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00015",
+          "group": "SG7",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00015",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00017",
+          "status": [
+            "Kann"
+          ]
+        },
+        {
+          "nr": "00019",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00020",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00022",
+          "status": [
+            "Kann"
+          ]
+        },
+        {
+          "before": "00023",
+          "group": "SG8",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00023",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00024",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00025",
+          "status": [
+            "Muss [4] ⊻ [5]"
+          ]
+        },
+        {
+          "nr": "00026",
+          "status": [
+            "Muss"
+          ]
         }
       ]
     },
     {
-      "code": 23012,
-      "name": "WiM / Informationsmeldung (Störungsbehebung) vom MSB der MaLo",
-      "segment_rules": [
+      "chapter": "4.3 Anwendungsfälle: Informationsmeldungen des MSB in der Sparte Strom",
+      "communication": "MSB an",
+      "elements": [
         {
-          "tag": "BGM",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DOC",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "INSRPT",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DTM",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "LIN",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "10A",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "LOC",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "NAD",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "1.1a",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "RFF",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "1001",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "4",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "STS",
-          "requirement": "M",
-          "conditional_rules": []
+          "de": "1004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "FTX",
-          "requirement": "O",
-          "conditional_rules": []
+          "de": "2005",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG 1.1a (no AHB constraint for PID 23012)"
+          "de": "2380",
+          "nr": "00003",
+          "operands": [
+            {
+              "operand": "X [931] [494]"
+            }
+          ]
         },
         {
-          "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG 1.1a (no AHB constraint for PID 23012)"
+          "de": "2379",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X [14]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00005",
+          "operands": [
+            {
+              "operand": "X [14]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "23",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00006",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "23012",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00008",
+          "operands": [
+            {
+              "code": "TN",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00008",
+          "operands": [
+            {
+              "operand": "X [508]"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00015",
+          "operands": [
+            {
+              "operand": "X [908] [511]"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00016",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00016",
+          "operands": [
+            {
+              "operand": "X ([931] [13] ∧ [515])"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00016",
+          "operands": [
+            {
+              "code": "102",
+              "operand": "X"
+            },
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "163",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00017",
+          "operands": [
+            {
+              "operand": "X ([931] [13] ∧ [515])"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00017",
+          "operands": [
+            {
+              "code": "102",
+              "operand": "X"
+            },
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2005",
+          "nr": "00018",
+          "operands": [
+            {
+              "code": "164",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00018",
+          "operands": [
+            {
+              "operand": "X ([931] [13] ∧ [515])"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00018",
+          "operands": [
+            {
+              "code": "102",
+              "operand": "X"
+            },
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "9015",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "Z06",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4405",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "Z09",
+              "operand": "X"
+            },
+            {
+              "code": "Z10",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "9013",
+          "nr": "00020",
+          "operands": [
+            {
+              "code": "Z75",
+              "operand": "X"
+            },
+            {
+              "code": "Z78",
+              "operand": "X"
+            },
+            {
+              "code": "Z81",
+              "operand": "X"
+            },
+            {
+              "code": "ZB8",
+              "operand": "X"
+            },
+            {
+              "code": "ZC1",
+              "operand": "X [506] ∧ [507]"
+            },
+            {
+              "code": "ZS1",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00022",
+          "operands": [
+            {
+              "code": "AAO",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00022",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00023",
+          "operands": [
+            {
+              "code": "DP",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3227",
+          "nr": "00024",
+          "operands": [
+            {
+              "code": "172",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3225",
+          "nr": "00024",
+          "operands": [
+            {
+              "operand": "X [950] [510]"
+            }
+          ]
+        },
+        {
+          "de": "1153",
+          "nr": "00025",
+          "operands": [
+            {
+              "code": "Z21",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00025",
+          "operands": [
+            {
+              "operand": "X [951] [509]"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00026",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00026",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         }
       ],
-      "group_rules": [
+      "name": "Informationsmeldung NB/LF/ÜNB",
+      "pid": 23012,
+      "rows": [
         {
-          "group_id": "SG7",
-          "tag": "DTM",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "Z06",
-              "when_additional_elements": [
-                {
-                  "element_index": 1,
-                  "value": "Z10"
-                }
-              ],
-              "then_requirement": "M",
-              "then_qualifier_index": 0,
-              "then_qualifier_value": "164",
-              "_description": "[8] Wenn SG7 STS+Z06+Z10 vorhanden, DTM 164 (Verarbeitung Endedatum) ist Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG7",
-          "tag": "FTX",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "Z06",
-              "when_additional_elements": [
-                {
-                  "element_index": 1,
-                  "value": "Z10"
-                },
-                {
-                  "element_index": 2,
-                  "value": "ZC1"
-                }
-              ],
-              "then_requirement": "M",
-              "_description": "[2] Wenn SG7 STS+Z06+Z10+ZC1 (Ablehnung wegen bestimmter Ursache) vorhanden, ist FTX (AAO Fehlerbeschreibung) Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG8",
-          "tag": "LOC",
-          "requirement": "O",
-          "_description": "MIG: LOC is mandatory in SG8 per MIG 0.2a; AHB requirement unverified - O for safety"
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
         },
         {
-          "group_id": "SG6",
-          "tag": "COM",
-          "requirement": "O",
-          "_description": "MIG: COM in SG6 (CTA) marked mandatory; AHB req unverified - O for safety"
+          "before": "00004",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00005",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00005",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00006",
+          "group": "SG3",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00007",
+          "group": "SG4",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00007",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00008",
+          "group": "SG4",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00008",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00015",
+          "group": "SG7",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00015",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00016",
+          "status": [
+            "Soll [3]"
+          ]
+        },
+        {
+          "nr": "00017",
+          "status": [
+            "Kann"
+          ]
+        },
+        {
+          "nr": "00018",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00020",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00022",
+          "status": [
+            "Muss [2]"
+          ]
+        },
+        {
+          "before": "00023",
+          "group": "SG8",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00023",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00024",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00025",
+          "status": [
+            "Muss [4] ⊻ [5]"
+          ]
+        },
+        {
+          "nr": "00026",
+          "status": [
+            "Muss"
+          ]
         }
       ]
     }
   ],
-  "reviewed_by": "xtask/import-xml-ahb",
-  "reviewed_at": "2026-07-08"
+  "conditions": {
+    "1": "Wenn Nachrichtenabsender vom Kunden informiert wurde.",
+    "10": "Wenn in diesem STS DE4405 = Z09",
+    "11": "Wenn in diesem STS DE4405 = Z10",
+    "12": "Wenn eine Störung festgestellt wurde, die durch den MSB behoben wurde.",
+    "13": "Wenn DE2379 = 303",
+    "14": "Nur MP-ID aus Sparte",
+    "2": "Wenn SG7 STS+Z06+Z10+ZC1 vorhanden.",
+    "3": "Wenn vorhanden.",
+    "4": "Wenn MP-ID in SG2 NAD+MR in der Rolle NB",
+    "494": "Das hier genannte Datum muss der Zeitpunkt sein, zu dem das Dokument erstellt wurde, oder ein Zeitpunkt, der davor liegt",
+    "495": "Der Zeitpunkt muss ≤ dem Wert im DE2380 des DTM+137 sein",
+    "5": "Wenn MP-ID in SG2 NAD+MR in der Rolle LF",
+    "500": "Hinweis: Vorgangsnummer (DOC DE1004) aus Prozessschritt 4b „Bestätigung der Störungsmeldung“ (Gas) bzw. Prozessschritt 2 „Antwort“ (Strom).",
+    "506": "Hinweis: Zu nutzen, wenn Behebung der Störung durch den MSB selbständig und unverschuldet nicht möglich ist.",
+    "507": "Hinweis: In SG7 FTX+AAO ist anzugeben, was die übergeordnete Ursache ist, aufgrund derer der MSB nicht in der Lage ist die Störung zu beheben.",
+    "508": "Hinweis: Vorgangsnummer aus DOC DE1004.",
+    "509": "Hinweis: Verwendung der ID der Messlokation",
+    "510": "Hinweis: Verwendung der ID der Marktlokation",
+    "511": "Hinweis: Die Nummerierung beginnt in jedem Dokument bei 1",
+    "512": "Hinweis: Wurde eine Störung festgestellt und durch den MSB behoben, ist die Segmentgruppe mit demselben Meldepunkt zweimal anzugeben",
+    "513": "Hinweis: Wurde keine Störung festgestellt, ist die Segmentgruppe genau einmal anzugeben",
+    "514": "Hinweis: Wurde eine Störung festgestellt, die nicht durch den MSB behoben werden konnte, ist die Segmentgruppe genau einmal anzugeben",
+    "515": "Hinweis: \"≤ dem Wert im DE2380 des DTM+137\" bedeutet, dass der dort genannte Tag ≥ dem in diesem DTM genannten Tag sein muss, wenn in DE2379 der Code 102 steht.",
+    "6": "Wenn keine Störung festgestellt werden konnte.",
+    "7": "Wenn keine weitere SG7 mit demselben Meldepunkt und DTM+9 vorhanden",
+    "8": "Wenn in dieser SG7 STS+Z06+Z10 vorhanden",
+    "9": "Wenn eine Störung festgestellt wurde, die durch den MSB selbständig und unverschuldet nicht behoben werden konnte. 4 INSRPT-Anwendungsfall im WiM-Prozess „Störungsbehebung in der Messlokation“ Den Tabellen dieses Kapitels ist zu entnehmen, wie die INSRPT in den jeweiligen Anwendungsfällen prinzipiell auszuprägen ist. Falls sich im Rahmen der Prüfung (in Prozessschritt 3 der WiM Gas Kap. C 2.3) der Verdacht des Störungsmelders bestätigt: › Prozessschritt 5 (Prüfidentifikator 23005) erfolgt nur, wenn NB nicht Melder der Störung ist (in diesem Fall wird der NB mittels Prozessschritt 4b (Prüfidentifikator 23004) über die Störung informiert). › Prozessschritt 8 (Prüfidentifikator 23009) erfolgt nur, wenn NB nicht Melder der Störung ist (in diesem Fall wird NB mittels Prozessschritt 7 (Prüfidentifikator 23008) über die Störung informiert).",
+    "908": "Format: Mögliche Werte: 1 bis n",
+    "931": "Format: ZZZ = +00",
+    "950": "Format: Marktlokations- ID",
+    "951": "Format: Zählpunktbezeichnung"
+  },
+  "message_type": "INSRPT",
+  "packages": {
+    "1P": "--                                                  Hinweis:       Das    ist  das   Standardpaket,             wenn      keine     Bedingung         zum     Tragen       kommt,        z. B.",
+    "2P": "[6]                                                 Wenn       keine     Störung       festgestellt       werden        konnte.",
+    "3P": "[12]                                                Wenn       eine    Störung       festgestellt       wurde,       die   durch     den     MSB     behoben         wurde.",
+    "4P": "[9]                                                 Wenn       eine    Störung       festgestellt       wurde,       die   durch     den     MSB     selbständig         und"
+  },
+  "release": "1.1a",
+  "schema_version": 2,
+  "source": {
+    "file": "INSRPT_AHB_1.1g_-_ausserordentliche_Veroeffentlichung_Stand_11.12.2025.pdf",
+    "sha256": "1f770b7bdfc3c7c2c5d2c9564df018f3ea66733a131a6e17754f389be986eee2",
+    "title": "INSRPT AHB 1.1g - außerordentliche Veröffentlichung Stand: 11.12.2025"
+  }
 }

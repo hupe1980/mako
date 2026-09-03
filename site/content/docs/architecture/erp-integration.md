@@ -399,6 +399,9 @@ BO4E-typed JSON object. Deserialise using the ERP's own BO4E library.
 | `de.mako.malo.identified` | MaLo-ID lookup resolved | `Marktlokation` |
 | `de.vpp.dispatch.confirmed` | WiM Steuerungsauftrag (PID 55168) positively confirmed by MSB — triggers VPP auto-billing in `billingd` | `{tx_id, location_id, max_power_kw, execution_time_from, execution_time_until, command_type, sender_mp_id, produkt_code}` |
 | `de.gabi.alocat.missing` | KoV §6.4 final-allocation window closed with no binding final ALOCAT — the gas day's imbalance cannot be settled; open a Clearingfall with the FNB/MGV | `{gas_day, deadline_label, sender_eic, receiver_eic, pruefidentifikator}` |
+| `de.gabi.nomination.curtailed` | The FNB/MGV confirmed less than was nominated — NOMRES states no status, so the shortfall shows up only as a reduced quantity; the portfolio is short until the BKV re-nominates or buys the gap | `{gas_day, nominated_kwh, confirmed_kwh, curtailed_kwh, sender_eic, receiver_eic, pruefidentifikator, nomination_ref}` |
+| `de.gabi.nomination.rejected` | The FNB/MGV refused the nomination; nothing flows on it | `{gas_day, reason, nominated_kwh, sender_eic, receiver_eic, pruefidentifikator, nomination_ref}` |
+| `de.gabi.nomres.missing` | The KoV NOMRES window closed unanswered, so the nomination's status is unknown at gas-day start | `{gas_day, deadline_label, sender_eic, receiver_eic, pruefidentifikator, nomination_ref}` |
 
 **Full example:**
 

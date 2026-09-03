@@ -280,8 +280,12 @@ pub(super) mod common {
             }
         }
 
-        if let (Some((start_val, start_span)), Some((end_val, _))) = (start, end) {
-            if !start_val.is_empty() && !end_val.is_empty() && start_val > end_val {
+        if let (Some((start_val, start_span)), Some((end_val, _))) = (start, end)
+            && !start_val.is_empty()
+            && !end_val.is_empty()
+            && start_val > end_val
+        {
+            {
                 issues.push(
                     edifact_rs::ValidationIssue::new(
                         edifact_rs::ValidationSeverity::Error,

@@ -184,10 +184,15 @@ impl EdifactIngestDispatcher {
                 let cmd = adapters::gabi_gas_nomination_registry().dispatch(raw, &fv)?;
                 let due_at = match &cmd {
                     NominationCommand::SendNomination { gas_day, .. }
+                    | NominationCommand::ReceiveNomint { gas_day, .. }
                     | NominationCommand::ReceiveNomres { gas_day, .. } => {
                         Some(gas_day.nomres_deadline_utc())
                     }
-                    NominationCommand::NomresDeadlineExpired { .. } => None,
+                    // Neither is built from an inbound message: the answer this
+                    // tenant sends and the fired deadline carry no gas day of
+                    // their own to register a window from.
+                    NominationCommand::SendNomres { .. }
+                    | NominationCommand::NomresDeadlineExpired { .. } => None,
                 };
                 let deadlines: Vec<(&'static str, OffsetDateTime)> = due_at
                     .map(|d| (mako_gabi_gas::nomination::NOMRES_DEADLINE_LABEL, d))
@@ -246,6 +251,29 @@ impl EdifactIngestDispatcher {
                     cmd.clone(),
                     &fv,
                     &[(mako_gabi_gas::FINAL_ALOCAT_DEADLINE_LABEL, final_due_at)],
+                )
+                .await
+            }
+            // ── Mehr-/Mindermengen — SSQNOT 70095/70096 ──────────────────────
+            //
+            // One-way from the NB to the MGV; the key is the published 2-Tupel
+            // (Netzkonto, Netzbetreiber) plus the Abrechnungszeitraum, so a
+            // later report for the same period resumes the process that holds
+            // the earlier one. No Frist binds the receiver.
+            "gabi-gas-mehr-mindermengen" => {
+                if !mako_gabi_gas::MEHR_MINDERMENGEN_PIDS.contains(&pid) {
+                    return Ok(IngestOutcome::Skipped {
+                        workflow_name: "gabi-gas-mehr-mindermengen",
+                        reason: "pid_not_in_dispatch_table",
+                    });
+                }
+                let cmd = adapters::gabi_gas_mehr_mindermengen_registry().dispatch(raw, &fv)?;
+                self.spawn_or_resume::<GaBiGasMehrMindermengenWorkflow>(
+                    &key,
+                    "gabi-gas-mehr-mindermengen",
+                    cmd,
+                    &fv,
+                    &[],
                 )
                 .await
             }

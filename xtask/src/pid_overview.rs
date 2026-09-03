@@ -4,9 +4,9 @@
 //! so it proves nothing was *lost* and is blind to a Prüfidentifikator that was
 //! never imported at all. This is the other direction, against the only
 //! statement of what exists: BDEW's *Anwendungsübersicht der
-//! Prüfidentifikatoren*. Where coverage is short, `ahb_rule_pack` answers a
-//! warning-only `unknown-pid` pack and `is_valid()` stays `true` in both
-//! directions, so the figure has to be computed rather than maintained by hand.
+//! Prüfidentifikatoren*. Where coverage is short, validation answers the
+//! `AHB-UNKNOWN-PID` warning and `is_valid()` stays `true`, so the figure has
+//! to be computed rather than maintained by hand.
 //!
 //! Two commands:
 //!
@@ -31,33 +31,23 @@ const REFERENCE_DOC: &str = "site/content/docs/regulatory/pid-reference.md";
 /// Raise it in the same commit that raises the coverage. It is deliberately not
 /// derived from the file it guards: a floor that recomputes itself ratchets
 /// downwards as happily as up.
-const COVERED_FLOOR: usize = 370;
+const COVERED_FLOOR: usize = 482;
+
+/// Published Prüfidentifikatoren a crate other than `edi-energy` carries.
+///
+/// The Anwendungsübersicht lists the two SSQNOT codes beside the BDEW ones,
+/// but SSQNOT is a DVGW Nachrichtenbeschreibung (5.7, an `ORDRSP` subset)
+/// parsed by `dvgw-edi`; `dvgw_edi::catalogue_for(Ssqnot)` is pinned to this
+/// list by the `mako-gabi-gas` tests.
+const CARRIED_BY_DVGW_EDI: &[&str] = &["70095", "70096"];
 
 /// Prüfidentifikatoren mako's profiles carry that the overview does not list,
 /// each with the reason it stays.
-const SHIPPED_NOT_PUBLISHED: &[(&str, &str)] = &[
-    (
-        "19115",
-        "Ablehnung Anforderung bilanzierte Menge — carried by the ORDRSP profile; \
-         confirm against the ORDRSP AHB and either retire it or record why it stays",
-    ),
-    (
-        "21015",
-        "withdrawn by IFTSTA AHB 2.1 Änd-ID 27061, but AHB 2.0g and the fv20251001 \
-         profile still publish it and EDIFACT has no Übergangsfrist — it stays until \
-         that profile goes",
-    ),
-    (
-        "21024",
-        "carried by the IFTSTA profile; confirm against the IFTSTA AHB and either \
-         retire it or record why it stays",
-    ),
-    (
-        "21026",
-        "carried by the IFTSTA profile; confirm against the IFTSTA AHB and either \
-         retire it or record why it stays",
-    ),
-];
+const SHIPPED_NOT_PUBLISHED: &[(&str, &str)] = &[(
+    "44170",
+    "Ablehnung Verpflichtungsanfrage — a column of UTILMD AHB Gas 1.2 the \
+     Anwendungsübersicht (Stand 12.08.2026) does not list",
+)];
 
 /// The published inventory, as extracted from the Anwendungsübersicht.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -304,11 +294,12 @@ pub fn check(workspace_root: &Path) -> bool {
         }
     };
 
-    let shipped = shipped_pids(workspace_root);
+    let mut shipped = shipped_pids(workspace_root);
     if shipped.is_empty() {
         eprintln!("check-pid-coverage: no profile carries a Prüfidentifikator — layout changed?");
         return false;
     }
+    shipped.extend(CARRIED_BY_DVGW_EDI.iter().map(|p| (*p).to_owned()));
 
     let published = overview.all();
     let covered = published.iter().filter(|p| shipped.contains(**p)).count();
@@ -352,8 +343,7 @@ pub fn check(workspace_root: &Path) -> bool {
         eprintln!(
             "\ncheck-pid-coverage: coverage fell from {COVERED_FLOOR} to {covered}. A \
              Prüfidentifikator that leaves the profiles takes its AHB rules with it, and \
-             `ahb_rule_pack` then answers a warning-only `unknown-pid` pack in both \
-             directions."
+             validation then answers the `AHB-UNKNOWN-PID` warning and nothing else."
         );
         ok = false;
     } else if covered > COVERED_FLOOR {
@@ -447,13 +437,13 @@ fn published_pids_absent_from_reference(
 fn shipped_pids(workspace_root: &Path) -> BTreeSet<String> {
     #[derive(serde::Deserialize)]
     struct Ahb {
-        pruefidentifikatoren: Vec<Entry>,
+        anwendungsfaelle: Vec<Entry>,
     }
     #[derive(serde::Deserialize)]
     struct Entry {
         /// The profiles carry the Prüfidentifikator as a number; the published
         /// overview carries it as text. Both are the same five digits.
-        code: u32,
+        pid: Option<u32>,
     }
 
     let mut newest: BTreeMap<(String, String), (String, PathBuf)> = BTreeMap::new();
@@ -492,9 +482,10 @@ fn shipped_pids(workspace_root: &Path) -> BTreeSet<String> {
         .filter_map(|(_, path)| std::fs::read_to_string(path).ok())
         .filter_map(|raw| serde_json::from_str::<Ahb>(&raw).ok())
         .flat_map(|a| {
-            a.pruefidentifikatoren
+            a.anwendungsfaelle
                 .into_iter()
-                .map(|e| e.code.to_string())
+                .filter_map(|e| e.pid)
+                .map(|p| p.to_string())
         })
         .collect()
 }

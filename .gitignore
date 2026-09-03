@@ -67,3 +67,6 @@ __pycache__/
 # Node tooling for the docs site (site/tools/check-mermaid.mjs)
 node_modules/
 site/package-lock.json
+
+# maturin leaves the debug-symbol bundle beside the built extension.
+*.dSYM/

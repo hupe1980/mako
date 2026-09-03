@@ -327,12 +327,21 @@ pub(super) fn render_ordchg(
     // only way the MSB can identify the target — and `RFF+Z13` the PID. They
     // are additive, not alternatives — a Stornierung without `RFF+ON` is one
     // the MSB cannot correlate.
-    if let Some(reference) =
-        esa_korrelation_ref(p).or_else(|| p.get("order_reference").and_then(|v| v.as_str()))
-        && !reference.is_empty()
+    match esa_korrelation_ref(p)
+        .or_else(|| p.get("order_reference").and_then(|v| v.as_str()))
+        .filter(|r| !r.is_empty())
     {
-        let qualifier = esa_korrelation_qualifier(pid).unwrap_or("ON");
-        builder = builder.reference(qualifier, reference);
+        Some(reference) => {
+            let qualifier = esa_korrelation_qualifier(pid).unwrap_or("ON");
+            builder = builder.reference(qualifier, reference);
+        }
+        None => {
+            return Err(RenderError::MissingField {
+                message_type: mt.into(),
+                field: "order_reference (SG1 RFF+ON — the ORDERS being changed or cancelled)"
+                    .into(),
+            });
+        }
     }
     // `BGM+Z57` — „Übermittlung von Werten an ESA" (the builder already emits
     // DE 1225 = 1, Aufhebung/Stornierung).
@@ -395,7 +404,7 @@ pub(super) fn render_ordrsp(
         }
     })?;
 
-    let mut builder = builders::OrdrespBuilder::new(release)
+    let mut builder = builders::OrdrespBuilder::new(release.clone())
         .sender(sender)
         .receiver(receiver)
         .message_ref(message_ref);
@@ -464,7 +473,15 @@ pub(super) fn render_ordrsp(
             .get("antwort_codeliste")
             .and_then(serde_json::Value::as_str);
         if let (Some(code), Some(codeliste)) = (code, codeliste) {
-            builder = builder.adjustment(code, codeliste);
+            // 19013's column marks DE 4465 alone: no Codeliste there.
+            let lists_codeliste = super::column_lists(
+                MessageType::Ordrsp,
+                &release,
+                pid.unwrap_or(0),
+                "AJT",
+                "1082",
+            );
+            builder = builder.adjustment(code, if lists_codeliste { codeliste } else { "" });
         } else {
             return Err(RenderError::MissingField {
                 message_type: mt.into(),

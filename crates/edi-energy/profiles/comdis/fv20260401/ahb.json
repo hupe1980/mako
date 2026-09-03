@@ -1,116 +1,1114 @@
 {
-  "schema_version": 1,
-  "message_type": "COMDIS",
-  "release": "1.0g",
-  "source_document": "COMDIS AHB, wire release 1.0g (Stand 01.10.2026)",
-  "pruefidentifikatoren": [
+  "ahb_version": "1.0h",
+  "anwendungsfaelle": [
     {
-      "code": 29001,
-      "name": "Ablehnung REMADV",
-      "segment_rules": [
+      "communication": "NB an LF",
+      "elements": [
         {
-          "tag": "AJT",
-          "requirement": "M"
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "BGM",
-          "requirement": "M"
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "COM",
-          "requirement": "M"
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "CTA",
-          "requirement": "M"
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "17A",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "CUX",
-          "requirement": "M"
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DOC",
-          "requirement": "M"
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "1.0g",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DTM",
-          "requirement": "M"
+          "de": "1001",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "456",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "MOA",
-          "requirement": "M"
+          "de": "1004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "NAD",
-          "requirement": "M"
+          "de": "1153",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "RFF",
-          "requirement": "M"
+          "de": "1154",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "29001",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "FTX",
-          "requirement": "O",
-          "_description": "FTX is optional per MIG 1.0g (no AHB constraint for PID 29001)"
+          "de": "2005",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X [931]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "6347",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "2",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "6345",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "EUR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "6343",
+          "nr": "00005",
+          "operands": [
+            {
+              "code": "4",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00006",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3139",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "IC",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3412",
+          "nr": "00007",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3148",
+          "nr": "00008",
+          "operands": [
+            {
+              "operand": "X ∨ [508]"
+            }
+          ]
+        },
+        {
+          "de": "3155",
+          "nr": "00008",
+          "operands": [
+            {
+              "code": "EM",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "FX",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "TE",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AJ",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AL",
+              "operand": "X [1P0..1]"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00009",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00009",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00009",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00010",
+          "operands": [
+            {
+              "code": "380",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00010",
+          "operands": [
+            {
+              "operand": "X [505]"
+            }
+          ]
+        },
+        {
+          "de": "5025",
+          "nr": "00011",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "5004",
+          "nr": "00011",
+          "operands": [
+            {
+              "operand": "X [930]"
+            }
+          ]
+        },
+        {
+          "de": "4465",
+          "nr": "00012",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00012",
+          "operands": [
+            {
+              "code": "E_0265",
+              "operand": "X [492] ∧ [23] ∧ [24]"
+            },
+            {
+              "code": "E_0271",
+              "operand": "X [492] ∧ [23] ∧ [25]"
+            },
+            {
+              "code": "E_0274",
+              "operand": "X [492] ∧ [23] ∧ [26]"
+            },
+            {
+              "code": "E_0504",
+              "operand": "X [492] ∧ [27] ∧ [25]"
+            },
+            {
+              "code": "E_0516",
+              "operand": "X [492] ∧ [23] ∧ [26]"
+            },
+            {
+              "code": "E_0520",
+              "operand": "X [492] ∧ [23] ∧ [25]"
+            },
+            {
+              "code": "E_0567",
+              "operand": "X [492] ∧ [23] ∧ [26]"
+            },
+            {
+              "code": "E_1008",
+              "operand": "X [493] ∧ [27] ∧ [25]"
+            },
+            {
+              "code": "S_0109",
+              "operand": "X [492] ∧ [27] ∧"
+            },
+            {
+              "code": "G_0089",
+              "operand": "X [493] ∧ [27] ∧"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00013",
+          "operands": [
+            {
+              "code": "ACD",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4441",
+          "nr": "00013",
+          "operands": [
+            {
+              "code": "Z07",
+              "operand": "X [1] ⊻ [31]"
+            },
+            {
+              "code": "Z08",
+              "operand": "X [2] ⊻ [32]"
+            },
+            {
+              "code": "Z09",
+              "operand": "X [6] ⊻ [13]"
+            },
+            {
+              "code": "Z10",
+              "operand": "X [7] ⊻ [14]"
+            },
+            {
+              "code": "Z11",
+              "operand": "X [8] ⊻ [15]"
+            },
+            {
+              "code": "Z12",
+              "operand": "X [10] ⊻ [16]"
+            },
+            {
+              "code": "Z13",
+              "operand": "X [11] ⊻ [17]"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00013",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00013",
+          "occurrence": 1,
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00013",
+          "occurrence": 2,
+          "operands": [
+            {
+              "operand": "X ([28] ∧ [493])"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00013",
+          "occurrence": 3,
+          "operands": [
+            {
+              "operand": "X ([30] ∧ [492]"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00014",
+          "operands": [
+            {
+              "code": "ACB",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00014",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00015",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00015",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         }
       ],
-      "group_rules": []
+      "name": "Ablehnung REMADV MSB an LF, NB, ESA",
+      "pid": 29001,
+      "rows": [
+        {
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00005",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00006",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00007",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00008",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00009",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00009",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00010",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00010",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00011",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00012",
+          "group": "SG3",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00012",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00013",
+          "status": [
+            "Muss [4] ⊻ [5] ⊻ [20] ⊻ [33]"
+          ]
+        },
+        {
+          "nr": "00014",
+          "status": [
+            "Muss [9] ⊻ [12] ⊻ [18] ⊻ [19] ⊻ [34]"
+          ]
+        },
+        {
+          "nr": "00015",
+          "status": [
+            "Muss"
+          ]
+        }
+      ]
     },
     {
-      "code": 29002,
-      "name": "Ablehnung IFTSTA",
-      "segment_rules": [
+      "communication": "NB an LF",
+      "elements": [
         {
-          "tag": "AJT",
-          "requirement": "M"
+          "de": "0062",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "BGM",
-          "requirement": "M"
+          "de": "0065",
+          "nr": "00001",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "COM",
-          "requirement": "M"
+          "de": "0052",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "D",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "CTA",
-          "requirement": "M"
+          "de": "0054",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "17A",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DOC",
-          "requirement": "M"
+          "de": "0051",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "UN",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "DTM",
-          "requirement": "M"
+          "de": "0057",
+          "nr": "00001",
+          "operands": [
+            {
+              "code": "1.0g",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "NAD",
-          "requirement": "M"
+          "de": "1001",
+          "nr": "00002",
+          "operands": [
+            {
+              "code": "739",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "RFF",
-          "requirement": "M"
+          "de": "1004",
+          "nr": "00002",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "CUX",
-          "requirement": "O",
-          "_description": "CUX is optional per MIG 1.0g (no AHB constraint for PID 29002)"
+          "de": "1153",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "Z13",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "FTX",
-          "requirement": "O",
-          "_description": "FTX is optional per MIG 1.0g (no AHB constraint for PID 29002)"
+          "de": "1154",
+          "nr": "00003",
+          "operands": [
+            {
+              "code": "29002",
+              "operand": "X"
+            }
+          ]
         },
         {
-          "tag": "MOA",
-          "requirement": "O",
-          "_description": "MOA is optional per MIG 1.0g (no AHB constraint for PID 29002)"
+          "de": "2005",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "137",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "2380",
+          "nr": "00004",
+          "operands": [
+            {
+              "operand": "X [931]"
+            }
+          ]
+        },
+        {
+          "de": "2379",
+          "nr": "00004",
+          "operands": [
+            {
+              "code": "303",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "MS",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00006",
+          "operands": [
+            {
+              "operand": "X [3]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00006",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3139",
+          "nr": "00007",
+          "operands": [
+            {
+              "code": "IC",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3412",
+          "nr": "00007",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3148",
+          "nr": "00008",
+          "operands": [
+            {
+              "operand": "X ∨ [508]"
+            }
+          ]
+        },
+        {
+          "de": "3155",
+          "nr": "00008",
+          "operands": [
+            {
+              "code": "EM",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "FX",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "TE",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AJ",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AL",
+              "operand": "X [1P0..1]"
+            }
+          ]
+        },
+        {
+          "de": "3035",
+          "nr": "00009",
+          "operands": [
+            {
+              "code": "MR",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "3039",
+          "nr": "00009",
+          "operands": [
+            {
+              "operand": "X [3]"
+            }
+          ]
+        },
+        {
+          "de": "3055",
+          "nr": "00009",
+          "operands": [
+            {
+              "code": "9",
+              "operand": "X"
+            },
+            {
+              "code": "293",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1001",
+          "nr": "00010",
+          "operands": [
+            {
+              "code": "Z41",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1004",
+          "nr": "00010",
+          "operands": [
+            {
+              "operand": "X [506]"
+            }
+          ]
+        },
+        {
+          "de": "4465",
+          "nr": "00012",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1082",
+          "nr": "00012",
+          "operands": [
+            {
+              "code": "S_0108",
+              "operand": "X [492]"
+            }
+          ]
+        },
+        {
+          "de": "4451",
+          "nr": "00014",
+          "operands": [
+            {
+              "code": "ACB",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "4440",
+          "nr": "00014",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0074",
+          "nr": "00015",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "0062",
+          "nr": "00015",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
         }
       ],
-      "group_rules": []
+      "name": "Ablehnung IFTSTA",
+      "pid": 29002,
+      "rows": [
+        {
+          "nr": "00001",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00002",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00003",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00004",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00006",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00006",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00007",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00008",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00009",
+          "group": "SG1",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00009",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00010",
+          "group": "SG2",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00010",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "before": "00012",
+          "group": "SG3",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00012",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00014",
+          "status": [
+            "Muss"
+          ]
+        },
+        {
+          "nr": "00015",
+          "status": [
+            "Muss"
+          ]
+        }
+      ]
     }
   ],
-  "reviewed_by": "xtask/import-xml-ahb",
-  "reviewed_at": "2026-07-08"
+  "conditions": {
+    "1": "wenn SG3 AJT+Z61+S_0109 oder SG3 AJT+Z62+S_0109 vorhanden",
+    "10": "wenn SG3 AJT+A03+E_0504 vorhanden",
+    "11": "wenn SG3 AJT+A15+E_0504 vorhanden",
+    "12": "wenn SG3 AJT+A99+S_0109 vorhanden",
+    "13": "wenn SG3 AJT+A07+E_1008 vorhanden",
+    "14": "wenn SG3 AJT+A02+E_1008 vorhanden",
+    "15": "wenn SG3 AJT+A01/ A04/A06/A09+E_1008 vorhanden",
+    "16": "wenn SG3 AJT+A03+E_1008 vorhanden",
+    "17": "wenn SG3 AJT+A15+E_1008 vorhanden",
+    "18": "wenn SG3 AJT+A05/ A10/A11+E_1008 vorhanden",
+    "19": "wenn SG3 AJT+A99+E_0265/E_0271/ E_0274/E_0516/E_0520/ E_0567 vorhanden",
+    "2": "wenn SG3 AJT+Z58+S_0109 oder SG3 AJT+Z59+S_0109 oder SG3 AJT+Z60+S_0109 vorhanden",
+    "21": "wenn im DE3155 in demselben COM der Code EM vorhanden ist",
+    "22": "wenn im DE3155 in demselben COM der Code TE / FX / AJ / AL vorhanden ist",
+    "23": "Wenn MP-ID in NAD+MS (Nachrichtensender) mit Rolle MSB vorhanden",
+    "24": "Wenn MP-ID in NAD+MR (Nachrichtenempfänger) mit Rolle ESA vorhanden",
+    "25": "Wenn MP-ID in NAD+MR (Nachrichtenempfänger) mit Rolle LF vorhanden",
+    "26": "Wenn MP-ID in NAD+MR (Nachrichtenempfänger) mit Rolle NB vorhanden",
+    "27": "Wenn MP-ID in NAD+MS (Nachrichtensender) mit Rolle NB vorhanden",
+    "28": "Angabe der Datenaustauschreferenz aus der CONTRL",
+    "29": "Angabe der Datenaustauschreferenz aus der APERAK",
+    "3": "Nur MP-ID aus Sparte",
+    "30": "Angabe der Nachrichtennummer aus der APERAK",
+    "31": "wenn SG3 AJT+Z61+G_0089 oder SG3 AJT+Z62+G_0089 vorhanden",
+    "32": "wenn SG3 AJT+Z58+G_0089 oder SG3 AJT+Z59+G_0089 oder SG3 AJT+Z60+G_0089 vorhanden",
+    "34": "wenn SG3 AJT+A99+G_0089 vorhanden",
+    "4": "wenn SG3 AJT+Z58/Z59/ Z60/Z61/Z62+S_0109 vorhanden",
+    "492": "Wenn MP-ID in NAD+MR (Nachrichtenempfänger) aus Sparte Strom",
+    "493": "Wenn MP-ID in NAD+MR (Nachrichtenempfänger) aus Sparte Gas",
+    "5": "wenn SG3 AJT+A01/A02/ A03/A04/A06/A07/A09/A12/ A15+E_0504 vorhanden",
+    "505": "Hinweis: BGM DE1004 aus der vorher per REMADV abgelehnten INVOIC-Nachricht",
+    "506": "Hinweis: BGM DE1004 aus der vorher per IFTSTA abgelehnten MSCONS- Nachricht",
+    "508": "Hinweis: Es darf nur eine Information im DE3148 übermittelt werden",
+    "510": "Hinweis: Wenn Eingang der zugrundeliegenden Nachricht nach dem 06.06. 2025, 00:00 Uhr bestätigt wurde",
+    "6": "wenn SG3 AJT+A07+E_0504 vorhanden",
+    "7": "wenn SG3 AJT+A02+E_0504 vorhanden",
+    "8": "wenn SG3 AJT+A01/A04/ A06/A09/A12+E_0504 vorhanden",
+    "9": "wenn SG3 AJT+A05/A10/ A11/A14+E_0504 vorhanden",
+    "930": "Format: max. 2 Nachkommastellen",
+    "931": "Format: ZZZ = +00",
+    "939": "Format: Die Zeichenkette muss die Zeichen @ und . enthalten",
+    "940": "Format: Die Zeichenkette muss mit dem Zeichen + beginnen und danach dürfen nur noch Ziffern folgen"
+  },
+  "message_type": "COMDIS",
+  "packages": {
+    "1P": "--                                                 Hinweis:       Das    ist  das    Standardpaket,            wenn      keine     Bedingung          zum     Tragen      kommt,        z.  B."
+  },
+  "release": "1.0g",
+  "schema_version": 2,
+  "source": {
+    "file": "COMDIS_AHB_1.0h.pdf",
+    "sha256": "5c72326a5d70b4e330bb792550661d692ed92d6de21ed34240b88da837146dac",
+    "title": "COMDIS AHB 1.0h"
+  }
 }

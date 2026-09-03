@@ -20,6 +20,11 @@ struct AperakBuilderInner {
     document_code: String,
     document_id: Option<String>,
     acw_ref: Option<String>,
+    /// `SG5 RFF+AGO` — the Dokumentennummer of the message answered.
+    ago_ref: Option<String>,
+    /// `SG2 DTM+171` — the Dokumentendatum of the message answered, `CCYYMMDDHHMM`
+    /// UTC, wire form.
+    reference_date: Option<String>,
     error_code: Option<String>,
     error_text: Option<String>,
     document_date: Option<String>,
@@ -54,6 +59,8 @@ impl AperakBuilder<Unset, Unset> {
                 document_code: "1000".to_owned(),
                 document_id: None,
                 acw_ref: None,
+                ago_ref: None,
+                reference_date: None,
                 error_code: None,
                 error_text: None,
                 document_date: None,
@@ -155,9 +162,24 @@ impl<S, R> AperakBuilder<S, R> {
         self
     }
 
-    /// Set the acknowledgement reference number (RFF+ACW).
+    /// The Nachrichten-Referenznummer of the message answered — `SG2 RFF+ACE`
+    /// and `SG5 RFF+ACW` both carry it.
     pub fn acw_ref(mut self, reference: impl Into<String>) -> Self {
         self.inner.acw_ref = Some(reference.into());
+        self
+    }
+
+    /// The Dokumentennummer (`BGM` DE 1004) of the message answered — `SG5
+    /// RFF+AGO`. Defaults to the Nachrichten-Referenznummer.
+    pub fn ago_ref(mut self, reference: impl Into<String>) -> Self {
+        self.inner.ago_ref = Some(reference.into());
+        self
+    }
+
+    /// The Dokumentendatum of the message answered (`CCYYMMDD` or
+    /// `CCYYMMDDHHMM`, UTC) — `SG2 DTM+171`. Defaults to this message's date.
+    pub fn reference_date(mut self, ccyymmddhhmm: impl Into<String>) -> Self {
+        self.inner.reference_date = Some(ccyymmddhhmm.into());
         self
     }
 
@@ -167,7 +189,7 @@ impl<S, R> AperakBuilder<S, R> {
         self
     }
 
-    /// Set a free-text error description (FTX+AAI).
+    /// Set a free-text error description (`FTX+ABO`, the qualifier the MIG admits).
     pub fn error_text(mut self, text: impl Into<String>) -> Self {
         self.inner.error_text = Some(text.into());
         self
@@ -210,19 +232,36 @@ impl<S, R> AperakBuilder<S, R> {
         let mut buf = Vec::new();
         let mut w = Writer::new(&mut buf);
 
-        let doc_id = self.inner.document_id.as_deref().unwrap_or("");
+        // `BGM` DE 1004 is the Dokumentennummer — the message reference unless
+        // one is given.
+        let doc_id = self
+            .inner
+            .document_id
+            .as_deref()
+            .unwrap_or(&self.inner.message_ref);
         emit_comp!(
             w,
             "UNH",
             [&self.inner.message_ref],
             ["APERAK", "D", "07B", "UN", self.inner.release.as_str()]
         );
-        emit_seg!(w, "BGM", &self.inner.document_code, doc_id, "9");
+        emit_seg!(w, "BGM", &self.inner.document_code, doc_id);
         // `DTM+137` Dokumentendatum. Every EDI@Energy AHB gives DE 2379 as
         // `303` (`CCYYMMDDHHMMZZZ`) with condition `[931]` fixing the zone to
         // `+00`; `[494]` requires the stamp to be the creation moment or
         // earlier. There is no Anwendungsfall in any AHB that takes `102`.
         emit_comp!(w, "DTM", ["137", &super::ccyymmddhhmm_utc(&dtm_val), "303"]);
+        // `SG2` — the message answered, by reference and date, before the
+        // parties (APERAK MIG Nr 00004/00005).
+        if let Some(r) = &self.inner.acw_ref {
+            emit_comp!(w, "RFF", ["ACE", r]);
+            let reference_date = self.inner.reference_date.as_deref().unwrap_or(&dtm_val);
+            emit_comp!(
+                w,
+                "DTM",
+                ["171", &super::ccyymmddhhmm_utc(reference_date), "303"]
+            );
+        }
         if let Some(id) = &self.inner.sender_id {
             emit_comp!(
                 w,
@@ -239,14 +278,18 @@ impl<S, R> AperakBuilder<S, R> {
                 [id, "", super::agency_for(self.inner.receiver_agency, id)]
             );
         }
-        if let Some(r) = &self.inner.acw_ref {
-            emit_comp!(w, "RFF", ["ACW", r]);
-        }
+        // `SG5` — the Fehlermeldung: code, text, then the references of the
+        // message it is about (MIG Nr 00012–00015).
         if let Some(code) = &self.inner.error_code {
             emit_seg!(w, "ERC", code);
         }
         if let Some(text) = &self.inner.error_text {
-            emit_comp!(w, "FTX", ["AAI"], [""], [""], [text]);
+            emit_comp!(w, "FTX", ["ABO"], [""], [""], [text]);
+        }
+        if let Some(r) = &self.inner.acw_ref {
+            emit_comp!(w, "RFF", ["ACW", r]);
+            let ago = self.inner.ago_ref.as_deref().unwrap_or(r);
+            emit_comp!(w, "RFF", ["AGO", ago]);
         }
         w.finish_unt(&self.inner.message_ref)
             .map_err(Error::Parse)?;

@@ -7,7 +7,7 @@ acknowledgement, the misrouted submission, the dead control path, and silence.
 
 import pytest
 
-from conftest import BILANZKREIS, MELO, ON, utilmd_interchange
+from conftest import BILANZKREIS, MALO, MELO, ON, utilmd_interchange
 from makotest import (
     BikoSim,
     ImsysSim,
@@ -31,8 +31,10 @@ def mscons_interchange(pid: int = 13003, *, sender: str = NB_ID) -> bytes:
         pid,
         sender,
         BIKO_ID,
-        metering_point="51238696012",
-        quantities=[("220", "1234.567", "KWH")],
+        # A Summenzeitreihe names its MaBiS-Zählpunkt and states each Zeitscheibe
+        # (`79`) with the period it belongs to.
+        metering_point=MELO,
+        intervals=[("79", "1234.567", "KWH", "202604010000+00", "202604010015+00")],
         on=ON,
     )
     return build_interchange(
@@ -72,17 +74,16 @@ class TestMarktpartnerSim:
         assert_edifact_valid(reply.business, on=ON)
 
     def test_an_antwortcode_brings_its_conditional_segments_with_it(self, nb, anmeldung):
-        """A code makes other segments conditional-Muss, and the AHB checks them.
+        """A code makes other segments conditional-Muss, and the answer carries them.
 
         `A06` („Andere Anmeldung in Bearbeitung") obliges a `SG4 DTM+Z07` on the
-        55003 carrying it. Writing the code without the date is an incomplete
-        Ablehnung, and it is the AHB layer — not this toolkit — that says so.
+        55003 carrying it. The answer is completed to its column, so the date
+        travels with the code even when the binding named none.
         """
         nb.on(55001).ablehnung(antwort_code="A06")
         reply = nb.receive(anmeldung)
-        report = validate_edifact(reply.business, ON)
-        assert not report.is_valid
-        assert [f.rule_id for f in report.errors] == ["AHB-55003-SG4-DTM-I0"]
+        assert b"DTM+Z07:" in reply.business
+        assert validate_edifact(reply.business, ON).is_valid
 
     def test_a_code_the_bdew_wants_explained_is_refused_bare(self, nb):
         """Some codes are incomplete without an `FTX+ACB` Erläuterung."""
@@ -226,10 +227,14 @@ class TestMultiMessageInterchange:
     how a broken second one ships.
     """
 
-    #: `(PID, BGM DE 1001)` — the AHB fixes the document code per process, and
-    #: 55004 Abmeldung is `E02` „Abmeldungen" where 55001 Anmeldung is `E01`
-    #: (UTILMD AHB Strom 2.2 §§ 8.6/8.9).
-    VORGAENGE = ((55001, "E01"), (55004, "E02"))
+    #: `(PID, BGM DE 1001, transaction)` — the AHB fixes the document code per
+    #: process: 55004 Abmeldung is `E02` „Abmeldungen" where 55001 Anmeldung is
+    #: `E01`, and the Abmeldung names its Ende (`DTM+93`) with a Transaktionsgrund
+    #: `E01`/`ZW4` and no Produktpaket (UTILMD AHB Strom 2.2 §§ 8.6/8.9).
+    VORGAENGE = (
+        (55001, "E01", dict(dates=[("92", "20260501")], bilanzkreis=BILANZKREIS)),
+        (55004, "E02", dict(dates=[("93", "20260501")], transaktionsgrund="E01")),
+    )
 
     def two_vorgaenge(self) -> bytes:
         return build_interchange(
@@ -248,14 +253,12 @@ class TestMultiMessageInterchange:
                     transactions=[
                         UtilmdTransaction(
                             f"VORGANG-{index + 1}",
-                            locations=[("melo", MELO)],
-                            dates=[("92", "20260501")],
-                            references=[("Z13", str(pid))],
-                            bilanzkreis=BILANZKREIS,
+                            locations=[("malo", MALO)],
+                            **transaction,
                         )
                     ],
                 )
-                for index, (pid, document_code) in enumerate(self.VORGAENGE)
+                for index, (pid, document_code, transaction) in enumerate(self.VORGAENGE)
             ],
         )
 
@@ -334,7 +337,7 @@ class TestAcknowledgementChoice:
     """
 
     def test_an_ahb_violation_earns_an_aperak(self, nb):
-        wire = utilmd_interchange(melo="NOTAMELO")
+        wire = utilmd_interchange(lokation="NOTAMELO")
         reply = nb.receive(wire)
         assert reply.ack_kind == "APERAK"
         assert not reply.ack_positive
@@ -353,7 +356,7 @@ class TestAcknowledgementChoice:
             mp_id=NB_ID, rolle="NB", reference_date=ON, strict=False
         )
         lenient.on(55001).bestaetigung()
-        reply = lenient.receive(utilmd_interchange(melo="NOTAMELO"))
+        reply = lenient.receive(utilmd_interchange(lokation="NOTAMELO"))
 
         assert reply, "a lax partner answers rather than going quiet"
         assert reply.ack_kind == "CONTRL" and reply.ack_positive
@@ -375,7 +378,7 @@ class TestBikoSim:
             NB_ID,
             BIKO_ID,
             MELO,
-            [("220", "1234.567", "KWH")],
+            intervals=[("79", "1234.567", "KWH", "202604010000+00", "202604010015+00")],
             on=ON,
             message_ref="2",
         )
@@ -389,7 +392,9 @@ class TestBikoSim:
                     NB_ID,
                     BIKO_ID,
                     MELO,
-                    [("220", "1234.567", "KWH")],
+                    intervals=[
+                        ("79", "1234.567", "KWH", "202604010000+00", "202604010015+00")
+                    ],
                     on=ON,
                     message_ref="1",
                 ),

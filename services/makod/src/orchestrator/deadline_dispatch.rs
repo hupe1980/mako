@@ -276,6 +276,9 @@ deadline_dispatch! {
         "mabis-profile",
         // MMMA delegates delivery to gpke-allokationsliste.
         "gabi-gas-mmma",
+        // A SSQNOT is one-way NB → MGV; SSQNOT 5.7 publishes no answer and no
+        // Frist binds the receiver.
+        "gabi-gas-mehr-mindermengen",
         // The Zuordnungs-Meldungen (55036/55037/55038, 44036/44037/44038) are
         // Meldepflichten: no Antwortnachricht exists, so nothing on the
         // receiving side can be late. The Frist they carry is the *sender's*,

@@ -263,13 +263,11 @@ pub fn gpke_abrechnung_registry() -> AdapterRegistry<GpkeAbrechnungWorkflow> {
                 ));
             };
 
-            let pid = inv
-                .bgm()
-                .and_then(|b| b.pruefidentifikator())
-                .ok_or_else(|| {
-                    EngineError::Deserialization(
-                        "GPKE Abrechnung adapter: PID not found in INVOIC BGM".into(),
-                    )
+            let pid = edi_energy::EdiEnergyMessage::detect_pruefidentifikator(inv)
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE Abrechnung adapter: no Prüfidentifikator in the INVOIC ({e})"
+                    ))
                 })
                 .and_then(convert_pid)?;
             let (validation_passed, validation_errors) = super::ahb_verdict(msg);
