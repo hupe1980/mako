@@ -3838,7 +3838,7 @@
   },
   "message_type": "REQOTE",
   "packages": {
-    "1P": "--                                                  Hinweis:       Das    ist  das   Standardpaket,             wenn      keine     Bedingung         zum     Tragen       kommt,       z.  B."
+    "1P": ""
   },
   "release": "1.3c",
   "schema_version": 2,

@@ -56,8 +56,9 @@ cargo xtask sync-regulatories --download
 # 2. Name the profile: release, dates, AHB version, the two PDFs
 $EDITOR crates/edi-energy/profiles/sources.json
 
-# 3. Generate it from the PDFs
+# 3. Generate it from the PDFs, then read the delta against the predecessor
 cargo xtask import-profiles --profile utilmd/fv20271001
+cargo xtask profile-diff utilmd fv20261001 fv20271001
 
 # 4. The generated profile validates its own skeletons — every column's minimal
 #    message against its own Prüfschablone — and the corpus still holds
@@ -69,7 +70,7 @@ cargo xtask check-pid-coverage
 cargo xtask check-release-coverage --date 2027-10-01
 ```
 
-`import-profiles` fails on a table it cannot read rather than guessing: a row whose statuses land between columns, a segment the AHB names that the MIG structure lacks, a column without `UNH`. `BDEW_DEBUG=1` traces every row the AHB reader assigns and `cargo xtask pdf-grid <pdf>` dumps the character grid it reads, which is how a new layout quirk is found. A Prüfidentifikator that leaves between two releases is an import regression unless `validate-profiles`' `RETIRED_PIDS` records BDEW's retirement.
+`import-profiles` fails on a table it cannot read rather than guessing: a row whose statuses land between columns, a segment the AHB names that the MIG structure lacks, a column without `UNH`, a Bedingung a status expression cites but whose text the reader did not find. `BDEW_DEBUG=1` traces every row the AHB reader assigns and `cargo xtask pdf-grid <pdf>` dumps the character grid it reads, which is how a new layout quirk is found. A Prüfidentifikator that leaves between two releases is an import regression unless `validate-profiles`' `RETIRED_PIDS` records BDEW's retirement.
 
 The predecessor gets its `valid_until` (the day before the successor's `valid_from`) in `sources.json`; `validate-profiles` refuses a gap, an overlap and a chain whose newest profile is not open-ended. Nothing is archived: a profile stays compiled for as long as it is in `sources.json`, and is deleted when no deployment can still receive its format.
 
@@ -81,10 +82,16 @@ The predecessor gets its `valid_until` (the day before the successor's `valid_fr
 |---|---|
 | `tests/skeletons.rs` | every Anwendungsfall's skeleton validates against its own Prüfschablone |
 | `tests/validation_snapshot.rs` | the verdict of every fixture, rule id by rule id |
-| `validate-profiles` | `sources.json` ↔ files, dates and continuity, Prüfidentifikatoren, AHB rows ↔ MIG structure |
+| `validate-profiles` | `sources.json` ↔ files, dates and continuity, Prüfidentifikatoren, AHB rows ↔ MIG structure, every cited Bedingung has its text |
 | `import-profiles --check` | a committed profile against its PDF — SKIPs where the mirror is absent |
 | `check-pid-coverage` | the shipped columns against BDEW's Anwendungsübersicht |
 | `check-release-coverage` | a profile covers the reference date for every message type |
+
+`cargo xtask profile-diff <type> <from-fv> <to-fv>` is the reader's half of the same
+set: per Prüfidentifikator, which appeared or were withdrawn, which places changed
+their status, which codes gained or lost an operand, and which Bedingungen and
+Pakete were rewritten. It reads the committed profiles alone, so it runs in the
+release PR without the document mirror.
 
 ---
 
@@ -138,68 +145,73 @@ distroless) via `docker buildx bake`. See the
 [makod Operator Guide](@/docs/services/makod.md#docker-deployment) for image details and
 deployment patterns.
 
-To see a human-readable diff between two annual releases (useful for release notes and reviewing spec changes):
+To read the delta between two annual releases — for the release PR's summary
+and for reviewing what the Festlegung changed:
 
 ```bash
-cargo xtask release-diff --message-type utilmd --from fv20251001 --to fv20261001
+cargo xtask profile-diff utilmd fv20251001 fv20261001
+cargo xtask profile-diff utilmd fv20251001 fv20261001 --pid 55001
 ```
 
-Output shows:
-
-- New / removed Pruefidentifikatoren
-- Changed mandatory/conditional/forbidden rules
-- New / removed code list entries
-- `valid_from` / `valid_until` boundary changes
+It lists which Prüfidentifikatoren appeared or were withdrawn and, per
+Prüfidentifikator, the places whose status changed, the codes that gained or
+lost an operand, and the Bedingungen and Pakete that were rewritten. Places are
+named by where they sit and what the MIG calls them, because the MIG renumbers
+its segments between Nachrichtentypversionen.
 
 ---
 
-## Codegen Architecture
+## How a profile is applied
 
-The code generator (`xtask/src/codegen.rs`) reads the AHB JSON profiles and emits Rust source for each message type. Key design decisions:
+There is no code generation. `mig.json` and `ahb.json` are embedded at build
+time and read as data:
 
-- **Inline closures** — each AHB rule is emitted as a Rust closure, eliminating the need for a reflection-style string-keyed rule registry.
-- **Shared helpers per module** — `ahb_check_mandatory`, `ahb_check_not_used`, `ahb_check_qualifier`, etc. are emitted once per generated file with `#[allow(dead_code)]` to suppress unused-function warnings for profiles that don't exercise every helper.
-- **Union pack via `merge()`** — per-PID packs are merged into a union pack at initialization time using checked `merge().expect()` so the merge invariant is explicit.
-- **`LazyLock` caching** — rule packs are initialized once per process via `std::sync::LazyLock` so repeated `validate()` calls do not re-parse JSON.
+- `Profile::validate` resolves each segment of a message to its place in the
+  Nachrichtenstruktur, applies the MIG's own checks, then the selected column's
+  Prüfschablone, evaluating each Bedingung against the message.
+- `Profile::skeleton` runs the validator's findings to a fixpoint to produce the
+  minimal conformant message of a column, and `Profile::complete` does the same
+  seeded with a caller's message.
+- A profile is loaded once per process through `LazyLock`, so repeated
+  validation does not re-parse the JSON.
 
----
+Adding a message type or a Formatversion is therefore an import and a
+`sources.json` entry — never a generated-source review.
 
-## CI Gates
-
-| Gate | Command | Purpose |
-|---|---|---|
-| Codegen drift | `cargo xtask codegen --check` | Prevents unreviewed profile changes |
-| Profile JSON validity | `cargo xtask validate-profiles` | Catches schema violations |
-| PID fixture coverage | `cargo xtask validate-pruefids` | Every PID has a fixture; reports curated vs synthetic separately |
-| AHB profile coverage | `cargo xtask check-pid-coverage` | How much of the published Prüfidentifikator inventory the profiles carry — `validate-profiles` compares consecutive releases and cannot see a PID that was never imported |
-| Semver check | `cargo semver-checks` | Prevents accidental API breaks |
-
-### Annual maintenance
-
-After each BDEW cycle, archive profiles whose `valid_until` has passed:
-
-```bash
-cargo xtask codegen --prune-expired   # sets "archived": true in expired mig.json files
-cargo xtask codegen --check           # confirm mod.rs is up to date
-```
-
-Archived profiles are hidden behind `{type}-archive` / `archive` Cargo features and do not
-inflate compile time for standard deployments.  See `site/content/docs/compliance/schema-versioning.md` for the
-full policy.
+A profile stays compiled in for as long as `sources.json` names it, and is
+deleted when no deployment can still receive its format. Nothing is archived
+behind a feature flag: a Formatversion is either shipped or gone.
 
 ---
 
 ## Transition Window Handling
 
-Messages dated within 7 days of a profile boundary are accepted by both the outgoing and incoming profile. This matches BDEW practice for handling messages sent just before or just after October 1.
+**The EDIFACT cut-over has no Übergangsfrist.** A message is validated against
+the profile in force on its date; the day the successor applies, the predecessor
+stops being acceptable. The 15-Werktage Übergangszeitraum of Allgemeine
+Festlegungen § 8.5 is the **XML** rule and does not transfer — it starts at the
+Anwendungszeitpunkt, counts Werktage rather than calendar days, and selects by
+the Erfüllungsdatum stated in the message rather than by when it was sent.
+`DEFAULT_RECEIVE_TOLERANCE_DAYS` is therefore `0`.
 
-The `ParseConfig::with_reference_date()` API lets you reproduce the exact profile selection for any historical date:
+An operator who chooses to accept a late-arriving message in the superseded
+format sets its own trailing-edge tolerance. It is an inbound policy, not a
+licence to send late:
+
+```rust
+use edi_energy::Platform;
+
+let platform = Platform::with_all_profiles().with_receive_tolerance_days(3);
+```
+
+`ParseConfig::with_reference_date()` reproduces the exact profile selection for
+any historical date:
 
 ```rust
 use edi_energy::{parse_with_config, ParseConfig};
 use time::macros::date;
 
-// Simulate parsing as it would behave on Oct 3, 2026
+// Select profiles as they stood on 3 October 2026
 let config = ParseConfig::new().with_reference_date(date!(2026-10-03));
 let msg = parse_with_config(bytes, config)?;
 ```

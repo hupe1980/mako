@@ -324,6 +324,84 @@ fn no_deadline_is_registered_with_a_string_literal_label() {
     );
 }
 
+/// Rule 2b — a label constant's text appears nowhere else as a literal.
+///
+/// Rule 2 reads the argument a deadline constructor is given, so a label bound
+/// to a local first — `let (workflow, label, hours) = match kind { … }` — walks
+/// past it. This one is positional-free: any production statement that spells a
+/// label constant's *text* has a second copy of it, and the two are then free
+/// to drift. Doc comments are exempt; they register nothing.
+#[test]
+fn no_label_constant_is_spelled_a_second_time() {
+    let root = workspace_root();
+    let crate_sources = crate_src_sources(&root);
+    let constants = label_constants(&crate_sources);
+    // Where each label's own constant is declared — that file is the one place
+    // the text belongs.
+    let declared: BTreeMap<&str, &str> = constants
+        .iter()
+        .map(|(name, (value, _))| (value.as_str(), name.as_str()))
+        .collect();
+
+    let mut sources = rust_sources(&root, "services");
+    sources.extend(crate_sources.iter().cloned());
+    let mut offenders = Vec::new();
+    for path in &sources {
+        if path.components().any(|c| {
+            matches!(
+                c.as_os_str().to_str(),
+                Some("tests" | "examples" | "benches")
+            )
+        }) {
+            continue;
+        }
+        let Ok(src) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let src = src
+            .split_once("\n#[cfg(test)]")
+            .map_or(src.as_str(), |(before, _)| before)
+            .to_owned();
+        for (value, name) in &declared {
+            let literal = format!("\"{value}\"");
+            // The declaration itself is the one legitimate spelling.
+            let declaration = format!("{name}: &str = {literal}");
+            let declaration_static = format!("{name}: &'static str = {literal}");
+            let mut from = 0;
+            while let Some(at) = src[from..].find(&literal) {
+                let at = from + at;
+                from = at + literal.len();
+                let line_start = src[..at].rfind('\n').map_or(0, |i| i + 1);
+                let line_end = src[at..].find('\n').map_or(src.len(), |i| at + i);
+                let line = &src[line_start..line_end];
+                if line.contains(&declaration) || line.contains(&declaration_static) {
+                    continue;
+                }
+                // A doc comment quoting the label — the `on_deadline` tables do
+                // — is not a second registration: no deadline is constructed
+                // from it, so it cannot fire into nothing. Rule 1 already holds
+                // the constant against the body below it.
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                offenders.push(format!(
+                    "{}:{}  {literal} — say {name}",
+                    path.strip_prefix(&root).unwrap_or(path).display(),
+                    src[..at].matches('\n').count() + 1
+                ));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "these deadline labels are spelled as a literal beside the constant that \
+         declares them. Two spellings drift, and a deadline whose label no \
+         `on_deadline` matches fires into nothing:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
 /// Rule 3 — no `on_deadline` accepts every label on the stream.
 #[test]
 fn no_on_deadline_is_a_catch_all() {

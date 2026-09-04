@@ -125,7 +125,7 @@ pub async fn dispatch_redispatch_xml(
             dispatcher
                 .spawn_or_resume_redispatch::<AktivierungWorkflow>(
                     &mrid,
-                    "redispatch-aktivierung",
+                    mako_redispatch::aktivierung::WORKFLOW_NAME,
                     cmd,
                     &[
                         (ACTIVATION_RESPONSE_WINDOW_LABEL, now + Duration::minutes(5)),
@@ -142,7 +142,7 @@ pub async fn dispatch_redispatch_xml(
                 .map(|a| a.v.as_str().to_owned())
             else {
                 return Ok(IngestOutcome::Skipped {
-                    workflow_name: "redispatch-aktivierung",
+                    workflow_name: mako_redispatch::aktivierung::WORKFLOW_NAME,
                     reason: "ack_without_receiving_document_identification",
                 });
             };
@@ -154,7 +154,11 @@ pub async fn dispatch_redispatch_xml(
             // Correlation delivery: the process is registered under the MRID
             // of the document being acknowledged.
             dispatcher
-                .resume_redispatch::<AktivierungWorkflow>(&recv_id, "redispatch-aktivierung", cmd)
+                .resume_redispatch::<AktivierungWorkflow>(
+                    &recv_id,
+                    mako_redispatch::aktivierung::WORKFLOW_NAME,
+                    cmd,
+                )
                 .await
         }
 
@@ -173,7 +177,7 @@ pub async fn dispatch_redispatch_xml(
             dispatcher
                 .spawn_or_resume_redispatch::<StammdatenWorkflow>(
                     &mrid,
-                    "redispatch-stammdaten",
+                    mako_redispatch::stammdaten::WORKFLOW_NAME,
                     cmd,
                     &[
                         (SD_ACK_WINDOW, now + Duration::hours(6)),
@@ -189,31 +193,33 @@ pub async fn dispatch_redispatch_xml(
         (doc, kind) => {
             let (workflow_name, ack_label, ack_hours) = match kind {
                 RedispatchDocumentKind::Unavailability => (
-                    "redispatch-verfuegbarkeit",
-                    "redispatch-verfuegbarkeit-ack-window",
+                    ack_forward::verfuegbarkeit::WORKFLOW_NAME,
+                    ack_forward::verfuegbarkeit::ACK_WINDOW_LABEL,
                     6,
                 ),
                 RedispatchDocumentKind::NetworkConstraint => (
-                    "redispatch-netzengpass",
-                    "redispatch-netzengpass-ack-window",
+                    ack_forward::netzengpass::WORKFLOW_NAME,
+                    ack_forward::netzengpass::ACK_WINDOW_LABEL,
                     6,
                 ),
-                RedispatchDocumentKind::Kaskade => {
-                    ("redispatch-kaskade", "redispatch-kaskade-ack-window", 6)
-                }
+                RedispatchDocumentKind::Kaskade => (
+                    ack_forward::kaskade::WORKFLOW_NAME,
+                    ack_forward::kaskade::ACK_WINDOW_LABEL,
+                    6,
+                ),
                 RedispatchDocumentKind::PlannedResourceSchedule => (
-                    "redispatch-planungsdaten",
-                    "redispatch-planungsdaten-ack-window",
+                    ack_forward::planungsdaten::WORKFLOW_NAME,
+                    ack_forward::planungsdaten::ACK_WINDOW_LABEL,
                     6,
                 ),
                 RedispatchDocumentKind::StatusRequest => (
-                    "redispatch-statusanfrage",
-                    "redispatch-statusanfrage-response-window",
+                    ack_forward::statusanfrage::WORKFLOW_NAME,
+                    ack_forward::statusanfrage::ACK_WINDOW_LABEL,
                     24,
                 ),
                 RedispatchDocumentKind::Kostenblatt => (
-                    "redispatch-kostenblatt",
-                    "redispatch-kostenblatt-ack-window",
+                    ack_forward::kostenblatt::WORKFLOW_NAME,
+                    ack_forward::kostenblatt::ACK_WINDOW_LABEL,
                     6,
                 ),
                 _ => {

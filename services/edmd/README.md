@@ -354,9 +354,6 @@ requests_per_second            = 500    # global sustained
 burst                          = 1000   # ingest is bursty by nature
 per_tenant_requests_per_second = 100
 
-[otel]
-endpoint = "http://otel-collector:4317"
-
 [mcp]
 api_key = "env:EDMD_MCP_API_KEY"
 

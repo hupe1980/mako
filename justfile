@@ -274,7 +274,7 @@ examples:
         python3 -c "import json,sys; m=json.load(sys.stdin); [print(p['name'], t['name']) for p in m['packages'] for t in p['targets'] if 'example' in t['kind']]" | sort)
     exit $fail
 
-ci: check test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-wire-timestamps check-business-dates check-rounding check-pid-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+ci: check test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-wire-timestamps check-business-dates check-rounding check-pid-coverage check-release-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -442,6 +442,12 @@ import-profile dir:
 import-profiles-check:
     cargo xtask import-profiles --check
 
+# Per Prüfidentifikator, what changed between two Formatversionen of one
+# message type, e.g. `just profile-diff utilmd fv20251001 fv20261001`.
+# Reads the committed profiles; no document mirror needed.
+profile-diff type from to:
+    cargo xtask profile-diff {{ type }} {{ from }} {{ to }}
+
 # Dump a BDEW PDF as the character grid the importer reads
 pdf-grid file:
     cargo xtask pdf-grid {{ file }}
@@ -449,7 +455,8 @@ pdf-grid file:
 # ── Validation ────────────────────────────────────────────────────────────────
 
 # The committed profiles are consistent: sources.json, dates and continuity
-# per track, Prüfidentifikatoren, AHB rows against the MIG structure.
+# per track, Prüfidentifikatoren, AHB rows against the MIG structure, and
+# every Bedingung a status expression cites has its text.
 validate-profiles:
     cargo xtask validate-profiles
 

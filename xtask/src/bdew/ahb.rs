@@ -138,7 +138,7 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
     let seg_row = Regex::new(r"^\s*(?:(SG\d+)\s+)?([A-Z]{3})\s+(\d{5})\b(.*)$").unwrap();
     let de_row = Regex::new(r"^\s*(?:(SG\d+)\s+)?([A-Z]{3})\s+(\d{4})\b(.*)$").unwrap();
     let cond_id = Regex::new(r"^\[(\d+P?|UB\d)\]$").unwrap();
-    let package = Regex::new(r"^\s*\[(\d+P)\]\s+(\S.*?)(?:\s{2,}\[.*)?$").unwrap();
+    let package_id = Regex::new(r"^\[(\d+P)\]$").unwrap();
 
     let mut doc = AhbDoc {
         anwendungsfaelle: Vec::new(),
@@ -165,6 +165,10 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
     // The code entry the running status cells belong to.
     let mut cur_code: Option<String> = None;
     let mut in_packages = false;
+    // The Paket table's column starts, and the Paket the running lines belong
+    // to.
+    let mut packages: Option<PackageTable> = None;
+    let mut cur_package: Option<String> = None;
     let mut prev_targets: Vec<usize> = Vec::new();
     // The previous table's column positions: a table published without
     // Prüfidentifikatoren continues across pages with the same columns, and
@@ -189,44 +193,65 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
         if t.contains("....") {
             continue;
         }
+        // ── Übersicht der Pakete ─────────────────────────────────────────
+        // Three columns: the Paket, its Paketvoraussetzung(en) — a Bedingung
+        // expression that can run over several lines — and the texts of the
+        // Bedingungen it cites. The header fixes where each starts.
         if t.starts_with("Paket") && t.contains("Paketvoraussetzung") {
             in_packages = true;
+            packages = char_pos(line, "Paketvoraussetzung")
+                .zip(char_pos(line, "Bedingungen"))
+                .map(|(pv, bed)| PackageTable { pv, bed });
             continue;
         }
         if in_packages && t.starts_with("EDIFACT Struktur") && t.contains("Beschreibung") {
             in_packages = false;
+            cur_package = None;
         }
-        if in_packages {
-            if let Some(c) = package.captures(line) {
-                doc.packages
-                    .entry(c[1].to_owned())
-                    .or_insert_with(|| c[2].trim().to_owned());
+        if in_packages && let Some(pt) = packages {
+            if heading.is_match(line) {
+                in_packages = false;
+                cur_package = None;
+            } else {
+                // The Paket column: `[3P]` opens a row, and the rows of a
+                // page-broken table resume under the repeated header.
+                if let Some(k) = tokens(line)
+                    .into_iter()
+                    .find(|k| k.x + 2 < pt.pv && package_id.is_match(k.text))
+                {
+                    cur_package = package_id.captures(k.text).map(|c| c[1].to_owned());
+                }
+                // The Paketvoraussetzung column, joined across its lines. It
+                // holds a Bedingung expression and nothing else, so prose
+                // there — the Hinweis under `--`, or a paragraph the table
+                // runs into — is not part of it.
+                if let Some(id) = &cur_package {
+                    let cell = tokens(line)
+                        .into_iter()
+                        .filter(|k| {
+                            k.x >= pt.pv.saturating_sub(2) && k.x < pt.bed.saturating_sub(2)
+                        })
+                        .map(|k| k.text)
+                        .collect::<Vec<_>>();
+                    if !cell.is_empty() && cell.iter().all(|t| is_expression_token(t)) {
+                        let entry = doc.packages.entry(id.clone()).or_default();
+                        for t in cell {
+                            if !entry.is_empty() {
+                                entry.push(' ');
+                            }
+                            entry.push_str(t);
+                        }
+                    } else {
+                        doc.packages.entry(id.clone()).or_default();
+                    }
+                }
                 collect_condition(
                     line,
-                    char_pos(line, "[").map_or(40, |x| x + 15),
+                    pt.bed.saturating_sub(2),
                     &cond_id,
                     &mut cur_cond,
                     &mut doc.conditions,
                 );
-                continue;
-            }
-            if heading.is_match(line) {
-                in_packages = false;
-            } else {
-                // Condition texts of the Paket table.
-                if let Some(ch) = t.chars().next()
-                    && ch == '['
-                {
-                    collect_condition(
-                        line,
-                        tokens(line).first().map_or(0, |k| k.x),
-                        &cond_id,
-                        &mut cur_cond,
-                        &mut doc.conditions,
-                    );
-                } else if !t.is_empty() {
-                    append_condition(t, &mut cur_cond);
-                }
                 continue;
             }
         }
@@ -241,12 +266,20 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
 
         // ── A new table ───────────────────────────────────────────────────
         if t.starts_with("EDIFACT Struktur") && t.contains("Beschreibung") {
-            commit_condition(&mut cur_cond, &mut doc.conditions);
             flush_pending(&mut pending_status, &mut doc);
             let desc_x = char_pos(line, "Beschreibung").unwrap_or(30);
             // `Bedingung` is centred over a multi-line column header and can
             // land on a later line; until seen, the boundary is provisional.
             let bedingung_x = char_pos(line, "Bedingung").unwrap_or(usize::MAX);
+            // A page break repeats the header of the table it interrupts, at
+            // the same geometry. The Bedingung column runs on across it, so
+            // the entry the previous page left open keeps collecting; a
+            // header at a different geometry opens a different table.
+            let page_break = table.as_ref().is_some_and(|t| t.desc_x == desc_x);
+            if !page_break {
+                commit_condition(&mut cur_cond, &mut doc.conditions);
+                cur_cond = None;
+            }
             table = Some(Table {
                 columns: Vec::new(),
                 desc_x,
@@ -260,7 +293,6 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
             last_row = Vec::new();
             last_el = Vec::new();
             last = Last::None;
-            cur_cond = None;
             continue;
         }
         if let Some(c) = heading.captures(line)
@@ -284,6 +316,18 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
 
         // ── Table header: names, roles, Prüfidentifikatoren ──────────────
         if !tb.header_done {
+            // The Bedingung column keeps printing next to the repeated header
+            // a page break inserts: the text there continues the entry the
+            // break interrupted, or opens the next ones.
+            if tb.bedingung_x != usize::MAX && t != "Bedingung" {
+                collect_condition(
+                    line,
+                    tb.bedingung_x,
+                    &cond_id,
+                    &mut cur_cond,
+                    &mut doc.conditions,
+                );
+            }
             if t == "Bedingung" || t.ends_with(" Bedingung") {
                 if let Some(x) = char_pos(line, "Bedingung") {
                     tb.bedingung_x = x;
@@ -994,7 +1038,7 @@ fn finish_header(
 }
 
 /// The status text printed under each column on this line, from byte offset
-/// `from` on, and the character offset where the last status expression ends.
+/// `from` on, and the grid column where the last status glyph ends.
 ///
 /// A cell is a status word with the brackets and operators that follow it
 /// (or, on a continuation line, a run of brackets and operators). Cells are
@@ -1009,6 +1053,12 @@ fn column_cells(tb: &mut Table, line: &str, from: usize) -> (Vec<Option<String>>
     let toks = tokens(rest);
     // (start, end, text)
     let mut raw: Vec<(usize, usize, String)> = Vec::new();
+    // The rightmost grid column a status glyph occupies. `end` below is a
+    // `rendered_end`, which scales a token's width to place its centre under
+    // the right column and therefore overshoots the grid; the Bedingung
+    // column's own text starts at a real grid position, so the boundary
+    // between them has to be measured on the grid.
+    let mut grid_end = 0;
     for (i, k) in toks.iter().enumerate() {
         let x = base + k.x;
         if !is_status_token(k.text) {
@@ -1046,6 +1096,7 @@ fn column_cells(tb: &mut Table, line: &str, from: usize) -> (Vec<Option<String>>
         // `x` for `X` is a typo the AHBs carry now and then.
         let word = if k.text == "x" { "X" } else { k.text };
         let end = rendered_end(x, k.text);
+        grid_end = grid_end.max(x + k.text.chars().count());
         match raw.last_mut() {
             // One word space on the grid is a cell or two past the glyphs.
             Some((_, last_end, text)) if !is_word && x <= *last_end + 2 => {
@@ -1056,7 +1107,6 @@ fn column_cells(tb: &mut Table, line: &str, from: usize) -> (Vec<Option<String>>
             _ => raw.push((x, end, word.to_owned())),
         }
     }
-    let end_x = raw.last().map_or(0, |(_, e, _)| *e);
     for (start, end, text) in raw {
         let centre = (start + end) / 2;
         // A cell is centred under its column; a `[n]` further off is the
@@ -1078,7 +1128,7 @@ fn column_cells(tb: &mut Table, line: &str, from: usize) -> (Vec<Option<String>>
             None => cells[ci] = Some(text),
         }
     }
-    (cells, end_x)
+    (cells, grid_end)
 }
 
 /// Whether the token after the data-element number is a code the MIG admits
@@ -1191,6 +1241,23 @@ fn collect_condition(
     if !buf.trim().is_empty() {
         append_condition(buf.trim(), cur);
     }
+}
+
+/// Where the Paket table's Paketvoraussetzung and Bedingungen columns start.
+#[derive(Debug, Clone, Copy)]
+struct PackageTable {
+    pv: usize,
+    bed: usize,
+}
+
+/// Whether a token can be part of a Paketvoraussetzung — a `[n]` reference, one
+/// of the operators the AHBs use, or the status word some of them print in
+/// front of it (`X [50] ∧ [528]`). Everything else in that column is prose.
+fn is_expression_token(t: &str) -> bool {
+    let core = t.trim_start_matches('(').trim_end_matches(')');
+    matches!(t, "∧" | "∨" | "⊻" | "(" | ")")
+        || matches!(t, "Muss" | "Soll" | "Kann" | "X" | "M" | "S" | "K")
+        || (core.starts_with('[') && core.ends_with(']'))
 }
 
 fn append_condition(text: &str, cur: &mut Option<(String, String)>) {

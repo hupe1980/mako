@@ -2252,7 +2252,7 @@
     "54": "Falls der Preis des Artikels gezont ist",
     "55": "Wenn in dieser SG36 ein weiteres RNG (d. h. eine weitere Zone) vorhanden ist, in der der Wert des DE6162 (Wertebereichsgrenze, untere) größer ist als der Wert des DE6162 in diesem RNG",
     "56": "Wenn BGM DE1001 = Z94, dann muss der hier genannte Zeitpunkt ≥ 01.10.2025 00:00 Uhr gesetzlicher deutscher Zeit sein",
-    "57": "wenn BGM DE1001 = Z94 (Preisblatt Technik) wenn BGM DE1001 = Z32 (Preisblatt Messstellenbetrieb)",
+    "57": "wenn BGM DE1001 = Z94 (Preisblatt Technik)",
     "6": "Wenn in dieser SG36 LIN in DE7140 9990001000798 vorhanden",
     "60": "Wenn in dieser SG36 der Teil vor dem \"-\" aus LIN DE7140 aus der Tabelle des Kapitels \"Produkte zur Bestellung einer Änderung an einer Lokation in der Sparte Strom\" der EDI@Energy Codeliste der Konfigurationen",
     "61": "Wenn in dieser SG36 der Wert der Zahl nach dem \"-\" aus LIN DE7140 > 01",
@@ -2292,7 +2292,7 @@
   },
   "message_type": "PRICAT",
   "packages": {
-    "1P": "--                                                 Hinweis:       Das    ist  das    Standardpaket,            wenn      keine     Bedingung          zum     Tragen      kommt,        z.  B."
+    "1P": ""
   },
   "release": "2.0e",
   "schema_version": 2,

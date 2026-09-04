@@ -33,8 +33,6 @@ pub struct Config {
     #[serde(default)]
     pub erp_hmac_secret: Option<String>,
     #[serde(default)]
-    pub otel: OtelConfig,
-    #[serde(default)]
     pub mcp: mako_service::mcp_auth::McpAuthConfig,
     /// OIDC token verification. Required: a MaBiS submission is a binding
     /// filing to the BIKO, so the service refuses to start without it unless
@@ -162,8 +160,6 @@ impl Default for ScheduleConfig {
         }
     }
 }
-
-pub use mako_service::telemetry::OtelConfig;
 
 impl Config {
     /// Refuse a configuration that cannot produce a valid submission.

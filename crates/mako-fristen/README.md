@@ -71,10 +71,9 @@ used in BDEW MaKo.
 ## Sourcing
 
 Every window in `antwort`, `meldung` and `vorlauf` carries the document and
-chapter it was read from. A window with no source is not in the table — it is a
-gap in the platform's [roadmap](https://github.com/hupe1980/mako), not a
-plausible default, because a fabricated Frist fails silently in whichever
-direction it was guessed.
+chapter it was read from. A window with no source is absent from the table
+rather than filled with a plausible default: a fabricated Frist fails silently,
+in whichever direction it was guessed.
 
 ## License
 

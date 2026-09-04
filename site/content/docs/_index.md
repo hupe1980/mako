@@ -62,8 +62,8 @@ graph TB
 ```
 
 The split is deliberate. The domain layer never sees EDIFACT, and the format
-layer never knows what a Lieferantenwechsel is — so an annual BDEW release is a
-codegen run against new profiles rather than a change to process logic.
+layer never knows what a Lieferantenwechsel is — so an annual BDEW release is an
+import of new profiles rather than a change to process logic.
 
 ## Sections
 

@@ -162,8 +162,8 @@ fn every_generated_fixture_stamps_the_agency_its_mp_id_implies() {
     );
     assert!(
         wrong.is_empty(),
-        "{} generated NAD(s) name the wrong code list — regenerate with \
-         `cargo xtask generate-fixtures` after fixing `agency_for`:\n  {}",
+        "{} generated NAD(s) name the wrong code list — fix `agency_for` and \
+         regenerate the fixtures it feeds:\n  {}",
         wrong.len(),
         wrong
             .iter()

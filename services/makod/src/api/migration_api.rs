@@ -72,8 +72,11 @@ use mako_mabis::MabisBillingWorkflow;
 use mako_redispatch::{
     ack_forward::{
         KaskadeWorkflow, KostenblattWorkflow, NetzengpassWorkflow, PlanungsdatenWorkflow,
-        StatusanfrageWorkflow, VerfuegbarkeitWorkflow,
-        names::{KASKADE, KOSTENBLATT, NETZENGPASS, PLANUNGSDATEN, STATUSANFRAGE, VERFUEGBARKEIT},
+        StatusanfrageWorkflow, VerfuegbarkeitWorkflow, kaskade::WORKFLOW_NAME as KASKADE,
+        kostenblatt::WORKFLOW_NAME as KOSTENBLATT, netzengpass::WORKFLOW_NAME as NETZENGPASS,
+        planungsdaten::WORKFLOW_NAME as PLANUNGSDATEN,
+        statusanfrage::WORKFLOW_NAME as STATUSANFRAGE,
+        verfuegbarkeit::WORKFLOW_NAME as VERFUEGBARKEIT,
     },
     aktivierung::{AktivierungWorkflow, WORKFLOW_NAME as AKTIVIERUNG_WORKFLOW},
     stammdaten::{

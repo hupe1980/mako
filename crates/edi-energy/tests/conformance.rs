@@ -65,8 +65,8 @@ use edi_energy::{EdiEnergyMessage, Platform};
 ///
 /// Derived dynamically from the latest `valid_from` across all registered
 /// profiles, plus a 365-day margin.  This means the date automatically
-/// advances when new profiles (with later `valid_from` dates) are added via
-/// `cargo xtask codegen`, without any manual constant update.
+/// advances when new profiles (with later `valid_from` dates) are imported,
+/// without any manual constant update.
 ///
 /// If no profile has a `valid_from` date, falls back to 2027-01-01.
 #[cfg(any(

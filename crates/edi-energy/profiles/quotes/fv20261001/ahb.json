@@ -5741,7 +5741,7 @@
     "44": "Wenn MSBA nicht Eigentümer des Gerätes/der Geräte ist",
     "49": "Wenn SG27 LIN++Z64 (Erforderliches Produkt Schaltzeitdefinitionen) vorhanden",
     "492": "wenn MP-ID in NAD+MR aus Sparte Strom",
-    "493": "wenn MP-ID in NAD+MR aus Sparte Gas 4 Anwendungsübersichten",
+    "493": "wenn MP-ID in NAD+MR aus Sparte Gas",
     "494": "Das hier genannte Datum muss der Zeitpunkt sein, zu dem das Dokument erstellt wurde, oder ein Zeitpunkt, der davor liegt.",
     "5": "Wenn in derselben SG27 LIN die Artikelnummer 9990001000649 vorhanden ist",
     "50": "Wenn SG27 LIN++Z65 (Erforderliches Produkt Leistungskurvendefinitionen) vorhanden",
@@ -5825,7 +5825,7 @@
   },
   "message_type": "QUOTES",
   "packages": {
-    "1P": "--                                                  Hinweis:       Das    ist  das   Standardpaket,             wenn      keine     Bedingung         zum     Tragen       kommt,       z.  B.",
+    "1P": "",
     "2P": "[8]",
     "3P": "[25]",
     "4P": "[492]",

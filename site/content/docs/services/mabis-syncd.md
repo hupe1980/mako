@@ -457,8 +457,6 @@ api_key = "env:MABIS_SYNCD_MCP_API_KEY"
 erp_webhook_url = "http://erp:8000/events"
 erp_hmac_secret = "env:MABIS_SYNCD_ERP_HMAC_SECRET"
 
-# [otel]
-# endpoint = "http://otel-collector:4317"
 ```
 
 Two values are checked at startup, where refusing still costs nothing:

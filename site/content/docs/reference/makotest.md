@@ -563,9 +563,9 @@ The catalogue serves **three wires**: `SG4 STS+E01` on a UTILMD, `AJT` on a
 REMADV, `SG2 AJT` on an ORDRSP. One `antwort_code(tree, code)` for all of them.
 
 Which matters because an obligation whose answer message type cannot be built is
-one no test can answer: **55 of the 58** published obligations are answerable —
-UTILMD 30, ORDRSP 11, IFTSTA 7, QUOTES 5, ORDERS 2. The three that are not carry
-answer PIDs absent from the compiled profiles.
+one no test can answer. All **61** published obligations are answerable — UTILMD
+36, ORDRSP 11, IFTSTA 7, QUOTES 5, ORDERS 2 — and
+`test_most_published_obligations_are_now_answerable` holds it there.
 
 **A code has no meaning without its tree.** `A02` is „Vorlauffrist nicht
 eingehalten" in `E_0607` and „Marktlokation nimmt nicht an der Marktkommunikation

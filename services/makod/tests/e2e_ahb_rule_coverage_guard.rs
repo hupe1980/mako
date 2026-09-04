@@ -151,7 +151,7 @@ async fn every_routed_pid_has_ahb_rules() {
         "these PIDs are routed but have no AHB rules in any shipped profile, so \
          inbound messages carrying them are validated against an empty rule pack \
          and silently pass:\n{}\n\nRe-import the profile from the BDEW AHB (see \
-         `cargo xtask extract-pdf`). If a PID is genuinely rule-free, add it to \
+         `cargo xtask import-profiles`). If a PID is genuinely rule-free, add it to \
          RULELESS_BY_DESIGN with the reason.",
         gaps.join("\n")
     );

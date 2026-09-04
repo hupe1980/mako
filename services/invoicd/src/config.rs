@@ -45,8 +45,6 @@
 //! # [oidc]
 //! # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 //! # audience = "api://mako-invoicd"
-//! # [otel]
-//! # endpoint = "http://otel-collector:4317"
 //! ```
 
 use invoic_checker::CheckConfig;
@@ -77,8 +75,6 @@ pub struct Config {
     pub erp: ErpConfig,
     #[serde(default)]
     pub oidc: Option<OidcConfig>,
-    #[serde(default)]
-    pub otel: OtelConfig,
     /// MCP server authentication. Supports OIDC + API-key fallback, or dev mode.
     /// See `[mcp]` in TOML — e.g. `api_key = "env:INVOICD_MCP_API_KEY"`.
     #[serde(default)]
@@ -314,9 +310,6 @@ impl Default for CheckSectionConfig {
 
 /// OIDC configuration — re-exported from `mako-service` (shared across all daemons).
 pub use mako_service::oidc::OidcConfig;
-
-/// OpenTelemetry config — shared struct from `mako-service`.
-pub use mako_service::telemetry::OtelConfig;
 
 /// ERP integration config — outbound payment CloudEvents.
 ///

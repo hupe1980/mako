@@ -105,8 +105,9 @@ pub struct RoutingError {
 /// # Registration order
 ///
 /// Each [`RedispatchDocumentKind`] maps to exactly one workflow name. Duplicate
-/// registrations overwrite the previous entry (last-write-wins), analogous
-/// to `PidRouter`. Use `cargo xtask validate-pruefids` to detect conflicts.
+/// registrations overwrite the previous entry (last-write-wins). Unlike
+/// `PidRouter::register_with_module`, nothing refuses a second registration:
+/// the kinds are registered once, from this crate, in [`crate::router`].
 #[derive(Debug, Default, Clone)]
 pub struct RedispatchRouter {
     /// Mapping from `RedispatchDocumentKind` discriminant to workflow name.

@@ -814,11 +814,14 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "utilmd"))]
 mod de9013_tests {
+    use super::STS_TRANSAKTIONSGRUND;
+    use crate::registry::ReleaseRegistry;
+
     /// `SG4 STS+7` DE 9013 has three composites, and each is its own code
-    /// space. The tables below are the whole of what UTILMD MIG Strom S2.2
-    /// publishes for elements 2 and 3, so a re-import that drops a code fails
+    /// space. The MIG's own tables are the source; this holds the named
+    /// constants against them, so a re-import that adds or drops a code fails
     /// here rather than at a counterparty.
     ///
     /// A code missing from element 2 is a Geschäftsvorfall mako cannot name; a
@@ -826,24 +829,69 @@ mod de9013_tests {
     /// 55077 turns a decidable Anmeldung into an escalation.
     #[test]
     fn the_de9013_tables_are_the_mig_tables() {
-        // Element 2 — Transaktionsgrund.
-        const GRUND: &[&str] = &[
-            "E01", "E02", "E03", "E05", "E06", "Z02", "Z15", "Z26", "Z33", "Z36", "Z37", "Z39",
-            "Z41", "ZAM", "ZAN", "ZAO", "ZC6", "ZC7", "ZC8", "ZD9", "ZE3", "ZG5", "ZG6", "ZG9",
-            "ZH0", "ZH1", "ZH2", "ZJ4", "ZP3", "ZP4", "ZQ7", "ZR9", "ZT0", "ZT4", "ZT5", "ZT6",
-            "ZT7", "ZU1", "ZX2", "ZX3", "ZX4", "ZX5", "ZX6", "ZX7", "ZX8", "ZX9", "ZY0", "ZY1",
-            "ZY2", "ZY4", "ZY5", "ZY6", "ZY7", "ZY9", "ZZA", "ZZD",
-        ];
-        // Element 3 — Transaktionsgrundergänzung. `ZW8`…`ZX1` are the
-        // Zuordnungsfälle and live in their own module; the element is one space
-        // on the wire, so they belong in this count.
-        const ERGAENZUNG: &[&str] = &[
-            "ZAP", "ZW0", "ZW1", "ZW2", "ZW3", "ZW4", "ZW5", "ZW6", "ZW7", "ZW8", "ZW9", "ZX0",
-            "ZX1", "ZZB", "ZZC",
-        ];
+        for (name, shipped, published) in [
+            ("element 2", SHIPPED_GRUND, &de9013(0)[..]),
+            ("element 3", SHIPPED_ERGAENZUNG, &de9013(1)[..]),
+        ] {
+            let mut have: Vec<&str> = shipped.to_vec();
+            have.sort_unstable();
+            have.dedup();
+            let mut want: Vec<&str> = published.to_vec();
+            want.sort_unstable();
+            want.dedup();
+            assert_eq!(have, want, "{name} drifted from the UTILMD MIG");
+        }
+    }
 
-        use super::{ergaenzung as e, transaktionsgrund as g, zuordnungsfall as z};
-        let shipped_grund = [
+    /// The `occurrence`-th DE 9013 code table of the Transaktionsgrund `STS`,
+    /// as the newest UTILMD Strom MIG publishes it.
+    ///
+    /// Strom and Gas agree on both tables; the Strom track is the one both are
+    /// quoted from. The segment is found by its own Statuskategorie — the MIG
+    /// renumbers its segments between Nachrichtentypversionen.
+    fn de9013(occurrence: usize) -> Vec<&'static str> {
+        let profile = ReleaseRegistry::global()
+            .all_profiles()
+            .iter()
+            .filter(|p| p.mig.message_type == "UTILMD" && p.mig.track.as_deref() == Some("Strom"))
+            .max_by(|a, b| a.mig.valid_from.cmp(&b.mig.valid_from))
+            .expect("a UTILMD Strom profile is embedded");
+        let sts = profile
+            .mig
+            .segments()
+            .into_iter()
+            .find(|s| {
+                s.tag == "STS"
+                    && s.elements
+                        .iter()
+                        .flat_map(|e| e.components.iter())
+                        .any(|c| {
+                            c.id == "9015"
+                                && c.codes.iter().any(|k| k.code == STS_TRANSAKTIONSGRUND)
+                        })
+            })
+            .expect("UTILMD SG4 carries the Transaktionsgrund STS");
+        let tables: Vec<Vec<&str>> = sts
+            .elements
+            .iter()
+            .flat_map(|el| el.components.iter())
+            .filter(|c| c.id == "9013")
+            .map(|c| c.codes.iter().map(|k| k.code.as_str()).collect())
+            .collect();
+        assert_eq!(
+            tables.len(),
+            3,
+            "the MIG prints DE 9013 three times in {} {}",
+            sts.nr,
+            sts.name
+        );
+        tables[occurrence].clone()
+    }
+
+    /// Element 2 — the Transaktionsgründe [`super::transaktionsgrund`] names.
+    const SHIPPED_GRUND: &[&str] = {
+        use super::transaktionsgrund as g;
+        &[
             g::EIN_AUSZUG,
             g::EINZUG_NEUANLAGE,
             g::WECHSEL,
@@ -900,8 +948,15 @@ mod de9013_tests {
             g::KORREKTUR_ABRECHNUNGSDATEN_BK_ERZEUGEND,
             g::AENDERUNG_PAKET_ID_MALO,
             g::UEBERGANGSVERSORGUNG,
-        ];
-        let shipped_ergaenzung = [
+        ]
+    };
+
+    /// Element 3 — the Transaktionsgrundergänzungen. `ZW8`…`ZX1` are the
+    /// Zuordnungsfälle and live in their own module; the element is one code
+    /// space on the wire, so they belong here.
+    const SHIPPED_ERGAENZUNG: &[&str] = {
+        use super::{ergaenzung as e, zuordnungsfall as z};
+        &[
             e::GESCHAEFTSVORFALL_1,
             e::GESCHAEFTSVORFALL_2,
             e::GESCHAEFTSVORFALL_3,
@@ -917,18 +972,6 @@ mod de9013_tests {
             z::FALL_2,
             z::FALL_3,
             z::FALL_4,
-        ];
-
-        for (name, shipped, published) in [
-            ("element 2", &shipped_grund[..], GRUND),
-            ("element 3", &shipped_ergaenzung[..], ERGAENZUNG),
-        ] {
-            let mut have: Vec<&str> = shipped.to_vec();
-            have.sort_unstable();
-            have.dedup();
-            let mut want: Vec<&str> = published.to_vec();
-            want.sort_unstable();
-            assert_eq!(have, want, "{name} drifted from UTILMD MIG Strom S2.2");
-        }
-    }
+        ]
+    };
 }

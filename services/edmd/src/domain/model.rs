@@ -126,9 +126,10 @@ pub const STORNO_PIDS: &[u32] = &[13006];
 /// subject — the Ausfallarbeit of a Redispatch-Maßnahme — which is why `edmd`
 /// keeps them together.
 ///
-/// `cargo xtask validate-pruefids` checks the invariant that matters:
-/// `mako_redispatch::aktivierung::MSCONS_PIDS` ⊆ this set, so a PID the
-/// workflow accepts always has its intervals stored.
+/// The invariant that matters is `mako_redispatch::aktivierung::MSCONS_PIDS` ⊆
+/// this set, so a PID the workflow accepts always has its intervals stored.
+/// `edmd` does not depend on `mako-redispatch`, so `redispatch_pids_are_accepted`
+/// can only check the half that is local — that this set ⊆ `ALL_MSCONS_PIDS`.
 ///
 /// Source: BDEW *Anwendungsübersicht Prüfidentifikatoren 4.0* (01.04.2026);
 /// MSCONS AHB 3.1g §5.

@@ -16,6 +16,7 @@
 //!   explains its absence;
 //! - every AHB row names a segment `Nr` the MIG structure has, and every column
 //!   lists `UNH`;
+//! - every `[n]` a status expression or an operand cites has its Bedingung text;
 //! - the `source.sha256` matches the mirrored document when the mirror is here.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -229,13 +230,30 @@ pub fn run(workspace_root: &str) -> bool {
                 continue;
             }
         };
-        let ahb: Ahb = match load(&profiles.join(dir).join("ahb.json")) {
+        let ahb_path = profiles.join(dir).join("ahb.json");
+        let ahb: Ahb = match load(&ahb_path) {
             Ok(a) => a,
             Err(e) => {
                 errors.push(format!("{dir}: {e}"));
                 continue;
             }
         };
+        // Every `[n]` a status or an operand cites has its Bedingung text. The
+        // importer refuses to write a profile that fails this, but only where
+        // the document mirror is; the committed file is what ships.
+        match load::<serde_json::Value>(&ahb_path) {
+            Ok(raw) => {
+                let missing = crate::import_profiles::unresolved_conditions(&raw);
+                if !missing.is_empty() {
+                    errors.push(format!(
+                        "{dir}: {} Bedingungen are cited but have no text: {:?}",
+                        missing.len(),
+                        missing.iter().take(20).collect::<Vec<_>>()
+                    ));
+                }
+            }
+            Err(e) => errors.push(format!("{dir}: {e}")),
+        }
         let mut e = |msg: String| errors.push(format!("{dir}: {msg}"));
         if mig.schema_version != 2 || ahb.schema_version != 2 {
             e("schema_version must be 2".into());

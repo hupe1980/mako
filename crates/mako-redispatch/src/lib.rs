@@ -90,12 +90,12 @@
 //! |---|---|---|
 //! | [`stammdaten`] | `redispatch-stammdaten` | `Stammdaten` |
 //! | [`aktivierung`] | `redispatch-aktivierung` | `ActivationDocument` |
-//! | [`ack_forward`] (Verfügbarkeit) | `redispatch-verfuegbarkeit` | `UnavailabilityMarketDocument` |
-//! | [`ack_forward`] (Netzengpass) | `redispatch-netzengpass` | `NetworkConstraintDocument` |
-//! | [`ack_forward`] (`Kaskade`) | `redispatch-kaskade` | `Kaskade` |
-//! | [`ack_forward`] (Planungsdaten) | `redispatch-planungsdaten` | `PlannedResourceScheduleDocument` |
-//! | [`ack_forward`] (Statusanfrage) | `redispatch-statusanfrage` | `StatusRequest_MarketDocument` |
-//! | [`ack_forward`] (`Kostenblatt`) | `redispatch-kostenblatt` | `Kostenblatt` |
+//! | [`ack_forward::verfuegbarkeit`] | `redispatch-verfuegbarkeit` | `UnavailabilityMarketDocument` |
+//! | [`ack_forward::netzengpass`] | `redispatch-netzengpass` | `NetworkConstraintDocument` |
+//! | [`ack_forward::kaskade`] | `redispatch-kaskade` | `Kaskade` |
+//! | [`ack_forward::planungsdaten`] | `redispatch-planungsdaten` | `PlannedResourceScheduleDocument` |
+//! | [`ack_forward::statusanfrage`] | `redispatch-statusanfrage` | `StatusRequest_MarketDocument` |
+//! | [`ack_forward::kostenblatt`] | `redispatch-kostenblatt` | `Kostenblatt` |
 
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
@@ -157,7 +157,7 @@ impl RedispatchModule {
         );
         router.register(
             RedispatchDocumentKind::PlannedResourceSchedule,
-            ack_forward::names::PLANUNGSDATEN,
+            ack_forward::planungsdaten::WORKFLOW_NAME,
         );
         // Acknowledgement is routed by correlation (ReceivingDocumentIdentification),
         // not by document kind — do NOT register it here.
@@ -167,20 +167,23 @@ impl RedispatchModule {
         );
         router.register(
             RedispatchDocumentKind::StatusRequest,
-            ack_forward::names::STATUSANFRAGE,
+            ack_forward::statusanfrage::WORKFLOW_NAME,
         );
         router.register(
             RedispatchDocumentKind::Unavailability,
-            ack_forward::names::VERFUEGBARKEIT,
+            ack_forward::verfuegbarkeit::WORKFLOW_NAME,
         );
-        router.register(RedispatchDocumentKind::Kaskade, ack_forward::names::KASKADE);
+        router.register(
+            RedispatchDocumentKind::Kaskade,
+            ack_forward::kaskade::WORKFLOW_NAME,
+        );
         router.register(
             RedispatchDocumentKind::NetworkConstraint,
-            ack_forward::names::NETZENGPASS,
+            ack_forward::netzengpass::WORKFLOW_NAME,
         );
         router.register(
             RedispatchDocumentKind::Kostenblatt,
-            ack_forward::names::KOSTENBLATT,
+            ack_forward::kostenblatt::WORKFLOW_NAME,
         );
         router
     }
@@ -195,12 +198,12 @@ impl EngineModule for RedispatchModule {
         &[
             stammdaten::WORKFLOW_NAME,
             aktivierung::WORKFLOW_NAME,
-            ack_forward::names::VERFUEGBARKEIT,
-            ack_forward::names::NETZENGPASS,
-            ack_forward::names::KASKADE,
-            ack_forward::names::PLANUNGSDATEN,
-            ack_forward::names::STATUSANFRAGE,
-            ack_forward::names::KOSTENBLATT,
+            ack_forward::verfuegbarkeit::WORKFLOW_NAME,
+            ack_forward::netzengpass::WORKFLOW_NAME,
+            ack_forward::kaskade::WORKFLOW_NAME,
+            ack_forward::planungsdaten::WORKFLOW_NAME,
+            ack_forward::statusanfrage::WORKFLOW_NAME,
+            ack_forward::kostenblatt::WORKFLOW_NAME,
         ]
     }
 

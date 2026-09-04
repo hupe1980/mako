@@ -198,8 +198,8 @@ impl ReleaseRegistry {
 
     /// Return a reference to the global registry.
     ///
-    /// Initialises the registry on first call (via `cargo xtask codegen`-generated
-    /// profile stubs). Subsequent calls are lock-free reads.
+    /// Initialises the registry on first call from the profiles embedded at
+    /// build time. Subsequent calls are lock-free reads.
     #[must_use]
     pub fn global() -> &'static Self {
         Self::global_arc()

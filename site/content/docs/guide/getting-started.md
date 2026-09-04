@@ -276,6 +276,41 @@ docker compose down -v   # destroy all volumes (full reset)
 
 ---
 
+## The second demo — EEG feed-in settlement
+
+`demos/eeg-billing` runs the other half of the platform: no EDIFACT at all, but
+the settlement path an NB owes an Anlagenbetreiber. `einsd` holds the plant
+register and computes the § 21 EEG 2023 Einspeisevergütung; `edmd` holds the
+quarter-hour Einspeisemenge it settles against.
+
+| Service | Port | Role |
+|---|---|---|
+| `marktd` | `8180` | Market Data Hub — the MaLo the plant feeds into |
+| `edmd` | `8380` | Energy Data Management — quarter-hour readings, billing periods |
+| `einsd` | `9180` | EEG/KWKG settlement — plant register, monthly Vergütung |
+
+```bash
+docker build --target edmd-runtime  -t edmd:dev  .
+docker build --target einsd-runtime -t einsd:dev .
+cd demos/eeg-billing
+docker compose up -d
+bash smoke.sh
+```
+
+It registers a 9.8 kWp rooftop plant, pushes a month of quarter-hour readings,
+settles the month, and asserts the `de.eeg.verguetung.berechnet` CloudEvent the
+ERP receives. The amount alone is not a legal document: under the
+Gutschriftverfahren (§ 14 Abs. 2 Satz 2 UStG) the Netzbetreiber issues the
+Gutschrift, so `einsd` renders it as a BO4E `Rechnung` whose VAT follows the
+operator's declared `ust_status` — the fixture is a Kleinunternehmer (§ 19
+UStG), so it carries 0 % USt.
+
+`marktd` comes from the same image the NB STP demo builds; `edmd` and `einsd`
+are built on their own because their Iceberg dependencies are not in the
+demo builder stage.
+
+---
+
 ## Next steps
 
 | Topic | Guide |

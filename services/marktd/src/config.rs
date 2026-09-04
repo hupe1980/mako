@@ -39,10 +39,6 @@
 //! delivery_timeout_secs = 10
 //! max_retry_attempts    = 3
 //!
-//! [otel]
-//! endpoint     = "http://otel-collector:4317"
-//! service_name = "marktd"
-//!
 //! [mcp]
 //! path = "/mcp"
 //! ```
@@ -71,8 +67,6 @@ pub struct Config {
     pub makod: MakodConfig,
     #[serde(default)]
     pub webhook: WebhookConfig,
-    #[serde(default)]
-    pub otel: OtelConfig,
     #[serde(default)]
     pub mcp: McpConfig,
     /// Automated monthly MMMA Gas / MMM Strom price import. When omitted or
@@ -172,12 +166,6 @@ fn default_delivery_timeout_secs() -> u64 {
 fn default_max_retry_attempts() -> u32 {
     3
 }
-
-// ── OpenTelemetry ─────────────────────────────────────────────────────────────
-
-/// Re-export `mako-service` OTel config so the rest of the crate only imports
-/// from `config`.
-pub use mako_service::telemetry::OtelConfig;
 
 // ── MCP server ────────────────────────────────────────────────────────────────
 

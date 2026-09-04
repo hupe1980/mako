@@ -396,7 +396,6 @@ warn_days_before_expiry = 14
 # notify_webhook_secret = "env:EOG_WEBHOOK_SECRET"
 
 # [oidc]   omit only in dev — without it every request gets synthetic dev claims
-# [otel]   omit to disable tracing export
 ```
 
 Equivalent environment overrides:

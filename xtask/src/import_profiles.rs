@@ -15,7 +15,7 @@
 //! cargo xtask import-profiles --check            # drift guard (needs the mirror)
 //! ```
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -243,6 +243,16 @@ fn import_one(
         "packages": ahb_doc.packages,
         "anwendungsfaelle": ahb_doc.anwendungsfaelle,
     });
+
+    let missing = unresolved_conditions(&ahb_json);
+    if !missing.is_empty() {
+        return Err(format!(
+            "{message_type}: {} Bedingungen are cited but have no text: {:?}",
+            missing.len(),
+            missing.iter().take(20).collect::<Vec<_>>()
+        ));
+    }
+
     Ok((mig_json, ahb_json))
 }
 
@@ -337,4 +347,104 @@ fn sanity(
         ));
     }
     Ok(())
+}
+
+/// Every `[n]` a status expression or an operand cites, and that no Bedingungen
+/// or Pakete table gives a text.
+///
+/// A Bedingung the reader loses — its number swallowed by the status expression
+/// left of it, or its entry printed next to the header a page break repeats —
+/// leaves the citation dangling, and the evaluator then reads the place as
+/// unconditioned. The citation is what proves the text was found.
+///
+/// Takes the serialised profile so the same check guards the import and the
+/// committed file, the second of which is all `validate-profiles` has.
+pub fn unresolved_conditions(ahb: &Value) -> BTreeSet<String> {
+    let table = |key: &str| -> BTreeSet<String> {
+        ahb.get(key)
+            .and_then(Value::as_object)
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default()
+    };
+    let conditions = table("conditions");
+    let packages = table("packages");
+
+    let mut missing = BTreeSet::new();
+    let mut cite = |expr: &str| {
+        for id in condition_ids(expr) {
+            // `[UB1]`–`[UB3]` are the Zeitpunktangaben of the Allgemeinen
+            // Festlegungen; no AHB reprints their text.
+            // `[UB1]`–`[UB3]` carry no AHB text (above). A Paket is cited
+            // with the occurrence it stands for — `[1P0..1]` — and the table
+            // keys it by the Paket alone.
+            let known = if id.starts_with("UB") {
+                true
+            } else if let Some(p) = id.find('P') {
+                packages.contains(&id[..=p])
+            } else {
+                conditions.contains(&id)
+            };
+            if !known {
+                missing.insert(id);
+            }
+        }
+    };
+    // Every string under `anwendungsfaelle` that can carry an expression, plus
+    // the Paketvoraussetzungen themselves.
+    fn walk(node: &Value, cite: &mut impl FnMut(&str)) {
+        match node {
+            Value::Object(m) => {
+                for (k, v) in m {
+                    if matches!(k.as_str(), "status" | "operand") {
+                        match v {
+                            Value::String(s) => cite(s),
+                            Value::Array(a) => {
+                                for e in a.iter().filter_map(Value::as_str) {
+                                    cite(e);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    walk(v, cite);
+                }
+            }
+            Value::Array(a) => {
+                for v in a {
+                    walk(v, cite);
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(faelle) = ahb.get("anwendungsfaelle") {
+        walk(faelle, &mut cite);
+    }
+    if let Some(pkgs) = ahb.get("packages").and_then(Value::as_object) {
+        for expr in pkgs.values().filter_map(Value::as_str) {
+            cite(expr);
+        }
+    }
+    missing
+}
+
+/// The `[n]` references in one status expression or operand.
+fn condition_ids(expr: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut rest = expr;
+    while let Some(open) = rest.find('[') {
+        rest = &rest[open + 1..];
+        let Some(close) = rest.find(']') else { break };
+        let id = &rest[..close];
+        // `10`, `2061`, `UB1`, `1P0..1`.
+        if !id.is_empty()
+            && id
+                .chars()
+                .all(|c| c.is_ascii_digit() || matches!(c, 'P' | 'U' | 'B' | '.'))
+        {
+            ids.push(id.to_owned());
+        }
+        rest = &rest[close + 1..];
+    }
+    ids
 }

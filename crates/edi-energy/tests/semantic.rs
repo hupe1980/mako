@@ -422,9 +422,9 @@ fn mscons_unit_the_column_does_not_list_is_refused() {
 
 // ── PID coverage fixtures ─────────────────────────────────────────────────────
 //
-// These fixture bytes exist solely so that `cargo xtask validate-pruefids` can
-// confirm each AHB Pruefidentifikator has at least one test referencing it.
-// Each constant embeds the zero-padded 8-digit PID in the BGM qualifier.
+// These fixture bytes exist so that each AHB Prüfidentifikator has at least one
+// test referencing it. Each constant embeds the zero-padded 8-digit PID in the
+// BGM qualifier.
 //
 // UTILMD PIDs: 11004, 11011, 11014, 11016, 11043, 55001, 55002, 55553, 55555
 // MSCONS PIDs: 13002, 13003, 13005, 13013

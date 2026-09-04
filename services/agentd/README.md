@@ -321,8 +321,24 @@ disappear. Admit the target explicitly:
 | `cargo xtask check-tool-grants` | A grant naming a tool no server declares; a `mutates` flag disagreeing with the server's `read_only_hint`; a mutating grant on a `tool-calling` agent |
 | `cargo xtask check-prompt-tools` | A procedure instructing a call the manifest never granted — **and** a grant no procedure step mentions |
 | `cargo xtask check-wire-timestamps` | A `time` value reaching a JSON wire as its component array |
-| `plane::` unit tests | An unsubscribed specialist, an answer-schema object that names its fields and accepts others, **a finding code the procedure emits and the schema cannot carry**, a customer-pooling memory subject, a terminal finding no triage rule reports, a role the policy set does not admit, an oversight verb the policy set grants to nobody, a triage row that expires instead of escalating, a manifest on disk that nobody embedded, a manifest with no schema modeline, a model id nobody reviewed, a declaration that cannot name itself, an audience belonging to no known arm |
+| `plane::` unit tests | Thirteen manifest invariants — listed below |
 | `plane::` unit tests, role builds | A specialist handing a finding to a desk in **another Marktrolle's arm** (§§ 6a, 7a EnWG) — run by `just smoke-roles` against `role-lf`, `role-nb` and `role-msb`, where the compiled set *is* the arm |
+
+What the `plane::` unit tests refuse, one manifest defect each:
+
+- a specialist subscribed to nothing;
+- an answer-schema object that names its fields and accepts others anyway;
+- **a finding code the procedure emits and the schema cannot carry**;
+- a memory subject that pools customers;
+- a terminal finding no triage rule reports;
+- a role the policy set does not admit;
+- an oversight verb the policy set grants to nobody;
+- a triage row that expires instead of escalating;
+- a manifest on disk that nobody embedded;
+- a manifest with no schema modeline;
+- a model id nobody reviewed;
+- a declaration that cannot name itself;
+- an audience belonging to no known arm.
 
 The prompt guard is the least obvious, and it runs in both directions because
 each direction fails differently.

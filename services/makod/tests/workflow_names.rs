@@ -188,7 +188,9 @@ fn every_spawned_workflow_name_is_a_declared_constant() {
 /// Where a `WORKFLOW_NAME` constant is declared, and how `makod` could name it.
 struct Declaration {
     name: String,
-    /// Module file stem — the `mako_gpke::comdis::WORKFLOW_NAME` form.
+    /// The module the constant is in — the innermost `pub mod` around it, or
+    /// the file stem when it sits at file level. Both are the last segment of
+    /// the `mako_gpke::comdis::WORKFLOW_NAME` form `makod` imports it by.
     module: String,
     /// Enclosing `impl` type, when the constant is an associated one — the
     /// `EmobAbmeldungWorkflow::WORKFLOW_NAME` form.
@@ -203,11 +205,16 @@ fn declarations(root: &Path) -> Vec<Declaration> {
         let Ok(src) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let module = path
+        let file_stem = path
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
         let mut impl_type: Option<String> = None;
+        // Inline `pub mod` blocks, with the brace depth each opened at: a
+        // crate may put one module per workflow in a single file, and then the
+        // file stem is not the path `makod` imports the constant by.
+        let mut mods: Vec<(String, i32)> = Vec::new();
+        let mut depth = 0_i32;
         for line in src.lines() {
             let trimmed = line.trim();
             // Track the innermost `impl X {` seen so far; an associated
@@ -221,6 +228,17 @@ fn declarations(root: &Path) -> Vec<Declaration> {
                     .next_back()
                     .map(str::to_owned);
             }
+            if let Some(rest) = trimmed.strip_prefix("pub mod ")
+                && let Some(name) = rest.split(['{', ';', ' ']).next()
+                && rest.contains('{')
+            {
+                mods.push((name.to_owned(), depth));
+            }
+            depth += i32::try_from(trimmed.matches('{').count()).unwrap_or(0)
+                - i32::try_from(trimmed.matches('}').count()).unwrap_or(0);
+            while mods.last().is_some_and(|(_, d)| depth <= *d) {
+                mods.pop();
+            }
             let Some(rest) = trimmed.strip_prefix("pub const WORKFLOW_NAME") else {
                 continue;
             };
@@ -230,7 +248,9 @@ fn declarations(root: &Path) -> Vec<Declaration> {
             };
             out.push(Declaration {
                 name: rest[open + 1..open + 1 + close].to_owned(),
-                module: module.clone(),
+                module: mods
+                    .last()
+                    .map_or_else(|| file_stem.clone(), |(m, _)| m.clone()),
                 impl_type: impl_type.clone(),
                 path: path.clone(),
             });

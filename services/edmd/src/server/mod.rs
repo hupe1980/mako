@@ -634,9 +634,12 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
                         let secret: &str = s.expose_secret();
                         secret
                     }),
-                    // Receive MSCONS completions for meter data storage
-                    // + INSRPT initiations for reading-order auto-creation
-                    // + Lieferbeginn/Lieferende completions for supply handover readings
+                    // Exactly the two types `handler.rs` branches on: MSCONS
+                    // completions for meter-data storage, INSRPT initiations for
+                    // reading-order auto-creation, and Lieferbeginn/Lieferende
+                    // completions for supply-handover readings. Not an operator
+                    // choice — a narrower set drops deliveries edmd needs and a
+                    // wider one registers a marktd fan-out edge it discards.
                     event_types: &[
                         mako_events::mako::PROCESS_COMPLETED,
                         mako_events::mako::PROCESS_INITIATED,

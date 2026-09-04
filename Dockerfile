@@ -1,24 +1,36 @@
 # ── mako — multi-stage Docker build ──────────────────────────────────────────
 #
-# Uses cargo-chef for proper Rust dependency layer caching.
-# Builds SIX production binaries from the same builder layer.
-#
-# Build targets:
-#   docker build --target runtime          -t makod:dev     .   # EDIFACT process engine
-#   docker build --target marktd-runtime   -t marktd:dev    .   # Market Data Hub
-#   docker build --target processd-runtime -t processd:dev  .   # Process Decision Engine
-#   docker build --target invoicd-runtime  -t invoicd:dev   .   # INVOIC plausibility daemon
-#   docker build --target edmd-runtime     -t edmd:dev      .   # Energy Data Management daemon
-#   docker build --target obsd-runtime     -t obsd:dev      .   # Observability daemon
+# Uses cargo-chef for proper Rust dependency layer caching. One runtime stage
+# per service binary, `runtime` (makod) being the default target.
 #
 # Stages:
 #   chef          cargo-chef + Rust toolchain + native build deps
 #   planner       Analyse workspace, emit recipe.json
-#   builder       Cook deps (cached layer) → compile all six binaries
-#   runtime       gcr.io/distroless/cc-debian12:nonroot — makod (default target)
+#   demo-builder  makod, marktd, processd — what `just build-demo` builds
+#   builder       The other fourteen services
+#   *-runtime     gcr.io/distroless/cc-debian12:nonroot, one per binary
 #
-# Build targets:
-#   docker build --target runtime      -t makod:dev .   # EDIFACT process engine
+# Build one image:
+#   docker build --target runtime             -t makod:dev       .
+#   docker build --target marktd-runtime      -t marktd:dev      .
+#   docker build --target processd-runtime    -t processd:dev    .
+#   docker build --target invoicd-runtime     -t invoicd:dev     .
+#   docker build --target edmd-runtime        -t edmd:dev        .
+#   docker build --target obsd-runtime        -t obsd:dev        .
+#   docker build --target netzbilanzd-runtime -t netzbilanzd:dev .
+#   docker build --target sperrd-runtime      -t sperrd:dev      .
+#   docker build --target einsd-runtime       -t einsd:dev       .
+#   docker build --target productd-runtime    -t productd:dev    .
+#   docker build --target billingd-runtime    -t billingd:dev    .
+#   docker build --target outputd-runtime     -t outputd:dev     .
+#   docker build --target accountingd-runtime -t accountingd:dev .
+#   docker build --target vertragd-runtime    -t vertragd:dev    .
+#   docker build --target portald-runtime     -t portald:dev     .
+#   docker build --target agentd-runtime      -t agentd:dev      .
+#   docker build --target mabis-syncd-runtime -t mabis-syncd:dev .
+#
+# `docker-bake.hcl` has a target per service and builds them in groups;
+# `just build-demo` builds the three `demos/nb-stp` starts.
 #
 # Runtime library notes
 # ─────────────────────
@@ -101,15 +113,13 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 3a — demo-builder  (8 demo services — NO LanceDB/agentd/einsd/productd)
+# ║ Stage 3a — demo-builder  (makod, marktd, processd)
 # ╚══════════════════════════════════════════════════════════════════════════════
-# Compiles only the 7 services used by demo/docker-compose.yml.
-# edmd is excluded: its iceberg + datafusion deps add ~12 min to the cold build.
-# edmd can be built separately: docker build --target edmd-runtime -t edmd:dev .
-# Skips agentd (LanceDB ~800 extra crates), einsd (iceberg), and 7 LF services.
-# Expected build time: ~6-8 min cold (3 services, no iceberg/LanceDB).
-# Demo runtime targets (makod, marktd, processd, invoicd, obsd,
-# netzbilanzd) all use --from=demo-builder.
+# The three binaries `demos/nb-stp` starts, and the only ones whose runtime
+# stage copies from here. They pull in neither iceberg/datafusion (edmd, einsd)
+# nor LanceDB (agentd), which is what keeps this stage at a few minutes cold
+# while `builder` takes tens. A demo that needs a service from `builder` —
+# `demos/eeg-billing` needs edmd and einsd — builds that image on its own.
 FROM chef AS demo-builder
 ARG PROFILE=release
 
@@ -133,7 +143,7 @@ RUN --mount=type=cache,id=cargo-registry-demo,sharing=locked,target=/usr/local/c
     && install -d -o 65532 -g 65532 -m 0700 /var/lib/makod
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 3b — builder  (all 17 services — production / CI release pipeline)
+# ║ Stage 3b — builder  (the other fourteen — production / CI release pipeline)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM chef AS builder
 ARG PROFILE=release

@@ -1473,7 +1473,7 @@ pub fn gpke_stornierung_registry() -> AdapterRegistry<GpkeStornierungWorkflow> {
                     tracing::warn!(
                         pid = pid.as_u32(),
                         "GPKE Stornierung adapter: PID {} has no UTILMD AHB profile — \
-                         validation was vacuous. Import profile with `cargo xtask import-xml-ahb`.",
+                         validation was vacuous. Import the profile with `cargo xtask import-profiles`.",
                         pid.as_u32(),
                     );
                     validation_passed = false;

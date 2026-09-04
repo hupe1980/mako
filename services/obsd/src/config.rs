@@ -30,8 +30,6 @@
 //! # [oidc]
 //! # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 //! # audience = "api://mako-obsd"
-//! # [otel]
-//! # endpoint = "http://otel-collector:4317"
 //! ```
 
 use serde::Deserialize;
@@ -58,8 +56,6 @@ pub struct Config {
     pub worker: WorkerConfig,
     #[serde(default)]
     pub oidc: Option<OidcConfig>,
-    #[serde(default)]
-    pub otel: OtelConfig,
     /// MCP server authentication. Supports OIDC + API-key fallback, or dev mode.
     /// See `[mcp]` in TOML — e.g. `api_key = "env:OBSD_MCP_API_KEY"`.
     #[serde(default)]
@@ -242,9 +238,6 @@ impl Default for SubscriptionConfig {
 
 /// OIDC configuration — re-exported from `mako-service` (shared across all daemons).
 pub use mako_service::oidc::OidcConfig;
-
-/// OpenTelemetry config — shared struct from `mako-service`.
-pub use mako_service::telemetry::OtelConfig;
 
 pub fn load_from_file(path: &Path) -> anyhow::Result<Config> {
     let text = std::fs::read_to_string(path)

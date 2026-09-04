@@ -734,14 +734,26 @@ irrelevant for a particular operator — reducing binary size and attack surface
 
 ### Granular flags
 
-| Feature flag | Compiled modules |
+A feature gates a **domain module**, not a workflow: one module registers every
+workflow of its Festlegung, and the `PidRouter` separates the roles inside it by
+Marktrolle. `startup::production_modules()` is the list, and this table is that
+list read out.
+
+| Feature flag | Modules compiled in |
 |---|---|
-| `role-lf-strom` | `mako-gpke` (LF side): `gpke-lf-anmeldung`, `gpke-lf-abmeldung`, `gpke-beendigung-zuordnung`, `gpke-ankuendigung-zuordnung-lf`, `gpke-abrechnung`, `gpke-messwerte`, `gpke-allokationsliste`, `gpke-datenabruf`, `gpke-anfrage-bestellung`, `gpke-utilts` |
-| `role-lf-gas` | `mako-geli-gas` (LF side): `geli-gas-stornierung-lf`, `geli-gas-sperrung-lf`, `geli-gas-mscons` |
-| `role-nb-strom` | `mako-gpke` (NB side): `gpke-supplier-change`, `gpke-zuordnungsmeldung`, `gpke-sperrung`, `gpke-konfiguration`, `gpke-konfiguration-aenderung`, `gpke-neuanlage`, `gpke-partin`, `mako-wim` (NB side); `mako-mabis`: `mabis-billing`, `mabis-zp-lifecycle`, `mabis-listenabgleich`, `mabis-clearingliste`, `mabis-anforderung`, `mabis-profile`; `mako-redispatch`: `redispatch-stammdaten`, `redispatch-aktivierung`, `redispatch-verfuegbarkeit`, `redispatch-netzengpass`, `redispatch-kaskade`, `redispatch-planungsdaten`, `redispatch-statusanfrage`, `redispatch-kostenblatt` (Redispatch 2.0 is gated to NB Strom / ÜNB — LF and MSB deployments are out of scope per BK6-20-059/060/061) |
-| `role-nb-gas` | `mako-geli-gas` (GNB side): `geli-gas-supplier-change`, `geli-gas-zuordnungsmeldung`, `geli-gas-sperrung-nb`, `geli-gas-stornierung`, `geli-gas-datenabruf`, `geli-gas-partin`, `geli-gas-sperrprozesse-invoic` |
-| `role-msb-strom` | `mako-wim`: `wim-device-change`, `wim-ersteinbau`, `wim-geraeteubernahme`, `wim-stammdaten`, `wim-preisanfrage`, `wim-rechnungsabwicklung`, `wim-preisliste`, `wim-invoic`, `wim-insrpt`, `wim-wertebestellung`, `wim-technik-aenderung`, `esa-wertebestellung` |
-| `role-msb-gas` | `mako-wim`: the WiM workflows on the Gas Prüfidentifikatoren |
+| `role-lf-strom` | `GpkeModule` (GPKE Strom, LF side) · `EmobModule` (the LF answers the 55240 Beendigung der Zuordnung) |
+| `role-nb-strom` | `GpkeModule` (NB side) · `WimModule` (NB side) · `MabisModule` · `EmobModule` · `RedispatchModule` |
+| `role-lf-gas` | `GeliGasModule` (GeLi Gas 3.0, LF side) |
+| `role-nb-gas` | `GeliGasModule` (GNB side) · `WimModule` (WiM Gas, NB side) · `GaBiGasModule` |
+| `role-msb-strom` | `WimModule` |
+| `role-msb-gas` | `WimModule` — the WiM workflows on the Gas Prüfidentifikatoren |
+| `role-esa-strom` | `WimModule` — the ESA side of WiM Strom Teil 2 Kap. 4 (`esa-wertebestellung` and its `wim-wertebestellung` counterpart) |
+
+`WimModule` is one crate for both Sparten, so every WiM role loads all of it;
+`RedispatchModule` is gated to NB Strom because LF, MSB and gas-only deployments
+have no §§ 13/13a obligations (BK6-20-059/060/061 as consolidated by
+BK6-23-241). Which workflow belongs to which process is the
+[process map](@/docs/reference/processes.md).
 
 ### Composite flags
 
@@ -750,8 +762,6 @@ irrelevant for a particular operator — reducing binary size and attack surface
 | `role-lf` | `role-lf-strom` + `role-lf-gas` |
 | `role-nb` | `role-nb-strom` + `role-nb-gas` |
 | `role-msb` | `role-msb-strom` + `role-msb-gas` |
-
-| `role-esa-strom` | `mako-wim` (ESA side): `esa-wertebestellung` and its `wim-wertebestellung` counterpart (WiM Strom Teil 2 Kap. 4) |
 
 ### Default
 

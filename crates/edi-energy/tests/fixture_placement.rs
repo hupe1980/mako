@@ -2,8 +2,8 @@
 //!
 //! `iftsta/valid/pid_44001.edi` was an IFTSTA interchange announcing
 //! Prüfidentifikator **44001** — a UTILMD Gas code that no IFTSTA AHB defines.
-//! It parsed, so nothing rejected it, and it counted toward `validate-pruefids`
-//! coverage while asserting a message-type/PID pairing that does not exist.
+//! It parsed, so nothing rejected it, while asserting a message-type/PID
+//! pairing that does not exist.
 //!
 //! The check reads the shipped profiles rather than a hardcoded PID→type map:
 //! the bands overlap in practice (29xxx is shared by APERAK and COMDIS, and

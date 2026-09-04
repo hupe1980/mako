@@ -200,8 +200,6 @@ jwks_refresh_secs = 300
 # to start. The insecure dev posture must be requested by name:
 # allow_insecure_no_auth = true
 
-# [otel]            # omit to disable tracing
-# endpoint = "http://otel-collector:4317"
 ```
 
 ### CLI flags
@@ -400,7 +398,7 @@ sub-resource cannot leave the column and the document disagreeing.
 | `GET` | `/api/v1/esa/consent-check` | — | Gate an ESA message (`?esa_mp_id=&msb_mp_id=&location_id=&perspective=`) → `{allowed, code, reason}`. `perspective=msb_inbound` (default, lenient: missing record = self-assertion) or `esa_outbound` (strict: missing record = no lawful basis). makod calls this before running the Wertebestellung workflow |
 | `GET` | `/api/v1/mabis-zp` | `read-mabis-zp` | Every Bilanzierungsgebiet → MaBiS-Zählpunkt assignment for the tenant |
 | `GET` | `/api/v1/bilanzierungsgebiete/{eic}/mabis-zp` | `read-mabis-zp` | Resolve the MaBiS-Zählpunkt (MSCONS SG6 `LOC+172`) for a territory. `404` is the signal `mabis-syncd` turns into a refused submission — it must never be read as "use the Bilanzierungsgebiet EIC instead" |
-| `PUT` | `/api/v1/bilanzierungsgebiete/{eic}/mabis-zp` | `write-mabis-zp` | Assign the MaBiS-Zählpunkt (NB role). Rejects a Meldepunkt equal to the EIC **and** one that is not a 33-character Zählpunktbezeichnung, with `400`. The length check catches *another* territory's 16-character EIC, which the inequality alone lets through and which would read as valid master data until a submission run refused it. Both are enforced at the API *and* by table `CHECK`s — the substitution is invisible once on the wire |
+| `PUT` | `/api/v1/bilanzierungsgebiete/{eic}/mabis-zp` | `write-mabis-zp` | Assign the MaBiS-Zählpunkt (NB role). `400` for a Meldepunkt equal to the EIC, and for one that is not a 33-character Zählpunktbezeichnung — the length check is what catches *another* territory's 16-character EIC. Enforced at the API and by table `CHECK`s: the substitution is invisible once on the wire |
 | `PUT` | `/api/v1/netzzugang/antraege` | `write-netzzugang` | Upsert a §20b EnWG Netzzugangsplattform request (makod `netzzugang` adapter projection). Emits `de.markt.netzzugang.antrag.updated` |
 | `GET` | `/api/v1/netzzugang/antraege` | `read-netzzugang` | List §20b requests (`?status=&netzanschluss_id=`) |
 | `GET` | `/api/v1/netzzugang/antraege/{id}` | `read-netzzugang` | Get a §20b request |
@@ -1297,11 +1295,36 @@ A Lieferantenwechsel spans three distinct phases, each triggering a targeted par
 | **Confirm** | `process.completed` | 55002 / 55078 / 44002 | `confirm_supply` | Promotes **the named supplier's** announcement to `Aktiv` and displaces the running assignment on the same Tranche — only that one, so an Anmeldung for a 25 % Tranche leaves the LFA holding the other 75 % in place. `lieferstatus = Beliefert`. |
 | **End** | `process.completed` | 55005 / 44005 | `end_supply` | Removes the named running assignment, or all of them when none is named. `lieferstatus` becomes `Unbeliefert` only once **no** assignment is left: one LFA leaving a tranchierte Marktlokation does not make it unsupplied. Announced assignments are preserved. An uncovered interval → emits `de.markt.versorgung.gap-detected`. |
 | **EoG** | `process.completed` | 55013 / 44013 | `begin_eog_supply` | `lieferstatus = Ersatzversorgung`/`Grundversorgung` (per `data.eog_art`), `lf_mp_id = E/G`, `eog_seit = Zuordnungsbeginn` (may be retroactive — anchors §38 Abs. 4). Resolves the Bilanzkreis from the completion payload, else the NB's deposited `default_bilanzkreis` (EoG ohne Antwort). Emits `de.markt.versorgung.eog-begonnen` (incl. `bilanzkreis`). |
-| **Stammdatenänderung** | `process.completed` | GPKE Teil 4 / GeLi Gas Änderung PIDs | `patch_stammdaten` | **Object-generic apply.** Dispatches by the `data.objekt` marker to the matching typed-column patch — `MARKTLOKATION`→`malo` (incl. §14a `fernsteuerbar`), `MESSLOKATION`→`melo` + the **MSB-Zuordnung** (zugeordneter MSB `CAV+7111=Z91`) recorded on the dated `melo_msb_zuordnungen` timeline via `assign_msb` effective the Änderungsdatum, `NETZLOKATION`→`nelo` (incl. §14a `steuerkanal`), `TECHNISCHE_RESSOURCE`→`technische_ressourcen` (`nutzung` `CCI+7059` Z17/Z50/Z56, `verbrauchsart` `CAV+7111` Z64/Z65/ZE5/ZA8, `ist_fernschaltbar`), `STEUERBARE_RESSOURCE`→`steuerbare_ressourcen` (**Konfigurationsprodukte** — each SG8 `SEQ+Z79` product group → a BO4E `Konfigurationsprodukt` with `produktcode` `PIA+5` DE7140, zugeordneter Marktpartner `CAV+Z91`/`ZF0`, and `leistungskurvendefinition` from `CCI+Z66`; the full contracted array is **replaced**, not merged), `TRANCHE`→`tranche`. Each `Some` field overwrites its column via `COALESCE`; JSONB payload and `version` untouched; no-op when the object is unknown locally. Emits `de.markt.malo.stammdaten-geaendert` (MaLo) / `de.markt.stammdaten.geaendert` (other objects). Deep MeLo `standorteigenschaften` are acknowledged without a typed apply (structural-MIG level). |
+| **Stammdatenänderung** | `process.completed` | GPKE Teil 4 / GeLi Gas Änderung PIDs | `patch_stammdaten` | Object-generic apply — see below |
 | **Clear** | `process.completed` | 55003 / 55080 / 44003 | `clear_lf_next` | Lieferbeginn rejected (Ablehnung Anmeldung): drops the refused supplier's announcement so no consumer acts on a switch that will not happen — a rival Anmeldung the NB has not ruled on survives it. Also the write behind 55038 / 44038 „Aufhebung einer zukünftigen Zuordnung", which is the same operation addressed at an LFZ. Idempotent. |
 
 All operations are idempotent under at-least-once fan-out delivery, and each emits
 `de.markt.versorgung.changed` carrying the state it produced.
+
+#### `patch_stammdaten` — one apply for every object
+
+The `data.objekt` marker selects the typed-column patch; each `Some` field
+overwrites its column via `COALESCE`, the JSONB payload and `version` are left
+alone, and an object mako does not hold locally is a no-op.
+
+| `objekt` | Table | Fields the apply carries beyond the plain columns |
+|---|---|---|
+| `MARKTLOKATION` | `malo` | §14a `fernsteuerbar` |
+| `MESSLOKATION` | `melo` | the MSB-Zuordnung (`CAV+7111=Z91`), recorded on the dated `melo_msb_zuordnungen` timeline by `assign_msb`, effective the Änderungsdatum |
+| `NETZLOKATION` | `nelo` | §14a `steuerkanal` |
+| `TECHNISCHE_RESSOURCE` | `technische_ressourcen` | `nutzung` (`CCI+7059` Z17/Z50/Z56), `verbrauchsart` (`CAV+7111` Z64/Z65/ZE5/ZA8), `ist_fernschaltbar` |
+| `STEUERBARE_RESSOURCE` | `steuerbare_ressourcen` | the Konfigurationsprodukte (below) |
+| `TRANCHE` | `tranche` | — |
+
+Each `SG8 SEQ+Z79` product group becomes one BO4E `Konfigurationsprodukt`, with
+`produktcode` from `PIA+5` DE 7140, the zugeordneter Marktpartner from
+`CAV+Z91`/`ZF0` and `leistungskurvendefinition` from `CCI+Z66`. The contracted
+array is **replaced**, not merged.
+
+The apply emits `de.markt.malo.stammdaten-geaendert` for a MaLo and
+`de.markt.stammdaten.geaendert` for every other object. Deep MeLo
+`standorteigenschaften` are acknowledged without a typed apply — they are
+structural-MIG level.
 
 ### Schema
 

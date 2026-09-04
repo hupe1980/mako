@@ -29,7 +29,7 @@ OBSD_CONFIG=obsd.toml obsd        # obsd --check is the container HEALTHCHECK pr
 `obsd` runs on the `mako-service` daemon runner (`mako_service::run::<Obsd>()`), which owns
 tracing, the tuned connection pool (`application_name = "obsd"`), migrations, graceful shutdown,
 and a real `/health/ready` (bounded `SELECT 1`). Config is TOML with `env:` substitution; the file
-path comes from `OBSD_CONFIG`. Log level is `RUST_LOG`; OTLP export is the `[otel]` block.
+path comes from `OBSD_CONFIG`. Log level is `RUST_LOG`; OTLP export is `OTEL_EXPORTER_OTLP_ENDPOINT`.
 
 ---
 
@@ -68,8 +68,6 @@ subscriber_id = "obsd"
 # [oidc]                                  # omit for dev mode
 # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 # audience = "api://mako-obsd"
-# [otel]
-# endpoint = "http://otel-collector:4317"
 ```
 
 The `[worker]` block tunes the background sweeps (`deadline_sweep_secs` 900, `deadline_warn_hours`

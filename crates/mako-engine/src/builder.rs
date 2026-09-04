@@ -157,10 +157,12 @@ pub trait EngineModule: Send + 'static {
     /// here**. Do not attempt to register PIDs lazily from async handlers or
     /// after the engine has started — there is no API for that by design.
     ///
-    /// Duplicate registrations (same PID from two modules) silently overwrite
-    /// the previous mapping; the last module to register wins. Use
-    /// `cargo xtask validate-pruefids` to catch accidental PID conflicts
-    /// between modules before they reach production.
+    /// Two modules claiming one PID for different workflows panics in
+    /// [`PidRouter::register_with_module`] while the engine is being built, so
+    /// the conflict stops the daemon rather than routing a message to whichever
+    /// module registered last.
+    ///
+    /// [`PidRouter::register_with_module`]: crate::pid_router::PidRouter::register_with_module
     ///
     /// For role-conditional registration (PIDs that should only be active for
     /// specific BDEW Marktrollen), override [`register_pids_with_roles`] instead.
@@ -1974,7 +1976,7 @@ where
                         validator(req.message_type),
                         "EngineBuilder::build: module '{}' requires an active edi-energy \
                              profile for '{}' ({}) but none is registered for today's date. \
-                             Run `cargo xtask codegen` to add the missing profile.",
+                             Run `cargo xtask import-profiles` to add the missing profile.",
                         module.name(),
                         req.message_type,
                         req.label,

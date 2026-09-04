@@ -1,7 +1,8 @@
 //! `GET|PUT /api/v1/malos/{malo_id}/grid` — NB grid topology for a MaLo.
 //!
 //! Source: the NB's own **NIS/GIS** (Network/Geographic Information System).
-//! Imported via `xtask import-grid` (CSV/API adapter) or provisioned manually.
+//! Provisioned through this API by the operator's own NIS/GIS export; mako
+//! ships no importer, because no standard export format exists.
 //! Read by `processd` NB module for Anmeldung STP decisions via `mako-pruefung`.
 //!
 //! NOTE: This is NOT MaStR data. MaStR (BNetzA Marktstammdatenregister) covers

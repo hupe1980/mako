@@ -306,6 +306,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v2
       - run: cargo build -p xtask
       - run: cargo run -p xtask -- help
       # axum 0.7 `/:param` route literals panic at startup under 0.8, and no
@@ -318,6 +319,60 @@ jobs:
       # invoice arrives — the check runs, the verdict is persisted, the dispatch
       # 404s, and the Antwortfrist expires on a process that looked healthy.
       - run: cargo run -p xtask -- check-answer-commands
+
+      # The rest of the guard set `just ci` runs. Each is a source scan that
+      # costs seconds; leaving them out of the pull-request gate is what lets a
+      # violation reach `main` and be found by whoever next runs `just ci`.
+      - run: cargo run -p xtask -- check-bo4e-coverage
+      - run: cargo run -p xtask -- check-bo4e-discriminants
+      - run: cargo run -p xtask -- check-bo4e-examples
+      - run: cargo run -p xtask -- check-bo4e-attributes
+      # A `time` value serialised into JSON reaches the client as a component
+      # array, not an RFC 3339 string.
+      - run: cargo run -p xtask -- check-wire-timestamps
+      # A business date read in UTC is the wrong day for two hours every day.
+      - run: cargo run -p xtask -- check-business-dates
+      # Money rounds kaufmännisch (DIN 1333); banker's rounding is off by a
+      # cent on exactly the half-way cases an invoice is full of.
+      - run: cargo run -p xtask -- check-rounding
+      # A MaLo-ID literal whose BDEW check digit is wrong names no location.
+      - run: cargo run -p xtask -- check-malo-ids
+      # A procedure step naming a tool the agent cannot reach stalls the run.
+      - run: cargo run -p xtask -- check-prompt-tools
+      # A publish order that precedes its own dependencies fails at the tag.
+      - run: cargo run -p xtask -- check-publish-order
+      # Documented dependency versions against the manifests.
+      - run: cargo run -p xtask -- check-dep-versions
+      # `rubo4e::v202xyy::` pins a BO4E version alias; `rubo4e::current::` is
+      # the one that moves with the crate.
+      - name: No hardcoded rubo4e version alias
+        run: just no-version-alias
+
+  # ── Role-scoped builds ──────────────────────────────────────────────────────
+  # `--all-features` cannot catch a module whose `#[cfg(feature = …)]` gate is
+  # missing or misplaced — that only shows up with the feature off. It is also
+  # the evidence behind the § 7 EnWG separation claim: an nb-only `processd`
+  # must contain no LF or MSB answer path, and only a role-scoped build proves
+  # it.
+  roles:
+    name: Role-scoped builds (§ 7 EnWG separation)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v2
+      - name: Install protoc
+        run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: just clippy-roles
+        env:
+          PYO3_PYTHON: python3
+      - run: just smoke-roles
+        env:
+          PYO3_PYTHON: python3
 
   makotest:
     name: makotest (Python toolkit)
@@ -422,13 +477,37 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo xtask check-release-coverage
 
+  # ── Publishability ──────────────────────────────────────────────────────────
+  # Every other job builds `--all-features`; `cargo publish` builds the crate's
+  # **default** features. A crate that only compiles with a feature on is found
+  # halfway through the release, after the crates ahead of it in the order are
+  # already on crates.io and cannot be taken back.
+  check-publishable:
+    name: Published crates build with default features
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v2
+      - name: Install protoc
+        run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: just check-publishable
+        env:
+          PYO3_PYTHON: python3
+
   # ── Dockerfile lint ─────────────────────────────────────────────────────────
-  # Validates all nine Dockerfile stages (makod, marktd, processd, invoicd,
-  # edmd, obsd, plus the chef/planner/builder stages) without running a
-  # full Rust compilation.  Catches syntax errors, broken COPY paths, and
-  # invalid --target references before they reach the release pipeline.
+  # `docker buildx build --check` performs Dockerfile linting and build-graph
+  # validation without invoking the builder backend or compiling any Rust code,
+  # so it catches syntax errors, broken COPY paths and invalid `--target`
+  # references before they reach the release pipeline. Every runtime stage is
+  # checked, because a broken COPY in a stage nothing lints is found by the
+  # release tag.
   dockerfile-lint:
-    name: Dockerfile lint (all targets)
+    name: Dockerfile lint (every runtime stage)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -436,23 +515,16 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # --check performs Dockerfile linting + build-graph validation without
-      # invoking the builder backend or compiling any Rust code.
-      # Each target is checked independently so failures are isolated.
-      - name: Lint runtime (makod)
-        run: docker buildx build --check --target runtime .
-
-      - name: Lint marktd-runtime
-        run: docker buildx build --check --target marktd-runtime .
-
-      - name: Lint processd-runtime
-        run: docker buildx build --check --target processd-runtime .
-
-      - name: Lint invoicd-runtime
-        run: docker buildx build --check --target invoicd-runtime .
-
-      - name: Lint edmd-runtime
-        run: docker buildx build --check --target edmd-runtime .
-
-      - name: Lint obsd-runtime
-        run: docker buildx build --check --target obsd-runtime .
+      # The stage list is `docker-bake.hcl`'s own, read out of it rather than
+      # restated: a service added there and not here would go unlinted.
+      - name: Lint every runtime stage
+        run: |
+          set -euo pipefail
+          targets=$(grep -oE '^\s*target\s+=\s+"[a-z0-9-]+"' docker-bake.hcl \
+                    | grep -oE '"[a-z0-9-]+"' | tr -d '"' | sort -u)
+          test -n "$targets" || { echo "no runtime stages found in docker-bake.hcl"; exit 1; }
+          for t in $targets; do
+            echo "==> --target $t"
+            docker buildx build --check --target "$t" .
+          done
+          echo "linted $(echo "$targets" | wc -w | tr -d ' ') runtime stages"

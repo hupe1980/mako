@@ -76,7 +76,13 @@ pub enum PutRecordResponse {
         /// The revision number that would be accepted next.
         expected_revision: i64,
     },
-    /// Selfservice not supported by this implementation — return 405.
+    /// Selfservice not supported by this implementation — answered with
+    /// **501**.
+    ///
+    /// Which status the Directory Service owes here is settled by its own
+    /// OpenAPI document, not by API-Guideline 1.0b § 3.6: that table describes
+    /// the asynchronous message-exchange pattern of § 3.5, and this service
+    /// already answers outside it (200 with a payload, 307 for a redirect).
     NotSupported,
 }
 

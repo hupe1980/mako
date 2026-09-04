@@ -36,11 +36,16 @@ Commands:
   check-answer-commands  Refuse an invoicd PID route naming a makod command that does not exist
   check-tool-grants   Verify every agentd manifest tool grant names a real MCP tool and
                         agrees with that server's own `read_only_hint`
+  import-profiles     Regenerate the profiles from the mirrored BDEW documents
+                        (--profile <type>/<fv>, --check to prove the committed files)
+  profile-diff        Per Prüfidentifikator, what changed between two Formatversionen
+                        (usage: profile-diff <type> <from-fv> <to-fv> [--pid <n>])
+  pdf-grid            Print a BDEW PDF on the character grid the importer reads
 
   --date <YYYY-MM-DD>   Date to check against (default: today)
 
 Exit codes:
-  0  All checks passed / codegen succeeded
+  0  All checks passed
   1  One or more errors were found
 ";
 
@@ -62,6 +67,7 @@ mod check_tool_grants;
 mod check_wire_timestamps;
 mod import_profiles;
 mod pid_overview;
+mod profile_diff;
 mod sync_regulatories;
 mod validate_ebd_codes;
 mod validate_profiles;
@@ -90,6 +96,7 @@ fn main() {
         Some("validate-ebd-codes") => validate_ebd_codes(),
         Some("validate-profiles") => validate_profiles(),
         Some("import-profiles") => import_profiles(),
+        Some("profile-diff") => profile_diff(),
         Some("pdf-grid") => pdf_grid(),
         Some("help" | "--help" | "-h") | None => print!("{HELP}"),
         Some(other) => {
@@ -127,6 +134,14 @@ fn import_profiles() {
     let (workspace_root, _) = workspace_info();
     let args: Vec<String> = std::env::args().skip(2).collect();
     if !import_profiles::run(&workspace_root, &args) {
+        std::process::exit(1);
+    }
+}
+
+fn profile_diff() {
+    let (workspace_root, _) = workspace_info();
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    if !profile_diff::run(&workspace_root, &args) {
         std::process::exit(1);
     }
 }

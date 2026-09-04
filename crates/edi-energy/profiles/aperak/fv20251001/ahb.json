@@ -1207,7 +1207,7 @@
   },
   "message_type": "APERAK",
   "packages": {
-    "1P": "--                                                  Hinweis:       Das    ist  das   Standardpaket,             wenn      keine     Bedingung         zum     Tragen       kommt,        z. B."
+    "1P": ""
   },
   "release": "2.1i",
   "schema_version": 2,

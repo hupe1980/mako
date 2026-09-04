@@ -17,7 +17,6 @@
 //! | `PUT` | `/admin/malo/{malo_id}` | Upsert a record |
 //! | `DELETE` | `/admin/malo/{malo_id}` | Remove a record |
 //! | `GET` | `/admin/malo/stats` | Per-tenant statistics |
-//! | `POST` | `/admin/malo/bulk` | Batch upsert (planned; returns 501) |
 
 use std::sync::Arc;
 
@@ -26,7 +25,7 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
-    routing::{delete, get, post, put},
+    routing::{delete, get, put},
 };
 use energy_api::models::electricity::MaloIdentResultPositive;
 use serde::{Deserialize, Serialize};
@@ -137,7 +136,6 @@ pub(crate) struct TenantStats {
 pub fn router(state: Arc<MaloAdminState>) -> Router {
     Router::new()
         .route("/admin/malo/stats", get(handle_stats))
-        .route("/admin/malo/bulk", post(handle_bulk_not_implemented))
         .route("/admin/malo/{malo_id}", get(handle_get))
         .route("/admin/malo/{malo_id}", put(handle_put))
         .route("/admin/malo/{malo_id}", delete(handle_delete))
@@ -394,32 +392,6 @@ pub(crate) async fn handle_stats(
         tenants: tenant_stats,
     })
     .into_response()
-}
-
-/// `POST /admin/malo/bulk` — batch upsert (not yet implemented).
-async fn handle_bulk_not_implemented(
-    State(state): State<Arc<MaloAdminState>>,
-    headers: HeaderMap,
-) -> Response {
-    let identity = match state.cedar.authenticate(&headers) {
-        Some(id) => id,
-        None => return unauthorized(),
-    };
-    if !state.cedar.authorize_malo(
-        &identity,
-        MakoAction::AdminMaloWrite,
-        &MaloResource {
-            tenant: &state.tenant_id,
-            malo_id: None,
-        },
-    ) {
-        return forbidden();
-    }
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        "Bulk upsert is not yet implemented. Use PUT /admin/malo/{malo_id} for individual records.",
-    )
-        .into_response()
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

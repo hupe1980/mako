@@ -87,6 +87,25 @@ A document defect the importer works around is printed as `warn` — an `SG27
 MOA` row without any status in INVOIC AHB 1.0b gets its status from the MIG.
 Read those lines; they are the places where the AHB and the profile differ.
 
+Every Bedingung a status expression or an operand cites must have its text; a
+citation the reader cannot resolve fails the import, because the evaluator
+would otherwise read the place as unconditioned.
+
+Then read the delta against the predecessor:
+
+```bash
+cargo xtask profile-diff utilmd fv20261001 fv20271001
+cargo xtask profile-diff utilmd fv20261001 fv20271001 --pid 55001
+```
+
+It lists which Prüfidentifikatoren appeared or were withdrawn and, per
+Prüfidentifikator, the places whose status changed, the codes that gained or
+lost an operand, and the Bedingungen and Pakete that were rewritten. Places are
+named by where they sit and what the MIG calls them — `SG4
+Vorgangs-Identifikation / STS Transaktionsgrund` — because the MIG renumbers
+its segments between Nachrichtentypversionen, and an `Nr`-keyed listing would
+report every segment of every column as changed. Put it in the PR summary.
+
 ---
 
 ## Step 3 — Prove it
@@ -105,7 +124,7 @@ skeleton and findings. The fixture snapshot names every verdict that moved.
 ## Step 4 — Validate the set
 
 ```bash
-cargo xtask validate-profiles            # sources ↔ files, dates and continuity, PIDs, AHB rows ↔ MIG
+cargo xtask validate-profiles            # sources ↔ files, dates and continuity, PIDs, AHB rows ↔ MIG, cited Bedingungen
 cargo xtask check-pid-coverage           # the shipped columns against the Anwendungsübersicht
 cargo xtask check-release-coverage --date 2027-10-01
 ```
@@ -137,6 +156,7 @@ missing.
 
 - [ ] `sources.json` names the documents by their mirrored file names and the predecessor has its `valid_until`
 - [ ] `import-profiles` ran clean; every `warn` line is a documented AHB defect
+- [ ] `profile-diff <type> <old fv> <new fv>` read, and its listing in the PR summary
 - [ ] `cargo test -p edi-energy --all-features` — skeletons 100 %, snapshot re-blessed with the diff read
 - [ ] `validate-profiles`, `check-pid-coverage`, `check-release-coverage --date <new fv>` green
 - [ ] retired Prüfidentifikatoren recorded with their Änd-ID

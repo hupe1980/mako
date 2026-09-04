@@ -19369,7 +19369,7 @@
     "543": "Hinweis: Wert aus BGM+Z93 (Bestellung eines Angebots Änderung der Technik der Lokation) DE1004 der ORDERS, mit der die Bestellung erfolgt ist.",
     "544": "Hinweis: Wert aus BGM DE1004 der PRICAT mit der das Preisblatt B des MSB, auf die aus Sicht des MSB das Angebot basiert, übermittelt wurde.",
     "545": "Hinweis: Angabe des Beginnzeitpunkts des realistisch möglichen Umsetzungstermins der zum Zeitpunkt der Ablehnung ermittelt werden kann.",
-    "546": "Hinweis: Angabe des Endezeitpunkts des realistisch möglichen Umsetzungstermins der zum Zeitpunkt der Ablehnung ermittelt werden kann. Wenn BGM+Z93 (Bestellung Angebots Änderung der Technik der Lokation) vorhanden",
+    "546": "Hinweis: Angabe des Endezeitpunkts des realistisch möglichen Umsetzungstermins der zum Zeitpunkt der Ablehnung ermittelt werden kann.",
     "547": "Hinweis: Wenn es sich um die Bestellung eines vorherigen Angebots im Rahmen der BDEW Anwendungshilfe \"Prozesse zur Änderung der Technik an Lokationen\" handelt.",
     "548": "Hinweis: Hinweis: wenn es sich um die Beauftragung einer Änderung gemäß WiM Teil1 UC \"Messlokationsänderung\" handelt.",
     "55": "Vorgangsnummer aus IDE DE7402 der UTILTS mit BGM+Z81",
@@ -19406,13 +19406,13 @@
     "902": "Format: Format: Möglicher Wert: ≥ 0",
     "903": "Format: Möglicher Wert: 1",
     "930": "Format: max. 2 Nachkommastellen",
-    "931": "Format: ZZZ = +00 Wenn BGM+Z51 vorhanden Wenn BGM+Z52 vorhanden",
+    "931": "Format: ZZZ = +00",
     "939": "Format: Die Zeichenkette muss die Zeichen @ und . enthalten",
     "940": "Format: Die Zeichenkette muss mit dem Zeichen + beginnen und danach dürfen nur noch Ziffern folgen"
   },
   "message_type": "ORDRSP",
   "packages": {
-    "1P": "--                                                  Hinweis:       Das    ist  das   Standardpaket,             wenn      keine     Bedingung         zum     Tragen       kommt,        z. B."
+    "1P": ""
   },
   "release": "1.4b",
   "schema_version": 2,

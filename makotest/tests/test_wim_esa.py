@@ -186,7 +186,7 @@ class TestQuotes:
 
 class TestCoverage:
     def test_most_published_obligations_are_now_answerable(self):
-        """The measure that drove binding these four types.
+        """Every published obligation resolves to a message type makotest builds.
 
         An obligation whose answer message type cannot be built is one no test
         can answer, however well the Frist and the Antwortcode are modelled.
@@ -214,6 +214,4 @@ class TestCoverage:
             )[0]
             not in buildable
         ]
-        # The three stragglers are UTILMD by band; their *answer* PIDs carry no
-        # compiled AHB rules, so the message type cannot be resolved from them.
         assert sorted(unanswerable) == []

@@ -368,6 +368,11 @@ macro_rules! ack_forward_workflow {
         }
 
         impl $name {
+            /// The name this workflow's processes are spawned and resumed
+            /// under — the module constant, restated on the type so a reader
+            /// holding the struct can reach it.
+            pub const WORKFLOW_NAME: &'static str = $workflow_name;
+
             /// Return the event-type prefix for this workflow's events.
             #[must_use]
             pub fn event_prefix() -> &'static str {
@@ -384,8 +389,8 @@ ack_forward_workflow!(
     /// ([`crate::fristen::ACK_FRIST`]).
     VerfuegbarkeitWorkflow,
     VerfuegbarkeitEvent,
-    "redispatch-verfuegbarkeit",
-    "redispatch-verfuegbarkeit-ack-window",
+    verfuegbarkeit::WORKFLOW_NAME,
+    verfuegbarkeit::ACK_WINDOW_LABEL,
     "Verfuegbarkeit",
 );
 
@@ -396,8 +401,8 @@ ack_forward_workflow!(
     /// ([`crate::fristen::ACK_FRIST`]).
     NetzengpassWorkflow,
     NetzengpassEvent,
-    "redispatch-netzengpass",
-    "redispatch-netzengpass-ack-window",
+    netzengpass::WORKFLOW_NAME,
+    netzengpass::ACK_WINDOW_LABEL,
     "Netzengpass",
 );
 
@@ -409,8 +414,8 @@ ack_forward_workflow!(
     /// Only active for `Marktrolle::Nb` and `Marktrolle::Unb` deployments.
     KaskadeWorkflow,
     KaskadeEvent,
-    "redispatch-kaskade",
-    "redispatch-kaskade-ack-window",
+    kaskade::WORKFLOW_NAME,
+    kaskade::ACK_WINDOW_LABEL,
     "Kaskade",
 );
 
@@ -421,8 +426,8 @@ ack_forward_workflow!(
     /// ([`crate::fristen::ACK_FRIST`]).
     PlanungsdatenWorkflow,
     PlanungsdatenEvent,
-    "redispatch-planungsdaten",
-    "redispatch-planungsdaten-ack-window",
+    planungsdaten::WORKFLOW_NAME,
+    planungsdaten::ACK_WINDOW_LABEL,
     "Planungsdaten",
 );
 
@@ -438,8 +443,8 @@ ack_forward_workflow!(
     /// (`StatusRequest_MarketDocument` FB 1.1).
     StatusanfrageWorkflow,
     StatusanfrageEvent,
-    "redispatch-statusanfrage",
-    "redispatch-statusanfrage-response-window",
+    statusanfrage::WORKFLOW_NAME,
+    statusanfrage::ACK_WINDOW_LABEL,
     "Statusanfrage",
 );
 
@@ -454,26 +459,72 @@ ack_forward_workflow!(
     /// ([`crate::fristen::`Betreiberfristen`::kostenblatt_stichtag`]).
     KostenblattWorkflow,
     KostenblattEvent,
-    "redispatch-kostenblatt",
-    "redispatch-kostenblatt-ack-window",
+    kostenblatt::WORKFLOW_NAME,
+    kostenblatt::ACK_WINDOW_LABEL,
     "Kostenblatt",
 );
 
-/// Workflow name constants for each process.
-/// Workflow name constants for each process in the acknowledge-and-forward family.
-pub mod names {
-    /// Workflow name for `VerfuegbarkeitWorkflow`.
-    pub const VERFUEGBARKEIT: &str = "redispatch-verfuegbarkeit";
-    /// Workflow name for `NetzengpassWorkflow`.
-    pub const NETZENGPASS: &str = "redispatch-netzengpass";
-    /// Workflow name for `KaskadeWorkflow`.
-    pub const KASKADE: &str = "redispatch-kaskade";
-    /// Workflow name for `PlanungsdatenWorkflow`.
-    pub const PLANUNGSDATEN: &str = "redispatch-planungsdaten";
-    /// Workflow name for `StatusanfrageWorkflow`.
-    pub const STATUSANFRAGE: &str = "redispatch-statusanfrage";
-    /// Workflow name for `KostenblattWorkflow`.
-    pub const KOSTENBLATT: &str = "redispatch-kostenblatt";
+// ── Workflow names and deadline labels ────────────────────────────────────────
+//
+// One module per process, each carrying the two strings both ends of the
+// platform have to agree on: the name a process is spawned and resumed under,
+// and the label its acknowledgement deadline fires with. Spelled once here and
+// read everywhere else — a second spelling that drifts writes the stream under
+// one name and looks it up under another, and a deadline no `on_deadline`
+// matches expires into `None`.
+
+/// Verfügbarkeitsmeldung — `UnavailabilityMarketDocument` (ANB → VNB).
+pub mod verfuegbarkeit {
+    /// Stable workflow name — used in `ProcessRegistry` lookups and log output.
+    pub const WORKFLOW_NAME: &str = "redispatch-verfuegbarkeit";
+    /// Deadline label for the 3-minute `AcknowledgementDocument` window
+    /// ([`crate::fristen::ACK_FRIST`]).
+    pub const ACK_WINDOW_LABEL: &str = "redispatch-verfuegbarkeit-ack-window";
+}
+
+/// Netzengpassinformation — `NetworkConstraintDocument` (ÜNB ↔ VNB).
+pub mod netzengpass {
+    /// Stable workflow name — used in `ProcessRegistry` lookups and log output.
+    pub const WORKFLOW_NAME: &str = "redispatch-netzengpass";
+    /// Deadline label for the 3-minute `AcknowledgementDocument` window
+    /// ([`crate::fristen::ACK_FRIST`]).
+    pub const ACK_WINDOW_LABEL: &str = "redispatch-netzengpass-ack-window";
+}
+
+/// `Kaskade` — § 13 Abs. 2 `EnWG` emergency measures (ÜNB → VNB → ANB).
+pub mod kaskade {
+    /// Stable workflow name — used in `ProcessRegistry` lookups and log output.
+    pub const WORKFLOW_NAME: &str = "redispatch-kaskade";
+    /// Deadline label for the 3-minute `AcknowledgementDocument` window
+    /// ([`crate::fristen::ACK_FRIST`]).
+    pub const ACK_WINDOW_LABEL: &str = "redispatch-kaskade-ack-window";
+}
+
+/// Planungsdaten (Abruffahrplan) — `PlannedResourceScheduleDocument`.
+pub mod planungsdaten {
+    /// Stable workflow name — used in `ProcessRegistry` lookups and log output.
+    pub const WORKFLOW_NAME: &str = "redispatch-planungsdaten";
+    /// Deadline label for the 3-minute `AcknowledgementDocument` window
+    /// ([`crate::fristen::ACK_FRIST`]).
+    pub const ACK_WINDOW_LABEL: &str = "redispatch-planungsdaten-ack-window";
+}
+
+/// Statusanfrage — `StatusRequest_MarketDocument`.
+pub mod statusanfrage {
+    /// Stable workflow name — used in `ProcessRegistry` lookups and log output.
+    pub const WORKFLOW_NAME: &str = "redispatch-statusanfrage";
+    /// Deadline label for the 3-minute `AcknowledgementDocument` window
+    /// ([`crate::fristen::ACK_FRIST`]).
+    pub const ACK_WINDOW_LABEL: &str = "redispatch-statusanfrage-response-window";
+}
+
+/// `Kostenblatt` — monthly cost reconciliation (VNB → ÜNB).
+pub mod kostenblatt {
+    /// Stable workflow name — used in `ProcessRegistry` lookups and log output.
+    pub const WORKFLOW_NAME: &str = "redispatch-kostenblatt";
+    /// Deadline label for the 3-minute `AcknowledgementDocument` window
+    /// ([`crate::fristen::ACK_FRIST`]).
+    pub const ACK_WINDOW_LABEL: &str = "redispatch-kostenblatt-ack-window";
 }
 
 #[cfg(test)]

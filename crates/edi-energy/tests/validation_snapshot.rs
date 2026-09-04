@@ -195,8 +195,9 @@ fn the_corpus_verdict_has_not_moved() {
 /// `PARSE-ERROR` and `VALIDATE-ERROR` are not verdicts about a message's
 /// content — they mean the entry never got as far as being judged, typically a
 /// malformed envelope such as a `UNT` DE 0074 count that does not match the
-/// segments carried. A receiver answers that with a CONTRL rejection, while
-/// `validate-pruefids` still counts the fixture as PID coverage.
+/// segments carried. A receiver answers that with a CONTRL rejection, and
+/// nothing else in the suite tells it apart from a fixture that was judged and
+/// refused.
 ///
 /// The snapshot cannot catch it: an unchanging failure is an unchanged verdict.
 #[test]

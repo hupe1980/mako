@@ -77,9 +77,14 @@ use crate::types::Sparte;
 /// [`EngineContext`] and only shared references are available at runtime.
 /// There is no way to mutate the router from an async dispatch handler.
 ///
-/// Duplicate registrations silently replace the previous mapping; the last
-/// call wins. Use `cargo xtask validate-pruefids` to detect PID conflicts
-/// between modules before they reach production.
+/// [`register`] replaces a duplicate silently — the last call wins — while
+/// [`register_with_module`] panics at build time when two modules claim one PID
+/// for different workflows. Every domain module registers through the latter,
+/// so a conflict stops the daemon before it starts rather than routing a
+/// message to the wrong process.
+///
+/// [`register`]: PidRouter::register
+/// [`register_with_module`]: PidRouter::register_with_module
 ///
 /// # Building a complete router
 ///

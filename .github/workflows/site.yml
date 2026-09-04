@@ -7,6 +7,10 @@ on:
     paths:
       - "site/**"
       - ".github/workflows/site.yml"
+  pull_request:
+    paths:
+      - "site/**"
+      - ".github/workflows/site.yml"
   workflow_dispatch:
 
 permissions:
@@ -27,7 +31,10 @@ env:
   ZOLA_VERSION: "0.23.2"
 
 jobs:
-  build:
+  # Everything `just check-site` runs, on pull requests too: a heading renamed
+  # in one page and linked with an `#anchor` from another is only visible to the
+  # link checker, and `deploy` runs too late to be that check.
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -53,6 +60,28 @@ jobs:
           npm install --no-audit --no-fund
           npm run check:mermaid
 
+      # `zola check` resolves `@/docs/…` links and their `#anchor` fragments;
+      # a plain relative `[text](page.md)` is invisible to it, which is what
+      # site/tools/check-links.mjs refuses.
+      - name: Check links
+        working-directory: site
+        run: |
+          node tools/check-links.mjs
+          zola check --skip-external-links
+
+  build:
+    needs: check
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zola
+        run: |
+          curl -sSfL "https://github.com/getzola/zola/releases/download/v${ZOLA_VERSION}/zola-v${ZOLA_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar xz -C /usr/local/bin zola
+          zola --version
+
       - name: Configure Pages
         id: pages
         uses: actions/configure-pages@v5
@@ -69,6 +98,7 @@ jobs:
 
   deploy:
     needs: build
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

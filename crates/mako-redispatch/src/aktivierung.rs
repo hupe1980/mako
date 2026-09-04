@@ -125,9 +125,10 @@ pub const IFTSTA_PIDS: &[u32] = &[21_037, 21_038];
 /// because 13020/13023 route to `mabis-billing` and 13026 to a family that is
 /// not implemented, yet all of them still belong in the OLAP store.
 ///
-/// `cargo xtask validate-pruefids` enforces the invariant that does have to
-/// hold: this set ⊆ `edmd`'s. A PID the workflow accepts whose intervals `edmd`
-/// drops would leave the process with no data to settle against.
+/// The invariant that has to hold is this set ⊆ `edmd`'s. A PID the workflow
+/// accepts whose intervals `edmd` drops would leave the process with no data to
+/// settle against. `edmd` does not depend on this crate, so nothing checks it
+/// mechanically — the two lists are held together by review.
 ///
 /// A cross-crate dependency from this process-engine crate to `edmd`'s
 /// data-tier domain would be the wrong direction architecturally, so the two

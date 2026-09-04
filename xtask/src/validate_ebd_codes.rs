@@ -13,9 +13,9 @@
 //! tree publishes it, and every existing guard passes.
 //!
 //! Nothing else in the tree compares the catalogue to the document it was
-//! transcribed from. `validate-pruefids` checks that a PID resolves to a tree
-//! and `validate-release-codes` that a profile has a fixture; both take the
-//! catalogue's contents on trust.
+//! transcribed from: the guards around it check that a PID resolves to a tree
+//! and that a profile carries the column, and both take the catalogue's
+//! contents on trust.
 //!
 //! # What it checks
 //!

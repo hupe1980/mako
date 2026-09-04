@@ -155,7 +155,7 @@ What every service gets for free from the runner:
 
 | Concern | Provided by `run::<D>()` |
 |---|---|
-| **Tracing** | Structured logs + optional OTLP export (`RUST_LOG`, `[otel]`) |
+| **Tracing** | Structured logs + optional OTLP export (`RUST_LOG`, `OTEL_EXPORTER_OTLP_ENDPOINT`) |
 | **Config** | `[database]` + service blocks, `env:`/`_FILE` substitution, `<SVC>_CONFIG` path |
 | **Pool** | Tuned sizing with a per-service `application_name` for `pg_stat_activity` |
 | **Migrations** | Applied at startup before the first request |

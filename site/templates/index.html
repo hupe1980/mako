@@ -51,8 +51,8 @@ graph LR
     AS4 -->|"CONTRL / APERAK"| MP
     </pre>
 
-    <p>The format layer is generated from the BDEW profiles, so an annual release is
-      a codegen run rather than a rewrite. The domain layer never sees EDIFACT: it
+    <p>The format layer reads the BDEW profiles as data, so an annual release is
+      an import run rather than a rewrite. The domain layer never sees EDIFACT: it
       receives typed commands and emits typed events.</p>
 
     <p>Two numbers describe the same catalogue from different sides:
@@ -179,7 +179,7 @@ graph TB
   <div class="wrap why-grid">
     <div>
       <h2>Built for the regulatory pace</h2>
-      <p>German market communication moves fast — LFW24, §14a, §41a dynamic tariffs, §42b/c energy sharing, the EDIFACT→API transition, the MaBiS-Hub cutover. mako’s domain layer is deliberately split from transport and format, so when the market moves, the platform moves with a codegen run — not a rewrite.</p>
+      <p>German market communication moves fast — LFW24, §14a, §41a dynamic tariffs, §42b/c energy sharing, the EDIFACT→API transition, the MaBiS-Hub cutover. mako’s domain layer is deliberately split from transport and format, so when the market moves, the platform moves with an import run — not a rewrite.</p>
       <ul class="check">
         <li><strong>Auditable by construction</strong> — event-sourced processes, replayable state, hash-chained ledger with § 147 AO period seals.</li>
         <li><strong>Four market roles, one engine</strong> — NB, LF, MSB and ESA answer from the published Entscheidungsbäume, and a role-scoped build contains only its own arm's code.</li>

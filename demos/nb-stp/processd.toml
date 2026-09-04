@@ -85,6 +85,4 @@ auto_preisanfrage = true
 # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 # audience = "api://mako-processd"
 
-# [otel] — intentionally absent in demo.
-# [otel]
-# endpoint = "http://otel-collector:4317"
+# OTLP export is off in the demo: set OTEL_EXPORTER_OTLP_ENDPOINT to turn it on.

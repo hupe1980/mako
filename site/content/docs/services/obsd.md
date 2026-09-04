@@ -307,8 +307,6 @@ event_types   = [
 # [mcp]           # MCP server auth: OIDC + optional API-key fallback
 # api_key = "env:OBSD_MCP_API_KEY"
 
-# [otel]          # omit to disable tracing
-# endpoint = "http://otel-collector:4317"
 ```
 
 ---

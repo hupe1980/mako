@@ -32,7 +32,8 @@
 //!
 //! AHB validation is bypassed for inbound `ReceiveAnkuendigung` because the
 //! hand-crafted wire fixture does not satisfy all S2.1 profile rules.
-//! AHB conformance is tested separately via `cargo xtask validate-pruefids`.
+//! AHB conformance is tested separately, against the profile itself, by
+//! `edi-energy`'s `skeletons` and `validation_snapshot` suites.
 
 use std::any::Any;
 

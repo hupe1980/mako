@@ -166,10 +166,6 @@ gas_url   = "https://www.tradinghub.eu/mmma-preise.csv"   # or file:///path/to/p
 strom_url = "https://www.bdew.de/…/Mehr-Mindermengen-Preise-Strom.csv"
 check_hour_utc = 6
 
-[otel]
-endpoint     = "http://otel-collector:4317"
-service_name = "marktd"
-
 [mcp]
 path = "/mcp"
 ```

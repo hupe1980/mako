@@ -12,8 +12,8 @@
 //! - Missing rows / incorrect WHERE clauses
 //!
 //! These are exactly the errors that `sqlx::query!()` compile-time macros would
-//! catch statically. Until the `.sqlx/` cache is generated (see `just sqlx-prepare`)
-//! and the queries are migrated to `query!()`, this test suite is the safety net.
+//! catch statically. `processd`'s queries are the runtime `sqlx::query` form, so
+//! this suite is what checks them.
 //!
 //! # Running
 //!
@@ -22,10 +22,8 @@
 //! cargo test --test sql_integration -p processd
 //! ```
 //!
-//! # sqlx-prepare alternative
-//!
-//! Run `just sqlx-prepare` to generate the `.sqlx/` offline cache, then
-//! migrate queries to `sqlx::query_as!()` for compile-time checking.
+//! Moving to `sqlx::query_as!()` would replace it with a compile-time check,
+//! and needs an offline `.sqlx/` cache the workspace does not carry.
 
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;

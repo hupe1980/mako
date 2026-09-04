@@ -4772,7 +4772,7 @@
     "6": "Wenn keine Störung festgestellt werden konnte.",
     "7": "Wenn keine weitere SG7 mit demselben Meldepunkt und DTM+9 vorhanden",
     "8": "Wenn in dieser SG7 STS+Z06+Z10 vorhanden",
-    "9": "Wenn eine Störung festgestellt wurde, die durch den MSB selbständig und unverschuldet nicht behoben werden konnte. 4 INSRPT-Anwendungsfall im WiM-Prozess „Störungsbehebung in der Messlokation“ Den Tabellen dieses Kapitels ist zu entnehmen, wie die INSRPT in den jeweiligen Anwendungsfällen prinzipiell auszuprägen ist. Falls sich im Rahmen der Prüfung (in Prozessschritt 3 der WiM Gas Kap. C 2.3) der Verdacht des Störungsmelders bestätigt: › Prozessschritt 5 (Prüfidentifikator 23005) erfolgt nur, wenn NB nicht Melder der Störung ist (in diesem Fall wird der NB mittels Prozessschritt 4b (Prüfidentifikator 23004) über die Störung informiert). › Prozessschritt 8 (Prüfidentifikator 23009) erfolgt nur, wenn NB nicht Melder der Störung ist (in diesem Fall wird NB mittels Prozessschritt 7 (Prüfidentifikator 23008) über die Störung informiert).",
+    "9": "Wenn eine Störung festgestellt wurde, die durch den MSB selbständig und unverschuldet nicht behoben werden konnte.",
     "908": "Format: Mögliche Werte: 1 bis n",
     "931": "Format: ZZZ = +00",
     "950": "Format: Marktlokations- ID",
@@ -4780,10 +4780,10 @@
   },
   "message_type": "INSRPT",
   "packages": {
-    "1P": "--                                                  Hinweis:       Das    ist  das   Standardpaket,             wenn      keine     Bedingung         zum     Tragen       kommt,        z. B.",
-    "2P": "[6]                                                 Wenn       keine     Störung       festgestellt       werden        konnte.",
-    "3P": "[12]                                                Wenn       eine    Störung       festgestellt       wurde,       die   durch     den     MSB     behoben         wurde.",
-    "4P": "[9]                                                 Wenn       eine    Störung       festgestellt       wurde,       die   durch     den     MSB     selbständig         und"
+    "1P": "",
+    "2P": "[6]",
+    "3P": "[12]",
+    "4P": "[9]"
   },
   "release": "1.1a",
   "schema_version": 2,

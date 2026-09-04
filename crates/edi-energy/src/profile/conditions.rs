@@ -549,8 +549,12 @@ pub enum Voraussetzung {
 }
 
 /// Re-join an EDIFACT pattern the AHB printed across a line break: a space
-/// right after `+`, `-` or `:` inside a token that looks like `TAG+…` is
+/// right after `+`, `-`, `:` or `/` inside a token that looks like `TAG+…` is
 /// removed (`PIA+5+1- 1?:1.9.0` → `PIA+5+1-1?:1.9.0`).
+///
+/// `/` separates the alternatives of one code list (`SEQ+Z04/ ZF7`), and the
+/// AHBs set a space after it for readability. Left in, the alternatives after
+/// the space are read as prose and the Voraussetzung matches only the first.
 fn join_wrapped_pattern(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let chars: Vec<char> = text.chars().collect();
@@ -564,7 +568,7 @@ fn join_wrapped_pattern(text: &str) -> String {
         if c == ' ' && in_pattern {
             let prev = out.chars().last();
             let next = chars.get(i + 1).copied();
-            if matches!(prev, Some('+' | '-' | ':'))
+            if matches!(prev, Some('+' | '-' | ':' | '/'))
                 && next.is_some_and(|n| n.is_ascii_alphanumeric() || n == '?')
             {
                 i += 1;

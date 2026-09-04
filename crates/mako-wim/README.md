@@ -184,10 +184,21 @@ the Gastag boundary. This leg is what makes the Wechsel constitutive.
 | `ersteinbau` | IFTSTA 21029 → 21030/21031 — Ersteinbau eines iMS in eine bestehende Messlokation, **3 WT** Antwort aus `E_0233` (Kap. 3.5, Strom only) |
 | `stammdaten`       | PIDs 17102–17133, 17132 — Stammdaten Anforderung / Übermittlung           |
 | `wertebestellung`  | PIDs 35003/15003/17007/17008, ORDCHG 39002 (Stornierung, answered by ORDRSP 19013/19014), ORDRSP 19011/19012, IFTSTA 21042 — **ESA Wertebestellung** (WiM Teil 2 Kap. 4): Anfrage → Angebot → Bestellung → Stornierung/Abbestellung, plus MSB-initiated termination. Fristen keyed on the positive AS4-Zustellquittung (ÜT); answers carry an `E_0254`/`E_0256`/`E_0257` Antwortcode. |
-| `invoic`           | PIDs 31009 (MSB-Rechnung, Strom) · 31003 (Abrechnung von Dienstleistungen, beide Sparten) · 31004 (Stornorechnung, Sparte-neutral). Both sides: **MSB** sends via `SendInvoic` (invoicer, awaits REMADV); **NB/LF/ESA** ingests via `ReceiveInvoic` then settles/disputes. Inbound REMADV 33001–33004 (incl. the Strom itemized Abweisungen 33003/34) + COMDIS 29001. Routed via `wim-invoic`; replies use conversation-ID correlation (RFF+Z13 → 31009 ref) so they resume this family even when the shared REMADV PID statically resolves to GPKE. The state machine is `mako-invoic`'s, shared with the GPKE, GaBi Gas and GeLi Gas billing families; this module declares only the family and the Gas Ablehnungs-Entscheidungsbaum. |
+| `invoic`           | INVOIC 31009 (MSB-Rechnung, Strom) · 31003 (Dienstleistungen, beide Sparten) · 31004 (Stornorechnung, Sparte-neutral); inbound REMADV 33001–33004 and COMDIS 29001 — see below |
 | `preisanfrage`     | PIDs 35001/35002/35004/35005 (REQOTE), 15001/15002/15004/15005 (QUOTES) — Preisanfrage            |
 | `preisliste`       | PIDs 27001–27003 — Preisliste PRICAT                                      |
 | `steuerungsauftrag`| PIDs 11021–11023 — iMS Steuerungsauftrag (API-Webdienste REST channel)    |
+
+### The `invoic` family
+
+Both sides run here: the **MSB** sends with `SendInvoic` and awaits the REMADV;
+the **NB/LF/ESA** ingests with `ReceiveInvoic`, then settles or disputes.
+
+Replies correlate by conversation ID (`RFF+Z13` → the 31009 reference), so they
+resume this family even though the shared REMADV PID statically resolves to
+GPKE. The state machine itself is `mako-invoic`'s, shared with the GPKE, GaBi
+Gas and GeLi Gas billing families; this module declares only the family and the
+Gas Ablehnungs-Entscheidungsbaum.
 
 ## Usage
 

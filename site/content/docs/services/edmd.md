@@ -2475,8 +2475,6 @@ event_types   = [
 # audience = "api://mako-edmd"
 # jwks_refresh_secs = 300
 
-# [otel]          # omit to disable tracing
-# endpoint = "http://otel-collector:4317"
 ```
 
 **Connection budget.** edmd opens more PostgreSQL pools than most services, so size

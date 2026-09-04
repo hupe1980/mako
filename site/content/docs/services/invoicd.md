@@ -554,8 +554,6 @@ url = "http://edmd:8380"
 # audience = "api://mako-invoicd"
 # jwks_refresh_secs = 300
 
-# [otel]          # omit to disable tracing
-# endpoint = "http://otel-collector:4317"
 ```
 
 ---

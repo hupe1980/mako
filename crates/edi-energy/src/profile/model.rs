@@ -238,6 +238,30 @@ pub struct Operand {
     pub operand: String,
 }
 
+impl MigProfile {
+    /// Every segment of the Nachrichtenstruktur in MIG order, groups walked
+    /// depth-first. The envelope segments are not part of it.
+    pub fn segments(&self) -> Vec<&SegmentNode> {
+        fn walk<'a>(nodes: &'a [Node], out: &mut Vec<&'a SegmentNode>) {
+            for node in nodes {
+                match node {
+                    Node::Group(g) => walk(&g.children, out),
+                    Node::Segment(s) => out.push(s),
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.structure, &mut out);
+        out
+    }
+
+    /// The segment the MIG numbers `nr`.
+    #[must_use]
+    pub fn segment(&self, nr: &str) -> Option<&SegmentNode> {
+        self.segments().into_iter().find(|s| s.nr == nr)
+    }
+}
+
 impl SegmentNode {
     /// The wire coordinates `(element, component)` and the layout entry of
     /// the `occurrence`-th data element `de` in this segment.

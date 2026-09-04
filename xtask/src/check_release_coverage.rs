@@ -198,7 +198,9 @@ pub fn check_release_coverage() {
             eprintln!("{e}");
         }
         eprintln!();
-        eprintln!("Run `cargo xtask extract-pdf` + `cargo xtask codegen` to add missing profiles.");
+        eprintln!(
+            "Run `cargo xtask sync-regulatories --download` then `cargo xtask import-profiles` to add missing profiles."
+        );
         eprintln!(
             "Check site/content/docs/compliance/annual-release-workflow.md for the standard remediation procedure."
         );
