@@ -163,11 +163,11 @@ pub struct JaehrlicheAbsenkung {
 }
 
 impl JaehrlicheAbsenkung {
-    /// § 40 Abs. 3 EEG 2023 — Wasserkraft, 0,5 % a year from 1 January 2024.
+    /// § 40 Abs. 5 EEG 2023 — Wasserkraft, 0,5 % a year from 1 January 2024.
     pub const WASSERKRAFT: Self = Self {
         beginn: time::macros::date!(2024 - 01 - 01),
         satz: dec!(0.005),
-        rechtsgrundlage: "§ 40 Abs. 3 EEG 2023",
+        rechtsgrundlage: "§ 40 Abs. 5 EEG 2023",
     };
     /// § 41 Abs. 4 EEG 2023 — Deponie-, Klär- und Grubengas, 1,5 % a year from
     /// 1 January 2024.
@@ -239,7 +239,7 @@ mod jaehrliche_absenkung_tests {
         );
     }
 
-    /// § 40 Abs. 3 — 0,5 % a year, compounding on the unrounded chain.
+    /// § 40 Abs. 5 — 0,5 % a year, compounding on the unrounded chain.
     #[test]
     fn hydro_degresses_half_a_percent_a_year() {
         let a = JaehrlicheAbsenkung::WASSERKRAFT;

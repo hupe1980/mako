@@ -542,6 +542,64 @@ async fn settle_and_read_steuer(
     serde_json::from_value(v["gutschrift_steuer_eur"].clone()).expect("steuer present")
 }
 
+/// § 21 Abs. 1 Satz 1 Nr. 1 EEG 2023 — the Einspeisevergütung mit gesetzlich
+/// bestimmtem anzulegenden Wert exists only „für Strom aus Anlagen mit einer
+/// installierten Leistung von bis zu 100 Kilowatt".
+///
+/// A larger plant left on `VERGUETUNG` is **unpaid**, not penalised: § 52 Abs. 1
+/// Nr. 4 charges a § 10b breach, which only a plant *in* Direktvermarktung can
+/// commit. The settlement records `kein_anspruch` at EUR 0 and issues no
+/// Gutschrift; a 100 kW plant beside it settles normally, because the wording is
+/// „bis zu".
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_plant_over_100_kw_on_the_einspeiseverguetung_has_no_claim() {
+    let Some((pool, _pg)) = test_pool("kein_anspruch").await else {
+        return;
+    };
+    let app = test_router(pool.clone());
+    seed_operator(&pool, "EB-1", "REGELBESTEUERUNG").await;
+
+    let with_kwp = |tr_id: &str, kwp: &str| {
+        let mut v = anlage_json(tr_id);
+        v["leistung_kwp"] = serde_json::json!(kwp);
+        v
+    };
+    for (tr_id, kwp) in [("P-150KW", "150"), ("P-100KW", "100")] {
+        let (status, body) = post_json(&app, "/api/v1/anlagen", with_kwp(tr_id, kwp)).await;
+        assert!(status.is_success(), "{tr_id}: {status} {body}");
+    }
+
+    let settle = async |tr_id: &str| -> serde_json::Value {
+        let (status, body) = post_json(
+            &app,
+            &format!("/api/v1/anlagen/{tr_id}/settle/2026/3"),
+            serde_json::json!({ "einspeisemenge_kwh": "5000" }),
+        )
+        .await;
+        assert!(status.is_success(), "settle {tr_id}: {status} {body}");
+        serde_json::from_str(&body).expect("settle response is JSON")
+    };
+
+    let refused = settle("P-150KW").await;
+    assert_eq!(refused["status"], "kein_anspruch");
+    assert_eq!(
+        refused["settlement_eur"].as_str().map(str::to_owned),
+        Some("0".to_owned()),
+        "nothing is owed: {refused}"
+    );
+    assert!(
+        refused["gutschrift_nummer"].is_null(),
+        "no §14 UStG Gutschrift for a settlement that owes nothing: {refused}"
+    );
+
+    let paid = settle("P-100KW").await;
+    assert_eq!(
+        paid["status"], "calculated",
+        "the wording is bis zu 100 Kilowatt, so 100 itself is inside: {paid}"
+    );
+}
+
 /// A plant cannot exist without an operator.
 ///
 /// § 7 Abs. 1 EEG 2023 puts the payment on the Netzbetreiber, so a plant nobody
@@ -1592,11 +1650,17 @@ async fn the_sect51_regime_follows_the_commissioning_date() {
         let pool = pool.clone();
         async move {
             sqlx::query(
+                // 200 kWp is over the § 21 Abs. 1 Satz 1 Nr. 1 ceiling, so the
+                // plant is necessarily in Direktvermarktung. The Marktwert is
+                // overridden to zero below, which makes MP = AW and keeps the
+                // arithmetic identical to a statutory rate.
                 "INSERT INTO eeg_anlagen
                    (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
-                    erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum, einspeiser_id)
+                    erzeugungsart, verguetungssatz_ct, settlement_model, direktverm_aw_ct,
+                    foerderendedatum, einspeiser_id)
                  VALUES ($1, $2, '51238696781', 2023, $3::date, 200,
-                         'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', '2045-12-31', 'EB-1')",
+                         'SOLAR_FREIFLAECHE', 8.11, 'DIREKTVERMARKTUNG', 8.11,
+                         '2045-12-31', 'EB-1')",
             )
             .bind(tr_id)
             .bind(TENANT)
@@ -1619,6 +1683,7 @@ async fn the_sect51_regime_follows_the_commissioning_date() {
                     einspeisemenge_kwh: Some(dec!(1000)),
                     kwh_during_negative_epex: Some(dec!(50)),
                     negative_price_quarter_hours: Some(96),
+                    jahresmarktwert_ct_kwh: Some(dec!(0)),
                     ..Default::default()
                 },
             );
@@ -1672,9 +1737,10 @@ async fn a_correction_without_sect51_figures_keeps_the_accrual() {
     sqlx::query(
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
-            erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum, einspeiser_id)
+            erzeugungsart, verguetungssatz_ct, settlement_model, direktverm_aw_ct,
+            foerderendedatum, einspeiser_id)
          VALUES ('TR-KORR', $1, '51238696781', 2023, '2025-06-01', 500,
-                 'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', '2045-12-31', 'EB-1')",
+                 'SOLAR_FREIFLAECHE', 8.11, 'DIREKTVERMARKTUNG', 8.11, '2045-12-31', 'EB-1')",
     )
     .bind(TENANT)
     .execute(&pool)
@@ -1709,6 +1775,7 @@ async fn a_correction_without_sect51_figures_keeps_the_accrual() {
         einspeisemenge_kwh: Some(dec!(1000)),
         kwh_during_negative_epex: Some(dec!(50)),
         negative_price_quarter_hours: Some(192),
+        jahresmarktwert_ct_kwh: Some(dec!(0)),
         ..Default::default()
     })
     .await;
@@ -1724,6 +1791,7 @@ async fn a_correction_without_sect51_figures_keeps_the_accrual() {
     // A meter-reading correction: the kWh changed, §51 was not re-derived.
     let korr = run(einsd::pg::SettleOverrides {
         einspeisemenge_kwh: Some(dec!(900)),
+        jahresmarktwert_ct_kwh: Some(dec!(0)),
         correction: Some(einsd::pg::Korrektur {
             original_id: None,
             reason: eeg_billing::scheme::CorrectionReason::MeterDataCorrected,
@@ -1916,10 +1984,10 @@ async fn the_sect100_optin_starts_running_after_the_imsys_year() {
     sqlx::query(
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
-            erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
-            imesys_rollout_datum, sect51_optin_erklaert_am, einspeiser_id)
+            erzeugungsart, verguetungssatz_ct, settlement_model, direktverm_aw_ct,
+            foerderendedatum, imesys_rollout_datum, sect51_optin_erklaert_am, einspeiser_id)
          VALUES ('TR-OPTIN', $1, '51238696781', 2017, '2019-06-01', 300,
-                 'SOLAR_FREIFLAECHE', 8.00, 'VERGUETUNG', '2039-12-31',
+                 'SOLAR_FREIFLAECHE', 8.00, 'DIREKTVERMARKTUNG', 8.00, '2039-12-31',
                  '2026-09-01', '2026-03-01', 'EB-1')",
     )
     .bind(TENANT)
@@ -1944,6 +2012,7 @@ async fn the_sect100_optin_starts_running_after_the_imsys_year() {
                     einspeisemenge_kwh: Some(dec!(1000)),
                     kwh_during_negative_epex: Some(dec!(100)),
                     negative_price_quarter_hours: Some(96),
+                    jahresmarktwert_ct_kwh: Some(dec!(0)),
                     ..Default::default()
                 },
             );
@@ -2006,12 +2075,17 @@ async fn the_sixty_percent_cap_is_not_a_sect52_violation() {
         let pool = pool.clone();
         async move {
             sqlx::query(
+                // A plant over 100 kW cannot be on VERGUETUNG (§ 21 Abs. 1 Satz 1
+                // Nr. 1), and this test reaches 150 kW, so every fixture is put in
+                // Direktvermarktung. § 52 Abs. 1 Nr. 1 is owed either way — the
+                // Pflichtzahlung does not depend on the Veräußerungsform.
                 "INSERT INTO eeg_anlagen
                    (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
-                    erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
-                    sect9_erfuellung, einspeiser_id)
+                    erzeugungsart, verguetungssatz_ct, settlement_model, direktverm_aw_ct,
+                    foerderendedatum, sect9_erfuellung, einspeiser_id)
                  VALUES ($1, $2, '51238696781', 2023, '2024-06-01', $3::numeric,
-                         'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', '2044-12-31', $4, 'EB-1')",
+                         'SOLAR_FREIFLAECHE', 8.11, 'DIREKTVERMARKTUNG', 8.11,
+                         '2044-12-31', $4, 'EB-1')",
             )
             .bind(tr_id)
             .bind(TENANT)
@@ -2033,6 +2107,7 @@ async fn the_sixty_percent_cap_is_not_a_sect52_violation() {
                 6,
                 einsd::pg::SettleOverrides {
                     einspeisemenge_kwh: Some(dec!(1000)),
+                    jahresmarktwert_ct_kwh: Some(dec!(0)),
                     ..Default::default()
                 },
             );
@@ -2216,6 +2291,7 @@ async fn an_unnotified_veraeusserungsform_switch_is_charged() {
         .expect("plant exists");
     let verstoesse = einsd::sect52::derive_pflichtverstoesse(
         &anlage,
+        &[],
         einsd::sect52::Sect52Context {
             billing_date: time::macros::date!(2026 - 06 - 01),
             ausfallverguetung: einsd::sect52::AusfallverguetungNutzung::default(),
@@ -2242,6 +2318,7 @@ async fn an_unnotified_veraeusserungsform_switch_is_charged() {
         .expect("plant exists");
     let verstoesse = einsd::sect52::derive_pflichtverstoesse(
         &anlage,
+        &[],
         einsd::sect52::Sect52Context {
             billing_date: time::macros::date!(2026 - 06 - 01),
             ausfallverguetung: einsd::sect52::AusfallverguetungNutzung::default(),
@@ -2251,30 +2328,457 @@ async fn an_unnotified_veraeusserungsform_switch_is_charged() {
     let _ = dec!(0);
 }
 
-/// §52 Abs. 1 Nr. 4 EEG — a plant above 100 kW settled on an Einspeisevergütung
-/// model. The MCP tool reported this and the settlement ignored it.
+/// Anlage 1 Nr. 2 EEG 2023 — which Marktwert a plant settles on is its **vintage**,
+/// not whichever figure the operator happened to load.
+///
+/// Two identical Direktvermarktung plants, same AW, same kWh, same month. One was
+/// commissioned in 2021 (Satz 1 → Monatsmarktwert of Nr. 3), the other in 2024
+/// (Satz 2 → Jahresmarktwert of Nr. 4). Load both series at different figures and
+/// the two settlements must differ accordingly. Before the split one table held
+/// both and whichever row existed was applied to every plant.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn the_direktvermarktungspflicht_breach_reaches_the_settlement() {
+async fn the_marktwert_series_follows_the_plants_vintage() {
     use rust_decimal::dec;
-    let Some((pool, _pg)) = test_pool("sect10b_breach").await else {
+    let Some((pool, _pg)) = test_pool("marktwert_serie").await else {
         return;
     };
     sqlx::query(
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
-            erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
-            sect9_erfuellung, einspeiser_id)
-         VALUES ('TR-10B', $1, '51238696781', 2023, '2024-06-01', 250,
-                 'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', '2044-12-31',
-                 'FERNSTEUERBARKEIT', 'EB-1')",
+            erzeugungsart, verguetungssatz_ct, settlement_model, direktverm_aw_ct,
+            foerderendedatum, einspeiser_id)
+         VALUES
+           ('TR-MW-ALT', $1, '51238696781', 2021, '2021-06-01', 80,
+            'SOLAR_FREIFLAECHE', 8.00, 'DIREKTVERMARKTUNG', 8.00, '2041-12-31', 'EB-1'),
+           ('TR-MW-NEU', $1, '51238696781', 2023, '2024-06-01', 80,
+            'SOLAR_FREIFLAECHE', 8.00, 'DIREKTVERMARKTUNG', 8.00, '2044-12-31', 'EB-1')",
     )
     .bind(TENANT)
     .execute(&pool)
     .await
     .expect("seed");
 
-    let anlage = einsd::pg::fetch_anlage(&pool, TENANT, "TR-10B")
+    // Nr. 3 (monthly) at 3 ct, Nr. 4 (annual, provisional) at 5 ct.
+    einsd::pg::upsert_marktwert(
+        &pool,
+        einsd::pg::MarktwertImport {
+            year: 2026,
+            serie: eeg_billing::Marktwertserie::Monatsmarktwert,
+            month: Some(6),
+            erzeugungsart: "SOLAR_FREIFLAECHE",
+            avg_ct_kwh: dec!(3),
+            vorlaeufig: false,
+            source: "test",
+        },
+    )
+    .await
+    .expect("import Monatsmarktwert");
+    einsd::pg::upsert_marktwert(
+        &pool,
+        einsd::pg::MarktwertImport {
+            year: 2026,
+            serie: eeg_billing::Marktwertserie::Jahresmarktwert,
+            month: None,
+            erzeugungsart: "SOLAR_FREIFLAECHE",
+            avg_ct_kwh: dec!(5),
+            vorlaeufig: true,
+            source: "test",
+        },
+    )
+    .await
+    .expect("import Jahresmarktwert");
+
+    let settle = |tr_id: &'static str| {
+        let pool = pool.clone();
+        async move {
+            let anlage = einsd::pg::fetch_anlage(&pool, TENANT, tr_id)
+                .await
+                .expect("fetch")
+                .expect("plant exists");
+            let input = einsd::pg::build_settle_input(
+                TENANT,
+                &anlage,
+                &regelbesteuert(),
+                2026,
+                6,
+                einsd::pg::SettleOverrides {
+                    einspeisemenge_kwh: Some(dec!(1000)),
+                    ..Default::default()
+                },
+            );
+            let mut tx = pool.begin().await.expect("begin");
+            let res = einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
+                .await
+                .expect("settle");
+            tx.commit().await.expect("commit");
+            res
+        }
+    };
+
+    // MP = AW − MW. 8 − 3 = 5 ct on 1000 kWh = 50 EUR.
+    assert_eq!(
+        settle("TR-MW-ALT").await.settlement_eur,
+        Some(dec!(50.00)),
+        "a 2021 plant settles on the Monatsmarktwert (Anlage 1 Nr. 2 Satz 1)"
+    );
+    // 8 − 5 = 3 ct on 1000 kWh = 30 EUR.
+    assert_eq!(
+        settle("TR-MW-NEU").await.settlement_eur,
+        Some(dec!(30.00)),
+        "a 2024 plant settles on the Jahresmarktwert (Satz 2)"
+    );
+
+    // The 2024 plant was priced on a provisional figure, so it is on the
+    // Nachbewertung list and the 2021 plant is not.
+    let offen = einsd::pg::list_marktwert_nachbewertung(&pool, TENANT, 2026)
+        .await
+        .expect("list");
+    let ids: Vec<&str> = offen.iter().filter_map(|r| r["tr_id"].as_str()).collect();
+    assert_eq!(
+        ids,
+        ["TR-MW-NEU"],
+        "only the plant settled on a provisional Jahresmarktwert needs recomputing"
+    );
+}
+
+/// Anlage 1 Nr. 2 Satz 1 keys on the **Zuschlag** date too, so a plant
+/// commissioned in 2024 on a 2022 award stays on the Monatsmarktwert.
+///
+/// And a plant that finds no figure in its own series is `price_missing` — it
+/// never falls through to the other one, which is the substitution the split
+/// exists to prevent.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_zuschlag_date_decides_and_the_other_series_is_not_a_fallback() {
+    use rust_decimal::dec;
+    let Some((pool, _pg)) = test_pool("marktwert_zuschlag").await else {
+        return;
+    };
+    sqlx::query(
+        "INSERT INTO eeg_anlagen
+           (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
+            erzeugungsart, verguetungssatz_ct, settlement_model, direktverm_aw_ct,
+            zuschlag_datum, foerderendedatum, einspeiser_id)
+         VALUES
+           ('TR-MW-ZU',  $1, '51238696781', 2023, '2024-06-01', 80,
+            'SOLAR_FREIFLAECHE', 8.00, 'DIREKTVERMARKTUNG', 8.00,
+            '2022-11-01', '2044-12-31', 'EB-1'),
+           ('TR-MW-GAP', $1, '51238696781', 2023, '2024-06-01', 80,
+            'WIND_ONSHORE', 8.00, 'DIREKTVERMARKTUNG', 8.00,
+            NULL, '2044-12-31', 'EB-1')",
+    )
+    .bind(TENANT)
+    .execute(&pool)
+    .await
+    .expect("seed");
+
+    // Only the monthly series exists, and only for solar.
+    einsd::pg::upsert_marktwert(
+        &pool,
+        einsd::pg::MarktwertImport {
+            year: 2026,
+            serie: eeg_billing::Marktwertserie::Monatsmarktwert,
+            month: Some(6),
+            erzeugungsart: "DEFAULT",
+            avg_ct_kwh: dec!(3),
+            vorlaeufig: false,
+            source: "test",
+        },
+    )
+    .await
+    .expect("import Monatsmarktwert");
+
+    let settle = |tr_id: &'static str| {
+        let pool = pool.clone();
+        async move {
+            let anlage = einsd::pg::fetch_anlage(&pool, TENANT, tr_id)
+                .await
+                .expect("fetch")
+                .expect("plant exists");
+            let input = einsd::pg::build_settle_input(
+                TENANT,
+                &anlage,
+                &regelbesteuert(),
+                2026,
+                6,
+                einsd::pg::SettleOverrides {
+                    einspeisemenge_kwh: Some(dec!(1000)),
+                    ..Default::default()
+                },
+            );
+            let mut tx = pool.begin().await.expect("begin");
+            let res = einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
+                .await
+                .expect("settle");
+            tx.commit().await.expect("commit");
+            res
+        }
+    };
+
+    assert_eq!(
+        settle("TR-MW-ZU").await.settlement_eur,
+        Some(dec!(50.00)),
+        "a 2022 Zuschlag keeps the plant on the Monatsmarktwert however late it was commissioned"
+    );
+    assert_eq!(
+        settle("TR-MW-GAP").await.status,
+        "price_missing",
+        "no Jahresmarktwert exists, and the Monatsmarktwert is not a substitute for it"
+    );
+}
+
+/// The §52 Pflichtverstoß register supplies the three things a bare derivation
+/// cannot state, and every one of them moves money.
+///
+/// - **`beginn`** — §52 Abs. 2 charges „pro Kalendermonat, in dem ganz oder
+///   zeitweise ein Pflichtverstoß … vorliegt". Without a start date the charge
+///   is one month; a breach open since January is six by June.
+/// - **`behoben_am`** — Abs. 3 Satz 1 Nr. 1 drops the rate to 2 €/kW „zurück bis
+///   zum Beginn", a fifth of the charge. It was unreachable before the register:
+///   `nachtraeglich_erfuellt` was hardcoded `false`.
+/// - **cured before the month** — a breach closed in May is not charged in June.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_pflichtverstoss_register_drives_the_sect52_charge() {
+    use rust_decimal::dec;
+    let Some((pool, _pg)) = test_pool("sect52_register").await else {
+        return;
+    };
+    // 100 kW so the §21 Abs. 1 Satz 1 Nr. 1 ceiling is not crossed and the plant
+    // settles normally; §9 is satisfied, so the only breach is the recorded one.
+    sqlx::query(
+        "INSERT INTO eeg_anlagen
+           (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
+            erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
+            sect9_erfuellung, mastr_registriert, einspeiser_id)
+         VALUES ('TR-REG', $1, '51238696781', 2023, '2024-06-01', 100,
+                 'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', '2044-12-31',
+                 'FERNSTEUERBARKEIT', true, 'EB-1')",
+    )
+    .bind(TENANT)
+    .execute(&pool)
+    .await
+    .expect("seed");
+
+    let settle = |year: i16, month: i16| {
+        let pool = pool.clone();
+        async move {
+            let anlage = einsd::pg::fetch_anlage(&pool, TENANT, "TR-REG")
+                .await
+                .expect("fetch")
+                .expect("plant exists");
+            let input = einsd::pg::build_settle_input(
+                TENANT,
+                &anlage,
+                &regelbesteuert(),
+                year,
+                month,
+                einsd::pg::SettleOverrides {
+                    einspeisemenge_kwh: Some(dec!(1000)),
+                    ..Default::default()
+                },
+            );
+            let mut tx = pool.begin().await.expect("begin");
+            einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
+                .await
+                .expect("settle");
+            tx.commit().await.expect("commit");
+            let p: Option<rust_decimal::Decimal> = sqlx::query_scalar(
+                "SELECT pflichtzahlung_eur FROM settlement_receipts
+                  WHERE tr_id = 'TR-REG' AND billing_year = $1 AND billing_month = $2",
+            )
+            .bind(year)
+            .bind(month)
+            .fetch_one(&pool)
+            .await
+            .expect("read receipt");
+            p
+        }
+    };
+
+    // Nothing recorded, nothing derived → no §52 charge at all.
+    assert!(
+        settle(2026, 6).await.is_none_or(|p| p.is_zero()),
+        "a compliant plant owes nothing"
+    );
+
+    // §52 Abs. 1 Nr. 3 — the §9 Abs. 8 iMSys Messeinrichtung. einsd cannot derive
+    // it; without the register it could never be charged at all.
+    let record = |typ, beginn| {
+        let pool = pool.clone();
+        async move {
+            let mut conn = pool.acquire().await.expect("conn");
+            einsd::pg::open_pflichtverstoss(&mut conn, TENANT, "TR-REG", typ, beginn, false, None)
+                .await
+                .expect("record the breach");
+        }
+    };
+    let cure = |typ, am| {
+        let pool = pool.clone();
+        async move {
+            let mut conn = pool.acquire().await.expect("conn");
+            einsd::pg::close_pflichtverstoss(&mut conn, TENANT, "TR-REG", typ, am)
+                .await
+                .expect("record the cure")
+                .expect("a breach was open");
+        }
+    };
+    record(
+        eeg_billing::SanktionsTyp::IMssAnforderungNichtErfuellt,
+        time::macros::date!(2026 - 01 - 01),
+    )
+    .await;
+
+    // January to June inclusive is six months at 10 EUR/kW on 100 kW.
+    assert_eq!(
+        settle(2026, 6).await,
+        Some(dec!(6000)),
+        "six calendar months at 10 EUR/kW on a 100 kW plant"
+    );
+
+    // Cured in June: Abs. 3 Satz 1 Nr. 1 reprices the whole run at 2 EUR/kW.
+    cure(
+        eeg_billing::SanktionsTyp::IMssAnforderungNichtErfuellt,
+        time::macros::date!(2026 - 06 - 20),
+    )
+    .await;
+    assert_eq!(
+        settle(2026, 6).await,
+        Some(dec!(1200)),
+        "§52 Abs. 3 Satz 1 Nr. 1 reduces Nr. 3 to 2 EUR/kW back to the beginning"
+    );
+
+    // July is after the cure, so the breach does not reach that month at all.
+    assert!(
+        settle(2026, 7).await.is_none_or(|p| p.is_zero()),
+        "a breach cured in June is not charged in July"
+    );
+}
+
+/// The §52 claim rides the settlement CloudEvent, and its name says it is the
+/// **running total**.
+///
+/// §52 Abs. 2 charges per Kilowatt and Kalendermonat, so the figure on a receipt
+/// grows while the breach subsists and a later one supersedes the earlier. A
+/// consumer that summed twelve monthly events would charge the year twelve times
+/// over, which is why the field is `pflichtzahlung_kumuliert_eur` and not
+/// `pflichtzahlung_eur`.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_sect52_claim_reaches_the_cloudevent_as_a_running_total() {
+    use rust_decimal::dec;
+    let Some((pool, _pg)) = test_pool("sect52_ce").await else {
+        return;
+    };
+    sqlx::query(
+        "INSERT INTO eeg_anlagen
+           (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
+            erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
+            sect9_erfuellung, mastr_registriert, einspeiser_id)
+         VALUES ('TR-CE52', $1, '51238696781', 2023, '2024-06-01', 100,
+                 'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', '2044-12-31',
+                 'FERNSTEUERBARKEIT', true, 'EB-1')",
+    )
+    .bind(TENANT)
+    .execute(&pool)
+    .await
+    .expect("seed");
+    let mut conn = pool.acquire().await.expect("conn");
+    einsd::pg::open_pflichtverstoss(
+        &mut conn,
+        TENANT,
+        "TR-CE52",
+        eeg_billing::SanktionsTyp::IMssAnforderungNichtErfuellt,
+        time::macros::date!(2026 - 04 - 01),
+        false,
+        None,
+    )
+    .await
+    .expect("record");
+
+    let anlage = einsd::pg::fetch_anlage(&pool, TENANT, "TR-CE52")
+        .await
+        .expect("fetch")
+        .expect("plant exists");
+    let input = einsd::pg::build_settle_input(
+        TENANT,
+        &anlage,
+        &regelbesteuert(),
+        2026,
+        6,
+        einsd::pg::SettleOverrides {
+            einspeisemenge_kwh: Some(dec!(1000)),
+            ..Default::default()
+        },
+    );
+    let mut tx = pool.begin().await.expect("begin");
+    let res = einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
+        .await
+        .expect("settle");
+    tx.commit().await.expect("commit");
+
+    // April, May, June at 10 EUR/kW on 100 kW.
+    assert_eq!(res.pflichtzahlung_kumuliert_eur, Some(dec!(3000)));
+    assert_eq!(
+        res.settlement_eur,
+        Some(dec!(81.10)),
+        "the Vergütung is untouched — §52 Abs. 6 Aufrechnung is the ledger's call"
+    );
+}
+
+/// §52 Abs. 3 Satz 1 Nr. 1 names **Nummern 1, 3, 4 and 11** and no others, so a
+/// cure does not reduce every breach.
+///
+/// Nr. 8 (§21b Abs. 3, no viertelstündliche Messung) is the counter-example: it
+/// can be cured, the register records that it was, and the charge stays at
+/// 10 EUR/kW. Reading Abs. 3 as a general „fixed it, pay less" rule would
+/// undercharge four fifths of it.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_cure_reduces_only_the_four_nummern_abs3_names() {
+    use rust_decimal::dec;
+    let Some((pool, _pg)) = test_pool("sect52_abs3_scope").await else {
+        return;
+    };
+    sqlx::query(
+        "INSERT INTO eeg_anlagen
+           (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
+            erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
+            sect9_erfuellung, mastr_registriert, einspeiser_id)
+         VALUES ('TR-ABS3', $1, '51238696781', 2023, '2024-06-01', 100,
+                 'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', '2044-12-31',
+                 'FERNSTEUERBARKEIT', true, 'EB-1')",
+    )
+    .bind(TENANT)
+    .execute(&pool)
+    .await
+    .expect("seed");
+
+    let mut conn = pool.acquire().await.expect("conn");
+    einsd::pg::open_pflichtverstoss(
+        &mut conn,
+        TENANT,
+        "TR-ABS3",
+        eeg_billing::SanktionsTyp::VeraeusserungsformNachweispflichtVerletzt,
+        time::macros::date!(2026 - 04 - 01),
+        false,
+        Some("Ist-Einspeisung nicht viertelstündlich gemessen"),
+    )
+    .await
+    .expect("record");
+    einsd::pg::close_pflichtverstoss(
+        &mut conn,
+        TENANT,
+        "TR-ABS3",
+        eeg_billing::SanktionsTyp::VeraeusserungsformNachweispflichtVerletzt,
+        time::macros::date!(2026 - 06 - 10),
+    )
+    .await
+    .expect("cure")
+    .expect("a breach was open");
+
+    let anlage = einsd::pg::fetch_anlage(&pool, TENANT, "TR-ABS3")
         .await
         .expect("fetch")
         .expect("plant exists");
@@ -2296,14 +2800,134 @@ async fn the_direktvermarktungspflicht_breach_reaches_the_settlement() {
     tx.commit().await.expect("commit");
 
     let pflicht: Option<rust_decimal::Decimal> = sqlx::query_scalar(
-        "SELECT pflichtzahlung_eur FROM settlement_receipts WHERE tr_id = 'TR-10B'",
+        "SELECT pflichtzahlung_eur FROM settlement_receipts WHERE tr_id = 'TR-ABS3'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read receipt");
+    // April, May, June — three months, still at the full rate.
+    assert_eq!(
+        pflicht,
+        Some(dec!(3000)),
+        "Nr. 8 is not on the §52 Abs. 3 Satz 1 Nr. 1 list, so the cure does not reduce it"
+    );
+}
+
+/// § 52 Abs. 1 Nr. 4 EEG 2023 charges a breach of **§ 10b**, not the size of the
+/// plant.
+///
+/// § 10b Abs. 1 binds the operator of a plant over 25 kW **that direct-markets**
+/// to fit the Abruf- und Fernsteuereinrichtung and grant the
+/// Direktvermarktungsunternehmen the authority to use it. Two things follow, and
+/// this pins both, because the check used to be „over 100 kW on an
+/// Einspeisevergütung model" — a different statute, and not a Pflichtverstoß at
+/// all:
+///
+/// 1. A plant over 100 kW left on `VERGUETUNG` owes **nothing**. It has no
+///    § 21 Abs. 1 Satz 1 Nr. 1 claim, so it is unpaid (`kein_anspruch`), and
+///    charging it 10 €/kW/Monat on top would be 2 500 € a month for a fact the
+///    EEG does not contain.
+/// 2. A plant in Direktvermarktung with a recorded § 10b breach does owe it.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn sect52_nr4_charges_a_sect10b_breach_not_a_plant_over_100_kw() {
+    use rust_decimal::dec;
+    let Some((pool, _pg)) = test_pool("sect10b_breach").await else {
+        return;
+    };
+    sqlx::query(
+        "INSERT INTO eeg_anlagen
+           (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
+            erzeugungsart, verguetungssatz_ct, settlement_model, direktverm_aw_ct,
+            foerderendedatum, sect9_erfuellung, einspeiser_id)
+         VALUES
+           ('TR-10B-VERG', $1, '51238696781', 2023, '2024-06-01', 250,
+            'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', NULL,
+            '2044-12-31', 'FERNSTEUERBARKEIT', 'EB-1'),
+           ('TR-10B-DV',   $1, '51238696781', 2023, '2024-06-01', 250,
+            'SOLAR_FREIFLAECHE', 8.11, 'DIREKTVERMARKTUNG', 8.11,
+            '2044-12-31', 'FERNSTEUERBARKEIT', 'EB-1')",
+    )
+    .bind(TENANT)
+    .execute(&pool)
+    .await
+    .expect("seed");
+
+    // The § 10b breach is a **finding**, not a plant column: § 10b Abs. 5 leaves
+    // the Nachweis to the Netzbetreiber and the Direktvermarktungsunternehmen,
+    // so it is filed in the register. Filed against both plants on purpose —
+    // only the one that actually direct-markets can breach it.
+    for tr_id in ["TR-10B-VERG", "TR-10B-DV"] {
+        let mut conn = pool.acquire().await.expect("conn");
+        einsd::pg::open_pflichtverstoss(
+            &mut conn,
+            TENANT,
+            tr_id,
+            eeg_billing::SanktionsTyp::Sect10bVorgabenVerletzt,
+            time::macros::date!(2026 - 01 - 01),
+            false,
+            Some("Fernsteuerbarkeit vom Direktvermarkter nicht nachgewiesen"),
+        )
+        .await
+        .expect("record the §10b breach");
+    }
+
+    let settle = |tr_id: &'static str| {
+        let pool = pool.clone();
+        async move {
+            let anlage = einsd::pg::fetch_anlage(&pool, TENANT, tr_id)
+                .await
+                .expect("fetch")
+                .expect("plant exists");
+            let input = einsd::pg::build_settle_input(
+                TENANT,
+                &anlage,
+                &regelbesteuert(),
+                2026,
+                6,
+                einsd::pg::SettleOverrides {
+                    einspeisemenge_kwh: Some(dec!(1000)),
+                    jahresmarktwert_ct_kwh: Some(dec!(0)),
+                    ..Default::default()
+                },
+            );
+            let mut tx = pool.begin().await.expect("begin");
+            let res = einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
+                .await
+                .expect("settle");
+            tx.commit().await.expect("commit");
+            res
+        }
+    };
+
+    let unpaid = settle("TR-10B-VERG").await;
+    assert_eq!(
+        unpaid.status, "kein_anspruch",
+        "§21 Abs. 1 Satz 1 Nr. 1: 250 kW is over the ceiling"
+    );
+    assert_eq!(unpaid.settlement_eur, Some(dec!(0)));
+    let pflicht: Option<rust_decimal::Decimal> = sqlx::query_scalar(
+        "SELECT pflichtzahlung_eur FROM settlement_receipts WHERE tr_id = 'TR-10B-VERG'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read receipt");
+    assert!(
+        pflicht.is_none_or(|p| p.is_zero()),
+        "a plant on the Einspeisevergütung cannot breach §10b even with a record filed \
+         against it, got {pflicht:?}"
+    );
+
+    settle("TR-10B-DV").await;
+    let pflicht: Option<rust_decimal::Decimal> = sqlx::query_scalar(
+        "SELECT pflichtzahlung_eur FROM settlement_receipts WHERE tr_id = 'TR-10B-DV'",
     )
     .fetch_one(&pool)
     .await
     .expect("read receipt");
     assert!(
         pflicht.is_some_and(|p| p > dec!(0)),
-        "a 250 kW plant on the Einspeisevergütung owes the §52 Abs. 1 Nr. 4 charge, got {pflicht:?}"
+        "a direct-marketing plant with a recorded §10b breach owes Nr. 4, got {pflicht:?}"
     );
 }
 

@@ -61,20 +61,38 @@ The German gas day starts and ends at **06:00 CET** (DVGW G 2000 §3.2):
 let day = GasDay::new(date!(2026-01-15));
 println!("Start UTC:           {}", day.start_utc());             // 05:00 UTC (winter)
 println!("Duration:            {} hours", day.duration_hours());  // 24
-println!("NOMINT deadline:     {}", day.nomination_deadline_utc()); // D-1 13:00 CET → 12:00 UTC
-println!("NOMRES deadline:     {}", day.nomres_deadline_utc());     // D-1 15:00 CET → 14:00 UTC
-println!("Initial ALOCAT due:  {}", day.initial_alocat_deadline_utc()); // D+3 12:00 CET (KoV §6.4)
-println!("Final ALOCAT due:    {}", day.final_alocat_deadline_utc());   // M+2 last day 12:00 CET
+println!("NOMINT deadline:     {}", day.nomination_deadline_utc()); // D-1 13:00 CET (convention)
+println!("NOMRES deadline:     {}", day.nomres_deadline_utc());     // D-1 15:00 CET (convention)
+println!("Daily ALOCAT due:    {}", day.taegliche_alocat_deadline_utc()); // D+1 12:00 (§ 46 Ziff. 1 KoV XV)
+println!("Final (RLM) due:     {}", day.finale_allokation_deadline_utc(  // M+14 WT (§ 47 Ziff. 1)
+    AllokationsSerie::Rlm,
+    |from, n| fristen::add_werktage(from, u32::from(n), HolidayCalendar::BdewMaKo),
+));
 ```
 
-#### KoV deadline summary
+#### Deadline summary
 
-| Deadline | Time | Method |
-|---|---|---|
-| NOMINT submission | D-1 13:00 CET | `nomination_deadline_utc()` |
-| NOMRES response window | D-1 15:00 CET | `nomres_deadline_utc()` |
-| Initial ALOCAT | D+3 12:00 CET | `initial_alocat_deadline_utc()` |
-| Final ALOCAT | M+2 last day | `final_alocat_deadline_utc()` |
+| Deadline | Time | Source | Method |
+|---|---|---|---|
+| Daily ALOCAT | D+1 12:00 | § 46 Ziff. 1/3 KoV XV | `taegliche_alocat_deadline_utc()` |
+| Untertägige Meldungen | 15:00 and 18:00 on D | § 46 Ziff. 2 KoV XV | *(not modelled — a second obligation, not this one)* |
+| Final allocation, **SLP** | D-1 12:00 | § 47 Ziff. 1 KoV XV | `finale_allokation_deadline_utc(Slp, …)` |
+| Final allocation, **RLM** and Entry-/Exitso | end of the 14th Werktag after the Liefermonat | § 47 Ziff. 1 KoV XV | `finale_allokation_deadline_utc(Rlm, …)` |
+| NOMINT submission | D-1 13:00 CET | *operating convention* | `nomination_deadline_utc()` |
+| NOMRES response window | D-1 15:00 CET | *operating convention* | `nomres_deadline_utc()` |
+
+The two nomination times are **not KoV XV Fristen** — the Kooperations­vereinbarung
+sets no clock time for the nomination cycle, and the DVGW NOMINT/NOMRES
+Nachrichtenbeschreibungen are format specs with no timing in them. D-1 13:00/15:00
+CET is the harmonised day-ahead cycle the FNB's Netzzugangsbedingungen carry;
+treat a breach as an operational alert, not as a documented Fristverletzung.
+
+The two final-allocation deadlines are **not variants of one figure**. An SLP
+allocation is final *before* the gas day it describes, because it is the forecast
+the Marktgebietsverantwortliche balances; an RLM allocation is final two weeks
+after the delivery month, once § 46 Ziff. 1's ten-Werktage plausibilisation has
+run. `makod` registers the RLM window on an inbound ALOCAT — the SLP one is
+already past when the message arrives.
 
 ### `GasBeschaffenheit` + `GasQuantity` — DVGW G 685 conversion
 
@@ -124,10 +142,10 @@ match flag {
 if flag.is_billable() { /* includes Measured, Substituted, Calculated, Corrected */ }
 ```
 
-### `AllocationVersion` — KoV §6.4 correction tracking
+### `AllocationVersion` — §§46/47 KoV XV correction tracking
 
 ALOCAT messages can be sent as initial, corrected, or final allocations per
-KoV §6.4. The `AllocationVersion` enum tracks which sequence this is:
+§§46/47 KoV XV. The `AllocationVersion` enum tracks which sequence this is:
 
 ```rust
 pub enum AllocationVersion {
@@ -324,7 +342,7 @@ message exchange:
 
 | Workflow | PIDs | DVGW message(s) | Description |
 |---|---|---|---|
-| `gabi-gas-allocation` | 70001–70023 | ALOCAT 5.11a | Gas quantity allocation — supports `Initial`, `Correction(n)`, `Final` versions per KoV §6.4 |
+| `gabi-gas-allocation` | 70001–70023 | ALOCAT 5.11a | Gas quantity allocation — supports `Initial`, `Correction(n)`, `Final` versions per §§46/47 KoV XV |
 | `gabi-gas-nomination` | 70030–70034 (NOMINT) · 70035–70039 (NOMRES) | NOMINT 4.6 · NOMRES 4.7 | Transportkunde → NB/MGV nomination + the NB's Bestätigung or Matching-Benachrichtigung; `NominationQuantity` tracks submitted/accepted/curtailed |
 
 The PID is read from `SG1 RFF+Z13`; `dvgw_edi::catalogue()` names each
@@ -358,8 +376,9 @@ BDEW EDI@Energy PIDs.
 | Document | Scope |
 |---|---|
 | **GaBi Gas 2.1 (BK7-24-01-008)** | Statutory basis for balance group accounting |
-| **KoV §3.2** | Nomination deadlines (D-1 13:00 CET) |
-| **KoV §6.4** | Allocation correction cycle (Initial / Correction / Final) |
+| **§ 46 KoV XV** | Versand von Allokationsdaten — the daily ALOCAT is due ‚unverzüglich, spätestens jedoch bis 12:00 Uhr‘ on D+1, plus the two untertägige Meldungen at 15:00 and 18:00 |
+| **§ 47 KoV XV** | Allokationsclearing — and with it the final-allocation deadline: **D-1 12:00** for SLP, **M+14 Werktage** for RLM and the Entry-/Exitso-Zeitreihen |
+| *(not the KoV)* | The nomination cycle. KoV XV sets no clock time for it; D-1 13:00/15:00 CET is the harmonised convention the FNB's Netzzugangsbedingungen carry, and mako treats a breach as an operational alert |
 | **BNetzA BK7-24-01-008** | GaBi Gas 2.1 — current ruling |
 | **DVGW G 685** | Gas metering: kWh_Hs = m³ × Hs × Z (≥ 3 decimal places required) |
 | **DVGW G 260** | Gas quality classes: H-Gas (9.5–13.1 kWh/m³) / L-Gas (7.5–10.3 kWh/m³) |

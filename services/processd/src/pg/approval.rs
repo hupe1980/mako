@@ -68,8 +68,11 @@ pub struct ApprovalQueueEntry {
     /// are the ones that were true when the decision was taken, not the ones
     /// the projection holds when an operator gets to it.
     pub followup_payload: Option<serde_json::Value>,
+    #[serde(with = "time::serde::rfc3339")]
     pub expires_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub decided_at: Option<OffsetDateTime>,
     /// `sub` of the principal who decided this entry (§ 20 EnWG / GoBD).
     pub decided_by: Option<String>,

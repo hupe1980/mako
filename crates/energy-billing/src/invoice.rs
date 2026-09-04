@@ -13,6 +13,51 @@ use crate::context::{AbschlagDeduction, BillingContext};
 use crate::error::EngineError;
 use crate::position::{BillingPosition, BillingWarning, PositionCategory};
 
+/// Split `total` across `fractions` so the shares sum back to `total` exactly.
+///
+/// [`billing::proportional_split`] is exact but refuses a negative total, and
+/// every reversal, Gutschrift and Abschlag deduction here carries one. The sign
+/// is lifted out and re-applied; negation is exact in `Decimal`.
+/// Normalise arbitrary non-negative weights into shares that sum to exactly one.
+///
+/// [`billing::proportional_split`] takes *shares* and refuses a set that does
+/// not sum to one; callers allocate by floor area, sub-meter reading or
+/// headcount. The last share absorbs the division residue, so the set sums to
+/// one exactly rather than within a rounding error.
+fn normalise_weights(weights: &[Decimal]) -> Result<Vec<Decimal>, EngineError> {
+    let mut sum = Decimal::ZERO;
+    for &w in weights {
+        if w < Decimal::ZERO {
+            return Err(EngineError::AllocationWeightsInvalid { sum: w });
+        }
+        sum += w;
+    }
+    if sum <= Decimal::ZERO {
+        return Err(EngineError::AllocationWeightsInvalid { sum });
+    }
+    let mut shares: Vec<Decimal> = weights.iter().map(|&w| w / sum).collect();
+    let last = shares.len() - 1;
+    let head: Decimal = shares[..last].iter().sum();
+    shares[last] = Decimal::ONE - head;
+    Ok(shares)
+}
+
+fn signed_split(
+    total: Decimal,
+    fractions: &[Decimal],
+    scale: u32,
+) -> Result<Vec<Decimal>, EngineError> {
+    let negative = total < Decimal::ZERO;
+    let magnitude = if negative { -total } else { total };
+    let mut shares = billing::proportional_split(magnitude, fractions, scale)?;
+    if negative {
+        for share in &mut shares {
+            *share = -*share;
+        }
+    }
+    Ok(shares)
+}
+
 /// A completed invoice — the immutable result of `BillingEngine::bill()`.
 ///
 /// ## Invariants
@@ -841,14 +886,20 @@ impl Invoice {
     ///
     /// ## Arguments
     ///
-    /// - `fractions`: allocation fractions per recipient. Do NOT need to sum to 1.0;
-    ///   they are normalised internally by `billing::proportional_split`.
+    /// - `fractions`: a non-negative weight per recipient — square metres, a
+    ///   sub-meter reading, a headcount. They need not sum to one; they are
+    ///   normalised into shares here.
     /// - `contexts`: one `BillingContext` per recipient (must match `fractions.len()`).
     ///   Each recipient gets their own rechnungsnummer, malo_id, etc.
     ///
+    /// Every allocated invoice inherits the source invoice's warnings, so a
+    /// blocking finding still blocks each share.
+    ///
     /// ## Errors
     ///
-    /// Returns `Err` when `fractions.len() != contexts.len()` or `fractions` is empty.
+    /// [`EngineError::AllocationMismatch`] when `fractions.len() != contexts.len()`
+    /// or `fractions` is empty; [`EngineError::AllocationWeightsInvalid`] when a
+    /// weight is negative or the weights sum to zero.
     pub fn allocate_proportionally(
         self,
         fractions: &[Decimal],
@@ -862,42 +913,32 @@ impl Invoice {
         }
 
         let n = fractions.len();
+        let shares = normalise_weights(fractions)?;
         let mut recipient_positions: Vec<Vec<crate::position::BillingPosition>> =
             (0..n).map(|_| Vec::new()).collect();
 
         for pos in &self.positions {
-            // Split this position's net_eur across recipients using penny-correct split.
-            // billing::proportional_split requires non-negative total; handle sign separately.
-            let (abs_eur, sign) = if pos.net_eur < Decimal::ZERO {
-                (-pos.net_eur, -Decimal::ONE)
-            } else {
-                (pos.net_eur, Decimal::ONE)
-            };
-            let splits = billing::proportional_split(abs_eur, fractions, 5)?;
-            for (i, split_abs) in splits.iter().enumerate() {
-                let split_amount = sign * split_abs;
-                // Adjust quantity proportionally where it makes sense.
-                let split_qty = if pos.quantity.is_zero() || fractions.len() <= 1 {
-                    pos.quantity
-                } else {
-                    let total_frac: Decimal = fractions.iter().sum();
-                    if total_frac.is_zero() {
-                        pos.quantity
-                    } else {
-                        (pos.quantity * fractions[i] / total_frac).round_kfm(4)
-                    }
-                };
+            // Amount *and* quantity go through the remainder-distributing split.
+            // Rounding each share on its own is exact only when the weights
+            // divide evenly — three shares of 1000 kWh give 3 × 333.3333 —
+            // so the recipients' volumes would stop adding up to the metered one.
+            let split_amounts = signed_split(pos.net_eur, &shares, 5)?;
+            let split_quantities = signed_split(pos.quantity, &shares, 4)?;
+            for i in 0..n {
                 let mut split_pos = pos.clone();
-                split_pos.net_eur = split_amount;
-                split_pos.quantity = split_qty;
+                split_pos.net_eur = split_amounts[i];
+                split_pos.quantity = split_quantities[i];
                 recipient_positions[i].push(split_pos);
             }
         }
 
+        // Every recipient inherits the source warnings: `has_errors()` gates
+        // dispatch, and a §41a iMSys mismatch on the building invoice applies to
+        // every share of it.
         Ok(recipient_positions
             .into_iter()
             .zip(contexts)
-            .map(|(positions, ctx)| Invoice::from_positions(ctx, positions, vec![]))
+            .map(|(positions, ctx)| Invoice::from_positions(ctx, positions, self.warnings.clone()))
             .collect())
     }
 

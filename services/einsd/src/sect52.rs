@@ -1,38 +1,62 @@
-//! §52 EEG 2023 — deriving the Pflichtverstöße from the plant record.
+//! §52 EEG 2023 — the Pflichtverstöße of one plant, from two sources.
 //!
-//! §52 Abs. 1 lists twelve violations, each charging the operator 10 €/kW per
-//! calendar month (Abs. 2), reduced to 2 € once the obligation is met (Abs. 3),
-//! capped at 10 €/kW in total (Abs. 5) and nettable against the Vergütung
-//! (Abs. 6).
+//! §52 Abs. 1 lists **thirteen** violations: it counts to twelve and inserts a
+//! Nr. 9a between 9 and 10. Each charges 10 €/kW per calendar month (Abs. 2),
+//! four of them run past the breach itself (Abs. 4), the total is capped at
+//! 10 €/kW per month (Abs. 5), and the claim may be netted against the Vergütung
+//! (Abs. 6). Abs. 3 reduces the rate, but only for the Nummern it names.
 //!
-//! `eeg-billing` models all twelve. This module is the one place that turns
-//! plant facts into violations, so a rule cannot be half-present — detected by an
-//! MCP tool but never reaching a settlement, or indexed but never queried.
+//! This module is the one place that turns plant facts into violations, so a
+//! rule cannot be half-present — detected by an MCP tool but never reaching a
+//! settlement, or indexed but never queried.
 //!
-//! ## What is derived here, and what is not
+//! ## Two sources, one merge
 //!
-//! | § | Violation | Derivable from the plant record? |
+//! Four breaches follow from the plant record. The other nine turn on facts no
+//! register row carries, and those are **recorded** in `eeg_pflichtverstoesse`
+//! by the operator or the ERP — §10b Abs. 5 leaves the Nachweis to the
+//! Netzbetreiber and the Direktvermarkter, §9 Abs. 5's Speicheranforderung is a
+//! site visit, Doppelvermarktung is a finding.
+//!
+//! | § | Violation | Source |
 //! |---|---|---|
-//! | Abs. 1 Nr. 1 | §9 Steuerbarkeit missing | yes — `sect9_erfuellung` × capacity |
-//! | Abs. 1 Nr. 4 | §10b Direktvermarktungspflicht | yes — capacity × settlement model |
-//! | Abs. 1 Nr. 5 | Ausfallvergütung Höchstdauer exceeded | yes — from the receipts |
-//! | Abs. 1 Nr. 9 | §21c switch not notified | yes — the notification timestamp |
-//! | Abs. 1 Nr. 11 | MaStR registration missing | yes — `mastr_registriert` |
-//! | Abs. 1 Nr. 2, 3, 6, 7, 8, 9a, 10, 12 | — | no: they turn on facts `einsd` does not hold (storage behaviour, metering resolution, Doppelvermarktung). Record them through the plant's `notes` and settle a correction. |
-
+//! | Abs. 1 Nr. 1 | §9 Steuerbarkeit missing | derived (`sect9_erfuellung` × capacity) |
+//! | Abs. 1 Nr. 5 | Ausfallvergütung Höchstdauer exceeded | derived from the receipts |
+//! | Abs. 1 Nr. 9 | §21c switch not notified | derived from the notification timestamp |
+//! | Abs. 1 Nr. 11 | MaStR registration missing | derived; `mastr_violation_start` is its clock |
+//! | Abs. 1 Nr. 2, 3, 4, 6, 7, 8, 9a, 10, 12 | — | **recorded** — the register entry is the trigger |
+//!
+//! A recorded entry never *contradicts* a derived one: where einsd derives the
+//! breach, the record only refines it. An operator therefore cannot close a
+//! Pflichtverstoß the plant record still shows.
+//!
+//! ## The register is the only source for three facts, and each moves money
+//!
+//! - **`beginn`** — Abs. 2 charges per calendar month „in dem ganz oder
+//!   zeitweise ein Pflichtverstoß … vorliegt". No start date means one month,
+//!   which understates a breach that has run for a year.
+//! - **`behoben_am`** — Abs. 3 Satz 1 Nr. 1 drops the rate to 2 €/kW „zurück bis
+//!   zum Beginn", so months already settled at 10 € need a § 147 AO correction.
+//! - **`technischer_defekt`** — Abs. 3 Satz 2 waives the defect month and the
+//!   next one for Nr. 1/3/4/8; the Beweislast is the operator's.
+//!
+//! Neither Abs. 3 reduction is derivable, so without a record both flags are
+//! `false` — which means „nobody said", not „no reduction applies".
+//!
 use eeg_billing::{Pflichtverstoss, SanktionsTyp};
 use rust_decimal::{Decimal, dec};
 use time::Date;
 
 use crate::models;
-use crate::pg::AnlageRow;
+use crate::pg::{AnlageRow, PflichtverstossRecord};
 
-/// Installed capacity from which Direktvermarktung is mandatory.
+/// §10b Abs. 1 Satz 1 EEG 2023 — the installed capacity from which a
+/// direct-marketing plant owes the Abruf- und Fernsteuerbarkeit.
 ///
-/// §21 Abs. 1 Satz 1 Nr. 1 grants the Einspeisevergütung only up to 100 kW, so a
-/// larger plant has to market directly; §10b carries the duty and §52 Abs. 1
-/// Nr. 4 the charge for breaching it.
-pub const DIREKTVERMARKTUNG_PFLICHT_KW: Decimal = dec!(100);
+/// „Betreiber von Anlagen mit einer installierten Leistung von **mehr als 25
+/// Kilowatt**, die den in ihren Anlagen erzeugten Strom direkt vermarkten".
+/// Breaching it is §52 Abs. 1 Nr. 4.
+pub const SECT10B_MINDESTLEISTUNG_KW: Decimal = dec!(25);
 
 /// §21 Abs. 1 Satz 1 Nr. 3 — the two Höchstdauern of the Ausfallvergütung.
 pub const AUSFALLVERGUETUNG_MAX_MONATE_AM_STUECK: u32 = 3;
@@ -83,24 +107,52 @@ fn monate_seit(start: Option<Date>, billing_date: Date) -> u32 {
     u32::try_from((years * 12 + months + 1).max(1)).unwrap_or(1)
 }
 
-/// Derive every §52 Abs. 1 violation this plant is in for the billing period.
+/// Every §52 Abs. 1 violation this plant is in for the billing period.
+///
+/// `aufzeichnungen` is the plant's `eeg_pflichtverstoesse` history; only the
+/// entries that bear on the billing month are read
+/// ([`PflichtverstossRecord::gilt_fuer`]).
 ///
 /// Returns an empty vector for a compliant plant — and for every plant governed
 /// by the pre-2023 regime, where a breach reduces the Vergütung instead of
 /// charging a separate Pflichtzahlung (`SanktionAlt`, handled by the caller).
 #[must_use]
-pub fn derive_pflichtverstoesse(anlage: &AnlageRow, ctx: Sect52Context) -> Vec<Pflichtverstoss> {
+pub fn derive_pflichtverstoesse(
+    anlage: &AnlageRow,
+    aufzeichnungen: &[PflichtverstossRecord],
+    ctx: Sect52Context,
+) -> Vec<Pflichtverstoss> {
     let leistung_kw = anlage.leistung_kwp;
     let art = eeg_billing::ErzeugungsArt::from_db_str(&anlage.erzeugungsart).ok();
     let mut out = Vec::new();
 
-    let mut push = |typ: SanktionsTyp, start: Option<Date>| {
+    // Only the entries that bear on this month, indexed by Nummer.
+    let relevant: Vec<&PflichtverstossRecord> = aufzeichnungen
+        .iter()
+        .filter(|r| r.gilt_fuer(ctx.billing_date))
+        .collect();
+    let aufzeichnung = |typ: SanktionsTyp| -> Option<&PflichtverstossRecord> {
+        relevant.iter().copied().find(|r| r.typ == typ)
+    };
+
+    // One place builds a `Pflichtverstoss`, so the §52 Abs. 3 flags and the
+    // Abs. 4 month extension cannot be applied to one Nummer and forgotten on
+    // another.
+    let mut push = |typ: SanktionsTyp, fallback_start: Option<Date>| {
+        let record = aufzeichnung(typ);
+        let start = record.map(|r| r.beginn).or(fallback_start);
+        let bis = record
+            .and_then(|r| r.behoben_am)
+            .filter(|b| *b < ctx.billing_date)
+            .unwrap_or(ctx.billing_date);
         out.push(Pflichtverstoss {
             typ,
             leistung_kw,
-            monate_des_verstosses: monate_seit(start, ctx.billing_date),
-            nachtraeglich_erfuellt: false,
-            technischer_defekt: false,
+            monate_des_verstosses: typ.abs4_monate(monate_seit(start, bis)),
+            // §52 Abs. 3 Satz 1 Nr. 1 — „sobald die entsprechende Pflicht
+            // erfüllt wird", and the reduction reaches back to the beginning.
+            nachtraeglich_erfuellt: record.is_some_and(|r| r.behoben_am.is_some()),
+            technischer_defekt: record.is_some_and(|r| r.technischer_defekt),
         });
     };
 
@@ -111,25 +163,7 @@ pub fn derive_pflichtverstoesse(anlage: &AnlageRow, ctx: Sect52Context) -> Vec<P
     // "≥ 25 kW without a Fernsteuerbarkeit date", which charged 10 €/kW/month to
     // every compliant plant that had taken the route the statute offers it.
     if eeg_billing::settlement_state::sect9_verletzt(leistung_kw, art, anlage.sect9_erfuellung()) {
-        push(
-            SanktionsTyp::FernsteuerbarkeitFehlend,
-            anlage.fernsteuerbarkeit_violation_start,
-        );
-    }
-
-    // ── Nr. 4 — §10b Direktvermarktungspflicht ───────────────────────────────
-    // §21 Abs. 1 Satz 1 Nr. 1 grants the Einspeisevergütung only up to 100 kW, so
-    // a larger plant taking it is in breach.
-    //
-    // Scoped to the plain Einspeisevergütung on purpose. MIETERSTROM and GGV are
-    // *not* included: the Mieterstromzuschlag (§21 Abs. 3) and the §42b EnWG
-    // supply relationship carry their own size rules, and reading the Abs. 1
-    // Nr. 1 cap across to them is a contestable position on which to charge
-    // 10 €/kW/month. The Ausfallvergütung is likewise excluded — it is the
-    // statute's own answer for a plant whose Direktvermarkter dropped out, and
-    // its limits are Nr. 5's business, not Nr. 4's.
-    if leistung_kw > DIREKTVERMARKTUNG_PFLICHT_KW && anlage.settlement_model == models::VERGUETUNG {
-        push(SanktionsTyp::DirektvermarktungspflichtVerletzt, None);
+        push(SanktionsTyp::FernsteuerbarkeitFehlend, None);
     }
 
     // ── Nr. 5 — Ausfallvergütung beyond its Höchstdauern ─────────────────────
@@ -162,7 +196,63 @@ pub fn derive_pflichtverstoesse(anlage: &AnlageRow, ctx: Sect52Context) -> Vec<P
         );
     }
 
+    // ── The nine recorded Nummern ────────────────────────────────────────────
+    //
+    // A record is the trigger for anything einsd cannot see. Nr. 4 is the one
+    // that also carries a statutory *scope*: §10b Abs. 1 binds the operator of a
+    // plant over 25 kW **that direct-markets**, so a record filed against a plant
+    // on the Einspeisevergütung charges nothing — it breaches a duty it does not
+    // have. Everything else is charged as filed.
+    let derived: [SanktionsTyp; 4] = [
+        SanktionsTyp::FernsteuerbarkeitFehlend,
+        SanktionsTyp::AusfallverguetungHoechstdauerUeberschritten,
+        SanktionsTyp::ZuordnungsWechselNichtGemeldet,
+        SanktionsTyp::MastrNichtRegistriert,
+    ];
+    let in_direktvermarktung = matches!(
+        anlage.settlement_model.as_str(),
+        models::DIREKTVERMARKTUNG | models::AUSSCHREIBUNG | models::SONSTIGE_DIREKTVERMARKTUNG
+    );
+    let recorded: Vec<SanktionsTyp> = relevant
+        .iter()
+        .map(|r| r.typ)
+        .filter(|typ| !derived.contains(typ))
+        .filter(|typ| {
+            *typ != SanktionsTyp::Sect10bVorgabenVerletzt
+                || (in_direktvermarktung && leistung_kw > SECT10B_MINDESTLEISTUNG_KW)
+        })
+        .collect();
+    for typ in recorded {
+        push(typ, None);
+    }
+
     out
+}
+
+/// What the plant owes for **one** calendar month if these breaches persist.
+///
+/// Not the total — [`Pflichtverstoss::monate_des_verstosses`] carries the months
+/// already accrued (including the §52 Abs. 4 tail), and a compliance *report*
+/// wants the monthly exposure rather than the running claim. Each violation is
+/// therefore priced at a single month, the §52 Abs. 3 rate the engine picks is
+/// kept, and the Abs. 5 ceiling — „insgesamt auf 10 Euro pro Kilowatt
+/// installierter Leistung der Anlage und Kalendermonat begrenzt" — is applied to
+/// the sum.
+///
+/// Lives here rather than at the report, so the figure an operator is shown and
+/// the figure a settlement charges cannot come from two different formulas.
+#[must_use]
+pub fn monatliche_exposition(verstoesse: &[Pflichtverstoss], leistung_kw: Decimal) -> Decimal {
+    verstoesse
+        .iter()
+        .map(|v| {
+            eeg_billing::calculate_pflichtzahlung(&Pflichtverstoss {
+                monate_des_verstosses: 1,
+                ..v.clone()
+            })
+        })
+        .sum::<Decimal>()
+        .min(leistung_kw * dec!(10))
 }
 
 #[cfg(test)]

@@ -42,6 +42,7 @@ pub const MAX_SLOTS_JE_LADEVORGANG: u64 = 366 * 96;
 /// One quarter hour of the German market grid, named by the instant it starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Viertelstunde {
+    #[serde(with = "time::serde::rfc3339")]
     start: OffsetDateTime,
 }
 
@@ -150,8 +151,10 @@ pub struct Ladevorgang {
     /// unauthenticated draw.
     pub token: Option<TokenRef>,
     /// When charging began.
+    #[serde(with = "time::serde::rfc3339")]
     pub beginn: OffsetDateTime,
     /// When charging ended.
+    #[serde(with = "time::serde::rfc3339")]
     pub ende: OffsetDateTime,
     /// Total energy drawn, in kWh.
     pub energie_kwh: Decimal,

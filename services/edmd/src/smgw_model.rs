@@ -145,6 +145,7 @@ pub struct GatewayCertificate {
     /// Whether this certificate has been revoked.
     pub is_revoked: bool,
     /// Revocation date (when `is_revoked = true`).
+    #[serde(with = "time::serde::rfc3339::option")]
     pub revoked_at: Option<OffsetDateTime>,
 }
 
@@ -342,6 +343,7 @@ pub struct SmgwSession {
     /// CLS channels configured on this gateway.
     pub cls_channels: Vec<ClsChannel>,
     /// Last successful data transmission (None = never).
+    #[serde(with = "time::serde::rfc3339::option")]
     pub last_contact_at: Option<OffsetDateTime>,
     /// Date of installation.
     pub installed_at: Date,

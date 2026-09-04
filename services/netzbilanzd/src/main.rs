@@ -188,6 +188,14 @@ fn redispatch_routes() -> Router {
             "/ausfallarbeit/malo-split",
             post(ausfallarbeit_api::post_ausfallarbeit_malo_split),
         )
+        .route(
+            "/ausfallarbeit/vergleichstag",
+            post(ausfallarbeit_api::post_ausfallarbeit_vergleichstag),
+        )
+        .route(
+            "/ausfallarbeit/vergleichszeitraum",
+            post(ausfallarbeit_api::post_ausfallarbeit_vergleichszeitraum),
+        )
 }
 
 /// Start the outbox drain and the two alert workers.

@@ -19,6 +19,11 @@
 //! - `POST /api/v1/redispatch/ausfallarbeit/malo-split` — splits one
 //!   marktlokationsscharfer Wert onto the TR behind the MaLo
 //!   (§ 24 Abs. 3 S. 2 EEG 2023).
+//! - `POST /api/v1/redispatch/ausfallarbeit/vergleichstag` — selects the Solar
+//!   Vergleichstag (Kap. 3.2.4.1) and returns `P_VZ,ist` and `G_VZ`.
+//! - `POST /api/v1/redispatch/ausfallarbeit/vergleichszeitraum` — selects the
+//!   Kap.-3.2.2.1 Vergleichszeitraum out of a TR's quarter-hour series and
+//!   returns the `KF` to feed back as `kf` on a `wind_spitz` request.
 
 use axum::Json;
 use mako_redispatch::ausfallarbeit as engine;
@@ -528,6 +533,116 @@ mod tests {
         assert_eq!(compute(&req).expect("computes"), vec![dec(-137.5)]);
     }
 
+    /// The route reads RFC 3339, returns RFC 3339, and picks the run
+    /// Kap. 3.2.2.1 admits rather than the first one offered.
+    #[tokio::test]
+    async fn vergleichszeitraum_picks_the_nearest_admissible_run() {
+        let quarter = |offset: i64, p_ist: &str, gemessen: bool| {
+            serde_json::json!({
+                "beginn": format!("2026-06-15T{:02}:{:02}:00Z", offset / 60, offset % 60),
+                "p_ist_kw": p_ist,
+                "p_theo_kw": "1000",
+                "vollstaendig_gemessen": gemessen,
+                "unbeschraenkt": true,
+            })
+        };
+        // 00:00–01:00 is spoilt by one unmeasured quarter-hour; 04:00–05:00 is
+        // clean and therefore the only candidate.
+        let mut kandidaten: Vec<_> = (0..4).map(|i| quarter(i * 15, "950", i != 2)).collect();
+        kandidaten.extend((16..20).map(|i| quarter(i * 15, "800", true)));
+
+        let req: VergleichszeitraumRequest = serde_json::from_value(serde_json::json!({
+            "massnahme_beginn": "2026-06-15T03:00:00Z",
+            "massnahme_ende": "2026-06-15T03:00:00Z",
+            "p_nenn_kw": "1000",
+            "kandidaten": kandidaten,
+        }))
+        .expect("valid request");
+
+        let Json(body) = post_ausfallarbeit_vergleichszeitraum(Json(req))
+            .await
+            .expect("an admissible run exists");
+        assert_eq!(body.kf, dec(0.8));
+        assert_eq!(body.lage, engine::VergleichszeitraumLage::Danach);
+        assert_eq!(body.viertelstunden.len(), 4);
+        assert_eq!(body.viertelstunden[0], "2026-06-15T04:00:00Z");
+    }
+
+    /// Solar's Vergleichszeitraum is a calendar day: the nearest one without a
+    /// Maßnahme against the SR, ties to the day before, and only the
+    /// quarter-hours over 10 % of the Nennleistung enter the two means.
+    #[tokio::test]
+    async fn vergleichstag_picks_the_nearest_day_without_a_massnahme() {
+        let req: VergleichstagRequest = serde_json::from_value(serde_json::json!({
+            "massnahme_tag": "2026-06-14",
+            "tage_mit_massnahme": ["2026-06-13"],
+            "p_nenn_kw": "1000",
+            "kandidaten": [
+                // 12 June — admissible, and the tie-break winner at 2 days.
+                {"beginn": "2026-06-12T10:00:00Z", "p_ist_kw": "900",
+                 "einstrahlung_kw_m2": "0.9", "nichtbeanspruchbar_oder_mba": false},
+                {"beginn": "2026-06-12T06:00:00Z", "p_ist_kw": "50",
+                 "einstrahlung_kw_m2": "0.1", "nichtbeanspruchbar_oder_mba": false},
+                // 13 June — nearer, but a Maßnahme ran against the SR.
+                {"beginn": "2026-06-13T10:00:00Z", "p_ist_kw": "800",
+                 "einstrahlung_kw_m2": "0.8", "nichtbeanspruchbar_oder_mba": false},
+                // 16 June — also 2 days away, loses the tie.
+                {"beginn": "2026-06-16T10:00:00Z", "p_ist_kw": "700",
+                 "einstrahlung_kw_m2": "0.7", "nichtbeanspruchbar_oder_mba": false},
+            ],
+        }))
+        .expect("valid request");
+
+        let Json(body) = post_ausfallarbeit_vergleichstag(Json(req))
+            .await
+            .expect("an admissible day exists");
+        assert_eq!(body.tag, "2026-06-12");
+        assert_eq!(body.lage, engine::VergleichszeitraumLage::Davor);
+        assert_eq!(body.viertelstunden, 1, "the 06:00 value is under 10 %");
+        assert_eq!(body.p_vz_ist_kw, dec(900.0));
+        assert_eq!(body.g_vz_kw_m2, dec(0.9));
+    }
+
+    /// No admissible day is a `422`, not a fabricated `P_VZ,ist / G_VZ`.
+    #[tokio::test]
+    async fn vergleichstag_refuses_when_no_day_qualifies() {
+        let req: VergleichstagRequest = serde_json::from_value(serde_json::json!({
+            "massnahme_tag": "2026-06-30",
+            "p_nenn_kw": "1000",
+            "kandidaten": [{
+                "beginn": "2026-07-01T10:00:00Z",
+                "p_ist_kw": "900",
+                "einstrahlung_kw_m2": "0.9",
+                "nichtbeanspruchbar_oder_mba": false,
+            }],
+        }))
+        .expect("valid request");
+        assert!(post_ausfallarbeit_vergleichstag(Json(req)).await.is_err());
+    }
+
+    /// No admissible run is a `422`, not a fabricated Korrekturfaktor.
+    #[tokio::test]
+    async fn vergleichszeitraum_refuses_when_nothing_qualifies() {
+        let req: VergleichszeitraumRequest = serde_json::from_value(serde_json::json!({
+            "massnahme_beginn": "2026-06-15T03:00:00Z",
+            "massnahme_ende": "2026-06-15T03:00:00Z",
+            "p_nenn_kw": "1000",
+            "kandidaten": [{
+                "beginn": "2026-06-15T00:00:00Z",
+                "p_ist_kw": "950",
+                "p_theo_kw": "1000",
+                "vollstaendig_gemessen": true,
+                "unbeschraenkt": true,
+            }],
+        }))
+        .expect("valid request");
+        assert!(
+            post_ausfallarbeit_vergleichszeitraum(Json(req))
+                .await
+                .is_err()
+        );
+    }
+
     #[tokio::test]
     async fn kf_bin_uses_the_measured_bin_when_it_is_occupied() {
         let req: KfBinRequest = serde_json::from_value(serde_json::json!({
@@ -636,4 +751,187 @@ mod tests {
             "a typo must not silently remove the beanspruchbare-Leistung cap"
         );
     }
+}
+
+// ── Kap. 3.2.2.1 — Vergleichszeitraum selection ─────────────────────────────
+
+/// The candidate series and the Maßnahme to place it against.
+///
+/// Sizing: one calendar month of quarter-hours is well inside the per-request
+/// interval cap, and Kap. 3.2.2.1 never reaches beyond the Maßnahme's own month,
+/// so a caller has no reason to send more.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VergleichszeitraumRequest {
+    /// Start of the Redispatch-Maßnahme — the anchor a run **before** it is
+    /// measured to.
+    #[serde(with = "time::serde::rfc3339")]
+    pub massnahme_beginn: time::OffsetDateTime,
+    /// End of the Redispatch-Maßnahme — the anchor a run **after** it is
+    /// measured to. Kap. 3.2.2.1 names both („vor oder nach der Viertelstunde,
+    /// in der die Redispatch-Maßnahme beginnt bzw. endet"), and using the
+    /// beginning for both sides makes a long Maßnahme prefer a Vergleichszeitraum
+    /// hours before it over the quarter-hours immediately after.
+    #[serde(with = "time::serde::rfc3339")]
+    pub massnahme_ende: time::OffsetDateTime,
+    /// Nennleistung of the TR in kW — the 10 % admissibility floor is a share
+    /// of it.
+    pub p_nenn_kw: Decimal,
+    /// Candidate quarter-hours, ascending. Runs that are not contiguous at a
+    /// quarter-hour spacing are skipped rather than rejected: a series with a
+    /// measurement gap is ordinary, and another run may still qualify.
+    pub kandidaten: Vec<engine::VergleichsViertelstunde>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VergleichszeitraumResponse {
+    /// `P_VZ,ist` in kW.
+    pub p_vz_ist_kw: Decimal,
+    /// `P_VZ,theo` in kW.
+    pub p_vz_theo_kw: Decimal,
+    /// `KF = P_VZ,ist / P_VZ,theo` — pass this as `kf` on a `wind_spitz`
+    /// request.
+    pub kf: Decimal,
+    /// Which side of the Maßnahme the four quarter-hours came from.
+    pub lage: engine::VergleichszeitraumLage,
+    /// Their start instants, ascending — the evidence for the selection.
+    /// RFC 3339, like every other timestamp on this service's wire.
+    pub viertelstunden: Vec<String>,
+}
+
+// ── Kap. 3.2.4.1 — Solar-Vergleichstag selection ────────────────────────────
+
+/// The candidate series and the Maßnahme to place a Solar Vergleichstag against.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VergleichstagRequest {
+    /// The calendar day the Redispatch-Maßnahme falls on. Distance is counted
+    /// in whole days from it.
+    pub massnahme_tag: time::Date,
+    /// Calendar days on which a Maßnahme was directed at the SR — Kap. 3.2.4.1
+    /// admits only a day „an dem keine Redispatch-Maßnahme gegenüber der SR
+    /// stattgefunden hat". `massnahme_tag` itself is excluded whether or not it
+    /// appears here.
+    #[serde(default)]
+    pub tage_mit_massnahme: Vec<time::Date>,
+    /// Nennleistung of the TR in kW — the 10 % admissibility floor is a share
+    /// of it.
+    pub p_nenn_kw: Decimal,
+    /// Candidate quarter-hours across the candidate days.
+    pub kandidaten: Vec<engine::VergleichstagViertelstunde>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VergleichstagResponse {
+    /// The calendar day selected.
+    pub tag: String,
+    /// `P_VZ,ist` in kW — pass this on a `solar_spitz` request.
+    pub p_vz_ist_kw: Decimal,
+    /// `G_VZ` in kW/m² — pass this on a `solar_spitz` request.
+    pub g_vz_kw_m2: Decimal,
+    /// Which side of the Maßnahme the day lies on.
+    pub lage: engine::VergleichszeitraumLage,
+    /// How many quarter-hours of that day were admitted — the evidence for the
+    /// two means.
+    pub viertelstunden: usize,
+}
+
+/// `POST /api/v1/redispatch/ausfallarbeit/vergleichstag`
+///
+/// Solar's Vergleichszeitraum is a **calendar day**, not the wind rule's four
+/// quarter-hours (Kap. 3.2.4.1): the nearest day before or after the Maßnahme on
+/// which no Maßnahme was directed at the SR, ties to the day before, never from
+/// another month — and within it only the quarter-hours that reach 10 % of the
+/// Nennleistung and carry no Nichtbeanspruchbarkeit or marktbedingte Anpassung.
+/// `P_VZ,ist / G_VZ` scales every kWh of the Spitzabrechnung, so the selection
+/// belongs to the engine rather than to each party's spreadsheet.
+///
+/// # Errors
+///
+/// - `400` when no candidates are given, or more than the per-request cap.
+/// - `422` when no day qualifies, or when the admitted quarter-hours carry no
+///   irradiation at all — `G_VZ` would be zero.
+pub async fn post_ausfallarbeit_vergleichstag(
+    Json(req): Json<VergleichstagRequest>,
+) -> ApiResult<Json<VergleichstagResponse>> {
+    if req.kandidaten.is_empty() {
+        return Err(ApiError::bad_request("kandidaten is empty"));
+    }
+    if req.kandidaten.len() > MAX_INTERVALLE {
+        return Err(ApiError::bad_request(format!(
+            "kandidaten exceeds {MAX_INTERVALLE} intervals"
+        )));
+    }
+    let tag = engine::solar_vergleichstag(
+        &req.kandidaten,
+        req.massnahme_tag,
+        &req.tage_mit_massnahme,
+        req.p_nenn_kw,
+    )
+    .map_err(|e| ApiError::unprocessable(e.to_string()))?;
+    Ok(Json(VergleichstagResponse {
+        tag: tag.tag.to_string(),
+        p_vz_ist_kw: tag.p_vz_ist_kw,
+        g_vz_kw_m2: tag.g_vz_kw_m2,
+        lage: tag.lage,
+        viertelstunden: tag.viertelstunden,
+    }))
+}
+
+/// `POST /api/v1/redispatch/ausfallarbeit/vergleichszeitraum`
+///
+/// The Korrekturfaktor prices every kWh of a Wind-Spitzabrechnung, and which
+/// four quarter-hours it is computed from is a rule rather than a convention —
+/// contiguous, fully measured, unrestricted, each at least 10 % of the
+/// Nennleistung, nearest to the Maßnahme with ties to the side before it, and
+/// never from the Folgemonat. „Nearest" is measured to the **beginning** of the
+/// Maßnahme on the one side and to its **end** on the other, which is why both
+/// instants are required. Deciding it caller-side is how two parties settle the
+/// same Maßnahme at different figures.
+///
+/// # Errors
+///
+/// - `400` when no candidates are given, or more than the per-request cap.
+/// - `422` when no admissible run of four exists on either side — the operator
+///   then falls back to the vereinfachte Spitzabrechnung or the Pauschale, which
+///   is a decision rather than a computation.
+pub async fn post_ausfallarbeit_vergleichszeitraum(
+    Json(req): Json<VergleichszeitraumRequest>,
+) -> ApiResult<Json<VergleichszeitraumResponse>> {
+    if req.kandidaten.is_empty() {
+        return Err(ApiError::bad_request("kandidaten is empty"));
+    }
+    if req.kandidaten.len() > MAX_INTERVALLE {
+        return Err(ApiError::bad_request(format!(
+            "kandidaten exceeds {MAX_INTERVALLE} intervals"
+        )));
+    }
+    let unprocessable = |e: engine::AusfallarbeitError| ApiError::unprocessable(e.to_string());
+    if req.massnahme_ende < req.massnahme_beginn {
+        return Err(ApiError::bad_request(
+            "massnahme_ende is before massnahme_beginn",
+        ));
+    }
+    let zeitraum = engine::vergleichszeitraum(
+        &req.kandidaten,
+        req.massnahme_beginn,
+        req.massnahme_ende,
+        req.p_nenn_kw,
+    )
+    .map_err(unprocessable)?;
+    let kf = zeitraum.korrekturfaktor().map_err(unprocessable)?;
+    Ok(Json(VergleichszeitraumResponse {
+        p_vz_ist_kw: zeitraum.p_vz_ist_kw,
+        p_vz_theo_kw: zeitraum.p_vz_theo_kw,
+        kf,
+        lage: zeitraum.lage,
+        viertelstunden: zeitraum
+            .viertelstunden
+            .iter()
+            .map(|v| {
+                v.format(&time::format_description::well_known::Rfc3339)
+                    .unwrap_or_else(|_| v.to_string())
+            })
+            .collect(),
+    }))
 }

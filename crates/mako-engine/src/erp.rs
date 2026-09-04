@@ -195,7 +195,7 @@ pub enum ErpEventType {
     /// `execution_time_until`, `max_power_kw`, `command_type`, `sender_mp_id`,
     /// `produkt_code`.
     VppDispatchConfirmed,
-    /// The KoV §6.4 final-allocation window closed with no binding final ALOCAT
+    /// The § 47 Ziffer 1 KoV XV final-allocation window closed with no binding final ALOCAT
     /// on file, so the gas day's imbalance cannot be settled.
     ///
     /// Raised from the `gabi-gas-allocation` deadline. The obligation is the
@@ -336,6 +336,7 @@ pub struct ErpEvent {
     pub payload: serde_json::Value,
 
     /// Wall-clock time when the domain event was persisted.
+    #[serde(with = "time::serde::rfc3339")]
     pub occurred_at: OffsetDateTime,
 
     /// W3C `traceparent` propagated from the request that caused this event.

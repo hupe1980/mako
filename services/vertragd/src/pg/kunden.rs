@@ -78,6 +78,7 @@ pub struct KundeListRow {
     pub organisations_id: Option<String>,
     pub erp_kunde_id: Option<String>,
     pub zahlungsziel_tage: i32,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
 }
 

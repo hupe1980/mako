@@ -189,8 +189,12 @@ Tranche), `ZW2` (eine neu zu bildende Tranche) — and the *angemeldete*
 Veräußerungsform is `SG10 CCI+Z22`; the *bestehende* one and the
 Ausfallvergütung flag come from `einsd` (`[nb] einsd_url`), because wire code
 `Z90` covers two regimes whose Fristen differ by a month versus five Werktage.
-A missing fact escalates and is named. The Monatserster rule is
-**§ 21b Abs. 1 EEG 2023**, not § 10c.
+The Monatserster rule is **§ 21b Abs. 1 Satz 2 EEG 2023**, not § 10c.
+
+The same `einsd` call answers `E_0623` Prüfschritt 540 — installed capacity
+against the § 21 Abs. 1 Satz 1 Nr. 1 ceiling of 100 kW. It decides `A55` against
+`A56`, because § 20 Satz 1 Nr. 3 pays the Marktprämie only while the Strom sits
+in a Bilanzkreis holding nothing else. A missing fact escalates and is named.
 
 A `ZW2` also makes the **Tranchengröße** Muss: `SG8` Produkt-Code
 `9991000002090` with the Produkteigenschaft „prozentuale Aufteilung", which is
@@ -233,8 +237,9 @@ a supplier they have left.
 
 STP is ~60 % without `malo_grid` coverage (missing records escalate) and ≥ 95 %
 once the NB has provisioned it via `marktd`'s NB-role PUT. An erzeugende
-Marktlokation additionally needs `[nb] einsd_url`; without it every 55077
-escalates.
+Marktlokation additionally needs `[nb] einsd_url` — for the `E_0622` Vorlauffrist
+and the `E_0623` Prüfschritt 540 Direktvermarktungspflicht; without it every
+55077 escalates.
 
 **§ 20 EnWG parity.** Every decision row carries `initiator_is_affiliate`
 (`lf_mp_id == own_mp_id`), and `auto_accept` is suppressed for affiliate-initiated

@@ -48,9 +48,18 @@ use time::Date;
     serde(tag = "scheme", rename_all = "SCREAMING_SNAKE_CASE")
 )]
 pub enum SettlementScheme {
-    /// §21 EEG — Fixed **Einspeisevergütung** paid by NB to Anlagenbetreiber.
+    /// §21 Abs. 1 Satz 1 Nr. 1 EEG — the **Einspeisevergütung** mit gesetzlich
+    /// bestimmtem anzulegenden Wert, paid by the NB to the Anlagenbetreiber.
     ///
     /// Formula: `kwh × verguetungssatz_ct / 100`
+    ///
+    /// **The claim ends at 100 kW installierter Leistung.** Nr. 1 grants it only
+    /// „für Strom aus Anlagen mit einer installierten Leistung von bis zu 100
+    /// Kilowatt", so a larger plant assigned to this scheme is owed nothing — see
+    /// [`crate::direktverm::direktvermarktungspflicht`]. The engine does not
+    /// enforce it, because this enum names a *formula* and the Veräußerungsform a
+    /// plant is actually assigned to is register data: the caller checks it and
+    /// reports [`SettlementStatus::KeinAnspruch`](crate::SettlementStatus::KeinAnspruch).
     FeedInTariff {
         /// Net feed-in tariff rate in ct/kWh (gross AW − §53 EEG deduction).
         /// Fixed at commissioning for the full 20-year Förderdauer.
@@ -554,6 +563,107 @@ pub enum CorrectionReason {
     /// Other/manual correction.
     Other,
 }
+
+// ── Marktwertserie (Anlage 1 Nr. 2) ──────────────────────────────────────────
+
+/// Which of the two Marktwert series Anlage 1 Nr. 2 EEG 2023 gives a plant.
+///
+/// The Marktprämie is `max(0, AW − MW)`, and using the wrong `MW` misprices
+/// every kWh — so the choice is the plant's vintage, never the operator's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
+pub enum Marktwertserie {
+    /// Anlage 1 Nr. 3 — the energieträgerspezifische **Monats**marktwert. Final
+    /// when published, and per calendar month.
+    Monatsmarktwert,
+    /// Anlage 1 Nr. 4 — the energieträgerspezifische **Jahres**marktwert. It has
+    /// no month, and the binding figure exists only once the year is over; the
+    /// ÜNB publish a running estimate before that.
+    Jahresmarktwert,
+}
+
+impl Marktwertserie {
+    /// The stored/wire token.
+    #[must_use]
+    pub fn as_db_str(self) -> &'static str {
+        match self {
+            Self::Monatsmarktwert => "MONATSMARKTWERT",
+            Self::Jahresmarktwert => "JAHRESMARKTWERT",
+        }
+    }
+
+    /// Parse a stored/wire token.
+    #[must_use]
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "MONATSMARKTWERT" => Some(Self::Monatsmarktwert),
+            "JAHRESMARKTWERT" => Some(Self::Jahresmarktwert),
+            _ => None,
+        }
+    }
+}
+
+/// Anlage 1 Nr. 2 EEG 2023 — which Marktwert series a plant's Marktprämie is
+/// computed from.
+///
+/// Satz 1 sends plants „die vor dem 1. Januar 2023 in Betrieb genommen worden
+/// sind **oder** deren Zuschlag vor dem 1. Januar 2023 erteilt worden ist" to
+/// the Monatsmarktwert; Satz 2 sends „Strom aus anderen Anlagen" to the
+/// Jahresmarktwert. Satz 3 then moves a Satz-1 plant onto the Jahresmarktwert
+/// too, „wenn der Anspruch nach der Abgrenzungs- oder der Pauschaloption nach
+/// § 19 Absatz 3b oder 3c geltend gemacht wird".
+///
+/// `zuschlag_datum` is the BNetzA award date where the plant has one; a plant
+/// commissioned in 2024 on a 2022 award takes the **Monats**marktwert, which is
+/// the case a bare Inbetriebnahme test gets wrong.
+///
+/// # Example
+///
+/// ```rust
+/// use eeg_billing::{Marktwertserie, marktwertserie};
+/// use time::macros::date;
+///
+/// // Commissioned 2021 — Satz 1.
+/// assert_eq!(
+///     marktwertserie(date!(2021-06-01), None, false),
+///     Marktwertserie::Monatsmarktwert
+/// );
+/// // Commissioned 2024 on a 2022 Zuschlag — still Satz 1.
+/// assert_eq!(
+///     marktwertserie(date!(2024-06-01), Some(date!(2022-11-01)), false),
+///     Marktwertserie::Monatsmarktwert
+/// );
+/// // Commissioned 2024, no earlier award — Satz 2.
+/// assert_eq!(
+///     marktwertserie(date!(2024-06-01), None, false),
+///     Marktwertserie::Jahresmarktwert
+/// );
+/// // A Satz-1 plant claiming under §19 Abs. 3b/3c — Satz 3.
+/// assert_eq!(
+///     marktwertserie(date!(2021-06-01), None, true),
+///     Marktwertserie::Jahresmarktwert
+/// );
+/// ```
+#[must_use]
+pub fn marktwertserie(
+    inbetriebnahme: Date,
+    zuschlag_datum: Option<Date>,
+    speicher_abgrenzungs_oder_pauschaloption: bool,
+) -> Marktwertserie {
+    if speicher_abgrenzungs_oder_pauschaloption {
+        return Marktwertserie::Jahresmarktwert;
+    }
+    let vor_2023 = |d: Date| d < ANLAGE1_NR2_STICHTAG;
+    if vor_2023(inbetriebnahme) || zuschlag_datum.is_some_and(vor_2023) {
+        Marktwertserie::Monatsmarktwert
+    } else {
+        Marktwertserie::Jahresmarktwert
+    }
+}
+
+/// Anlage 1 Nr. 2 Satz 1 EEG 2023 — „vor dem 1. Januar 2023".
+pub const ANLAGE1_NR2_STICHTAG: Date = time::macros::date!(2023 - 01 - 01);
 
 // ── MarktpreisKategorie ───────────────────────────────────────────────────────
 

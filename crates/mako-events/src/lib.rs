@@ -430,7 +430,7 @@ pub mod agent {
 /// GaBi Gas balancing events (`de.gabi.*`), defined in `mako-gabi-gas`.
 ///
 /// [`gabi::ALOCAT_MISSING`] is emitted by `makod`: the `gabi-gas-allocation` workflow
-/// enqueues a `GabiFinalAllocationOverdue` outbox entry when the KoV §6.4
+/// enqueues a `GabiFinalAllocationOverdue` outbox entry when the § 47 Ziffer 1 KoV XV
 /// final-allocation window closes unsettled, and `OutboxErpWorker` delivers it
 /// as a CloudEvent like every other ERP notification.
 ///
@@ -477,7 +477,7 @@ pub mod gabi {
     pub const INVOIC_MMM_RECEIVED: &str = "de.gabi.invoic.mmm.received";
     /// ⚠ phantom: no emitter yet.
     pub const INVOIC_KAPAZITAET_RECEIVED: &str = "de.gabi.invoic.kapazitaet.received";
-    /// The KoV §6.4 final-allocation window closed with no binding final
+    /// The § 47 Ziffer 1 KoV XV final-allocation window closed with no binding final
     /// ALOCAT on file, so the gas day's imbalance cannot be settled.
     ///
     /// Emitted by `makod` from the `gabi-gas-allocation` deadline via

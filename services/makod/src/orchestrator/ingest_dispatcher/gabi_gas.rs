@@ -244,7 +244,23 @@ impl EdifactIngestDispatcher {
                         reason: "pid_not_in_dispatch_table",
                     });
                 };
-                let final_due_at = gas_day.final_alocat_deadline_utc();
+                // § 47 Ziffer 1 KoV XV gives the final allocation two different
+                // deadlines, and only one of them is watchable from an inbound
+                // ALOCAT: an **SLP** allocation is final on D-1 12:00, which is
+                // already past by the time the first ALOCAT for gas day D
+                // arrives, so nothing could ever be registered for it. The
+                // window that is watchable is the **RLM** one — M+14 Werktage
+                // after the delivery month — and that is what is registered.
+                let final_due_at = gas_day.finale_allokation_deadline_utc(
+                    mako_gabi_gas::AllokationsSerie::Rlm,
+                    |from, n| {
+                        mako_fristen::add_werktage(
+                            from,
+                            u32::from(n),
+                            mako_fristen::HolidayCalendar::BdewMaKo,
+                        )
+                    },
+                );
                 self.spawn_or_resume::<GaBiGasAllocationWorkflow>(
                     &key,
                     "gabi-gas-allocation",

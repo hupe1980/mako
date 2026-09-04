@@ -316,6 +316,7 @@ pub struct EsaWertebestellungData {
     /// MSB has already said it cannot serve an earlier date, so ordering the
     /// original Wunschtermin anyway asks for something the offer excluded.
     #[serde(default)]
+    #[serde(with = "time::serde::rfc3339::option")]
     pub fruehester_start: Option<OffsetDateTime>,
     /// What the MSB offered — prices, currency, OBIS registers, Einrichtungs-
     /// dauer. Retained past the Bestellung because the MSB's INVOIC 31009

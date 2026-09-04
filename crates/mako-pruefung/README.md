@@ -123,12 +123,13 @@ tell them apart. What does is the ordering ORDERS' Zuordnung zu einem Objekt —
 Bestellung nach Angebot of the AWH „Änderung der Technik an Lokationen".
 `codes::aenderung_der_technik_baum(besteller, art)` takes both facts, and
 answering out of the wrong one sends a confirmation the counterparty reads as a
-refusal. The WiM MSB-Wechsel trees
-share no code with the GPKE ones at all: a rejection there is `ZC9`, `Z29`,
-`Z34`, `E11`, `E17` or `Z09`. `codes::lookup(ebd, code)`
-resolves a code **within** its tree, and the code's published `Cluster` is what
-selects the answer PID. A caller never passes an `accepted: bool` alongside a
-code, because the two can disagree.
+refusal.
+
+The WiM MSB-Wechsel trees share no code with the GPKE ones at all: a rejection
+there is `ZC9`, `Z29`, `Z34`, `E11`, `E17` or `Z09`. `codes::lookup(ebd, code)`
+therefore resolves a code **within** its tree, and the code's published
+`Cluster` selects the answer PID — a caller never passes an `accepted: bool`
+alongside a code, because the two can disagree.
 
 Not every tree clusters on agreement. `E_0595` („Bestellung prüfen", the
 Bearbeitungsstand on Abrechnungsdaten) splits its codes into „Änderung der Daten"

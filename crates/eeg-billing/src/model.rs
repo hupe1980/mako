@@ -104,10 +104,19 @@ pub enum SanktionsTyp {
     /// Plant not equipped with the required intelligent measurement system infrastructure.
     IMssAnforderungNichtErfuellt,
 
-    /// §52 Abs. 1 Nr. 4 — §10b Direktvermarktungspflicht not met.
+    /// §52 Abs. 1 Nr. 4 — Verstoß gegen §10b (Vorgaben zur Direktvermarktung).
     ///
-    /// Plant > 100 kW required to be in Direktvermarktung but still uses Einspeisevergütung.
-    DirektvermarktungspflichtVerletzt,
+    /// §10b Abs. 1 obliges the operator of a plant **over 25 kW that direct-markets**
+    /// to fit the technical equipment through which the Direktvermarktungsunternehmen
+    /// can call up the Ist-Einspeisung and remotely curtail it, and to grant it that
+    /// authority. It is **not** the duty to direct-market: a plant over 100 kW that
+    /// stays on the Einspeisevergütung breaches nothing here — it simply has no
+    /// §21 Abs. 1 Satz 1 Nr. 1 claim, which is
+    /// [`SettlementStatus::KeinAnspruch`], not a Zahlung.
+    ///
+    /// **Rate: €10/kW/month**, reduced to €2 retroactively on cure (§52 Abs. 3 Satz 1
+    /// Nr. 1) and waived for two months on a technical defect (Satz 2).
+    Sect10bVorgabenVerletzt,
 
     /// §52 Abs. 1 Nr. 11 — Plant not registered in MaStR.
     ///
@@ -207,6 +216,174 @@ pub enum SanktionsTyp {
     DoppelvermarktungsverbotVerletzt,
 }
 
+impl SanktionsTyp {
+    /// Every variant, in the order §52 Abs. 1 lists them.
+    ///
+    /// Thirteen, not twelve: Abs. 1 counts to 12 but inserts **Nr. 9a** between
+    /// 9 and 10. The list is what a persistence layer's `CHECK` constraint and a
+    /// REST surface's vocabulary are held against, so a new Pflichtverstoß
+    /// cannot be added in one place and forgotten in the other.
+    pub const ALL: [Self; 13] = [
+        Self::FernsteuerbarkeitFehlend,
+        Self::SpeicherAnforderungNichtErfuellt,
+        Self::IMssAnforderungNichtErfuellt,
+        Self::Sect10bVorgabenVerletzt,
+        Self::AusfallverguetungHoechstdauerUeberschritten,
+        Self::EinspeiseverguetungUnzulaessigeNutzung,
+        Self::VeraeusserungsformWechselUngueltig,
+        Self::VeraeusserungsformNachweispflichtVerletzt,
+        Self::ZuordnungsWechselNichtGemeldet,
+        Self::InbetriebnahmeVorgabeVerletzt,
+        Self::VolleinspeisungspflichtVerletzt,
+        Self::MastrNichtRegistriert,
+        Self::DoppelvermarktungsverbotVerletzt,
+    ];
+
+    /// Which Nummer of §52 Abs. 1 this is, as the statute writes it — `"9a"`
+    /// is a Nummer of its own, which is why this is a string and not a number.
+    #[must_use]
+    pub fn nummer(self) -> &'static str {
+        match self {
+            Self::FernsteuerbarkeitFehlend => "1",
+            Self::SpeicherAnforderungNichtErfuellt => "2",
+            Self::IMssAnforderungNichtErfuellt => "3",
+            Self::Sect10bVorgabenVerletzt => "4",
+            Self::AusfallverguetungHoechstdauerUeberschritten => "5",
+            Self::EinspeiseverguetungUnzulaessigeNutzung => "6",
+            Self::VeraeusserungsformWechselUngueltig => "7",
+            Self::VeraeusserungsformNachweispflichtVerletzt => "8",
+            Self::ZuordnungsWechselNichtGemeldet => "9",
+            Self::InbetriebnahmeVorgabeVerletzt => "9a",
+            Self::VolleinspeisungspflichtVerletzt => "10",
+            Self::MastrNichtRegistriert => "11",
+            Self::DoppelvermarktungsverbotVerletzt => "12",
+        }
+    }
+
+    /// The stored/wire token — the `SCREAMING_SNAKE_CASE` serde name.
+    #[must_use]
+    pub fn as_db_str(self) -> &'static str {
+        match self {
+            Self::FernsteuerbarkeitFehlend => "FERNSTEUERBARKEIT_FEHLEND",
+            Self::SpeicherAnforderungNichtErfuellt => "SPEICHER_ANFORDERUNG_NICHT_ERFUELLT",
+            Self::IMssAnforderungNichtErfuellt => "I_MSS_ANFORDERUNG_NICHT_ERFUELLT",
+            Self::Sect10bVorgabenVerletzt => "SECT10B_VORGABEN_VERLETZT",
+            Self::AusfallverguetungHoechstdauerUeberschritten => {
+                "AUSFALLVERGUETUNG_HOECHSTDAUER_UEBERSCHRITTEN"
+            }
+            Self::EinspeiseverguetungUnzulaessigeNutzung => {
+                "EINSPEISEVERGUETUNG_UNZULAESSIGE_NUTZUNG"
+            }
+            Self::VeraeusserungsformWechselUngueltig => "VERAEUSSERUNGSFORM_WECHSEL_UNGUELTIG",
+            Self::VeraeusserungsformNachweispflichtVerletzt => {
+                "VERAEUSSERUNGSFORM_NACHWEISPFLICHT_VERLETZT"
+            }
+            Self::ZuordnungsWechselNichtGemeldet => "ZUORDNUNGS_WECHSEL_NICHT_GEMELDET",
+            Self::InbetriebnahmeVorgabeVerletzt => "INBETRIEBNAHME_VORGABE_VERLETZT",
+            Self::VolleinspeisungspflichtVerletzt => "VOLLEINSPEISUNGSPFLICHT_VERLETZT",
+            Self::MastrNichtRegistriert => "MASTR_NICHT_REGISTRIERT",
+            Self::DoppelvermarktungsverbotVerletzt => "DOPPELVERMARKTUNGSVERBOT_VERLETZT",
+        }
+    }
+
+    /// Parse a stored/wire token back. `None` for anything not in [`Self::ALL`].
+    #[must_use]
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|t| t.as_db_str() == s)
+    }
+
+    /// §52 **Abs. 4** — how many calendar months the Zahlung is owed for, given
+    /// the months the breach itself lasted.
+    ///
+    /// Four Nummern run past the breach: Nr. 7 „zusätzlich für die folgenden
+    /// drei Kalendermonate", Nr. 9 „zusätzlich für den folgenden
+    /// Kalendermonat", Nr. 12 „zusätzlich für die folgenden sechs
+    /// Kalendermonate" — and Nr. 10 is not an extension at all but a
+    /// replacement: „für **alle** Kalendermonate des Kalenderjahres".
+    ///
+    /// Nr. 5 is deliberately absent. Abs. 4 does not name it, and adding three
+    /// months there would charge a plant on the Ausfallvergütung a quarter it
+    /// does not owe.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use eeg_billing::SanktionsTyp;
+    ///
+    /// assert_eq!(SanktionsTyp::ZuordnungsWechselNichtGemeldet.abs4_monate(2), 3);
+    /// assert_eq!(SanktionsTyp::VolleinspeisungspflichtVerletzt.abs4_monate(2), 12);
+    /// assert_eq!(SanktionsTyp::AusfallverguetungHoechstdauerUeberschritten.abs4_monate(2), 2);
+    /// ```
+    #[must_use]
+    pub fn abs4_monate(self, monate_des_verstosses: u32) -> u32 {
+        match self {
+            Self::VeraeusserungsformWechselUngueltig => monate_des_verstosses.saturating_add(3),
+            Self::ZuordnungsWechselNichtGemeldet => monate_des_verstosses.saturating_add(1),
+            Self::DoppelvermarktungsverbotVerletzt => monate_des_verstosses.saturating_add(6),
+            // Abs. 4 Nr. 3 — the whole calendar year, not the breach plus a tail.
+            Self::VolleinspeisungspflichtVerletzt => 12,
+            _ => monate_des_verstosses,
+        }
+    }
+}
+
+#[cfg(test)]
+mod sanktionstyp_tests {
+    use super::SanktionsTyp;
+
+    /// §52 Abs. 1 counts to twelve but inserts Nr. 9a, so there are thirteen —
+    /// and `ALL` has to hold every one of them, because a persistence `CHECK`
+    /// and a REST vocabulary are generated from it.
+    #[test]
+    fn all_holds_every_variant_exactly_once() {
+        let mut nummern: Vec<&str> = SanktionsTyp::ALL.iter().map(|t| t.nummer()).collect();
+        nummern.sort_unstable();
+        nummern.dedup();
+        assert_eq!(nummern.len(), SanktionsTyp::ALL.len());
+        let mut tokens: Vec<&str> = SanktionsTyp::ALL.iter().map(|t| t.as_db_str()).collect();
+        tokens.sort_unstable();
+        tokens.dedup();
+        assert_eq!(tokens.len(), SanktionsTyp::ALL.len());
+        for t in SanktionsTyp::ALL {
+            assert_eq!(SanktionsTyp::from_db_str(t.as_db_str()), Some(t));
+        }
+        assert_eq!(SanktionsTyp::from_db_str("NOT_A_VIOLATION"), None);
+    }
+
+    /// §52 Abs. 4 names exactly four Nummern, and Nr. 5 is not one of them.
+    #[test]
+    fn abs4_extends_only_the_four_nummern_it_names() {
+        let extended: Vec<&str> = SanktionsTyp::ALL
+            .iter()
+            .filter(|t| t.abs4_monate(2) != 2)
+            .map(|t| t.nummer())
+            .collect();
+        assert_eq!(extended, ["7", "9", "10", "12"]);
+        assert_eq!(
+            SanktionsTyp::VeraeusserungsformWechselUngueltig.abs4_monate(2),
+            5
+        );
+        assert_eq!(
+            SanktionsTyp::ZuordnungsWechselNichtGemeldet.abs4_monate(2),
+            3
+        );
+        assert_eq!(
+            SanktionsTyp::DoppelvermarktungsverbotVerletzt.abs4_monate(2),
+            8
+        );
+        // Nr. 10 is a replacement, not an addition: „für alle Kalendermonate
+        // des Kalenderjahres" — twelve however long the under-delivery ran.
+        assert_eq!(
+            SanktionsTyp::VolleinspeisungspflichtVerletzt.abs4_monate(2),
+            12
+        );
+        assert_eq!(
+            SanktionsTyp::VolleinspeisungspflichtVerletzt.abs4_monate(11),
+            12
+        );
+    }
+}
+
 /// §52 EEG 2023 — Pflichtverstoss input for penalty calculation.
 ///
 /// A compliance violation that triggers a payment obligation of €10/kW/month
@@ -240,11 +417,11 @@ pub struct Pflichtverstoss {
     pub leistung_kw: Decimal,
     /// Number of calendar months during which the violation is/was in effect.
     ///
-    /// **Include §52 Abs. 4 extra months** for the following types:
-    /// - Nr. 5 (Ausfallvergütung Höchstdauer), Nr. 7 (§21b Wechsel ungültig): add 3 months
-    /// - Nr. 9 (§21c Zuordnungsmeldung fehlt): add 1 month
-    /// - Nr. 10 (Volleinspeisung): pass 12 months (all months of the calendar year)
-    /// - Nr. 12 (§80 Doppelvermarktung): add 6 months
+    /// **Already including the §52 Abs. 4 months** — apply
+    /// [`SanktionsTyp::abs4_monate`] to the raw duration rather than doing it by
+    /// hand: Nr. 7 +3, Nr. 9 +1, Nr. 12 +6, and Nr. 10 the full calendar year
+    /// (12), which is a replacement rather than an addition. Abs. 4 does **not**
+    /// name Nr. 5.
     pub monate_des_verstosses: u32,
     /// Whether the obligation has since been fulfilled.
     ///
@@ -360,7 +537,7 @@ pub struct SettleInput {
     /// - `TenantElectricity` → §21 Abs. 3 Mieterstrom
     /// - `PostEeg` → post-Förderung spot (configurable `post_eeg_price_floor`)
     /// - `KwkSurcharge` → §7 KWKG
-    /// - `TemporaryFeedInTariff` → §21 Abs. 1 Nr. 2 Ausfallvergütung
+    /// - `TemporaryFeedInTariff` → §21 Abs. 1 Satz 1 Nr. 3 Ausfallvergütung
     /// - `Eigenverbrauch` → no payment
     /// - `FlexibilityPremium` → §50b bestehende Biomasseanlagen
     /// - `FlexibilitySurcharge` → §50a neue Biomasseanlagen (capacity payment)
@@ -1010,4 +1187,19 @@ pub enum SettlementStatus {
     FoerderungBeendet,
     /// §25 / §47 EEG: MaStR registration missing — payment suspended.
     Sanctioned,
+    /// The Veräußerungsform the plant is assigned to carries no §19 Abs. 1 claim
+    /// for a plant of its size.
+    ///
+    /// The case that reaches it today is §21 Abs. 1 Satz 1 Nr. 1: the
+    /// Einspeisevergütung mit gesetzlich bestimmtem anzulegenden Wert exists only
+    /// „für Strom aus Anlagen mit einer installierten Leistung von bis zu 100
+    /// Kilowatt", so a larger plant assigned to it is owed nothing — not
+    /// penalised, owed nothing. It is a **terminal** outcome: re-running the
+    /// settlement will not change it, only a Veräußerungsformwechsel will.
+    ///
+    /// **Reported by the caller, never by [`crate::calculate_settlement`].**
+    /// [`SettlementScheme`](crate::SettlementScheme) names a formula; which
+    /// Veräußerungsform a plant is actually assigned to is register data, and the
+    /// service that holds it (einsd) decides this before calling the engine.
+    KeinAnspruch,
 }

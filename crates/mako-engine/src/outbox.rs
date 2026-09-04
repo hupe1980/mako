@@ -226,11 +226,13 @@ pub struct OutboxMessage {
     pub payload_schema: Option<Box<str>>,
 
     /// When this entry was created.
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 
     /// Do not deliver before this time.
     ///
     /// `None` means deliver immediately (as soon as the delivery worker runs).
+    #[serde(with = "time::serde::rfc3339::option")]
     pub deliver_after: Option<OffsetDateTime>,
 
     /// Number of delivery attempts so far. Starts at `0`, incremented by

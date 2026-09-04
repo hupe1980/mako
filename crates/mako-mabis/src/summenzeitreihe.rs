@@ -63,8 +63,10 @@ pub use crate::ids::MabisZaehlpunktId;
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SumInterval {
     /// Interval start (UTC).
+    #[serde(with = "time::serde::rfc3339")]
     pub from: OffsetDateTime,
     /// Interval end (UTC).
+    #[serde(with = "time::serde::rfc3339")]
     pub to: OffsetDateTime,
     /// Aggregated energy in kWh (sum of all contributing MaLo values).
     pub quantity_kwh: Decimal,
@@ -97,8 +99,10 @@ pub struct Summenzeitreihe {
     /// as the Meldepunkt misidentifies the series to the BIKO.
     pub mabis_zp_id: MabisZaehlpunktId,
     /// Start of the settlement period (UTC).
+    #[serde(with = "time::serde::rfc3339")]
     pub period_from: OffsetDateTime,
     /// End of the settlement period (UTC).
+    #[serde(with = "time::serde::rfc3339")]
     pub period_to: OffsetDateTime,
     /// Ascending version within (Bilanzierungsgebiet, Bilanzierungsmonat).
     ///
@@ -107,6 +111,7 @@ pub struct Summenzeitreihe {
     /// lifecycle state — MSCONS carries it as SG6 DTM+293
     /// (Fertigstellungsdatum/-zeit) — so a correction is the same series resent
     /// under a higher version.
+    #[serde(with = "time::serde::rfc3339")]
     pub version: OffsetDateTime,
     /// The aggregated intervals, ordered by `from`.
     pub intervals: Vec<SumInterval>,

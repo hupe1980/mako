@@ -207,8 +207,12 @@ their codes with the Ebene and Positionsnummer. Which family is decided by
 (`A25` against **`AC1`**) and the two Preisblatt-only Kopf-Prüfschritte 80/90.
 
 `E_0566` and `E_0210` — the Messstellenbetriebs-Rechnung toward an NB resp. an
-LF — are named correctly and carry no Codeliste here, so `invoicd` answers under
-the right tree with **no** code and logs the dispute for an operator. A code
+LF — resolve to the right tree and their Codelisten now ship, so an inbound
+REMADV under one of them is read with its published Bedeutung and Cluster rather
+than as an opaque string. What is not there is the **walk**: these trees are not
+the ESA/Preisblatt-B one renamed (`E_0210` has 37 Prüfschritte to `E_0264`'s 26
+and agrees on two of the twenty step numbers they share), so `invoicd` still
+answers them with **no** code and logs the dispute for an operator. A code
 borrowed from another tree would be worse than none: `A70` is `E_0406`
 Prüfschritt 900 and means nothing in `E_0210`.
 

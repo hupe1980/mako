@@ -37,13 +37,39 @@ pub fn bo4e_version() -> &'static str {
     mako_markt::bo4e::SCHEMA_VERSION
 }
 
+/// Every product category `productd` accepts, in the order the schema
+/// constraint lists them.
+///
+/// The `products.category` CHECK constraint in `migrations/0001_schema.sql` is
+/// the enforcing copy; this one is what the REST and MCP surfaces describe to
+/// their callers, and `the_categories_match_the_schema_constraint` holds the two
+/// against each other. Thirteen of them are `energy_billing::Product` variants;
+/// `BUNDLE` is productd's own composite, which resolves to component products
+/// before billing ever sees it.
+pub const PRODUCT_CATEGORIES: &[&str] = &[
+    "STROM",
+    "GAS",
+    "WAERME",
+    "WASSER",
+    "SOLAR",
+    "EEG",
+    "EINSPEISUNG",
+    "WAERMEPUMPE",
+    "WALLBOX",
+    "HEMS",
+    "EMOBILITY",
+    "ENERGIEDIENSTLEISTUNG",
+    "BUNDLE",
+    "SHARING",
+];
+
 /// Product categories that store a BO4E `Tarifpreisblatt` payload.
 ///
 /// For these categories `_typ: "TARIFPREISBLATT"` is required (injected if
 /// absent) and the full BO4E envelope is validated via
 /// `rubo4e::current::Tarifpreisblatt`.  All other categories
-/// (`WASSER`, `HEMS`, `EMOBILITY`, `ENERGIEDIENSTLEISTUNG`, `BUNDLE`) use a free-form
-/// structure — only `tarifpreise` is validated if present.
+/// (`WASSER`, `HEMS`, `EMOBILITY`, `ENERGIEDIENSTLEISTUNG`, `BUNDLE`) use a
+/// free-form structure — only `tarifpreise` is validated if present.
 const TARIFPREISBLATT_CATEGORIES: &[&str] = &[
     "STROM",
     "GAS",
@@ -112,7 +138,7 @@ pub const VALID_PREISTYPEN: &[&str] = &[
 ///
 /// | Category | `_typ` injection | BO4E envelope validation |
 /// |---|---|---|
-/// | `STROM`, `GAS`, `WAERME`, `SOLAR`, `EEG`, `EINSPEISUNG`, `WAERMEPUMPE`, `WALLBOX` | ✓ `"TARIFPREISBLATT"` | ✓ via `rubo4e::current::Tarifpreisblatt` |
+/// | `STROM`, `GAS`, `WAERME`, `SOLAR`, `EEG`, `EINSPEISUNG`, `WAERMEPUMPE`, `WALLBOX`, `SHARING` | ✓ `"TARIFPREISBLATT"` | ✓ via `rubo4e::current::Tarifpreisblatt` |
 /// | `WASSER`, `HEMS`, `EMOBILITY`, `ENERGIEDIENSTLEISTUNG`, `BUNDLE` | ✗ | ✗ |
 ///
 /// ## Position validation (all categories)
@@ -2545,4 +2571,65 @@ pub async fn get_comparison_feed(
         Json(response),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod category_tests {
+    use super::{PRODUCT_CATEGORIES, TARIFPREISBLATT_CATEGORIES};
+
+    /// Three copies of the category list exist — the schema constraint that
+    /// enforces it, the Rust constant the REST layer describes it with, and the
+    /// MCP tool descriptions an agent reads before it calls anything. They had
+    /// drifted: `WASSER` and `SHARING` were missing from the tool descriptions,
+    /// so no agent could list or create either, and no test noticed because the
+    /// database accepted them all along.
+    #[test]
+    fn the_categories_match_the_schema_constraint() {
+        let sql = include_str!("../migrations/0001_schema.sql");
+        let constraint = sql
+            .split_once("category        TEXT    NOT NULL CHECK (category IN (")
+            .expect("products.category CHECK constraint")
+            .1
+            .split_once("))")
+            .expect("closing paren")
+            .0;
+        let mut from_sql: Vec<&str> = constraint
+            .split(',')
+            .map(|t| t.trim().trim_matches('\'').trim())
+            .filter(|t| !t.is_empty())
+            .collect();
+        from_sql.sort_unstable();
+        let mut from_rust = PRODUCT_CATEGORIES.to_vec();
+        from_rust.sort_unstable();
+        assert_eq!(from_sql, from_rust);
+    }
+
+    /// Every category the MCP tools name to an agent must be one the database
+    /// accepts, and every category the database accepts must be named — an
+    /// omission is a capability the agent plane cannot reach.
+    #[test]
+    fn the_mcp_descriptions_name_every_category() {
+        let mcp = include_str!("mcp_server.rs");
+        let piped = PRODUCT_CATEGORIES.join("|");
+        let slashed = PRODUCT_CATEGORIES.join("/");
+        let listings = mcp.matches("STROM|").count() + mcp.matches("STROM/").count();
+        assert!(listings > 0, "no category listing found in mcp_server.rs");
+        assert_eq!(
+            mcp.matches(piped.as_str()).count() + mcp.matches(slashed.as_str()).count(),
+            listings,
+            "an MCP category listing does not name all {} categories",
+            PRODUCT_CATEGORIES.len()
+        );
+    }
+
+    /// A BO4E-envelope category must be a real category.
+    #[test]
+    fn the_tarifpreisblatt_categories_are_a_subset() {
+        for category in TARIFPREISBLATT_CATEGORIES {
+            assert!(
+                PRODUCT_CATEGORIES.contains(category),
+                "{category} carries a Tarifpreisblatt but is not an accepted category"
+            );
+        }
+    }
 }

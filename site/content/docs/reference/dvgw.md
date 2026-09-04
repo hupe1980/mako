@@ -265,18 +265,18 @@ sequenceDiagram
     Note over BKV,FNB: gas day D runs 06:00 → 06:00 CET
     BKV->>FNB: NOMINT — nomination for D
     FNB-->>BKV: NOMRES — matching result
-    Note right of FNB: due 15:00 CET on D-1<br/>GasDay::nomres_deadline_utc()
+    Note right of FNB: 15:00 CET on D-1 — convention<br/>GasDay::nomres_deadline_utc()
     opt re-nomination
         BKV->>FNB: NOMINT with RFF+AGO → the nomination it corrects
         FNB-->>BKV: NOMRES
     end
-    FNB->>BKV: ALOCAT — Initial (preliminary)
-    Note right of FNB: due D+3 12:00 CET<br/>GasDay::initial_alocat_deadline_utc()
+    FNB->>BKV: ALOCAT — the daily allocation
+    Note right of FNB: due D+1 12:00 · §46 Ziff.1 KoV XV<br/>GasDay::taegliche_alocat_deadline_utc()
     opt corrections
         FNB->>BKV: ALOCAT — Correction
     end
     FNB->>BKV: ALOCAT — Final (Bilanzierungsbrennwert)
-    Note right of FNB: due end of M+2<br/>GasDay::final_alocat_deadline_utc()
+    Note right of FNB: SLP D-1 12:00 · RLM end of M+14 WT · §47 Ziff.1<br/>GasDay::finale_allokation_deadline_utc()
 ```
 
 `AllocationVersion` (`Initial`/`Correction`/`Final`) is the typed form of the
@@ -309,7 +309,7 @@ account, not one day of it — while `ZG-T1` identifies an open **Clearingfall**
 So `DvgwMessage::process_key()` composes the tuple with the gas day for the
 `ZO-T*` cases — with the whole Abrechnungszeitraum for a SSQNOT, which reports
 a month rather than a day — and leaves `ZG-T1` alone: an allocation process
-holds one gas day's record and one KoV §6.4 deadline, so a key without the day
+holds one gas day's record and one § 47 KoV XV deadline, so a key without the day
 would let the second day overwrite both of the first's, while a clearing case
 legitimately spans several days under one number.
 
@@ -496,7 +496,7 @@ messages validated through the AHB/MIG profile layer:
 | `GasQuantity` | Decimal-precision kWh_Hs with m³ + conversion metadata |
 | `GasBeschaffenheit` | Brennwert (Hs/Hu) + Zustandszahl; `.validate()` checks DVGW G 260 ranges |
 | `GasQualityFlag` | 7-state quality flag per § 60 Abs. 2 MsbG |
-| `AllocationVersion` | Initial/Correction(n)/Final per KoV §6.4 |
+| `AllocationVersion` | Initial/Correction(n)/Final per §§46/47 KoV XV |
 | `GasMarketRole` | 9-role typed enum (LF, NB, FNB, VNB, BKV, MGV, MSB, Händler, TNB) |
 | `GasImbalanceSaldo` | Mehr/Minder/Balanced with `ausgleichsenergie_price_ct_per_kwh` per KoV §9 |
 | `GasPortfolioBalance` | BKV portfolio across Bilanzkreise; `conservation_check()` per GaBi Gas 2.1 |

@@ -251,10 +251,14 @@ pub struct AnlageRow {
     /// §22b EEG 2023 — Bürgerenergiegesellschaft (§3 Nr. 15).
     pub ist_buergerenergie: bool,
     pub zuschlag_erloeschen_datum: Option<Date>,
-    // §52 violation tracking
+    // §52 Abs. 1 Nr. 11 — the one §52 clock einsd owns end to end. Every other
+    // breach lives in `eeg_pflichtverstoesse`.
     pub mastr_violation_start: Option<Date>,
-    pub fernsteuerbarkeit_violation_start: Option<Date>,
-    // §21b Veräußerungsform switch guard
+    /// § 19 Abs. 3b / 3c EEG 2023 — `KEINE` | `ABGRENZUNG` | `PAUSCHAL`. Anlage 1
+    /// Nr. 2 Satz 3 moves a plant claiming either option onto the
+    /// Jahresmarktwert whatever its vintage.
+    pub speicher_option: String,
+    // §21b Abs. 1 Satz 2 — the effective date of the last Veräußerungsform switch
     pub last_veraeusserungsform_switch: Option<Date>,
     // §51a cumulative RAW negative-price quarter-hours (drives effektives_foerderende)
     pub negative_price_qh_gesamt: i64,
@@ -274,8 +278,10 @@ pub struct AnlageRow {
     // §100: date the Solarspitzengesetz opt-in was declared (Textform to the NB)
     pub sect51_optin_erklaert_am: Option<Date>,
     // §21c notification tracking
+    #[serde(with = "time::serde::rfc3339::option")]
     pub veraeusserungsform_notification_sent_at: Option<OffsetDateTime>,
     /// When the 180-day Förderende alert was emitted; NULL until it is.
+    #[serde(with = "time::serde::rfc3339::option")]
     pub foerderung_alert_sent_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -582,6 +588,19 @@ pub async fn upsert_anlage(
     Ok(())
 }
 
+pub async fn fetch_anlage_conn(
+    conn: &mut sqlx::PgConnection,
+    tenant: &str,
+    tr_id: &str,
+) -> anyhow::Result<Option<AnlageRow>> {
+    sqlx::query_as::<_, AnlageRow>("SELECT * FROM eeg_anlagen WHERE tr_id = $1 AND tenant = $2")
+        .bind(tr_id)
+        .bind(tenant)
+        .fetch_optional(&mut *conn)
+        .await
+        .context("fetch plant")
+}
+
 pub async fn fetch_anlage(
     pool: &PgPool,
     tenant: &str,
@@ -788,6 +807,11 @@ pub struct SettleInput {
     /// Ignored for plants under the pre-2023 regime, where a breach reduces the
     /// Vergütung itself rather than charging a separate Pflichtzahlung.
     pub pflichtverstoesse: Vec<eeg_billing::Pflichtverstoss>,
+    /// §21 Abs. 1 Satz 1 Nr. 3 — how long the plant has been on the
+    /// Ausfallvergütung, including this period. `run_settlement` re-derives the
+    /// §52 Abs. 1 violations under its own transaction and needs this to answer
+    /// Nr. 5, which no plant column carries.
+    pub ausfallverguetung_nutzung: crate::sect52::AusfallverguetungNutzung,
     /// §36e/§37e/§39e EEG 2023 — whether the Zuschlag has lapsed for this period.
     ///
     /// Derived from `zuschlag_erloeschen_datum` against the billing month rather
@@ -800,6 +824,10 @@ pub struct SettleInput {
     pub zuschlagswert_ct: Option<Decimal>,
     /// Date of the BNetzA award notification.
     pub zuschlag_datum: Option<Date>,
+    /// Anlage 1 Nr. 2 Satz 3 EEG 2023 — the plant claims under the § 19
+    /// Abs. 3b/3c Abgrenzungs- oder Pauschaloption, which puts it on the
+    /// Jahresmarktwert whatever its Inbetriebnahmedatum.
+    pub speicher_abgrenzungs_oder_pauschaloption: bool,
     /// §39n EEG 2023 — Innovationsausschreibung.
     pub ist_innovationsausschreibung: bool,
     /// §22b EEG 2023 — Bürgerenergiegesellschaft (§3 Nr. 15).
@@ -820,7 +848,7 @@ pub struct SettleInput {
     /// Caller tracks cumulative annual kWh and passes `min(kwh, remaining_annual_quota)`.
     /// `None` = cap does not apply.
     pub biogas_sect44b_eligible_kwh: Option<Decimal>,
-    /// §20 Abs. 2 + Anlage 1 EEG 2023 — technology-specific Jahresmarktwert.
+    /// Anlage 1 Nr. 3/4 EEG 2023 — technology-specific Jahresmarktwert.
     /// Alternative to `epex_avg_ct_kwh` for MarketPremium. `None` = auto-fetch.
     pub jahresmarktwert_ct_kwh: Option<Decimal>,
     /// §44b: year-to-date Einspeisemenge for the Biogas annual quota (from AnlageRow).
@@ -868,6 +896,16 @@ pub struct SettleResult {
     pub gutschrift_steuer_eur: Option<Decimal>,
     /// Brutto (net + USt) on the Gutschrift.
     pub gutschrift_brutto_eur: Option<Decimal>,
+    /// §52 Abs. 2 EEG 2023 — the **cumulative** Pflichtzahlung owed to the
+    /// Netzbetreiber as of this period, not this month's increment.
+    ///
+    /// §52 charges „pro Kilowatt … und Kalendermonat", so the claim grows with
+    /// every month a breach subsists and the figure on each receipt is the
+    /// running total. Summing two receipts double-counts; the later one
+    /// supersedes the earlier. It is a separate claim and is never netted into
+    /// `settlement_eur` — §52 Abs. 6 Satz 2 permits the Aufrechnung, but that is
+    /// a decision for the ledger, not for the settlement.
+    pub pflichtzahlung_kumuliert_eur: Option<Decimal>,
 }
 
 // ── §44b quota computation ─────────────────────────────────────────────────────
@@ -1221,38 +1259,82 @@ fn derive_biomasse(anlage: &AnlageRow) -> Option<eeg_billing::biomasse::BiomassS
     ))
 }
 
-// ── §20 Abs. 2 Jahresmarktwert fetch ──────────────────────────────────────────
+// ── Anlage 1 Marktwert fetch ──────────────────────────────────────────
 
-/// Fetch the technology-specific Jahresmarktwert (§20 Abs. 2 + Anlage 1 EEG 2023).
+/// What a Marktwert lookup found, and how binding it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MarktwertTreffer {
+    /// The figure in ct/kWh.
+    pub avg_ct_kwh: Decimal,
+    /// Which Anlage-1 series it came from.
+    pub serie: eeg_billing::Marktwertserie,
+    /// `true` when it is an ÜNB running estimate rather than the published
+    /// binding figure — always `false` for a Monatsmarktwert, and for the EPEX
+    /// fallback, which is not a Marktwert at all but is at least final.
+    pub vorlaeufig: bool,
+}
+
+/// Fetch the energieträgerspezifische Marktwert a plant is entitled to
+/// (Anlage 1 Nr. 2–4 EEG 2023).
 ///
-/// Lookup order:
-/// 1. Exact technology match in `jahresmarktwert_preise`
-/// 2. `DEFAULT` fallback row in `jahresmarktwert_preise`
-/// 3. Generic EPEX monthly average from `epex_monthly_prices`
-/// 4. `None` (PriceMissing)
+/// `serie` is the plant's, not the operator's: [`eeg_billing::marktwertserie`]
+/// derives it from the Inbetriebnahme and the Zuschlag date. Asking for the
+/// wrong one is how two parties settle the same month at different figures.
+///
+/// Lookup order **within the requested series**:
+/// 1. exact technology match in `marktwert_preise`
+/// 2. the `DEFAULT` fallback row
+/// 3. the generic EPEX monthly average the caller passes
+/// 4. `None` — `PriceMissing`, which the monthly worker retries. That is the
+///    honest answer for a post-2023 plant before the ÜNB have published
+///    anything: substituting the other series would misprice every kWh.
+///
+/// # Errors
+///
+/// Database failures.
 pub async fn fetch_marktwert(
     conn: &mut sqlx::PgConnection,
     billing_year: i16,
     billing_month: i16,
+    serie: eeg_billing::Marktwertserie,
     erzeugungsart: &str,
     epex_fallback: Option<Decimal>,
-) -> anyhow::Result<Option<Decimal>> {
-    // 1 & 2: try jahresmarktwert_preise (exact match, then DEFAULT)
-    let jmw: Option<Decimal> = sqlx::query_scalar(
-        "SELECT avg_ct_kwh FROM jahresmarktwert_preise
-         WHERE billing_year = $1 AND billing_month = $2
-           AND erzeugungsart = ANY(ARRAY[$3, 'DEFAULT'])
-         ORDER BY (erzeugungsart = $3) DESC
+) -> anyhow::Result<Option<MarktwertTreffer>> {
+    // A Jahresmarktwert has no month, so the predicate differs by series rather
+    // than the value bound to it.
+    let monat = match serie {
+        eeg_billing::Marktwertserie::Monatsmarktwert => Some(billing_month),
+        eeg_billing::Marktwertserie::Jahresmarktwert => None,
+    };
+    let row: Option<(Decimal, bool)> = sqlx::query_as(
+        "SELECT avg_ct_kwh, vorlaeufig FROM marktwert_preise
+         WHERE billing_year = $1 AND art = $2
+           AND billing_month IS NOT DISTINCT FROM $3
+           AND erzeugungsart = ANY(ARRAY[$4, 'DEFAULT'])
+         ORDER BY (erzeugungsart = $4) DESC
          LIMIT 1",
     )
     .bind(billing_year)
-    .bind(billing_month)
+    .bind(serie.as_db_str())
+    .bind(monat)
     .bind(erzeugungsart)
     .fetch_optional(&mut *conn)
     .await
-    .context("fetch Jahresmarktwert")?;
+    .context("fetch Marktwert")?;
 
-    Ok(jmw.or(epex_fallback))
+    Ok(row
+        .map(|(avg_ct_kwh, vorlaeufig)| MarktwertTreffer {
+            avg_ct_kwh,
+            serie,
+            vorlaeufig,
+        })
+        .or_else(|| {
+            epex_fallback.map(|avg_ct_kwh| MarktwertTreffer {
+                avg_ct_kwh,
+                serie,
+                vorlaeufig: false,
+            })
+        }))
 }
 
 /// Override values callers can supply to `build_settle_input`.
@@ -1282,7 +1364,7 @@ pub struct SettleOverrides {
     /// settlement receipts are Buchungsbelege with an eight-year retention under
     /// § 147 Abs. 3 AO and have to say what was corrected and why.
     pub correction: Option<Korrektur>,
-    /// §20 Abs. 2 technology-specific Jahresmarktwert (explicit override).
+    /// Anlage 1 technology-specific Marktwert (explicit override).
     pub jahresmarktwert_ct_kwh: Option<Decimal>,
     /// §51 Abs. 3 EEG — calendar days of an unreported negative-price period,
     /// for a plant on the Ausfallvergütung. Zero when the figure is known.
@@ -1404,13 +1486,14 @@ pub fn build_settle_input(
         wind_korrekturfaktor,
         sect9_erfuellung: anlage.sect9_erfuellung(),
         is_biogas_sect51b: anlage.is_biogas_sect51b,
-        pflichtverstoesse: crate::sect52::derive_pflichtverstoesse(
-            anlage,
-            crate::sect52::Sect52Context {
-                billing_date: billing_date.unwrap_or(anlage.inbetriebnahme),
-                ausfallverguetung: overrides.ausfallverguetung,
-            },
-        ),
+        // Left empty on purpose. §52 Abs. 1 is derived from the plant record
+        // **and** the `eeg_pflichtverstoesse` register, and this function is
+        // synchronous, so it cannot read the register. `run_settlement` fills the
+        // field under the same transaction — the way it refreshes every other
+        // running total — so a caller cannot forget to and settle a plant at
+        // one month's charge for a year-old breach.
+        pflichtverstoesse: Vec::new(),
+        ausfallverguetung_nutzung: overrides.ausfallverguetung,
         // §36e/§37e/§39e: the award has lapsed once its date has passed.
         award_expired: matches!(
             (anlage.zuschlag_erloeschen_datum, billing_date),
@@ -1422,6 +1505,9 @@ pub fn build_settle_input(
         ausschreibungs_zuschlag_id: anlage.ausschreibungs_zuschlag_id.clone(),
         zuschlagswert_ct: anlage.zuschlagswert_ct,
         zuschlag_datum: anlage.zuschlag_datum,
+        // Anlage 1 Nr. 2 Satz 3 — a storage claim under § 19 Abs. 3b/3c moves the
+        // plant onto the Jahresmarktwert whatever its Inbetriebnahmedatum.
+        speicher_abgrenzungs_oder_pauschaloption: anlage.speicher_option != "KEINE",
         ist_innovationsausschreibung: anlage.ist_innovationsausschreibung,
         ist_buergerenergie: anlage.ist_buergerenergie,
         correction: overrides.correction,
@@ -1652,6 +1738,23 @@ pub async fn run_settlement(
     // The detection lives in `crate::sect52`, which is the one place plant facts
     // become violations — so a rule cannot be detected in one surface and missed
     // in another.
+    // ── §52 Abs. 1 — derive from the plant row *and* the register ────────────
+    //
+    // Read here rather than in `build_settle_input`, which is synchronous: the
+    // register carries the start date, the Abs. 3 Satz 1 Nr. 1 cure and the
+    // Abs. 3 Satz 2 defect waiver, and every one of those changes the amount.
+    let aufzeichnungen = list_pflichtverstoesse(&mut *conn, &input.tenant, &input.tr_id).await?;
+    if let Some(anlage) = fetch_anlage_conn(&mut *conn, &input.tenant, &input.tr_id).await? {
+        input.pflichtverstoesse = crate::sect52::derive_pflichtverstoesse(
+            &anlage,
+            &aufzeichnungen,
+            crate::sect52::Sect52Context {
+                billing_date: input.billing_date.unwrap_or(anlage.inbetriebnahme),
+                ausfallverguetung: input.ausfallverguetung_nutzung,
+            },
+        );
+    }
+
     let (sanktion, pflichtverstoss) =
         if eeg_gesetz_enum.mastr_nichtregistrierung_suspendiert_verguetung() {
             // EEG ≤2021 path: Vergütung reduced to 0 for unregistered plants.
@@ -1722,8 +1825,39 @@ pub async fn run_settlement(
             gutschrift_nummer: None,
             gutschrift_steuer_eur: None,
             gutschrift_brutto_eur: None,
+            // The award lapsed before the §52 derivation ran, so no claim is
+            // stated here either — the receipt's own columns are cleared with it.
+            pflichtzahlung_kumuliert_eur: None,
         });
     }
+
+    // ── § 21 Abs. 1 Satz 1 Nr. 1 EEG 2023 — the claim ends at 100 kW ─────────
+    //
+    // The Einspeisevergütung mit gesetzlich bestimmtem anzulegenden Wert exists
+    // only „für Strom aus Anlagen mit einer installierten Leistung von bis zu 100
+    // Kilowatt". A larger plant left on `VERGUETUNG` is owed **nothing**: it is
+    // not sanctioned — § 52 Abs. 1 Nr. 4 charges a § 10b breach, which only a
+    // plant *in* Direktvermarktung can commit — and it is not paid either.
+    //
+    // Decided here rather than inside `calculate_settlement`, because
+    // `SettlementScheme` names a *formula* while the Veräußerungsform a plant is
+    // actually assigned to is register data. `settlement_model` is that fact and
+    // it lives in this service.
+    //
+    // It is **not** an early return: § 52 Abs. 1 charges are owed to the
+    // Netzbetreiber whether or not the plant has a Vergütungsanspruch, so the
+    // engine still runs and only the money side is overridden below.
+    //
+    // `AUSFALLVERGUETUNG` is deliberately untouched: § 21 Abs. 1 Satz 1 Nr. 3
+    // exists *for* plants above the threshold. A plant commissioned before
+    // 2016-01-01 answers `None` and is settled as before rather than refused on a
+    // threshold mako's regulatory corpus does not carry.
+    let kein_anspruch = input.settlement_model == crate::models::VERGUETUNG
+        && input
+            .leistung_kwp
+            .zip(input.inbetriebnahme)
+            .and_then(|(kw, ibn)| eeg_billing::direktverm::direktvermarktungspflicht(kw, ibn))
+            .unwrap_or(false);
 
     // ── §24 Abs. 1 EEG 2023 — deserialize CapacityBlocks from JSONB ─────────
     let capacity_blocks: Vec<eeg_billing::CapacityBlock> = input
@@ -1853,25 +1987,42 @@ pub async fn run_settlement(
             .context("compute §44b Biogas quota")?
     };
 
-    // ── §20 Abs. 2 + Anlage 1 EEG 2023 — technology-specific Jahresmarktwert ─
-    // For MarketPremium (Direktvermarktung / Ausschreibung), prefer the
-    // technology-specific Jahresmarktwert over the generic EPEX monthly average.
-    // Lookup order: caller override → jahresmarktwert_preise exact → DEFAULT fallback → EPEX.
+    // ── Anlage 1 Nr. 2–4 EEG 2023 — the energieträgerspezifische Marktwert ───
+    //
+    // Which series the plant takes is Nr. 2's answer, not the operator's: a
+    // plant commissioned or bezuschlagt before 01.01.2023 settles on the
+    // **Monats**marktwert (Nr. 3), everything newer on the **Jahres**marktwert
+    // (Nr. 4), and a Satz-1 plant claiming under the § 19 Abs. 3b/3c
+    // Abgrenzungs- oder Pauschaloption moves onto Nr. 4 as well.
+    //
+    // Lookup order: caller override → the plant's own series in
+    // `marktwert_preise` (exact technology, then DEFAULT) → the generic EPEX
+    // monthly average → `PriceMissing`. It never falls back to the *other*
+    // series: that is the substitution this split exists to prevent.
+    let serie = eeg_billing::marktwertserie(
+        input.inbetriebnahme.unwrap_or(mako_fristen::heute()),
+        input.zuschlag_datum,
+        input.speicher_abgrenzungs_oder_pauschaloption,
+    );
+    let mut marktwert_vorlaeufig = false;
     let effective_marktwert = if input.jahresmarktwert_ct_kwh.is_some() {
         input.jahresmarktwert_ct_kwh
     } else if matches!(
         input.settlement_model.as_str(),
         "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG"
     ) {
-        fetch_marktwert(
+        let treffer = fetch_marktwert(
             &mut *conn,
             input.billing_year,
             input.billing_month,
+            serie,
             &input.erzeugungsart,
             input.epex_avg_ct_kwh,
         )
         .await
-        .context("fetch Jahresmarktwert")?
+        .context("fetch Marktwert")?;
+        marktwert_vorlaeufig = treffer.is_some_and(|t| t.vorlaeufig);
+        treffer.map(|t| t.avg_ct_kwh)
     } else {
         input.epex_avg_ct_kwh
     };
@@ -1886,7 +2037,7 @@ pub async fn run_settlement(
         scheme,
         tariff_source,
         einspeisemenge_kwh: input.einspeisemenge_kwh,
-        // §20 Abs. 2: use technology-specific Jahresmarktwert for DV plants; EPEX for others.
+        // Anlage 1 Nr. 2–4: the plant's own Marktwert series for DV plants; EPEX for others.
         marktwert_ct_kwh: effective_marktwert,
         sanktion,
         kwh_during_negative_epex: input.kwh_during_negative_epex,
@@ -1942,12 +2093,45 @@ pub async fn run_settlement(
         biomasse: input.biomasse.clone(),
     });
 
+    // ── § 21 Abs. 1 Satz 1 Nr. 1 — override the money side, keep the § 52 side ─
+    //
+    // The engine priced the Einspeisevergütung because that is the formula it was
+    // handed. The plant has no claim to it, so the amount is zero and the audit
+    // position says why — but the Pflichtzahlung, the Fälligkeitsdatum and the
+    // reduced quantity stay exactly as computed: § 52 Abs. 1 is owed to the
+    // Netzbetreiber whether or not the plant is paid, and the § 51 arithmetic is
+    // what a later correction (after a Veräußerungsformwechsel) starts from.
+    let mut output = output;
+    if kein_anspruch && output.status == SettlementStatus::Calculated {
+        output.status = SettlementStatus::KeinAnspruch;
+        output.settlement_eur = Some(rust_decimal::Decimal::ZERO);
+        output.positions = vec![eeg_billing::SettlePosition {
+            description: format!(
+                "§21 Abs. 1 Satz 1 Nr. 1 EEG 2023: kein Anspruch auf die Einspeisevergütung — \
+                 installierte Leistung {} kW über 100 kW",
+                input.leistung_kwp.unwrap_or_default()
+            ),
+            legal_basis: "§21 Abs. 1 Satz 1 Nr. 1 EEG 2023".to_owned(),
+            kwh: output.eligible_kwh.unwrap_or(rust_decimal::Decimal::ZERO),
+            rate_ct_kwh: rust_decimal::Decimal::ZERO,
+            eur: rust_decimal::Decimal::ZERO,
+        }];
+        tracing::warn!(
+            tr_id = %input.tr_id,
+            leistung_kwp = ?input.leistung_kwp,
+            "einsd: §21 Abs. 1 Satz 1 Nr. 1 — plant over 100 kW on VERGUETUNG has no claim; \
+             assign a Direktvermarktung (§20) or the Ausfallvergütung (§21 Abs. 1 Satz 1 Nr. 3)"
+        );
+    }
+    let output = output;
+
     let status = match output.status {
         SettlementStatus::Calculated => "calculated",
         SettlementStatus::NoData => "no_data",
         SettlementStatus::PriceMissing => "price_missing",
         SettlementStatus::FoerderungBeendet => "foerderung_beendet",
         SettlementStatus::Sanctioned => "sanctioned",
+        SettlementStatus::KeinAnspruch => "kein_anspruch",
         // Forward-compatible: any future status variant stores as "unknown" and does not block
         _ => "unknown",
     };
@@ -2050,15 +2234,16 @@ pub async fn run_settlement(
                pflichtzahlung_eur, faelligkeitsdatum,
                verlaengerungsanspruch_qh, billing_days_fraction, positions_json,
                is_correction, correction_of, correction_reason,
-               rechnung_json, gutschrift_nummer)
+               rechnung_json, gutschrift_nummer, marktwert_vorlaeufig)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-                  $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                  $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
           ON CONFLICT (tr_id, tenant, billing_year, billing_month) WHERE is_correction = false DO UPDATE
           SET settlement_model          = EXCLUDED.settlement_model,
               einspeisemenge_kwh        = EXCLUDED.einspeisemenge_kwh,
               settlement_eur            = EXCLUDED.settlement_eur,
               status                    = EXCLUDED.status,
               pflichtzahlung_eur        = EXCLUDED.pflichtzahlung_eur,
+              marktwert_vorlaeufig      = EXCLUDED.marktwert_vorlaeufig,
               faelligkeitsdatum         = EXCLUDED.faelligkeitsdatum,
               verlaengerungsanspruch_qh = EXCLUDED.verlaengerungsanspruch_qh,
               billing_days_fraction     = EXCLUDED.billing_days_fraction,
@@ -2090,6 +2275,7 @@ pub async fn run_settlement(
     .bind(input.correction.as_ref().map(Korrektur::reason_text))
     .bind(rechnung_json.clone())
     .bind(gutschrift_nummer.clone())
+    .bind(marktwert_vorlaeufig)
     .fetch_one(&mut *conn)
     .await
     .context("persist settlement")?;
@@ -2285,6 +2471,7 @@ pub async fn run_settlement(
         gutschrift_nummer,
         gutschrift_steuer_eur,
         gutschrift_brutto_eur,
+        pflichtzahlung_kumuliert_eur: pflichtzahlung_eur,
     })
 }
 
@@ -2294,7 +2481,15 @@ pub async fn run_settlement(
 /// found nothing to settle with. Treating them as settled meant a plant settled
 /// too early — before the ÜNB Marktwert or the complete edmd data existed —
 /// was never picked up again and simply went unpaid.
-const SETTLED_STATUSES: [&str; 3] = ["calculated", "foerderung_beendet", "sanctioned"];
+const SETTLED_STATUSES: [&str; 4] = [
+    "calculated",
+    "foerderung_beendet",
+    "sanctioned",
+    // §21 Abs. 1 Satz 1 Nr. 1 — the period is decided, and re-running it will
+    // reach the same answer. Only a Veräußerungsformwechsel changes it, and that
+    // rewrites the plant rather than the receipt.
+    "kein_anspruch",
+];
 
 /// List all active plants that have NOT been settled for `(year, month)` yet.
 ///
@@ -2621,58 +2816,141 @@ pub async fn lookup_verguetungssatz(
     Ok(row.and_then(|r| r.try_get::<Decimal, _>("verguetungssatz_ct").ok()))
 }
 
-/// Upsert a technology-specific Jahresmarktwert price (§20 Abs. 2 + Anlage 1 EEG 2023).
+/// Upsert a technology-specific Jahresmarktwert price (Anlage 1 Nr. 3/4 EEG 2023).
 ///
 /// `erzeugungsart` must match a value from `eeg_anlagen.erzeugungsart` (e.g. `WIND_ONSHORE`,
 /// `SOLAR_AUFDACH`) or the special value `DEFAULT` for the generic fallback row.
 /// Published by ÜNB at netztransparenz.de.
-pub async fn upsert_jahresmarktwert(
-    pool: &PgPool,
-    year: i16,
-    month: i16,
-    erzeugungsart: &str,
-    avg_ct_kwh: Decimal,
-    source: &str,
-) -> anyhow::Result<()> {
+/// One ÜNB Marktwert row, as a caller states it.
+#[derive(Debug, Clone, Copy)]
+pub struct MarktwertImport<'a> {
+    /// Calendar year the figure belongs to.
+    pub year: i16,
+    /// Anlage 1 Nr. 3 or Nr. 4.
+    pub serie: eeg_billing::Marktwertserie,
+    /// The month, for a Monatsmarktwert; `None` for a Jahresmarktwert.
+    pub month: Option<i16>,
+    /// Plant technology, or `DEFAULT` for the generic fallback row.
+    pub erzeugungsart: &'a str,
+    /// The figure in ct/kWh.
+    pub avg_ct_kwh: Decimal,
+    /// An ÜNB running estimate rather than the published binding figure.
+    pub vorlaeufig: bool,
+    /// Where it came from, for the audit trail.
+    pub source: &'a str,
+}
+
+/// Store or replace one ÜNB Marktwert.
+///
+/// # Errors
+///
+/// Database failures, including the `art`/`billing_month` consistency CHECK.
+pub async fn upsert_marktwert(pool: &PgPool, mw: MarktwertImport<'_>) -> anyhow::Result<()> {
+    let MarktwertImport {
+        year,
+        serie,
+        month,
+        erzeugungsart,
+        avg_ct_kwh,
+        vorlaeufig,
+        source,
+    } = mw;
+    // A Monatsmarktwert is final when it is published; only the Jahresmarktwert
+    // has a running estimate. The CHECK enforces it too — this keeps the caller
+    // from having to know.
+    let vorlaeufig = vorlaeufig && serie == eeg_billing::Marktwertserie::Jahresmarktwert;
     sqlx::query(
-        r"INSERT INTO jahresmarktwert_preise
-            (billing_year, billing_month, erzeugungsart, avg_ct_kwh, source)
-          VALUES ($1, $2, $3, $4, $5)
-          ON CONFLICT (billing_year, billing_month, erzeugungsart) DO UPDATE
+        r"INSERT INTO marktwert_preise
+            (billing_year, art, billing_month, erzeugungsart, avg_ct_kwh, vorlaeufig, source)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          ON CONFLICT (billing_year, art, erzeugungsart, COALESCE(billing_month, 0)) DO UPDATE
           SET avg_ct_kwh   = EXCLUDED.avg_ct_kwh,
+              vorlaeufig   = EXCLUDED.vorlaeufig,
               source       = EXCLUDED.source,
               imported_at  = now()",
     )
     .bind(year)
+    .bind(serie.as_db_str())
     .bind(month)
     .bind(erzeugungsart)
     .bind(avg_ct_kwh)
+    .bind(vorlaeufig)
     .bind(source)
     .execute(pool)
     .await
-    .context("upsert_jahresmarktwert")?;
+    .context("upsert_marktwert")?;
     Ok(())
 }
 
-/// Fetch a single Jahresmarktwert row (exact technology match only — no DEFAULT fallback).
-/// Returns `None` when no row exists for the given (year, month, erzeugungsart) triple.
-pub async fn fetch_jahresmarktwert_single(
+/// Fetch one stored Marktwert (exact technology match only — no `DEFAULT`
+/// fallback, because this answers „what did we import", not „what applies").
+///
+/// # Errors
+///
+/// Database failures.
+pub async fn fetch_marktwert_single(
     pool: &PgPool,
     year: i16,
-    month: i16,
+    serie: eeg_billing::Marktwertserie,
+    month: Option<i16>,
     erzeugungsart: &str,
-) -> anyhow::Result<Option<Decimal>> {
-    let row: Option<Decimal> = sqlx::query_scalar(
-        "SELECT avg_ct_kwh FROM jahresmarktwert_preise
-          WHERE billing_year = $1 AND billing_month = $2 AND erzeugungsart = $3",
+) -> anyhow::Result<Option<(Decimal, bool)>> {
+    sqlx::query_as(
+        "SELECT avg_ct_kwh, vorlaeufig FROM marktwert_preise
+          WHERE billing_year = $1 AND art = $2
+            AND billing_month IS NOT DISTINCT FROM $3
+            AND erzeugungsart = $4",
     )
     .bind(year)
+    .bind(serie.as_db_str())
     .bind(month)
     .bind(erzeugungsart)
     .fetch_optional(pool)
     .await
-    .context("fetch_jahresmarktwert_single")?;
-    Ok(row)
+    .context("fetch_marktwert_single")
+}
+
+/// Every settled period computed on a **provisional** Jahresmarktwert.
+///
+/// Anlage 1 Nr. 2 Satz 2 EEG 2023 prices a post-2023 plant's Marktprämie from
+/// the Jahresmarktwert, and the binding figure exists only once the year is
+/// over. A month settled before that is correct as far as it could be and wrong
+/// as soon as the ÜNB publish — this is the list of what to recompute, which
+/// `POST /api/v1/settlements/{year}/{month}/correction` then does.
+///
+/// # Errors
+///
+/// Database failures.
+pub async fn list_marktwert_nachbewertung(
+    pool: &PgPool,
+    tenant: &str,
+    year: i16,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let rows = sqlx::query(
+        r"SELECT tr_id, billing_month, settlement_model, settlement_eur
+          FROM settlement_receipts
+          WHERE tenant = $1 AND billing_year = $2
+            AND marktwert_vorlaeufig
+            AND is_correction = false
+          ORDER BY tr_id, billing_month",
+    )
+    .bind(tenant)
+    .bind(year)
+    .fetch_all(pool)
+    .await
+    .context("list_marktwert_nachbewertung")?;
+    use sqlx::Row as _;
+    Ok(rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "tr_id": r.get::<String, _>("tr_id"),
+                "billing_month": r.get::<i16, _>("billing_month"),
+                "settlement_model": r.get::<String, _>("settlement_model"),
+                "settlement_eur": r.get::<Option<Decimal>, _>("settlement_eur"),
+            })
+        })
+        .collect())
 }
 
 pub async fn upsert_epex_price(
@@ -3295,4 +3573,154 @@ pub async fn aw_reduktionen_am(
         "hinweis": "Alle §§53b–54-Abzüge mindern den anzulegenden Wert vor der \
                     Vergütungsformel; die gleitende Marktprämie ist bei null begrenzt.",
     }))
+}
+
+// ── §52 Abs. 1 EEG 2023 — the Pflichtverstoß register ────────────────────────
+
+/// One recorded §52 Abs. 1 Pflichtverstoß.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PflichtverstossRecord {
+    /// Row id — stable across a cure, so the history is followable.
+    pub id: Uuid,
+    /// Which Nummer of §52 Abs. 1.
+    pub typ: eeg_billing::SanktionsTyp,
+    /// First day the breach subsisted. §52 Abs. 2 counts calendar months from
+    /// here.
+    pub beginn: Date,
+    /// Day the obligation was met. `None` while the breach is open; once set,
+    /// §52 Abs. 3 Satz 1 Nr. 1 reduces the charge to 2 €/kW **back to
+    /// `beginn`** for the Nummern that admit it.
+    pub behoben_am: Option<Date>,
+    /// §52 Abs. 3 Satz 2 — the breach was caused by a technical defect, so the
+    /// defect month and the following one are waived (Nr. 1/3/4/8, breaches
+    /// after 31.12.2023 only). The operator carries the Beweislast.
+    pub technischer_defekt: bool,
+    /// What was found, and by whom.
+    pub notiz: Option<String>,
+}
+
+impl PflichtverstossRecord {
+    /// Whether this record bears on the given billing month.
+    ///
+    /// §52 Abs. 2 charges „pro Kalendermonat, in dem ganz oder zeitweise ein
+    /// Pflichtverstoß … vorliegt oder andauert", so a breach cured on the 5th
+    /// still counts for that month — and one cured before the month began does
+    /// not count for it at all.
+    #[must_use]
+    pub fn gilt_fuer(&self, billing_date: Date) -> bool {
+        let monat = (billing_date.year(), billing_date.month());
+        let nach_beginn = (self.beginn.year(), self.beginn.month()) <= monat;
+        let vor_ende = self
+            .behoben_am
+            .is_none_or(|b| (b.year(), b.month()) >= monat);
+        nach_beginn && vor_ende
+    }
+}
+
+fn pflichtverstoss_from_row(row: &sqlx::postgres::PgRow) -> Option<PflichtverstossRecord> {
+    use sqlx::Row as _;
+    Some(PflichtverstossRecord {
+        id: row.try_get("id").ok()?,
+        typ: eeg_billing::SanktionsTyp::from_db_str(&row.try_get::<String, _>("typ").ok()?)?,
+        beginn: row.try_get("beginn").ok()?,
+        behoben_am: row.try_get("behoben_am").ok()?,
+        technischer_defekt: row.try_get("technischer_defekt").ok()?,
+        notiz: row.try_get("notiz").ok()?,
+    })
+}
+
+/// Every recorded Pflichtverstoß of one plant, newest breach first.
+///
+/// # Errors
+///
+/// Database failures. A row whose `typ` no longer parses is skipped rather than
+/// failing the read: it cannot be charged, and refusing the whole settlement
+/// because of one unknown token would be worse.
+pub async fn list_pflichtverstoesse(
+    conn: &mut sqlx::PgConnection,
+    tenant: &str,
+    tr_id: &str,
+) -> anyhow::Result<Vec<PflichtverstossRecord>> {
+    let rows = sqlx::query(
+        r"SELECT id, typ, beginn, behoben_am, technischer_defekt, notiz
+          FROM eeg_pflichtverstoesse
+          WHERE tenant = $1 AND tr_id = $2
+          ORDER BY beginn DESC, erfasst_am DESC",
+    )
+    .bind(tenant)
+    .bind(tr_id)
+    .fetch_all(&mut *conn)
+    .await
+    .context("list Pflichtverstöße")?;
+    Ok(rows.iter().filter_map(pflichtverstoss_from_row).collect())
+}
+
+/// Open a Pflichtverstoß against a plant.
+///
+/// # Errors
+///
+/// Database failures, including the partial unique index when one of that
+/// Nummer is already open — the caller turns that into a `409`.
+pub async fn open_pflichtverstoss(
+    conn: &mut sqlx::PgConnection,
+    tenant: &str,
+    tr_id: &str,
+    typ: eeg_billing::SanktionsTyp,
+    beginn: Date,
+    technischer_defekt: bool,
+    notiz: Option<&str>,
+) -> Result<PflichtverstossRecord, sqlx::Error> {
+    let id = Uuid::new_v4();
+    sqlx::query(
+        r"INSERT INTO eeg_pflichtverstoesse
+              (id, tenant, tr_id, typ, beginn, technischer_defekt, notiz)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(id)
+    .bind(tenant)
+    .bind(tr_id)
+    .bind(typ.as_db_str())
+    .bind(beginn)
+    .bind(technischer_defekt)
+    .bind(notiz)
+    .execute(&mut *conn)
+    .await?;
+    Ok(PflichtverstossRecord {
+        id,
+        typ,
+        beginn,
+        behoben_am: None,
+        technischer_defekt,
+        notiz: notiz.map(ToOwned::to_owned),
+    })
+}
+
+/// Close the open Pflichtverstoß of that Nummer.
+///
+/// `Ok(None)` when none is open — the caller answers `404` rather than opening
+/// a closed one, because a cure without a breach is a data error.
+///
+/// # Errors
+///
+/// Database failures, including the `behoben_am >= beginn` constraint.
+pub async fn close_pflichtverstoss(
+    conn: &mut sqlx::PgConnection,
+    tenant: &str,
+    tr_id: &str,
+    typ: eeg_billing::SanktionsTyp,
+    behoben_am: Date,
+) -> Result<Option<PflichtverstossRecord>, sqlx::Error> {
+    let row = sqlx::query(
+        r"UPDATE eeg_pflichtverstoesse
+          SET behoben_am = $4, aktualisiert_am = now()
+          WHERE tenant = $1 AND tr_id = $2 AND typ = $3 AND behoben_am IS NULL
+          RETURNING id, typ, beginn, behoben_am, technischer_defekt, notiz",
+    )
+    .bind(tenant)
+    .bind(tr_id)
+    .bind(typ.as_db_str())
+    .bind(behoben_am)
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(row.as_ref().and_then(pflichtverstoss_from_row))
 }

@@ -208,6 +208,7 @@ pub struct GasPortfolioBalance {
     pub positions: Vec<PortfolioPosition>,
 
     /// Timestamp when this snapshot was computed (UTC).
+    #[serde(with = "time::serde::rfc3339")]
     pub computed_at: time::OffsetDateTime,
 }
 

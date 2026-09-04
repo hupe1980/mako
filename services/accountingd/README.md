@@ -104,6 +104,13 @@ webhook replay, with one `sepa_collection_entries` row per collected mandate: th
 attribution key for pain.002 replies (`EndToEndId`), camt bookings (`Btch/PmtInfId`)
 and pain.007 reversals.
 
+Those rows are the record of what the bank received, so a **dispatched** run is
+frozen: rebuilding one answers `409` rather than replacing the entries a reply
+would be matched against, and the XML is only handed back once the archive row
+exists. The nightly N-5 scheduler takes an advisory lock (`LOCK_SEPA_N5`) so a
+single replica builds the day's batch; the freeze is what still holds if the lock
+is lost or the service restarts mid-day.
+
 The XML schema version defaults to the current EPC releases (`pain.008.001.08`,
 `pain.001.001.09`) and can be pinned per bank with the optional `pain008_schema` /
 `pain001_schema` config keys (e.g. `pain.008.001.02` for the pre-2023 version).

@@ -24,7 +24,7 @@ graph TB
     edmd["edmd :8380<br/>¼h Einspeisung feed-in<br/>(GET /feed-in) + kWh"]
     einsd["einsd :9180"]
     eeg_billing["eeg-billing crate<br/>10 settlement schemes<br/>Anlage 1 Marktprämie<br/>§49 degression · §36h Abs.1/2 wind<br/>§51 Negativpreis · §51a Förderende<br/>§51b biogas Ausschreibung<br/>§39n feste Marktprämie<br/>§52 Abs.6 netting<br/>SettlementPeriodState · InbetriebnahmeTyp<br/>no I/O"]
-    db[("PostgreSQL<br/>eeg_anlagen · settlement_receipts<br/>settlement_receipt_history<br/>settlement_state_transitions<br/>eeg_regionalnachweise · eeg_stromsteuerbefreiungen<br/>eeg_sect54_solar_defekte<br/>epex_monthly_prices · epex_spot_prices<br/>wind_guetefaktor_reevaluations · eeg_verguetungssaetze")]
+    db[("PostgreSQL<br/>eeg_anlagen · settlement_receipts<br/>settlement_receipt_history<br/>settlement_state_transitions<br/>eeg_regionalnachweise · eeg_stromsteuerbefreiungen<br/>eeg_sect54_solar_defekte · eeg_pflichtverstoesse<br/>marktwert_preise · epex_monthly_prices · epex_spot_prices<br/>wind_guetefaktor_reevaluations · eeg_verguetungssaetze")]
     erp["ERP webhook<br/>CloudEvents 1.0"]
     agentd["agentd :9580<br/>eeg-agent<br/>(all de.eeg.* events)"]
 
@@ -178,18 +178,18 @@ crate's `statutory_rate_tests`.
 
 | Value | Technology | Legal basis |
 |---|---|---|
-| `SOLAR_AUFDACH` | Rooftop PV | §21 + §48 EEG 2023 |
-| `SOLAR_FREIFLAECHE` | Ground-mounted PV | §28 EEG 2023 |
-| `SOLAR_AGRIPV` | Agri-PV | §37 Abs. 1 Nr. 3 + §48 EEG 2023 |
-| `SOLAR_MIETERSTROM` | Building community solar | §21 Abs. 3 EEG 2023 |
-| `SOLAR_STECKER` | Balkonkraftwerk <800 W | §9 EEG 2023 |
-| `WIND_ONSHORE` | Wind onshore | §§21, 28, 36 EEG 2023 |
-| `WIND_OFFSHORE` | Wind offshore | §§70ff EEG 2023 |
+| `SOLAR_AUFDACH` | Solar on a Gebäude or Lärmschutzwand (zweites Segment, §3 Nr. 41b) | §48 Abs. 2 / Abs. 2a EEG 2023 |
+| `SOLAR_FREIFLAECHE` | Freiflächenanlage (erstes Segment, §3 Nr. 41a) | §48 Abs. 1 / Abs. 1a EEG 2023 |
+| `SOLAR_AGRIPV` | Agri-PV — a besondere Solaranlage | §48 Abs. 1 S. 1 Nr. 5 lit. a + Abs. 1b EEG 2023 |
+| `SOLAR_MIETERSTROM` | Building community solar | §21 Abs. 3 + §48a EEG 2023 |
+| `SOLAR_STECKER` | Steckersolargerät, ≤2 kW and ≤800 VA inverter | §8 Abs. 5a EEG 2023 |
+| `WIND_ONSHORE` | Wind onshore | §46 (AW) · §36 (Gebote) EEG 2023 |
+| `WIND_OFFSHORE` | Wind offshore | Windenergie-auf-See-Gesetz (§22 Abs. 1 refers to it) |
 | `BIOMASSE` / `BIOMASSE_HOLZ` | Solid biomass | §42 EEG 2023 |
-| `BIOGAS` / `BIOMETHAN` | Fermentation / upgraded gas | §42 EEG 2023 |
-| `KLAEGAS` / `GRUBENGAS` / `DEPONIEGAS` | Sewage / mine / landfill gas | §41 EEG 2023 |
-| `WASSERKRAFT` | Hydro | §40 EEG 2023 |
-| `GEOTHERMIE` / `GEZEITEN` | Geothermal / tidal | §§45–46 EEG 2023 |
+| `BIOGAS` / `BIOMETHAN` | Fermentation / upgraded gas | §42 (Biomethan excluded by Satz 2) · §43 · §44 EEG 2023 |
+| `KLAEGAS` / `GRUBENGAS` / `DEPONIEGAS` | Sewage / mine / landfill gas | §41 Abs. 2 / Abs. 3 / Abs. 1 EEG 2023 |
+| `WASSERKRAFT` / `GEZEITEN` | Hydro, tidal (§3 Nr. 21 lit. a makes tidal Wasserkraft) | §40 EEG 2023 |
+| `GEOTHERMIE` | Geothermal | §45 EEG 2023 |
 | `KWKG` | Combined heat & power | §7 KWKG 2023 |
 
 There is deliberately **no generic `SOLAR`**: the §48 rate depends on the Bauform, so a plant
@@ -217,7 +217,7 @@ one spelling and miss the other.
 | `settlement_model` | Regulation | Formula | CloudEvent |
 |---|---|---|---|
 | `VERGUETUNG` | §21 Abs. 1 EEG 2023 | `kwh × verguetungssatz_ct / 100` | `de.eeg.verguetung.berechnet` |
-| `AUSFALLVERGUETUNG` | §21 Abs. 1 Nr. 2 EEG 2023 | same, at the statutory reduced rate | `de.eeg.verguetung.berechnet` |
+| `AUSFALLVERGUETUNG` | §21 Abs. 1 Satz 1 Nr. 3 EEG 2023 | same, at the statutory reduced rate | `de.eeg.verguetung.berechnet` |
 | `MIETERSTROM` | §21 Abs. 3 EEG 2023 | `kwh × (verguetung + mieter_zuschlag) / 100` | `de.eeg.verguetung.berechnet` |
 | `GGV` | §42b EnWG | §21 rate on the grid feed-in at the GGV MaLo | `de.eeg.verguetung.berechnet` |
 | `DIREKTVERMARKTUNG` | §20 EEG 2023 | Anlage 1 gleitende Marktprämie, see below | `de.eeg.marktpraemie.berechnet` |
@@ -236,11 +236,48 @@ receives the already-resolved AW.
 
 ### Anlage 1 EEG 2023 — die gleitende Marktprämie
 
-Anlage 1 Nr. 3.1.2 defines the Marktprämie as the anzulegender Wert minus the
-Monatsmarktwert, floored at zero:
+Anlage 1 defines the Marktprämie as the anzulegender Wert minus the Marktwert,
+floored at zero:
 
 ```
-Marktprämie = max(0, AW − Monatsmarktwert) × kwh / 100
+Marktprämie = max(0, AW − MW) × kwh / 100
+```
+
+**Which Marktwert applies is the plant's vintage, not the operator's choice.**
+Anlage 1 Nr. 2 sends plants commissioned **or bezuschlagt** before 01.01.2023 to
+the energieträger­spezifische **Monats**marktwert of Nr. 3 and everything newer to
+the **Jahres**marktwert of Nr. 4; Satz 3 then moves a Satz-1 plant onto the
+Jahresmarktwert as well once it claims under the § 19 Abs. 3b/3c Abgrenzungs- oder
+Pauschaloption (`speicher_option` on the plant).
+
+`marktwert_preise` holds both series, distinguished by `art`, and the settlement
+asks for the one the plant is entitled to. The **Zuschlag** date matters on its
+own: a plant commissioned in 2024 on a 2022 award stays on the Monatsmarktwert,
+which a bare Inbetriebnahme test gets wrong.
+
+Within the series the lookup goes exact technology → `DEFAULT` row → the generic
+EPEX monthly average → `price_missing`. It **never** falls through to the other
+series: substituting one for the other misprices every kWh, and `price_missing`
+is not a settled status, so the monthly worker simply retries once the figure
+lands.
+
+A **Jahresmarktwert has no month** and its binding figure exists only once the
+year is over — the ÜNB publish a running estimate before that. A row may
+therefore be `vorlaeufig`, the receipt records that it was, and
+`GET /api/v1/marktwert/{year}/nachbewertung` lists every month that has to be
+recomputed when the final figure is published. The recomputation is
+`POST /api/v1/settlements/{year}/{month}/correction`, so the superseded receipt
+survives in `settlement_receipt_history` — a § 147 AO Buchungsbeleg is amended,
+not overwritten.
+
+```http
+PUT /api/v1/marktwert/2026/monat/SOLAR_FREIFLAECHE
+{ "billing_month": 6, "avg_ct_kwh": "3.1400", "source": "netztransparenz.de" }
+
+PUT /api/v1/marktwert/2026/jahr/SOLAR_FREIFLAECHE
+{ "avg_ct_kwh": "4.8100", "vorlaeufig": true, "source": "netztransparenz.de" }
+
+GET /api/v1/marktwert/2026/nachbewertung
 ```
 
 There is **no additive Managementprämie**. Marketing costs have been folded into
@@ -248,7 +285,7 @@ the anzulegender Wert since EEG 2014 — the §53 Vergütungsabzug (0.4 ct/kWh s
 and wind, 0.2 ct/kWh biomass and gas) is that same cost appearing on the
 Einspeisevergütung route instead. Adding a premium on top would pay it twice.
 
-When the Monatsmarktwert exceeds the AW the payment is zero: the plant earns from
+When the Marktwert exceeds the AW the payment is zero: the plant earns from
 the market, and there is no guaranteed floor to fall back on.
 
 **KWKG rates** (§7 Abs. 1 KWKG 2023, from 01.01.2023):
@@ -447,24 +484,81 @@ of those sets it after the check.
 
 ## §9 / §52 EEG — Steuerbarkeit und Pflichtzahlungen
 
-§52 Abs. 1 lists **twelve** Pflichtverstöße. Each charges the operator 10 €/kW per
-calendar month (Abs. 2), drops to 2 € once the obligation is met (Abs. 3), is capped at
-10 €/kW in total (Abs. 5) and may be netted against the Vergütung (Abs. 6).
+§52 Abs. 1 lists **thirteen** Pflichtverstöße — it counts to twelve but inserts a
+**Nr. 9a** between 9 and 10. Each charges the operator 10 €/kW per calendar month
+(Abs. 2), some drop to 2 € (Abs. 3), four run past the breach itself (Abs. 4), the
+total is capped at 10 €/kW per month (Abs. 5) and the claim may be netted against
+the Vergütung (Abs. 6).
 
-`einsd` derives the five the plant record can actually establish, in one place
-(`sect52::derive_pflichtverstoesse`), and feeds them all into the settlement:
+They reach a settlement from **two sources**, merged in one place
+(`sect52::derive_pflichtverstoesse`):
 
-| §52 Abs. 1 | Violation | Derived from |
+| §52 Abs. 1 | Violation | Source |
 |---|---|---|
-| Nr. 1 | §9 Steuerbarkeit not satisfied | `sect9_erfuellung` × capacity × technology |
-| Nr. 4 | §10b Direktvermarktungspflicht | capacity > 100 kW on an Einspeisevergütung model |
-| Nr. 5 | Ausfallvergütung past its Höchstdauer | the settlement receipts |
-| Nr. 9 | §21c switch not notified | `veraeusserungsform_notification_sent_at` |
-| Nr. 11 | MaStR registration missing | `mastr_registriert` |
+| Nr. 1 | §9 Steuerbarkeit not satisfied | **derived** — `sect9_erfuellung` × capacity × technology |
+| Nr. 5 | Ausfallvergütung past its Höchstdauer | **derived** — from the settlement receipts |
+| Nr. 9 | §21c switch not notified | **derived** — `veraeusserungsform_notification_sent_at` |
+| Nr. 11 | MaStR registration missing | **derived** — `mastr_registriert`, with `mastr_violation_start` as its clock |
+| Nr. 2, 3, 4, 6, 7, 8, 9a, 10, 12 | Speicher, iMSys, §10b, §21 Abs. 2, §21b Abs. 2/3, §37 Abs. 1a / §48 Abs. 6, Volleinspeisung, §80 | **recorded** in `eeg_pflichtverstoesse` |
 
-The remaining seven (Nr. 2, 3, 6, 7, 8, 9a, 10, 12) turn on facts `einsd` does not hold —
-storage behaviour, metering resolution, Doppelvermarktung. Record them on the plant's
-`notes` and settle a correction.
+The nine recorded ones are not derivable in principle, not merely unimplemented:
+§10b Abs. 5 leaves the Nachweis that a Direktvermarkter can actually curtail the
+plant to the Netzbetreiber and the Direktvermarktungsunternehmen, §9 Abs. 5's
+Speicheranforderung is a site visit, and Doppelvermarktung is a finding. The
+register is where such a finding is filed.
+
+### The register
+
+```http
+POST /api/v1/anlagen/{tr_id}/pflichtverstoesse
+{ "typ": "I_MSS_ANFORDERUNG_NICHT_ERFUELLT", "beginn": "2026-01-01",
+  "technischer_defekt": false, "notiz": "Vor-Ort-Prüfung 12.01.2026" }
+
+PUT  /api/v1/anlagen/{tr_id}/pflichtverstoesse/I_MSS_ANFORDERUNG_NICHT_ERFUELLT/behoben
+{ "behoben_am": "2026-06-20" }
+
+GET  /api/v1/anlagen/{tr_id}/pflichtverstoesse
+```
+
+`409` when one of that Nummer is already open — a breach recurs, so the history is
+kept and only the open entry is unique. A `typ` outside the vocabulary answers
+`400` **with the vocabulary**, and `tests/schema_code_guard.rs` holds the SQL
+`CHECK` against `SanktionsTyp::ALL`, so a fourteenth breach cannot land in the
+code and be rejected by the database.
+
+It also supplies what a derivation cannot state on its own, and each of the three
+moves money:
+
+| Field | Effect |
+|---|---|
+| `beginn` | §52 Abs. 2 charges „pro Kalendermonat, in dem ganz oder zeitweise ein Pflichtverstoß … vorliegt". Without it the charge is one month, however long the breach has run |
+| `behoben_am` | §52 Abs. 3 Satz 1 Nr. 1 drops the rate to 2 €/kW „zurück bis zum Beginn" — a fifth of the charge — for **Nr. 1, 3, 4 and 11 only**. Nr. 9a and Nr. 10 are at 2 € from the start (Satz 1 Nr. 2); everything else stays at 10 € however thoroughly it was cured |
+| `technischer_defekt` | §52 Abs. 3 Satz 2 waives the defect month and the following one for Nr. 1/3/4/8, for breaches after 31.12.2023. The Darlegungs- und Beweislast is the operator's, which is why it is stated rather than inferred |
+
+Because Abs. 3's reduction reaches back to the beginning, a cure makes every month
+already settled at 10 € an overcharge. Correct them with
+`POST /api/v1/settlements/{year}/{month}/correction`; the response to the cure
+says so.
+
+**A record never creates a breach `einsd` derives.** For Nr. 1, 5, 9 and 11 the
+plant record decides *whether* there is a breach and the record only refines it,
+so closing an entry cannot silence a violation the plant still shows. Conversely
+a §10b record filed against a plant on the Einspeisevergütung charges nothing:
+§10b Abs. 1 binds the operator of a plant over 25 kW **that direct-markets**.
+
+### §52 Abs. 4 — four breaches outlive themselves
+
+`SanktionsTyp::abs4_monate` applies them, so no caller has to remember:
+
+| §52 Abs. 4 | Nummer | Effect |
+|---|---|---|
+| Nr. 1 | Nr. 7 (§21b Abs. 2 Satz 1 Hs. 2) | + the following **three** calendar months |
+| Nr. 2 | Nr. 9 (§21c) | + the following calendar month |
+| Nr. 3 | Nr. 10 (Volleinspeisung) | **all** calendar months of the year — a replacement, not an addition |
+| Nr. 4 | Nr. 12 (§80 Doppelvermarktung) | + the following **six** calendar months |
+
+Nr. 5 is deliberately absent: Abs. 4 does not name it, and adding three months
+there would charge a plant on the Ausfallvergütung a quarter it does not owe.
 
 ### §9 is staged by capacity
 
@@ -712,29 +806,61 @@ Deckel" of earlier EEG versions no longer exists.
 
 ---
 
-## §§20–22 EEG 2023 — Direktvermarktung
+## §§20–22 EEG 2023 — Veräußerungsformen, Direktvermarktungspflicht, Ausschreibung
 
-### Mandatory threshold (§20)
+### The Direktvermarktungspflicht is the shadow of §21 Abs. 1 Satz 1 Nr. 1
 
-Plants > 100 kW installed capacity must participate in Direktvermarktung. Plants that fail
-to do so while above the threshold trigger `DirektvermarktungspflichtVerletzt` (§52 Abs. 1
-Nr. 4). Use the `AUSFALLVERGUETUNG` model for plants whose Direktvermarkter is temporarily
-unavailable (Ausfallvergütung per §21 Abs. 1 Nr. 2 EEG 2023 — `TemporaryFeedInTariff` is this
-library's abstraction for the statutory fallback remuneration).
+The EEG contains no section imposing a duty to market directly. What it contains
+is a ceiling: the Einspeisevergütung mit gesetzlich bestimmtem anzulegenden Wert
+exists only „für Strom aus Anlagen mit einer installierten Leistung von **bis zu
+100 Kilowatt**". A larger plant that wants to be paid has to take the Marktprämie
+(§20), which §20 Satz 1 Nr. 1 pays only for months in which the Strom is direkt
+vermarktet.
 
-### Ausschreibungspflicht (§22)
+So a plant over 100 kW left on `VERGUETUNG` is **not penalised — it is unpaid**.
+The settlement answers `kein_anspruch` with a EUR 0 position naming §21 Abs. 1
+Satz 1 Nr. 1, and `check_einspeiseverguetung_anspruch` lists the portfolio.
+§52 Abs. 1 Nr. 4 is a different fact entirely: a breach of **§10b**, the Abruf-
+und Fernsteuerbarkeit a plant *over 25 kW that direct-markets* owes its
+Direktvermarktungsunternehmen. A plant on the Einspeisevergütung is not in a
+Direktvermarktung and cannot breach it.
 
-| Technology | Threshold |
-|---|---|
-| Solar PV | > 1,000 kWp |
-| Wind onshore | > 750 kW |
-| Biomasse | > 150 kW |
-| Wasserkraft | > 500 kW |
-| Geothermie | > 150 kW |
-| Wind offshore | always |
+Use `AUSFALLVERGUETUNG` for a plant whose Direktvermarkter dropped out — §21
+Abs. 1 Satz **1 Nr. 3**, capped at three consecutive and six calendar months per
+year, and reduced 20 % by §53 Abs. 3. It is open to a plant above 100 kW; that
+is what it exists for.
 
-Plants above these thresholds must use `tariff_source = Auction` with the BNetzA-awarded AW.
-The `direktvermarktung` and `capacity_blocks` columns track this.
+A plant commissioned **before 2016-01-01** is governed by the EEG 2014 staging
+(500 kW from 01.08.2014, 100 kW from 01.01.2016), which mako's regulatory corpus
+does not carry. `direktvermarktungspflicht` answers `None` for it and the
+settlement pays it rather than refusing on an unsourced threshold; the MCP tool
+lists it under `ungeklaert`.
+
+### Ausschreibungspflicht (§22 Abs. 2–5)
+
+The exemption is stated as „bis einschließlich", so the threshold value itself is
+still exempt.
+
+| Technology | Exempt up to and including | Source |
+|---|---|---|
+| Solar, **erstes Segment** — Freiflächenanlagen and solar on baulichen Anlagen that are neither Gebäude nor Lärmschutzwand (§3 Nr. 41a) | 1 MW | §22 Abs. 3 Satz 2 Nr. 1 |
+| Solar, **zweites Segment** — on, at or in a Gebäude or a Lärmschutzwand (§3 Nr. 41b) | 750 kW | §22 Abs. 3 Satz 2 Nr. 1a |
+| Wind an Land | 1 MW | §22 Abs. 2 Satz 2 Nr. 1 |
+| Biomasse | 150 kW (except bestehende Anlagen nach §39g, which always need a Zuschlag) | §22 Abs. 4 Satz 2 |
+| Wasserkraft, Deponiegas, Klärgas, Grubengas, Geothermie | **any size** — their AW stays gesetzlich bestimmt by §§40–49 and no Ausschreibung exists for them at all | §22 Abs. 5 Satz 2 |
+| Wind offshore | **nothing** — the Zuschlag and the AW come from the Windenergie-auf-See-Gesetz | §22 Abs. 1 |
+
+Two exemptions are deliberately **not** applied by
+`eeg_billing::direktverm::requires_ausschreibung`, because neither is a capacity
+test: Pilotwindenergieanlagen an Land (125 MW per year across the cohort, §22
+Abs. 2 Satz 2 Nr. 2) and Anlagen von Bürgerenergiegesellschaften (Wind bis
+18 MW, Solar bis 6 MW, §22b). The 6-MW figure belongs to that last row — it is
+**not** an Agri-PV rule; Agri-PV is a besondere Solaranlage of the erstes
+Segment and takes the 1-MW threshold.
+
+Plants above the threshold must use `tariff_source = Auction` with the
+BNetzA-awarded AW. The `direktvermarktung` and `capacity_blocks` columns track
+this.
 
 ---
 
@@ -800,7 +926,7 @@ charge may be netted against it (Abs. 6).
 | `FernsteuerbarkeitFehlend` | Nr. 1 | €10/kW/month | Yes → €2 on fulfilment | **yes** |
 | `SpeicherAnforderungNichtErfuellt` | Nr. 2 | €10/kW/month | No | no |
 | `IMssAnforderungNichtErfuellt` | Nr. 3 | €10/kW/month | Yes → €2 | no |
-| `DirektvermarktungspflichtVerletzt` | Nr. 4 | €10/kW/month | Yes → €2 | **yes** |
+| `Sect10bVorgabenVerletzt` | Nr. 4 | €10/kW/month | Yes → €2 | **yes** |
 | `AusfallverguetungHoechstdauerUeberschritten` | Nr. 5 | €10/kW/month | No | **yes** |
 | `EinspeiseverguetungUnzulaessigeNutzung` | Nr. 6 | €10/kW/month | No | no |
 | `VeraeusserungsformWechselUngueltig` | Nr. 7 | €10/kW/month | No | no |
@@ -816,12 +942,20 @@ charge may be netted against it (Abs. 6).
 
 ### Violation start tracking
 
+Nr. 11 is the one §52 clock `einsd` owns end to end; everything else starts from a
+register entry.
+
 - **On registration** (`POST /api/v1/anlagen`): `mastr_registriert = false` sets
   `mastr_violation_start = heute()` (the Europe/Berlin date) when not already tracked.
 - **On MaStR confirmation** (`POST .../mastr-registrierung`): clears it, stopping accrual.
-- **At settlement**: `monate_des_verstosses` counts inclusive calendar months from the
-  start date, because §52 Abs. 2 charges for every month the breach subsists "ganz oder
-  teilweise".
+- **Everything else**: `eeg_pflichtverstoesse.beginn`, filed through the register.
+- **At settlement**: `run_settlement` re-reads the register inside its own
+  transaction — the way it re-reads every other running total — so no caller can
+  settle a plant at one month's charge for a year-old breach.
+  `monate_des_verstosses` then counts inclusive calendar months from the start to
+  the earlier of the billing month and `behoben_am`, because §52 Abs. 2 charges
+  for every month the breach subsists "ganz oder teilweise", and the §52 Abs. 4
+  tail is added on top.
 
 ---
 
@@ -845,13 +979,29 @@ Source: §13a EnWG (Redispatch 2.0, historically §15 EEG Härtefallregelung); �
 
 ---
 
-## §21b EEG 2023 — Veräußerungsform Wechsel
+## §21b EEG 2023 — Zuordnung zu einer Veräußerungsform, Wechsel
 
-Plants switch between Einspeisevergütung and Direktvermarktung monthly. Rules enforced:
+§21b Abs. 1 Satz 1 lists **four** Veräußerungsformen, and the endpoint accepts
+the four settlement models that name one: `VERGUETUNG` (Nr. 2 i.V.m. §21 Abs. 1
+Satz 1 Nr. 1), `AUSFALLVERGUETUNG` (Nr. 2 i.V.m. Nr. 3), `DIREKTVERMARKTUNG`
+(Nr. 1, die Marktprämie nach §20) and `SONSTIGE_DIREKTVERMARKTUNG` (Nr. 4).
+`AUSSCHREIBUNG` is deliberately not one: it is the Marktprämie with an
+auction-set anzulegender Wert, and a switch request does not grant a Zuschlag.
 
-- Plants > 100 kW **cannot** switch back to Einspeisevergütung (mandatory Direktvermarktung, §20 EEG 2023).
-- Only **one switch per calendar month** is permitted (§21b / §21c EEG 2023).
-- Effective date must be the **1st of a calendar month**.
+`eeg_billing::direktverm::validate_wechsel` is the decision; the handler maps the
+settlement model onto it and renders the refusal.
+
+| Rule | Source |
+|---|---|
+| The change takes effect only **on the first of a calendar month** | §21b Abs. 1 Satz 2 |
+| The Mitteilung is due **before the preceding calendar month begins** — so the earliest reachable effective date is the 1st of the month after next | §21c Abs. 1 Satz 1 |
+| A plant over **100 kW** may not take the Einspeisevergütung mit gesetzlich bestimmtem Wert — it may still take the Ausfallvergütung | §21 Abs. 1 Satz 1 Nr. 1 |
+| The Ausfallvergütung is closed to a plant assigned to the unentgeltliche Abnahme within the last 24 months | §21b Abs. 1 Satz 4 |
+
+There is no „one switch per calendar month" rule: Satz 2 already makes a second
+change within one month impossible, and §21c Abs. 1 Satz 2's fünftletzter
+Werktag variant for the Ausfallvergütung is a Werktag rule the endpoint does not
+apply.
 
 ```http
 POST /api/v1/anlagen/{tr_id}/switch-veraeusserungsform
@@ -865,11 +1015,9 @@ Content-Type: application/json
 }
 ```
 
-Returns `422 Unprocessable Entity` when:
-- `PflichtgemasseDirektvermarktung` — plant > 100 kW cannot revert
-- `AlreadySwitchedThisMonth` — switch already performed this calendar month
-
-`last_veraeusserungsform_switch` is updated on success. All subsequent settlements use the new model.
+Returns `422 Unprocessable Entity` naming the rule that decided.
+`last_veraeusserungsform_switch` is updated on success. All subsequent
+settlements use the new model.
 
 ---
 
@@ -1074,6 +1222,7 @@ Response:
 | `price_missing` | EPEX price needed; import via `PUT /api/v1/epex-monthly/{year}/{month}` |
 | `foerderung_beendet` | Förderdauer ended; this period was prorated |
 | `sanctioned` | §52 Abs. 1 EEG ≤2021 — Vergütung = 0 (`SanktionAlt::VerguetungAufNull`) |
+| `kein_anspruch` | §21 Abs. 1 Satz 1 Nr. 1 — over 100 kW on the Einspeisevergütung, so there is no claim. Terminal: only a Veräußerungsformwechsel changes it |
 
 Idempotent: re-running overwrites the previous result.
 
@@ -1330,7 +1479,7 @@ See [BNetzA Einspeisevergütungen](https://www.bundesnetzagentur.de/DE/Fachtheme
 | `POST` | `/api/v1/anlagen/{tr_id}/aw-reduktionen/stromsteuerbefreiung` | §53c — record a granted per-kWh Stromsteuerbefreiung |
 | `POST` | `/api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt` | §54 — record solar first-segment defects |
 | `POST` | `/api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt/{id}/nachweis-erbracht` | §54 Abs. 3 Satz 2/3 — close the period once the Nachweis arrives |
-| `GET` | `/api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform` | Veräußerungsform in force for a MaLo — read by `processd`'s NB module, which needs the *bestehende* form to pick the `E_0622` Vorlauffrist |
+| `GET` | `/api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform` | Veräußerungsform in force for a MaLo, plus the `E_0623` Prüfschritt 540 Direktvermarktungspflicht — read by `processd`'s NB module, which needs the *bestehende* form to pick the `E_0622` Vorlauffrist |
 | `POST` | `/api/v1/anlagen/{tr_id}/switch-veraeusserungsform` | **§21b** monthly Veräußerungsform switch |
 | `POST` | `/api/v1/anlagen/{tr_id}/wind-reevaluation` | **§36h Abs. 2** Standortgüte re-evaluation (year 6/11/16) |
 | `GET` | `/api/v1/anlagen/foerderung-auslaufend` | Expiring within N days |
@@ -1341,7 +1490,8 @@ See [BNetzA Einspeisevergütungen](https://www.bundesnetzagentur.de/DE/Fachtheme
 | `POST` | `/api/v1/anlagen/{tr_id}/jahresabrechnung/{year}` | Annual reconciliation from the stored monthly receipts |
 | `PUT/GET` | `/api/v1/epex-monthly/{year}/{month}` | EPEX monthly average |
 | `PUT` | `/api/v1/epex-spot` | Bulk-load EPEX day-ahead spot prices (§51 auto-derivation) |
-| `PUT/GET` | `/api/v1/jahresmarktwert/{year}/{month}/{erzeugungsart}` | §20 Abs. 2 Jahresmarktwert (ÜNB-published) |
+| `PUT/GET` | `/api/v1/marktwert/{year}/{art}/{erzeugungsart}` | Anlage 1 Nr. 3/4 Marktwert, `art` = `monat` \| `jahr` (ÜNB-published) |
+| `GET` | `/api/v1/marktwert/{year}/nachbewertung` | Months settled on a provisional Jahresmarktwert |
 | `POST` | `/api/v1/verguetungssatz-lookup` | Tariff rate lookup |
 | `GET/POST` | `/mcp` | MCP server (Streamable HTTP 2025-11-25) |
 | `GET` | `/health` | Liveness |
@@ -1361,7 +1511,7 @@ See [BNetzA Einspeisevergütungen](https://www.bundesnetzagentur.de/DE/Fachtheme
 | `edmd_url` | no | — | `edmd` URL for auto-fetching Einspeisemenge |
 | `edmd_api_key` | no | — | Bearer token for `edmd` |
 | `alert_interval_secs` | no | `21600` | Förderendedatum alert interval (6h) |
-| `jahresmarktwert_url` | no | — | ÜNB source for the §20 Abs. 2 Jahresmarktwert import |
+| `jahresmarktwert_url` | no | — | ÜNB source for the **monthly** Marktwert import (Anlage 1 Nr. 3). The Jahresmarktwert lands once a year and is imported by hand |
 | `jahresmarktwert_import_interval_secs` | no | — | How often to poll it |
 | `auto_settle_from_day` | no | — | Day of month the auto-settle worker may start. The ÜNB publishes the Marktwert around the 5th, so running earlier writes `price_missing` receipts for plants that were merely early |
 | `auto_settle_catchup_months` | no | `3` | How many months back each sweep revisits (clamped 1–24), so a period the service was down for is not left unpaid |
@@ -1428,9 +1578,9 @@ One row per Technische Ressource. PK: `(tr_id, tenant)`.
 | `biogaserzeugungsanlage_id` | TEXT? | §24 Satz 2 — biogas from the same Biogaserzeugungsanlage is fused regardless of Satz 1 |
 | `zuschlag_erloeschen_datum` → `award_expired` | *derived* | Zuschlag erloschen → FoerderungBeendet, derived from the date against the billing period. Technology-specific: **§36e** (Wind an Land), **§37e** (Solaranlagen des ersten Segments), **§39e** (Biomasseanlagen) EEG 2023 |
 | `zuschlag_erloeschen_datum` | DATE? | Date the Zuschlag lapses for want of timely commissioning (§36e / §37e / §39e). Distinct from **§35a Entwertung von Zuschlägen**, which is a BNetzA act rather than a deadline |
-| `last_veraeusserungsform_switch` | DATE? | §21b: date of last Veräußerungsform switch (monthly guard) |
+| `last_veraeusserungsform_switch` | DATE? | §21b: the effective date of the last Veräußerungsform switch |
 | `mastr_violation_start` | DATE? | §52: date MaStR non-registration began (auto-set on registration) |
-| `fernsteuerbarkeit_violation_start` | DATE? | §52: date Fernsteuerbarkeit violation began |
+| *(every other §52 clock)* | — | `eeg_pflichtverstoesse` — see [§9 / §52 EEG](#ss9-ss52-eeg-steuerbarkeit-und-pflichtzahlungen) |
 | `negative_price_qh_gesamt` | BIGINT | §51a: cumulative **raw** quarter-hours; `effektives_foerderende` rounds once over the total |
 | `ist_pilotwindanlage` | BOOL | §3 Nr. 37: exempt from §51 under every Fassung |
 | `sect51_optin_erklaert_am` | DATE | §100: Solarspitzengesetz opt-in declared (runs from the year-end after the iMSys) |
@@ -1485,13 +1635,28 @@ electricity, CHECK-capped at the §3 StromStG full rate of 2,05 ct/kWh.
 §54 EEG 2023: the four statutory defects for solar first-segment auction plants,
 per validity period. A row recording no defect is rejected by a CHECK.
 
+### `eeg_pflichtverstoesse`
+
+§52 Abs. 1 EEG 2023: the breaches recorded against a plant. The `typ` CHECK is
+`SanktionsTyp::ALL` and a guard holds the two together. A partial unique index
+(`ep_offen`) allows one **open** entry per plant and Nummer while keeping the
+history — a breach recurs, and the §52 Abs. 3 Satz 1 Nr. 1 reduction reaches back
+to the beginning of the one being cured, not of every one that ever ran.
+
 ### `eeg_verguetungssaetze`
 
 Reference table for gross AW rates by technology, capacity band, and commissioning quarter.
 
+### `marktwert_preise`
+
+The ÜNB Marktwerte in both Anlage 1 series, distinguished by `art`. `billing_month`
+is NULL for a Jahresmarktwert, which has none, and `vorlaeufig` marks a running
+estimate — only a Jahresmarktwert can be one.
+
 ### `epex_monthly_prices`
 
-EPEX Spot monthly averages. Required for `DIREKTVERMARKTUNG`, `AUSSCHREIBUNG` and `POST_EEG_SPOT`.
+EPEX Spot monthly averages. The fallback inside a series when no `marktwert_preise`
+row matches, and the basis for `POST_EEG_SPOT`.
 
 ---
 
@@ -1499,7 +1664,7 @@ EPEX Spot monthly averages. Required for `DIREKTVERMARKTUNG`, `AUSSCHREIBUNG` an
 
 | Type | When | Key payload fields |
 |---|---|---|
-| `de.eeg.verguetung.berechnet` | FEED\_IN\_TARIFF / POST\_EEG settled | `tr_id`, `billing_year`, `billing_month`, `settlement_eur` (net), `pflichtzahlung_eur`, **`gutschrift_nummer`**, **`gutschrift_steuer_eur`**, **`gutschrift_brutto_eur`**, **`bank_iban`**, **`bank_bic`**, **`zahlungsempfaenger`** |
+| `de.eeg.verguetung.berechnet` | FEED\_IN\_TARIFF / POST\_EEG settled | `tr_id`, `billing_year`, `billing_month`, `settlement_eur` (net), `pflichtzahlung_kumuliert_eur` (the **running** §52 claim, not a monthly increment — a later receipt supersedes an earlier one), **`gutschrift_nummer`**, **`gutschrift_steuer_eur`**, **`gutschrift_brutto_eur`**, **`bank_iban`**, **`bank_bic`**, **`zahlungsempfaenger`** |
 | `de.eeg.marktpraemie.berechnet` | MARKET\_PREMIUM settled | + `epex_avg_ct_kwh`, `aw_ct`, `effective_aw_ct` |
 | `de.eeg.anlage.mastr-registriert` | MaStR confirmed | `tr_id`, `mastr_nummer` |
 | `de.eeg.anlage.foerderung-auslaufend` | Förderung ending ≤180 days | `tr_id`, `foerderendedatum`, `days_remaining` |
@@ -1571,20 +1736,20 @@ At `/mcp` (Streamable HTTP 2025-11-25). Auth: `Authorization: Bearer <mcp_api_ke
 `lookup_verguetungssatz` · `lookup_statutory_rate` · `trigger_settle` ·
 `list_unsettled_plants` · `get_epex_monthly_price` · `import_epex_monthly_price` ·
 `get_compliance_status` · `list_plants_without_mastr` ·
-`check_direktvermarktung_compliance` · `check_sect44b_quota` ·
-`import_jahresmarktwert` · `get_jahresmarktwert` ·
+`check_einspeiseverguetung_anspruch` · `check_sect44b_quota` ·
+`import_marktwert` · `get_marktwert` ·
 `get_settlement_state_history` · `explain_settlement` · `get_aw_reduktionen`
 
 | Tool | Description |
 |---|---|
-| `check_direktvermarktung_compliance` | Lists active plants >100 kW settled under a non-Direktvermarktung scheme (§3 Nr. 1 + §20 EEG 2023). These are §52 Abs. 1 Nr. 4 violation candidates — Abs. 2 is the 10 €/kW rate, not the list of breaches. |
+| `check_einspeiseverguetung_anspruch` | Lists active plants >100 kW assigned to the Einspeisevergütung. §21 Abs. 1 Satz 1 Nr. 1 grants that claim only bis zu 100 kW, so the settlement answers `kein_anspruch` and the operator is paid nothing until the Veräußerungsform changes. **Not** a §52 case: Nr. 4 charges a §10b breach, which only a plant *in* Direktvermarktung can commit. |
 | `check_sect44b_quota` | Returns annual biogas production cap, YTD kWh, remaining quota, and alerts at 75 % (WARNING) and 90 % (CRITICAL) exhaustion (§44b EEG 2023, plants >100 kW). |
 
 **6 prompts:**
 `register-eeg-plant` · `settle-monthly` · `check-foerderung-expiry` ·
 `ausschreibung-workflow` · `post-eeg-transition` · `anlagenerweiterung`
 
-The `eeg-agent` specialist in `agentd` handles `de.eeg.*` CloudEvents **and** `de.messwert.reading.direct.stored` (for iMSys rollout detection — lifts the <100 kW §51 Negativpreisregel exemption on first iMSys push). Two more agentd specialists cover einsd: `eeg-compliance-agent` runs the §52/§44b/§20 compliance checks (get_compliance_status, check_sect44b_quota, check_direktvermarktung_compliance); `einsd-batch-agent` drives the monthly settlement batch + §52 Pflichtzahlungen sweep (list_unsettled_plants + POST /settlements/batch, triggered on de.eeg.anlage.foerderung-auslaufend or manual/cron).
+The `eeg-agent` specialist in `agentd` handles `de.eeg.*` CloudEvents **and** `de.messwert.reading.direct.stored` (for iMSys rollout detection — lifts the <100 kW §51 Negativpreisregel exemption on first iMSys push). Two more agentd specialists cover einsd: `eeg-compliance-agent` runs the §52/§44b/§21 compliance checks (get_compliance_status, check_sect44b_quota, check_einspeiseverguetung_anspruch); `einsd-batch-agent` drives the monthly settlement batch + §52 Pflichtzahlungen sweep (list_unsettled_plants + POST /settlements/batch, triggered on de.eeg.anlage.foerderung-auslaufend or manual/cron).
 See [agentd operator guide](@/docs/services/agentd.md) for the full trigger→action mapping.
 
 ---

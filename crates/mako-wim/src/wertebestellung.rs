@@ -180,6 +180,7 @@ pub const ANTWORT_WINDOW_LABEL: &str = "wim-wertebestellung-antwort";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Zustellquittung {
     /// Time the recipient acknowledged the transmission (the ÜZ).
+    #[serde(with = "time::serde::rfc3339")]
     pub received_at: OffsetDateTime,
     /// `true` for a positive Zustellquittung.
     pub positive: bool,
@@ -441,6 +442,7 @@ pub struct WertebestellungData {
     /// later — and a Prüfschritt whose input was dropped in transit escalates
     /// to an operator on every single order.
     #[serde(default)]
+    #[serde(with = "time::serde::rfc3339::option")]
     pub bindungsfrist: Option<OffsetDateTime>,
     /// `DTM+203` of the confirmed Bestellung — when the Abo starts.
     ///

@@ -477,22 +477,22 @@ Dispatch does four things in order, inside one transaction:
    pass-through as a first-class field, so it does not travel as a free-text `ZusatzAttribut`
    and the LF's own parser reads it.
 
-   Fremdkosten are **informational**: BO4E models them as a cost breakdown beside the invoice,
-   not as positions that add to it, so attaching them changes what the document explains and not
-   what it charges — `gesamtnetto`, `gesamtsteuer` and `zuZahlen` are untouched. Third-party
-   costs the counterparty actually owes belong in the settlement, where the engine prices them,
-   traces them and states the tax on them. `PUT /fremdkosten/{draft_id}` accepts them only while
-   the invoice is a `draft`: the merge happens here, at dispatch, so a later attachment would
-   store costs the counterparty never receives and `GET` would describe a document nobody was
-   sent. That answers `409`.
+   Fremdkosten are **informational** — a BO4E cost breakdown beside the invoice, not
+   positions that add to it, so `gesamtnetto`, `gesamtsteuer` and `zuZahlen` are
+   untouched. Third-party costs the counterparty actually owes belong in the
+   settlement, which prices, traces and taxes them.
+
+   `PUT /fremdkosten/{draft_id}` therefore accepts them only while the invoice is a
+   `draft`, and answers `409` afterwards: the merge happens at dispatch, so a later
+   attachment would store costs nobody was sent.
 2. **Runs the outbound BO4E gate** over the merged document
    ([`ensure_conformant`](@/docs/architecture/domain-model.md#the-bo4e-gate)).
-   This is the one point in netzbilanzd where a document is *assembled at runtime*
-   rather than emitted whole by the settlement engine — a stored `Rechnung` plus a
-   separately stored `Fremdkosten`, each valid when written, combined here into a
-   shape no test has seen. Step 3 covers the arithmetic; this covers what it does
-   not, notably an out-of-schema enum anywhere in the merged tree. **mako does not
-   send a document it would refuse to receive.**
+   This is the one place netzbilanzd assembles a document at runtime rather than
+   emitting it whole from the engine — a stored `Rechnung` plus a separately stored
+   `Fremdkosten`, each valid when written, combined into a shape no test has seen.
+   Step 3 covers the arithmetic; this covers the rest, notably an out-of-schema enum
+   anywhere in the merged tree. **mako does not send a document it would refuse to
+   receive.**
 3. **Re-checks the amended document.** The verdict stored at drafting time describes the
    document as drafted; the counterparty checks what actually arrives. A `Dispute` verdict
    blocks the send and returns the disputing findings.
@@ -768,10 +768,14 @@ artefact, not a missing charge.
 
 The stateless Ausfallarbeit engine (BK6-23-241) sits at `/api/v1/redispatch/ausfallarbeit/*`:
 `compute` (per-TR `W_A` series for every Abrechnungsvariante), `ueberbauung` (the Kap.-3.4
-cap), `kf-bin` (the Kap.-3.2.3.2 offshore Wind-Bin factor) and `malo-split`
-(§ 24 Abs. 3 S. 2 EEG 2023). Callers supply the quarter-hour series; sourcing them from
-SCADA, `edmd` or DWD stays with the operator. These four return the same JSON problem body as
-every other endpoint here.
+cap), `kf-bin` (the Kap.-3.2.3.2 offshore Wind-Bin factor), `malo-split`
+(§ 24 Abs. 3 S. 2 EEG 2023) and the two Vergleichszeitraum selectors —
+`vergleichszeitraum` (Kap. 3.2.2.1, wind: four contiguous quarter-hours, measured
+to the **beginning** of the Maßnahme on one side and to its **end** on the other)
+and `vergleichstag` (Kap. 3.2.4.1, solar: a whole calendar day without a Maßnahme
+against the SR). Callers supply the quarter-hour series; sourcing them from
+SCADA, `edmd` or DWD stays with the operator. All six return the same JSON problem
+body as every other endpoint here.
 
 ---
 

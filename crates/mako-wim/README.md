@@ -119,7 +119,7 @@ the Gastag boundary. This leg is what makes the Wechsel constitutive.
 | PID(s)       | Process name                                      | EDIFACT       | Module               | Status          |
 |--------------|---------------------------------------------------|---------------|----------------------|-----------------|
 | 17001        | Bestellung Geräteübernahmeangebot (MSBN → MSBA)   | ORDERS 1.4b   | `geraeteubernahme`   | ✅ Implemented · Antwort 19001/19002, **2 WT** |
-| 17009        | Anzeige Gerätewechselabsicht (MSBN → MSBA)        | ORDERS 1.4b   | `geraeteubernahme`   | ✅ Implemented · Antwort 19015/19016, **2 WT vor dem Wechseltermin** |
+| 17009        | Anzeige Gerätewechselabsicht (MSBN → MSBA)        | ORDERS 1.4b   | `geraeteubernahme`   | ✅ Implemented · Antwort 19015/19016, **2 WT vor dem Wechseltermin**; ein Termin näher als 4 WT wird mit `E17` abgelehnt |
 | 19001, 19002 | ORDRSP Bestellbestätigung / Ablehnung (MSBA → MSBN) | ORDRSP 1.4c | `geraeteubernahme`   | ✅ Registered (nMSB role only) |
 | 19015, 19016 | ORDRSP Eigenausbau ja/nein (MSBA → MSBN)          | ORDRSP 1.4c   | `geraeteubernahme`   | ✅ Registered (nMSB role only) |
 | 17002 → 19003/19004 | Weiterverpflichtung des MSB (**NB → MSBA**) | ORDERS 1.4b   | `weiterverpflichtung`| ✅ Implemented · **1 WT**, `E_0203` |
@@ -178,7 +178,7 @@ the Gastag boundary. This leg is what makes the Wechsel constitutive.
 | Rust module        | Contents                                                                  |
 |--------------------|---------------------------------------------------------------------------|
 | `geraetewechsel`   | PIDs 55039/55042/55051/55168 and their Gas twins 44039/44042/44051/44168, plus 44183 and the IFTSTA Gesamtvorgang leg 21009–21013 — MSB-Wechsel workflow + projection. Handles both directions: inbound UTILMD (`ReceiveUtilmd` → APERAK → `DispatchAntwort` → `ReceiveGesamtvorgang` → `DispatchZuordnung`) and ERP-initiated outbound orders (`InitiateDeviceChange` → `ReceiveAntwort` → `MeldeGesamtvorgang` → `ReceiveZuordnungsantwort`). Antwortfrist per process via `antwort_frist_werktage()`; the Realisierungskorridor is enforced on the Gesamtvorgang date. |
-| `geraeteubernahme` | ORDERS 17001 → ORDRSP 19001/19002 (Bestellbestätigung/Ablehnung) and ORDERS 17009 → 19015/19016 (Eigenausbau ja/nein) — WiM Teil 1 Kap. 3.1/3.2 |
+| `geraeteubernahme` | ORDERS 17001 → ORDRSP 19001/19002 (Bestellbestätigung/Ablehnung) and ORDERS 17009 → 19015/19016 (Eigenausbau ja/nein) — WiM Teil 1 Kap. 3.1/3.2. The 17009 Mindestvorlaufzeit is checked against `mako_fristen::vorlauf` before the answer window opens: a Gerätewechseltermin closer than the 4. Werktag is refused with `E17` naming the earliest date still reachable, rather than accepted with a window that expired before the message arrived |
 | `weiterverpflichtung` | ORDERS 17002 → ORDRSP 19003/19004 — the NB keeping the abgebender MSB on the Messlokation while the gMSB prepares to take over (Kap. 2.4.2 Nr. 5/6, `E_0203`) |
 | `technik_aenderung` | REQOTE 35005 → QUOTES 15005 / IFTSTA 21033, ORDERS 17011/17118 → ORDRSP 19005/19006, IFTSTA 21025/21027 — Messlokationsänderung auf **beiden** Wegen; **10 WT** Antwort, **20 WT** Vorlauffrist nur auf der direkten Beauftragung (Kap. 3.3 / AWH Änd. Technik) |
 | `ersteinbau` | IFTSTA 21029 → 21030/21031 — Ersteinbau eines iMS in eine bestehende Messlokation, **3 WT** Antwort aus `E_0233` (Kap. 3.5, Strom only) |
@@ -350,14 +350,15 @@ flag alongside it.
 four use cases publish **no free-text segment at all**: the only `FTX` a
 conformant 19011 may carry is `SG27 FTX+Z27` — the MSB's IP address, Muss when
 the confirmed order named a Kapitel-4.6.2 SMGW product (`FTX+Z28` for a range),
-and the source the ESA has to admit before the iMS can reach it. So the ESA side
-records [`esa::Antwort`], the typed `(Antwortcode, EBD)` pair, rather than prose:
-that is what lets it tell `A08` (Einwilligung abgelaufen — renew and re-order)
-from `A10` (Lokationsbündel — split the request) from `A09` (Gerätetechnik —
-nothing to retry). `Antwort::widerspricht_pid` flags a code whose Cluster
-contradicts the PID that carried it; such an answer is recorded as a conflict and
-resolved **by the PID**, since resolving it by the code would silently turn a
-confirmation into a refusal.
+and the source the ESA has to admit before the iMS can reach it.
+
+The ESA side therefore records [`esa::Antwort`], the typed `(Antwortcode, EBD)`
+pair, rather than prose — that is what tells `A08` (Einwilligung abgelaufen:
+renew and re-order) from `A10` (Lokationsbündel: split the request) from `A09`
+(Gerätetechnik: nothing to retry). `Antwort::widerspricht_pid` flags a code whose
+Cluster contradicts the PID that carried it; such an answer is recorded as a
+conflict and resolved **by the PID**, since resolving it by the code would
+silently turn a confirmation into a refusal.
 
 ### Every inbound step notifies
 

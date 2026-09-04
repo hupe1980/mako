@@ -39,29 +39,48 @@
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
 pub enum ErzeugungsArt {
-    /// Rooftop PV (Gebäudeanlage) — §48 Abs. 1 Nr. 1 / Abs. 2a.
+    /// Rooftop PV — a Solaranlage „auf, an oder in einem Gebäude oder einer
+    /// Lärmschutzwand", whose anzulegender Wert is § 48 Abs. 2 (plus the
+    /// Abs. 2a Volleinspeisung uplift). § 3 Nr. 41b makes it a **Solaranlage des
+    /// zweiten Segments**, so its Ausschreibungsgrenze is 750 kW
+    /// (§ 22 Abs. 3 Satz 2 Nr. 1a).
     ///
     /// There is deliberately no generic `Solar` variant. The §48 rate depends on
-    /// the Bauform, so a plant recorded as "solar, unspecified" cannot be priced
-    /// — it was the default, which meant an omitted Bauform silently became a
-    /// rooftop rate on a Freiflächenanlage.
+    /// where the plant sits, so a plant recorded as "solar, unspecified" cannot
+    /// be priced — it was the default, which meant an omitted Bauform silently
+    /// became a rooftop rate on a Freiflächenanlage.
     #[default]
     SolarAufdach,
-    /// Ground-mounted PV (Freiflächenanlage) — lower rates, tender-based >1 MWp.
+    /// Ground-mounted PV (Freiflächenanlage) — § 48 Abs. 1 sets which surfaces
+    /// qualify and § 48 Abs. 1a its gesetzlich bestimmter Wert. § 3 Nr. 41a
+    /// makes it a **Solaranlage des ersten Segments**: Ausschreibung above 1 MW
+    /// (§ 22 Abs. 3 Satz 2 Nr. 1).
     SolarFreiflaeche,
-    /// Agri-PV (§48 Abs. 3 bonus, dual land use).
+    /// Agri-PV — a **besondere Solaranlage** under § 48 Abs. 1 Satz 1 Nr. 5
+    /// Buchst. a (Ackerflächen mit gleichzeitigem Nutzpflanzenanbau), whose
+    /// uplift is § 48 Abs. 1b. Erstes Segment, like every Freiflächenanlage.
     SolarAgriPv,
-    /// Mieterstrom building solar (§21 Abs. 3 EEG).
+    /// Mieterstrom building solar — the Mieterstromzuschlag is § 21 Abs. 3, its
+    /// anzulegender Wert § 48a.
     SolarMieterstrom,
-    /// Balkonkraftwerk / Stecker-PV (<800 W, simplified registration).
+    /// Balkonkraftwerk / Stecker-PV — § 8 Abs. 5a: up to 2 kW installed and
+    /// 800 VA inverter power behind a Letztverbraucher's Entnahmestelle.
     SolarStecker,
-    /// Wind onshore (§21 EEG, tender-based >750 kW).
+    /// Wind onshore — anzulegender Wert § 46, Gebote § 36, Ausschreibungspflicht
+    /// above 1 MW (§ 22 Abs. 2 Satz 2 Nr. 1).
     WindOnshore,
-    /// Wind offshore (§§70ff EEG, Offshore-Zuschlag via BNetzA).
+    /// Wind offshore — outside the EEG's own rate sections: the Zuschlag and the
+    /// anzulegender Wert come from the **Windenergie-auf-See-Gesetz**, which
+    /// § 22 Abs. 1 refers to.
     WindOffshore,
-    /// Biomasse (§42-43 EEG 2023).
+    /// Biomasse — § 42 sets 12,67 ct/kWh bis 150 kW Bemessungsleistung
+    /// (Biomethan excluded by Satz 2); §§ 43/44 carry the Bioabfall- and
+    /// Güllevergärung claims.
     Biomasse,
-    /// Holzbiomasse (§42a EEG 2023, restricted).
+    /// Feste Biomasse (Holz). The EEG 2023 sets **no separate anzulegender Wert**
+    /// for it and imposes **no fresh-wood restriction** — it is settled as
+    /// Biomasse under § 42; the sustainability rules for solid biomass sit
+    /// outside the EEG.
     BiomassHolz,
     /// Biogas (plant-based gas).
     Biogas,

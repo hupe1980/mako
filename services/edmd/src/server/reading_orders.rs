@@ -81,10 +81,12 @@ pub(crate) struct ReadingOrderRow {
     pub status: String,
     pub zaehlerstand_kwh: Option<Decimal>,
     pub zaehlerstand_qm3: Option<Decimal>,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub ausgefuehrt_am: Option<time::OffsetDateTime>,
     pub mscons_ref: Option<String>,
     pub auftrag_position_id: Option<uuid::Uuid>,
     pub insrpt_process_id: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
 }
 

@@ -30,10 +30,14 @@
 //! | `GET`    | `/api/v1/anlagen/foerderung-auslaufend` | Plants expiring within 180 days |
 //! | `POST`   | `/api/v1/anlagen/{tr_id}/settle/{year}/{month}` | Trigger monthly settlement |
 //! | `GET`    | `/api/v1/anlagen/{tr_id}/settlements` | Settlement history |
+//! | `GET`    | `/api/v1/anlagen/{tr_id}/pflichtverstoesse` | §52 Abs. 1 breaches recorded against the plant |
+//! | `POST`   | `/api/v1/anlagen/{tr_id}/pflichtverstoesse` | Record one — the only path for the nine Nummern einsd cannot derive |
+//! | `PUT`    | `/api/v1/anlagen/{tr_id}/pflichtverstoesse/{typ}/behoben` | Record the cure (§52 Abs. 3 Satz 1 Nr. 1) |
 //! | `PUT`    | `/api/v1/epex-monthly/{year}/{month}` | Import EPEX monthly price |
 //! | `GET`    | `/api/v1/epex-monthly/{year}/{month}` | Fetch stored EPEX price |
-//! | `PUT`    | `/api/v1/jahresmarktwert/{year}/{month}/{erzeugungsart}` | Import §20 Abs. 2 technology-specific Marktwert (ÜNB) |
-//! | `GET`    | `/api/v1/jahresmarktwert/{year}/{month}/{erzeugungsart}` | Fetch stored Jahresmarktwert |
+//! | `PUT`    | `/api/v1/marktwert/{year}/{art}/{erzeugungsart}` | Import an Anlage 1 Nr. 3/4 Marktwert (`art` = `monat` \| `jahr`) |
+//! | `GET`    | `/api/v1/marktwert/{year}/{art}/{erzeugungsart}` | Fetch a stored Marktwert |
+//! | `GET`    | `/api/v1/marktwert/{year}/nachbewertung` | Months settled on a provisional Jahresmarktwert |
 //! | `GET`    | `/health` | Liveness check |
 //! | `GET`    | `/health/ready` | Readiness check |
 //!
@@ -230,7 +234,7 @@ impl Daemon for Einsd {
             }
         });
 
-        // Background worker: auto-import §20 Abs. 2 + Anlage 1 EEG 2023 technology-specific
+        // Background worker: auto-import Anlage 1 Nr. 3/4 EEG 2023 technology-specific
         // Jahresmarktwert from ÜNB publication (netztransparenz.de or custom aggregator).
         //
         // Runs once on startup (after 60s delay) and then every `jahresmarktwert_import_interval_secs`
@@ -284,14 +288,24 @@ impl Daemon for Einsd {
                                             _ => None,
                                         })
                                         .map(|d: rust_decimal::Decimal| d);
+                                    // The ÜNB feed is the **monthly** series
+                                    // (Anlage 1 Nr. 3), which is what this URL
+                                    // template addresses. The Jahresmarktwert has
+                                    // no month and is imported by hand or by the
+                                    // operator's own job, because its binding
+                                    // figure lands once a year.
                                     if let Some(ct) = avg_ct
-                                        && let Err(e) = pg::upsert_jahresmarktwert(
+                                        && let Err(e) = pg::upsert_marktwert(
                                             &jmw_pool,
-                                            year,
-                                            month,
-                                            art,
-                                            ct,
-                                            "auto-import",
+                                            pg::MarktwertImport {
+                                                year,
+                                                serie: eeg_billing::Marktwertserie::Monatsmarktwert,
+                                                month: Some(month),
+                                                erzeugungsart: art,
+                                                avg_ct_kwh: ct,
+                                                vorlaeufig: false,
+                                                source: "auto-import",
+                                            },
                                         )
                                         .await
                                     {
@@ -303,7 +317,7 @@ impl Daemon for Einsd {
                                     year,
                                     month,
                                     count = items.len(),
-                                    "§20 Abs. 2 Jahresmarktwert auto-imported from ÜNB"
+                                    "Anlage 1 Marktwert auto-imported from ÜNB"
                                 );
                             }
                         }

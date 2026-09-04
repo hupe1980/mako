@@ -114,7 +114,8 @@ graph LR
 > `tests/skeletons.rs` generates its minimal message from the Prüfschablone
 > and validates it against that same column, and `cargo xtask
 > check-pid-coverage` holds the shipped columns against BDEW's published
-> Anwendungsübersicht (480 of 482). A curated `valid/` fixture,
+> Anwendungsübersicht, and reports its own count so this page need not carry
+> one. A curated `valid/` fixture,
 > asserted clean by the conformance suite, evidences that mako reads the
 > Anwendungsfall.
 >

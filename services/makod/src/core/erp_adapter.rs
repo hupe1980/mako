@@ -668,7 +668,7 @@ fn map_message_type_to_erp_event(msg_type: &str) -> Option<mako_engine::erp::Erp
         "MaloIdentified" => ErpEventType::MaloIdentified,
         // WiM Steuerungsauftrag positive Endantwort (PID 55168) — triggers VPP billing.
         "DispatchConfirmed" => ErpEventType::VppDispatchConfirmed,
-        // GaBi Gas KoV §6.4 final-allocation window closed unsettled.
+        // GaBi Gas § 47 Ziffer 1 KoV XV final-allocation window closed unsettled.
         "GabiFinalAllocationOverdue" => ErpEventType::GabiFinalAllocationOverdue,
         // The three nomination outcomes a BKV has to act on.
         "GabiNominationCurtailed" => ErpEventType::GabiNominationCurtailed,

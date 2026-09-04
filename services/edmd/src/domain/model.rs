@@ -235,6 +235,7 @@ pub struct MeterDataReceipt {
     /// EDIFACT message reference.
     pub message_ref: Option<String>,
     /// UTC timestamp of the `de.mako.process.completed` event.
+    #[serde(with = "time::serde::rfc3339")]
     pub received_at: OffsetDateTime,
     /// Data-isolation key — operator's BDEW/DVGW Codenummer or GLN.
     ///
@@ -437,8 +438,10 @@ pub struct Typ2Read {
     /// 33-character Messlokations-ID, if available.
     pub melo_id: Option<String>,
     /// Interval start (UTC).
+    #[serde(with = "time::serde::rfc3339")]
     pub dtm_from: OffsetDateTime,
     /// Interval end (UTC).
+    #[serde(with = "time::serde::rfc3339")]
     pub dtm_to: OffsetDateTime,
     /// Energy quantity in kWh (or m³ for water/gas volume, per `sparte`).
     pub quantity_kwh: Decimal,
@@ -473,7 +476,10 @@ pub struct Typ2Read {
     #[serde(default)]
     pub bestellung_ref: Option<String>,
     /// When `edmd` received the value (database clock on write).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        with = "time::serde::rfc3339::option"
+    )]
     pub received_at: Option<OffsetDateTime>,
 }
 
@@ -505,6 +511,7 @@ pub struct MeterReading {
     /// 11-digit Marktlokations-ID.
     pub malo_id: String,
     /// The instant the register held this value (UTC).
+    #[serde(with = "time::serde::rfc3339")]
     pub read_at: OffsetDateTime,
     /// The register value, **in the unit the register counts** — kWh for
     /// electricity and heat, m³ for gas and water.
@@ -560,7 +567,9 @@ pub struct ZsgConversionEntry {
     pub malo_id: String,
     /// Canonical OBIS spelling, empty for an unlabelled register.
     pub obis_code_norm: String,
+    #[serde(with = "time::serde::rfc3339")]
     pub span_from: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
     pub span_to: OffsetDateTime,
     /// [`ZSG_OUTCOME_ROLLOVER`], or the `AnomalyKind` that refused the
     /// difference.
@@ -627,8 +636,10 @@ pub struct MeterRead {
     /// 33-character Messlokations-ID, if available.
     pub melo_id: Option<String>,
     /// Interval start (UTC).
+    #[serde(with = "time::serde::rfc3339")]
     pub dtm_from: OffsetDateTime,
     /// Interval end (UTC).
+    #[serde(with = "time::serde::rfc3339")]
     pub dtm_to: OffsetDateTime,
     /// Energy quantity in kWh.
     pub quantity_kwh: Decimal,
@@ -701,7 +712,10 @@ pub struct MeterRead {
     /// returns the version in force then, and excludes intervals first stored
     /// after T. The `meter_read_corrections` table remains the human-readable
     /// audit log (who/when/why), not the reconstruction mechanism.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        with = "time::serde::rfc3339::option"
+    )]
     pub valid_from_tx: Option<OffsetDateTime>,
 
     /// The MSCONS correction version this reading was delivered under.
@@ -725,7 +739,9 @@ pub struct MeterRead {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimeSeriesQuery {
     pub malo_id: String,
+    #[serde(with = "time::serde::rfc3339")]
     pub from: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
     pub to: OffsetDateTime,
     pub sparte: Option<Sparte>,
     /// Tenant data-isolation key. Not optional: `store` scopes every read on it
@@ -967,8 +983,10 @@ pub struct CorrectionRecord {
     #[serde(default)]
     pub obis_code: Option<String>,
     /// Interval start (UTC).
+    #[serde(with = "time::serde::rfc3339")]
     pub dtm_from: OffsetDateTime,
     /// Interval end (UTC).
+    #[serde(with = "time::serde::rfc3339")]
     pub dtm_to: OffsetDateTime,
     /// Energy value BEFORE the correction (kWh).
     pub original_kwh: Decimal,

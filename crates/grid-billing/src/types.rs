@@ -1680,10 +1680,12 @@ pub struct SpotpreisInterval {
     /// UTC start of this controlled dispatch interval (ISO-8601).
     ///
     /// Typically the start of a 15-min settlement slot.
+    #[serde(with = "time::serde::rfc3339")]
     pub period_from: time::OffsetDateTime,
     /// UTC end of this controlled dispatch interval (ISO-8601).
     ///
     /// Typically `period_from + 15 min`.
+    #[serde(with = "time::serde::rfc3339")]
     pub period_to: time::OffsetDateTime,
     /// Energy consumption (or reduction) during this interval in kWh.
     ///

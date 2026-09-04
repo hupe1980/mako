@@ -161,7 +161,7 @@ fn parsed_answer() -> Completion {
         "sender_eic": "11XRWENET-----1E",
         "receiver_eic": "11YN00000000TH2M",
         "action": "VERIFY_EVENT",
-        "legal_basis": "KoV §6.4",
+        "legal_basis": "§ 47 Ziffer 1 KoV XV",
         "have_enough_information": true
     }))
 }

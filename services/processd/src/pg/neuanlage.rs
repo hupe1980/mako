@@ -68,8 +68,11 @@ pub struct NeuanlageFall {
     pub letzte_pruefung_am: Option<Date>,
     pub antwortcode: Option<String>,
     pub detail: Option<String>,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub beantwortet_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
 }
 

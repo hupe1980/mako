@@ -23,7 +23,7 @@ pub struct SettleRequest {
     /// Einspeisemenge kWh. `None` → fetched from `edmd`.
     pub einspeisemenge_kwh: Option<Decimal>,
     /// Market reference ct/kWh. `None` → the stored monthly EPEX average, which
-    /// `run_settlement` may still supersede with a §20 Abs. 2 Jahresmarktwert.
+    /// `run_settlement` may still supersede with a Anlage 1 Marktwert.
     pub epex_avg_ct_kwh: Option<Decimal>,
     /// §13a EnWG curtailed kWh for the period.
     pub einspeisemanagement_kwh: Option<Decimal>,

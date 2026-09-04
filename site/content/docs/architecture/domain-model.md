@@ -667,7 +667,10 @@ The German gas day is defined by **DVGW G 2000 §3.2**: it starts and ends at
 | Summer (CEST, UTC+2) | 06:00 CEST | 04:00 UTC |
 
 DST transitions produce 23-hour (spring forward) or 25-hour (fall back) gas days.
-The nomination deadline per KoV §3.2 is **D-1 13:00 CET**.
+The day-ahead nomination deadline mako assumes is **D-1 13:00 CET**. KoV XV sets
+no clock time for the nomination cycle — that is the FNB's Netzzugangsbedingungen,
+harmonised across Europe — so mako treats a breach as an operational alert rather
+than a documented Fristverletzung.
 
 ```rust
 let day = GasDay::new(date!(2026-01-15));
@@ -702,7 +705,7 @@ Gas quality classes per **DVGW G 260**:
 | L-Gas | 7.5–10.3 | Parts of northern Germany |
 | Biogas | variable | Injected biomethane |
 
-### AllocationVersion — KoV §6.4 correction tracking
+### AllocationVersion — §§46/47 KoV XV correction tracking
 
 ALOCAT messages may be sent as initial, corrected, or final allocations:
 

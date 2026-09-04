@@ -21,7 +21,7 @@
 
 use rust_decimal::Decimal;
 use rust_decimal::prelude::Zero;
-use time::{Date, Month, Time};
+use time::{Date, Month, OffsetDateTime, Time};
 
 // ── Frist constants (BilAReM Kap. 3.2.1) ─────────────────────────────────────
 
@@ -65,6 +65,22 @@ pub enum AusfallarbeitError {
     /// The Verlustfaktor `KF_V` left its domain ]0;1[ (Kap. 3.2.3.2).
     #[error("Verlustfaktor {0} liegt nicht in ]0;1[")]
     VerlustfaktorAusserhalb(Decimal),
+    /// No admissible Wind-KF Vergleichszeitraum exists on either side of the
+    /// Maßnahme (Kap. 3.2.2.1).
+    #[error(
+        "kein zulässiger Vergleichszeitraum: keine {VERGLEICHSZEITRAUM_VIERTELSTUNDEN} \
+         zusammenhängenden, vollständig gemessenen Viertelstunden mit unbeschränkter \
+         Einspeisung ≥ 10 % der Nennleistung im Monat der Maßnahme"
+    )]
+    KeinVergleichszeitraum,
+    /// No admissible Solar Vergleichstag exists in the Maßnahme's month
+    /// (Kap. 3.2.4.1).
+    #[error(
+        "kein zulässiger Vergleichstag: kein Kalendertag im Monat der Maßnahme ohne \
+         Redispatch-Maßnahme mit mindestens einer Viertelstunde ≥ 10 % der Nennleistung \
+         ohne Nichtbeanspruchbarkeit oder marktbedingte Anpassung"
+    )]
+    KeinVergleichstag,
     /// Too few Wertepaare for a valid Wind-Bin Leistungsfaktor (m ≥ 3).
     #[error("Wind-Bin unterbesetzt: {0} Wertepaare (< {WIND_BIN_MINDEST_WERTEPAARE})")]
     BinUnterbesetzt(usize),
@@ -232,6 +248,219 @@ pub fn wind_pauschal(
     p_lim: Decimal,
 ) -> Decimal {
     w_a(p_0.min(p_inst), &[p_mba, p_bean], p_lim, true)
+}
+
+/// RFC 3339 for a `Vec<OffsetDateTime>`.
+///
+/// `time::serde::rfc3339` covers the scalar and the `Option`, not the sequence,
+/// and the derived fallback is `time`'s internal component array — valid JSON
+/// that no consumer can read. This is the same contract `xtask
+/// check-wire-timestamps` enforces for `json!` fields.
+mod rfc3339_vec {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use time::OffsetDateTime;
+
+    #[derive(Serialize, Deserialize)]
+    struct One(#[serde(with = "time::serde::rfc3339")] OffsetDateTime);
+
+    pub(super) fn serialize<S: Serializer>(
+        value: &[OffsetDateTime],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(value.iter().copied().map(One))
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<OffsetDateTime>, D::Error> {
+        Ok(Vec::<One>::deserialize(deserializer)?
+            .into_iter()
+            .map(|One(v)| v)
+            .collect())
+    }
+}
+
+/// One candidate quarter-hour for the Wind-KF Vergleichszeitraum.
+///
+/// Supplied by the caller from the TR's own series; this module decides only
+/// which four of them Kap. 3.2.2.1 admits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct VergleichsViertelstunde {
+    /// Start of the quarter-hour. Candidates are read in this order and must be
+    /// strictly ascending; a gap of more than a quarter-hour breaks contiguity.
+    ///
+    /// RFC 3339 on the wire: `time`'s derived representation is its internal
+    /// component array, which no consumer outside `time` can read.
+    #[serde(with = "time::serde::rfc3339")]
+    pub beginn: OffsetDateTime,
+    /// Gemessener Leistungsmittelwert `P_ist` in kW.
+    pub p_ist_kw: Decimal,
+    /// Theoretischer Leistungsmittelwert `P_theo` in kW from the zertifizierte
+    /// Leistungskennlinie.
+    pub p_theo_kw: Decimal,
+    /// `false` for a quarter-hour that is not fully measured — an Ersatzwert, a
+    /// partial interval, or a Störung.
+    pub vollstaendig_gemessen: bool,
+    /// `false` while the feed-in was restricted (a Redispatch-Maßnahme, an
+    /// Einspeisemanagement, a marktbedingte Anpassung).
+    pub unbeschraenkt: bool,
+}
+
+impl VergleichsViertelstunde {
+    /// Admissible on its own terms: fully measured, unrestricted, and carrying
+    /// at least [`VERGLEICHSZEITRAUM_MINDESTANTEIL`] of the Nennleistung.
+    fn zulaessig(&self, p_nenn_kw: Decimal) -> bool {
+        self.vollstaendig_gemessen
+            && self.unbeschraenkt
+            && self.p_ist_kw >= p_nenn_kw * VERGLEICHSZEITRAUM_MINDESTANTEIL
+    }
+}
+
+/// Which side of the Maßnahme the Vergleichszeitraum was taken from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VergleichszeitraumLage {
+    /// Before the Maßnahme — the tie-break winner at equal distance.
+    Davor,
+    /// After the Maßnahme, within the same calendar month.
+    Danach,
+}
+
+/// The four quarter-hours Kap. 3.2.2.1 admits, and the two means they yield.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Vergleichszeitraum {
+    /// `P_VZ,ist` — the measured mean over the four quarter-hours, in kW.
+    pub p_vz_ist_kw: Decimal,
+    /// `P_VZ,theo` — the theoretical mean over the same four, in kW.
+    pub p_vz_theo_kw: Decimal,
+    /// Which side of the Maßnahme they were taken from.
+    pub lage: VergleichszeitraumLage,
+    /// The start instants of the four, ascending.
+    #[serde(with = "rfc3339_vec")]
+    pub viertelstunden: Vec<OffsetDateTime>,
+}
+
+impl Vergleichszeitraum {
+    /// `KF = P_VZ,ist / P_VZ,theo` for this Vergleichszeitraum.
+    ///
+    /// # Errors
+    ///
+    /// [`AusfallarbeitError::UnzulaessigerDivisor`] if `P_VZ,theo ≤ 0`.
+    pub fn korrekturfaktor(&self) -> Result<Decimal, AusfallarbeitError> {
+        korrekturfaktor(self.p_vz_ist_kw, self.p_vz_theo_kw)
+    }
+}
+
+/// Select the Wind-KF Vergleichszeitraum from a TR's quarter-hour series
+/// (Kap. 3.2.2.1).
+///
+/// The rule has four parts and every one of them changes the answer:
+///
+/// - **four contiguous** quarter-hours ([`VERGLEICHSZEITRAUM_VIERTELSTUNDEN`]),
+///   so a run interrupted by one inadmissible interval does not qualify;
+/// - **fully measured and unrestricted**, so an Ersatzwert or a quarter-hour
+///   still under an Einspeisemanagement cannot set the Korrekturfaktor that
+///   then prices the Ausfallarbeit;
+/// - **at least 10 % of the Nennleistung**
+///   ([`VERGLEICHSZEITRAUM_MINDESTANTEIL`]) — near standstill the measured and
+///   theoretical means are both close to zero and their quotient is noise;
+/// - **nearest to the Maßnahme, ties to the side before it**, and never from the
+///   Folgemonat: the KF is a monthly figure, so reaching into the next month
+///   would settle one month with another month's weather.
+///
+/// **The two sides are measured from two different anchors**, which the text is
+/// explicit about: „die zeitlich nächsten … vier Viertelstunden vor oder nach
+/// der Viertelstunde, in der die Redispatch-Maßnahme **beginnt bzw. endet**".
+/// A run before the Maßnahme is measured to `massnahme_beginn`, one after it to
+/// `massnahme_ende`. Measuring both from the beginning inflates every „danach"
+/// distance by the length of the Maßnahme and hands a four-hour measure a
+/// Vergleichszeitraum from hours before it when the quarter-hours immediately
+/// after it are the nearest — a different KF, and the KF prices every kWh.
+///
+/// # Errors
+///
+/// [`AusfallarbeitError::KeinVergleichszeitraum`] when no admissible run of four
+/// exists on either side.
+pub fn vergleichszeitraum(
+    kandidaten: &[VergleichsViertelstunde],
+    massnahme_beginn: OffsetDateTime,
+    massnahme_ende: OffsetDateTime,
+    p_nenn_kw: Decimal,
+) -> Result<Vergleichszeitraum, AusfallarbeitError> {
+    let n = VERGLEICHSZEITRAUM_VIERTELSTUNDEN;
+    let viertelstunde = time::Duration::minutes(15);
+    let monat = (massnahme_beginn.year(), massnahme_beginn.month());
+
+    let mut best: Option<(
+        time::Duration,
+        VergleichszeitraumLage,
+        &[VergleichsViertelstunde],
+    )> = None;
+
+    for run in kandidaten.windows(n) {
+        // Contiguous, ascending, and every member admissible on its own.
+        if run
+            .windows(2)
+            .any(|pair| pair[1].beginn - pair[0].beginn != viertelstunde)
+        {
+            continue;
+        }
+        if !run.iter().all(|vs| vs.zulaessig(p_nenn_kw)) {
+            continue;
+        }
+
+        let ende = run[n - 1].beginn + viertelstunde;
+        let (abstand, lage) = if ende <= massnahme_beginn {
+            (massnahme_beginn - ende, VergleichszeitraumLage::Davor)
+        } else if run[0].beginn >= massnahme_ende {
+            (
+                run[0].beginn - massnahme_ende,
+                VergleichszeitraumLage::Danach,
+            )
+        } else {
+            // Overlaps the Maßnahme — those quarter-hours are the measure's
+            // own, not a comparison for it.
+            continue;
+        };
+
+        // „Folgemonat quarter-hours are never used": a run after the Maßnahme
+        // must stay inside the Maßnahme's calendar month. A run before it
+        // cannot leave the month by construction, but reaching back into the
+        // Vormonat is the mirror of the same objection.
+        if run
+            .iter()
+            .any(|vs| (vs.beginn.year(), vs.beginn.month()) != monat)
+        {
+            continue;
+        }
+
+        // Ties go to `Davor`, which `VergleichszeitraumLage::Davor < Danach`
+        // expresses — but only against an equal distance, so it is compared
+        // explicitly rather than through a derived `Ord` on a tuple.
+        let better = match &best {
+            None => true,
+            Some((d, l, _)) => {
+                abstand < *d
+                    || (abstand == *d
+                        && *l == VergleichszeitraumLage::Danach
+                        && lage == VergleichszeitraumLage::Davor)
+            }
+        };
+        if better {
+            best = Some((abstand, lage, run));
+        }
+    }
+
+    let Some((_, lage, run)) = best else {
+        return Err(AusfallarbeitError::KeinVergleichszeitraum);
+    };
+    let teiler = Decimal::from(u64::try_from(n).unwrap_or(u64::MAX));
+    Ok(Vergleichszeitraum {
+        p_vz_ist_kw: run.iter().map(|vs| vs.p_ist_kw).sum::<Decimal>() / teiler,
+        p_vz_theo_kw: run.iter().map(|vs| vs.p_theo_kw).sum::<Decimal>() / teiler,
+        lage,
+        viertelstunden: run.iter().map(|vs| vs.beginn).collect(),
+    })
 }
 
 // ── Kap. 3.2.3.2 — Wind-Bin-Verfahren (Windenergieanlagen auf See) ──────────
@@ -440,6 +669,155 @@ pub fn solar_pauschal(
     )
 }
 
+// ── Kap. 3.2.4.1 — Solar-Vergleichstag ──────────────────────────────────────
+
+/// One quarter-hour of a candidate Solar-Vergleichstag.
+///
+/// Supplied by the caller from the TR's own series and the Einstrahlungs-
+/// messung; this module decides only which of them Kap. 3.2.4.1 admits and which
+/// calendar day they add up to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct VergleichstagViertelstunde {
+    /// Start of the quarter-hour. Its calendar date is the day it belongs to.
+    #[serde(with = "time::serde::rfc3339")]
+    pub beginn: OffsetDateTime,
+    /// Gemessener Leistungsmittelwert `P_ist` in kW.
+    pub p_ist_kw: Decimal,
+    /// Durchschnittliche Einstrahlleistung in kW/m².
+    pub einstrahlung_kw_m2: Decimal,
+    /// `true` while a Nichtbeanspruchbarkeit or a marktbedingte Anpassung
+    /// applied — Kap. 3.2.4.1 excludes those quarter-hours from the means.
+    pub nichtbeanspruchbar_oder_mba: bool,
+}
+
+/// The Solar Vergleichstag and the two means it yields (Kap. 3.2.4.1).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Vergleichstag {
+    /// The calendar day the values were taken from.
+    pub tag: Date,
+    /// `P_VZ,ist` — the mean measured feed-in over the admitted quarter-hours,
+    /// in kW.
+    pub p_vz_ist_kw: Decimal,
+    /// `G_VZ` — the mean irradiation over the same quarter-hours, in kW/m².
+    pub g_vz_kw_m2: Decimal,
+    /// Which side of the Maßnahme the day lies on.
+    pub lage: VergleichszeitraumLage,
+    /// How many quarter-hours of that day were admitted.
+    pub viertelstunden: usize,
+}
+
+/// Select the Solar Vergleichstag from a candidate series (Kap. 3.2.4.1).
+///
+/// The rule is a **calendar day**, not four quarter-hours — Solar and Wind do
+/// not share a Vergleichszeitraum, and using the wind rule for a Solaranlage
+/// changes `P_VZ,ist / G_VZ` and with it every kWh of Ausfallarbeit:
+///
+/// - „der letzte vorangegangene oder der erste nachfolgende **Kalendertag** vor
+///   oder nach der Redispatch-Maßnahme, an dem keine Redispatch-Maßnahme
+///   gegenüber der SR stattgefunden hat" — hence `tage_mit_massnahme`;
+/// - „bei gleichem zeitlichem Abstand ist der Kalendertag **vor** der
+///   Redispatch-Maßnahme zu verwenden";
+/// - „Kalendertage aus dem **Folgemonat** sind nicht zu verwenden";
+/// - only quarter-hours „in denen der Leistungsmittelwert mindestens 10 % der
+///   Nennleistung der TR beträgt und in denen keine Nichtbeanspruchbarkeiten
+///   oder marktbedingten Anpassungen vorliegen" enter the two means;
+/// - „für den Vergleichszeitraum ist zurückzugehen bis zu dem letzten Tag, an
+///   dem eine Viertelstunde mit mehr als 10 % Einspeisung stattgefunden hat" —
+///   so a run of dark days is stepped over rather than ending the search.
+///
+/// `massnahme_tag` is the calendar day the Maßnahme falls on; distance is
+/// counted in whole days from it.
+///
+/// # Errors
+///
+/// [`AusfallarbeitError::KeinVergleichstag`] when no day in the Maßnahme's month
+/// qualifies, and [`AusfallarbeitError::UnzulaessigerDivisor`] when the admitted
+/// quarter-hours carry no irradiation at all — `G_VZ` would be zero and
+/// [`solar_spitz`] could not divide by it.
+pub fn solar_vergleichstag(
+    kandidaten: &[VergleichstagViertelstunde],
+    massnahme_tag: Date,
+    tage_mit_massnahme: &[Date],
+    p_nenn_kw: Decimal,
+) -> Result<Vergleichstag, AusfallarbeitError> {
+    let schwelle = p_nenn_kw * VERGLEICHSZEITRAUM_MINDESTANTEIL;
+    let mut best: Option<(i64, VergleichszeitraumLage, Date)> = None;
+
+    // Group by calendar day without allocating a map: the candidate series is a
+    // month at most, so a linear pass per distinct day is cheaper than the map.
+    let mut tage: Vec<Date> = kandidaten.iter().map(|vs| vs.beginn.date()).collect();
+    tage.sort_unstable();
+    tage.dedup();
+
+    for tag in tage {
+        if tag == massnahme_tag || tage_mit_massnahme.contains(&tag) {
+            continue;
+        }
+        // „Kalendertage aus dem Folgemonat sind nicht zu verwenden." A day in
+        // the Vormonat is the mirror of the same objection: the Vergleichstag
+        // stays inside the month being settled.
+        if (tag.year(), tag.month()) != (massnahme_tag.year(), massnahme_tag.month()) {
+            continue;
+        }
+        if !kandidaten
+            .iter()
+            .any(|vs| vs.beginn.date() == tag && zulaessig(vs, schwelle))
+        {
+            continue;
+        }
+        let abstand = (tag - massnahme_tag).whole_days();
+        let lage = if abstand < 0 {
+            VergleichszeitraumLage::Davor
+        } else {
+            VergleichszeitraumLage::Danach
+        };
+        let entfernung = abstand.abs();
+        let better = match &best {
+            None => true,
+            Some((d, l, _)) => {
+                entfernung < *d
+                    || (entfernung == *d
+                        && *l == VergleichszeitraumLage::Danach
+                        && lage == VergleichszeitraumLage::Davor)
+            }
+        };
+        if better {
+            best = Some((entfernung, lage, tag));
+        }
+    }
+
+    let Some((_, lage, tag)) = best else {
+        return Err(AusfallarbeitError::KeinVergleichstag);
+    };
+
+    let admitted: Vec<&VergleichstagViertelstunde> = kandidaten
+        .iter()
+        .filter(|vs| vs.beginn.date() == tag && zulaessig(vs, schwelle))
+        .collect();
+    let teiler = Decimal::from(u64::try_from(admitted.len()).unwrap_or(u64::MAX));
+    let g_vz = admitted
+        .iter()
+        .map(|vs| vs.einstrahlung_kw_m2)
+        .sum::<Decimal>()
+        / teiler;
+    if g_vz <= Decimal::zero() {
+        return Err(AusfallarbeitError::UnzulaessigerDivisor("G_VZ"));
+    }
+    Ok(Vergleichstag {
+        tag,
+        p_vz_ist_kw: admitted.iter().map(|vs| vs.p_ist_kw).sum::<Decimal>() / teiler,
+        g_vz_kw_m2: g_vz,
+        lage,
+        viertelstunden: admitted.len(),
+    })
+}
+
+/// „mindestens 10 % der Nennleistung … und keine Nichtbeanspruchbarkeiten oder
+/// marktbedingten Anpassungen".
+fn zulaessig(vs: &VergleichstagViertelstunde, schwelle_kw: Decimal) -> bool {
+    !vs.nichtbeanspruchbar_oder_mba && vs.p_ist_kw >= schwelle_kw
+}
+
 // ── Kap. 3.3 — Anlagen mit nicht-fluktuierender Erzeugung ───────────────────
 
 /// Spitzabrechnung (Kap. 3.3.1): `W_A,i` from the geplante Fahrweise
@@ -576,10 +954,245 @@ pub fn ueberbauung_kuerzung(
 mod tests {
     use super::*;
     use rust_decimal::prelude::FromPrimitive;
-    use time::macros::{date, time};
+    use time::macros::{date, datetime, time};
 
     fn dec(v: f64) -> Decimal {
         Decimal::from_f64(v).expect("finite")
+    }
+
+    // ── Kap. 3.2.2.1 Vergleichszeitraum ──────────────────────────────────
+
+    fn vs(
+        minute_offset: i64,
+        p_ist: f64,
+        gemessen: bool,
+        unbeschraenkt: bool,
+    ) -> VergleichsViertelstunde {
+        VergleichsViertelstunde {
+            beginn: datetime!(2026-06-15 00:00 UTC) + time::Duration::minutes(minute_offset),
+            p_ist_kw: dec(p_ist),
+            p_theo_kw: dec(1000.0),
+            vollstaendig_gemessen: gemessen,
+            unbeschraenkt,
+        }
+    }
+
+    /// The nearest admissible run of four wins, and „nearest" is measured to the
+    /// edge of the run rather than to its start.
+    #[test]
+    fn vergleichszeitraum_takes_the_nearest_admissible_run() {
+        // Maßnahme at 03:00. Two admissible runs: 00:00–01:00 (2 h away) and
+        // 04:00–05:00 (1 h away). The later one is nearer.
+        let mut kandidaten: Vec<VergleichsViertelstunde> =
+            (0..4).map(|i| vs(i * 15, 900.0, true, true)).collect();
+        kandidaten.extend((16..20).map(|i| vs(i * 15, 800.0, true, true)));
+
+        let z = vergleichszeitraum(
+            &kandidaten,
+            datetime!(2026-06-15 03:00 UTC),
+            datetime!(2026-06-15 03:00 UTC),
+            dec(1000.0),
+        )
+        .expect("an admissible run exists");
+        assert_eq!(z.lage, VergleichszeitraumLage::Danach);
+        assert_eq!(z.p_vz_ist_kw, dec(800.0));
+        assert_eq!(z.korrekturfaktor().unwrap(), dec(0.8));
+    }
+
+    /// At equal distance the run before the Maßnahme wins.
+    #[test]
+    fn an_equal_distance_resolves_to_the_run_before() {
+        // Maßnahme at 02:00: 00:00–01:00 ends 1 h before, 03:00–04:00 starts
+        // 1 h after.
+        let mut kandidaten: Vec<VergleichsViertelstunde> =
+            (0..4).map(|i| vs(i * 15, 900.0, true, true)).collect();
+        kandidaten.extend((12..16).map(|i| vs(i * 15, 800.0, true, true)));
+
+        let z = vergleichszeitraum(
+            &kandidaten,
+            datetime!(2026-06-15 02:00 UTC),
+            datetime!(2026-06-15 02:00 UTC),
+            dec(1000.0),
+        )
+        .expect("an admissible run exists");
+        assert_eq!(z.lage, VergleichszeitraumLage::Davor);
+        assert_eq!(z.p_vz_ist_kw, dec(900.0));
+    }
+
+    /// Each of the three admissibility criteria alone disqualifies a run, and
+    /// one bad quarter-hour breaks the contiguity the other three needed.
+    #[test]
+    fn one_inadmissible_quarter_hour_disqualifies_the_whole_run() {
+        let massnahme = datetime!(2026-06-15 03:00 UTC);
+        for spoil in [
+            vs(30, 900.0, false, true), // not fully measured
+            vs(30, 900.0, true, false), // feed-in was restricted
+            vs(30, 99.0, true, true),   // below 10 % of the 1000 kW Nennleistung
+        ] {
+            let mut kandidaten: Vec<VergleichsViertelstunde> =
+                (0..4).map(|i| vs(i * 15, 900.0, true, true)).collect();
+            kandidaten[2] = spoil;
+            assert_eq!(
+                vergleichszeitraum(&kandidaten, massnahme, massnahme, dec(1000.0)),
+                Err(AusfallarbeitError::KeinVergleichszeitraum)
+            );
+        }
+
+        // Exactly 10 % is admissible — „mindestens 10 %".
+        let kandidaten: Vec<VergleichsViertelstunde> =
+            (0..4).map(|i| vs(i * 15, 100.0, true, true)).collect();
+        assert!(vergleichszeitraum(&kandidaten, massnahme, massnahme, dec(1000.0)).is_ok());
+    }
+
+    /// A run in the Folgemonat is never used, however near it is.
+    #[test]
+    fn the_folgemonat_is_never_reached_into() {
+        // Maßnahme on 30 June at 23:00; the only admissible run starts 1 July.
+        let kandidaten: Vec<VergleichsViertelstunde> = (0..4)
+            .map(|i| VergleichsViertelstunde {
+                beginn: datetime!(2026-07-01 00:00 UTC) + time::Duration::minutes(i * 15),
+                p_ist_kw: dec(900.0),
+                p_theo_kw: dec(1000.0),
+                vollstaendig_gemessen: true,
+                unbeschraenkt: true,
+            })
+            .collect();
+        assert_eq!(
+            vergleichszeitraum(
+                &kandidaten,
+                datetime!(2026-06-30 23:00 UTC),
+                datetime!(2026-06-30 23:45 UTC),
+                dec(1000.0)
+            ),
+            Err(AusfallarbeitError::KeinVergleichszeitraum)
+        );
+    }
+
+    /// A gap in the series breaks contiguity even when every value qualifies.
+    #[test]
+    fn a_gap_breaks_contiguity() {
+        let kandidaten = vec![
+            vs(0, 900.0, true, true),
+            vs(15, 900.0, true, true),
+            vs(45, 900.0, true, true), // 30 minutes later, not 15
+            vs(60, 900.0, true, true),
+        ];
+        assert_eq!(
+            vergleichszeitraum(
+                &kandidaten,
+                datetime!(2026-06-15 03:00 UTC),
+                datetime!(2026-06-15 03:00 UTC),
+                dec(1000.0)
+            ),
+            Err(AusfallarbeitError::KeinVergleichszeitraum)
+        );
+    }
+
+    /// „vor oder nach der Viertelstunde, in der die Maßnahme **beginnt bzw.
+    /// endet**" — the two sides are measured from two different anchors, and a
+    /// long Maßnahme is where that shows.
+    #[test]
+    fn the_danach_side_is_measured_from_the_end_of_the_massnahme() {
+        // A four-hour Maßnahme, 02:00–06:00. Admissible runs: 00:00–01:00,
+        // which ends 1 h before it starts, and 06:00–07:00, which starts right
+        // at its end. Measured correctly the later one wins at zero distance;
+        // measured from the beginning it would be 4 h away and lose.
+        let mut kandidaten: Vec<VergleichsViertelstunde> =
+            (0..4).map(|i| vs(i * 15, 900.0, true, true)).collect();
+        kandidaten.extend((24..28).map(|i| vs(i * 15, 800.0, true, true)));
+
+        let z = vergleichszeitraum(
+            &kandidaten,
+            datetime!(2026-06-15 02:00 UTC),
+            datetime!(2026-06-15 06:00 UTC),
+            dec(1000.0),
+        )
+        .expect("an admissible run exists");
+        assert_eq!(z.lage, VergleichszeitraumLage::Danach);
+        assert_eq!(z.p_vz_ist_kw, dec(800.0));
+    }
+
+    // ── Kap. 3.2.4.1 — Solar-Vergleichstag ───────────────────────────────
+
+    fn tag_vs(
+        tag: Date,
+        stunde: u8,
+        p_ist: f64,
+        einstrahlung: f64,
+        gestoert: bool,
+    ) -> VergleichstagViertelstunde {
+        VergleichstagViertelstunde {
+            beginn: tag.with_hms(stunde, 0, 0).expect("valid time").assume_utc(),
+            p_ist_kw: dec(p_ist),
+            einstrahlung_kw_m2: dec(einstrahlung),
+            nichtbeanspruchbar_oder_mba: gestoert,
+        }
+    }
+
+    /// Solar has a **calendar-day** Vergleichszeitraum, not the wind rule's four
+    /// quarter-hours: the nearest day without a Maßnahme, ties to the day
+    /// before, never from another month.
+    #[test]
+    fn the_solar_vergleichstag_is_the_nearest_day_without_a_massnahme() {
+        let d = |day| Date::from_calendar_date(2026, Month::June, day).expect("valid date");
+        let kandidaten = vec![
+            tag_vs(d(12), 10, 900.0, 0.9, false),
+            tag_vs(d(13), 10, 800.0, 0.8, false), // has its own Maßnahme
+            tag_vs(d(16), 10, 700.0, 0.7, false),
+        ];
+        // Maßnahme on the 14th: the 13th is nearer but excluded, so the 12th
+        // (2 days) beats the 16th (2 days) on the tie-break.
+        let z = solar_vergleichstag(&kandidaten, d(14), &[d(13)], dec(1000.0))
+            .expect("an admissible day exists");
+        assert_eq!(z.tag, d(12));
+        assert_eq!(z.lage, VergleichszeitraumLage::Davor);
+        assert_eq!(z.p_vz_ist_kw, dec(900.0));
+        assert_eq!(z.g_vz_kw_m2, dec(0.9));
+    }
+
+    /// Only the quarter-hours that reach 10 % of the Nennleistung and carry no
+    /// Nichtbeanspruchbarkeit or marktbedingte Anpassung enter the two means.
+    #[test]
+    fn a_dark_or_curtailed_quarter_hour_is_left_out_of_the_means() {
+        let d = |day| Date::from_calendar_date(2026, Month::June, day).expect("valid date");
+        let kandidaten = vec![
+            tag_vs(d(12), 6, 50.0, 0.1, false),   // below 10 % of 1000 kW
+            tag_vs(d(12), 10, 900.0, 0.9, false), // counted
+            tag_vs(d(12), 11, 700.0, 0.7, true),  // marktbedingte Anpassung
+            tag_vs(d(12), 12, 700.0, 0.7, false), // counted
+        ];
+        let z = solar_vergleichstag(&kandidaten, d(14), &[], dec(1000.0))
+            .expect("an admissible day exists");
+        assert_eq!(z.viertelstunden, 2);
+        assert_eq!(z.p_vz_ist_kw, dec(800.0));
+        assert_eq!(z.g_vz_kw_m2, dec(0.8));
+    }
+
+    /// A day with nothing above 10 % is stepped over rather than ending the
+    /// search — „zurückzugehen bis zu dem letzten Tag, an dem eine Viertelstunde
+    /// mit mehr als 10 % Einspeisung stattgefunden hat".
+    #[test]
+    fn a_dark_day_is_stepped_over() {
+        let d = |day| Date::from_calendar_date(2026, Month::June, day).expect("valid date");
+        let kandidaten = vec![
+            tag_vs(d(11), 10, 900.0, 0.9, false),
+            tag_vs(d(13), 10, 20.0, 0.02, false), // the whole day is below 10 %
+        ];
+        let z = solar_vergleichstag(&kandidaten, d(14), &[], dec(1000.0))
+            .expect("the dark day is skipped, not fatal");
+        assert_eq!(z.tag, d(11));
+    }
+
+    /// The Folgemonat is never reached into, however near it is.
+    #[test]
+    fn the_solar_vergleichstag_stays_in_the_month() {
+        let im_juni = |day| Date::from_calendar_date(2026, Month::June, day).expect("valid date");
+        let erster_juli = Date::from_calendar_date(2026, Month::July, 1).expect("valid date");
+        let kandidaten = vec![tag_vs(erster_juli, 10, 900.0, 0.9, false)];
+        assert_eq!(
+            solar_vergleichstag(&kandidaten, im_juni(30), &[], dec(1000.0)),
+            Err(AusfallarbeitError::KeinVergleichstag)
+        );
     }
 
     // ── Kap. 3.1 ─────────────────────────────────────────────────────────

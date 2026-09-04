@@ -208,6 +208,71 @@ pub fn check_release_coverage() {
     } else {
         println!("All message types are covered for {check_date}. ✓");
     }
+
+    check_published_span(profiles_root);
+}
+
+/// The landing page and the site footer name the Formatversionen mako ships
+/// (`site/config.toml`, `extra.format_versions`). Importing a new one moves the
+/// span and leaves the claim understating what the platform reads — the same
+/// drift `services/makod/tests/published_counts.rs` stops for the PID count.
+///
+/// The claim is a **span**, not a list: mako keeps every imported Formatversion
+/// resolvable so a process started under an older one runs to completion under
+/// its rules.
+fn check_published_span(profiles_root: &Path) {
+    let mut versions: Vec<String> = Vec::new();
+    for msg in std::fs::read_dir(profiles_root)
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        if !msg.path().is_dir() {
+            continue;
+        }
+        for fv in std::fs::read_dir(msg.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let name = fv.file_name().to_string_lossy().into_owned();
+            // `fv20260401` and `fv20260401_gas` are one Formatversion in two Sparten.
+            if let Some(digits) = name.strip_prefix("fv")
+                && digits.len() >= 8
+                && digits[..8].chars().all(|c| c.is_ascii_digit())
+            {
+                versions.push(digits[..8].to_owned());
+            }
+        }
+    }
+    versions.sort_unstable();
+    versions.dedup();
+    let Some((first, last)) = versions.first().zip(versions.last()) else {
+        return;
+    };
+    let fmt = |d: &str| format!("FV{}-{}-{}", &d[..4], &d[4..6], &d[6..8]);
+    let expected = format!("{} → {}", fmt(first), fmt(last));
+
+    let config = Path::new("site/config.toml");
+    let Ok(text) = std::fs::read_to_string(config) else {
+        return;
+    };
+    let stated = text
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("format_versions"))
+        .and_then(|l| l.split('"').nth(1))
+        .unwrap_or_default();
+    if stated == expected {
+        println!("check-release-coverage: site states the profile span `{expected}` ✓");
+        return;
+    }
+    eprintln!();
+    eprintln!(
+        "site/config.toml states `format_versions = \"{stated}\"`, but the imported \
+         profiles span `{expected}` ({} Formatversionen).",
+        versions.len()
+    );
+    std::process::exit(1);
 }
 
 fn parse_date(s: &str) -> Option<time::Date> {

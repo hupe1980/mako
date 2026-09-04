@@ -259,6 +259,7 @@ pub struct StuckKomponenteRow {
     pub nb_mp_id: Option<String>,
     pub status: String,
     pub mako_process_id: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
     pub angemeldet_since: time::OffsetDateTime,
     pub days_stuck: i64,
 }

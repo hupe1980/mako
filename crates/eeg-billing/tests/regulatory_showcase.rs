@@ -2590,121 +2590,186 @@ fn pre_eeg2023_plants_use_the_db_series() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// §§20–22 EEG 2023 — Direktvermarktung rules
+// §§ 20–22 EEG 2023 — Veräußerungsformen, Direktvermarktungspflicht, Ausschreibung
 // ══════════════════════════════════════════════════════════════════════════════
 
-/// §20 EEG — mandatory Direktvermarktung for plants > 100 kW.
+/// § 21 Abs. 1 Satz 1 Nr. 1 EEG 2023 — the Einspeisevergütung mit gesetzlichem
+/// anzulegenden Wert stops at „bis zu 100 Kilowatt", which is what makes a
+/// larger plant direktvermarktungspflichtig. There is no § 20 Abs. 1: § 20 has
+/// no Absätze and is the Marktprämie.
 #[test]
-fn sect20_mandatory_above_100kw() {
-    use eeg_billing::EegGesetz;
-    use eeg_billing::direktverm::is_direktvermarktung_mandatory;
+fn s21_abs1_nr1_closes_the_einspeiseverguetung_above_100_kw() {
+    use eeg_billing::direktverm::direktvermarktungspflicht;
+    use time::macros::date;
 
-    // Exactly 100 kW: NOT mandatory (§20 says "> 100 kW")
-    assert!(!is_direktvermarktung_mandatory(
-        d("100"),
-        EegGesetz::Eeg2023
-    ));
-
-    // 100.001 kW: mandatory
-    assert!(is_direktvermarktung_mandatory(
-        d("100.001"),
-        EegGesetz::Eeg2023
-    ));
-
-    // 750 kW wind: definitely mandatory
-    assert!(is_direktvermarktung_mandatory(d("750"), EegGesetz::Eeg2023));
+    let ibn = date!(2024 - 03 - 01);
+    assert_eq!(direktvermarktungspflicht(d("100"), ibn), Some(false));
+    assert_eq!(direktvermarktungspflicht(d("100.001"), ibn), Some(true));
+    assert_eq!(direktvermarktungspflicht(d("750"), ibn), Some(true));
 }
 
-/// §20 — EEG 2009 plants are exempt from mandatory Direktvermarktung (§100 Übergangsregelung).
+/// A plant commissioned before 2016-01-01 is governed by the EEG 2014 staging,
+/// which mako's regulatory mirror does not carry — so the answer is *unknown*,
+/// not „nicht pflichtig". Answering „nein" would hand a 600 kW plant an
+/// Einspeisevergütung on an unsourced threshold.
 #[test]
-fn sect20_eeg2009_plants_exempt_from_mandatory() {
-    use eeg_billing::EegGesetz;
-    use eeg_billing::direktverm::is_direktvermarktung_mandatory;
+fn a_pre_2016_plant_leaves_the_direktvermarktungspflicht_unanswered() {
+    use eeg_billing::direktverm::direktvermarktungspflicht;
+    use time::macros::date;
 
-    // Even a large EEG 2009 plant may stay on Einspeisevergütung forever
-    assert!(!is_direktvermarktung_mandatory(
-        d("500"),
-        EegGesetz::Eeg2009
-    ));
-    assert!(!is_direktvermarktung_mandatory(
-        d("500"),
-        EegGesetz::Eeg2000
-    ));
+    assert_eq!(
+        direktvermarktungspflicht(d("600"), date!(2015 - 12 - 31)),
+        None
+    );
+    assert_eq!(
+        direktvermarktungspflicht(d("600"), date!(2016 - 01 - 01)),
+        Some(true)
+    );
 }
 
-/// §22 EEG — Ausschreibungspflicht thresholds.
+/// § 22 Abs. 2–5 EEG 2023 — the Ausschreibungserfordernis, per technology.
+///
+/// The two traps this pins: Solar has **two** thresholds keyed on the Segment
+/// (§ 3 Nr. 41a/41b), and Wasserkraft/Geothermie have none at all — Abs. 5
+/// Satz 2 keeps their anzulegender Wert gesetzlich bestimmt.
 #[test]
-fn sect22_ausschreibung_thresholds() {
+fn s22_ausschreibung_thresholds() {
     use eeg_billing::ErzeugungsArt;
-    use eeg_billing::direktverm::requires_ausschreibung;
+    use eeg_billing::direktverm::{SolarSegment, requires_ausschreibung};
 
-    // Solar >1 MWp: tendering mandatory
+    // Abs. 3 Satz 2 Nr. 1 — erstes Segment (Freifläche) bis einschließlich 1 MW.
     assert!(requires_ausschreibung(
         d("1001"),
-        ErzeugungsArt::SolarFreiflaeche
+        ErzeugungsArt::SolarFreiflaeche,
+        SolarSegment::Erstes
     ));
     assert!(!requires_ausschreibung(
-        d("999"),
-        ErzeugungsArt::SolarAufdach
+        d("1000"),
+        ErzeugungsArt::SolarFreiflaeche,
+        SolarSegment::Erstes
     ));
-
-    // Wind onshore >750 kW: tendering mandatory
-    assert!(requires_ausschreibung(d("751"), ErzeugungsArt::WindOnshore));
+    // Nr. 1a — zweites Segment (Gebäude/Lärmschutzwand) bis einschließlich 750 kW.
+    assert!(requires_ausschreibung(
+        d("900"),
+        ErzeugungsArt::SolarAufdach,
+        SolarSegment::Zweites
+    ));
     assert!(!requires_ausschreibung(
         d("750"),
-        ErzeugungsArt::WindOnshore
+        ErzeugungsArt::SolarAufdach,
+        SolarSegment::Zweites
     ));
 
-    // Wind offshore: always tendering (§23 EEG 2023)
-    assert!(requires_ausschreibung(d("1"), ErzeugungsArt::WindOffshore));
+    // Abs. 2 Satz 2 Nr. 1 — Wind an Land bis einschließlich 1 MW.
+    assert!(requires_ausschreibung(
+        d("1001"),
+        ErzeugungsArt::WindOnshore,
+        SolarSegment::Erstes
+    ));
+    assert!(!requires_ausschreibung(
+        d("1000"),
+        ErzeugungsArt::WindOnshore,
+        SolarSegment::Erstes
+    ));
 
-    // Biomasse >150 kW: tendering mandatory
-    assert!(requires_ausschreibung(d("151"), ErzeugungsArt::Biomasse));
-    assert!(!requires_ausschreibung(d("150"), ErzeugungsArt::Biogas));
+    // Offshore runs under the WindSeeG, to which § 22 Abs. 1 refers.
+    assert!(requires_ausschreibung(
+        d("1"),
+        ErzeugungsArt::WindOffshore,
+        SolarSegment::Erstes
+    ));
+
+    // Abs. 4 Satz 2 — Biomasse bis einschließlich 150 kW.
+    assert!(requires_ausschreibung(
+        d("151"),
+        ErzeugungsArt::Biomasse,
+        SolarSegment::Erstes
+    ));
+    assert!(!requires_ausschreibung(
+        d("150"),
+        ErzeugungsArt::Biogas,
+        SolarSegment::Erstes
+    ));
+
+    // Abs. 5 Satz 2 — never tendered, at any size.
+    assert!(!requires_ausschreibung(
+        d("50000"),
+        ErzeugungsArt::Wasserkraft,
+        SolarSegment::Erstes
+    ));
+    assert!(!requires_ausschreibung(
+        d("50000"),
+        ErzeugungsArt::Geothermie,
+        SolarSegment::Erstes
+    ));
 }
 
-/// §21 Abs. 3 — monthly switch validation: mandatory plant cannot switch.
+/// § 21b Abs. 1 Satz 2 + § 21c Abs. 1 Satz 1 EEG 2023 — a Wechsel takes effect
+/// only on the first of a month and must be notified before the *preceding*
+/// month begins. The old model asserted „once per calendar month", a rule the
+/// statute does not contain.
 #[test]
-fn sect21_mandatory_plant_cannot_switch_back() {
-    use eeg_billing::EegGesetz;
-    use eeg_billing::direktverm::{SwitchBlockedReason, validate_switch_to_vergütung};
+fn s21b_and_s21c_bound_the_veraeusserungsform_wechsel() {
+    use eeg_billing::direktverm::{
+        EinspeiseverguetungsVariante, Veraeusserungsform, Wechsel, WechselAblehnung,
+        mitteilungsfrist, validate_wechsel,
+    };
     use time::macros::date;
 
-    let result =
-        validate_switch_to_vergütung(d("200"), EegGesetz::Eeg2023, date!(2025 - 07 - 01), None);
     assert_eq!(
-        result,
-        Err(SwitchBlockedReason::PflichtgemasseDirektvermarktung)
+        mitteilungsfrist(date!(2026 - 07 - 01)),
+        date!(2026 - 05 - 31)
     );
-}
 
-/// §21 Abs. 3 — voluntary plant can switch once per month.
-#[test]
-fn sect21_voluntary_switch_once_per_month() {
-    use eeg_billing::EegGesetz;
-    use eeg_billing::direktverm::{SwitchBlockedReason, validate_switch_to_vergütung};
-    use time::macros::date;
+    let base = Wechsel {
+        ziel: Veraeusserungsform::Marktpraemie,
+        wirksam_ab: date!(2026 - 07 - 01),
+        mitgeteilt_am: date!(2026 - 05 - 31),
+        leistung_kw: d("80"),
+        inbetriebnahme: date!(2024 - 03 - 01),
+        unentgeltliche_abnahme_in_24_monaten: false,
+    };
+    assert!(validate_wechsel(&base).is_ok());
 
-    // Different month → OK
-    let ok = validate_switch_to_vergütung(
-        d("80"),
-        EegGesetz::Eeg2023,
-        date!(2025 - 08 - 01),
-        Some(date!(2025 - 07 - 01)),
+    assert_eq!(
+        validate_wechsel(&Wechsel {
+            wirksam_ab: date!(2026 - 07 - 02),
+            ..base
+        }),
+        Err(WechselAblehnung::NichtZumMonatsersten)
     );
-    assert!(ok.is_ok());
-
-    // Same month → blocked
-    let blocked = validate_switch_to_vergütung(
-        d("80"),
-        EegGesetz::Eeg2023,
-        date!(2025 - 07 - 15),
-        Some(date!(2025 - 07 - 01)),
+    assert_eq!(
+        validate_wechsel(&Wechsel {
+            mitgeteilt_am: date!(2026 - 06 - 01),
+            ..base
+        }),
+        Err(WechselAblehnung::MitteilungZuSpaet {
+            spaetestens_am: date!(2026 - 05 - 31)
+        })
     );
-    assert!(matches!(
-        blocked,
-        Err(SwitchBlockedReason::AlreadySwitchedThisMonth { .. })
-    ));
+
+    // § 21 Abs. 1 Satz 1 Nr. 1 closes only the *first* Variante to a large
+    // plant; the Ausfallvergütung exists precisely for such plants.
+    let gesetzlich =
+        Veraeusserungsform::Einspeiseverguetung(EinspeiseverguetungsVariante::GesetzlicherWert);
+    assert_eq!(
+        validate_wechsel(&Wechsel {
+            ziel: gesetzlich,
+            leistung_kw: d("200"),
+            ..base
+        }),
+        Err(WechselAblehnung::DirektvermarktungspflichtVerletzt)
+    );
+    let ausfall =
+        Veraeusserungsform::Einspeiseverguetung(EinspeiseverguetungsVariante::Ausfallverguetung);
+    assert!(
+        validate_wechsel(&Wechsel {
+            ziel: ausfall,
+            leistung_kw: d("200"),
+            ..base
+        })
+        .is_ok()
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -3524,7 +3589,8 @@ fn sect52_abs6_full_netting_pipeline() {
 #[test]
 fn eeg2000_grandfathering_no_negativpreis_no_direktverm() {
     use eeg_billing::ErzeugungsArt;
-    use eeg_billing::direktverm::is_direktvermarktung_mandatory;
+    use eeg_billing::direktverm::direktvermarktungspflicht;
+    use time::macros::date;
 
     // EEG 2000 plant: §51 does not apply (Bestandsschutz §66 EEG 2017)
     let out = calculate_settlement(&SettleInput {
@@ -3542,15 +3608,12 @@ fn eeg2000_grandfathering_no_negativpreis_no_direktverm() {
     assert_eq!(out.eligible_kwh, Some(d("10000")));
     assert_eq!(out.settlement_eur, Some(d("5062.00")));
 
-    // EEG 2000 plants are also exempt from mandatory Direktvermarktung
-    assert!(!is_direktvermarktung_mandatory(
-        d("500"),
-        EegGesetz::Eeg2000
-    ));
-    assert!(!is_direktvermarktung_mandatory(
-        d("500"),
-        EegGesetz::Eeg2004
-    ));
+    // A plant of that vintage predates the verified §21 Abs. 1 Satz 1 Nr. 1
+    // wording, so the Direktvermarktungspflicht is reported as unanswered.
+    assert_eq!(
+        direktvermarktungspflicht(d("500"), date!(2004 - 06 - 01)),
+        None
+    );
 }
 
 // ── §44b Abs. 1 EEG 2023 — Biogas quota January reset ────────────────────────
@@ -4291,55 +4354,29 @@ fn sect44_guellebonusanlage_rate_table() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// §42a EEG 2023 — Holzbiomasse restriction post-2026
+// § 42 EEG 2023 — feste Biomasse carries no fresh-wood restriction
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// §42a EEG 2023 — new Holzbiomasse plant commissioned from 2026-01-01
-/// loses EEG eligibility (fresh wood primary energy prohibition).
+/// There is **no § 42a EEG** and the word „Holz" does not occur in the EEG 2023
+/// at all. A Holzbiomasse plant is settled under § 42 like any other Biomasse
+/// plant, whatever its Inbetriebnahmedatum — the sustainability rules for solid
+/// biomass sit outside the EEG. This pins the absence, because the engine used
+/// to zero such a settlement on a fabricated „§ 42a" basis.
 #[test]
-fn sect42a_holzbiomasse_post_2026_blocked() {
-    let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff {
-            verguetungssatz_ct: d("14.47"),
-        },
-        einspeisemenge_kwh: Some(d("8000")),
-        erzeugungsart: Some(eeg_billing::ErzeugungsArt::BiomassHolz),
-        inbetriebnahme: Some(date!(2026 - 03 - 15)), // commissioned after restriction
-        ..SettleInput::default()
-    });
-
-    assert_eq!(
-        out.status,
-        SettlementStatus::Sanctioned,
-        "Holzbiomasse ≥ 2026 must be Sanctioned"
-    );
-    assert_eq!(out.settlement_eur, Some(Decimal::ZERO));
-    assert!(
-        out.positions.iter().any(|p| p.legal_basis.contains("§42a")),
-        "position must cite §42a EEG 2023"
-    );
-}
-
-/// §42a EEG 2023 — Holzbiomasse plant commissioned BEFORE 2026 retains Bestandsschutz.
-#[test]
-fn sect42a_holzbiomasse_pre_2026_bestandsschutz() {
-    let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff {
-            verguetungssatz_ct: d("13.63"),
-        },
-        einspeisemenge_kwh: Some(d("5000")),
-        erzeugungsart: Some(eeg_billing::ErzeugungsArt::BiomassHolz),
-        inbetriebnahme: Some(date!(2022 - 06 - 01)), // pre-2026 → Bestandsschutz
-        ..SettleInput::default()
-    });
-
-    assert_eq!(
-        out.status,
-        SettlementStatus::Calculated,
-        "Pre-2026 Holzbiomasse plant retains EEG support (Bestandsschutz)"
-    );
-    // 5000 × 13.63 / 100 = 681.50 EUR
-    assert_eq!(out.settlement_eur, Some(d("681.50")));
+fn holzbiomasse_is_settled_like_any_other_biomasse() {
+    for ibn in [date!(2022 - 06 - 01), date!(2026 - 03 - 15)] {
+        let out = calculate_settlement(&SettleInput {
+            scheme: SettlementScheme::FeedInTariff {
+                verguetungssatz_ct: d("13.63"),
+            },
+            einspeisemenge_kwh: Some(d("5000")),
+            erzeugungsart: Some(eeg_billing::ErzeugungsArt::BiomassHolz),
+            inbetriebnahme: Some(ibn),
+            ..SettleInput::default()
+        });
+        assert_eq!(out.status, SettlementStatus::Calculated, "{ibn}");
+        assert_eq!(out.settlement_eur, Some(d("681.50")), "{ibn}");
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4572,23 +4609,29 @@ fn s13a_compensation_survives_the_sect25_proration() {
     assert_eq!(out.settlement_eur, Some(d("300.00")));
 }
 
-/// §42a EEG 2023 — a §13a EnWG compensation does not lift an EEG sanction.
+/// § 43 Abs. 1 Nr. 2 EEG 2023 — a §13a EnWG compensation does not lift an EEG
+/// sanction: the substrate cap zeroes the EEG claim and the status stays
+/// `Sanctioned` even though a Redispatch position is paid alongside it.
 #[test]
-fn s42a_sanction_survives_an_einspeisemanagement_position() {
+fn a_sanction_survives_an_einspeisemanagement_position() {
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::FeedInTariff {
             verguetungssatz_ct: d("14.67"),
         },
         einspeisemenge_kwh: Some(d("10000")),
         einspeisemanagement_kwh: Some(d("500")),
-        erzeugungsart: Some(eeg_billing::ErzeugungsArt::BiomassHolz),
-        inbetriebnahme: Some(date!(2026 - 02 - 01)),
+        biomasse: Some(eeg_billing::biomasse::BiomassSettlementData::new(
+            eeg_billing::biomasse::BiomassBrennstoff::PflanzlicheBiomasse,
+            d("0"),
+            d("0.60"),
+            d("500"),
+        )),
         ..SettleInput::default()
     });
     assert_eq!(
         out.status,
         SettlementStatus::Sanctioned,
-        "the §42a sanction must remain visible on the settlement"
+        "the §43 substrate-cap sanction must remain visible on the settlement"
     );
 }
 

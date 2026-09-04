@@ -735,8 +735,8 @@ fn specialist_count(workspace_root: &Path) -> usize {
 /// Every `#[tool(..)] async fn name` in one file, with its read-only hint.
 ///
 /// The wire name is `name = "…"` when the attribute overrides it — `einsd`
-/// declares `get_jahresmarktwert_tool` as `get_jahresmarktwert`, and a check
-/// reading the function name would report a grant that is in fact correct.
+/// declares `get_marktwert_tool` as `get_marktwert`, and a check reading the
+/// function name would report a grant that is in fact correct.
 fn tools_in(src: &str) -> Vec<(String, bool)> {
     let mut out = Vec::new();
     let bytes = src.as_bytes();

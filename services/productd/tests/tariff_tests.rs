@@ -95,75 +95,6 @@ mod preistyp_tests {
     }
 }
 
-// ── Product category whitelist ────────────────────────────────────────────────
-
-#[cfg(test)]
-mod category_tests {
-    const ALL_CATEGORIES: &[&str] = &[
-        "STROM",
-        "GAS",
-        "WAERME",
-        "SOLAR",
-        "EEG",
-        "EINSPEISUNG",
-        "WAERMEPUMPE",
-        "WALLBOX",
-        "HEMS",
-        "EMOBILITY",
-        "ENERGIEDIENSTLEISTUNG",
-        "BUNDLE",
-    ];
-
-    const TARIFPREISBLATT_CATEGORIES: &[&str] = &[
-        "STROM",
-        "GAS",
-        "WAERME",
-        "SOLAR",
-        "EEG",
-        "EINSPEISUNG",
-        "WAERMEPUMPE",
-        "WALLBOX",
-    ];
-
-    #[test]
-    fn all_categories_are_allcaps() {
-        for cat in ALL_CATEGORIES {
-            assert_eq!(cat.to_uppercase(), *cat, "category must be ALLCAPS: {cat}");
-        }
-    }
-
-    #[test]
-    fn tarifpreisblatt_categories_are_subset_of_all() {
-        let all: std::collections::HashSet<_> = ALL_CATEGORIES.iter().copied().collect();
-        for cat in TARIFPREISBLATT_CATEGORIES {
-            assert!(
-                all.contains(cat),
-                "Tarifpreisblatt category {cat} not in ALL_CATEGORIES"
-            );
-        }
-    }
-
-    #[test]
-    fn non_tarifpreisblatt_categories_exist() {
-        // HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, BUNDLE are free-form
-        let tarifpb: std::collections::HashSet<_> =
-            TARIFPREISBLATT_CATEGORIES.iter().copied().collect();
-        let free_form: Vec<_> = ALL_CATEGORIES
-            .iter()
-            .copied()
-            .filter(|c| !tarifpb.contains(c))
-            .collect();
-        assert!(
-            !free_form.is_empty(),
-            "Expected at least one free-form category"
-        );
-        assert!(free_form.contains(&"HEMS"));
-        assert!(free_form.contains(&"EMOBILITY"));
-        assert!(free_form.contains(&"ENERGIEDIENSTLEISTUNG"));
-        assert!(free_form.contains(&"BUNDLE"));
-    }
-}
-
 // ── EPEX price validation ─────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1184,58 +1115,6 @@ mod comparison_feed_tests {
         assert_eq!(extract_mindestlaufzeit_monate(&data), Some(12));
         assert_eq!(extract_kuendigungsfrist_wochen(&data), Some(4));
         assert_eq!(extract_bonus_rabatt_eur(&data), Some(dec!(50.00)));
-    }
-}
-
-// ── §42c SHARING category tests ────────────────────────────────────────────────
-
-#[cfg(test)]
-mod sharing_category_tests {
-    /// SHARING must be a valid category in the schema CHECK constraint.
-    /// billingd reads SHARING products as SharingProduct (§42c EnWG); without
-    /// SHARING in the constraint, those products cannot be stored in productd.
-    #[test]
-    fn sharing_is_valid_category() {
-        const VALID_CATEGORIES: &[&str] = &[
-            "STROM",
-            "GAS",
-            "WAERME",
-            "SOLAR",
-            "EEG",
-            "EINSPEISUNG",
-            "WAERMEPUMPE",
-            "WALLBOX",
-            "HEMS",
-            "EMOBILITY",
-            "ENERGIEDIENSTLEISTUNG",
-            "BUNDLE",
-            "SHARING",
-        ];
-        assert!(
-            VALID_CATEGORIES.contains(&"SHARING"),
-            "SHARING must be in the category list for §42c EnWG billingd SharingProduct"
-        );
-    }
-
-    /// SHARING should be validated as a BO4E Tarifpreisblatt category
-    /// (billingd reads it via ElectricityProduct inside SharingProduct).
-    #[test]
-    fn sharing_is_tarifpreisblatt_category() {
-        const TARIFPREISBLATT_CATEGORIES: &[&str] = &[
-            "STROM",
-            "GAS",
-            "WAERME",
-            "SOLAR",
-            "EEG",
-            "EINSPEISUNG",
-            "WAERMEPUMPE",
-            "WALLBOX",
-            "SHARING",
-        ];
-        assert!(
-            TARIFPREISBLATT_CATEGORIES.contains(&"SHARING"),
-            "SHARING must be validated as Tarifpreisblatt for billingd ElectricityProduct billing path"
-        );
     }
 }
 

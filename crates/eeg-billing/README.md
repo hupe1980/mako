@@ -69,7 +69,7 @@ receives the already-resolved AW from the caller.
 | `TenantElectricity` | §21 Abs. 3 EEG 2023 | `kwh × (verguetung + zuschlag) / 100` |
 | `PostEeg` | post-20yr | `kwh × EPEX / 100` (configurable `price_floor` on the variant) |
 | `KwkSurcharge` | §7 KWKG 2023 | `eligible_kwh × rate / 100` (hour-limit cap) |
-| `TemporaryFeedInTariff` | §21 Abs. 1 Nr. 2 | Ausfallvergütung (temporary feed-in when Direktvermarkter fails) |
+| `TemporaryFeedInTariff` | §21 Abs. 1 Satz 1 Nr. 3 | Ausfallvergütung (temporary feed-in when the Direktvermarkter drops out) |
 | `Eigenverbrauch` | §21 Abs. 3 EEG | No EEG feed-in remuneration is calculated. |
 | `FlexibilityPremium` | §50b EEG 2023 | `kwh × (verguetung + flex_praemie) / 100` |
 | `FlexibilitySurcharge` | §50a EEG 2023 | `kw × rate / 12` (monthly capacity payment) |
@@ -103,21 +103,20 @@ eeg-billing/src/
 ├── formula.rs           Core settlement dispatcher — pure, all §§ rules applied
 ├── model.rs             SettleInput / SettleOutput / SettlePosition
 ├── scheme.rs            SettlementScheme, TariffSource, Paragraph100Rule
-├── technology.rs        ErzeugungsArt (19 variants), InbetriebnahmeTyp, RepoweringScope
+├── technology.rs        ErzeugungsArt (18 variants), InbetriebnahmeTyp, RepoweringScope
 ├── version.rs           EegGesetz (8 variants), §51 thresholds and kW-exemption tables
 ├── rates.rs             §48 AW tables: solar PV per §49 window, wind, biomasse, KWKG
 ├── foerderdauer.rs      foerderendedatum_eeg(), §52 Pflichtzahlung, §51a extension
 ├── foerderungsende.rs   FoerderendeGrund enum, SanktionStatus lifecycle
 │
 ├── degression.rs        §49 semi-annual solar AW degression — 1 % every 1 Feb / 1 Aug
-├── direktverm.rs        §§20–22 — mandatory threshold, Ausschreibungspflicht, period model
+├── direktverm.rs        §§20–22 — Direktvermarktungspflicht, Ausschreibungspflicht, §21b/§21c Wechsel
 ├── negativpreis.rs      §51 per-interval negative-price derivation (version-aware runs)
 ├── reductions.rs        §52 Pflichtzahlungen — §52 Abs. 6 netting (a euro-level offset)
 ├── aw_reductions.rs     §§53b–54 — cuts to the anzulegender Wert, before the formula
 ├── zusammenfassung.rs   §24 Abs. 1 — the full Zusammenfassung decision (Sätze 1–5)
 ├── settlement_state.rs  Monthly lifecycle state machine — Active/Reduced/Suspended/PostEeg
 │
-├── solar.rs             §48 PV subtypes, Agri-PV bonus
 ├── wind.rs              §36h Korrekturfaktor, WindStandort, Gütegrad/Standortklasse
 ├── biomasse.rs          §43/§44 fuel classes, Güllekleinanlage (≤75 kW, ≥80% Gülle)
 │
@@ -355,16 +354,36 @@ assert_eq!(solar_pv_ueberschuss_aw_ct(dec!(9), date!(2024-09-01)), Some(dec!(8.4
 
 ---
 
-## §§20–22 EEG 2023 — Direktvermarktung rules
+## §§20–22 EEG 2023 — Veräußerungsformen, Direktvermarktungspflicht, Ausschreibung
+
+The EEG has no section imposing a duty to market directly. The duty is the
+shadow of **§21 Abs. 1 Satz 1 Nr. 1**: the Einspeisevergütung mit gesetzlich
+bestimmtem anzulegenden Wert exists only „für Strom aus Anlagen mit einer
+installierten Leistung von bis zu 100 Kilowatt", so anything larger has to take
+the Marktprämie — which §20 pays only for months the Strom is direkt vermarktet.
 
 ```rust
-use eeg_billing::direktverm::{is_direktvermarktung_mandatory, requires_ausschreibung};
-use eeg_billing::{EegGesetz, ErzeugungsArt};
+use eeg_billing::direktverm::{SolarSegment, direktvermarktungspflicht, requires_ausschreibung};
+use eeg_billing::ErzeugungsArt;
 use rust_decimal::dec;
+use time::macros::date;
 
-assert!(is_direktvermarktung_mandatory(dec!(150), EegGesetz::Eeg2023)); // >100 kW: mandatory
-assert!(requires_ausschreibung(dec!(1500), ErzeugungsArt::SolarAufdach)); // >1 MWp: tender
+// §21 Abs. 1 Satz 1 Nr. 1 — the ceiling, keyed on the Inbetriebnahmedatum.
+assert_eq!(direktvermarktungspflicht(dec!(150), date!(2024-05-01)), Some(true));
+// A pre-2016 plant is governed by a text outside mako's corpus: unanswered, not "no".
+assert_eq!(direktvermarktungspflicht(dec!(600), date!(2013-05-01)), None);
+
+// §22 Abs. 3 Satz 2 — Solar has two thresholds, keyed on the Segment.
+assert!( requires_ausschreibung(dec!(900), ErzeugungsArt::SolarAufdach,      SolarSegment::Zweites));
+assert!(!requires_ausschreibung(dec!(900), ErzeugungsArt::SolarFreiflaeche, SolarSegment::Erstes));
+// §22 Abs. 5 Satz 2 — Wasserkraft and Geothermie are never tendered, at any size.
+assert!(!requires_ausschreibung(dec!(5000), ErzeugungsArt::Wasserkraft, SolarSegment::Erstes));
 ```
+
+`§21b Abs. 1 Satz 2` (a change takes effect only on the first of a month) and
+`§21c Abs. 1 Satz 1` (the Mitteilung is due before the *preceding* month begins)
+are `validate_wechsel`. There is no „one switch per calendar month" rule — Satz 2
+already makes a second change within one month impossible.
 
 ---
 
@@ -372,13 +391,13 @@ assert!(requires_ausschreibung(dec!(1500), ErzeugungsArt::SolarAufdach)); // >1 
 
 | Variant | Technology | Notes |
 |---|---|---|
-| `SolarAufdach` | Rooftop PV | Higher §48 rates |
-| `SolarFreiflaeche` | Ground-mounted PV | Tender >1 MWp |
-| `SolarAgriPv` | Agri-PV | §51a factor 0.5 |
+| `SolarAufdach` | Rooftop PV (Gebäude/Lärmschutzwand) | §48 Abs. 2 rates; **zweites Segment** (§3 Nr. 41b) → tender > 750 kW |
+| `SolarFreiflaeche` | Ground-mounted PV | §48 Abs. 1/1a; **erstes Segment** (§3 Nr. 41a) → tender > 1 MW |
+| `SolarAgriPv` | Agri-PV | §48 Abs. 1 S. 1 Nr. 5 lit. a, uplift Abs. 1b; erstes Segment — there is **no** 6-MW Agri-PV exemption |
 | `SolarMieterstrom` | §21 Abs. 3 building solar | — |
 | `SolarStecker` | Steckersolargerät, ≤2 kW **and** ≤800 VA inverter | §3 Nr. 43, §8 Abs. 5a, §9, §10a Abs. 2 |
-| `WindOnshore` | Wind onshore | **No statutory AW** — §22 Abs. 2 requires a Zuschlag, §36h derives the value from it |
-| `WindOffshore` | Wind offshore | Always Ausschreibungspflicht |
+| `WindOnshore` | Wind onshore | **No fixed AW** — §46 Abs. 1 computes it from §36h Abs. 1 with the Vorvorjahr auction average; a Zuschlag is required only above 1 MW (§22 Abs. 2 S. 2 Nr. 1) |
+| `WindOffshore` | Wind offshore | Zuschlag and AW come from the **WindSeeG**, to which §22 Abs. 1 refers |
 | `Biomasse` | Biomasse | §42 — 12,67 ct ≤150 kW Bemessungsleistung; above that, tender |
 | `BiomassHolz` | Feste Biomasse | No separate AW; tendered plants meet the §39i Abs. 2 Höchstbemessungsleistung |
 | `Biogas` | Fermentation biogas | §43 Bioabfälle / §44 Gülle where they qualify |
@@ -405,7 +424,7 @@ Anlagenbetreiber, each a figure fixed by statute:
 | Güllevergärung | § 44 Abs. 1 | `22,00` ≤ 75 kW, `19,00` ≤ 150 kW |
 | Geothermie | § 45 Abs. 1 | flat `25,20` |
 | Solar | § 48 | see below (§ 101 Abs. 1 Satz 2) |
-| Wind an Land | — | **no statutory value**: § 22 Abs. 2 requires a Zuschlag, § 36h derives the AW from it |
+| Wind an Land | § 46 Abs. 1 | **no fixed figure**: the AW is § 36h Abs. 1 with the Zuschlagswert replaced by the Vorvorjahr auction average (§ 46 Abs. 2). A Zuschlag is needed only above 1 MW (§ 22 Abs. 2 Satz 2 Nr. 1) |
 
 Every figure is asserted against the statute by `rates::statutory_rate_tests`,
 which walks each ladder tier by tier and pins the two non-tables — § 42 answering
@@ -525,7 +544,7 @@ breakdown entry.
 
 **Explicitly in scope** — tested and **production-oriented**:
 - §21 EEG Einspeisevergütung (all EEG versions 2000–2023)
-- §20 EEG Gleitende Marktprämie + §§22a/28 Ausschreibung
+- §20 EEG Marktprämie + §§22/22a/28 Ausschreibung
 - §21 Abs. 3 Mieterstrom, §50a/b Flexibilitätsprämie, §7 KWKG
 - §51/§51a/§51b Negativpreisregel, §52 sanctions and Abs. 6 netting
 - §53 Einspeisevergütungsabzug, and the AW-level cuts of §53b (Regionalnachweise,
@@ -557,7 +576,8 @@ breakdown entry.
 - `TariffSource::Transitional(Paragraph100Rule)` → `effective_eeg_gesetz()` auto-override
 
 **Intentionally out of scope** (caller's responsibility):
-- §21b monthly switch enforcement — enforced by `einsd` (`validate_switch_to_vergütung`)
+- The §21b/§21c Wechsel *act* — `direktverm::validate_wechsel` decides it here, but
+  `einsd` owns the plant record it decides against and issues the §21c notification
 - §§53b–54 fact lookups — `einsd` reads the triggering facts and passes an
   `AwReductionContext`; the amounts themselves are statutory and live here
 - §55 Pönalen — outside this domain entirely: a bidder↔regelverantwortlicher-ÜNB

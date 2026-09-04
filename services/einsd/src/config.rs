@@ -37,7 +37,7 @@ pub struct EinsdConfig {
     /// whose `foerderendedatum` is within 180 days.  Defaults to 21600 (6 h).
     pub alert_interval_secs: Option<u64>,
 
-    /// URL template for auto-importing §20 Abs. 2 technology-specific Jahresmarktwert.
+    /// URL template for auto-importing Anlage 1 technology-specific Jahresmarktwert.
     ///
     /// When set, `einsd` auto-fetches technology-specific Marktwert values from the
     /// ÜNB publication (netztransparenz.de or a custom aggregator) on the 5th of each
@@ -47,8 +47,11 @@ pub struct EinsdConfig {
     /// Example: `"https://api.netztransparenz.de/eeg/marktwert/{year}/{month}"`
     /// (The `{year}` and `{month}` placeholders are replaced with the billing period.)
     ///
-    /// When absent, operators must import values manually via
-    /// `PUT /api/v1/jahresmarktwert/{year}/{month}/{erzeugungsart}`.
+    /// The feed is the **monthly** series (Anlage 1 Nr. 3); the Jahresmarktwert
+    /// of Nr. 4 lands once a year and is imported by hand.
+    ///
+    /// When absent, operators import every value manually via
+    /// `PUT /api/v1/marktwert/{year}/{art}/{erzeugungsart}`.
     pub jahresmarktwert_url: Option<String>,
 
     /// Interval in seconds between Jahresmarktwert auto-import runs (default: 86400, once/day).

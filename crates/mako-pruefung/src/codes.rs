@@ -4133,6 +4133,795 @@ pub const E_0254_CODES: &[AntwortCode] = &[
 // Sending an `E_0264` code on a 33002 is therefore a non-conformant answer,
 // not merely a mislabelled one.
 
+// ── WiM Teil 1 Kap. 6 / Kap. 3.6.3.8 — die MSB-Rechnung gegenüber NB und LF ───
+//
+// Two Use-Cases on Prüfidentifikator 31009, both distinct from the Preisblatt-B
+// pair the AWH „Änderung der Technik an Lokationen" puts on the same PID:
+// the MSB bills the **NB** for the Messstellenbetrieb mit iMS (Kap. 8.14,
+// `E_0566`/`E_0567`/`E_0568`/`E_0569`) and the **LF** for the
+// Messstellenbetrieb (Kap. 8.13, `E_0210`/`E_0211`/`E_0243`).
+//
+// The catalogue is carried; the **walks are not**, and these are not the
+// ESA/Preisblatt-B walk under new names: `E_0210` has 37 Prüfschritte to
+// `E_0264`'s 26, and of the twenty numbers they share only 10 and 20 ask the
+// same question. Running one family's walk under another's tree name answers at
+// a Prüfschritt that asks something else — non-conformant, not approximate.
+//
+// mako is the **MSB** on this PID, so these are the codes it *receives*:
+// carrying them lets an inbound REMADV resolve to its Bedeutung and Cluster
+// ([`lookup`]) rather than being stored as an opaque string.
+// [`crate::rechnung::familie_fuer`] returns `None` for both, which is what says
+// no walk decides them.
+
+/// `E_0210` — Rechnung Messstellenbetrieb gegenüber dem **LF** prüfen
+/// (EBD 4.3 Kap. 8.13.1). Prüfende Rolle: LF.
+pub const EBD_MSB_RECHNUNG_LF: &str = "E_0210";
+const E_0210: Option<&'static str> = Some(EBD_MSB_RECHNUNG_LF);
+
+/// `E_0243` — Storno verarbeiten, LF-Seite (EBD 4.3 Kap. 8.13.3).
+///
+/// Its Codeliste prints no Cluster; every code is an Ablehnung by position in
+/// the tree. There is deliberately no `E_0211`: Kap. 8.13.2 states
+/// „Derzeit ist für diese Entscheidung kein Entscheidungsbaum notwendig, da
+/// keine Antwort gegeben wird" — the LF sends nothing back on a
+/// Nicht-Zahlungsavis, which is why this family cannot be expressed as a
+/// [`crate::rechnung::RechnungsFamilie`], whose `nicht_zahlungsavis` field has
+/// no value to take.
+pub const EBD_MSB_STORNO_LF: &str = "E_0243";
+const E_0243: Option<&'static str> = Some(EBD_MSB_STORNO_LF);
+
+/// `E_0566` — Rechnung Messstellenbetrieb mit iMS gegenüber dem **NB** prüfen
+/// (EBD 4.3 Kap. 8.14.1). Prüfende Rolle: NB.
+pub const EBD_MSB_RECHNUNG_NB: &str = "E_0566";
+const E_0566: Option<&'static str> = Some(EBD_MSB_RECHNUNG_NB);
+
+/// `E_0567` — Nichtzahlungsavis prüfen, NB-Seite (EBD 4.3 Kap. 8.14.2).
+///
+/// One code. „ja" is not a code but an instruction: „Versand der Nachricht
+/// ‚Storno der ursprünglichen Rechnung'".
+pub const EBD_MSB_NICHT_ZAHLUNGSAVIS_NB: &str = "E_0567";
+const E_0567: Option<&'static str> = Some(EBD_MSB_NICHT_ZAHLUNGSAVIS_NB);
+
+/// `E_0568` — erneute Prüfung nach einem COMDIS 29001 (EBD 4.3 Kap. 8.14.3).
+///
+/// Prüfschritt **1** is the second round's own question („Konnte der MSB alle
+/// Einwände entkräften?") and answers `AC1`, as the Preisblatt-B families do —
+/// not the ESA family's `A25`.
+pub const EBD_MSB_RECHNUNG_ERNEUT_NB: &str = "E_0568";
+const E_0568: Option<&'static str> = Some(EBD_MSB_RECHNUNG_ERNEUT_NB);
+
+/// `E_0569` — Prüfen, ob Antwort auf Stornierung erforderlich, NB-Seite
+/// (EBD 4.3 Kap. 8.14.4). Its Codeliste prints no Cluster.
+pub const EBD_MSB_STORNO_NB: &str = "E_0569";
+const E_0569: Option<&'static str> = Some(EBD_MSB_STORNO_NB);
+
+// ── E_0210 (31 codes) ──
+pub const E_0210_CODES: &[AntwortCode] = &[
+    // Kopfebene
+    code!(
+        "A01",
+        E_0210,
+        Ablehnung,
+        "Rechnung entspricht nicht §14 Abs. 4 UStG (Prüfschritt 10)",
+        bemerkung
+    ),
+    code!(
+        "A02",
+        E_0210,
+        Ablehnung,
+        "Rechnungsdatum liegt in der Zukunft (Prüfschritt 20)"
+    ),
+    code!(
+        "A03",
+        E_0210,
+        Ablehnung,
+        "Das Rechnungsdatum liegt vor dem Ende des Abrechnungszeitraumes (Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0210,
+        Ablehnung,
+        "Der LF lehnt die Zahlung des Messstellenbetriebs ab. Der LF ist der Marktlokation nicht einen Tag des Abrechnungszeitraumes zugeordnet (Prüfschritt 40)"
+    ),
+    code!(
+        "A05",
+        E_0210,
+        Ablehnung,
+        "Der LF lehnt die Zahlung des Messstellenbetriebs ab. Eine Ablehnung der Zahlung wird durch den LF begründet (Prüfschritt 50)",
+        bemerkung
+    ),
+    code!(
+        "A06",
+        E_0210,
+        Ablehnung,
+        "Rechnungsnummer wurde bereits verwendet (Prüfschritt 60)"
+    ),
+    code!(
+        "A07",
+        E_0210,
+        Ablehnung,
+        "Die Rechnung enthält einen bereits abgerechnetes Zeitintervall (Prüfschritt 70)"
+    ),
+    code!(
+        "A08",
+        E_0210,
+        Ablehnung,
+        "Bei der Abrechnung des MSB kann es nicht zu einer Rückerstattung kommen (Prüfschritt 80)"
+    ),
+    code!(
+        "A09",
+        E_0210,
+        Ablehnung,
+        "Das Zahlungsziel ist unterschritten (Prüfschritt 90)"
+    ),
+    code!(
+        "A10",
+        E_0210,
+        Ablehnung,
+        "Dem Lieferanten liegt kein gültiges Preisblatt MSB-Leistungen vor (Prüfschritt 100)"
+    ),
+    code!(
+        "A11",
+        E_0210,
+        Ablehnung,
+        "Die Abrechnung des Messstellenbetriebs ist nicht mit dem Lieferanten für diese Marktlokation vereinbart (Prüfschritt 110)"
+    ),
+    code!(
+        "A12",
+        E_0210,
+        Ablehnung,
+        "Die Referenz erfolgt nicht auf das jüngste Angebot zu diesem Zeitpunkt (Prüfschritt 120)"
+    ),
+    code!(
+        "A13",
+        E_0210,
+        Ablehnung,
+        "Die Abrechnung des Messstellenbetriebs ist nicht mit dem Lieferanten für diese Marktlokation für den abgerechneten Zeitraum vereinbart (Prüfschritt 130)"
+    ),
+    code!(
+        "A26",
+        E_0210,
+        Ablehnung,
+        "Es dürfen nicht mehrere bestätigte Angebote in einer Rechnung abgerechnet werden (Prüfschritt 135)"
+    ),
+    code!(
+        "A90",
+        E_0210,
+        Ablehnung,
+        "Sonstiger Fehler auf Kopfebene (Prüfschritt 140)",
+        bemerkung
+    ),
+    // Positionsebene
+    code!(
+        "A30",
+        E_0210,
+        Ablehnung,
+        "Die Artikelnummer bzw. Artikel-ID der Rechnungsposition ist nicht in dem bestätigten Angebot enthalten (Prüfschritt 301)"
+    ),
+    code!(
+        "A31",
+        E_0210,
+        Ablehnung,
+        "Die Artikelnummer bzw. Artikel-ID der Rechnungsposition ist nicht in dem bestätigten Angebot für den gesamten Positionszeitraum enthalten (Prüfschritt 302)",
+        bemerkung
+    ),
+    code!(
+        "A27",
+        E_0210,
+        Ablehnung,
+        "Der Zeitraum der Rechnungsposition ist nicht vollständig im Gültigkeitszeitraum eines oder mehrerer Preisblätter enthalten (Prüfschritt 303)"
+    ),
+    code!(
+        "A28",
+        E_0210,
+        Ablehnung,
+        "Der Preis in der Rechnungsposition entspricht nicht dem Preis aus dem Preisblatt bzw. den Preisblättern des MSB (Prüfschritt 304)"
+    ),
+    code!(
+        "A29",
+        E_0210,
+        Ablehnung,
+        "Der Preis aus der Rechnungsposition entspricht nicht dem vereinbarten Preis aus dem individuellen Angebot (Prüfschritt 309)"
+    ),
+    code!(
+        "A15",
+        E_0210,
+        Ablehnung,
+        "Der gültige Umsatzsteuersatz für die Rechnungsposition für diesen Zeitraum wurde nicht korrekt angegeben (Prüfschritt 310)"
+    ),
+    code!(
+        "A17",
+        E_0210,
+        Ablehnung,
+        "Das Enddatum der Rechnungsposition liegt nach dem Enddatum des Abrechnungszeitraums (Prüfschritt 330)"
+    ),
+    code!(
+        "A18",
+        E_0210,
+        Ablehnung,
+        "Das Beginndatum der Rechnungsposition liegt vor dem Beginndatum des Abrechnungszeitraums (Prüfschritt 340)"
+    ),
+    code!(
+        "A25",
+        E_0210,
+        Ablehnung,
+        "Unerwarteter Abrechnungszeitraum wird abgerechnet (Prüfschritt 345)",
+        bemerkung
+    ),
+    code!(
+        "A20",
+        E_0210,
+        Ablehnung,
+        "Rechenfehler liegt vor (Prüfschritt 360)"
+    ),
+    code!(
+        "A99",
+        E_0210,
+        Ablehnung,
+        "Sonstiger Fehler auf Positionsebene (Prüfschritt 370)",
+        bemerkung
+    ),
+    // Summenebene
+    code!(
+        "A21",
+        E_0210,
+        Ablehnung,
+        "Erwartete Position nicht vorhanden (Prüfschritt 500)"
+    ),
+    code!(
+        "A22",
+        E_0210,
+        Ablehnung,
+        "Genannte Besteuerungsgrundlage passt nicht zu der Summe der Einzelpositionen des Steuersatzes (Prüfschritt 510)",
+        bemerkung
+    ),
+    code!(
+        "A23",
+        E_0210,
+        Ablehnung,
+        "Summe aller Rechnungspositionen (Netto) dieser Rechnung, denen dieser Steuersatz zugeordnet ist, multipliziert mit diesem Steuersatz entspricht nicht der Angabe des Steuerbetrages für diesen Steuersatz (Prüfschritt 520)"
+    ),
+    code!(
+        "A24",
+        E_0210,
+        Ablehnung,
+        "Rechnungsbetrag (Besteuerungsgrundlage inklusive Steuerbetrag) der Summe ist nicht korrekt (Prüfschritt 540)"
+    ),
+    code!(
+        "A96",
+        E_0210,
+        Ablehnung,
+        "Sonstiges (Prüfschritt 550)",
+        bemerkung
+    ),
+];
+
+// ── E_0243 (8 codes) ──
+pub const E_0243_CODES: &[AntwortCode] = &[
+    // Kopfebene
+    code!(
+        "A01",
+        E_0243,
+        Ablehnung,
+        "Die zu stornierende Rechnung ist nicht vorhanden (Prüfschritt 10)"
+    ),
+    code!(
+        "A06",
+        E_0243,
+        Ablehnung,
+        "Rechnungsnummer wurde bereits verwendet (Prüfschritt 15)"
+    ),
+    code!(
+        "A07",
+        E_0243,
+        Ablehnung,
+        "Rechnung entspricht nicht §14 Abs. 4 UStG (Prüfschritt 17)"
+    ),
+    code!(
+        "A02",
+        E_0243,
+        Ablehnung,
+        "Die zu stornierende Rechnung wurde bereits storniert (Prüfschritt 20)"
+    ),
+    code!(
+        "A03",
+        E_0243,
+        Ablehnung,
+        "Der Rechnungstyp der Stornorechnung ist nicht identisch mit dem Rechnungstyp der ursprünglichen Rechnung (Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0243,
+        Ablehnung,
+        "Der Abrechnungszeitraum bzw. das Ausführungsdatum der Stornorechnung ist nicht identisch mit dem Abrechnungszeitraum bzw. dem Ausführungsdatum der ursprünglichen Rechnung (Prüfschritt 40)"
+    ),
+    code!(
+        "A05",
+        E_0243,
+        Ablehnung,
+        "Mindestens ein Betrag der Stornorechnung passt nicht zu dem Betrag der ursprünglichen Rechnung (Prüfschritt 50)"
+    ),
+    code!(
+        "A99",
+        E_0243,
+        Ablehnung,
+        "Ablehnung Sonstiges (Prüfschritt 60)",
+        bemerkung
+    ),
+];
+
+// ── E_0566 (31 codes) ──
+pub const E_0566_CODES: &[AntwortCode] = &[
+    // Kopfebene
+    code!(
+        "A01",
+        E_0566,
+        Ablehnung,
+        "Rechnung entspricht nicht §14 Abs. 4 UStG (Prüfschritt 10)",
+        bemerkung
+    ),
+    code!(
+        "A02",
+        E_0566,
+        Ablehnung,
+        "Rechnungsdatum liegt in der Zukunft (Prüfschritt 20)"
+    ),
+    code!(
+        "A03",
+        E_0566,
+        Ablehnung,
+        "Das Rechnungsdatum liegt vor dem Ende des Abrechnungszeitraumes (Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0566,
+        Ablehnung,
+        "Der NB lehnt die Zahlung des Messstellenbetriebs ab. Der NB ist der Marktlokation nicht einen Tag des Abrechnungszeitraumes zugeordnet (Prüfschritt 40)"
+    ),
+    code!(
+        "A05",
+        E_0566,
+        Ablehnung,
+        "Der NB lehnt die Zahlung des Messstellenbetriebs ab. Eine Ablehnung der Zahlung wird durch den NB begründet (Prüfschritt 50)",
+        bemerkung
+    ),
+    code!(
+        "A06",
+        E_0566,
+        Ablehnung,
+        "Rechnungsnummer wurde bereits verwendet (Prüfschritt 60)"
+    ),
+    code!(
+        "A07",
+        E_0566,
+        Ablehnung,
+        "Die Rechnung enthält einen bereits abgerechnetes Zeitintervall (Prüfschritt 70)"
+    ),
+    code!(
+        "AE6",
+        E_0566,
+        Ablehnung,
+        "Der Beginn des Abrechnungszeitraums ist < 01.01.2024 00:00 Uhr (Prüfschritt 75)"
+    ),
+    code!(
+        "AE8",
+        E_0566,
+        Ablehnung,
+        "Im gesamten Abrechnungszeitraum ist an keiner Messlokation der Marktlokation ein iMS eingebaut (Prüfschritt 77)"
+    ),
+    code!(
+        "A08",
+        E_0566,
+        Ablehnung,
+        "Bei der Abrechnung des MSB kann es nicht zu einer Rückerstattung kommen (Prüfschritt 80)"
+    ),
+    code!(
+        "A09",
+        E_0566,
+        Ablehnung,
+        "Das Zahlungsziel ist unterschritten (Prüfschritt 90)"
+    ),
+    code!(
+        "A10",
+        E_0566,
+        Ablehnung,
+        "Dem NB liegt kein gültiges Preisblatt MSB-Leistungen vor (Prüfschritt 100)"
+    ),
+    code!(
+        "AE9",
+        E_0566,
+        Ablehnung,
+        "Der MSB ist der Marktlokation nicht einen Tag des Abrechnungszeitraumes zugeordnet (Prüfschritt 115)"
+    ),
+    code!(
+        "AF0",
+        E_0566,
+        Ablehnung,
+        "Der MSB ist im gesamten Abrechnungszeitraum nicht der Marktlokation zugeordnet (Prüfschritt 125)"
+    ),
+    code!(
+        "A13",
+        E_0566,
+        Ablehnung,
+        "Die Abrechnung des Messstellenbetriebs ist nicht mit dem NB für diese Marktlokation für den abgerechneten Zeitraum vorgegeben (Prüfschritt 130)"
+    ),
+    code!(
+        "A90",
+        E_0566,
+        Ablehnung,
+        "Sonstiger Fehler auf Kopfebene (Prüfschritt 140)",
+        bemerkung
+    ),
+    // Positionsebene
+    code!(
+        "AF1",
+        E_0566,
+        Ablehnung,
+        "Die in der angegebenen Position verwendete Artikel-ID hätte nicht für den gesamten Positionszeitraum aufgeführt werden dürfen (Prüfschritt 301)",
+        bemerkung
+    ),
+    code!(
+        "AF2",
+        E_0566,
+        Ablehnung,
+        "Diese Artikel-ID ist für diesen Rechnungstyp in dem besagten Positionszeitraum nicht zulässig (Prüfschritt 302)"
+    ),
+    code!(
+        "A27",
+        E_0566,
+        Ablehnung,
+        "Der Zeitraum der Rechnungsposition ist nicht vollständig im Gültigkeitszeitraum eines oder mehrerer Preisblätter enthalten (Prüfschritt 303)"
+    ),
+    code!(
+        "A28",
+        E_0566,
+        Ablehnung,
+        "Der Preis in der Rechnungsposition entspricht nicht dem Preis aus dem Preisblatt bzw. den Preisblättern des MSB (Prüfschritt 304)"
+    ),
+    code!(
+        "A15",
+        E_0566,
+        Ablehnung,
+        "Der gültige Umsatzsteuersatz für die Rechnungsposition für diesen Zeitraum wurde nicht korrekt angegeben (Prüfschritt 310)"
+    ),
+    code!(
+        "A17",
+        E_0566,
+        Ablehnung,
+        "Das Enddatum der Rechnungsposition liegt nach dem Enddatum des Abrechnungszeitraums (Prüfschritt 330)"
+    ),
+    code!(
+        "A18",
+        E_0566,
+        Ablehnung,
+        "Das Beginndatum der Rechnungsposition liegt vor dem Beginndatum des Abrechnungszeitraums (Prüfschritt 340)"
+    ),
+    code!(
+        "A25",
+        E_0566,
+        Ablehnung,
+        "Unerwarteter Abrechnungszeitraum wird abgerechnet (Prüfschritt 345)",
+        bemerkung
+    ),
+    code!(
+        "A20",
+        E_0566,
+        Ablehnung,
+        "Rechenfehler liegt vor (Prüfschritt 360)"
+    ),
+    code!(
+        "A99",
+        E_0566,
+        Ablehnung,
+        "Sonstiger Fehler auf Positionsebene (Prüfschritt 370)",
+        bemerkung
+    ),
+    // Summenebene
+    code!(
+        "AE7",
+        E_0566,
+        Ablehnung,
+        "Erwartete Position nicht vorhanden (Prüfschritt 501)",
+        bemerkung
+    ),
+    code!(
+        "A22",
+        E_0566,
+        Ablehnung,
+        "Genannte Besteuerungsgrundlage passt nicht zu der Summe der Einzelpositionen des Steuersatzes (Prüfschritt 510)"
+    ),
+    code!(
+        "A23",
+        E_0566,
+        Ablehnung,
+        "Summe aller Rechnungspositionen (Netto) dieser Rechnung, denen dieser Steuersatz zugeordnet ist, multipliziert mit diesem Steuersatz entspricht nicht der Angabe des Steuerbetrages für diesen Steuersatz (Prüfschritt 520)",
+        bemerkung
+    ),
+    code!(
+        "A24",
+        E_0566,
+        Ablehnung,
+        "Rechnungsbetrag (Besteuerungsgrundlage inklusive Steuerbetrag) der Summe ist nicht korrekt (Prüfschritt 540)"
+    ),
+    code!("A96", E_0566, Ablehnung, "Sonstiges (Prüfschritt 550)"),
+];
+
+// ── E_0567 (1 codes) ──
+pub const E_0567_CODES: &[AntwortCode] = &[
+    // Kopfebene
+    code!(
+        "A99",
+        E_0567,
+        Ablehnung,
+        "Die Rechnung wird als korrekt angesehen (Prüfschritt 10)",
+        bemerkung
+    ),
+];
+
+// ── E_0568 (32 codes) ──
+pub const E_0568_CODES: &[AntwortCode] = &[
+    // Kopfebene
+    code!(
+        "AC1",
+        E_0568,
+        Ablehnung,
+        "Der Rechnungsempfänger lehnt die Zahlung der Rechnung weiterhin ab, da der MSB nicht alle Einwände des Rechnungsempfängers entkräften konnte (Prüfschritt 1)",
+        bemerkung
+    ),
+    code!(
+        "A01",
+        E_0568,
+        Ablehnung,
+        "Rechnung entspricht nicht §14 Abs. 4 UStG (Prüfschritt 10)",
+        bemerkung
+    ),
+    code!(
+        "A02",
+        E_0568,
+        Ablehnung,
+        "Rechnungsdatum liegt in der Zukunft (Prüfschritt 20)"
+    ),
+    code!(
+        "A03",
+        E_0568,
+        Ablehnung,
+        "Das Rechnungsdatum liegt vor dem Ende des Abrechnungszeitraumes (Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0568,
+        Ablehnung,
+        "Der NB lehnt die Zahlung des Messstellenbetriebs ab. Der NB ist der Marktlokation nicht einen Tag des Abrechnungszeitraumes zugeordnet (Prüfschritt 40)"
+    ),
+    code!(
+        "A05",
+        E_0568,
+        Ablehnung,
+        "Der NB lehnt die Zahlung des Messstellenbetriebs ab. Eine Ablehnung der Zahlung wird durch den NB begründet (Prüfschritt 50)",
+        bemerkung
+    ),
+    code!(
+        "A06",
+        E_0568,
+        Ablehnung,
+        "Rechnungsnummer wurde bereits verwendet (Prüfschritt 60)"
+    ),
+    code!(
+        "A07",
+        E_0568,
+        Ablehnung,
+        "Die Rechnung enthält einen bereits abgerechnetes Zeitintervall (Prüfschritt 70)"
+    ),
+    code!(
+        "AE6",
+        E_0568,
+        Ablehnung,
+        "Der Beginn des Abrechnungszeitraums ist < 01.01.2024 00:00 Uhr (Prüfschritt 75)"
+    ),
+    code!(
+        "AE8",
+        E_0568,
+        Ablehnung,
+        "Im gesamten Abrechnungszeitraum ist an keiner Messlokation der Marktlokation ein iMS eingebaut (Prüfschritt 77)"
+    ),
+    code!(
+        "A08",
+        E_0568,
+        Ablehnung,
+        "Bei der Abrechnung des MSB kann es nicht zu einer Rückerstattung kommen (Prüfschritt 80)"
+    ),
+    code!(
+        "A09",
+        E_0568,
+        Ablehnung,
+        "Das Zahlungsziel ist unterschritten (Prüfschritt 90)"
+    ),
+    code!(
+        "A10",
+        E_0568,
+        Ablehnung,
+        "Dem NB liegt kein gültiges Preisblatt MSB-Leistungen vor (Prüfschritt 100)"
+    ),
+    code!(
+        "AE9",
+        E_0568,
+        Ablehnung,
+        "Der MSB ist der Marktlokation nicht einen Tag des Abrechnungszeitraumes zugeordnet (Prüfschritt 115)"
+    ),
+    code!(
+        "AF0",
+        E_0568,
+        Ablehnung,
+        "Der MSB ist im gesamten Abrechnungszeitraum nicht der Marktlokation zugeordnet (Prüfschritt 125)"
+    ),
+    code!(
+        "A13",
+        E_0568,
+        Ablehnung,
+        "Die Abrechnung des Messstellenbetriebs ist nicht mit dem NB für diese Marktlokation für den abgerechneten Zeitraum vorgegeben (Prüfschritt 130)"
+    ),
+    code!(
+        "A90",
+        E_0568,
+        Ablehnung,
+        "Sonstiger Fehler auf Kopfebene (Prüfschritt 140)",
+        bemerkung
+    ),
+    // Positionsebene
+    code!(
+        "AF1",
+        E_0568,
+        Ablehnung,
+        "Die in der angegebenen Position verwendete Artikel-ID hätte nicht für den gesamten Positionszeitraum aufgeführt werden dürfen (Prüfschritt 301)",
+        bemerkung
+    ),
+    code!(
+        "AF2",
+        E_0568,
+        Ablehnung,
+        "Diese Artikel-ID ist für diesen Rechnungstyp in dem besagten Positionszeitraum nicht zulässig (Prüfschritt 302)"
+    ),
+    code!(
+        "A27",
+        E_0568,
+        Ablehnung,
+        "Der Zeitraum der Rechnungsposition ist nicht vollständig im Gültigkeitszeitraum eines oder mehrerer Preisblätter enthalten (Prüfschritt 303)"
+    ),
+    code!(
+        "A28",
+        E_0568,
+        Ablehnung,
+        "Der Preis in der Rechnungsposition entspricht nicht dem Preis aus dem Preisblatt bzw. den Preisblättern des MSB (Prüfschritt 304)"
+    ),
+    code!(
+        "A15",
+        E_0568,
+        Ablehnung,
+        "Der gültige Umsatzsteuersatz für die Rechnungsposition für diesen Zeitraum wurde nicht korrekt angegeben (Prüfschritt 310)"
+    ),
+    code!(
+        "A17",
+        E_0568,
+        Ablehnung,
+        "Das Enddatum der Rechnungsposition liegt nach dem Enddatum des Abrechnungszeitraums (Prüfschritt 330)"
+    ),
+    code!(
+        "A18",
+        E_0568,
+        Ablehnung,
+        "Das Beginndatum der Rechnungsposition liegt vor dem Beginndatum des Abrechnungszeitraums (Prüfschritt 340)"
+    ),
+    code!(
+        "A25",
+        E_0568,
+        Ablehnung,
+        "Unerwarteter Abrechnungszeitraum wird abgerechnet (Prüfschritt 345)",
+        bemerkung
+    ),
+    code!(
+        "A20",
+        E_0568,
+        Ablehnung,
+        "Rechenfehler liegt vor (Prüfschritt 360)"
+    ),
+    code!(
+        "A99",
+        E_0568,
+        Ablehnung,
+        "Sonstiger Fehler auf Positionsebene (Prüfschritt 370)",
+        bemerkung
+    ),
+    // Summenebene
+    code!(
+        "AE7",
+        E_0568,
+        Ablehnung,
+        "Erwartete Position nicht vorhanden (Prüfschritt 501)",
+        bemerkung
+    ),
+    code!(
+        "A22",
+        E_0568,
+        Ablehnung,
+        "Genannte Besteuerungsgrundlage passt nicht zu der Summe der Einzelpositionen des Steuersatzes (Prüfschritt 510)",
+        bemerkung
+    ),
+    code!(
+        "A23",
+        E_0568,
+        Ablehnung,
+        "Summe aller Rechnungspositionen (Netto) dieser Rechnung, denen dieser Steuersatz zugeordnet ist, multipliziert mit diesem Steuersatz entspricht nicht der Angabe des Steuerbetrages für diesen Steuersatz (Prüfschritt 520)",
+        bemerkung
+    ),
+    code!(
+        "A24",
+        E_0568,
+        Ablehnung,
+        "Rechnungsbetrag (Besteuerungsgrundlage inklusive Steuerbetrag) der Summe ist nicht korrekt (Prüfschritt 540)"
+    ),
+    code!(
+        "A96",
+        E_0568,
+        Ablehnung,
+        "Sonstiges (Prüfschritt 550)",
+        bemerkung
+    ),
+];
+
+// ── E_0569 (8 codes) ──
+pub const E_0569_CODES: &[AntwortCode] = &[
+    // Kopfebene
+    code!(
+        "A01",
+        E_0569,
+        Ablehnung,
+        "Die zu stornierende Rechnung ist nicht vorhanden (Prüfschritt 10)"
+    ),
+    code!(
+        "A06",
+        E_0569,
+        Ablehnung,
+        "Rechnungsnummer wurde bereits verwendet (Prüfschritt 15)"
+    ),
+    code!(
+        "A07",
+        E_0569,
+        Ablehnung,
+        "Rechnung entspricht nicht §14 Abs. 4 UStG (Prüfschritt 17)"
+    ),
+    code!(
+        "A02",
+        E_0569,
+        Ablehnung,
+        "Die zu stornierende Rechnung wurde bereits storniert (Prüfschritt 20)"
+    ),
+    code!(
+        "A03",
+        E_0569,
+        Ablehnung,
+        "Der Rechnungstyp der Stornorechnung ist nicht identisch mit dem Rechnungstyp der ursprünglichen Rechnung (Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0569,
+        Ablehnung,
+        "Der Abrechnungszeitraum bzw. das Ausführungsdatum der Stornorechnung ist nicht identisch mit dem Abrechnungszeitraum bzw. dem Ausführungsdatum der ursprünglichen Rechnung (Prüfschritt 40)"
+    ),
+    code!(
+        "A05",
+        E_0569,
+        Ablehnung,
+        "Mindestens ein Betrag der Stornorechnung passt nicht zu dem Betrag der ursprünglichen Rechnung (Prüfschritt 50)"
+    ),
+    code!(
+        "A99",
+        E_0569,
+        Ablehnung,
+        "Ablehnung Sonstiges (Prüfschritt 60)",
+        bemerkung
+    ),
+];
+
 /// `E_0264` — Rechnung einer für den ESA erbrachten Leistung prüfen
 /// (INVOIC 31009 → REMADV 33001/33003/33004).
 pub const EBD_ESA_RECHNUNG: &str = "E_0264";
@@ -4629,6 +5418,15 @@ pub const CODELISTEN: &[(&str, &[AntwortCode])] = &[
     (EBD_ESA_NICHT_ZAHLUNGSAVIS, E_0265_CODES),
     (EBD_ESA_RECHNUNG_ERNEUT, E_0266_CODES),
     (EBD_ESA_STORNO_RECHNUNG, E_0267_CODES),
+    // WiM Teil 1 — die MSB-Rechnung gegenüber dem NB (Kap. 8.14) und dem LF
+    // (Kap. 8.13). Catalogued so an inbound REMADV resolves; no walk produces
+    // them (see the section comment above).
+    (EBD_MSB_RECHNUNG_LF, E_0210_CODES),
+    (EBD_MSB_STORNO_LF, E_0243_CODES),
+    (EBD_MSB_RECHNUNG_NB, E_0566_CODES),
+    (EBD_MSB_NICHT_ZAHLUNGSAVIS_NB, E_0567_CODES),
+    (EBD_MSB_RECHNUNG_ERNEUT_NB, E_0568_CODES),
+    (EBD_MSB_STORNO_NB, E_0569_CODES),
 ];
 
 /// The trees that publish **Ablehnungscodes only**, each paired with the tree
@@ -4783,6 +5581,38 @@ pub const ABLEHNUNG_ONLY_TREES: &[(&str, &str)] = &[
          which carries no AJT at all (REMADV AHB 1.0a §3.1.1)",
     ),
     (
+        EBD_MSB_RECHNUNG_LF,
+        "REMADV: the Zustimmung at Prüfschritt 560 is the Zahlungsavis 33001, \
+         which carries no AJT at all (REMADV AHB 1.0a §3.1.1)",
+    ),
+    (
+        EBD_MSB_RECHNUNG_NB,
+        "REMADV: the Zustimmung at Prüfschritt 560 is the Zahlungsavis 33001, \
+         which carries no AJT at all (REMADV AHB 1.0a §3.1.1)",
+    ),
+    (
+        EBD_MSB_RECHNUNG_ERNEUT_NB,
+        "REMADV: the Zustimmung at Prüfschritt 560 is the Zahlungsavis 33001, \
+         which carries no AJT at all (REMADV AHB 1.0a §3.1.1)",
+    ),
+    (
+        EBD_MSB_NICHT_ZAHLUNGSAVIS_NB,
+        "INVOIC: „ja\u{201c} at Prüfschritt 10 publishes no code — the MSB sends \
+         the Storno der ursprünglichen Rechnung instead of an answer",
+    ),
+    (
+        EBD_MSB_STORNO_LF,
+        "REMADV: the Zustimmung at Prüfschritt 70 is the Zahlungsavis 33001, \
+         which carries no AJT; Prüfschritte 70/80 also decide whether any \
+         answer is due at all",
+    ),
+    (
+        EBD_MSB_STORNO_NB,
+        "REMADV: the Zustimmung at Prüfschritt 70 is the Zahlungsavis 33001, \
+         which carries no AJT; Prüfschritte 70/80 also decide whether any \
+         answer is due at all",
+    ),
+    (
         EBD_ESA_NICHT_ZAHLUNGSAVIS,
         "COMDIS: the positive exit sends the Stornorechnung 31004, not an \
          answer — only the refusal of the ESA's Ablehnung carries a code",
@@ -4823,6 +5653,12 @@ pub struct RechnungspruefungTrees {
     /// not publish, which is a non-conformant answer rather than an
     /// approximate one — `A70` is `E_0406` Prüfschritt 900 and means nothing
     /// in `E_0210`.
+    ///
+    /// It says the **codes** are here, not that a walk produces them. Carrying
+    /// a Codeliste lets an inbound answer be understood; deciding one needs the
+    /// Prüfschritte, and [`crate::rechnung::familie_fuer`] is where that is
+    /// reported. `every_quartet_states_whether_its_codes_are_carried` derives
+    /// this flag from [`CODELISTEN`] so it cannot drift from the catalogue.
     pub codes_verfuegbar: bool,
 }
 
@@ -4915,11 +5751,11 @@ pub const fn rechnungspruefung(
         // Rechnung Messstellenbetrieb mit iMS gegenüber dem NB (WiM Teil 1 Kap. 6).
         (31_009, R::Netzbetreiber, MsbRechnungsgegenstand::Messstellenbetrieb) => {
             Some(RechnungspruefungTrees {
-                rechnung: "E_0566",
-                nicht_zahlungsavis: "E_0567",
-                erneut: Some("E_0568"),
-                storno: "E_0569",
-                codes_verfuegbar: false,
+                rechnung: EBD_MSB_RECHNUNG_NB,
+                nicht_zahlungsavis: EBD_MSB_NICHT_ZAHLUNGSAVIS_NB,
+                erneut: Some(EBD_MSB_RECHNUNG_ERNEUT_NB),
+                storno: EBD_MSB_STORNO_NB,
+                codes_verfuegbar: true,
             })
         }
         // Abrechnung Leistungen des Preisblatts B zwischen MSB und NB
@@ -4934,13 +5770,18 @@ pub const fn rechnungspruefung(
             })
         }
         // Abrechnung Messstellenbetrieb gegenüber dem LF (WiM Teil 1 Kap. 3.6.3.8).
+        //
+        // `E_0211` is a heading with no tree under it: Kap. 8.13.2 states
+        // „Derzeit ist für diese Entscheidung kein Entscheidungsbaum notwendig,
+        // da keine Antwort gegeben wird". It is named because the quartet has
+        // that slot, not because anything is answered from it.
         (31_009, R::LieferantOderMsb, MsbRechnungsgegenstand::Messstellenbetrieb) => {
             Some(RechnungspruefungTrees {
-                rechnung: "E_0210",
+                rechnung: EBD_MSB_RECHNUNG_LF,
                 nicht_zahlungsavis: "E_0211",
                 erneut: None,
-                storno: "E_0243",
-                codes_verfuegbar: false,
+                storno: EBD_MSB_STORNO_LF,
+                codes_verfuegbar: true,
             })
         }
         // Abrechnung Leistungen des Preisblatts B zwischen MSB und LF
@@ -4996,6 +5837,44 @@ pub fn lookup(ebd: &str, code: &str) -> Option<&'static AntwortCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `codes_verfuegbar` must be derived from the catalogue, not asserted
+    /// beside it.
+    ///
+    /// It exists so a caller does not answer under a tree whose alphabet mako
+    /// does not carry. A hand-set `false` beside a catalogue that *does* carry
+    /// the tree costs a capability silently; a hand-set `true` beside one that
+    /// does not is the non-conformant answer the field was added to prevent.
+    /// Neither is possible while this holds.
+    #[test]
+    fn every_quartet_states_whether_its_codes_are_carried() {
+        use mako_fristen::vorlauf::RechnungEmpfaenger as R;
+        let carried = |tree: &str| {
+            CODELISTEN
+                .iter()
+                .any(|(t, codes)| *t == tree && !codes.is_empty())
+        };
+
+        for pid in [31_001_u32, 31_002, 31_003, 31_005, 31_006, 31_009] {
+            for empfaenger in [R::Esa, R::Netzbetreiber, R::LieferantOderMsb] {
+                for gegenstand in [
+                    MsbRechnungsgegenstand::Messstellenbetrieb,
+                    MsbRechnungsgegenstand::PreisblattB,
+                ] {
+                    let Some(trees) = rechnungspruefung(pid, empfaenger, gegenstand) else {
+                        continue;
+                    };
+                    assert_eq!(
+                        trees.codes_verfuegbar,
+                        carried(trees.rechnung),
+                        "{pid}/{empfaenger:?}/{gegenstand:?}: {} is {}carried",
+                        trees.rechnung,
+                        if carried(trees.rechnung) { "" } else { "not " }
+                    );
+                }
+            }
+        }
+    }
 
     /// Every code the UTILMD AHB makes `FTX` Pflicht for must say so here.
     ///

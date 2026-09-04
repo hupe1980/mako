@@ -44,7 +44,7 @@ fn receive_alocat(pruefidentifikator: u32, gas_day: &str) -> AllocationCommand {
     }
 }
 
-/// Same as [`receive_alocat`] but with an explicit KoV §6.4 version.
+/// Same as [`receive_alocat`] but with an explicit §47 Ziffer 1 KoV XV version.
 fn receive_alocat_versioned(
     pruefidentifikator: u32,
     gas_day: &str,
@@ -166,7 +166,7 @@ async fn enb_an_nb_alocat_received() {
 }
 
 /// A second ALOCAT for the same gas day is a **correction**, not a duplicate:
-/// KoV §6.4 admits corrections until the binding final allocation.
+/// §47 Ziffer 1 KoV XV admits corrections until the binding final allocation.
 #[tokio::test]
 async fn a_correction_supersedes_the_initial_allocation() {
     let proc = make_process();
@@ -180,7 +180,7 @@ async fn a_correction_supersedes_the_initial_allocation() {
         AllocationVersion::Correction(1),
     ))
     .await
-    .expect("KoV §6.4 admits corrections after the initial allocation");
+    .expect("§47 Ziffer 1 KoV XV admits corrections after the initial allocation");
 
     let state = proc.state().await.unwrap();
     assert_eq!(
@@ -217,11 +217,11 @@ async fn no_correction_is_admissible_after_the_final_allocation() {
         .await;
     assert!(
         result.is_err(),
-        "KoV §6.4 admits no correction after the binding final allocation"
+        "§47 Ziffer 1 KoV XV admits no correction after the binding final allocation"
     );
 }
 
-/// The KoV §6.4 M+2 window closing with no final allocation is recorded, so the
+/// The §47 KoV XV final-allocation window closing with no final allocation is recorded, so the
 /// unsettled imbalance is visible in the event log rather than merely absent.
 #[tokio::test]
 async fn final_allocation_window_closing_without_a_final_is_recorded() {
@@ -241,7 +241,7 @@ async fn final_allocation_window_closing_without_a_final_is_recorded() {
     assert!(matches!(state, AllocationState::FinalOverdue(_)));
 }
 
-/// The missed KoV §6.4 obligation must leave the platform, not just the state.
+/// The missed §47 Ziffer 1 KoV XV obligation must leave the platform, not just the state.
 ///
 /// A `FinalOverdue` stream that raises no notification is indistinguishable
 /// from a healthy one to everything outside makod: the imbalance cannot be
@@ -325,7 +325,7 @@ async fn a_settled_gas_day_enqueues_no_notification() {
 
 /// `on_deadline` is what tells makod whether the obligation was really missed.
 ///
-/// The KoV §6.4 window is registered when the *first* ALOCAT arrives and is
+/// The §47 Ziffer 1 KoV XV window is registered when the *first* ALOCAT arrives and is
 /// never cancelled, so the deadline fires for **every** gas day — including the
 /// ones that settled normally. `makod`'s `dispatch_deadline` routes through
 /// `execute_timeout_with_retry` and raises its error-level REGULATORY ALERT
@@ -362,7 +362,7 @@ async fn on_deadline_is_silent_for_a_gas_day_that_settled() {
             &settled.state().await.unwrap(),
         )
         .is_none(),
-        "a settled gas day must not raise the KoV §6.4 alert",
+        "a settled gas day must not raise the §47 Ziffer 1 KoV XV alert",
     );
 
     // Unsettled — only the initial allocation arrived.

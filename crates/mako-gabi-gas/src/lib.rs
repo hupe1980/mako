@@ -95,6 +95,7 @@ pub mod mehr_mindermengen;
 // ── Domain re-exports ─────────────────────────────────────────────────────────
 
 pub use domain::{
+    AllokationsSerie,
     Bilanzkreis,
     DeliveryPoint,
     DeliveryPointDirection,

@@ -153,12 +153,14 @@ and stores it in `billing_records.en16931_json`. `en16931-formats` renders that 
 XRechnung/CII (`/xrechnung`, `/submit-b2g`) and PEPPOL UBL (`/ubl`); the B2G path
 runs the `en16931` rule engine first and refuses to submit a rejectable document.
 BG-23 and the BG-22 totals are derived from the rounded line amounts, so a
-mixed-rate invoice (gas 19 % + Fernwärme 7 % + PV 0 %) carries a correct **per-line**
-VAT that reconciles (BR-CO-10/13, BR-S-08). **Every** invoice-producing path
-(calculate, correction credit-note, VPP, GGV, Sammelrechnung) stores the model,
-and the renderers read only from it — a record without one answers 422 rather
-than falling back to a second, hand-rolled mapping.
-BO4E stays the accounting representation on the `de.billing.rechnung.erstellt` event.
+mixed-rate invoice (gas 19 % + Fernwärme 7 % + PV 0 %) carries a correct
+**per-line** VAT that reconciles (BR-CO-10/13, BR-S-08).
+
+**Every** invoice-producing path (calculate, correction credit-note, VPP, GGV,
+Sammelrechnung) stores the model, and the renderers read only from it — a record
+without one answers 422 rather than falling back to a second, hand-rolled
+mapping. BO4E stays the accounting representation on the
+`de.billing.rechnung.erstellt` event.
 
 The mapping builds the BG-25 lines and `en16931::reconcile` derives the BG-23
 breakdown and BG-22 totals from them (crate-owned, so BR-CO/BR-S reconcile by
@@ -167,13 +169,15 @@ contact, IBAN); BT-23 business process, the BG-16 SEPA payment instruction and
 **BG-14 the billing period** are stamped on every document. BT-34 (the seller's
 own MP-ID as a GLN) is emitted only when `Identifier::eas_checked` confirms the
 GS1 check digit — a mistyped `tenant` omits the term and logs it, rather than
-asserting a GLN the identifier is not. The **B2G** path (`/submit-b2g`) takes the recipient in
-the request `buyer` (name/address/contact) plus the `reference` Leitweg-ID (BT-10),
-completes the buyer, and renders through `en16931-formats::cii::to_string_for(&…, &XRECHNUNG)`
-— which **validates against the full XRechnung 3.0 profile before writing**, so a
+asserting a GLN the identifier is not.
+
+The **B2G** path (`/submit-b2g`) takes the recipient in the request `buyer`
+(name/address/contact) plus the `reference` Leitweg-ID (BT-10), completes the
+buyer, and renders through `en16931-formats::cii::to_string_for(&…, &XRECHNUNG)`,
+which **validates against the full XRechnung 3.0 profile before writing** — so a
 rejectable document is never emitted; on failure it returns the violated rules and
-the precise `buyer_gaps` (via `Party::missing_for`). (`en16931`/`en16931-formats` are
-**v0.5.0** — pinned exactly; cross-check against KoSIT/Mustang before production B2G.)
+the precise `buyer_gaps` (via `Party::missing_for`). `en16931`/`en16931-formats`
+are pinned to **v0.5.0**; cross-check against KoSIT/Mustang before production B2G.
 
 ## The document a customer receives
 

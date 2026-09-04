@@ -942,14 +942,17 @@ impl SyncEngine {
         // future Hub arm must not fall through to the bilateral payload.
         cfg.submission_target.ensure_supported()?;
 
-        // Build makod command payload
+        // Build the makod command payload.
+        //
         // A Summenzeitreihe is an MSCONS message, Prüfidentifikator 13003
         // ("Übertragung Summenzeitreihe", MSCONS AHB 3.2 §8.3.1). UTILTS carries
         // Berechnungsformel and Zählzeitdefinitionen and has no Summenzeitreihe
         // use case at all.
-        // MSCONS Prüfidentifikator 13003, "Übertragung Summenzeitreihe"
-        // (MSCONS AHB 3.2 §8.3.1). UTILTS carries Berechnungsformel and
-        // Zählzeitdefinitionen and has no Summenzeitreihe use case.
+        //
+        // The Prüfidentifikator travels on the payload rather than being left
+        // for the renderer to infer from the command name: the two sides agree
+        // on these keys by convention, and a filer that cannot state what it
+        // filed cannot be audited against the AHB it filed under.
         //
         // EDIFACT wants its own date formats: the Bilanzierungsmonat is
         // `CCYYMM` (DTM+492, format 610), the Versionsangabe
@@ -960,6 +963,7 @@ impl SyncEngine {
             "marktrolle": "ÜNB",
             "correlation_id": run_id.to_string(),
             "payload": {
+                "pruefidentifikator": MSCONS_SUMMENZEITREIHE_PID.as_u32(),
                 "mabis_zp_id": summenzeitreihe.mabis_zp_id,
                 "bilanzierungsgebiet_id": summenzeitreihe.bilanzierungsgebiet_id.as_ref(),
                 "balancing_period": fmt_edifact_month(summenzeitreihe.period_from),
@@ -1092,6 +1096,18 @@ pub fn previous_month_period(today: Date) -> (Date, Date) {
 mod tests {
     use super::*;
     use time::macros::date;
+
+    /// The filer states the Prüfidentifikator it is filing under, and it is the
+    /// one MSCONS AHB 3.2 §8.3.1 defines for a Summenzeitreihe.
+    ///
+    /// `makod`'s `mabis.summenzeitreihe.uebermitteln` refuses a payload that
+    /// states any other, so this constant and that renderer are one fact rather
+    /// than two — the seam where a filer wired to the wrong command would
+    /// otherwise have its Zeitreihe rendered as a 13003 whatever it meant.
+    #[test]
+    fn the_filed_pruefidentifikator_is_the_summenzeitreihe_one() {
+        assert_eq!(MSCONS_SUMMENZEITREIHE_PID.as_u32(), 13_003);
+    }
 
     #[test]
     fn previous_month_january() {

@@ -62,7 +62,7 @@ pub struct ProductdMcpState {
 pub struct ListProductsParams {
     /// LF MP-ID (BDEW-Codenummer, 13 digits).
     pub lf_mp_id: String,
-    /// Filter by category: STROM|GAS|WAERME|SOLAR|EEG|EINSPEISUNG|WAERMEPUMPE|WALLBOX|HEMS|EMOBILITY|ENERGIEDIENSTLEISTUNG|BUNDLE.
+    /// Filter by category: STROM|GAS|WAERME|WASSER|SOLAR|EEG|EINSPEISUNG|WAERMEPUMPE|WALLBOX|HEMS|EMOBILITY|ENERGIEDIENSTLEISTUNG|BUNDLE|SHARING.
     pub category: Option<String>,
     pub limit: Option<i64>,
 }
@@ -120,7 +120,7 @@ pub struct GetAngebotParams {
 pub struct ValidateTariffConfigParams {
     /// LF MP-ID (BDEW Codenummer) owning this product.
     pub lf_mp_id: String,
-    /// Product category: STROM|GAS|WAERME|SOLAR|EEG|EINSPEISUNG|WAERMEPUMPE|WALLBOX|SHARING|HEMS|EMOBILITY|ENERGIEDIENSTLEISTUNG|BUNDLE
+    /// Product category: STROM|GAS|WAERME|WASSER|SOLAR|EEG|EINSPEISUNG|WAERMEPUMPE|WALLBOX|HEMS|EMOBILITY|ENERGIEDIENSTLEISTUNG|BUNDLE|SHARING
     pub category: String,
     /// Full Tarifpreisblatt JSONB payload to validate.
     pub data: serde_json::Value,
@@ -160,7 +160,7 @@ impl ProductdMcpHandler {
     // ── Product catalog ───────────────────────────────────────────────────────
 
     #[tool(
-        description = "List products for an LF MP-ID. Filter by category (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE). Returns product summaries including name, category, and validity.",
+        description = "List products for an LF MP-ID. Filter by category (STROM/GAS/WAERME/WASSER/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE/SHARING). Returns product summaries including name, category, and validity.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_products(
@@ -933,7 +933,7 @@ impl ServerHandler for ProductdMcpHandler {
         .with_instructions(
             "productd MCP -- Product & Tariff Catalog (LF role).\n\
              Single source of truth for retail products the LF sells to end customers.\n\
-             Categories: STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE.\n\
+             Categories: STROM/GAS/WAERME/WASSER/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE/SHARING.\n\
              Also manages EPEX Spot day-ahead prices for §41a dynamic tariffs (iMSys, mandatory since Jan 2025).\n\
              B2B Angebote (formal quotations) for C&I/RLM customers: lifecycle ANGELEGT→VERSANDT→ANGENOMMEN/ABGELEHNT/ABGELAUFEN.\n\n\
              Key tools:\n\

@@ -1188,11 +1188,12 @@ document *says*, and proves it before anything crosses the boundary:
    into `billing_records.template_hash` (`COALESCE`, never overwritten), so
    requesting the PDF a decade later reproduces the document that was sent
    rather than re-styling it. A draft pins nothing and renders with the current
-   layout every time. The hash is a value from another service — no foreign key
-   can guard it; outputd's append-only store policy is what keeps it resolvable
-   (§ 147 AO / GoBD, 8 years). Racing first renders are safe: the pin is a
-   conditional update that returns the winning hash, and the loser re-renders
-   once with the winner.
+   layout every time.
+
+   The hash is a value from another service, so no foreign key can guard it —
+   outputd's append-only store policy is what keeps it resolvable (§ 147 AO /
+   GoBD, 8 years). Racing first renders are safe: the pin is a conditional
+   update that returns the winning hash, and the loser re-renders once with it.
 
 Templates, the carrier mechanics, the publish gates and the external validation
 panel (veraPDF + Mustang) are documented in the

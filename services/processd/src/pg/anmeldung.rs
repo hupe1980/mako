@@ -60,6 +60,7 @@ pub struct AnmeldungDecisionRecord {
     pub antwortcode: Option<String>,
     pub detail: Option<String>,
     pub initiator_is_affiliate: bool,
+    #[serde(with = "time::serde::rfc3339")]
     pub decided_at: OffsetDateTime,
     pub tenant: String,
 }

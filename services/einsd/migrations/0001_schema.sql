@@ -15,7 +15,7 @@
 --   eeg_verguetungssaetze     — EEG/KWKG tariff reference data
 --   epex_monthly_prices       — monthly EPEX Spot reference (Marktprämie)
 --   epex_spot_prices          — per-¼h/h day-ahead prices (§51 Negativpreisregel)
---   jahresmarktwert_preise    — technology-specific Jahresmarktwert (§20 Abs. 2 EEG)
+--   marktwert_preise          — Monats- und Jahresmarktwert (Anlage 1 Nr. 2–4 EEG)
 --   eeg_regionalnachweise     — §53b Regionalnachweis periods (§79a)
 --   eeg_stromsteuerbefreiungen — §53c per-kWh Stromsteuerbefreiung
 --   eeg_sect54_solar_defekte  — §54 solar first-segment auction defects
@@ -133,7 +133,7 @@ CREATE TABLE eeg_anlagen (
     -- half the plants.
     settlement_model   TEXT        NOT NULL DEFAULT 'VERGUETUNG' CHECK (settlement_model IN (
         'VERGUETUNG',                -- §21 Abs. 1 Einspeisevergütung
-        'AUSFALLVERGUETUNG',         -- §21 Abs. 1 Nr. 2 Ausfallvergütung (−20 %)
+        'AUSFALLVERGUETUNG',         -- §21 Abs. 1 Satz 1 Nr. 3 Ausfallvergütung (−20 %)
         'DIREKTVERMARKTUNG',         -- §20 gleitende Marktprämie
         'AUSSCHREIBUNG',             -- §22 wettbewerblich ermittelte Marktprämie
         'SONSTIGE_DIREKTVERMARKTUNG',-- §21a Direktvermarktung ohne EEG-Zahlung
@@ -257,10 +257,26 @@ CREATE TABLE eeg_anlagen (
     -- lapsed, nothing left to settle" was unreachable. The date is the fact; the
     -- expiry is derived from it against the billing period.
     zuschlag_erloeschen_datum  DATE,
-    -- §52: cumulative violation start dates for Pflichtzahlung
+    -- §52 Abs. 1 Nr. 11 — when the MaStR breach began. This is the one §52 clock
+    -- einsd owns end to end: registration without a MaStR number sets it,
+    -- confirmation clears it. Every other Pflichtverstoß is recorded in
+    -- `eeg_pflichtverstoesse` (see below), because its start is a fact only the
+    -- operator, the Direktvermarkter or a site visit establishes.
     mastr_violation_start      DATE,
-    fernsteuerbarkeit_violation_start DATE,
-    -- §21b guard: date of last Veräußerungsform switch (monthly lock)
+    -- § 19 Abs. 3b / 3c EEG 2023 — the Speicher-Abgrenzungs- bzw. Pauschaloption,
+    -- i.e. how the förderfähige Anteil of electricity from a Stromspeicher is
+    -- determined. Two consequences, both money:
+    --
+    --   * Anlage 1 Nr. 2 Satz 3 moves a plant claiming under either option onto
+    --     the **Jahres**marktwert even when its vintage would give it the
+    --     Monatsmarktwert.
+    --   * § 20 Satz 2 requires the whole feed-in at that Einspeisestelle to sit
+    --     in a separate Bilanz- oder Unterbilanzkreis.
+    --
+    -- 'KEINE' is the ordinary case: no storage claim is made.
+    speicher_option            TEXT        NOT NULL DEFAULT 'KEINE'
+                               CHECK (speicher_option IN ('KEINE', 'ABGRENZUNG', 'PAUSCHAL')),
+    -- §21b Abs. 1 Satz 2: the effective date of the last Veräußerungsform switch
     last_veraeusserungsform_switch DATE,
     -- §51a: cumulative RAW negative-price quarter-hours (§51 lost intervals).
     -- The Förderende extension rounds this to whole days / the solar
@@ -345,6 +361,82 @@ CREATE INDEX ea_settlement       ON eeg_anlagen (settlement_model, tenant) WHERE
 CREATE INDEX ea_gesetz_tenant    ON eeg_anlagen (eeg_gesetz, tenant);
 CREATE INDEX ea_repowering       ON eeg_anlagen (tenant) WHERE ist_repowering = true;
 CREATE INDEX ea_zusammenlegung   ON eeg_anlagen (parent_tr_id, tenant) WHERE parent_tr_id IS NOT NULL;
+
+-- ── §52 Abs. 1 EEG 2023 — the Pflichtverstoß register ────────────────────────
+--
+-- §52 Abs. 1 lists thirteen breaches (Nr. 1–12 with a Nr. 9a between 9 and 10).
+-- einsd *derives* four of them from the plant record — Nr. 1 (§9 Steuerbarkeit),
+-- Nr. 5 (Ausfallvergütung Höchstdauer, from the receipts), Nr. 9 (§21c
+-- notification) and Nr. 11 (MaStR). The other nine turn on facts no register row
+-- carries: whether the Direktvermarkter can actually curtail the plant (Nr. 4,
+-- §10b Abs. 5 leaves the Nachweis to the two parties), whether a Speicher meets
+-- §9 Abs. 5 (Nr. 2), whether the Ist-Einspeisung is measured in
+-- viertelstündlicher Auflösung (Nr. 8), whether the Strom was doppelt vermarktet
+-- (Nr. 12) — each is a finding, and this table is where a finding is filed.
+--
+-- It also supplies what the derived four cannot state on their own:
+--
+--   * `beginn`      — §52 Abs. 2 charges „pro Kalendermonat, in dem ganz oder
+--                     zeitweise ein Pflichtverstoß vorliegt", so the month count
+--                     runs from here. Without it the charge starts at one month,
+--                     which understates a breach that has run for a year.
+--   * `behoben_am`  — §52 Abs. 3 Satz 1 Nr. 1 reduces the charge to 2 €/kW
+--                     „sobald die entsprechende Pflicht erfüllt wird; diese
+--                     Verringerung wirkt **zurück bis zum Beginn**". Months
+--                     already settled at 10 € therefore need a § 147 AO
+--                     correction, which is what `settlement_receipts.correction_of`
+--                     is for.
+--   * `technischer_defekt` — §52 Abs. 3 Satz 2 waives the defect month and the
+--                     following one for Nr. 1/3/4/8, for breaches after
+--                     31.12.2023. The Darlegungs- und Beweislast is the
+--                     operator's, so this is recorded rather than inferred.
+--
+-- One breach may recur, so the history is kept and only the *open* entry per
+-- (plant, Nummer) is unique.
+CREATE TABLE eeg_pflichtverstoesse (
+    id                 UUID        PRIMARY KEY,
+    tenant             TEXT        NOT NULL,
+    tr_id              TEXT        NOT NULL,
+    -- `eeg_billing::SanktionsTyp::as_db_str` — held against the enum by
+    -- `tests/schema_code_guard.rs`, so a fourteenth breach cannot land in the
+    -- code without landing here.
+    typ                TEXT        NOT NULL CHECK (typ IN (
+                           'FERNSTEUERBARKEIT_FEHLEND',
+                           'SPEICHER_ANFORDERUNG_NICHT_ERFUELLT',
+                           'I_MSS_ANFORDERUNG_NICHT_ERFUELLT',
+                           'SECT10B_VORGABEN_VERLETZT',
+                           'AUSFALLVERGUETUNG_HOECHSTDAUER_UEBERSCHRITTEN',
+                           'EINSPEISEVERGUETUNG_UNZULAESSIGE_NUTZUNG',
+                           'VERAEUSSERUNGSFORM_WECHSEL_UNGUELTIG',
+                           'VERAEUSSERUNGSFORM_NACHWEISPFLICHT_VERLETZT',
+                           'ZUORDNUNGS_WECHSEL_NICHT_GEMELDET',
+                           'INBETRIEBNAHME_VORGABE_VERLETZT',
+                           'VOLLEINSPEISUNGSPFLICHT_VERLETZT',
+                           'MASTR_NICHT_REGISTRIERT',
+                           'DOPPELVERMARKTUNGSVERBOT_VERLETZT')),
+    beginn             DATE        NOT NULL,
+    behoben_am         DATE,
+    technischer_defekt BOOLEAN     NOT NULL DEFAULT false,
+    -- What was found, and by whom. A Pflichtzahlung is a claim against the
+    -- operator; „because the ERP said so" is not an audit trail.
+    notiz              TEXT,
+    erfasst_am         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    aktualisiert_am    TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    FOREIGN KEY (tr_id, tenant) REFERENCES eeg_anlagen (tr_id, tenant) ON DELETE CASCADE,
+    CONSTRAINT ep_behoben_nach_beginn CHECK (behoben_am IS NULL OR behoben_am >= beginn)
+);
+
+-- At most one open breach per plant and Nummer; closed ones are history.
+CREATE UNIQUE INDEX ep_offen ON eeg_pflichtverstoesse (tenant, tr_id, typ)
+    WHERE behoben_am IS NULL;
+CREATE INDEX ep_anlage ON eeg_pflichtverstoesse (tenant, tr_id, beginn DESC);
+
+COMMENT ON TABLE eeg_pflichtverstoesse IS
+    '§52 Abs. 1 EEG 2023 Pflichtverstöße recorded against a plant. Supplies the '
+    'start date, the §52 Abs. 3 Satz 1 Nr. 1 cure and the Abs. 3 Satz 2 defect '
+    'waiver for the four breaches einsd derives, and is the trigger for the nine '
+    'it cannot derive.';
 CREATE INDEX ea_kwkg             ON eeg_anlagen (tenant) WHERE settlement_model = 'KWKG_ZUSCHLAG';
 CREATE INDEX ea_award_erloeschen ON eeg_anlagen (tenant, zuschlag_erloeschen_datum)
     WHERE zuschlag_erloeschen_datum IS NOT NULL;
@@ -376,6 +468,13 @@ CREATE TABLE settlement_receipts (
     billing_days_fraction       NUMERIC(8, 6),
     -- §52 EEG: separate Pflichtzahlung (penalty) amount
     pflichtzahlung_eur          NUMERIC(14, 5),
+    -- Anlage 1 Nr. 2 Satz 2 EEG 2023: this settlement used a **provisional**
+    -- Jahresmarktwert — an ÜNB running estimate rather than the binding figure,
+    -- which exists only once the year is over. The month is settled and paid;
+    -- it just has to be recomputed when the final figure is published, which is
+    -- a § 147 AO correction like any other. False for a Monatsmarktwert, which
+    -- is final when published, and for the EPEX fallback.
+    marktwert_vorlaeufig        BOOLEAN     NOT NULL DEFAULT false,
     -- § 147 AO / GoBD: itemized position snapshot for audit trail
     positions_json              JSONB,
     -- Full §14 UStG Gutschrift as a rubo4e::current::Rechnung JSONB (Gutschriftverfahren:
@@ -642,27 +741,63 @@ COMMENT ON TABLE epex_spot_prices IS
     'EPEX day-ahead spot prices per ¼h/h interval for §51 Negativpreisregel. '
     'Import via PUT /api/v1/epex-spot (bulk). Negative price → AW reduced to null.';
 
--- ── §20 Abs. 2 + Anlage 1 EEG 2023: technology-specific Jahresmarktwert ──────
+-- ── Anlage 1 Nr. 2–4 EEG 2023: der energieträgerspezifische Marktwert ───────
+--
+-- The Marktprämie is `max(0, AW − MW)`, and **which** MW is keyed on the plant's
+-- vintage rather than on the operator's preference (Anlage 1 Nr. 2):
+--
+--   Satz 1 — plants in Betrieb genommen *or* bezuschlagt **before 01.01.2023**
+--            use the energieträgerspezifische **Monats**marktwert of Nr. 3.
+--   Satz 2 — every other plant uses the **Jahres**marktwert of Nr. 4.
+--   Satz 3 — a Satz-1 plant moves onto the Jahresmarktwert as well once it
+--            claims under the § 19 Abs. 3b/3c Abgrenzungs- oder Pauschaloption.
+--
+-- One table held both series before, keyed only by (Jahr, Monat, Erzeugungsart),
+-- so whichever figure the operator happened to load was applied to every plant.
+-- `art` makes the two distinguishable and the lookup asks for the one the plant
+-- is entitled to; a missing figure is `price_missing`, which the monthly worker
+-- retries, rather than a silent substitution.
+--
+-- A **Jahres**marktwert has no month: the ÜNB publish a running estimate during
+-- the year and the binding figure after it. `billing_month` is therefore NULL
+-- for that series and `vorlaeufig` says which of the two a row is — a settlement
+-- computed on a provisional figure is correctable, and the receipt records that
+-- it was so the year-end publication can find it.
 
-CREATE TABLE jahresmarktwert_preise (
+CREATE TABLE marktwert_preise (
     billing_year    SMALLINT    NOT NULL,
-    billing_month   SMALLINT    NOT NULL CHECK (billing_month BETWEEN 1 AND 12),
+    -- Anlage 1 Nr. 3 = MONATSMARKTWERT, Nr. 4 = JAHRESMARKTWERT.
+    art             TEXT        NOT NULL CHECK (art IN ('MONATSMARKTWERT', 'JAHRESMARKTWERT')),
+    -- The month for Nr. 3; NULL for Nr. 4, which has none.
+    billing_month   SMALLINT    CHECK (billing_month BETWEEN 1 AND 12),
     -- Matches erzeugungsart values; 'DEFAULT' = generic fallback
     erzeugungsart   TEXT        NOT NULL,
     avg_ct_kwh      NUMERIC(8, 4) NOT NULL
                     CHECK (avg_ct_kwh BETWEEN -100 AND 1000),
+    -- A running ÜNB estimate rather than the published binding figure. Always
+    -- false for a Monatsmarktwert, which is final when it is published.
+    vorlaeufig      BOOLEAN     NOT NULL DEFAULT false,
     source          TEXT        NOT NULL DEFAULT 'manual',
     imported_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (billing_year, billing_month, erzeugungsart)
+    CONSTRAINT mw_monat_passt_zur_art CHECK (
+        (art = 'MONATSMARKTWERT' AND billing_month IS NOT NULL)
+     OR (art = 'JAHRESMARKTWERT'  AND billing_month IS NULL)),
+    CONSTRAINT mw_monatswert_ist_endgueltig CHECK (
+        art = 'JAHRESMARKTWERT' OR NOT vorlaeufig)
 );
 
-COMMENT ON TABLE jahresmarktwert_preise IS
-    '§20 Abs. 2 + Anlage 1 EEG 2023: technology-specific monthly Marktwert. '
-    'Published by ÜNB (netztransparenz.de). '
-    'Lookup order: exact erzeugungsart → DEFAULT → epex_monthly_prices.';
+-- `billing_month` is NULL for the annual series, so the key is an index rather
+-- than a PRIMARY KEY: NULLs are distinct under a plain unique constraint.
+CREATE UNIQUE INDEX mw_key ON marktwert_preise
+    (billing_year, art, erzeugungsart, COALESCE(billing_month, 0));
+CREATE INDEX mw_period ON marktwert_preise (billing_year DESC, art, erzeugungsart);
 
-CREATE INDEX jmw_period    ON jahresmarktwert_preise (billing_year DESC, billing_month DESC);
-CREATE INDEX jmw_art_period ON jahresmarktwert_preise (erzeugungsart, billing_year DESC, billing_month DESC);
+COMMENT ON TABLE marktwert_preise IS
+    'Anlage 1 Nr. 2–4 EEG 2023: the energieträgerspezifische Marktwert, in both '
+    'series the statute defines. Published by ÜNB (netztransparenz.de). Which '
+    'series a plant takes follows its Inbetriebnahme/Zuschlag date, never the '
+    'operator. Lookup order within a series: exact erzeugungsart → DEFAULT → '
+    'epex_monthly_prices.';
 
 -- ── §§53b–54 EEG 2023: reductions of the anzulegender Wert ───────────────────
 --

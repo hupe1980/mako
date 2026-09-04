@@ -67,6 +67,17 @@ pub enum EngineError {
         contexts: usize,
     },
 
+    /// `Invoice::allocate_proportionally` was given weights it cannot normalise.
+    ///
+    /// A negative weight is not an allocation share, and weights summing to
+    /// zero name no recipient at all. Both are caller mistakes rather than
+    /// arithmetic failures, so they are refused before the split runs.
+    #[error("allocation weights must be non-negative and sum above zero, got sum {sum}")]
+    AllocationWeightsInvalid {
+        /// The sum of the supplied weights.
+        sum: Decimal,
+    },
+
     /// An arithmetic or document error from the `billing` core —
     /// monetary overflow, invalid schedule, tax-layer failure.
     #[error(transparent)]
@@ -82,6 +93,7 @@ impl EngineError {
             Self::PriceOutOfRange { .. } => "PRICE_OUT_OF_RANGE",
             Self::InvalidPeriod { .. } => "INVALID_PERIOD",
             Self::AllocationMismatch { .. } => "ALLOCATION_MISMATCH",
+            Self::AllocationWeightsInvalid { .. } => "ALLOCATION_WEIGHTS_INVALID",
             Self::Arithmetic(_) => "ARITHMETIC",
         }
     }

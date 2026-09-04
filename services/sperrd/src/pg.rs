@@ -258,8 +258,10 @@ pub struct SperrOrderRow {
     pub status: OrderStatus,
     /// How many Sperrversuche have been made — the Festlegung allows two.
     pub sperrversuche: i32,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub letzter_versuch_am: Option<OffsetDateTime>,
     pub letzter_versuch_grund: Option<String>,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub executed_at: Option<OffsetDateTime>,
     pub execution_note: Option<String>,
     pub fail_reason: Option<String>,
@@ -267,10 +269,13 @@ pub struct SperrOrderRow {
     /// The § 3.5.1.2 Nr. 5 deadline for the IFTSTA 21039.
     pub iftsta_faellig_am: Option<Date>,
     pub iftsta_ref: Option<String>,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub iftsta_dispatched_at: Option<OffsetDateTime>,
     pub iftsta_attempts: i32,
     pub iftsta_last_error: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
 }
 

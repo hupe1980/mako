@@ -565,6 +565,21 @@ impl Daemon for Accountingd {
                     .unwrap_or(14)
                     .clamp(1, 60);
                 loop {
+                    // Serialised across replicas, like the Abschlag, Dunning and
+                    // Jahresabschluss workers. The dispatch claim below keeps the
+                    // *event* from going out twice; the lock keeps two replicas
+                    // from racing over `sepa_collection_runs`/`_entries`, the rows
+                    // a bank reply is attributed to.
+                    let Some(mut wlock) =
+                        accountingd::pg::try_worker_lock(&pool_sepa, accountingd::pg::LOCK_SEPA_N5)
+                            .await
+                    else {
+                        tracing::debug!(
+                            "accountingd: SEPA N-5 worker — another replica holds the lock"
+                        );
+                        tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600)).await;
+                        continue;
+                    };
                     let today = mako_fristen::heute();
                     // Wraps correctly across month end.
                     let target_date = today + time::Duration::days(lead_days);
@@ -660,6 +675,17 @@ impl Daemon for Accountingd {
                                 .await
                                 {
                                     Ok(id) => Some(id),
+                                    Err(e)
+                                        if e.downcast_ref::<accountingd::pg::SepaRunAlreadyDispatched>()
+                                            .is_some() =>
+                                    {
+                                        // Expected on a same-day restart: the
+                                        // day's pain.008 is already with the
+                                        // bank and its rows are the record of
+                                        // what was submitted.
+                                        tracing::debug!(due_date = %target_date, "accountingd: SEPA — run already dispatched, nothing to rebuild");
+                                        None
+                                    }
                                     Err(e) => {
                                         tracing::warn!(error = %e, "accountingd: SEPA — failed to persist sepa_collection_run");
                                         None
@@ -757,6 +783,8 @@ impl Daemon for Accountingd {
                         }
                     }
 
+                    accountingd::pg::release_worker_lock(&mut wlock, accountingd::pg::LOCK_SEPA_N5)
+                        .await;
                     // Sleep ~24h; use 23h to drift-proof against DST transitions.
                     tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600)).await;
                 }

@@ -296,6 +296,7 @@ impl QuarterHourAllocation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AllocationVersion {
     /// When this version was formed.
+    #[serde(with = "time::serde::rfc3339")]
     pub erstellungszeitpunkt: OffsetDateTime,
     /// Its MaBiS Datenstatus.
     pub datenstatus: Datenstatus,

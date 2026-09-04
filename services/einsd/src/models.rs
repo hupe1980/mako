@@ -9,7 +9,9 @@
 
 /// §21 Abs. 1 EEG 2023 — Einspeisevergütung.
 pub const VERGUETUNG: &str = "VERGUETUNG";
-/// §21 Abs. 1 Nr. 2 EEG 2023 — Ausfallvergütung (Einspeisevergütung −20 %).
+/// §21 Abs. 1 Satz 1 Nr. 3 EEG 2023 — Ausfallvergütung (Einspeisevergütung −20 % nach §53 Abs. 3).
+/// It was Nr. 2 under the EEG 2017; the EEG 2023 inserted the unentgeltliche
+/// Abnahme in front of it.
 pub const AUSFALLVERGUETUNG: &str = "AUSFALLVERGUETUNG";
 /// §20 EEG 2023 — gleitende Marktprämie (Direktvermarktung).
 pub const DIREKTVERMARKTUNG: &str = "DIREKTVERMARKTUNG";
@@ -51,7 +53,7 @@ pub const ALL: [&str; 12] = [
 /// The models settled as a Direktvermarktung, i.e. paid a Marktprämie.
 ///
 /// These emit `de.eeg.marktpraemie.berechnet` and resolve their market reference
-/// through the §20 Abs. 2 Jahresmarktwert rather than the generic EPEX average.
+/// through the Anlage 1 Marktwert rather than the generic EPEX average.
 #[must_use]
 pub fn ist_marktpraemie(model: &str) -> bool {
     matches!(model, DIREKTVERMARKTUNG | AUSSCHREIBUNG)

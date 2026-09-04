@@ -106,9 +106,11 @@ pub struct Deadline {
     label: Box<str>,
 
     /// When this deadline expires.
+    #[serde(with = "time::serde::rfc3339")]
     due_at: OffsetDateTime,
 
     /// When this deadline was registered.
+    #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
 }
 

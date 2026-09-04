@@ -1643,8 +1643,10 @@ mod tests {
             (R::Esa, G::Messstellenbetrieb, Some(ESA)),
             (R::LieferantOderMsb, G::PreisblattB, Some(PREISBLATT_B_LF)),
             (R::Netzbetreiber, G::PreisblattB, Some(PREISBLATT_B_NB)),
-            // `E_0566`/`E_0210` are named but their Codelisten are not carried,
-            // so no family walks them.
+            // `E_0566`/`E_0210` carry their Codelisten but not their walk: the
+            // Prüfschritte are their own (37 against `E_0264`'s 26, agreeing on
+            // two of twenty shared numbers), and `E_0211` has no tree at all,
+            // so `nicht_zahlungsavis` has no value to take.
             (R::Netzbetreiber, G::Messstellenbetrieb, None),
             (R::LieferantOderMsb, G::Messstellenbetrieb, None),
         ] {

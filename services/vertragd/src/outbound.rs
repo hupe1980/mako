@@ -289,6 +289,7 @@ pub struct DeadTask {
     pub payload: serde_json::Value,
     pub attempts: i32,
     pub last_error: Option<String>,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub dead_lettered_at: Option<time::OffsetDateTime>,
 }
 

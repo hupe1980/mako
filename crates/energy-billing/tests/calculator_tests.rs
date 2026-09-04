@@ -5167,6 +5167,84 @@ fn invoice_allocate_proportionally_penny_correct() {
     assert!(parts[0].brutto_eur > parts[1].brutto_eur, "60% > 40%");
 }
 
+/// A three-way split must conserve the metered volume, not only the money.
+///
+/// Each share used to be rounded on its own, which is exact only when the
+/// fractions divide evenly: 1000 kWh split three ways came out as
+/// 3 × 333.3333 kWh = 999.9999 kWh, so the recipients' invoices no longer
+/// accounted for the volume the building was metered at. The amounts were
+/// already remainder-distributed; the quantities now go the same way.
+#[test]
+fn invoice_allocation_conserves_quantity_and_warnings() {
+    let tariff: Product = serde_json::from_str(
+        r#"{
+        "category": "STROM", "arbeitspreis_ct_per_kwh": "20.0", "mwst_rate_override": "0.0"
+    }"#,
+    )
+    .unwrap();
+    let rates = RegulatoryRates::default();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        lf_mp_id: "9900000000001".to_owned(),
+        rechnungsnummer: "ALLOC-THIRDS".to_owned(),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: rates.clone(),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(1000),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&GridInput::default(), &rates)
+        .bill(ctx, &quantities)
+        .unwrap();
+
+    let per_position_quantity: Vec<Decimal> =
+        invoice.positions.iter().map(|p| p.quantity).collect();
+    let original_brutto = invoice.brutto_eur;
+    let source_warnings = invoice.warnings.len();
+
+    let ctxs: Vec<BillingContext> = ["A", "B", "C"]
+        .iter()
+        .map(|tag| BillingContext {
+            rechnungsnummer: format!("ALLOC-{tag}"),
+            malo_id: (*tag).to_owned(),
+            ..invoice.context.clone()
+        })
+        .collect();
+
+    let parts = invoice
+        .allocate_proportionally(&[dec!(1), dec!(1), dec!(1)], ctxs)
+        .unwrap();
+
+    let sum: Decimal = parts.iter().map(|p| p.brutto_eur).sum();
+    assert_eq!(
+        sum, original_brutto,
+        "three-way split must stay penny-exact"
+    );
+
+    for (idx, original) in per_position_quantity.iter().enumerate() {
+        let split_sum: Decimal = parts.iter().map(|p| p.positions[idx].quantity).sum();
+        assert_eq!(
+            split_sum, *original,
+            "position {idx}: split quantities must sum back to the metered volume"
+        );
+    }
+
+    for part in &parts {
+        assert_eq!(
+            part.warnings.len(),
+            source_warnings,
+            "an allocation must not launder the source invoice's warnings"
+        );
+    }
+}
+
 /// The NNE Grundpreis accrues only over active contract days.
 ///
 /// It billed the full period regardless of `vertragsbeginn`/`vertragsende`,

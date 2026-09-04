@@ -90,12 +90,6 @@ impl BiomassBrennstoff {
     pub fn guellebonusanlage_eligible(self) -> bool {
         matches!(self, Self::Guelle | Self::Festmist)
     }
-
-    /// Returns `true` when §42a EEG 2023 Holzbiomasse restrictions apply.
-    #[must_use]
-    pub fn has_holzbiomasse_restriction(self) -> bool {
-        self == Self::Holzbiomasse
-    }
 }
 
 // ── BiomassSettlementData ─────────────────────────────────────────────────────

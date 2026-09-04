@@ -80,6 +80,7 @@ pub struct KundeRow {
     pub sepa_erlaubt: bool,
     pub erp_kunde_id: Option<String>,
     pub notizen: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
 }
 
@@ -96,7 +97,9 @@ pub struct KundenIdentitaetRow {
     pub rolle: String,
     pub standort_filter: Option<String>,
     pub aktiv: bool,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub letzter_login: Option<time::OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
 }
 
@@ -120,6 +123,7 @@ pub struct RahmenvertragRow {
     pub sammelrechnung_intervall: Option<String>,
     pub erp_rahmenvertrag_id: Option<String>,
     pub notizen: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
 }
 
@@ -151,6 +155,7 @@ pub struct VersorgungsvertragRow {
     pub kuendigung_eingang: Option<Date>,
     pub kuendigung_zum: Option<Date>,
     /// § 41 Abs. 8 Nr. 2 EnWG: when the Textform confirmation went out.
+    #[serde(with = "time::serde::rfc3339::option")]
     pub kuendigungsbestaetigung_am: Option<time::OffsetDateTime>,
     pub bundle_code: Option<String>,
     pub standort_bezeichnung: Option<String>,
@@ -158,7 +163,9 @@ pub struct VersorgungsvertragRow {
     pub zahlungsziel_tage: Option<i32>,
     pub erp_contract_id: Option<String>,
     pub notizen: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub completed_at: Option<time::OffsetDateTime>,
 }
 

@@ -439,7 +439,9 @@ pub async fn dispatch_deadline(
                     .map(|_| ())
             }
             "gabi-gas-allocation" => {
-                // KoV §6.4 final-allocation window (end of month M+2, 12:00 CET).
+                // § 47 Ziffer 1 KoV XV final-allocation window (M+14 Werktage,
+                // 12:00 — the RLM figure, which is the only one an inbound
+                // ALOCAT can still be watched against; SLP is final on D-1).
                 //
                 // The window is registered when the *first* ALOCAT for a gas day
                 // arrives and is never cancelled, so this deadline fires for every
@@ -459,9 +461,9 @@ pub async fn dispatch_deadline(
                         deadline_id = %deadline_id,
                         label       = %label,
                         "REGULATORY ALERT: GaBi Gas final-allocation window expired \
-                         (KoV §6.4) — no binding final ALOCAT was received for this gas \
-                         day by the end of month M+2. The imbalance cannot be settled; \
-                         raise a Clearingfall with the FNB/MGV.",
+                         (§ 47 Ziffer 1 KoV XV) — no binding final ALOCAT was received \
+                         for this gas day within M+14 Werktage. The imbalance cannot be \
+                         settled; raise a Clearingfall with the FNB/MGV.",
                     );
                 } else {
                     tracing::debug!(

@@ -129,6 +129,21 @@ pub enum FristShape {
     /// GPKE Teil 2 uses it where the answer has to be back before the NB's own
     /// same-day cut-off; the Beginn der Ersatz-/Grundversorgung is the case
     /// that matters to a supplier.
+    ///
+    /// The literal reading breaks down in two cases the Festlegung does not
+    /// contemplate, because both presuppose a Nr. 1 transmitted on a Werktag in
+    /// time to be answered: a message that arrives **after** the cut-off, and one
+    /// that arrives on a Saturday, a Sunday or a Feiertag. Read literally, each
+    /// yields a deadline already in the past at the instant of arrival — which
+    /// `operator_window` turns into a queue entry that has already expired, so
+    /// nobody is shown the work and the process is reported breached against a
+    /// party that never had the chance to answer.
+    ///
+    /// Both therefore roll to the same clock time on the next Werktag. That is
+    /// not an invented window: it is the second window GPKE Teil 2 publishes for
+    /// these very Prüfidentifikatoren („15:00 Uhr des 1. WT nach dem ÜT"), and
+    /// it is the only one of the two that is reachable at all. Inside the
+    /// cut-off on a Werktag the tighter same-day instant still applies.
     SameDayAt(Time),
     /// „Am selben Tag wie …" — the end of the anchor's own day, with no
     /// wall-clock time attached.
@@ -142,6 +157,11 @@ pub enum FristShape {
 
 impl FristShape {
     /// Resolve this Frist against the instant the message arrived.
+    ///
+    /// # Panics
+    ///
+    /// On a date at the very end of the representable range, where the day after
+    /// the arrival day does not exist. Unreachable for any Übertragungstag.
     #[must_use]
     pub fn due_at(self, received: OffsetDateTime, cal: HolidayCalendar) -> OffsetDateTime {
         match self {
@@ -150,7 +170,21 @@ impl FristShape {
             Self::WerktageAtCutoff(n) => crate::deadline_at_werktage(received, n, cal),
             Self::SameDayAt(at) => {
                 let berlin = received.to_timezone(timezones::db::europe::BERLIN);
-                crate::berlin_at(berlin.date(), at)
+                let same_day = crate::berlin_at(berlin.date(), at);
+                if crate::is_werktag(berlin.date(), cal) && same_day > received {
+                    same_day
+                } else {
+                    crate::berlin_at(
+                        crate::next_werktag(
+                            berlin
+                                .date()
+                                .next_day()
+                                .expect("date overflow — unreachable for any practical date"),
+                            cal,
+                        ),
+                        at,
+                    )
+                }
             }
             Self::SameDay => {
                 let berlin = received.to_timezone(timezones::db::europe::BERLIN);
@@ -1537,6 +1571,84 @@ mod tests {
             Date::from_calendar_date(y, m, d).expect("valid date"),
             Time::from_hms(h, 0, 0).expect("valid time"),
         )
+    }
+
+    /// PID 55555 publishes the tighter of its two windows, and the looser one
+    /// is a constant rather than a comment.
+    ///
+    /// GPKE Teil 4 gives the same Prüfidentifikator 2 Werktage as a Rückmeldung
+    /// (§ 1.4.4) and 10 as a Bestellung (§ 1.5.4), and the message alone does
+    /// not say which — only a preceding 55553 does. A PID-keyed table has to
+    /// publish one, and it must be the tighter: sizing a queue by the looser
+    /// window reports a lapsed Frist as still running.
+    ///
+    /// This holds both numbers against the table so
+    /// [`STAMMDATEN_BESTELLUNG_WERKTAGE`] stays a checked alternative rather
+    /// than a constant nothing reads.
+    #[test]
+    fn the_shared_pid_publishes_the_tighter_of_its_two_windows() {
+        let tighter = STAMMDATEN_RUECKMELDUNG_WERKTAGE.min(STAMMDATEN_BESTELLUNG_WERKTAGE);
+        assert_eq!(
+            tighter, STAMMDATEN_RUECKMELDUNG_WERKTAGE,
+            "the Rückmeldung window is the tighter one"
+        );
+        let anfrage = antwort_obligation(55_555).expect("55555 is catalogued");
+        assert_eq!(anfrage.frist, FristShape::WerktageAtCutoff(tighter));
+        assert!(
+            anfrage.source.contains("10 WT"),
+            "the source names the window the table does not publish"
+        );
+    }
+
+    /// „15:00 Uhr am ÜT" must never resolve to an instant that has already
+    /// passed.
+    ///
+    /// Read literally it does exactly that for a 55013 that arrives after the
+    /// cut-off or on a non-Werktag, and `operator_window` then hands the
+    /// operator a queue entry whose `expires_at` is already behind it — the work
+    /// is invisible and the answering party is reported in breach of a window it
+    /// never had. Both cases roll to 15:00 on the next Werktag, which is the
+    /// Festlegung's own second window for this Prüfidentifikator.
+    #[test]
+    fn a_same_day_cutoff_never_resolves_into_the_past() {
+        let eog = antwort_obligation(55_013).expect("55013 is catalogued");
+        assert_eq!(eog.frist, FristShape::SameDayAt(at(15)));
+
+        // Thu 2026-06-11 at 09:00 Berlin (07:00 UTC) — inside the window, so the
+        // tighter same-day instant stands.
+        let morning = utc(2026, Month::June, 11, 7);
+        let due = eog.frist.due_at(morning, HolidayCalendar::BdewMaKo);
+        assert_eq!(
+            due.to_timezone(timezones::db::europe::BERLIN).date(),
+            Date::from_calendar_date(2026, Month::June, 11).unwrap()
+        );
+        assert!(due > morning);
+
+        // The same Thursday at 18:00 Berlin — 15:00 is gone, so Friday 15:00.
+        let evening = utc(2026, Month::June, 11, 16);
+        let due = eog.frist.due_at(evening, HolidayCalendar::BdewMaKo);
+        assert!(due > evening, "a deadline in the past cannot be answered");
+        assert_eq!(
+            due.to_timezone(timezones::db::europe::BERLIN).date(),
+            Date::from_calendar_date(2026, Month::June, 12).unwrap()
+        );
+
+        // Saturday 2026-06-13 morning — not a Werktag, so Monday 15:00.
+        let saturday = utc(2026, Month::June, 13, 7);
+        let due = eog.frist.due_at(saturday, HolidayCalendar::BdewMaKo);
+        assert_eq!(
+            due.to_timezone(timezones::db::europe::BERLIN).date(),
+            Date::from_calendar_date(2026, Month::June, 15).unwrap()
+        );
+
+        // The operator window is then reachable, which is the point.
+        for received in [morning, evening, saturday] {
+            let window = operator_window(55_013, received);
+            assert!(
+                window.expires_at > received,
+                "the queue entry must not expire before it is created"
+            );
+        }
     }
 
     /// The Modell-2 windows are 7 WT for the Anmeldung and 3 WT for the other

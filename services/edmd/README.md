@@ -107,9 +107,11 @@ the MSB. edmd is the MSB, so both halves are stored and both are tiered: the
 register readings in the `meter_readings` **point** table (§ 146 Abs. 4 AO — a
 stored difference cannot reproduce the values it came from) and the derived
 intervals relabelled onto the Lastgang register (`1-0:1.8.0` is a Zählerstand,
-`1-0:1.29.0` is the Lastgang). A Zählerstand is stored **unconverted**: § 25
-Nr. 4 MessEV converts the *difference*, so a gas register stays m³ while its
-interval is kWh_Hs. The ZSG is keyed by **Messlokation** as well as register — a
+`1-0:1.29.0` is the Lastgang).
+
+Two consequences. A Zählerstand is stored **unconverted** — § 25 Nr. 4 MessEV
+converts the *difference*, so a gas register stays m³ while its interval is
+kWh_Hs. And the ZSG is keyed by **Messlokation** as well as register, because a
 Marktlokation may be measured by several meters carrying the same OBIS code at
 the same instants.
 

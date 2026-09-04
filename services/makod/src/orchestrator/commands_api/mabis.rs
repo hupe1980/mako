@@ -245,7 +245,16 @@ fn parse_bilanzierungsmonat(s: &str) -> Result<mako_mabis::Bilanzierungsmonat, D
 /// | `version` | Yes | Versionsangabe, `CCYYMMDDHHMMSSZZZ`, ascending per §3.8.2 |
 /// | `receiver_mp_id` | Yes | BIKO code |
 /// | `sender_mp_id` | No | defaults to this operator's MP-ID |
+/// | `pruefidentifikator` | No | when stated, must be `13003` |
 /// | `intervals` | Yes | one entry per settlement slot: `from`, `to`, `quantity_kwh` |
+///
+/// # Why the Prüfidentifikator is checked rather than assumed
+///
+/// The filer and this renderer agree on these payload keys by convention alone.
+/// `mabis-syncd` states the Prüfidentifikator it believes it is filing under, and
+/// a mismatch is refused here: a filer wired to the wrong command would otherwise
+/// have its Zeitreihe rendered as a 13003 Summenzeitreihe whatever it meant to
+/// send, and the BIKO would settle a Bilanzierungsgebiet from it.
 pub(super) async fn dispatch_mabis_summenzeitreihe_uebermitteln(
     state: &CommandsApiState,
     payload: &serde_json::Value,
@@ -296,6 +305,16 @@ pub(super) async fn dispatch_mabis_summenzeitreihe_uebermitteln(
         .unwrap_or(state.sender_party_id.as_str())
         .to_owned();
 
+    const SUMMENZEITREIHE_PID: u64 = 13_003;
+    if let Some(stated) = payload.get("pruefidentifikator").and_then(|v| v.as_u64())
+        && stated != SUMMENZEITREIHE_PID
+    {
+        return Err(DispatchError::InvalidPayload(format!(
+            "\"pruefidentifikator\" is {stated}, but this command renders MSCONS \
+             {SUMMENZEITREIHE_PID} (Übertragung Summenzeitreihe, MSCONS AHB 3.2 §8.3.1)"
+        )));
+    }
+
     let causation = EventId::new();
     let message = OutboxMessage {
         message_id: OutboxMessageId::new(),
@@ -310,7 +329,7 @@ pub(super) async fn dispatch_mabis_summenzeitreihe_uebermitteln(
         message_type: "MSCONS".into(),
         recipient: receiver_mp_id.as_str().into(),
         payload: serde_json::json!({
-            "pid": 13003,
+            "pid": SUMMENZEITREIHE_PID,
             "sender_mp_id": sender_mp_id,
             "receiver_mp_id": receiver_mp_id,
             "mabis_zp_id": mabis_zp_id,

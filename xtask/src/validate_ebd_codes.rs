@@ -368,11 +368,18 @@ fn heading(line: &str) -> Option<(String, String)> {
     // `E_0510_Anmeldung prüfen` — the id is the first six characters; the
     // underscore after them separates it from the tree's name, and splitting on
     // the *first* underscore would yield `E`.
+    //
+    // The separator is not always there. EBD 4.3 Kap. 8.14.2 prints
+    // „E_0567 Nichtzahlungsavis prüfen" with a space, and requiring the
+    // underscore made that whole tree unknown to this guard — so a catalogue
+    // entry for it was reported as answering with a tree the document does not
+    // publish, which is the opposite of the truth.
     let word = it.next()?;
-    if word.len() <= 6 || word.as_bytes()[6] != b'_' {
-        return None;
-    }
-    let id = &word[..6];
+    let id = match word.len() {
+        6 => word,
+        n if n > 6 && word.as_bytes()[6] == b'_' => &word[..6],
+        _ => return None,
+    };
     is_tree_id(id).then(|| (num.to_owned(), id.to_owned()))
 }
 
@@ -408,11 +415,18 @@ fn code_tokens(line: &str) -> Vec<String> {
     out
 }
 
-/// `A01`, `A100`, `AC1` — the Prüfschritt code space.
+/// `A01`, `A100`, `AC1`, `AE6`, `AF2` — the Prüfschritt code space.
+///
+/// The lettered forms are **not** just `AC#`. EBD 4.3 uses `AE6`–`AE9` and
+/// `AF0`–`AF2` in the Messstellenbetrieb trees, and hard-coding `C` made every
+/// one of them invisible to this guard — including to the completeness check
+/// below, which can only report a code it can recognise. A tree that publishes
+/// nothing but lettered codes was checked against an empty published set and
+/// passed.
 fn is_a_code(w: &str) -> bool {
     let b = w.as_bytes();
     match b {
-        [b'A', b'C', d] => d.is_ascii_digit(),
+        [b'A', c, d] if c.is_ascii_uppercase() => d.is_ascii_digit(),
         [b'A', rest @ ..] if (2..=3).contains(&rest.len()) => rest.iter().all(u8::is_ascii_digit),
         _ => false,
     }

@@ -97,7 +97,7 @@ impl Skill for GabiAllocationTriage {
             "sender_eic": sender_eic,
             "receiver_eic": receiver_eic,
             "action": "OPEN_CLEARING_CASE",
-            "legal_basis": "KoV §6.4",
+            "legal_basis": "§ 47 Ziffer 1 KoV XV",
         });
         Ok(Outcome::done(input.map(|_| answer)))
     }

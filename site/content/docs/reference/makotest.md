@@ -181,7 +181,7 @@ windows and of nothing else:
 | `shape` | Window | Example |
 |---|---|---|
 | `werktag_at` | a clock time on the *n*-th Werktag after the ÜT | 55001 → 11:00 on the 1. WT |
-| `same_day_at` | that clock time **on the ÜT itself** | 55013 → 15:00 am ÜT |
+| `same_day_at` | that clock time **on the ÜT itself**, rolling to the next Werktag when it would already be behind the message | 55013 → 15:00 am ÜT |
 | `end_of_werktag` | the **end** of the *n*-th Werktag | 44001 → Ablauf 4. WT |
 | `werktage_at_cutoff` | 17:00 Europe/Berlin on the *n*-th Werktag | 55039 → 3 WT |
 
@@ -189,7 +189,15 @@ GPKE alone uses the first two, and they share a clock time: „15:00 Uhr am ÜT"
 „15:00 Uhr des 1. WT nach dem ÜT" are a full day apart, so `werktage` is what
 separates them and `o.window` renders the pair. Sizing any of these the same is
 wrong in both directions, and the loose direction is silent: it reports a lapsed
-Frist as still running. So ask the table:
+Frist as still running.
+
+`same_day_at` carries one exception, in the other direction. A message that
+arrives after the cut-off, or on a Saturday, a Sunday or a Feiertag, would resolve
+to an instant already behind it — a deadline nobody could have met, reported as a
+breach. Those roll to the same clock time on the next Werktag, which is the second
+window the Festlegung publishes for the same Prüfidentifikator.
+
+So ask the table:
 
 ```python
 from makotest import antwort_obligation, antwort_obligations, assert_deadline_is

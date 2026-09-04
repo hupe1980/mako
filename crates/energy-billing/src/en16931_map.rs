@@ -298,18 +298,22 @@ impl Invoice {
             // One group per (category, rate), not one per advance: BR-CO-*
             // reconciles on the group, and a monthly Abschlagsplan would
             // otherwise put eleven identical allowances on the page.
-            let mut groups: std::collections::BTreeMap<(&'static str, String), Decimal> =
+            // Keyed on the `Decimal` rate itself. Rendering it to a string to
+            // key the map and parsing it back needed a fallback for a parse that
+            // cannot fail, and the fallback was a **zero rate** — the one value
+            // that turns a lost rate into a plausible-looking untaxed allowance
+            // rather than an error. `group_key` already normalises trailing
+            // zeros, so `0.19` and `0.190` still group together.
+            let mut groups: std::collections::BTreeMap<(&'static str, Decimal), Decimal> =
                 std::collections::BTreeMap::new();
             for advance in &advances {
                 for entry in advance.tax() {
                     let (cat, rate) = entry.group_key();
-                    *groups
-                        .entry((cat.code(), rate.to_string()))
-                        .or_insert(Decimal::ZERO) += entry.taxable_base.into_decimal();
+                    *groups.entry((cat.code(), rate)).or_insert(Decimal::ZERO) +=
+                        entry.taxable_base.into_decimal();
                 }
             }
             for ((cat, rate), base) in groups {
-                let rate: Decimal = rate.parse().unwrap_or(Decimal::ZERO);
                 builder = builder.allowance(en16931::invoice::DocumentAllowanceCharge {
                     amount: amount(base.round_kfm(2)),
                     base_amount: None,

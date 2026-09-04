@@ -120,6 +120,7 @@ pub struct DraftRow {
     /// `makod` process UUID once dispatched.
     pub dispatch_ref: Option<String>,
     /// When it was dispatched.
+    #[serde(with = "time::serde::rfc3339::option")]
     pub dispatched_at: Option<time::OffsetDateTime>,
     /// REMADV 33001 reference once paid.
     pub remadv_ref: Option<String>,
@@ -134,8 +135,10 @@ pub struct DraftRow {
     /// Why the recalculation happened.
     pub korrektur_grund: Option<String>,
     /// Insert time.
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
     /// Last change.
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
 
@@ -186,6 +189,7 @@ pub struct DraftSummaryRow {
     /// Payment due date — what an overdue report measures against.
     pub due_date: Date,
     /// Insert time.
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
 }
 
@@ -989,8 +993,10 @@ pub struct AuditRow {
     /// BO4E schema version of the stored document.
     pub bo4e_version: String,
     /// Insert time.
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
     /// Last change.
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
 
@@ -1070,16 +1076,20 @@ pub struct KostenblattRow {
     /// Submission status.
     pub status: String,
     /// When it was submitted.
+    #[serde(with = "time::serde::rfc3339::option")]
     pub submitted_at: Option<time::OffsetDateTime>,
     /// Submission reference.
     pub dispatch_ref: Option<String>,
     /// Activation window start.
+    #[serde(with = "time::serde::rfc3339::option")]
     pub activation_start_utc: Option<time::OffsetDateTime>,
     /// Activation window end.
+    #[serde(with = "time::serde::rfc3339::option")]
     pub activation_end_utc: Option<time::OffsetDateTime>,
     /// Provenance of `dispatch_kwh`.
     pub dispatch_source: Option<String>,
     /// Insert time.
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
 }
 
@@ -1285,8 +1295,10 @@ pub struct FremdkostenRow {
     /// Sum of the positions, in EUR.
     pub total_eur: Decimal,
     /// Insert time.
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
     /// Last change.
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
 

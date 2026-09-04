@@ -54,7 +54,7 @@ crates = [
   { name = "mako-engine", url = "https://crates.io/crates/mako-engine" },
 ]
 # Latest supported BDEW EDI@Energy format versions (shown in the footer).
-format_versions = "FV2026-04-01 · FV2026-10-01"
+format_versions = "FV2025-04-01 → FV2026-10-01"
 # Mermaid diagram rendering (pinned major, loaded only on pages that need it).
 mermaid_version = "11"
 # SEO / social card

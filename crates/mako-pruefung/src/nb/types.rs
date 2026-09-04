@@ -64,7 +64,7 @@ impl Marktlokationsart {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Veraeusserungsform {
     /// `Z90` — Einspeisevergütung (§ 21 Abs. 1 Nr. 1 EEG 2023) **or**
-    /// Ausfallvergütung (§ 21 Abs. 1 Nr. 2 EEG 2023).
+    /// Ausfallvergütung (§ 21 Abs. 1 Satz 1 Nr. 3 EEG 2023).
     ///
     /// One wire code, two regimes with different Fristen: the Ausfallvergütung
     /// takes the verkürzte 5-Werktage-Vorlauffrist, the uneingeschränkte
@@ -141,8 +141,8 @@ pub struct ErzeugungsAnmeldung {
     /// 405 / 605 / 805), which takes the ordinary Werktag-Vorlauffrist rather
     /// than the EEG Monatserster rule.
     pub nicht_eeg_kwkg: bool,
-    /// `true` when the plant is on the **Ausfallvergütung** (§ 21 Abs. 1 Nr. 2
-    /// EEG 2023 / § 38 EEG 2014) rather than the uneingeschränkte
+    /// `true` when the plant is on the **Ausfallvergütung** (§ 21 Abs. 1 Satz 1
+    /// Nr. 3 EEG 2023, Nr. 2 under the EEG 2017) rather than the uneingeschränkte
     /// Einspeisevergütung — the „verkürzter Wechsel" of `E_0622` Prüfschritt
     /// 420, whose Vorlauffrist is 5 Werktage instead of a month.
     ///
@@ -164,12 +164,20 @@ pub struct ErzeugungsAnmeldung {
     #[serde(default)]
     pub tranchen_prozent: std::collections::BTreeMap<String, Decimal>,
     /// Prüfschritt 540 — „Handelt es sich um eine direktvermarktungspflichtige
-    /// Marktlokation?" (§ 21b EEG), from the NB's EEG-Register.
+    /// Marktlokation?", from the NB's EEG-Register.
     ///
-    /// `None` means *unread*, not „nein": the answer follows from the Anlage's
-    /// registration and installed capacity, which no message carries. Reading it
-    /// as „nein" would settle Prüfschritt 540 for every Anmeldung and make `A55`
-    /// — the „Herstellung einer 100 % LF-Zuordnung" trigger — unreachable.
+    /// The duty is the shadow of § 21 Abs. 1 Satz 1 Nr. 1 EEG: the
+    /// Einspeisevergütung mit gesetzlich bestimmtem Wert stops at 100 kW, so a
+    /// larger Anlage has to take a Direktvermarktung — and § 20 Satz 1 Nr. 3
+    /// then pays the Marktprämie only while the Strom is balanced in a
+    /// Bilanzkreis holding nothing else, which is what a residual share in the
+    /// NB's own Bilanzkreis destroys. Hence `A55`.
+    ///
+    /// `None` means *unread*, not „nein": no message carries installed capacity,
+    /// and for a plant commissioned before 2016 even the register cannot answer
+    /// it. Reading it as „nein" would settle Prüfschritt 540 for every Anmeldung
+    /// and make `A55` — the „Herstellung einer 100 % LF-Zuordnung" trigger —
+    /// unreachable.
     #[serde(default)]
     pub direktvermarktungspflichtig: Option<bool>,
 }
@@ -412,9 +420,9 @@ pub struct TranchenLage {
     /// Prüfschritt 540 — „Handelt es sich um eine direktvermarktungspflichtige
     /// Marktlokation?"
     ///
-    /// Supplied rather than derived: it follows from the Anlage's registration
-    /// and installed capacity (§ 21b EEG), which is the NB's EEG-Register and
-    /// not anything the assignment list can answer.
+    /// Supplied rather than derived: it follows from the Anlagen's installed
+    /// capacity (§ 21 Abs. 1 Satz 1 Nr. 1 EEG), which is the NB's EEG-Register
+    /// and not anything the assignment list can answer.
     ///
     /// [`TranchenLage`] carries only resolved facts: a caller that cannot read
     /// this one passes no `TranchenLage` at all, and

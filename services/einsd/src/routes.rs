@@ -67,6 +67,20 @@ pub fn build_router(
             "/api/v1/anlagen/{tr_id}/mastr-registrierung",
             post(crate::handlers::post_mastr_registrierung),
         )
+        // ── §52 Abs. 1 EEG 2023 — the Pflichtverstoß register ─────────────────
+        // Nine of the thirteen Nummern are not derivable from a plant row, so
+        // this is the only path by which they ever reach a settlement; for the
+        // four that are, a record supplies the start date and the Abs. 3
+        // reductions.
+        .route(
+            "/api/v1/anlagen/{tr_id}/pflichtverstoesse",
+            axum::routing::get(crate::handlers::get_pflichtverstoesse)
+                .post(crate::handlers::post_pflichtverstoss),
+        )
+        .route(
+            "/api/v1/anlagen/{tr_id}/pflichtverstoesse/{typ}/behoben",
+            axum::routing::put(crate::handlers::put_pflichtverstoss_behoben),
+        )
         // ── §§53b–54 EEG 2023 — facts that cut the anzulegender Wert ─────────
         // Recording them through the API keeps a change that silently reduces a
         // Gutschrift behind the same Cedar gate as every other lifecycle event.
@@ -130,10 +144,16 @@ pub fn build_router(
         )
         // ── EPEX spot per-interval prices (§51 Negativpreisregel) ──────────────
         .route("/api/v1/epex-spot", put(crate::handlers::put_epex_spot))
-        // ── §20 Abs. 2 Jahresmarktwert prices (ÜNB-published) ─────────────────
+        // ── Anlage 1 Nr. 2–4 Marktwert prices (ÜNB-published) ─────────────────
+        // `art` is `monat` or `jahr`: two series, and which one a plant settles
+        // on follows its Inbetriebnahme/Zuschlag date, never the operator.
         .route(
-            "/api/v1/jahresmarktwert/{year}/{month}/{erzeugungsart}",
-            put(crate::handlers::put_jahresmarktwert).get(crate::handlers::get_jahresmarktwert),
+            "/api/v1/marktwert/{year}/{art}/{erzeugungsart}",
+            put(crate::handlers::put_marktwert).get(crate::handlers::get_marktwert),
+        )
+        .route(
+            "/api/v1/marktwert/{year}/nachbewertung",
+            get(crate::handlers::get_marktwert_nachbewertung),
         )
         // ── Einspeiser (Anlagenbetreiber) ──────────────────────────────────────
         // The § 19 UStG election and the payout account belong to the operator,

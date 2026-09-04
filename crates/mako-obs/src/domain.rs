@@ -208,6 +208,11 @@ pub struct ProcessProjection {
     /// for this PID. That is *unknown*, not unbounded — such a process is
     /// deliberately absent from every breach sweep rather than measured against
     /// an instant nobody can cite.
+    ///
+    /// RFC 3339 on the wire, so the REST and MCP surfaces state one deadline the
+    /// same way. `time`'s derived `serde` format is not ISO 8601
+    /// (`1970-01-01 00:00:00.0 +00:00:00`) and most parsers reject it.
+    #[serde(with = "time::serde::rfc3339::option")]
     pub deadline_at: Option<OffsetDateTime>,
     /// Citation for `deadline_at`, carried so an alert and a BNetzA answer can
     /// both name the Festlegung rather than asserting a number.
@@ -215,8 +220,10 @@ pub struct ProcessProjection {
     /// Risk classification at the time of the last update.
     pub deadline_risk: DeadlineRisk,
     /// UTC timestamp of the first event seen for this process.
+    #[serde(with = "time::serde::rfc3339")]
     pub started_at: OffsetDateTime,
     /// UTC timestamp of the most recently received event.
+    #[serde(with = "time::serde::rfc3339")]
     pub last_event_at: OffsetDateTime,
     /// BDEW ERC error code when `state == Rejected` (e.g. `"E01"`, `"Z29"`).
     pub erc_code: Option<String>,

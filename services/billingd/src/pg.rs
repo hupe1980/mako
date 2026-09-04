@@ -33,6 +33,7 @@ pub struct BillingRecordRow {
     pub total_netto_eur: Option<Decimal>,
     pub total_brutto_eur: Option<Decimal>,
     pub outcome: String,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub dispatched_at: Option<OffsetDateTime>,
     /// TRUE = Stornorechnung / Korrekturrechnung.
     pub is_correction: bool,

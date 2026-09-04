@@ -359,10 +359,11 @@ fn marktlokationsart_of(pid: u32, ergaenzung: Option<&str>) -> Marktlokationsart
 /// Returns `None` when the Veräußerungsform or the Geschäftsvorfall is absent or
 /// unknown — `evaluate` then escalates, which is the § 20 EnWG-safe answer.
 ///
-/// **`bestehende_veraeusserungsform` is deliberately `None` here.** It is the
-/// NB's own EEG-/KWKG-Register, not a wire fact, and `processd` has no reader
-/// for it; the engine escalates the Veräußerungsformwechsel question rather
-/// than assuming there was none.
+/// **`bestehende_veraeusserungsform`, `ausfallverguetung` and
+/// `direktvermarktungspflichtig` are deliberately empty here.** All three are
+/// the NB's own EEG-/KWKG-Register rather than wire facts;
+/// `evaluate_and_decide` fills them from `einsd` before the tree runs, and a
+/// deployment without that reader escalates instead of assuming.
 fn erzeugung_of(
     ergaenzung: Option<&str>,
     veraeusserungsform: Option<&str>,
@@ -390,6 +391,7 @@ fn erzeugung_of(
         // it is measured against is filled in by the caller from `marktd`.
         gewuenschter_prozentsatz: tranchengroesse_prozent,
         tranchen_prozent: std::collections::BTreeMap::new(),
+        // `E_0623` Prüfschritt 540 — filled from `einsd`, see above.
         direktvermarktungspflichtig: None,
     })
 }
@@ -552,11 +554,18 @@ pub async fn evaluate_and_decide(
     // needs the form in force at the Zuordnungsbeginn. That is the NB's own
     // EEG-/KWKG-Register, not the message — and `Z90` covers two regimes with
     // different Fristen, so the Ausfallvergütung flag comes from there too.
+    //
+    // The same read answers `E_0623` Prüfschritt 540: the
+    // Direktvermarktungspflicht follows from the Anlagen's installed capacity
+    // (§ 21 Abs. 1 Satz 1 Nr. 1 EEG), which only the register holds. It stays
+    // `None` when the register cannot answer it, and `tranchen_lage` then builds
+    // no `TranchenLage` at all rather than choosing between `A55` and `A56`.
     if let (Some(erz), Some(einsd)) = (anfrage.erzeugung.as_mut(), einsd) {
         match einsd.veraeusserungsform(&malo_id).await {
             Ok(Some(auskunft)) => {
                 erz.bestehende_veraeusserungsform = Some(auskunft.veraeusserungsform);
                 erz.ausfallverguetung = auskunft.ausfallverguetung;
+                erz.direktvermarktungspflichtig = auskunft.direktvermarktungspflichtig;
             }
             // Not in the register. That is not evidence of a
             // „Nicht-EEG-/-KWKG"-Marktlokation, so the engine escalates.

@@ -182,7 +182,7 @@ pub struct NominationData {
 
     /// Reference to the prior NOMINT that this re-nomination corrects.
     ///
-    /// Per KoV §3.2: the BKV may submit corrections within the intraday
+    /// The BKV may submit corrections within the intraday
     /// re-nomination window. Each correcting NOMINT references the previous
     /// NOMINT's `nomination_ref` via this field, creating an auditable
     /// nomination correction chain.
@@ -231,8 +231,10 @@ pub struct NominationPosition {
 #[serde(deny_unknown_fields)]
 pub struct NominationMenge {
     /// Start of the period, UTC.
+    #[serde(with = "time::serde::rfc3339")]
     pub von: time::OffsetDateTime,
     /// End of the period, exclusive, UTC.
+    #[serde(with = "time::serde::rfc3339")]
     pub bis: time::OffsetDateTime,
     /// `QTY` DE 6060 in `KW1` — kilowatt-hours per hour.
     pub kwh_pro_h: rust_decimal::Decimal,
@@ -255,6 +257,7 @@ pub struct Renominierung {
     /// The corrected nomination's Dokumentennummer.
     pub nomination_ref: MessageRef,
     /// When the corrected nomination was processed, UTC.
+    #[serde(with = "time::serde::rfc3339")]
     pub processed_at: time::OffsetDateTime,
 }
 

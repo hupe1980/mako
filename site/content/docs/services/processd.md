@@ -170,6 +170,18 @@ direktvermarktungspflichtige Marktlokation (530/540 → `A55` against `A56`, the
 trigger for „Herstellung einer 100 % LF-Zuordnung"). Four of the tree's six
 outcomes exist only here.
 
+Prüfschritt 540 is not cosmetic. §20 Satz 1 Nr. 3 EEG pays the Marktprämie only
+while the Strom sits in a Bilanz- oder Unterbilanzkreis holding nothing but
+direkt vermarkteten EE-Strom, so a residual share in the NB's own Bilanzkreis
+costs a direktvermarktungspflichtige plant its claim.
+
+The fact is register data — installed capacity against the §21 Abs. 1 Satz 1
+Nr. 1 ceiling of 100 kW — and `processd` reads it from `einsd` on the same call
+that answers the `E_0622` Vorlauffrist. A register that cannot answer it (a plant
+commissioned before 2016 falls under an EEG version outside mako's corpus) leaves
+`processd` with no `TranchenLage`, and `E_0623` escalates rather than choosing
+between `A55` and `A56`.
+
 The share the LFN registers rides the Produktpaket beside the Bilanzkreis —
 `SG8` Produkt-Code `9991000002090` with the Produkteigenschaft „prozentuale
 Aufteilung", which the AHB makes Muss on a Geschäftsvorfall 3. The same product
@@ -231,8 +243,9 @@ Veräußerungsform)`. The *angemeldete* one is `SG10 CCI+Z22` on the wire; the
 (`GET /api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform`, configured as
 `[nb] einsd_url`) — wire code `Z90` covers both the uneingeschränkte
 Einspeisevergütung and the Ausfallvergütung, whose Fristen differ by a month
-versus five Werktage. A missing fact escalates and is named; the statutory anchor
-for the Monatserster rule is **§ 21b Abs. 1 EEG 2023**, not § 10c.
+versus five Werktage. The same call answers `E_0623` Prüfschritt 540. A missing
+fact escalates and is named; the statutory anchor for the Monatserster rule is
+**§ 21b Abs. 1 Satz 2 EEG 2023**, not § 10c.
 
 **Gas** (`G_0011`) runs the `A03`/`A04`/`A16`/`A17` identification checks first,
 as the AHB requires, then `E17` for a Fristüberschreitung, `E13` for a
@@ -293,7 +306,8 @@ keeps a customer bound to a supplier they have left.
 Anmeldung. The `malo_grid` record is a prerequisite — a missing one escalates —
 so STP improves markedly once it is provisioned. An **erzeugende** Marktlokation additionally needs
 `[nb] einsd_url`: `E_0622` chooses between six published Vorlauffristen from the
-*bestehende* Veräußerungsform, which is register data and not on the wire. A
+*bestehende* Veräußerungsform, and `E_0623` Prüfschritt 540 needs the
+Direktvermarktungspflicht — both register data, neither on the wire. A
 deployment without it escalates every 55077 — the § 20 EnWG-safe outcome, since
 none of the six is a defensible default.
 
@@ -440,13 +454,21 @@ and its own Antwortfrist:
 |---|---|---|---|---|---|
 | Strom | 55007 | Lieferende von NB an LF | `E_0609` | 55008 / 55009 | 05:00 Uhr des 1. WT nach dem ÜT |
 | Strom | 55010 | Beendigung der Zuordnung | `E_0624` | 55011 / 55012 | 09:00 Uhr des 1. WT nach dem ÜT |
-| Strom | 55013 | Anmeldung E/G (§ 36 / § 38 EnWG) | `E_0615` | 55014 / 55015 | **15:00 Uhr am ÜT** |
+| Strom | 55013 | Anmeldung E/G (§ 36 / § 38 EnWG) | `E_0615` | 55014 / 55015 | **15:00 Uhr am ÜT**, sonst 15:00 Uhr des 1. WT |
 | Strom | 55016 | Kündigung (LFN → LFA) | `E_0614` | 55017 / 55018 | Ablauf des 1. WT nach dem ÜT |
-| Strom | 55607 | Ankündigung Zuordnung LF (erz. MaLo / Tranche) | `E_0603`–`E_0606` | 55608 / 55609 | **15:00 Uhr am ÜT** |
+| Strom | 55607 | Ankündigung Zuordnung LF (erz. MaLo / Tranche) | `E_0603`–`E_0606` | 55608 / 55609 | **15:00 Uhr am ÜT**, sonst 15:00 Uhr des 1. WT |
 | Gas | 44007 | Lieferende von NB an LF | `E_3002` | 44008 / 44009 | Ablauf des 3. WT |
 | Gas | 44010 | Beendigung der Zuordnung | `E_3020` | 44011 / 44012 | Ablauf des 3. WT |
 | Gas | 44013 | Anmeldung E/G | `E_3008` | 44014 / 44015 | Ablauf des 2. WT |
 | Gas | 44016 | Kündigung beim Altlieferanten | `E_3001` | 44017 / 44018 | Ablauf des 3. WT |
+
+GPKE Teil 2 states two windows for the two „am ÜT" rows, selected by whether the
+Zuordnungsbeginn lies in the future (§ 2.3.2.2 resp. § 2.4.2.2). Keyed on the
+Prüfidentifikator alone the table cannot see which applies, so `mako-fristen`
+publishes the tighter same-day instant — except where that instant is already
+behind the message, after the cut-off or on a non-Werktag, in which case it rolls
+to 15:00 on the next Werktag. A deadline in the past reports a breach against a
+party that never had a window.
 
 The same business process carries the same command name in both Sparten —
 `{gpke,geli}.nb-lieferende.*`, `{gpke,geli}.beendigung-zuordnung.*`,

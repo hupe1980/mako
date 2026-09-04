@@ -539,21 +539,54 @@ fn sect52_violations_are_derived_in_one_place() {
         ("handlers.rs", HANDLERS),
     ] {
         let code = code_only(src);
+        // Naming a `SanktionsTyp` is fine — the register stores one and the REST
+        // surface parses one. *Building a `Pflichtverstoss`* is what has to stay
+        // in one place, so the §52 Abs. 3 flags and the Abs. 4 month extension
+        // cannot be applied on one path and forgotten on another.
         assert!(
-            !code.contains("SanktionsTyp::"),
+            !code.contains("Pflichtverstoss {"),
             "{name} constructs a §52 violation — that belongs in sect52.rs"
         );
     }
     let sect52 = code_only(SECT52);
     for typ in [
         "FernsteuerbarkeitFehlend",
-        "DirektvermarktungspflichtVerletzt",
+        "Sect10bVorgabenVerletzt",
         "AusfallverguetungHoechstdauerUeberschritten",
         "ZuordnungsWechselNichtGemeldet",
         "MastrNichtRegistriert",
     ] {
         assert!(sect52.contains(typ), "sect52.rs no longer derives {typ}");
     }
+}
+
+/// The `eeg_pflichtverstoesse.typ` CHECK is the `SanktionsTyp` vocabulary.
+///
+/// The register is the only path by which nine of the thirteen §52 Abs. 1
+/// Nummern ever reach a settlement, so a breach the enum knows and the CHECK
+/// rejects is a breach that cannot be filed at all — and one the CHECK accepts
+/// and the enum does not is a row `list_pflichtverstoesse` silently skips.
+#[test]
+fn the_pflichtverstoss_check_matches_the_enum() {
+    let schema = code_only(SCHEMA);
+    let start = schema
+        .find("CREATE TABLE eeg_pflichtverstoesse")
+        .expect("the register table exists");
+    let table = &schema[start..schema[start..].find(");").expect("table ends") + start];
+    for typ in eeg_billing::SanktionsTyp::ALL {
+        assert!(
+            table.contains(&format!("'{}'", typ.as_db_str())),
+            "eeg_pflichtverstoesse.typ rejects §52 Abs. 1 Nr. {} ({})",
+            typ.nummer(),
+            typ.as_db_str()
+        );
+    }
+    let in_check = table.matches('\'').count() / 2;
+    assert_eq!(
+        in_check,
+        eeg_billing::SanktionsTyp::ALL.len(),
+        "the CHECK admits a token the enum does not know"
+    );
 }
 
 /// The §9 obligation is staged by capacity, so a flat capacity test is a bug.

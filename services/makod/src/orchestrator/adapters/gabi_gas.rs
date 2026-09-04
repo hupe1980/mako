@@ -301,7 +301,7 @@ pub fn gabi_gas_allocation_registry() -> AdapterRegistry<GaBiGasAllocationWorkfl
 
             // The version is stated by the document-name code, not assumed:
             // reporting every message as `Initial` hides whether the binding
-            // final allocation ever arrived, which is what the KoV §6.4 deadline
+            // final allocation ever arrived, which is what the § 47 Ziffer 1 KoV XV deadline
             // watches for.
             //
             // `X5G` (Endgültige Allokation) is deliberately **not** mapped to
@@ -309,7 +309,7 @@ pub fn gabi_gas_allocation_registry() -> AdapterRegistry<GaBiGasAllocationWorkfl
             // messages that follow the endgültige one, while the workflow treats
             // `Final` as settled and refuses any later correction — so mapping it
             // would drop every correction that arrives afterwards. Closing that
-            // needs the KoV §6.4 question of what "binding" means once a
+            // needs the § 47 Ziffer 1 KoV XV question of what "binding" means once a
             // correction follows, which is a process decision, not a parse one.
             let version = match msg.document {
                 DvgwDocument::KorrigierteAllokationBilanzierungsbrennwert

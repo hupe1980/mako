@@ -38,8 +38,8 @@ The BilAReM domain layer spans three seams:
 - `mako_redispatch::ausfallarbeit` — the full Kap.-3 Ausfallarbeit engine per
   the final Anlage (Beschluss 07.05.2026): `P_lim` determination
   (Aufforderungs-/Duldungsfall, Referenzprofil/beidseitige Fixierung), Wind
-  Spitz-/vereinfachte Spitzabrechnung (`KF = P_VZ,ist/P_VZ,theo`, Nennleistung
-  cap), the Wind-Bin-Verfahren for WEA auf See (`KF_Bin = KF_LBin × KF_V`,
+  Spitz-/vereinfachte Spitzabrechnung (`KF = P_VZ,ist/P_VZ,theo` over the
+  Kap.-3.2.2.1 Vergleichszeitraum the engine selects itself, Nennleistung cap), the Wind-Bin-Verfahren for WEA auf See (`KF_Bin = KF_LBin × KF_V`,
   0,5-m/s bins per DIN EN 61400-12-1, `m ≥ 3`, Ersatzwert chain
   Vormonat → Folgemonat → 12-Monats-Mittel → 1, `KF_V ∈ ]0;1[`), Solar
   Spitz (irradiation-scaled, `P_WR` bound) and Pauschal (Anlagenfaktor table,
@@ -61,6 +61,34 @@ endpoints:
 | `POST /api/v1/redispatch/ausfallarbeit/ueberbauung` | Kap.-3.4 cap across the TR of one Netzlokation |
 | `POST /api/v1/redispatch/ausfallarbeit/kf-bin` | Kap.-3.2.3.2 `KF_Bin` for one 0,5-m/s bin — feed the result back as `kf` on a `wind_spitz` request |
 | `POST /api/v1/redispatch/ausfallarbeit/malo-split` | § 24 Abs. 3 S. 2 EEG 2023 — splits one marktlokationsscharfer Wert onto the TR behind the MaLo, pro rata by installed capacity |
+| `POST /api/v1/redispatch/ausfallarbeit/vergleichszeitraum` | Kap.-3.2.2.1 selection of the four Vergleichs-Viertelstunden and the `KF` they yield — feed the result back as `kf` on a `wind_spitz` request |
+| `POST /api/v1/redispatch/ausfallarbeit/vergleichstag` | Kap.-3.2.4.1 selection of the Solar Vergleichstag and the `P_VZ,ist` / `G_VZ` it yields — feed both back on a `solar_spitz` request |
+
+The Vergleichszeitraum is selected, not assumed. Kap. 3.2.2.1 admits four
+**contiguous** quarter-hours that are fully measured, carry unrestricted feed-in
+and each reach at least 10 % of the Nennleistung, taken from the side nearest the
+Maßnahme with ties going to the side before it, and never from the Folgemonat.
+Every one of those changes the Korrekturfaktor and through it every kWh.
+
+„Nearest" has **two anchors** — „vor oder nach der Viertelstunde, in der die
+Maßnahme beginnt **bzw. endet**" — so the request carries both
+`massnahme_beginn` and `massnahme_ende`. Measuring both sides from the beginning
+hands a four-hour Maßnahme a Vergleichszeitraum from hours before it when the
+quarter-hours right after are the nearest.
+
+`422` when no admissible run exists: the fallback to the vereinfachte
+Spitzabrechnung or the Pauschale is a decision, not a computation.
+
+**Solar does not share the wind rule.** Kap. 3.2.4.1 gives a Solaranlage a
+**calendar day** as its Vergleichszeitraum — the last preceding or first
+following day on which no Maßnahme was directed at the SR, ties to the day
+before, never from another month — and admits only the quarter-hours of that day
+that reach 10 % of the Nennleistung and carry no Nichtbeanspruchbarkeit or
+marktbedingte Anpassung. A day too dark to qualify is stepped over rather than
+ending the search („zurückzugehen bis zu dem letzten Tag, an dem eine
+Viertelstunde mit mehr als 10 % Einspeisung stattgefunden hat"). `P_VZ,ist / G_VZ`
+scales every kWh of the Spitzabrechnung, so `vergleichstag` decides it rather
+than each party's spreadsheet.
 
 An underoccupied bin is not an error on the `kf-bin` route: Kap. 3.2.3.2
 prescribes a binding Ersatzwert order, and the response names which step

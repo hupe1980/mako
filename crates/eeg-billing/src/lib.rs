@@ -19,7 +19,7 @@
 //! | `KwkSurcharge` | `eligible_kwh × rate / 100` (hour-limit cap) | §7 KWKG 2023 |
 //! | `FlexibilityPremium` | Vergütung + `kwh × flex_praemie_ct / 100` | §50b EEG 2023 (bestehende Anlagen) |
 //! | `FlexibilitySurcharge` | `kw × rate / 12` (monthly capacity payment) | §50a EEG 2023 (neue Anlagen) |
-//! | `TemporaryFeedInTariff` | `kwh × verguetungssatz_ct / 100` (reduced Ausfallvergütung) | §21 Abs. 1 Nr. 2 EEG 2023 |
+//! | `TemporaryFeedInTariff` | `kwh × verguetungssatz_ct / 100` (reduced Ausfallvergütung) | §21 Abs. 1 Satz 1 Nr. 3 EEG 2023 |
 //! | `SonstigeDirektvermarktung` | EUR 0 — revenue on the open market, no NB payment | §21a EEG |
 //!
 //! # One formula — all EEG versions (2000–2024)
@@ -98,7 +98,6 @@ pub mod reductions;
 pub mod rounding;
 pub mod scheme;
 pub mod settlement_state;
-pub mod solar;
 pub mod tariff;
 pub mod technology;
 pub mod ust;
@@ -118,11 +117,11 @@ pub use aw_reductions::{AwReductionApplied, AwReductionContext, Sect54SolarReduc
 pub use biomasse::{bemessungsleistung_stunden, sect44b_jahreskontingent_kwh};
 pub use error::SettlementError;
 pub use foerderdauer::{
-    calculate_pflichtzahlung, compute_billing_days_fraction, foerderendedatum_eeg,
-    foerderendedatum_eeg_ausschreibung, foerderendedatum_kwkg_years, foerderendedatum_repowering,
-    kwk_eligible_kwh, kwk_foerderend_calendar, kwk_max_kwh, pflichtzahlung_verjaehrt_am,
-    sect52a_netztrennung_erforderlich, verguetungszeitraum_verlaengerung_qh,
-    wind_onshore_korrekturfaktor_corrected_aw,
+    SECT51A_SOLAR_FACTOR_DENOMINATOR, calculate_pflichtzahlung, compute_billing_days_fraction,
+    foerderendedatum_eeg, foerderendedatum_eeg_ausschreibung, foerderendedatum_kwkg_years,
+    foerderendedatum_repowering, kwk_eligible_kwh, kwk_foerderend_calendar, kwk_max_kwh,
+    pflichtzahlung_verjaehrt_am, sect52a_netztrennung_erforderlich,
+    verguetungszeitraum_verlaengerung_qh, wind_onshore_korrekturfaktor_corrected_aw,
 };
 pub use formula::calculate_settlement;
 pub use model::{
@@ -134,8 +133,9 @@ pub use negativpreis::{
 };
 pub use rounding::RoundMoney;
 pub use scheme::{
-    AusschreibungMetadata, CorrectionReason, MarktpreisKategorie, Paragraph100Rule,
-    SettlementScheme, SettlementType, TariffSource,
+    ANLAGE1_NR2_STICHTAG, AusschreibungMetadata, CorrectionReason, MarktpreisKategorie,
+    Marktwertserie, Paragraph100Rule, SettlementScheme, SettlementType, TariffSource,
+    marktwertserie,
 };
 pub use technology::{
     ErzeugungsArt, InbetriebnahmeTyp, InvalidErzeugungsArt, InvalidInbetriebnahmeTyp,
@@ -149,14 +149,14 @@ pub use zusammenfassung::{
 
 // Domain module guide:
 // degression: §49 semi-annual solar AW degression — degressionsstufen, abgesenkter_wert
-// direktverm: §§20–22 Direktvermarktung — mandatory threshold, Ausschreibungspflicht, period model
+// direktverm: §§20–22 Veräußerungsformen — Direktvermarktungspflicht (§21 Abs.1 S.1 Nr.1),
+//   Ausschreibungspflicht (§22 Abs.2–5), Zuordnung und Wechsel (§21b/§21c)
 // (Metering topology, Eigenverbrauch/Überschuss split and §42b EnWG GGV allocation live in the
 //  external `metering` crate — AggregationRule, compute_virtual_meter, MeasurementPoint, Messtyp.)
 // reductions: §52 Pflichtzahlungen — apply_sect52_netting, ReductionPipeline (euro level)
 // aw_reductions: §§53b–54 — cuts to the anzulegender Wert, applied before the formula
 // zusammenfassung: §24 Abs. 1 — sind_eine_anlage, the full Sätze 1–5 decision
 // settlement_state: Monthly lifecycle state machine — SettlementPeriodState, derive_settlement_state
-// solar: §48 EEG PV subtypes, Volleinspeisung/Überschuss, Agri-PV
 // wind:  §36h Korrekturfaktor, Standortklasse, reference yield model
 // biomasse: §43/§44 fuel classes, Güllekleinanlage (≤75 kW, ≥80% Gülle)
 // foerderungsende: FoerderendeGrund enum, SanktionStatus lifecycle

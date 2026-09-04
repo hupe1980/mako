@@ -121,7 +121,7 @@ pub use mako_fristen::vorlauf::{
 pub const EEG_ZUORDNUNG_VORLAUF_MONATE_DEFAULT: u32 = 1;
 
 /// The **verkürzte** Vorlauffrist, in Werktage, for a plant leaving the
-/// Ausfallvergütung (§ 21 Abs. 1 Nr. 2 EEG 2023) — GPKE Teil 2 § 2.1.1 letzte
+/// Ausfallvergütung (§ 21 Abs. 1 Satz 1 Nr. 3 EEG 2023) — GPKE Teil 2 § 2.1.1 letzte
 /// Zeile, `E_0622` Prüfschritt 440 („Vorgabe nach EEG: 5 WT vor
 /// Zuordnungsbeginn").
 pub const EEG_VERKUERZTER_WECHSEL_WT: u32 = 5;
@@ -494,7 +494,7 @@ fn gv1(
                     "Verkürzte Vorlauffrist not met: Zuordnungsbeginn {}, latest ÜT \
                      {earliest_ut} ({EEG_VERKUERZTER_WECHSEL_WT} WT vor dem \
                      Zuordnungsbeginn), receipt {today}. The plant leaves the \
-                     Ausfallvergütung (§ 21 Abs. 1 Nr. 2 EEG 2023), for which GPKE Teil 2 \
+                     Ausfallvergütung (§ 21 Abs. 1 Satz 1 Nr. 3 EEG 2023), for which GPKE Teil 2 \
                      § 2.1.1 fixes the verkürzte Frist.",
                     anfrage.process_date
                 ),

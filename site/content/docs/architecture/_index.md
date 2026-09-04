@@ -162,7 +162,7 @@ Each is independently testable and suitable for crates.io publication.
 | `energy-billing` | Pure multi-product retail energy billing (LF) | `Product` (13 categories) through `BillingEngine`; §14a controllable loads; Strom-/Energiesteuer Tarife with Entlastung kept out of the amounts; HT/NT, block tariffs, RLM demand charge; calendar-exact proration; EN 16931 category `O`; §41a EPEX; `Invoice::merge` / `allocate_proportionally`; optional `eeg` and `bo4e` features; zero I/O |
 | `eeg-billing` | Pure EEG/KWKG feed-in settlement (NB) | `calculate_settlement`, 10 settlement schemes, §51/§52 rules, `InbetriebnahmeTyp`, proptest invariants; statutory anzulegende Werte per §§40–45 with each Erzeugungsart's own annual Absenkung; opt-in `bo4e` feature → **§14 UStG Gutschrift** (`settlement_to_gutschrift` → BO4E `Rechnung` with per-rate USt breakdown) |
 | `mako-invoic` | The INVOIC settle/dispute process, once — shared by all four billing families (GPKE, WiM, GaBi Gas, GeLi Gas) | `InvoicFamily` (PID set · deadline label · the two role capabilities), `InvoicWorkflow<F>`, `InvoicState`/`InvoicEvent`/`InvoicCommand` |
-| `invoic-checker` | INVOIC plausibility 6-check pipeline | `InvoicCheckEngine::check`, `CheckOutcome` |
+| `invoic-checker` | INVOIC plausibility — the eight-stage pipeline (Storno reference · period · Zahlungsziel · currency · arithmetic · total · Umsatzsteuer · tariff) | `InvoicCheckEngine::check`, `CheckOutcome` |
 | `mako-pruefung` | The published **Antwortcode** decision trees, executable | `nb`/`lf`/`msb`/`mabis` modules behind `role-*` features; `codes::lookup` resolves a code **within** its EBD; `Cluster` (8 variants incl. MaBiS `Abweisung` / list / `Reklamation`) picks the answer PID; unknown facts escalate, never guess |
 | `mako-obs` | Process observability types | `ProcessProjection`, `KpiReport`, `DeadlineRisk` |
 | `mako-service` | **Service SDK** — cross-cutting infrastructure for all 17 daemons | `load_config`, `DatabaseConfig`, `HttpConfig`, `shutdown::token/serve`, `OidcConfig::build_verifier`, `McpAuth`, `McpAuthConfig`, `init_tracing_from_env`, `CedarEnforcer`, `outbox`, `ServiceBuilder` |
@@ -266,7 +266,7 @@ and `agentd`, which is the MCP *host* that calls the others.
 
 | Daemon | Port | Role | Config file |
 |--------|------|------|-------------|
-| [`makod`](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | Protocol gateway — EDIFACT ↔ BO4E, 71 workflows, AS4 ingest, deadlines | `makod.toml` |
+| [`makod`](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | Protocol gateway — EDIFACT ↔ BO4E, 71 workflows over 469 Prüfidentifikatoren, AS4 ingest, deadlines | `makod.toml` |
 | [`marktd`](@/docs/services/marktd.md) | `:8180` | Market data hub — locations, registries, Versorgungsstatus, durable fan-out | `marktd.toml` |
 | [`processd`](@/docs/services/processd.md) | `:8580` | Process decision engine — the published Entscheidungsbäume, NB · LF · MSB · ESA | `processd.toml` |
 | [`edmd`](@/docs/services/edmd.md) | `:8380` | Energy data management — MSCONS, Zählerstandsgang, quality, Ablesesteuerung | `edmd.toml` |
@@ -371,11 +371,12 @@ See [`processd` Operator Guide](@/docs/services/processd.md).
 
 `invoicd` is the autonomous INVOIC plausibility-check pipeline for the
 Lieferant role. It subscribes to `de.mako.process.initiated` events from `marktd`,
-runs seven checks (period validity, position arithmetic, document total,
-**Umsatzsteuer** — including that the per-rate `steuerbetraege` breakdown sums to
-`gesamtsteuer`, which is what the recipient's Vorsteuerabzug is computed from —
-tariff match against the applicable **Preisstaffel**, Zahlungsziel, and MMM
-settlement price), persists the receipt to PostgreSQL, then issues
+runs the eight-stage pipeline (Storno reference, period validity, Zahlungsziel,
+currency agreement, position arithmetic, document total, **Umsatzsteuer** —
+including that the per-rate `steuerbetraege` breakdown sums to `gesamtsteuer`,
+which is what the recipient's Vorsteuerabzug is computed from — and the tariff
+match against the applicable **Preisstaffel**), persists the receipt to
+PostgreSQL, then issues
 `gpke.abrechnung.annehmen` or `gpke.abrechnung.ablehnen` back to `makod`.
 
 The PostgreSQL persistence provides a durable audit trail of all received

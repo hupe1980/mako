@@ -4,7 +4,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
 use mako_service::cedar::CedarEnforcer;
 use mako_service::error::ApiError;
@@ -19,9 +19,8 @@ use crate::{
     config::EinsdConfig,
     pg::{
         AnlageUpsertRequest, AnlagenQuery, decommission_anlage, fetch_anlage, fetch_epex_price,
-        fetch_jahresmarktwert_single, list_anlagen, list_expiring, list_settlement_receipts,
-        list_unsettled, lookup_verguetungssatz, upsert_anlage, upsert_epex_price,
-        upsert_jahresmarktwert, zusammenlegen,
+        list_anlagen, list_expiring, list_settlement_receipts, list_unsettled,
+        lookup_verguetungssatz, upsert_anlage, upsert_epex_price, zusammenlegen,
     },
 };
 
@@ -379,6 +378,16 @@ pub fn build_settlement_ce(
             "bank_iban": bank_iban,
             "bank_bic": bank_bic,
             "zahlungsempfaenger": zahlungsempfaenger,
+            // §52 Abs. 2 — the **cumulative** claim against the operator, not
+            // this month's increment: §52 charges per Kilowatt and Kalendermonat,
+            // so the figure grows while the breach subsists and a later receipt
+            // supersedes an earlier one. Named for that, because a consumer that
+            // sums twelve monthly events would charge the year twelve times over.
+            //
+            // Never netted into `settlement_eur`. §52 Abs. 6 Satz 2 permits the
+            // Aufrechnung against the §19 Abs. 1 claim, but that is the ledger's
+            // decision and it has to be able to see both sides to make it.
+            "pflichtzahlung_kumuliert_eur": result.pflichtzahlung_kumuliert_eur,
         }),
     )
     .with_id(ce_id.to_string());
@@ -569,23 +578,22 @@ pub async fn get_anlage(
 
 /// `GET /api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform`
 ///
-/// The plant register's answer to the one question `E_0622` Prüfschritte
-/// 400–830 ask that the UTILMD cannot: **which Veräußerungsform is in force**
-/// at a Marktlokation today.
+/// The three facts `processd` needs about a Marktlokation and the UTILMD cannot
+/// carry — it picks the `E_0622` Vorlauffrist and answers `E_0623` Prüfschritt
+/// 540 from them:
 ///
-/// `processd` needs it to choose between the six Vorlauffristen GPKE Teil 2
-/// § 2.1.1 publishes for an Anmeldung erzeugender Marktlokation. Two facts come
-/// back, because the wire cannot carry the second:
+/// - `veraeusserungsform` — the `SG10 CCI+Z22` DE 7037 code.
+/// - `ausfallverguetung` — `Z90` is shared by the uneingeschränkte
+///   Einspeisevergütung (§ 21 Abs. 1 Satz 1 Nr. 1) and the Ausfallvergütung
+///   (Nr. 3), whose Fristen differ by a month versus fünf Werktage. Only the
+///   register separates them.
+/// - `direktvermarktungspflichtig` — `E_0623` Prüfschritt 540, over every aktive
+///   Anlage. `null` where the answer rests on an EEG version mako's regulatory
+///   corpus does not carry, which is not the same as `false`.
 ///
-/// - `veraeusserungsform` — the UTILMD `SG10 CCI+Z22` DE 7037 code.
-/// - `ausfallverguetung` — `Z90` covers both the uneingeschränkte
-///   Einspeisevergütung (§ 21 Abs. 1 Nr. 1 EEG 2023) and the Ausfallvergütung
-///   (Nr. 2), and the two take *different* Fristen: a month versus the verkürzte
-///   fünf Werktage. Only the register separates them.
-///
-/// `404` means the Marktlokation is not in this NB's EEG-/KWKG-Register. That is
-/// **not** the same as „Nicht-EEG-Marktlokation" — it may equally be a plant
-/// nobody has registered yet — so `processd` escalates rather than assuming.
+/// `404` means the Marktlokation is not in this NB's EEG-/KWKG-Register — which
+/// is not the same as „Nicht-EEG-Marktlokation", so `processd` escalates rather
+/// than assuming.
 pub async fn get_veraeusserungsform_by_malo(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -601,23 +609,36 @@ pub async fn get_veraeusserungsform_by_malo(
             .into_response();
     }
 
-    let row = sqlx::query(
-        r"SELECT tr_id, settlement_model
+    // Every plant on the Marktlokation, newest first: the first row answers the
+    // Veräußerungsform, all aktive rows together answer Prüfschritt 540.
+    let rows = sqlx::query(
+        r"SELECT tr_id, settlement_model, status, leistung_kwp, inbetriebnahme
           FROM eeg_anlagen
           WHERE malo_id = $1 AND tenant = $2
-          ORDER BY inbetriebnahme DESC
-          LIMIT 1",
+          ORDER BY inbetriebnahme DESC",
     )
     .bind(&malo_id)
     .bind(&cfg.tenant)
-    .fetch_optional(&pool)
+    .fetch_all(&pool)
     .await;
 
-    match row {
-        Ok(Some(r)) => {
+    match rows {
+        Ok(rows) if !rows.is_empty() => {
             use sqlx::Row as _;
+            let r = &rows[0];
             let tr_id: String = r.get("tr_id");
             let model: String = r.get("settlement_model");
+            let anlagen: Vec<(bool, Decimal, Date)> = rows
+                .iter()
+                .map(|row| {
+                    (
+                        row.get::<String, _>("status") == "aktiv",
+                        row.get("leistung_kwp"),
+                        row.get("inbetriebnahme"),
+                    )
+                })
+                .collect();
+            let pflicht = direktvermarktungspflicht_der_malo(&anlagen);
             match veraeusserungsform_of(&model) {
                 Some(form) => Json(serde_json::json!({
                     "malo_id":            malo_id,
@@ -625,6 +646,7 @@ pub async fn get_veraeusserungsform_by_malo(
                     "settlement_model":   model,
                     "veraeusserungsform": form,
                     "ausfallverguetung":  model == "AUSFALLVERGUETUNG",
+                    "direktvermarktungspflichtig": pflicht,
                 }))
                 .into_response(),
                 // Mieterstrom, GGV, Eigenverbrauch, Post-EEG and the
@@ -644,7 +666,7 @@ pub async fn get_veraeusserungsform_by_malo(
                     .into_response(),
             }
         }
-        Ok(None) => (
+        Ok(_) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({
                 "error": "NOT_REGISTERED",
@@ -654,6 +676,33 @@ pub async fn get_veraeusserungsform_by_malo(
             .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
+}
+
+/// `E_0623` Prüfschritt 540 over every aktive Anlage of one Marktlokation.
+///
+/// Each entry is `(status == 'aktiv', leistung_kwp, inbetriebnahme)`.
+/// `Some(true)` as soon as one plant exceeds the § 21 Abs. 1 Satz 1 Nr. 1
+/// threshold, `None` when none does but one is governed by an EEG version
+/// outside mako's corpus, `Some(false)` only when every plant answered — a
+/// Marktlokation with no aktive Anlage included.
+///
+/// Read off **capacity**, not off the Veräußerungsform currently assigned: the
+/// tree asks who is *pflichtig*, not who has chosen. § 24 Zusammenfassung is
+/// already applied at rest, so the stored `leistung_kwp` is the figure § 21
+/// Abs. 1 asks about.
+fn direktvermarktungspflicht_der_malo(anlagen: &[(bool, Decimal, Date)]) -> Option<bool> {
+    let mut unanswered = false;
+    for &(aktiv, leistung, ibn) in anlagen {
+        if !aktiv {
+            continue;
+        }
+        match eeg_billing::direktverm::direktvermarktungspflicht(leistung, ibn) {
+            Some(true) => return Some(true),
+            Some(false) => {}
+            None => unanswered = true,
+        }
+    }
+    (!unanswered).then_some(false)
 }
 
 /// Map a settlement model onto its UTILMD `SG10 CCI+Z22` DE 7037 code.
@@ -876,32 +925,50 @@ pub struct EpexPriceBody {
     pub source: Option<String>,
 }
 
-// ── §20 Abs. 2 Jahresmarktwert prices ──────────────────────────────────────
+// ── Anlage 1 Marktwert prices ──────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
-pub struct JahresmarktwertBody {
+pub struct MarktwertBody {
     pub avg_ct_kwh: Decimal,
+    /// Required for a Monatsmarktwert (Anlage 1 Nr. 3); refused for a
+    /// Jahresmarktwert (Nr. 4), which is one figure per year.
+    pub billing_month: Option<i16>,
+    /// An ÜNB running estimate rather than the published binding figure. Only a
+    /// Jahresmarktwert can be one.
+    #[serde(default)]
+    pub vorlaeufig: bool,
     pub source: Option<String>,
 }
 
-/// `PUT /api/v1/jahresmarktwert/{year}/{month}/{erzeugungsart}`
+#[derive(Debug, Deserialize)]
+pub struct MarktwertQuery {
+    /// The month, for a Monatsmarktwert. Omitted for a Jahresmarktwert.
+    pub billing_month: Option<i16>,
+}
+
+/// `PUT /api/v1/marktwert/{year}/{art}/{erzeugungsart}`
 ///
-/// Import or update a technology-specific monthly Jahresmarktwert price
-/// (§20 Abs. 2 + Anlage 1 EEG 2023), published by ÜNB at netztransparenz.de.
+/// Import or update the energieträgerspezifische Marktwert the ÜNB publish at
+/// netztransparenz.de. `art` is `monat` or `jahr` — Anlage 1 Nr. 3 and Nr. 4 are
+/// **two different series**, and which one a plant settles on follows its
+/// Inbetriebnahme/Zuschlag date (Nr. 2), never the operator's choice.
 ///
-/// `erzeugungsart` must match an `erzeugungsart` column value (e.g. `WIND_ONSHORE`,
-/// `SOLAR_AUFDACH`, `BIOMASSE`) or `DEFAULT` for the generic fallback row.
+/// `erzeugungsart` must match an `erzeugungsart` column value (e.g.
+/// `WIND_ONSHORE`, `SOLAR_AUFDACH`, `BIOMASSE`) or `DEFAULT` for the generic
+/// fallback row.
 ///
-/// For MarketPremium (Direktvermarktung / Ausschreibung) settlements, the
-/// technology-specific Jahresmarktwert takes precedence over the generic EPEX
-/// monthly average from `epex_monthly_prices`.
-pub async fn put_jahresmarktwert(
+/// A **Monatsmarktwert** needs `billing_month` and is final when published. A
+/// **Jahresmarktwert** takes no month and may be `vorlaeufig` — the ÜNB publish
+/// a running estimate during the year and the binding figure after it. Every
+/// month settled on a provisional figure is listed by
+/// `GET /api/v1/marktwert/{year}/nachbewertung`.
+pub async fn put_marktwert(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Extension(pool): Extension<PgPool>,
-    Path((year, month, erzeugungsart)): Path<(i16, i16, String)>,
-    Json(body): Json<JahresmarktwertBody>,
+    Path((year, art, erzeugungsart)): Path<(i16, String, String)>,
+    Json(body): Json<MarktwertBody>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "write-marktdaten", &cfg.tenant) {
         return (
@@ -910,25 +977,62 @@ pub async fn put_jahresmarktwert(
         )
             .into_response();
     }
-
-    if !(1..=12).contains(&month) {
-        return (StatusCode::BAD_REQUEST, "month must be 1–12").into_response();
+    let Some(serie) = marktwertserie_aus_pfad(&art) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "UNKNOWN_MARKTWERT_ART",
+                "message": "art must be `monat` (Anlage 1 Nr. 3) or `jahr` (Nr. 4)",
+            })),
+        )
+            .into_response();
+    };
+    match (serie, body.billing_month) {
+        (eeg_billing::Marktwertserie::Monatsmarktwert, Some(m)) if (1..=12).contains(&m) => {}
+        (eeg_billing::Marktwertserie::Monatsmarktwert, _) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "a Monatsmarktwert needs a billing_month of 1–12",
+            )
+                .into_response();
+        }
+        (eeg_billing::Marktwertserie::Jahresmarktwert, None) => {}
+        (eeg_billing::Marktwertserie::Jahresmarktwert, Some(_)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "a Jahresmarktwert has no month — Anlage 1 Nr. 4 is one figure per year",
+            )
+                .into_response();
+        }
     }
     let source = body.source.as_deref().unwrap_or("manual");
-    match upsert_jahresmarktwert(&pool, year, month, &erzeugungsart, body.avg_ct_kwh, source).await
+    match crate::pg::upsert_marktwert(
+        &pool,
+        crate::pg::MarktwertImport {
+            year,
+            serie,
+            month: body.billing_month,
+            erzeugungsart: &erzeugungsart,
+            avg_ct_kwh: body.avg_ct_kwh,
+            vorlaeufig: body.vorlaeufig,
+            source,
+        },
+    )
+    .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
     }
 }
 
-/// `GET /api/v1/jahresmarktwert/{year}/{month}/{erzeugungsart}`
-pub async fn get_jahresmarktwert(
+/// `GET /api/v1/marktwert/{year}/{art}/{erzeugungsart}` (`?billing_month=`)
+pub async fn get_marktwert(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Extension(pool): Extension<PgPool>,
-    Path((year, month, erzeugungsart)): Path<(i16, i16, String)>,
+    Path((year, art, erzeugungsart)): Path<(i16, String, String)>,
+    Query(q): Query<MarktwertQuery>,
 ) -> impl IntoResponse {
     if let Err(e) = enforcer.check(&claims.principal(), "read-marktdaten", &cfg.tenant) {
         return (
@@ -937,17 +1041,68 @@ pub async fn get_jahresmarktwert(
         )
             .into_response();
     }
-
-    match fetch_jahresmarktwert_single(&pool, year, month, &erzeugungsart).await {
-        Ok(Some(p)) => Json(serde_json::json!({
+    let Some(serie) = marktwertserie_aus_pfad(&art) else {
+        return (StatusCode::BAD_REQUEST, "art must be `monat` or `jahr`").into_response();
+    };
+    match crate::pg::fetch_marktwert_single(&pool, year, serie, q.billing_month, &erzeugungsart)
+        .await
+    {
+        Ok(Some((avg_ct_kwh, vorlaeufig))) => Json(serde_json::json!({
             "billing_year": year,
-            "billing_month": month,
+            "art": serie.as_db_str(),
+            "billing_month": q.billing_month,
             "erzeugungsart": erzeugungsart,
-            "avg_ct_kwh": p,
+            "avg_ct_kwh": avg_ct_kwh,
+            "vorlaeufig": vorlaeufig,
         }))
         .into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+    }
+}
+
+/// `GET /api/v1/marktwert/{year}/nachbewertung`
+///
+/// Every month of `year` settled on a **provisional** Jahresmarktwert, so the
+/// operator can recompute them once the ÜNB publish the binding figure. The
+/// recomputation is `POST /api/v1/settlements/{year}/{month}/correction`, which
+/// keeps the superseded receipt in `settlement_receipt_history` — a § 147 AO
+/// Buchungsbeleg is amended, not overwritten.
+pub async fn get_marktwert_nachbewertung(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Extension(pool): Extension<PgPool>,
+    Path(year): Path<i16>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "read-marktdaten", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    match crate::pg::list_marktwert_nachbewertung(&pool, &cfg.tenant, year).await {
+        Ok(rows) => Json(serde_json::json!({
+            "billing_year": year,
+            "offen": rows.len(),
+            "perioden": rows,
+            "hinweis": "Anlage 1 Nr. 2 Satz 2 EEG 2023 — these were settled on a provisional \
+                        Jahresmarktwert. Recompute each with POST \
+                        /api/v1/settlements/{year}/{month}/correction once the binding figure \
+                        is published.",
+        }))
+        .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+    }
+}
+
+/// `monat` / `jahr` on the wire → the Anlage 1 series.
+fn marktwertserie_aus_pfad(art: &str) -> Option<eeg_billing::Marktwertserie> {
+    match art {
+        "monat" => Some(eeg_billing::Marktwertserie::Monatsmarktwert),
+        "jahr" => Some(eeg_billing::Marktwertserie::Jahresmarktwert),
+        _ => None,
     }
 }
 
@@ -1745,18 +1900,25 @@ pub struct VeraeusserungsformWechselRequest {
 
 /// `POST /api/v1/anlagen/{tr_id}/switch-veraeusserungsform`
 ///
-/// **§21b EEG 2023 — Veräußerungsform Wechsel.**
+/// **§ 21b EEG 2023 — Zuordnung zu einer Veräußerungsform, Wechsel.**
 ///
-/// Switches the plant between Einspeisevergütung (§21) and Direktvermarktung (§20).
+/// Moves the plant between the Veräußerungsformen § 21b Abs. 1 Satz 1 lists.
+/// `eeg_billing::direktverm::validate_wechsel` is the decision; this handler
+/// only maps the stored `settlement_model` onto it and renders the refusal.
 ///
 /// Rules enforced:
-/// - §21b Abs. 1: the switch takes effect on the 1st of a calendar month, and a
-///   plant may change form once per month.
-/// - §21 Abs. 1 Nr. 3: a plant above the mandatory-Direktvermarktung threshold
-///   cannot switch back to Einspeisevergütung.
-/// - §21c Abs. 1: the Netzbetreiber must be notified before the start of the
-///   preceding calendar month — so the earliest reachable date is the 1st of the
-///   month after next.
+/// - § 21b Abs. 1 Satz 2 — the change takes effect only „zum ersten Kalendertag
+///   eines Monats".
+/// - § 21c Abs. 1 Satz 1 — the Mitteilung is due *before the preceding calendar
+///   month begins*, so the earliest reachable effective date is the 1st of the
+///   month after next. (Satz 2's fünftletzter Werktag for a move into or out of
+///   the Ausfallvergütung is a Werktag rule and is not applied here.)
+/// - § 21 Abs. 1 Satz 1 Nr. 1 — a plant over 100 kW may not take the
+///   Einspeisevergütung mit gesetzlich bestimmtem Wert. It may still take the
+///   Ausfallvergütung (Nr. 3), which is why that target is not refused.
+/// - § 21b Abs. 1 Satz 4 — the Ausfallvergütung is closed to a plant that was
+///   assigned to the unentgeltliche Abnahme within the last 24 months. einsd
+///   records no such assignment, so this arm never fires today.
 ///
 /// On success: updates `settlement_model`, `direktverm_mp_id`, `direktverm_aw_ct`,
 /// and `last_veraeusserungsform_switch` on the plant record.
@@ -1776,8 +1938,7 @@ pub async fn post_switch_veraeusserungsform(
             .into_response();
     }
 
-    use eeg_billing::EegGesetz;
-    use eeg_billing::direktverm::{SwitchBlockedReason, validate_switch_to_vergütung};
+    use eeg_billing::direktverm::{Wechsel, WechselAblehnung, validate_wechsel};
     use time::format_description::well_known::Iso8601;
 
     let anlage = match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
@@ -1797,74 +1958,60 @@ pub async fn post_switch_veraeusserungsform(
         }
     };
 
-    if effective_date.day() != 1 {
+    let Some((new_model, ziel)) = wechselziel(&req.new_model) else {
         return (
             StatusCode::BAD_REQUEST,
-            "effective_date must be the 1st of a calendar month (§21b Abs. 1 EEG 2023)",
-        )
-            .into_response();
-    }
-
-    // §21c Abs. 1 EEG 2023: the switch must reach the Netzbetreiber **before the
-    // beginning of the preceding calendar month**. A switch effective 1 June has
-    // to be notified by 30 April.
-    //
-    // The check is on the request date because that is when the notification is
-    // enqueued. A backdated switch is refused rather than silently accepted: it
-    // would change what the plant is owed for a month already settled.
-    if let Some(earliest) = fruehester_wechseltermin(mako_fristen::heute())
-        && effective_date < earliest
-    {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
             format!(
-                "§21c Abs. 1 EEG 2023: a Veräußerungsform switch must reach the \
-                 Netzbetreiber before the start of the preceding calendar month — \
-                 the earliest effective_date that can still be notified today is {earliest}"
+                "§21b Abs. 1 Satz 1 EEG 2023 lists four Veräußerungsformen — expected one of \
+                 VERGUETUNG, AUSFALLVERGUETUNG, DIREKTVERMARKTUNG or \
+                 SONSTIGE_DIREKTVERMARKTUNG, got {}",
+                req.new_model
             ),
         )
             .into_response();
-    }
-
-    let eeg_gesetz = EegGesetz::from_db_year(anlage.eeg_gesetz).unwrap_or(EegGesetz::Eeg2023);
-
-    // Only validate the switch-to-Vergütung direction (mandatory plants cannot switch back).
-    // Switching to Direktvermarktung is always allowed.
-    let is_switching_to_verguetung = req.new_model == crate::models::VERGUETUNG;
-
-    if is_switching_to_verguetung
-        && let Err(reason) = validate_switch_to_vergütung(
-            anlage.leistung_kwp,
-            eeg_gesetz,
-            effective_date,
-            anlage.last_veraeusserungsform_switch,
-        )
-    {
-        let msg = match reason {
-            SwitchBlockedReason::PflichtgemasseDirektvermarktung => {
-                "plant is subject to mandatory Direktvermarktung (§20 EEG 2023 — >100 kW) and cannot switch back to Einspeisevergütung"
-            }
-            SwitchBlockedReason::AlreadySwitchedThisMonth { last_switch } => &format!(
-                "already switched this calendar month (last switch: {last_switch}) — §21b EEG 2023 allows only one switch per month"
-            ),
-        };
-        return (StatusCode::UNPROCESSABLE_ENTITY, msg.to_owned()).into_response();
-    }
-
-    let new_model = match req.new_model.as_str() {
-        crate::models::VERGUETUNG => crate::models::VERGUETUNG,
-        crate::models::DIREKTVERMARKTUNG => crate::models::DIREKTVERMARKTUNG,
-        other => {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "§21b EEG 2023 knows two Veräußerungsformen — expected VERGUETUNG or \
-                     DIREKTVERMARKTUNG, got {other}"
-                ),
-            )
-                .into_response();
-        }
     };
+
+    // The Mitteilung is dated today: that is when the notification is enqueued.
+    // A backdated switch is refused rather than silently accepted — it would
+    // change what the plant is owed for a month already settled.
+    let wechsel = Wechsel {
+        ziel,
+        wirksam_ab: effective_date,
+        mitgeteilt_am: mako_fristen::heute(),
+        leistung_kw: anlage.leistung_kwp,
+        inbetriebnahme: anlage.inbetriebnahme,
+        // § 21b Abs. 1 Satz 4 — einsd does not record an assignment to the
+        // unentgeltliche Abnahme, so the Sperre cannot be evaluated and is not
+        // asserted. `settlement_model` has no value for it.
+        unentgeltliche_abnahme_in_24_monaten: false,
+    };
+    if let Err(reason) = validate_wechsel(&wechsel) {
+        let msg = match reason {
+            WechselAblehnung::NichtZumMonatsersten => {
+                "§21b Abs. 1 Satz 2 EEG 2023: effective_date must be the 1st of a calendar month"
+                    .to_owned()
+            }
+            WechselAblehnung::MitteilungZuSpaet { spaetestens_am } => format!(
+                "§21c Abs. 1 Satz 1 EEG 2023: the Mitteilung was due by {spaetestens_am}, before \
+                 the preceding calendar month began. The earliest effective_date that can still \
+                 be notified today is {}",
+                fruehester_wechseltermin(mako_fristen::heute())
+                    .map_or_else(|| "unbestimmt".to_owned(), |d| d.to_string())
+            ),
+            WechselAblehnung::DirektvermarktungspflichtVerletzt => format!(
+                "§21 Abs. 1 Satz 1 Nr. 1 EEG 2023: the Einspeisevergütung mit gesetzlich \
+                 bestimmtem Wert ends at 100 kW and this plant has {} kW — it may take the \
+                 Ausfallvergütung (Nr. 3) but not VERGUETUNG",
+                anlage.leistung_kwp
+            ),
+            WechselAblehnung::AusfallverguetungNachUnentgeltlicherAbnahme => {
+                "§21b Abs. 1 Satz 4 EEG 2023: the Ausfallvergütung is closed to a plant assigned \
+                 to the unentgeltliche Abnahme within the last 24 months"
+                    .to_owned()
+            }
+        };
+        return (StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
+    }
 
     // ── Transactional outbox: the Veräußerungsform switch (eeg_anlagen UPDATE) and
     // its §21c notification CloudEvent commit atomically. ─────────────────────────
@@ -1949,6 +2096,38 @@ pub async fn post_switch_veraeusserungsform(
 ///
 /// §21c Abs. 1 EEG 2023 requires the notification before the start of the
 /// preceding calendar month, so a notification sent in April is in time for
+/// Map a stored `settlement_model` onto the § 21b Abs. 1 Satz 1 Veräußerungsform
+/// it names, for the two settlement models this endpoint may switch *into*.
+///
+/// `AUSSCHREIBUNG` is deliberately absent: it is the Marktprämie with an
+/// auction-set anzulegender Wert, not a Veräußerungsform of its own, and a
+/// Zuschlag is not something a switch request grants. `KWKG_ZUSCHLAG`,
+/// `MIETERSTROM` and the rest are settlement models outside § 21b.
+fn wechselziel(
+    new_model: &str,
+) -> Option<(&'static str, eeg_billing::direktverm::Veraeusserungsform)> {
+    use eeg_billing::direktverm::EinspeiseverguetungsVariante;
+    use eeg_billing::direktverm::Veraeusserungsform as V;
+    match new_model {
+        crate::models::VERGUETUNG => Some((
+            crate::models::VERGUETUNG,
+            V::Einspeiseverguetung(EinspeiseverguetungsVariante::GesetzlicherWert),
+        )),
+        crate::models::AUSFALLVERGUETUNG => Some((
+            crate::models::AUSFALLVERGUETUNG,
+            V::Einspeiseverguetung(EinspeiseverguetungsVariante::Ausfallverguetung),
+        )),
+        crate::models::DIREKTVERMARKTUNG => {
+            Some((crate::models::DIREKTVERMARKTUNG, V::Marktpraemie))
+        }
+        crate::models::SONSTIGE_DIREKTVERMARKTUNG => Some((
+            crate::models::SONSTIGE_DIREKTVERMARKTUNG,
+            V::SonstigeDirektvermarktung,
+        )),
+        _ => None,
+    }
+}
+
 /// 1 June but not for 1 May.
 #[must_use]
 pub fn fruehester_wechseltermin(heute: time::Date) -> Option<time::Date> {
@@ -2146,7 +2325,84 @@ pub async fn post_jahresabrechnung(
 
 #[cfg(test)]
 mod veraeusserungsform_tests {
-    use super::veraeusserungsform_of;
+    use super::{direktvermarktungspflicht_der_malo, veraeusserungsform_of, wechselziel};
+    use rust_decimal::dec;
+    use time::macros::date;
+
+    /// `E_0623` Prüfschritt 540 is a property of the **Marktlokation**, so one
+    /// Anlage over the § 21 Abs. 1 Satz 1 Nr. 1 threshold makes it pflichtig
+    /// even when its neighbours are small.
+    #[test]
+    fn one_large_anlage_makes_the_marktlokation_direktvermarktungspflichtig() {
+        let ibn = date!(2024 - 03 - 01);
+        assert_eq!(
+            direktvermarktungspflicht_der_malo(&[(true, dec!(60), ibn), (true, dec!(150), ibn),]),
+            Some(true)
+        );
+        assert_eq!(
+            direktvermarktungspflicht_der_malo(&[(true, dec!(60), ibn), (true, dec!(40), ibn),]),
+            Some(false)
+        );
+    }
+
+    /// A decommissioned plant carries no duty, and must not create one for the
+    /// Marktlokation it used to sit on.
+    #[test]
+    fn a_stillgelegte_anlage_does_not_create_a_pflicht() {
+        let ibn = date!(2024 - 03 - 01);
+        assert_eq!(
+            direktvermarktungspflicht_der_malo(&[(false, dec!(500), ibn), (true, dec!(40), ibn),]),
+            Some(false)
+        );
+    }
+
+    /// An unanswerable plant leaves the whole Prüfschritt open rather than being
+    /// counted as „nicht pflichtig" — otherwise a 2013 plant of 600 kW would let
+    /// `E_0623` answer `A56` where it cannot know that `A55` is wrong.
+    #[test]
+    fn an_unanswerable_anlage_leaves_pruefschritt_540_open() {
+        assert_eq!(
+            direktvermarktungspflicht_der_malo(&[
+                (true, dec!(40), date!(2024 - 03 - 01)),
+                (true, dec!(600), date!(2013 - 05 - 01)),
+            ]),
+            None
+        );
+        // …unless another plant already answered „ja": one is enough.
+        assert_eq!(
+            direktvermarktungspflicht_der_malo(&[
+                (true, dec!(150), date!(2024 - 03 - 01)),
+                (true, dec!(600), date!(2013 - 05 - 01)),
+            ]),
+            Some(true)
+        );
+    }
+
+    /// A Marktlokation with no aktive Anlage answers „nein": nothing on it
+    /// carries a duty.
+    #[test]
+    fn an_empty_marktlokation_is_not_pflichtig() {
+        assert_eq!(direktvermarktungspflicht_der_malo(&[]), Some(false));
+    }
+
+    /// § 21b Abs. 1 Satz 1 lists **four** Veräußerungsformen, and the endpoint
+    /// accepts the three einsd stores as settlement models plus the
+    /// Ausfallvergütung. `AUSSCHREIBUNG` is not one: it is the Marktprämie with
+    /// an auction-set anzulegender Wert, and a switch request does not grant a
+    /// Zuschlag.
+    #[test]
+    fn the_switch_endpoint_knows_the_four_veraeusserungsformen() {
+        for model in [
+            crate::models::VERGUETUNG,
+            crate::models::AUSFALLVERGUETUNG,
+            crate::models::DIREKTVERMARKTUNG,
+            crate::models::SONSTIGE_DIREKTVERMARKTUNG,
+        ] {
+            assert!(wechselziel(model).is_some(), "{model}");
+        }
+        assert!(wechselziel(crate::models::AUSSCHREIBUNG).is_none());
+        assert!(wechselziel(crate::models::KWKG_ZUSCHLAG).is_none());
+    }
 
     /// The settlement model → `SG10 CCI+Z22` DE 7037 mapping is a regulatory
     /// judgement, not a rename: `processd` picks one of six Vorlauffristen from
@@ -2650,5 +2906,285 @@ pub async fn put_einspeiser(
     match crate::pg_einspeiser::upsert(&pool, &cfg.tenant, &einspeiser_id, &body).await {
         Ok(()) => (StatusCode::NO_CONTENT).into_response(),
         Err(e) => ApiError::bad_request(e.to_string()).into_response(),
+    }
+}
+
+// ── §52 Abs. 1 EEG 2023 — the Pflichtverstoß register ────────────────────────
+
+/// Body of `POST /api/v1/anlagen/{tr_id}/pflichtverstoesse`.
+#[derive(serde::Deserialize)]
+pub struct PflichtverstossAnlegenRequest {
+    /// The §52 Abs. 1 Nummer, as `eeg_billing::SanktionsTyp` names it —
+    /// `FERNSTEUERBARKEIT_FEHLEND`, `SECT10B_VORGABEN_VERLETZT`, … The full
+    /// vocabulary is `SanktionsTyp::ALL`, and `GET` on this route returns it in
+    /// the error body of an unknown value.
+    pub typ: String,
+    /// First day the breach subsisted, ISO 8601. §52 Abs. 2 counts calendar
+    /// months from here.
+    pub beginn: String,
+    /// §52 Abs. 3 Satz 2 — the breach was caused by a technical defect, so the
+    /// defect month and the following one are waived (Nr. 1/3/4/8, breaches
+    /// after 31.12.2023 only). The operator carries the Darlegungs- und
+    /// Beweislast, which is why this is stated rather than inferred.
+    #[serde(default)]
+    pub technischer_defekt: bool,
+    /// What was found, and by whom.
+    pub notiz: Option<String>,
+}
+
+/// Body of `PUT /api/v1/anlagen/{tr_id}/pflichtverstoesse/{typ}/behoben`.
+#[derive(serde::Deserialize)]
+pub struct PflichtverstossBehobenRequest {
+    /// Day the obligation was met, ISO 8601. Must not precede `beginn`.
+    pub behoben_am: String,
+}
+
+fn parse_sanktionstyp(s: &str) -> Result<eeg_billing::SanktionsTyp, Box<Response>> {
+    eeg_billing::SanktionsTyp::from_db_str(s).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "UNKNOWN_PFLICHTVERSTOSS",
+                "message": format!("{s:?} is not a §52 Abs. 1 EEG 2023 Pflichtverstoß"),
+                "erlaubt": eeg_billing::SanktionsTyp::ALL
+                    .iter()
+                    .map(|t| serde_json::json!({ "typ": t.as_db_str(), "nummer": t.nummer() }))
+                    .collect::<Vec<_>>(),
+            })),
+        )
+            .into_response()
+            .into()
+    })
+}
+
+fn parse_iso_date_field(field: &str, s: &str) -> Result<time::Date, Box<Response>> {
+    time::Date::parse(s, &time::format_description::well_known::Iso8601::DATE).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("invalid {field} — use ISO 8601 (YYYY-MM-DD)"),
+        )
+            .into_response()
+            .into()
+    })
+}
+
+/// `GET /api/v1/anlagen/{tr_id}/pflichtverstoesse`
+///
+/// Every §52 Abs. 1 breach recorded against the plant, newest first — open and
+/// cured alike, because §52 Abs. 3 Satz 1 Nr. 1's reduction „wirkt zurück bis
+/// zum Beginn" and a settled month may still have to be corrected.
+pub async fn get_pflichtverstoesse(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Path(tr_id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "read-anlage", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    let mut conn = match pool.acquire().await {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+    };
+    match crate::pg::list_pflichtverstoesse(&mut conn, &cfg.tenant, &tr_id).await {
+        Ok(rows) => Json(serde_json::json!({
+            "tr_id": tr_id,
+            "pflichtverstoesse": rows
+                .iter()
+                .map(|r| serde_json::json!({
+                    "id": r.id,
+                    "typ": r.typ.as_db_str(),
+                    "nummer": r.typ.nummer(),
+                    "beginn": r.beginn.to_string(),
+                    "behoben_am": r.behoben_am.map(|d| d.to_string()),
+                    "technischer_defekt": r.technischer_defekt,
+                    "notiz": r.notiz,
+                }))
+                .collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+    }
+}
+
+/// `POST /api/v1/anlagen/{tr_id}/pflichtverstoesse`
+///
+/// Record a §52 Abs. 1 breach. This is the **only** way nine of the thirteen
+/// Nummern ever reach a settlement: §10b Abs. 5 leaves the Nachweis that a
+/// Direktvermarkter can curtail the plant to the two parties, §9 Abs. 5's
+/// Speicheranforderung is a site visit, and Doppelvermarktung is a finding —
+/// none of it is derivable from a plant row.
+///
+/// For the four einsd *does* derive (Nr. 1, 5, 9, 11) a record does not create
+/// the breach; it refines it with the start date, the Abs. 3 Satz 1 Nr. 1 cure
+/// and the Abs. 3 Satz 2 defect. Closing a record therefore never silences a
+/// breach the plant record still shows.
+///
+/// `409` when one of that Nummer is already open — cure it first.
+pub async fn post_pflichtverstoss(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Path(tr_id): Path<String>,
+    Json(req): Json<PflichtverstossAnlegenRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    let typ = match parse_sanktionstyp(&req.typ) {
+        Ok(t) => t,
+        Err(r) => return *r,
+    };
+    let beginn = match parse_iso_date_field("beginn", &req.beginn) {
+        Ok(d) => d,
+        Err(r) => return *r,
+    };
+    let mut conn = match pool.acquire().await {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+    };
+    match crate::pg::open_pflichtverstoss(
+        &mut conn,
+        &cfg.tenant,
+        &tr_id,
+        typ,
+        beginn,
+        req.technischer_defekt,
+        req.notiz.as_deref(),
+    )
+    .await
+    {
+        Ok(rec) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "id": rec.id,
+                "tr_id": tr_id,
+                "typ": typ.as_db_str(),
+                "nummer": typ.nummer(),
+                "beginn": beginn.to_string(),
+                "technischer_defekt": rec.technischer_defekt,
+            })),
+        )
+            .into_response(),
+        Err(e) => pflichtverstoss_write_error(&e, &tr_id, typ),
+    }
+}
+
+/// `PUT /api/v1/anlagen/{tr_id}/pflichtverstoesse/{typ}/behoben`
+///
+/// Close the open breach of that Nummer. §52 Abs. 3 Satz 1 Nr. 1 then drops the
+/// rate to 2 €/kW **back to the beginning** for Nr. 1/3/4/11 — so months already
+/// settled at 10 € are overcharged until they are corrected, which is what
+/// `POST /api/v1/settlements/{year}/{month}/correction` is for.
+///
+/// `404` when no breach of that Nummer is open: a cure without a breach is a
+/// data error, not something to record.
+pub async fn put_pflichtverstoss_behoben(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Path((tr_id, typ)): Path<(String, String)>,
+    Json(req): Json<PflichtverstossBehobenRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    let typ = match parse_sanktionstyp(&typ) {
+        Ok(t) => t,
+        Err(r) => return *r,
+    };
+    let behoben_am = match parse_iso_date_field("behoben_am", &req.behoben_am) {
+        Ok(d) => d,
+        Err(r) => return *r,
+    };
+    let mut conn = match pool.acquire().await {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+    };
+    match crate::pg::close_pflichtverstoss(&mut conn, &cfg.tenant, &tr_id, typ, behoben_am).await {
+        Ok(Some(rec)) => Json(serde_json::json!({
+            "id": rec.id,
+            "tr_id": tr_id,
+            "typ": typ.as_db_str(),
+            "nummer": typ.nummer(),
+            "beginn": rec.beginn.to_string(),
+            "behoben_am": behoben_am.to_string(),
+            "hinweis": "§52 Abs. 3 Satz 1 Nr. 1 EEG 2023 reduces the charge to 2 EUR/kW back to \
+                        the beginning of the breach — correct any month already settled at 10 EUR \
+                        via POST /api/v1/settlements/{year}/{month}/correction",
+        }))
+        .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "KEIN_OFFENER_PFLICHTVERSTOSS",
+                "message": format!(
+                    "no open §52 Abs. 1 Nr. {} breach on plant {tr_id}",
+                    typ.nummer()
+                ),
+            })),
+        )
+            .into_response(),
+        Err(e) => pflichtverstoss_write_error(&e, &tr_id, typ),
+    }
+}
+
+/// Turn a write failure into the status the caller can act on.
+///
+/// The partial unique index is the „already open" case and the CHECK is
+/// „behoben_am before beginn"; everything else is a `500`.
+fn pflichtverstoss_write_error(
+    e: &sqlx::Error,
+    tr_id: &str,
+    typ: eeg_billing::SanktionsTyp,
+) -> Response {
+    let Some(db) = e.as_database_error() else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response();
+    };
+    match db.constraint() {
+        Some("ep_offen") => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "PFLICHTVERSTOSS_BEREITS_OFFEN",
+                "message": format!(
+                    "a §52 Abs. 1 Nr. {} breach is already open on plant {tr_id} — record its \
+                     cure before opening another",
+                    typ.nummer()
+                ),
+            })),
+        )
+            .into_response(),
+        Some("ep_behoben_nach_beginn") => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "BEHOBEN_VOR_BEGINN",
+                "message": "behoben_am precedes the recorded beginn",
+            })),
+        )
+            .into_response(),
+        _ if db.is_foreign_key_violation() => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "NOT_REGISTERED",
+                "message": format!("no plant {tr_id} in this EEG-/KWKG-Register"),
+            })),
+        )
+            .into_response(),
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
 }

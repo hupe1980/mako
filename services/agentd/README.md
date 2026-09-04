@@ -118,18 +118,17 @@ the tools return. It does not when the task is judgement over open-ended input.
 
 All 28 specialists declare `output.schema`, and every schema is **closed**
 (`additionalProperties: false`) — at the root *and* at every nested object that
-names its fields. The holes were one level in: `findings[]`, `violations[]`,
-`failed_checks[]` — the arrays carrying what the specialist actually concluded,
-and the part a triage rule's `path` reaches. An object that declares no
-`properties` is a map whose keys are data (a count per MP-ID, an event echoed
+names its fields, including the `findings[]` / `violations[]` /
+`failed_checks[]` arrays a triage rule's `path` reaches. An object that declares
+no `properties` is a map whose keys are data (a count per MP-ID, an event echoed
 back) and stays open, because closing one would forbid what it exists to carry.
-A prose `OUTPUT FORMAT` block inside a prompt
-is a contract in the one place nothing can enforce it; as a schema the model is
-held to it, the runtime folds it into the effect key — so editing the schema
-reports divergence on replay rather than reinterpreting a stored answer — and it
-is covered by the manifest digest. Closed, the declared shape is the whole
-shape, which is also what keeps a triage rule's `path` total over what the model
-can return.
+
+A prose `OUTPUT FORMAT` block inside a prompt is a contract in the one place
+nothing can enforce it. As a schema the model is held to it, the runtime folds it
+into the effect key — so editing the schema reports divergence on replay rather
+than reinterpreting a stored answer — and the manifest digest covers it. Closed,
+the declared shape is the whole shape, which is what keeps a triage rule's `path`
+total over what the model can return.
 
 ### A code with nowhere to go
 

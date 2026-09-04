@@ -333,13 +333,13 @@ two-decimal money, umlauts, a long item name, absent optional fields — then:
    file is **refused**, because it would produce a handsome PDF with no invoice
    in it — the one failure mode that looks like success);
 2. stamps the Factur-X XMP;
-3. **reads the finished document back with the counterparty's reader**. Not
-   mako's — `en16931-formats::zugferd::extract`, the same code a receiver runs.
-   The payload must come out byte-identical, re-parse as CII, carry the same
-   BT-1 and BT-115 that went in, and produce **no `Divergence`** — the reader's
-   term for the four ways a hybrid invoice is wrong while still opening
-   cleanly: XMP profile ≠ BT-24, XMP filename ≠ the file attached, an
-   `/AFRelationship` that calls the invoice supplementary, or no XMP at all;
+3. **reads the finished document back with the counterparty's reader** —
+   `en16931-formats::zugferd::extract`, the same code a receiver runs, not
+   mako's. The payload must come out byte-identical, re-parse as CII, carry the
+   same BT-1 and BT-115 that went in, and produce **no `Divergence`**: the four
+   ways a hybrid invoice is wrong while still opening cleanly — XMP profile ≠
+   BT-24, XMP filename ≠ the file attached, an `/AFRelationship` calling the
+   invoice supplementary, or no XMP at all;
 4. reads the text back off the **page** and requires the § 14 Abs. 4 UStG terms
    that are not a matter of taste — the invoice number (Nr. 4), both party
    names (Nr. 1), and the seller's tax identifier (Nr. 2). Without this,

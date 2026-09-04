@@ -142,9 +142,14 @@ pub const BESTAETIGUNG_FRIST_WT: u32 = 2;
 /// MSBN failed to observe, and `E17` is the code for it.
 pub const GERAETEWECHSELABSICHT_ANTWORT_WT: u32 = 2;
 
-/// Werktage after the Anzeige at the earliest at which the Gerätewechsel may
-/// take place (Kap. 3.1.2 Nr. 1 / AWH 4.1.2 Nr. 1).
-pub const GERAETEWECHSEL_TERMIN_FRUEHESTENS_WT: u32 = 4;
+/// The [`mako_fristen::vorlauf`] key for the Mindestvorlaufzeit between the
+/// Anzeige der Gerätewechselabsicht and the Gerätewechseltermin
+/// (Kap. 3.1.2 Nr. 1 / AWH 4.1.2 Nr. 1 — frühestens am 4. folgenden Werktag).
+///
+/// The number itself lives in the Vorlauffrist table and is read from there.
+/// A copy here was a second place for the Festlegung to be edited, and it was
+/// the copy nothing checked against.
+pub const GERAETEWECHSEL_TERMIN_VORLAUF_KEY: &str = "wim.geraetewechsel-termin";
 
 /// Deadline label for the ORDRSP answer window on a Bestellung (2 Werktage).
 pub const ORDRSP_DEADLINE_LABEL: &str = "wim-geraeteubernahme-ordrsp-deadline";
@@ -570,6 +575,41 @@ impl Workflow for WimGeraeteubernahmeWorkflow {
                     ));
                 }
 
+                // The Mindestvorlaufzeit, before anything is accepted.
+                //
+                // Kap. 3.1.2 Nr. 1 puts the Gerätewechseltermin at the 4.
+                // Werktag after the Anzeige at the earliest, and Nr. 2 puts the
+                // answer 2 Werktage *before* that Termin. A Termin closer than
+                // four therefore produces an answer window that is already in
+                // the past at arrival: the process was accepted, its deadline
+                // fired immediately, and it was auto-rejected as
+                // „deadline expired" — which names neither the rule that was
+                // broken nor the date that would have satisfied it.
+                //
+                // `E17` (Mindestvorlaufzeit nicht eingehalten) is the code for
+                // this, and the answer must name the earliest Termin the MSBN
+                // could still reach.
+                if pid.as_u32() == 17_009
+                    && let Some(mako_fristen::vorlauf::VorlaufVerdict::TooLate {
+                        shortfall_wt,
+                        earliest_possible,
+                    }) = vorlauf_verdict(termin.as_deref(), received_at)
+                {
+                    let reason = format!(
+                        "E17: Mindestvorlaufzeit nicht eingehalten — der Gerätewechseltermin \
+                         liegt {shortfall_wt} Werktage zu früh; frühestmöglicher Termin ist \
+                         {earliest_possible} (WiM Teil 1 Kap. 3.1.2 Nr. 1)"
+                    );
+                    events.push(GeraeteubernahmeEvent::Abgelehnt {
+                        reason: reason.clone(),
+                    });
+                    return Ok(WorkflowOutput::with_outbox_and_deadlines(
+                        events,
+                        vec![aperak(&empfaenger, &absender, sparte, Some(&reason))],
+                        vec![aperak_deadline(sparte, pid.as_u32(), received_at)],
+                    ));
+                }
+
                 events.push(GeraeteubernahmeEvent::ValidationPassed { message_ref });
 
                 // Two clocks. The APERAK says the ORDERS could be processed —
@@ -736,6 +776,23 @@ fn aperak_deadline(sparte: Sparte, pid: u32, received_at: OffsetDateTime) -> Pen
 ///
 /// A 17009 without a Termin cannot be scheduled at all; that is a rejected
 /// order, not a default window.
+/// The Kap. 3.1.2 Nr. 1 Vorlauffrist verdict for a 17009 Termin, or `None` when
+/// the Termin is absent or unparseable — [`antwort_deadline`] refuses those with
+/// its own message, and reporting them twice would say the same thing two ways.
+fn vorlauf_verdict(
+    termin: Option<&str>,
+    received_at: OffsetDateTime,
+) -> Option<mako_fristen::vorlauf::VorlaufVerdict> {
+    let datum = termin.and_then(parse_yyyymmdd)?;
+    let obligation = mako_fristen::vorlauf::vorlauf(GERAETEWECHSEL_TERMIN_VORLAUF_KEY)
+        .expect("the Gerätewechseltermin Vorlauffrist is catalogued");
+    Some(obligation.shape.check(
+        mako_fristen::berlin_date(received_at),
+        datum,
+        HolidayCalendar::BdewMaKo,
+    ))
+}
+
 fn antwort_deadline(
     orders_pid: u32,
     termin: Option<&str>,
@@ -1005,6 +1062,58 @@ mod tests {
         out.events
             .iter()
             .fold(s, WimGeraeteubernahmeWorkflow::apply)
+    }
+
+    /// A Gerätewechseltermin closer than the Mindestvorlaufzeit is refused with
+    /// `E17`, not accepted with a deadline already behind it.
+    ///
+    /// Kap. 3.1.2 Nr. 1 puts the Termin at the 4. Werktag after the Anzeige at
+    /// the earliest, and Nr. 2 puts the answer 2 Werktage before the Termin. A
+    /// Termin closer than four therefore hands the MSBA an answer window that
+    /// expired before the message arrived: the process was accepted, the
+    /// deadline fired at once, and the auto-rejection said only
+    /// „deadline expired" — naming neither the rule nor the date that would
+    /// have satisfied it.
+    #[test]
+    fn a_termin_inside_the_vorlauffrist_is_refused_with_e17() {
+        // Anzeige on Mon 2026-03-02. The 4. Werktag after it is Fri 2026-03-06.
+        for (termin, admissible) in [
+            ("20260304", false), // Wed — 2 Werktage away
+            ("20260305", false), // Thu — 3 Werktage away
+            ("20260306", true),  // Fri — exactly 4, „frühestens am 4. WT"
+            ("20260401", true),
+        ] {
+            let out = WimGeraeteubernahmeWorkflow::handle(
+                &GeraeteubernahmeState::default(),
+                orders(17_009, Sparte::Strom, Some(termin)),
+            )
+            .expect("the ORDERS is well-formed either way");
+            let refused = out.events.iter().any(|e| {
+                matches!(e, GeraeteubernahmeEvent::Abgelehnt { reason } if reason.contains("E17"))
+            });
+            assert_eq!(
+                refused, !admissible,
+                "Termin {termin}: expected admissible = {admissible}"
+            );
+            if !admissible {
+                let state = out.events.iter().fold(
+                    GeraeteubernahmeState::default(),
+                    WimGeraeteubernahmeWorkflow::apply,
+                );
+                assert!(state.is_terminal(), "a refused Anzeige does not stay open");
+                // The answer must name the earliest Termin still reachable.
+                let GeraeteubernahmeState::Abgelehnt { reason } = &state else {
+                    panic!("refused states are Abgelehnt");
+                };
+                assert!(
+                    reason.contains("2026-03-06"),
+                    "the refusal names the frühestmöglicher Termin: {reason}"
+                );
+                // Only the APERAK goes out — no ORDRSP answer window is opened
+                // on a Frist that cannot be met.
+                assert!(out.deadlines.iter().all(|d| d.label.starts_with("aperak-")));
+            }
+        }
     }
 
     /// The Bestellung is answered with an ORDRSP that carries the code **and**

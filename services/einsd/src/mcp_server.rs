@@ -14,13 +14,13 @@
 //! | `list_unsettled_plants` | Plants not yet settled for a given month |
 //! | `get_epex_monthly_price` | Look up stored EPEX Spot monthly average |
 //! | `import_epex_monthly_price` | Store/update EPEX Spot monthly average price |
-//! | `import_jahresmarktwert` | Store/update §20 Abs. 2 technology-specific monthly Marktwert (ÜNB) |
+//! | `import_marktwert` | Store/update an Anlage 1 Nr. 3/4 Marktwert in its own series (ÜNB) |
 //! | `get_compliance_status` | Every §52 Abs. 1 violation einsd derives, priced with the engine's Abs. 2/3/5 rules |
 //! | `list_plants_without_mastr` | Plants not registered in MaStR (§52 Abs. 1 Nr. 11 EEG 2023) |
-//! | `check_direktvermarktung_compliance` | Plants >100 kW on an Einspeisevergütung model (§52 Abs. 1 Nr. 4) |
+//! | `check_einspeiseverguetung_anspruch` | Plants >100 kW on an Einspeisevergütung model — no §21 Abs. 1 Satz 1 Nr. 1 claim |
 //! | `check_sect44b_quota` | Check §44b biogas annual 45%-cap quota status |
 //! | `get_settlement_state_history` | § 147 AO / GoBD audit trail of settlement state transitions |
-//! | `get_jahresmarktwert` | Look up stored §20 Abs. 2 technology-specific monthly Marktwert |
+//! | `get_marktwert` | Look up a stored Anlage 1 Marktwert in one of its two series |
 //! | `get_aw_reduktionen` | What is cutting a plant's anzulegender Wert on a given day (§§53b–54) |
 //! | `explain_settlement` | The stored receipt's positions, each with its legal basis |
 //!
@@ -184,7 +184,7 @@ pub struct TriggerSettleParams {
     /// Override kWh. When absent, fetched from edmd.
     pub einspeisemenge_kwh: Option<DecimalArg>,
     /// Override the market reference ct/kWh. When absent, the stored monthly
-    /// average is used (a §20 Abs. 2 Jahresmarktwert may still supersede it).
+    /// average is used (a Anlage 1 Marktwert may still supersede it).
     pub epex_avg_ct_kwh: Option<DecimalArg>,
 }
 
@@ -227,23 +227,34 @@ pub struct LookupStatutoryRateParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct ImportJahresmarktwertParams {
+pub struct ImportMarktwertParams {
     pub billing_year: i16,
-    pub billing_month: i16,
+    /// `MONATSMARKTWERT` (Anlage 1 Nr. 3) or `JAHRESMARKTWERT` (Nr. 4).
+    pub art: String,
+    /// Required for a Monatsmarktwert; must be absent for a Jahresmarktwert,
+    /// which is one figure per year.
+    pub billing_month: Option<i16>,
     /// Technology type matching erzeugungsart column values, e.g. WIND_ONSHORE,
     /// SOLAR_AUFDACH, SOLAR_FREIFLAECHE, BIOMASSE, BIOGAS, WASSERKRAFT, or DEFAULT.
     pub erzeugungsart: String,
-    /// §20 Abs. 2 + Anlage 1 EEG 2023 monthly technology-specific Marktwert in ct/kWh.
-    /// Published by ÜNB at netztransparenz.de.
+    /// The energieträgerspezifische Marktwert in ct/kWh, published by the ÜNB at
+    /// netztransparenz.de.
     pub avg_ct_kwh: DecimalArg,
+    /// An ÜNB running estimate rather than the binding figure. Only a
+    /// Jahresmarktwert can be one; it is ignored for a Monatsmarktwert.
+    #[serde(default)]
+    pub vorlaeufig: bool,
     /// Source description (e.g. "netztransparenz.de", "manual").
     pub source: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct JahresmarktwertLookupParams {
+pub struct MarktwertLookupParams {
     pub billing_year: i16,
-    pub billing_month: i16,
+    /// `MONATSMARKTWERT` or `JAHRESMARKTWERT`.
+    pub art: String,
+    /// The month, for a Monatsmarktwert. Omitted for a Jahresmarktwert.
+    pub billing_month: Option<i16>,
     /// Technology type or DEFAULT.
     pub erzeugungsart: String,
 }
@@ -683,8 +694,21 @@ impl EinsdMcpHandler {
 
         // The same detector the settlement uses, so the report and the payment
         // agree — including the Abs. 3 reduced rate, the Abs. 5 cap and §9.
+        let aufzeichnungen = crate::pg::list_pflichtverstoesse(
+            &mut *self
+                .state
+                .pool
+                .acquire()
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+            &self.state.tenant,
+            &anlage.tr_id,
+        )
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         let verstoesse = crate::sect52::derive_pflichtverstoesse(
             &anlage,
+            &aufzeichnungen,
             crate::sect52::Sect52Context {
                 billing_date: heute_monatserster,
                 ausfallverguetung: crate::pg::ausfallverguetung_nutzung(
@@ -704,18 +728,9 @@ impl EinsdMcpHandler {
             },
         );
 
-        // §52 Abs. 2/3 rates and the Abs. 5 cap, from the engine — one month's
-        // exposure, so each violation is priced for a single month.
-        let monatlich: rust_decimal::Decimal = verstoesse
-            .iter()
-            .map(|v| {
-                eeg_billing::calculate_pflichtzahlung(&eeg_billing::Pflichtverstoss {
-                    monate_des_verstosses: 1,
-                    ..v.clone()
-                })
-            })
-            .sum::<rust_decimal::Decimal>()
-            .min(anlage.leistung_kwp * rust_decimal::Decimal::from(10));
+        // §52 Abs. 2/3 rates and the Abs. 5 cap — one month's exposure, priced by
+        // the same module the settlement charges from.
+        let monatlich = crate::sect52::monatliche_exposition(&verstoesse, anlage.leistung_kwp);
 
         let eeg_2023_regime = anlage.eeg_gesetz >= 2023;
         let kwk_max_kwh = anlage
@@ -742,8 +757,13 @@ impl EinsdMcpHandler {
                 )),
             },
             "pflichtverstoesse": verstoesse.iter().map(|v| serde_json::json!({
-                "typ": format!("{:?}", v.typ),
+                "typ": v.typ.as_db_str(),
+                "nummer": v.typ.nummer(),
+                // Including the §52 Abs. 4 tail: Nr. 7 +3, Nr. 9 +1, Nr. 12 +6,
+                // and Nr. 10 the whole calendar year.
                 "monate": v.monate_des_verstosses,
+                "nachtraeglich_erfuellt": v.nachtraeglich_erfuellt,
+                "technischer_defekt": v.technischer_defekt,
             })).collect::<Vec<_>>(),
             "pflichtzahlung": {
                 "monatlich_eur": monatlich.to_string(),
@@ -843,20 +863,24 @@ impl EinsdMcpHandler {
         .map_err(|e| McpError::internal_error(e.message, None))
     }
 
-    /// List plants where mandatory Direktvermarktung (§3 Nr. 1 + §20 EEG 2023) is required
-    /// but the plant is settled under a non-Direktvermarktung scheme.
+    /// List active plants that have **no §21 Abs. 1 Satz 1 Nr. 1 claim**: the
+    /// Einspeisevergütung mit gesetzlich bestimmtem anzulegenden Wert exists only
+    /// „für Strom aus Anlagen mit einer installierten Leistung von bis zu 100
+    /// Kilowatt", and these are assigned to it above that.
     ///
-    /// Mandatory when: leistung_kwp > 100 AND eeg_gesetz >= 2012 AND status = aktiv.
-    /// Settling such plants under VERGUETUNG violates §52 Abs. 1 Nr. 4 EEG 2023.
+    /// This is **not** a §52 Pflichtverstoß. Nr. 4 charges a breach of §10b — the
+    /// Abruf- und Fernsteuerbarkeit a plant *in* Direktvermarktung owes — and such
+    /// a plant is not in one. Nothing is owed to the Netzbetreiber; nothing is owed
+    /// to the operator either, which is the whole finding.
     #[tool(
-        name = "check_direktvermarktung_compliance",
-        description = "List active plants above 100 kW settled on an Einspeisevergütung model. §21 Abs. 1 Satz 1 Nr. 1 EEG 2023 grants that claim only up to 100 kW, so a larger plant must market directly (§10b) — the breach is §52 Abs. 1 Nr. 4 at 10 €/kW/month, and the settlement engine now charges it.",
+        name = "check_einspeiseverguetung_anspruch",
+        description = "List active plants above 100 kW assigned to the Einspeisevergütung. §21 Abs. 1 Satz 1 Nr. 1 EEG 2023 grants that claim only up to 100 kW, so the settlement answers kein_anspruch and the operator is paid nothing until the Veräußerungsform is changed. It is not a §52 penalty case.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
-    async fn check_direktvermarktung_compliance(&self) -> Result<CallToolResult, McpError> {
-        // Exactly the predicate `sect52::derive_pflichtverstoesse` charges on, so
-        // the report and the settlement cannot tell an operator different things
-        // about the same plant.
+    async fn check_einspeiseverguetung_anspruch(&self) -> Result<CallToolResult, McpError> {
+        // Exactly the predicate `calculate_settlement` refuses on, so the report
+        // and the settlement cannot tell an operator different things about the
+        // same plant.
         let rows = sqlx::query_as::<_, crate::pg::AnlageRow>(
             r"SELECT * FROM eeg_anlagen
               WHERE tenant = $1
@@ -867,35 +891,43 @@ impl EinsdMcpHandler {
               ORDER BY leistung_kwp DESC",
         )
         .bind(&self.state.tenant)
-        .bind(crate::sect52::DIREKTVERMARKTUNG_PFLICHT_KW)
+        .bind(eeg_billing::direktverm::DIREKTVERMARKTUNG_PFLICHT_KW)
         .bind(crate::models::VERGUETUNG)
         .fetch_all(&self.state.pool)
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let violations: Vec<serde_json::Value> = rows
-            .iter()
-            .map(|a| {
-                serde_json::json!({
-                    "tr_id": a.tr_id,
-                    "malo_id": a.malo_id,
-                    "erzeugungsart": a.erzeugungsart,
-                    "leistung_kwp": a.leistung_kwp.to_string(),
-                    "eeg_gesetz": a.eeg_gesetz,
-                    "current_settlement_model": a.settlement_model,
-                    "foerderendedatum": a.foerderendedatum.to_string(),
-                    "monthly_penalty_eur": (a.leistung_kwp * rust_decimal::Decimal::from(10)).to_string(),
-                    "required_action": "Switch to DIREKTVERMARKTUNG: PUT /api/v1/anlagen/{tr_id} with settlement_model=DIREKTVERMARKTUNG, direktverm_aw_ct and direktverm_mp_id — or POST /switch-veraeusserungsform, which enforces the §21b/§21c timing.",
-                })
+        // A plant commissioned before 2016 falls under the EEG 2014 staging, which
+        // mako's regulatory corpus does not carry; the settlement pays it rather
+        // than refusing on an unsourced threshold, so the report must not claim it
+        // has no Anspruch either.
+        let (ohne_anspruch, ungeklaert): (Vec<_>, Vec<_>) = rows.iter().partition(|a| {
+            eeg_billing::direktverm::direktvermarktungspflicht(a.leistung_kwp, a.inbetriebnahme)
+                == Some(true)
+        });
+
+        let render = |a: &&crate::pg::AnlageRow| {
+            serde_json::json!({
+                "tr_id": a.tr_id,
+                "malo_id": a.malo_id,
+                "erzeugungsart": a.erzeugungsart,
+                "leistung_kwp": a.leistung_kwp.to_string(),
+                "inbetriebnahme": a.inbetriebnahme.to_string(),
+                "eeg_gesetz": a.eeg_gesetz,
+                "current_settlement_model": a.settlement_model,
+                "foerderendedatum": a.foerderendedatum.to_string(),
+                "required_action": "Assign a Veräußerungsform that pays: POST /api/v1/anlagen/{tr_id}/switch-veraeusserungsform with DIREKTVERMARKTUNG (§20 Marktprämie) or AUSFALLVERGUETUNG (§21 Abs. 1 Satz 1 Nr. 3), which enforces the §21b/§21c timing.",
             })
-            .collect();
+        };
 
         ContentBlock::json(serde_json::json!({
-            "violations_count": violations.len(),
-            "compliant": violations.is_empty(),
-            "violations": violations,
-            "legal_basis": "§21 Abs. 1 Satz 1 Nr. 1 EEG 2023 caps the Einspeisevergütung claim at 100 kW; the duty to market directly is §10b and the breach is §52 Abs. 1 Nr. 4 i.V.m. Abs. 2 at 10 €/kW/Monat.",
-            "note": "Mieterstrom (§21 Abs. 3) and GGV (§42b EnWG) are deliberately out of scope — they carry their own size rules, and the settlement does not charge Nr. 4 on them either.",
+            "ohne_anspruch_count": ohne_anspruch.len(),
+            "compliant": ohne_anspruch.is_empty(),
+            "ohne_anspruch": ohne_anspruch.iter().map(render).collect::<Vec<_>>(),
+            "ungeklaert": ungeklaert.iter().map(render).collect::<Vec<_>>(),
+            "legal_basis": "§21 Abs. 1 Satz 1 Nr. 1 EEG 2023 grants the Einspeisevergütung mit gesetzlich bestimmtem anzulegenden Wert only bis zu 100 Kilowatt. Above it the plant must take a Direktvermarktung (§20 / §21a) or the Ausfallvergütung (§21 Abs. 1 Satz 1 Nr. 3); the settlement answers kein_anspruch until it does.",
+            "not_a_penalty": "§52 Abs. 1 Nr. 4 charges a breach of §10b — the Abruf- und Fernsteuerbarkeit a plant *in* Direktvermarktung owes above 25 kW. A plant on the Einspeisevergütung is not in one and breaches nothing.",
+            "ungeklaert_note": "Plants commissioned before 2016-01-01 fall under the EEG 2014 staging, which is outside mako's regulatory corpus. They are listed separately and are still settled.",
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
@@ -1011,80 +1043,119 @@ impl EinsdMcpHandler {
     }
 
     #[tool(
-        name = "import_jahresmarktwert",
-        description = "Store or update a §20 Abs. 2 + Anlage 1 EEG 2023 technology-specific monthly \
-Marktwert published by the ÜNB (netztransparenz.de). \
-For MarketPremium (Direktvermarktung / Ausschreibung) settlements this value takes \
-precedence over the generic EPEX monthly average from import_epex_monthly_price. \
-erzeugungsart must match plant erzeugungsart values (WIND_ONSHORE, SOLAR_AUFDACH, \
+        name = "import_marktwert",
+        description = "Store or update an energieträgerspezifischer Marktwert published by the ÜNB \
+(netztransparenz.de). Anlage 1 EEG 2023 defines TWO series and they are not interchangeable: \
+art='MONATSMARKTWERT' (Nr. 3) needs a billing_month and is final when published; \
+art='JAHRESMARKTWERT' (Nr. 4) takes no month and may be vorlaeufig, because the binding figure \
+exists only once the year is over. Which series a plant settles on follows its Inbetriebnahme or \
+Zuschlag date (Nr. 2), never the operator: before 01.01.2023 the Monatsmarktwert, otherwise the \
+Jahresmarktwert. erzeugungsart must match plant erzeugungsart values (WIND_ONSHORE, SOLAR_AUFDACH, \
 SOLAR_FREIFLAECHE, BIOMASSE, BIOGAS, WASSERKRAFT, etc.) or 'DEFAULT' for the generic fallback."
     )]
-    async fn import_jahresmarktwert(
+    async fn import_marktwert(
         &self,
-        Parameters(params): Parameters<ImportJahresmarktwertParams>,
+        Parameters(params): Parameters<ImportMarktwertParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::upsert_jahresmarktwert;
+        let Some(serie) = eeg_billing::Marktwertserie::from_db_str(&params.art) else {
+            return Err(McpError::invalid_params(
+                "art must be MONATSMARKTWERT (Anlage 1 Nr. 3) or JAHRESMARKTWERT (Nr. 4)",
+                None,
+            ));
+        };
+        let monat_passt = match serie {
+            eeg_billing::Marktwertserie::Monatsmarktwert => {
+                params.billing_month.is_some_and(|m| (1..=12).contains(&m))
+            }
+            eeg_billing::Marktwertserie::Jahresmarktwert => params.billing_month.is_none(),
+        };
+        if !monat_passt {
+            return Err(McpError::invalid_params(
+                "a MONATSMARKTWERT needs a billing_month of 1-12; a JAHRESMARKTWERT has none",
+                None,
+            ));
+        }
         let avg = params.avg_ct_kwh.into();
         let source = params.source.as_deref().unwrap_or("manual");
-        match upsert_jahresmarktwert(
+        match crate::pg::upsert_marktwert(
             &self.state.pool,
-            params.billing_year,
-            params.billing_month,
-            &params.erzeugungsart,
-            avg,
-            source,
+            crate::pg::MarktwertImport {
+                year: params.billing_year,
+                serie,
+                month: params.billing_month,
+                erzeugungsart: &params.erzeugungsart,
+                avg_ct_kwh: avg,
+                vorlaeufig: params.vorlaeufig,
+                source,
+            },
         )
         .await
         {
             Ok(()) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                "Jahresmarktwert stored: {}/{}/{} = {:.4} ct/kWh (source: {}). \
-                 This value will be used for all {} MarketPremium settlements for \
-                 billing_year={} billing_month={}.",
+                "{} stored: {} {}{} = {:.4} ct/kWh (source: {}{}). It applies to every \
+                 Direktvermarktung plant whose vintage puts it on this series.",
+                serie.as_db_str(),
                 params.billing_year,
-                params.billing_month,
                 params.erzeugungsart,
+                params
+                    .billing_month
+                    .map_or_else(String::new, |m| format!(" month {m}")),
                 params.avg_ct_kwh,
                 source,
-                params.erzeugungsart,
-                params.billing_year,
-                params.billing_month,
+                if params.vorlaeufig {
+                    ", vorläufig"
+                } else {
+                    ""
+                },
             ))])),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
 
     #[tool(
-        name = "get_jahresmarktwert",
-        description = "Look up the stored §20 Abs. 2 technology-specific monthly Marktwert for a given \
-year, month, and erzeugungsart. Returns NOT_FOUND when no row exists (settlements will \
-fall back to EPEX in that case). Use 'DEFAULT' as erzeugungsart to check the generic fallback row.",
+        name = "get_marktwert",
+        description = "Look up a stored energieträgerspezifischer Marktwert. art is \
+MONATSMARKTWERT (Anlage 1 Nr. 3, needs billing_month) or JAHRESMARKTWERT (Nr. 4, no month). \
+Returns NOT_FOUND when no row exists — a settlement then falls back to the generic EPEX average \
+within the same series and is PriceMissing if that is absent too. It never substitutes the other \
+series. Use 'DEFAULT' as erzeugungsart to check the generic fallback row.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
-    async fn get_jahresmarktwert_tool(
+    async fn get_marktwert_tool(
         &self,
-        Parameters(params): Parameters<JahresmarktwertLookupParams>,
+        Parameters(params): Parameters<MarktwertLookupParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::fetch_jahresmarktwert_single;
-        match fetch_jahresmarktwert_single(
+        let Some(serie) = eeg_billing::Marktwertserie::from_db_str(&params.art) else {
+            return Err(McpError::invalid_params(
+                "art must be MONATSMARKTWERT or JAHRESMARKTWERT",
+                None,
+            ));
+        };
+        match crate::pg::fetch_marktwert_single(
             &self.state.pool,
             params.billing_year,
+            serie,
             params.billing_month,
             &params.erzeugungsart,
         )
         .await
         {
-            Ok(Some(p)) => ContentBlock::json(serde_json::json!({
+            Ok(Some((avg_ct_kwh, vorlaeufig))) => ContentBlock::json(serde_json::json!({
                 "billing_year": params.billing_year,
+                "art": serie.as_db_str(),
                 "billing_month": params.billing_month,
                 "erzeugungsart": params.erzeugungsart,
-                "avg_ct_kwh": p,
-                "legal_basis": "§20 Abs. 2 + Anlage 1 EEG 2023 (ÜNB-published technology-specific Marktwert)",
+                "avg_ct_kwh": avg_ct_kwh,
+                "vorlaeufig": vorlaeufig,
+                "legal_basis": "Anlage 1 Nr. 2-4 EEG 2023 (ÜNB-published, series keyed on the plant's vintage)",
             }))
             .map(|b| CallToolResult::success(vec![b]))
             .map_err(|e| McpError::internal_error(e.message, None)),
             Ok(None) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                "No Jahresmarktwert stored for {}/{}/{} — settlements use EPEX fallback.",
-                params.billing_year, params.billing_month, params.erzeugungsart
+                "No {} stored for {} {} — settlements fall back to EPEX within the same series.",
+                serie.as_db_str(),
+                params.billing_year,
+                params.erzeugungsart
             ))])),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
@@ -1321,7 +1392,8 @@ impl EinsdMcpHandler {
             PromptMessage::new_text(
                 Role::Assistant,
                 "## Monthly EEG/KWKG settlement\n\n\
-                 1. Import the market reference: import_jahresmarktwert (§20 Abs. 2,\n\
+                 1. Import the market reference: import_marktwert, in the series the plant's\n\
+                    vintage puts it on (Anlage 1 Nr. 2,\n\
                     technology-specific, published by the ÜNB) — it takes precedence over\n\
                     the generic import_epex_monthly_price.\n\
                  2. Load the EPEX day-ahead curve (PUT /api/v1/epex-spot) so §51 can be\n\
@@ -1420,7 +1492,7 @@ impl EinsdMcpHandler {
                     ist_innovationsausschreibung / ist_buergerenergie where they apply\n\n\
                  2. Settlement is the ordinary gleitende Marktprämie on the awarded AW:\n\
                     max(0, AW − Marktwert) × kwh / 100. No Managementprämie is added.\n\
-                    Import the §20 Abs. 2 Marktwert first.\n\n\
+                    Import the Anlage 1 Marktwert first.\n\n\
                  3. Reductions that apply to tender plants specifically:\n\
                     §54 — the four defects of the Solar-erstes-Segment auction, recorded via\n\
                     POST /aw-reduktionen/sect54-defekt and cutting the AW before the formula.\n\
@@ -1458,8 +1530,9 @@ impl EinsdMcpHandler {
                  B. EIGENVERBRAUCH — self-consumption, no grid payment.\n\
                     Notify the NB via UTILMD (GPKE Lieferende).\n\
                  C. DIREKTVERMARKTUNG — a new Direktvermarkter contract.\n\
-                    POST /switch-veraeusserungsform enforces §21b (first of a month, one\n\
-                    switch per month) and §21c (the NB must be told before the start of the\n\
+                    POST /switch-veraeusserungsform enforces §21b Abs. 1 Satz 2 (a change\n\
+                    takes effect only on the first of a month) and §21c Abs. 1 Satz 1 (the NB\n\
+                    must be told before the start of the\n\
                     preceding calendar month, so the earliest reachable date is the first of\n\
                     the month after next). An unnotified switch is §52 Abs. 1 Nr. 9.\n\
                  D. Vollrepowering — §3 Nr. 30 i.V.m. §25: a fresh Inbetriebnahme restarts\n\
@@ -1547,10 +1620,10 @@ impl ServerHandler for EinsdMcpHandler {
              Registry: list_plants, get_plant, list_expiring, list_settlements, list_unsettled_plants\n\
              Rates: lookup_verguetungssatz (DB), lookup_statutory_rate (static tables)\n\
              Market data: get_epex_monthly_price, import_epex_monthly_price,\n\
-             get_jahresmarktwert, import_jahresmarktwert\n\
+             get_marktwert, import_marktwert\n\
              Settlement: trigger_settle\n\
              Compliance: get_compliance_status, list_plants_without_mastr,\n\
-             check_direktvermarktung_compliance, check_sect44b_quota\n\
+             check_einspeiseverguetung_anspruch, check_sect44b_quota\n\
              Audit: explain_settlement, get_settlement_state_history, get_aw_reduktionen\n\n\
              Money and energy cross this surface as exact decimals — send them as strings\n\
              (\"8.11\"). They end up on a §14 UStG Gutschrift and must not pass through f64.\n\n\
@@ -1574,7 +1647,7 @@ impl ServerHandler for EinsdMcpHandler {
              hours before first generation.\n\
              §13a EnWG curtailment is compensated as a separate position and is not touched\n\
              by §51 — those kWh were never fed in.\n\n\
-             Workflow: lookup_verguetungssatz → POST /api/v1/anlagen → import_jahresmarktwert\n\
+             Workflow: lookup_verguetungssatz → POST /api/v1/anlagen → import_marktwert\n\
              → PUT /api/v1/epex-spot (so §51 can be derived) → trigger_settle or\n\
              POST /api/v1/settle/{y}/{m} → explain_settlement.",
         )

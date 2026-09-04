@@ -236,7 +236,7 @@ Stufe is 3.
 | `POST` | `/api/v1/sepa/mandates` | Register SEPA mandate (IBAN validated via mod-97) — OIDC required |
 | `GET` | `/api/v1/sepa/mandates/{id}` | Fetch mandate |
 | `DELETE` | `/api/v1/sepa/mandates/{id}` | **Revoke mandate** (§58 ZAG) |
-| `POST` | `/api/v1/sepa/run` | Generate **and archive** one pain.008 message (one `PmtInf` group per SequenceType, mandatory Gläubiger-ID) |
+| `POST` | `/api/v1/sepa/run` | Generate **and archive** one pain.008 message (one `PmtInf` group per SequenceType, mandatory Gläubiger-ID); `409` when the collection date has already been dispatched |
 | `GET` | `/api/v1/sepa/collections/{run_id}/entries` | What a run collected, and where each entry stands (`SUBMITTED`/`SETTLED`/`REJECTED`/`RETURNED`/`REVERSED`) |
 | `POST` | `/api/v1/sepa/pain002` | Ingest a **pain.002 XML** status report — applies to payouts *and* collections, incl. Verification of Payee |
 | `POST` | `/api/v1/sepa/reversals` | Build a **pain.007** giving a settled collection back (creditor-initiated Storno) |
@@ -1196,6 +1196,14 @@ RCUR in separate payment-information blocks; they live in separate groups of
 the same file, so a collection run is a single bank submission and a single
 `sepa_collection_runs` audit row.
 
+**The XML is only returned once the archive row exists**, and a collection date
+whose run has already been dispatched answers **`409`**. The stored pain.008 and
+its entries are the record of what the bank received: a pain.002 rejection names
+an `EndToEndId` and a camt booking a `PmtInfId`, so a second file for the same
+date is both an unattributable reply and — if it is submitted — a household
+debited twice. The N-5 scheduler holds an advisory lock for the same reason, so
+only one replica builds the day's batch.
+
 Response shape:
 ```json
 {
@@ -1218,7 +1226,12 @@ Key features of the pain.008 generator:
 - **`Mandatsreferenz` = `EndToEndId`**: capped at 35 characters (Max35Text) — enforced at mandate registration and by a DB CHECK
 - **Distinct `PmtInfId` per group** (`<MsgId>-<SEQ>`): the crate refuses a duplicate across groups, because it is the key a bank echoes in pain.002 and in a camt `Btch` block — two groups sharing one make a booking unattributable
 - **Structured `PstlAdr` on both sides** when configured — see the cut-over note above
-- **ISO 20022 `Purp/Cd`** derived from the account's Sparte: `ELEC` (Strom), `GASB` (Gas), `WTER` (Wasser/Abwasser), `ENRG` (Fern-/Nahwärme — ISO has no district-heating code). Informational, instructing no bank, but it is what the debtor's statement and their accounting software read to categorise the collection; an energy supplier's Lastschrift with no purpose is indistinguishable from any other on the statement. `STROM_UND_GAS` emits none — a combined supply is two purposes and picking either would be false. The Sparte is learned from `de.billing.rechnung.erstellt`
+- **ISO 20022 `Purp/Cd`** from the account's Sparte, learned from
+  `de.billing.rechnung.erstellt`: `ELEC`, `GASB`, `WTER` (Wasser/Abwasser),
+  `ENRG` (Fern-/Nahwärme — ISO has no district-heating code). It instructs no
+  bank, but it is what the debtor's statement and accounting software read to
+  categorise the collection. `STROM_UND_GAS` emits none: a combined supply is two
+  purposes and picking either would be false
 - **`with_description`**: Each entry carries `"Abschlag YYYY-MM"` as RemittanceInfo (`Ustrd`) — visible on debtor's bank statement. The 140-character limit binds on the *transliterated* text, so 140 German characters cannot silently become 141 and lose their tail
 - **Hard error**: missing or invalid `creditor_iban` returns HTTP 503 (no silent placeholder IBAN)
 - **N-5 scheduler**: Background worker auto-generates and dispatches the pain.008 message 5 days before each `billing_day`; persisted once per collection date in `sepa_collection_runs` for audit and ERP replay

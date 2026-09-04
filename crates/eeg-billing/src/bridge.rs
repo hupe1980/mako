@@ -43,7 +43,7 @@ use crate::model::{SettleOutput, SettlementStatus};
 /// Returns an **empty** `Vec` for `NoData` and `PriceMissing` — nothing to bill yet.
 ///
 /// For `Sanctioned`, returns a single EUR 0 line tagged `"§25-sanctioned"` for audit
-/// trail.
+/// trail. `KeinAnspruch` carries its own EUR 0 position and passes straight through.
 ///
 /// For all other statuses, delegates to `SettlePosition::to_line_item` on each
 /// position already computed by [`crate::calculate_settlement`].
@@ -73,8 +73,13 @@ pub fn settlement_to_line_items(output: &SettleOutput) -> Vec<LineItem> {
             ]
         }
 
-        // Positions already computed in SettleOutput — delegate directly
-        SettlementStatus::Calculated | SettlementStatus::FoerderungBeendet => {
+        // Positions already computed in SettleOutput — delegate directly.
+        // `KeinAnspruch` carries its own EUR 0 position naming §21 Abs. 1 Satz 1
+        // Nr. 1, so the Gutschrift states why nothing is owed rather than being
+        // silently empty.
+        SettlementStatus::Calculated
+        | SettlementStatus::FoerderungBeendet
+        | SettlementStatus::KeinAnspruch => {
             output.positions.iter().map(|p| p.to_line_item()).collect()
         }
     }

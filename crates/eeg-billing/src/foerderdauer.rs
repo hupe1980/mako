@@ -49,10 +49,16 @@ use time::error::ComponentRange;
 ///
 /// ## Which plants are statutory?
 ///
-/// - Solar PV ≤ 750 kWp (§21 Abs. 1 Nr. 1 + §48 EEG 2023)
-/// - Small wind ≤ 750 kW (§21 Abs. 1 Nr. 2)
-/// - Biomasse ≤ 150 kW (§21 Abs. 1 Nr. 3)
-/// - All other technology types below the tender threshold
+/// Whichever ones §22 Abs. 2–5 EEG 2023 leaves out of the Ausschreibung — that
+/// is the *only* thing that decides it. §21 Abs. 1 Satz 1's Nummern are the four
+/// Varianten of the Einspeisevergütung, not a per-technology threshold table.
+///
+/// - Solar, erstes Segment (Freifläche) ≤ 1 MW · zweites Segment (Gebäude,
+///   Lärmschutzwand) ≤ 750 kW — §22 Abs. 3 Satz 2
+/// - Wind an Land ≤ 1 MW — §22 Abs. 2 Satz 2 Nr. 1
+/// - Biomasse ≤ 150 kW — §22 Abs. 4 Satz 2
+/// - Wasserkraft, Deponie-, Klär- und Grubengas, Geothermie at **any** size —
+///   §22 Abs. 5 Satz 2 keeps their AW gesetzlich bestimmt
 ///
 /// Plants with a BNetzA Zuschlag (`ausschreibungs_zuschlag_id` set) use tender rules.
 ///
@@ -272,7 +278,7 @@ pub fn verguetungszeitraum_verlaengerung_qh(lost_quarter_hours: u64, is_solar: b
         // §51a Abs. 2 EEG 2023: multiply by 0.5, round up to next full quarter-hour
         // (Volllastviertelstunden). The month-by-month draw-down is applied by the
         // caller via `volllastviertelstunden_im_monat` / `solar_verlaengerung_ende`.
-        lost_quarter_hours.div_ceil(2)
+        lost_quarter_hours.div_ceil(SECT51A_SOLAR_FACTOR_DENOMINATOR)
     } else {
         // §51a Abs. 1 Satz 2 EEG 2023: "Die nach Satz 1 ermittelte Anzahl an
         // Viertelstunden wird aufgerundet auf den nächsten vollen Kalendertag."
@@ -282,6 +288,14 @@ pub fn verguetungszeitraum_verlaengerung_qh(lost_quarter_hours: u64, is_solar: b
         lost_quarter_hours.div_ceil(QH_PER_DAY) * QH_PER_DAY
     }
 }
+
+/// §51a Abs. 2 EEG 2023 — the solar halving denominator.
+///
+/// For Solaranlagen the Vergütungszeitraum is extended by only **half** the lost
+/// quarter-hours, rounded up; wind, biomass and the rest extend 1:1 (rounded up
+/// to a full calendar day by Abs. 1 Satz 2). This is the only place the factor
+/// appears.
+pub const SECT51A_SOLAR_FACTOR_DENOMINATOR: u64 = 2;
 
 /// §51a Abs. 2 Satz 3 EEG 2023 — Volllastviertelstunden per calendar month.
 ///
@@ -507,7 +521,7 @@ pub fn calculate_pflichtzahlung(violation: &crate::model::Pflichtverstoss) -> De
         violation.typ,
         SanktionsTyp::FernsteuerbarkeitFehlend
             | SanktionsTyp::IMssAnforderungNichtErfuellt
-            | SanktionsTyp::DirektvermarktungspflichtVerletzt
+            | SanktionsTyp::Sect10bVorgabenVerletzt
             | SanktionsTyp::VeraeusserungsformNachweispflichtVerletzt
     );
     let effective_months = if violation.technischer_defekt && defect_grace_eligible {
@@ -525,7 +539,7 @@ pub fn calculate_pflichtzahlung(violation: &crate::model::Pflichtverstoss) -> De
         violation.typ,
         SanktionsTyp::FernsteuerbarkeitFehlend
             | SanktionsTyp::IMssAnforderungNichtErfuellt
-            | SanktionsTyp::DirektvermarktungspflichtVerletzt
+            | SanktionsTyp::Sect10bVorgabenVerletzt
             | SanktionsTyp::MastrNichtRegistriert
     );
 

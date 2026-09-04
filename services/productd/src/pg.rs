@@ -739,7 +739,9 @@ pub struct AngebotRow {
     pub jahreskosten_brutto_eur: Option<Decimal>,
     pub gewaehlte_variante: Option<i16>,
     pub rahmenvertrag_id: Option<Uuid>,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub accepted_at: Option<time::OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub declined_at: Option<time::OffsetDateTime>,
     pub erp_angebot_id: Option<String>,
     pub notizen: Option<String>,

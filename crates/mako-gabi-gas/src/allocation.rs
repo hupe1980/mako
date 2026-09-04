@@ -26,11 +26,11 @@
 //! ```text
 //! New
 //!  └─ Recorded ──(correction / final ALOCAT)──→ Recorded
-//!       └─ FinalOverdue   [KoV §6.4 M+2 deadline passed with no final]
+//!       └─ FinalOverdue   [§47 KoV XV final-allocation deadline passed with no final]
 //! ```
 //!
 //! No response is sent, but the process is **not** terminal on first receipt:
-//! KoV §6.4 lets the FNB/MGV correct an allocation and then confirm a binding
+//! §46/§47 KoV XV let the Netzbetreiber correct an allocation and then confirm a binding
 //! final one, and only the final allocation settles the imbalance.
 //!
 //! # Regulatory basis
@@ -65,11 +65,11 @@ pub const ALLOCATION_PIDS: &[u32] = &[
 /// Workflow key for PID router registration.
 pub const WORKFLOW_NAME: &str = "gabi-gas-allocation";
 
-/// Deadline label for the KoV §6.4 final-allocation window.
+/// Deadline label for the §47 Ziffer 1 KoV XV final-allocation window.
 ///
 /// The binding final allocation is due by the end of month M+2 at 12:00 CET;
 /// register a [`mako_engine::deadline::Deadline`] with this label using
-/// [`GasDay::final_alocat_deadline_utc`] when the first ALOCAT for a gas day is
+/// [`GasDay::finale_allokation_deadline_utc`] when the first ALOCAT for a gas day is
 /// recorded. If it fires with no [`AllocationVersion::Final`] on file, the
 /// FNB/MGV has missed a binding obligation.
 pub const FINAL_ALOCAT_DEADLINE_LABEL: &str = "gabi-gas-final-alocat-deadline";
@@ -122,7 +122,7 @@ impl AllocationType {
 /// - `Correction(n)` = nth correction (n ≥ 1)
 /// - `Final` = confirmed final allocation (no further corrections expected)
 ///
-/// Source: Kooperationsvereinbarung Gas (KoV) §6.4.
+/// Source: Kooperationsvereinbarung Gas XV §§ 46, 47.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AllocationVersion {
@@ -158,7 +158,7 @@ pub struct AllocationData {
     pub gas_day: GasDay,
     /// Version of this allocation (initial, correction, or final).
     ///
-    /// Per KoV §6.4: the FNB/MGV sends an initial allocation and may send
+    /// Per §46/§47 KoV XV: the Netzbetreiber sends a daily allocation and may send
     /// corrections within the correction window. The final allocation is
     /// binding for imbalance settlement.
     pub version: AllocationVersion,
@@ -202,7 +202,7 @@ pub enum AllocationEvent {
         message_ref: MessageRef,
     },
 
-    /// The KoV §6.4 final-allocation window closed with no binding final
+    /// The §47 Ziffer 1 KoV XV final-allocation window closed with no binding final
     /// ALOCAT on file. The imbalance for this gas day cannot be settled.
     FinalAllocationOverdue {
         /// Gas day whose final allocation is missing.
@@ -244,7 +244,7 @@ pub enum AllocationState {
     /// its [`AllocationVersion`] says whether that is the initial allocation, a
     /// correction, or the binding final.
     Recorded(Box<AllocationData>),
-    /// The KoV §6.4 window closed with no final allocation on file.
+    /// The §47 Ziffer 1 KoV XV window closed with no final allocation on file.
     FinalOverdue(Box<AllocationData>),
 }
 
@@ -269,7 +269,7 @@ impl AllocationState {
     }
 
     /// `true` once the binding final allocation has been recorded. No further
-    /// correction is admissible after this point (KoV §6.4).
+    /// correction is admissible after this point (§47 Ziffer 1 KoV XV).
     #[must_use]
     pub fn is_settled(&self) -> bool {
         matches!(
@@ -312,7 +312,7 @@ pub enum AllocationCommand {
         message_ref: MessageRef,
     },
 
-    /// The KoV §6.4 final-allocation deadline fired.
+    /// The §47 Ziffer 1 KoV XV final-allocation deadline fired.
     TimeoutExpired {
         /// Deadline identifier, for audit.
         deadline_id: DeadlineId,
@@ -398,14 +398,14 @@ impl Workflow for GaBiGasAllocationWorkflow {
                 clearing_number,
                 message_ref,
             } => {
-                // KoV §6.4 admits corrections and then one binding final
+                // §47 Ziffer 1 KoV XV admits corrections and then one binding final
                 // allocation, so a second ALOCAT for the same gas day is the
                 // normal case, not an error. Only a message *after* the final
                 // one is refused — the final allocation settles the imbalance.
                 if state.is_settled() {
                     return Err(WorkflowError::rejected(
                         "the binding final allocation is already on file; \
-                         KoV §6.4 admits no further correction",
+                         §47 Ziffer 1 KoV XV admits no further correction",
                     ));
                 }
                 let allocation_type =

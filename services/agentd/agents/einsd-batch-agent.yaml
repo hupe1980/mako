@@ -54,14 +54,17 @@ spec:
          eeg_gesetz year — the Solarspitzengesetz cut in on 25.02.2025.
 
       ### § 52 Pflichtzahlungen sweep
-      1. Call einsd `check_direktvermarktung_compliance` — plants above 100 kW whose
-         Veräußerungsform no longer carries a claim.
+      1. Call einsd `check_einspeiseverguetung_anspruch` — plants above 100 kW on the
+         Einspeisevergütung, which therefore carries no § 21 Abs. 1 Satz 1 Nr. 1 claim.
+         Report them as unpaid, **not** as a § 52 exposure: they owe the Netzbetreiber
+         nothing.
       2. For each violation: calculate penalty exposure at **10 EUR/kW installierter
          Leistung and Kalendermonat** (§ 52 Abs. 2), from the month the Pflichtverstoß
-         began. Which Nummer of § 52 Abs. 1 applies decides the *start date* the exposure
-         runs from, so read it off the plant rather than assuming:
-         `mastr_violation_start` for Nr. 11 and `fernsteuerbarkeit_violation_start` for
-         Nr. 1. For an EEG 2017 plant the old regime applies through § 100 instead: a
+         began. The start date comes from `eeg_pflichtverstoesse.beginn` for every
+         Nummer but Nr. 11, whose clock is `eeg_anlagen.mastr_violation_start`; read it
+         rather than assuming a single month. A cured breach reduces the whole run to
+         2 EUR/kW, but only for Nr. 1, 3, 4 and 11 (§ 52 Abs. 3 Satz 1 Nr. 1).
+         For an EEG 2017 plant the old regime applies through § 100 instead: a
          missing MaStR entry reduces the Vergütung to zero rather than charging a
          separate Pflichtzahlung, so never add both.
       3. Call einsd `check_sect44b_quota` for all active BIOGAS plants:
@@ -208,11 +211,11 @@ spec:
         Violation flags, Einspeisemanagement and Förderende for a plant in
         NEEDS_REVIEW.
 
-    - ref: tool://einsd/check_direktvermarktung_compliance
+    - ref: tool://einsd/check_einspeiseverguetung_anspruch
       mutates: false
       max_sensitivity: internal
       description: >-
-        The § 52 Abs. 1 Nr. 4 sweep across the portfolio.
+        The § 21 Abs. 1 Satz 1 Nr. 1 claim sweep across the portfolio.
 
     - ref: tool://einsd/check_sect44b_quota
       mutates: false

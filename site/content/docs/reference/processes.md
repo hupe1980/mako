@@ -103,7 +103,7 @@ Quick reference across all process families. Each row is a top-level domain.
 | **GPKE Zuordnungs-Meldungen** | ⚡ | `mako-gpke` `gpke-zuordnungsmeldung` | UTILMD 55036/55037/55038 | — Meldepflicht, **keine Antwortnachricht** (Sendefrist in `mako_fristen::meldung`) | BK6-24-174 Teil 2 |
 | **PARTIN Strom Kommunikationsdaten** | ⚡ | `mako-gpke` `gpke-partin` | PARTIN 37000–37006 | — | PARTIN AHB 1.0f |
 | **WiM MSB-Wechsel** | ⚡ 🔥 | `mako-wim` `wim-device-change` | UTILMD 55039/55042/55051/55168 resp. 44039/44042/44051/44168 (out+in) und ihre Antworten | 3/5/7/1 WT — see below | BK6-22-024 · AWH WiM Gas 2.0 |
-| **WiM Geräteübernahme** | ⚡ 🔥 | `mako-wim` `wim-geraeteubernahme` | ORDERS 17001 · 17002 · 17009 · ORDRSP 19001/19002 · 19003/19004 · 19015/19016 | 4 WT Angebot · 2 WT Bestellung · 2 WT vor dem Gerätewechseltermin | BK6-22-024 Kap. 3.1.2 / 3.2.2 |
+| **WiM Geräteübernahme** | ⚡ 🔥 | `mako-wim` `wim-geraeteubernahme` | ORDERS 17001 · 17002 · 17009 · ORDRSP 19001/19002 · 19003/19004 · 19015/19016 | 4 WT Angebot · 2 WT Bestellung · Gerätewechseltermin frühestens am 4. WT, Antwort 2 WT davor | BK6-22-024 Kap. 3.1.2 / 3.2.2 |
 | **WiM Abrechnung** | ⚡ 🔥 | `mako-wim` `wim-invoic` | INVOIC 31009 · 31003 · 31004 · REMADV 33001–33004 · COMDIS 29001 | zum Zahlungsziel; NB bei 31009: 4. WT davor | BK6-22-024 Kap. 3.6.3.8 / 3.7 / 6 |
 | **WiM Rechnungsabwicklung MSB über LF** | ⚡ | `mako-wim` `wim-rechnungsabwicklung` | REQOTE 35002 → QUOTES 15002 · ORDERS 17005/17006 · ORDRSP 19009/19010 | 5 WT Angebot · **8 WT** Antwort/Beendigung | BK6-22-024 Kap. 3.6.3.4–3.6.3.7 |
 | **WiM Stammdaten** | ⚡🔥 | `mako-wim` `wim-stammdaten` | UTILMD Stammdaten beider Sparten | per PID, `mako_fristen::antwort` | BK6-22-024 · AWH WiM Gas 2.0 |
@@ -1460,7 +1460,7 @@ sequenceDiagram
     participant FNB as FNB / MGV
     participant VNB as VNB
 
-    Note over BKV,FNB: D-1 (deadline 13:00 CET per KoV §3.2)
+    Note over BKV,FNB: D-1 (13:00 CET — the harmonised cycle, not a KoV Frist)
     BKV->>FNB: NOMINT 70030-70034
     FNB-->>BKV: NOMRES 70035-70039
 
@@ -1469,7 +1469,7 @@ sequenceDiagram
     FNB-->>BKV: DELRES (format not parsed)
     FNB->>BKV: SCHEDL (format not parsed)
 
-    Note over FNB,BKV: After day D (KoV §6.4)
+    Note over FNB,BKV: After day D (§§ 46/47 KoV XV)
     FNB->>BKV: ALOCAT 70013-70020 (Initial)
     FNB->>BKV: ALOCAT 70013-70020 (Correction 1..n)
     FNB->>BKV: ALOCAT 70013-70020 (Final — binding)
@@ -1495,7 +1495,7 @@ All energy quantities use `Decimal` — no float arithmetic.
 | `GasBeschaffenheit` | Brennwert Hs/Hu + Zustandszahl. DVGW G 685/G 260. | `to_kwh_hs(m3)` = m³ × Hs × Z, rounded to 3 dp |
 | `GasQuantity` | Gas energy in kWh_Hs with optional m³ context. | `from_m3(vol, beschaffenheit)`, `from_kwh(kwh)` |
 | `NominationQuantity` | Submitted / accepted / curtailed breakdown. | `accept_partial(kwh, reason)`, `is_curtailed()` |
-| `AllocationVersion` | Initial / Correction(n) / Final per KoV §6.4. | `is_revision()` |
+| `AllocationVersion` | Initial / Correction(n) / Final per §§ 46/47 KoV XV. | `is_revision()` |
 | `GasMarketRole` | Typed BKV/FNB/VNB/MGV/LF/Händler classification. | `submits_nominations()`, `has_imbalance_obligation()` |
 | `GasImbalanceSaldo` | Nomination − allocation imbalance. | `direction()` → Mehr / Minder / Balanced |
 | `GasPortfolioBalance` | BKV portfolio across all Bilanzkreise. | `net_imbalance_kwh()`, `open_imbalance_count()` |

@@ -116,6 +116,7 @@ pub struct LfAnfrage {
     pub uet_lieferanmeldung: Option<Date>,
     /// When the message reached us — the „Nachrichteneingang" several
     /// Prüfschritte compare against.
+    #[serde(with = "time::serde::rfc3339")]
     pub eingang: OffsetDateTime,
 }
 

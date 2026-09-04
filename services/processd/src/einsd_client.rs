@@ -1,9 +1,15 @@
 //! The one thing `processd` asks the EEG-/KWKG-Register.
 //!
-//! `E_0622` Prüfschritte 400–830 choose an Anmeldung erzeugender Marktlokation's
-//! Vorlauffrist from the pair (bestehende, angemeldete) Veräußerungsform. The
-//! *angemeldete* one is on the wire (`SG10 CCI+Z22`); the **bestehende** one is
-//! register data, and `einsd` owns it.
+//! Two Entscheidungsbäume need a fact the UTILMD cannot carry, and both facts
+//! live in the same register row, so one call answers both:
+//!
+//! - `E_0622` Prüfschritte 400–830 choose an Anmeldung erzeugender
+//!   Marktlokation's Vorlauffrist from the pair (bestehende, angemeldete)
+//!   Veräußerungsform. The *angemeldete* one is on the wire (`SG10 CCI+Z22`);
+//!   the **bestehende** one is register data.
+//! - `E_0623` Prüfschritt 540 asks „Handelt es sich um eine
+//!   direktvermarktungspflichtige Marktlokation?" — the § 21 Abs. 1 Satz 1 Nr. 1
+//!   capacity question, decided over the Anlagen the register holds.
 //!
 //! Kept to a single read so the dependency stays legible: an NB deployment that
 //! does not run `einsd` simply escalates every 55077, which is the § 20
@@ -13,17 +19,27 @@ use mako_pruefung::nb::types::Veraeusserungsform;
 use mako_service::http::{Upstream, UpstreamError};
 use secrecy::SecretString;
 
-/// What the register knows about a Marktlokation's Veräußerungsform.
+/// What the register knows about a Marktlokation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RegisterAuskunft {
     /// The Veräußerungsform in force, as `SG10 CCI+Z22` DE 7037 spells it.
     pub veraeusserungsform: Veraeusserungsform,
-    /// `true` for the Ausfallvergütung (§ 21 Abs. 1 Nr. 2 EEG 2023).
+    /// `true` for the Ausfallvergütung (§ 21 Abs. 1 Satz 1 **Nr. 3** EEG 2023 —
+    /// Nr. 2 is the unentgeltliche Abnahme; under the EEG 2017 it was Nr. 2).
     ///
-    /// Wire code `Z90` covers it *and* the uneingeschränkte Einspeisevergütung,
-    /// and the two take different Vorlauffristen — a month versus the verkürzte
-    /// fünf Werktage — so this flag is the whole reason for the lookup.
+    /// Wire code `Z90` covers it *and* die uneingeschränkte Einspeisevergütung,
+    /// and the two take different Vorlauffristen — a month versus die verkürzte
+    /// fünf Werktage — so this flag is one of the two reasons for the lookup.
     pub ausfallverguetung: bool,
+    /// `E_0623` Prüfschritt 540 — „Handelt es sich um eine
+    /// direktvermarktungspflichtige Marktlokation?"
+    ///
+    /// `None` when the register cannot answer it, which happens for a plant
+    /// commissioned before 2016: the EEG 2014 staging that governs it is not in
+    /// mako's regulatory corpus, so `einsd` reports the question as open rather
+    /// than answering „nein". `processd` then builds no `TranchenLage` and
+    /// `E_0623` escalates — the same treatment every unread fact gets.
+    pub direktvermarktungspflichtig: Option<bool>,
 }
 
 /// `einsd`'s answer, as the handler renders it.
@@ -33,6 +49,10 @@ struct VeraeusserungsformBody {
     veraeusserungsform: Option<String>,
     #[serde(default)]
     ausfallverguetung: bool,
+    /// Absent on an older `einsd`, which is indistinguishable from „the register
+    /// cannot answer it" — both leave Prüfschritt 540 open.
+    #[serde(default)]
+    direktvermarktungspflichtig: Option<bool>,
 }
 
 /// Reader for `einsd`'s Veräußerungsform lookup.
@@ -80,6 +100,7 @@ impl EinsdClient {
         Ok(Some(RegisterAuskunft {
             veraeusserungsform: form,
             ausfallverguetung: body.ausfallverguetung,
+            direktvermarktungspflichtig: body.direktvermarktungspflichtig,
         }))
     }
 }

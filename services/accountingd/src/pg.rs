@@ -452,18 +452,55 @@ pub async fn record_jahresabschluss(
     Ok(())
 }
 
+/// A pain.008 for this collection date has already gone to the bank.
+///
+/// Returned by [`persist_sepa_collection`] rather than swallowed, so a caller
+/// that would have gone on to dispatch stops instead of treating a stale run as
+/// its own.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error(
+    "SEPA collection run {run_id} for {collection_date} has already been dispatched; \
+     its stored pain.008 and entries are the record of what the bank received and \
+     must not be rebuilt"
+)]
+pub struct SepaRunAlreadyDispatched {
+    /// The run that is already out.
+    pub run_id: Uuid,
+    /// Its collection date.
+    pub collection_date: time::Date,
+}
+
 /// Persist a SEPA pain.008 batch — the run row **and** what it collected.
 ///
 /// Inserts into `sepa_collection_runs` and one `sepa_collection_entries` row per
-/// mandate, in one transaction. If a run already exists for the same
-/// `(tenant, collection_date)` it is updated and its entries replaced, so a
-/// regenerated batch cannot leave a stale entry claiming to have been
-/// collected. Returns the run's ID.
+/// mandate, in one transaction. A run that is still `PENDING` for the same
+/// `(tenant, collection_date)` is regenerated in place, so a rebuilt batch
+/// cannot leave a stale entry claiming to have been collected. Returns the
+/// run's ID.
 ///
 /// The entry rows are what later attributes a bank reply: a pain.002 rejection
 /// names an `EndToEndId`, a camt booking names a `PmtInfId` in its `Btch` block,
 /// and a pain.007 reversal must restate the original amount and mandate exactly
 /// as submitted.
+///
+/// # A dispatched run is frozen
+///
+/// Once `dispatch_status = 'DISPATCHED'` the pain.008 has left for the bank, and
+/// the stored XML and entries are the only record of what was submitted. Letting
+/// a later rebuild overwrite them makes the rows disagree with the file the bank
+/// holds — a mandate added or an Abschlag changed since then, and the rejection
+/// that comes back names an `EndToEndId` no row carries any more, so a
+/// receivable stays open with nothing pointing at it.
+///
+/// [`LOCK_SEPA_N5`] keeps two replicas from racing here in the first place; this
+/// is the guard that survives a lost lock or a same-day restart, and it refuses
+/// rather than silently no-ops so the caller does not treat a stale run as
+/// freshly built.
+///
+/// # Errors
+///
+/// [`SepaRunAlreadyDispatched`] when a run for `(tenant, collection_date)` has
+/// already gone out, plus the usual storage errors.
 pub async fn persist_sepa_collection(
     pool: &PgPool,
     tenant: &str,
@@ -474,6 +511,26 @@ pub async fn persist_sepa_collection(
         .begin()
         .await
         .context("persist_sepa_collection: begin")?;
+    // `FOR UPDATE`: the check and the write have to be one decision, or two
+    // builders both read `PENDING` and both proceed.
+    let existing: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT run_id, dispatch_status FROM sepa_collection_runs
+         WHERE tenant = $1 AND collection_date = $2 FOR UPDATE",
+    )
+    .bind(tenant)
+    .bind(collection_date)
+    .fetch_optional(&mut *tx)
+    .await
+    .context("persist_sepa_collection: lock existing run")?;
+    if let Some((run_id, status)) = &existing
+        && status == "DISPATCHED"
+    {
+        return Err(SepaRunAlreadyDispatched {
+            run_id: *run_id,
+            collection_date,
+        }
+        .into());
+    }
     let row = sqlx::query(
         r"INSERT INTO sepa_collection_runs
               (tenant, collection_date, msg_id, pain008_xml, total_ct, mandate_count)
@@ -1554,6 +1611,7 @@ pub struct DunningCaseRow {
     #[serde(with = "time::serde::rfc3339")]
     pub issued_at: OffsetDateTime,
     pub due_date: Date,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub resolved_at: Option<OffsetDateTime>,
     pub sperrauftrag_ce_id: Option<String>,
 }
@@ -2660,9 +2718,11 @@ pub struct DunningLockRow {
     pub note: Option<String>,
     pub valid_from: Date,
     pub valid_to: Option<Date>,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub aufgehoben_at: Option<OffsetDateTime>,
     pub aufhebung_grund: Option<String>,
     pub created_by: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
 
@@ -2882,8 +2942,10 @@ pub struct EinwandRow {
     pub betrag_ct: i64,
     pub erhoben_am: Date,
     pub note: Option<String>,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub erledigt_at: Option<OffsetDateTime>,
     pub erledigung: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
 
@@ -3182,11 +3244,21 @@ pub async fn refresh_verzug(
     Ok(verzug)
 }
 
-/// Recompute the Verzug for every account carrying an open dunning case.
+/// Re-clear and recompute the Verzug for every account carrying an open dunning
+/// case.
 ///
-/// The daily worker's safety net. Most refreshes ride the posting that caused
-/// them, but an objection lapsing and an instalment falling due both move the
-/// Verzug with no posting behind them.
+/// The daily worker's safety net, and it has to cover both halves. Most
+/// refreshes ride the posting that caused them, but an objection lapsing and an
+/// instalment falling due both move the Verzug with no posting behind them —
+/// and the FIFO clearing that a posting carries is deliberately *best effort*
+/// ([`post_entry`] logs and continues rather than failing the money post), so a
+/// transient failure there leaves a paid invoice sitting at its gross residual.
+///
+/// The Verzug is computed **from those residuals**. Refreshing the cache without
+/// re-running the clearing would therefore re-derive the same wrong arrears
+/// every day, escalate a paid-up customer through the Mahnstufen and hand the
+/// §§ 41f/41g sequence a debt that does not exist. Both run here, clearing
+/// first.
 ///
 /// # Errors
 ///
@@ -3207,10 +3279,16 @@ pub async fn refresh_verzug_for_open_cases(
     .await
     .context("refresh_verzug_for_open_cases")?;
 
+    let today = mako_fristen::heute();
     let mut n = 0u64;
     for r in rows {
         let malo_id: String = r.try_get("malo_id")?;
         let lf_mp_id: String = r.try_get("lf_mp_id")?;
+        // Idempotent: `apply_fifo_clearing` returns `None` when nothing is left
+        // to match, so a re-run on an already-cleared account is a no-op.
+        if let Err(e) = ledger.apply_fifo_clearing(&lf_mp_id, &malo_id, today).await {
+            tracing::warn!(malo = %malo_id, error = %e, "FIFO re-clearing failed");
+        }
         if let Err(e) = refresh_verzug(ledger, pool, tenant, &malo_id, &lf_mp_id).await {
             tracing::warn!(malo = %malo_id, error = %e, "Verzug refresh failed");
         } else {
@@ -3912,6 +3990,7 @@ pub struct PaymentPlanInstallmentRow {
     pub amount_ct: i64,
     pub status: String,
     pub ledger_entry_id: Option<Uuid>,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub paid_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,

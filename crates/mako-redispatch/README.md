@@ -180,6 +180,24 @@ Anlage to BK6-23-241:
   method for WEA auf See, Solar Spitz and Pauschal, the nicht-fluktuierende
   variants, the Kap.-3.4 Überbauungs-cap and the §24 Abs. 3 S. 2 EEG 2023
   MaLo→TR split.
+- **The Wind-KF Vergleichszeitraum is selected, not assumed.**
+  `ausfallarbeit::vergleichszeitraum` picks the four quarter-hours Kap. 3.2.2.1
+  admits — contiguous, fully measured, unrestricted, each at least 10 % of the
+  Nennleistung, nearest to the Maßnahme with ties to the side before it, and
+  never from the Folgemonat. „Nearest" has two anchors, which the text is
+  explicit about („vor oder nach der Viertelstunde, in der die Maßnahme beginnt
+  **bzw. endet**"): a run before the Maßnahme is measured to its beginning, one
+  after it to its end. Each criterion changes the Korrekturfaktor, and
+  through it every kWh of Ausfallarbeit the measure is settled at, so the
+  selection is part of the engine rather than a caller's convention.
+- **Solar has its own Vergleichszeitraum, and it is a calendar day.**
+  `ausfallarbeit::solar_vergleichstag` implements Kap. 3.2.4.1: the nearest day
+  before or after the Maßnahme on which no Maßnahme was directed at the SR, ties
+  to the day before, never from another month, and within it only the
+  quarter-hours reaching 10 % of the Nennleistung with no Nichtbeanspruchbarkeit
+  or marktbedingte Anpassung. A day too dark to qualify is stepped over rather
+  than ending the search. Applying the wind rule to a Solaranlage would change
+  `P_VZ,ist / G_VZ` and with it every kWh.
 
 ---
 

@@ -153,6 +153,7 @@ divisor produces.
 | `PriceOutOfRange { field, value }` | A tariff price exceeds the monetary range (corrupt tariff) | `PRICE_OUT_OF_RANGE` |
 | `InvalidPeriod { from, to }` | What `BillingPeriod::new` returns for `from > to` | `INVALID_PERIOD` |
 | `AllocationMismatch { fractions, contexts }` | `allocate_proportionally` shape mismatch | `ALLOCATION_MISMATCH` |
+| `AllocationWeightsInvalid { sum }` | a negative allocation weight, or weights summing to zero | `ALLOCATION_WEIGHTS_INVALID` |
 | `Arithmetic(billing::BillingError)` | Passthrough from the arithmetic core | `ARITHMETIC` |
 
 `code()` is stable and machine-readable; `blocking_warnings()` exposes the
@@ -663,11 +664,14 @@ if invoice.has_errors() {
 ### Proportional cost allocation (B2B shared buildings)
 
 ```rust
+// Weights, not shares — square metres here; they are normalised internally.
 let parts = building_invoice.allocate_proportionally(
-    &[dec!(0.40), dec!(0.35), dec!(0.25)],
+    &[dec!(84), dec!(73), dec!(52)],
     vec![ctx_tenant_a, ctx_tenant_b, ctx_tenant_c],
 )?;
-// Guaranteed: parts[0].brutto + parts[1].brutto + parts[2].brutto == original.brutto
+// Guaranteed: the parts' brutto sum back to the original brutto, and each
+// position's split quantities sum back to the metered volume. Every part
+// inherits the source invoice's warnings, so a blocking finding still blocks.
 ```
 
 ### §41a Abs. 6 annual savings comparison

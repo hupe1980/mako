@@ -7,7 +7,7 @@ through Förderdauer expiry.
 | Feature | Detail |
 |---|---|
 | **HTTP port** | `:9180` |
-| **Database** | PostgreSQL (einspeiser, eeg_anlagen, settlement_receipts incl. `rechnung_json` + `gutschrift_nummer`, eeg_verguetungssaetze) |
+| **Database** | PostgreSQL — `einspeiser`, `eeg_anlagen`, `settlement_receipts` (incl. `rechnung_json`, `gutschrift_nummer`, `marktwert_vorlaeufig`), `eeg_pflichtverstoesse`, `marktwert_preise`, `eeg_verguetungssaetze` |
 | **Einspeiser (Anlagenbetreiber)** | The party behind the plants, held once. The § 19 UStG election and the payout account are properties of the *person*, so one `PUT` switches the VAT on all of its plants. No Vertrag — § 7 Abs. 1 EEG 2023 forbids conditioning the claim on one |
 | **§14 UStG Gutschrift** | Every billable settlement issues the Gutschrift (Gutschriftverfahren — the NB issues the document) as a BO4E `Rechnung` in `settlement_receipts.rechnung_json`, VAT from the operator's declared `einspeiser.ust_status` (Regelbesteuerung 19 % category `S` / §19 Kleinunternehmer 0 % category `E`) |
 | **Auth** | OIDC/JWT + Cedar ABAC + HMAC-signed CloudEvents |
@@ -16,10 +16,11 @@ through Förderdauer expiry.
 | **One settle path** | REST, batch, MCP `trigger_settle` and the monthly worker all call `settle::settle_plant`, so the entry point cannot change the amount. They differ only in what they choose to override |
 | **Cumulative counters** | `kwk_strom_kwh_gesamt` (§8 KWKG), `biogas_quota_kwh_ytd` (§44b) and `negative_price_qh_gesamt` (§51a) are running totals the settlement both reads and writes, so they are re-read under a `FOR UPDATE` lock on the plant row as the transaction's first statement — the only point serialising *every* settle of one plant. `settlement_period_accruals` holds each period's absolute contribution, so a re-settle applies the difference |
 | **§9 Steuerbarkeit** | Staged by capacity: ≥100 kW Fernsteuerbarkeit only, 25–100 kW Fernsteuerbarkeit **or** the 60 % Leistungsbegrenzung, <25 kW the cap alone, Steckersolar <2 kW exempt. Each plant records **which** route it took (`sect9_erfuellung`) |
-| **§ 52 Pflichtzahlungen** | Five of the twelve Abs. 1 violations are derived from the plant record in one place (`sect52`) — Nr. 1, 4, 5, 9 and 11 — and priced by the engine (Abs. 2 rate, Abs. 3 reduction, Abs. 5 cap) |
+| **§ 52 Pflichtzahlungen** | Abs. 1 lists **thirteen** breaches (Nr. 1–12 with a Nr. 9a). Four are derived from the plant record in one place (`sect52`) — Nr. 1, 5, 9, 11 — and the other nine are **recorded** in `eeg_pflichtverstoesse`, which is also where the derived four get their start date, the Abs. 3 Satz 1 Nr. 1 cure and the Abs. 3 Satz 2 defect waiver. The engine then prices them: Abs. 2 rate, Abs. 3 reduction, Abs. 4 tail (Nr. 7 +3, Nr. 9 +1, Nr. 12 +6, Nr. 10 the whole year), Abs. 5 cap |
+| **§ 52 register** | `POST/GET /api/v1/anlagen/{tr_id}/pflichtverstoesse` and `PUT …/{typ}/behoben`. A record never *creates* a breach einsd derives — it only refines it — so a cure cannot silence what the plant record still shows. Filing a §10b breach against a plant on the Einspeisevergütung charges nothing: §10b Abs. 1 binds only a plant that direct-markets |
 | **Ausfallvergütung** | § 21 Abs. 1 Satz 1 Nr. 3 — the § 53 Abs. 3 **−20 %** on the ordinary rate, the 3-consecutive / 6-per-year Höchstdauern counted from the receipts, and the § 51 Abs. 3 **5 % per calendar day** cut |
 | **Plant types** | 18 `erzeugungsart` values: five SOLAR Bauformen, WIND_ONSHORE/OFFSHORE, BIOMASSE/BIOGAS/BIOMETHAN, KLAEGAS/GRUBENGAS/DEPONIEGAS, WASSERKRAFT, GEOTHERMIE, GEZEITEN, KWKG. There is no generic `SOLAR` — the §48 rate depends on the Bauform |
-| **Settlement models** | 12, one token each (no aliases): VERGUETUNG, AUSFALLVERGUETUNG (§21 Abs. 1 Nr. 2), MIETERSTROM (§21 Abs. 3), GGV (§42b EnWG), DIREKTVERMARKTUNG (§20), AUSSCHREIBUNG (§22), SONSTIGE_DIREKTVERMARKTUNG (§21a), POST_EEG_SPOT, EIGENVERBRAUCH, KWKG_ZUSCHLAG (§7 KWKG 2023), FLEXIBILITAET (§50b), FLEXIBILITAET_ZUSCHLAG (§50a) |
+| **Settlement models** | 12, one token each (no aliases): VERGUETUNG, AUSFALLVERGUETUNG (§21 Abs. 1 Satz 1 Nr. 3), MIETERSTROM (§21 Abs. 3), GGV (§42b EnWG), DIREKTVERMARKTUNG (§20), AUSSCHREIBUNG (§22), SONSTIGE_DIREKTVERMARKTUNG (§21a), POST_EEG_SPOT, EIGENVERBRAUCH, KWKG_ZUSCHLAG (§7 KWKG 2023), FLEXIBILITAET (§50b), FLEXIBILITAET_ZUSCHLAG (§50a) |
 | **Rate table** | Built-in `eeg_verguetungssaetze`, keyed on `(erzeugungsart, verguetungsform, leistung_min_kwp, billing_start)` — Überschuss and Volleinspeisung differ by the §48 Abs. 2a bonus, so `verguetungsform` is part of the key **and** of the lookup |
 | **Repowering** | `POST /api/v1/anlagen/{tr_id}/repowering` — a Vollrepowering is a fresh Inbetriebnahme (§3 Nr. 30), so §25 restarts. §22 is the Ausschreibung provision and governs none of this |
 | **Zusammenlegung** | `parent_tr_id` links merged plants. The endpoint evaluates **§24 Abs. 1 in full** — the four cumulative conditions of Satz 1 plus the Sätze 2–5 carve-outs — and refuses a merge the statute does not support with `422`, naming the rule that decided. Ownership is not a criterion ("unabhängig von den Eigentumsverhältnissen") |
@@ -102,15 +103,15 @@ floating point, and 0,1 ct/kWh has no exact `f64`.
 | `trigger_settle` | Trigger one-off settlement for a plant + month |
 | `get_epex_monthly_price` | EPEX Day-Ahead monthly average for a period |
 | `import_epex_monthly_price` | Import a new monthly average price |
-| `get_compliance_status` | Every §52 Abs. 1 violation `einsd` derives, priced with the engine's Abs. 2/3/5 rules |
+| `get_compliance_status` | Every §52 Abs. 1 violation on the plant — the four `einsd` derives plus the ones recorded in `eeg_pflichtverstoesse` — priced with the engine's Abs. 2/3/4/5 rules |
 | `list_plants_without_mastr` | Plants not registered in MaStR (§52 Abs. 1 Nr. 11); a pre-2023 plant owes no Pflichtzahlung and is excluded from the total |
-| `check_direktvermarktung_compliance` | Plants >100 kW on an Einspeisevergütung model — §52 Abs. 1 Nr. 4; the settlement charges it |
+| `check_einspeiseverguetung_anspruch` | Plants >100 kW on an Einspeisevergütung model — no §21 Abs. 1 Satz 1 Nr. 1 claim; the settlement answers `kein_anspruch` |
 | `check_sect44b_quota` | **§44b EEG 2023**: annual biogas cap (leistung × 0.45 × the §3 Nr. 6 hours of *that* year — 8 784 in a leap year, less the hours before first generation), YTD, remaining, 75 %/90 % alert |
 | `explain_settlement` | The full position trace behind one month's EUR amount — every `SettlePosition` with its `legal_basis`, kWh and rate. What an operator dispute or a BNetzA inspection actually asks for |
 | `get_aw_reduktionen` | Why the anzulegender Wert is cut on a date: every active §53b / §53c / §54 reduction with its statutory amount. These cuts shrink the payment without touching the Einspeisemenge or the rate table, so they are the first thing to check when a Gutschrift is smaller than expected |
 | `get_settlement_state_history` | The § 147 AO / GoBD trail of `settlement_state` transitions with the period that caused each |
-| `get_jahresmarktwert` | The stored §20 Abs. 2 technology-specific monthly Marktwert; `DEFAULT` reads the generic fallback row |
-| `import_jahresmarktwert` | Store the ÜNB Marktwert (netztransparenz.de). Takes precedence over the generic EPEX average for Direktvermarktung / Ausschreibung |
+| `get_marktwert` | A stored Anlage 1 Marktwert in one of its two series (`MONATSMARKTWERT` / `JAHRESMARKTWERT`); `DEFAULT` reads the generic fallback row |
+| `import_marktwert` | Store an ÜNB Marktwert (netztransparenz.de) in the series it belongs to. Which series a plant settles on is Anlage 1 Nr. 2's answer, not the importer's |
 
 ## Testing
 
@@ -174,7 +175,7 @@ is [`policies/einsd.cedar`](policies/einsd.cedar).
 | `run-settlement` | `.../settle/...`, `/api/v1/settle/...` | `NB`, `LF`, `UENB` |
 | `manage-lifecycle` | repowering (§22), zusammenlegen (§24), MaStR, §21b switch | `NB`, `LF`, `UENB` |
 | `correct-settlement` | `.../correction` (§ 147 AO / GoBD) | `NB`, `UENB` |
-| `write-marktdaten` | EPEX / Jahresmarktwert `PUT` | `NB`, `LF`, `UENB` |
+| `write-marktdaten` | EPEX / Marktwert `PUT` | `NB`, `LF`, `UENB` |
 
 Writes are role-gated because settling a plant creates a payment obligation to
 the Anlagenbetreiber. Corrections are held to a narrower set again: they

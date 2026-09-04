@@ -53,7 +53,7 @@ spec:
       **§ 52 Abs. 1 Nr. 5**; failing to tell the Netzbetreiber which Veräußerungsform the
       plant is in, or that it changed (§ 21b Abs. 1, § 21c), is **§ 52 Abs. 1 Nr. 9**,
       and that one is payable for the following Kalendermonat as well (§ 52 Abs. 4 Nr. 2).
-      einsd `check_direktvermarktung_compliance` decides which of the two applies.
+      einsd `get_compliance_status` decides which of the two applies.
       Pflichtzahlung: **10 EUR/kW/Kalendermonat** (§ 52 Abs. 2), falling to 2 EUR once the
       obligation is met (§ 52 Abs. 3), capped at 10 EUR/kW/Kalendermonat across all
       concurrent violations (§ 52 Abs. 5), due on the 15th of the following month and
@@ -85,7 +85,10 @@ spec:
       1. Call einsd `get_plant` for plant details.
       2. Call einsd `get_compliance_status` for §52 violation check.
       3. If BIOGAS and > 100 kW: call einsd `check_sect44b_quota`.
-      4. If > 100 kW on VERGUETUNG: call einsd `check_direktvermarktung_compliance`.
+      4. If > 100 kW on VERGUETUNG: call einsd `check_einspeiseverguetung_anspruch`.
+         That is **not** a § 52 case — the plant has no § 21 Abs. 1 Satz 1 Nr. 1 claim
+         and is paid nothing until its Veräußerungsform changes. § 52 Abs. 1 Nr. 4 is
+         the § 10b Abruf-/Fernsteuerbarkeit a plant *in* Direktvermarktung owes.
       5. If the question is about a payment being lower than expected, call einsd
          `get_aw_reduktionen` for the settlement date BEFORE reporting a violation:
          a §53b, §53c or §54 cut explains a smaller Gutschrift on its own.
@@ -93,7 +96,7 @@ spec:
          the first day of a Kalendermonat (§ 21b Abs. 1), and the Netzbetreiber has
          to have been told of it under § 21c. Call einsd `get_plant` for the
          installierte Leistung and the new Veräußerungsform, and einsd
-         `check_direktvermarktung_compliance` for whether the new one carries a
+         `check_einspeiseverguetung_anspruch` for whether the new one carries a
          claim at that size. An unreported change is § 52 Abs. 1 Nr. 9, and it is
          owed for the following Kalendermonat as well (§ 52 Abs. 4 Nr. 2).
 
@@ -282,12 +285,12 @@ spec:
       description: >-
         Biogas annual-cap utilisation under § 44b EEG 2023.
 
-    - ref: tool://einsd/check_direktvermarktung_compliance
+    - ref: tool://einsd/check_einspeiseverguetung_anspruch
       mutates: false
       max_sensitivity: internal
       description: >-
-        Plants above the Einspeisevergütung ceiling still on the Vergütung
-        model.
+        Plants above the § 21 Abs. 1 Satz 1 Nr. 1 ceiling still on the
+        Einspeisevergütung, which therefore carries no claim.
 
     - ref: tool://einsd/get_aw_reduktionen
       mutates: false

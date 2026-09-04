@@ -37,7 +37,7 @@ graph TB
     end
 
     subgraph nb_billing ["Invoice & Grid Billing (NB)"]
-        invoicd[":8280 invoicd<br/>INVOIC 6-check plausibility<br/>auto-settle/dispute"]
+        invoicd[":8280 invoicd<br/>INVOIC 8-stage plausibility<br/>auto-settle/dispute"]
         netzbilanzd[":8680 netzbilanzd<br/>NNE/KA/MMM/MSB billing<br/>GridSettlement · CalculationTrace"]
         sperrd[":8780 sperrd<br/>Sperr-/Entsperrauftrag queue<br/>ORDERS 17115/17117 · IFTSTA 21039"]
     end
@@ -88,7 +88,7 @@ graph TB
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [invoicd](@/docs/services/invoicd.md) | `:8280` | LF | INVOIC plausibility-check — 6 checks (incl. ToU band routing via `zaehlzeitregister`), auto-settle/dispute, § 147 AO / GoBD receipts |
+| [invoicd](@/docs/services/invoicd.md) | `:8280` | LF | INVOIC plausibility-check — eight stages (incl. ToU band routing via `zaehlzeitregister`), auto-settle/dispute, § 147 AO / GoBD receipts |
 | [netzbilanzd](@/docs/services/netzbilanzd.md) | `:8680` | NB | NNE/KA/MMM/MSB/AWH billing — generates INVOIC 31001/31002/31005/31009/31011, full REMADV lifecycle, §14a Modul 2 ToU, §42b EnWG GGV, Redispatch 2.0 Kostenblatt, 8-tool MCP server |
 | [sperrd](@/docs/services/sperrd.md) | `:8780` | NB | Sperrung execution tracking — IFTSTA 21039 auto-dispatch on field confirmation; `GET /stats` compliance snapshot; tenant isolation; 4-tool MCP server |
 

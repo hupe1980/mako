@@ -324,6 +324,10 @@ pub struct AntwortObligation {
     /// |---|---|---|---|
     /// | `"werktag_at"` | that clock time on the *n*-th Werktag after the ÜT | *n* | set |
     /// | `"same_day_at"` | that clock time **on the ÜT itself** | `0` | set |
+    ///
+    /// `"same_day_at"` rolls to the same clock time on the next Werktag when the
+    /// ÜT is not a Werktag or the cut-off has already passed at arrival — the
+    /// literal reading would otherwise place the deadline behind the message.
     /// | `"same_day"` | the anchor's own day, no cut-off stated | `0` | `None` |
     /// | `"end_of_werktag"` | the **end** of the *n*-th Werktag | *n* | `None` |
     /// | `"werktage_at_cutoff"` | 17:00 Europe/Berlin on the *n*-th Werktag | *n* | `None` |

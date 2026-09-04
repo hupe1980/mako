@@ -115,7 +115,7 @@ regulatory sources.
 | [`grid-billing`](crates/grid-billing/) | Role-neutral grid settlement — NNE, MMM, MSB, AWH Gas, reversal and correction, each position carrying its legal-reference trace |
 | [`eeg-billing`](crates/eeg-billing/) | EEG/KWKG feed-in settlement — 10 schemes, § 51 Negativpreisregel, § 52 sanctions, § 24 Anlagenerweiterung |
 | [`energy-billing`](crates/energy-billing/) | Retail billing (LF) — 13 product categories, § 41a dynamic tariffs, EN 16931 mapping |
-| [`invoic-checker`](crates/invoic-checker/) | INVOIC plausibility — six checks over period, arithmetic, totals and tariff match |
+| [`invoic-checker`](crates/invoic-checker/) | INVOIC plausibility — the eight-stage pipeline: Storno reference, period, Zahlungsziel, currency, arithmetic, total, Umsatzsteuer, tariff |
 | [`mako-pruefung`](crates/mako-pruefung/) | The BDEW Entscheidungsbäume, executable — NB, LF, MSB, ESA and MaBiS answer rules |
 | [`mako-invoic`](crates/mako-invoic/) | The INVOIC settle/dispute state machine every billing family registers against |
 
@@ -576,6 +576,7 @@ mako/
 │   ├── mako-redispatch/     # Redispatch 2.0 process engine — 8 XML-document-driven workflows
 │   ├── redispatch-xml/      # Redispatch 2.0 XML/XSD parsing — all 9 document types
 │   ├── invoic-checker/      # INVOIC plausibility-check pipeline (LF side)
+│   ├── mako-invoic/         # The INVOIC settle/dispute state machine, shared by all billing families
 │   ├── mako-pruefung/       # Antwortnachricht decisions (NB + LF + MSB Entscheidungsbäume)
 │   ├── mako-fristen/        # The German market calendar — Werktage, Fristen, and what "today" means
 │   ├── energy-billing/      # LF consumption billing engine (§§40–41a EnWG)

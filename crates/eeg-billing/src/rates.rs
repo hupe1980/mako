@@ -410,7 +410,7 @@ fn amount_ct(ct_str: &str) -> Amount<5> {
 //
 // | Erzeugungsart | Absenkung | ab | § |
 // |---|---|---|---|
-// | Wasserkraft | 0,5 %/Jahr | 01.01.2024 | § 40 Abs. 3 |
+// | Wasserkraft | 0,5 %/Jahr | 01.01.2024 | § 40 Abs. 5 |
 // | Deponie-/Klär-/Grubengas | 1,5 %/Jahr | 01.01.2024 | § 41 Abs. 4 |
 // | Biomasse (§§ 42–44) | 0,5 %/Jahr | **01.07.**2024 | § 44a |
 // | Geothermie | 0,5 %/Jahr | 01.01.2024 | § 45 Abs. 2 |
@@ -476,18 +476,26 @@ pub fn wasserkraft_lookup(eeg_year: i16) -> Option<RateLookup> {
 
 /// § 41 Abs. 1 EEG 2023 — **Deponiegas**, by Bemessungsleistung.
 ///
+/// **The ladder ends at 5 MW.** Abs. 1 has two Nummern, both „bis einschließlich",
+/// and no „ab einer Bemessungsleistung von mehr als" row — unlike § 40 Nr. 7 and
+/// § 41 Abs. 3 Nr. 3, where the drafters wrote one when they wanted an open top.
+/// A plant above 5 MW therefore has **no** gesetzlich bestimmter Wert here and the
+/// lookup answers `None`, which the caller has to decide rather than being paid
+/// the 5-MW rate.
+///
 /// ```rust
 /// use eeg_billing::rates;
 /// use rust_decimal::dec;
 /// let t = rates::deponiegas_lookup(2023).unwrap();
 /// assert_eq!(t.rate_for(dec!(400)).unwrap(), billing::Amount::parse("0.07460").unwrap());
 /// assert_eq!(t.rate_for(dec!(3000)).unwrap(), billing::Amount::parse("0.05170").unwrap());
+/// assert!(t.rate_for(dec!(6000)).is_err());
 /// ```
 pub fn deponiegas_lookup(eeg_year: i16) -> Option<RateLookup> {
     match eeg_year {
         2023..=2026 => RateLookup::builder()
             .at_most(dec!(500), amount_ct("7.46"))
-            .fallback(amount_ct("5.17"))
+            .at_most(dec!(5_000), amount_ct("5.17"))
             .build()
             .ok(),
         _ => None,
@@ -495,11 +503,13 @@ pub fn deponiegas_lookup(eeg_year: i16) -> Option<RateLookup> {
 }
 
 /// § 41 Abs. 2 EEG 2023 — **Klärgas**, by Bemessungsleistung.
+///
+/// Same shape as Abs. 1, including the closed top at 5 MW.
 pub fn klaergas_lookup(eeg_year: i16) -> Option<RateLookup> {
     match eeg_year {
         2023..=2026 => RateLookup::builder()
             .at_most(dec!(500), amount_ct("5.93"))
-            .fallback(amount_ct("5.17"))
+            .at_most(dec!(5_000), amount_ct("5.17"))
             .build()
             .ok(),
         _ => None,
@@ -525,9 +535,10 @@ pub fn grubengas_lookup(eeg_year: i16) -> Option<RateLookup> {
 
 /// § 45 Abs. 1 EEG 2023 — **Geothermie**, a flat 25,20 ct/kWh.
 ///
-/// Not § 41: that is Deponie-, Klär- und Grubengas. Plants above the § 22 Abs. 4
-/// threshold have their anzulegender Wert set by tender — use
-/// [`crate::TariffSource::Auction`] with the awarded value.
+/// Not § 41: that is Deponie-, Klär- und Grubengas. And there is **no Geothermie
+/// Ausschreibung at any size**: § 22 Abs. 5 Satz 2 names Geothermie among the
+/// technologies whose anzulegender Wert „durch die §§ 40 bis 49 gesetzlich
+/// bestimmt" is. § 22 Abs. 4 is Biomasse.
 pub fn geothermie_lookup(eeg_year: i16) -> Option<RateLookup> {
     match eeg_year {
         2017..=2026 => RateLookup::builder()

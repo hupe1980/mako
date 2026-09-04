@@ -13,7 +13,7 @@
 //! Each test uses a unique tenant, so the shared `public` satellites are isolated;
 //! the ledger is one-per-database, so `TENANT` names it (a fixed test ledger).
 
-use accountingd::ledger::PgLedger;
+use accountingd::ledger::{PgLedger, PostEntry};
 use accountingd::pg;
 use sqlx::PgPool;
 use time::macros::date;
@@ -469,6 +469,100 @@ async fn payment_clears_invoice_and_trial_balance_balances() {
     let dr: i64 = tb.iter().map(|l| l.debits_ct).sum();
     let cr: i64 = tb.iter().map(|l| l.credits_ct).sum();
     assert_eq!(dr, cr, "Summen- und Saldenliste: Soll = Haben");
+}
+
+/// A clearing that never ran must not be able to dun a customer who has paid.
+///
+/// `post_entry` applies the FIFO clearing on a best-effort basis: a transient
+/// failure there is logged rather than failing the money post, which is the
+/// right trade — but it leaves a paid invoice at its gross residual, and the
+/// Verzug is computed from residuals. The daily dunning run therefore has to
+/// re-clear before it re-derives, or it escalates a paid-up household through
+/// the Mahnstufen and into the §§ 41f/41g disconnection sequence on a debt that
+/// does not exist.
+///
+/// The reset below stands in for that missed clearing.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_daily_run_reclears_a_payment_the_posting_missed() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let account_id = pg::upsert_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap();
+
+    pg::post_entry(
+        &ledger,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        "RECHNUNG",
+        5000,
+        &uniq("ce"),
+        None,
+        None,
+        date!(2026 - 06 - 01),
+        date!(2026 - 06 - 01),
+        Some("Rechnung"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    // The payment goes straight to the ledger, which books the money without
+    // clearing anything — exactly the state `post_entry` leaves behind when its
+    // best-effort clearing fails.
+    ledger
+        .post(PostEntry::new(
+            &malo,
+            "LF1",
+            "ZAHLUNG",
+            -5000,
+            uniq("ce"),
+            date!(2026 - 06 - 10),
+        ))
+        .await
+        .unwrap();
+    pg::refresh_verzug(&ledger, &pool, TENANT, &malo, "LF1")
+        .await
+        .unwrap();
+    assert!(
+        !ledger
+            .open_receivables("LF1", &malo)
+            .await
+            .unwrap()
+            .is_empty(),
+        "the uncleared payment leaves the invoice at its gross residual"
+    );
+
+    // An open dunning case is what puts the account in the daily sweep.
+    pg::create_dunning_case(&pool, account_id, TENANT, 1, 5000, date!(2026 - 06 - 20))
+        .await
+        .unwrap();
+
+    pg::refresh_verzug_for_open_cases(&ledger, &pool, TENANT)
+        .await
+        .unwrap();
+
+    assert!(
+        ledger
+            .open_receivables("LF1", &malo)
+            .await
+            .unwrap()
+            .is_empty(),
+        "the daily run must re-clear the payment, not re-derive the same arrears"
+    );
+    let verzug: i64 =
+        sqlx::query_scalar("SELECT verzug_ct FROM accounts WHERE malo_id = $1 AND tenant = $2")
+            .bind(&malo)
+            .bind(TENANT)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(verzug, 0, "a paid-up account is not in Verzug");
 }
 
 /// Festschreibung (GoBD / § 146 AO): a period can be sealed, the seal chain
@@ -2813,6 +2907,90 @@ async fn seed_collection(
         .unwrap()
         .expect("the collected entry is persisted");
     (run_id, entry, malo)
+}
+
+/// A pain.008 the bank already has must not be rebuilt underneath it.
+///
+/// The N-5 scheduler is a daily loop over every replica. `LOCK_SEPA_N5` now
+/// serialises it, but a lost lock or a same-day restart still reaches
+/// `persist_sepa_collection`, and the old code upserted the run row and replaced
+/// its entries unconditionally. The stored XML and entries are the only record
+/// of what was submitted: overwrite them and the pain.002 that comes back names
+/// an `EndToEndId` no row carries, so the rejection is unattributable and the
+/// receivable stays open with nothing pointing at it.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_dispatched_collection_run_is_frozen() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let d = date!(2026 - 08 - 25);
+    let (run_id, entry, _malo) = seed_collection(&pool, d, 9_900).await;
+
+    let creditor_address = accountingd::sepa::AddressParts {
+        town: Some("Berlin".to_owned()),
+        country: Some("DE".to_owned()),
+        ..Default::default()
+    };
+    let mandates = pg::list_active_mandates(&pool, TENANT, 100).await.unwrap();
+    let mandate = mandates
+        .into_iter()
+        .find(|m| m.mandatsref == entry.mandatsref)
+        .expect("the seeded mandate");
+    // A *different* amount, which is what a second builder produces after an
+    // Abschlag changed — and what would silently replace the submitted row.
+    let rebuild = |amount_ct: i64| {
+        accountingd::sepa::build_pain_008(
+            &accountingd::sepa::CreditorIdentity {
+                iban: "DE89370400440532013000",
+                name: "Test Energie GmbH",
+                creditor_id: "DE98ZZZ09999999999",
+                address: Some(&creditor_address),
+            },
+            d,
+            &[(&mandate, amount_ct)],
+            Default::default(),
+        )
+        .expect("pain.008 builds")
+    };
+
+    // While the run is still PENDING a rebuild is allowed — that is how a batch
+    // corrected before submission replaces its own stale entries.
+    assert_eq!(
+        pg::persist_sepa_collection(&pool, TENANT, d, &rebuild(9_900))
+            .await
+            .unwrap(),
+        run_id,
+        "a PENDING run is regenerated in place"
+    );
+
+    // Claim it for dispatch, exactly as the scheduler does.
+    let mut tx = pool.begin().await.unwrap();
+    assert!(
+        pg::mark_sepa_collection_dispatched(&mut *tx, run_id)
+            .await
+            .unwrap(),
+        "the run is claimed"
+    );
+    tx.commit().await.unwrap();
+
+    let err = pg::persist_sepa_collection(&pool, TENANT, d, &rebuild(4_200))
+        .await
+        .expect_err("a dispatched run must refuse a rebuild");
+    assert!(
+        err.downcast_ref::<pg::SepaRunAlreadyDispatched>().is_some(),
+        "the refusal is typed, so a caller can tell it from a storage fault: {err}"
+    );
+
+    // And the submitted amount still stands.
+    let after = pg::find_collection_entry_by_e2e(&pool, TENANT, &entry.mandatsref)
+        .await
+        .unwrap()
+        .expect("the original entry survives");
+    assert_eq!(
+        after.amount_ct, 9_900,
+        "the entry the bank was given must not be rewritten"
+    );
 }
 
 /// The run row is the archive; the entry rows are what attributes a bank reply.

@@ -2779,6 +2779,11 @@ pub async fn run_sepa(
             // Archive the ad-hoc run exactly like the N-5 scheduler's. A
             // pain.008 handed to a bank without an audit row is a collection
             // nothing can later attribute, settle or reverse.
+            // The XML is only handed out once the archive row exists. It used
+            // to be returned with `run_id: null` on a persistence failure,
+            // which is precisely the collection the comment above warns
+            // against: the operator submits it, the bank replies, and no entry
+            // row carries the `EndToEndId` the reply names.
             let run_id = match crate::pg::persist_sepa_collection(
                 &pool,
                 &cfg.tenant,
@@ -2787,17 +2792,36 @@ pub async fn run_sepa(
             )
             .await
             {
-                Ok(id) => Some(id),
+                Ok(id) => id,
                 Err(e) => {
-                    tracing::warn!(error = %e, "accountingd: /sepa/run — failed to persist sepa_collection_run");
-                    None
+                    // A run already dispatched for this date is an operator
+                    // mistake, not a fault: building a second pain.008 for the
+                    // same collection date is how a household gets debited
+                    // twice. `409` says so; anything else is a real failure.
+                    let already = e
+                        .downcast_ref::<crate::pg::SepaRunAlreadyDispatched>()
+                        .is_some();
+                    let status = if already {
+                        StatusCode::CONFLICT
+                    } else {
+                        tracing::error!(error = %e, "accountingd: /sepa/run — failed to persist sepa_collection_run");
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    };
+                    return (
+                        status,
+                        Json(serde_json::json!({
+                            "error": e.to_string(),
+                            "collection_date": collection_date.to_string(),
+                        })),
+                    )
+                        .into_response();
                 }
             };
             (
                 StatusCode::OK,
                 Json(serde_json::json!({
                     // One pain.008 message; FRST/RCUR/… are separate PmtInf groups inside it.
-                    "run_id": run_id.map(|id| id.to_string()),
+                    "run_id": run_id.to_string(),
                     "msg_id": run.msg_id,
                     "collection_date": collection_date.to_string(),
                     "entry_count": run.entry_count,

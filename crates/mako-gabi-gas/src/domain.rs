@@ -396,7 +396,7 @@ impl std::ops::Sub for GasQuantity {
 /// Quantity breakdown from a nomination / nomination response cycle.
 ///
 /// Captures what the BKV nominated, what the FNB/MGV accepted, and the
-/// curtailment applied. All values in kWh_Hs (per KoV §3.2).
+/// curtailment applied. All values in kWh_Hs.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NominationQuantity {
     /// Quantity submitted by the BKV in the NOMINT (kWh_Hs).
@@ -488,6 +488,31 @@ pub struct GasDay {
 /// — so the hour is resolved against Europe/Berlin and then converted, the same
 /// way every Frist is. `mako_fristen::berlin_at` owns the timezone database, so
 /// the gas day and the Fristen cannot disagree about when an hour is.
+/// § 47 Ziffer 1 KoV XV — „bei RLM-Zeitreihen … M+14 Werktage".
+pub const FINALE_ALLOKATION_RLM_WERKTAGE: u16 = 14;
+
+/// § 46 Ziffer 1 KoV XV — the Ausspeisenetzbetreiber plausibilises the reported
+/// Lastgänge „bis zum 10. Werktag nach Ablauf des Liefermonats" and forms
+/// Ersatzwerte per DVGW-Arbeitsblatt G 685 where they are needed. It runs out
+/// four Werktage before the final allocation of the same month.
+pub const RLM_PLAUSIBILISIERUNG_WERKTAGE: u16 = 10;
+
+/// Which allocation series a Zeitreihe belongs to, for § 47 Ziffer 1.
+///
+/// The two have different final-allocation deadlines, and the difference is a
+/// difference in kind: an SLP allocation is a forecast that is binding *before*
+/// the gas day, an RLM allocation is a measurement that is final two weeks after
+/// the delivery month.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AllokationsSerie {
+    /// Standardlastprofil-Zeitreihen — final on D-1, 12:00 Uhr.
+    Slp,
+    /// RLM-Zeitreihen and, per § 47 Ziffer 1, Entry Biogas, Entry Wasserstoff,
+    /// Entryso and Exitso — final M+14 Werktage.
+    Rlm,
+}
+
 fn berlin_clock(date: Date, hour: u8) -> OffsetDateTime {
     mako_fristen::berlin_at(
         date,
@@ -586,10 +611,17 @@ impl GasDay {
         }
     }
 
-    /// NOMINT deadline for this gas day: D-1 13:00 CET in UTC.
+    /// NOMINT deadline for this gas day: D-1 13:00 CET, expressed in UTC.
     ///
-    /// Per KoV §3.2: the BKV must submit the NOMINT by 13:00 CET on the day
-    /// before the gas day (D-1). This is used to trigger deadline alerts.
+    /// **This is an operating convention, not a KoV Frist.** The
+    /// Kooperationsvereinbarung Gas XV sets no nomination clock time — the
+    /// nomination cycle is the Fernleitungsnetzbetreiber's own
+    /// Netzzugangsbedingungen, harmonised across Europe by the Balancing and
+    /// CAM Network Codes, and the DVGW NOMINT Nachrichtenbeschreibung is a
+    /// format spec with no timing in it. 13:00 CET on D-1 is the day-ahead
+    /// nomination deadline the German market operates on; treat a breach as an
+    /// operational alert rather than as a documented Fristverletzung, and
+    /// configure it where an FNB publishes something else.
     ///
     /// # Panics
     ///
@@ -599,13 +631,12 @@ impl GasDay {
         berlin_clock(self.date - Duration::days(1), 13)
     }
 
-    /// NOMRES response deadline for this gas day: D-1 15:00 CET in UTC.
+    /// NOMRES response deadline for this gas day: D-1 15:00 CET, in UTC.
     ///
-    /// Per the Kooperationsvereinbarung Gas: the FNB/MGV must respond to
-    /// the BKV's nomination (NOMINT) by **15:00 CET on gas day D-1** — i.e.
-    /// ~2 hours after the NOMINT submission deadline.
-    ///
-    /// Register a [`mako_engine::deadline::Deadline`] with
+    /// Same standing as [`Self::nomination_deadline_utc`] — the two hours
+    /// between the nomination and its confirmation are the harmonised
+    /// matching cycle, not a KoV XV provision. Register a
+    /// [`mako_engine::deadline::Deadline`] with
     /// [`crate::nomination::NOMRES_DEADLINE_LABEL`] using this timestamp
     /// immediately after the `NominationSent` event is persisted.
     ///
@@ -617,57 +648,77 @@ impl GasDay {
         berlin_clock(self.date - Duration::days(1), 15)
     }
 
-    /// Initial ALOCAT deadline: gas day D+3 at 12:00 CET in UTC.
+    /// The daily ALOCAT deadline for this gas day: **D+1, 12:00 Uhr** in UTC.
     ///
-    /// Per KoV §6.4: the FNB must issue the **initial** (preliminary) allocation
-    /// to the BKV by **D+3 at 12:00 CET** (D = gas day date).
+    /// § 46 Ziffer 1 KoV XV: the Ausspeisenetzbetreiber determines „die am
+    /// Vortag … ausgespeisten Stundenmengen" and sends them „unverzüglich,
+    /// spätestens jedoch bis 12:00 Uhr an den Marktgebietsverantwortlichen".
+    /// Ziffer 3 says the same for Grenzkopplungs-, Produktions-, Biogas- und
+    /// Speicherpunkte. So the allocation of gas day D is due by noon on D+1 —
+    /// not three days later.
     ///
-    /// Register a deadline with label `"gabi-gas-alocat-initial-deadline"` to
-    /// monitor compliance.
+    /// Ziffer 2's untertägige Bereitstellung (15:00 and 18:00 on the gas day
+    /// itself) is a *second* obligation and is not this one.
     ///
     /// # Panics
     ///
     /// Does not panic in practice.
     #[must_use]
-    pub fn initial_alocat_deadline_utc(&self) -> OffsetDateTime {
-        berlin_clock(self.date + Duration::days(3), 12)
+    pub fn taegliche_alocat_deadline_utc(&self) -> OffsetDateTime {
+        berlin_clock(self.date + Duration::days(1), 12)
     }
 
-    /// Final ALOCAT deadline: M+2 (end of the second calendar month after the
-    /// gas day) at 12:00 CET in UTC.
+    /// When the **final** allocation for this gas day is due, in UTC.
     ///
-    /// Per KoV §6.4: the FNB/MGV must issue the **final** (binding) allocation
-    /// by the end of month M+2. The exact day is the last day of month+2 at
-    /// 12:00 CET. All corrections must be complete by this date.
+    /// § 47 Ziffer 1 KoV XV defines it while defining when an
+    /// Allokationsclearingfall can arise: „nach dem Versand der finalen
+    /// Allokationen – bei SLP-Zeitreihen ist dies der Tag **D-1, 12:00 Uhr**
+    /// und bei RLM-Zeitreihen sowie Entry Biogas-, Entry Wasserstoff- und
+    /// Entryso- und Exitso-Zeitreihen **M+14 Werktage**".
     ///
-    /// Used to alert agentd's `gabi-gas-agent` to trigger compliance checks.
+    /// The two are not variations of one figure: an SLP allocation is final
+    /// *before* the gas day it describes, because it is a forecast the
+    /// Marktgebietsverantwortliche bilanziert; an RLM allocation is final two
+    /// weeks after the delivery month, once the Lastgänge are plausibilised
+    /// (§ 46 Ziffer 1 gives that its own 10-Werktage window). Applying one to
+    /// the other misses the deadline by months in one direction and raises a
+    /// false alarm in the other.
+    ///
+    /// **The clock times differ because only one of them is stated.** § 47 gives
+    /// the SLP deadline as „der Tag D-1, **12:00 Uhr**"; the RLM one it gives as
+    /// „M+14 Werktage" with no time of day, and a Frist counted in Werktage runs
+    /// to the **end** of the last one. Pinning it to noon would shorten it by
+    /// half a day against a text that does not say so.
+    ///
+    /// `werktag_nach` resolves „M+14 Werktage" against the caller's calendar —
+    /// `mako_fristen` owns Werktage and the German holiday set, and this crate
+    /// does not depend on it. It receives the last day of the delivery month and
+    /// must return the 14th Werktag after it.
     ///
     /// # Panics
     ///
     /// Does not panic in practice.
     #[must_use]
-    pub fn final_alocat_deadline_utc(&self) -> OffsetDateTime {
-        // M+2: month of gas day + 2, last day of that month
-        let month_num = self.date.month() as u8;
-        let year = self.date.year();
-        let (target_year, target_month) = if month_num >= 11 {
-            // Nov → Jan+1, Dec → Feb+1
-            (
-                year + 1,
-                time::Month::try_from((month_num + 2) % 12).unwrap_or(time::Month::January),
-            )
-        } else {
-            (
-                year,
-                time::Month::try_from(month_num + 2).unwrap_or(time::Month::January),
-            )
-        };
-        // Last day of target month
-        let last_day =
-            Date::from_calendar_date(target_year, target_month, target_month.length(target_year))
-                .unwrap_or_else(|_| self.date + Duration::days(60));
-
-        berlin_clock(last_day, 12)
+    pub fn finale_allokation_deadline_utc(
+        &self,
+        serie: AllokationsSerie,
+        werktag_nach: impl Fn(Date, u16) -> Date,
+    ) -> OffsetDateTime {
+        match serie {
+            AllokationsSerie::Slp => berlin_clock(self.date - Duration::days(1), 12),
+            AllokationsSerie::Rlm => {
+                let monatsletzter = Date::from_calendar_date(
+                    self.date.year(),
+                    self.date.month(),
+                    self.date.month().length(self.date.year()),
+                )
+                .unwrap_or(self.date);
+                let letzter_werktag = werktag_nach(monatsletzter, FINALE_ALLOKATION_RLM_WERKTAGE);
+                // End of that Werktag: 00:00 of the following day, which is the
+                // same instant and avoids naming a 23:59:59 that no text does.
+                berlin_clock(letzter_werktag.next_day().unwrap_or(letzter_werktag), 0)
+            }
+        }
     }
 
     /// Format as `YYYY-MM-DD` (DVGW standard gas day identifier).
@@ -878,7 +929,7 @@ pub enum ImbalanceDirection {
 mod tests {
     use super::*;
     use rust_decimal::dec;
-    use time::macros::date;
+    use time::macros::{date, datetime};
 
     // ── GasBeschaffenheit ──────────────────────────────────────────────────────
 
@@ -1140,40 +1191,59 @@ mod tests {
         assert_eq!(dl.hour(), 13, "15:00 CEST = 13:00 UTC in summer");
     }
 
+    /// § 46 Ziffer 1 KoV XV — the allocation of gas day D is due „unverzüglich,
+    /// spätestens jedoch bis 12:00 Uhr" on the day after it. It was D+3, which
+    /// is three days of silence the KoV does not grant.
     #[test]
-    fn initial_alocat_deadline_is_d_plus_3_12_00_cet_winter() {
-        // Gas day 2026-01-15 → Initial ALOCAT deadline = 2026-01-18 12:00 CET = 11:00 UTC
+    fn the_daily_alocat_is_due_at_noon_the_next_day() {
+        // Gas day 2026-01-15 → 2026-01-16 12:00 CET = 11:00 UTC
         let d = GasDay::new(date!(2026 - 01 - 15));
-        let dl = d.initial_alocat_deadline_utc();
-        assert_eq!(dl.date(), date!(2026 - 01 - 18), "D+3 date");
+        let dl = d.taegliche_alocat_deadline_utc();
+        assert_eq!(dl.date(), date!(2026 - 01 - 16), "D+1");
         assert_eq!(dl.hour(), 11, "12:00 CET = 11:00 UTC in winter");
     }
 
+    /// § 47 Ziffer 1 KoV XV gives the two series different final-allocation
+    /// deadlines, and they are not variations of one figure: an SLP allocation
+    /// is final **before** the gas day, an RLM allocation two weeks after the
+    /// delivery month. The old model had one „M+2" for both.
     #[test]
-    fn final_alocat_deadline_is_end_of_month_plus_2() {
-        // Gas day 2026-01-15 → Final ALOCAT deadline = end of 2026-03 at 12:00 CET
-        let d = GasDay::new(date!(2026 - 01 - 15));
-        let dl = d.final_alocat_deadline_utc();
-        assert_eq!(
-            dl.date().month(),
-            time::Month::March,
-            "M+2 = March for January gas day"
-        );
-        assert_eq!(dl.date().year(), 2026);
-        assert_eq!(dl.date().day(), 31, "last day of March");
-    }
+    fn the_final_allocation_deadline_differs_by_series() {
+        // A stand-in for a Werktagskalender: `mako_fristen` owns the real one and
+        // this crate does not depend on it, which is why the caller supplies it.
+        let werktage = |from: Date, n: u16| {
+            let mut d = from;
+            let mut left = n;
+            while left > 0 {
+                d += Duration::days(1);
+                if !matches!(d.weekday(), Weekday::Saturday | Weekday::Sunday) {
+                    left -= 1;
+                }
+            }
+            d
+        };
 
-    #[test]
-    fn final_alocat_deadline_november_wraps_to_january_next_year() {
-        // Gas day 2026-11-15 → Final ALOCAT deadline = end of 2027-01
-        let d = GasDay::new(date!(2026 - 11 - 15));
-        let dl = d.final_alocat_deadline_utc();
+        let d = GasDay::new(date!(2026 - 01 - 15));
+
+        let slp = d.finale_allokation_deadline_utc(AllokationsSerie::Slp, werktage);
+        assert_eq!(slp.date(), date!(2026 - 01 - 14), "SLP is final on D-1");
+        assert_eq!(slp.hour(), 11, "12:00 CET");
+
+        // January 2026 ends on Saturday the 31st; fourteen Werktage later is
+        // 2026-02-19, well inside February and nothing like „end of March". § 47
+        // states no clock time for the RLM figure, so the Frist runs to the end
+        // of that Werktag — 00:00 on the 20th is the same instant.
+        let rlm = d.finale_allokation_deadline_utc(AllokationsSerie::Rlm, werktage);
+        // The value is UTC: 00:00 CET on the 20th is 23:00 UTC on the 19th.
         assert_eq!(
-            dl.date().year(),
-            2027,
-            "M+2 from November wraps to next year"
+            rlm,
+            datetime!(2026-02-19 23:00 UTC),
+            "end of the 14th Werktag"
         );
-        assert_eq!(dl.date().month(), time::Month::January);
+        assert!(
+            rlm.date() < date!(2026 - 03 - 01),
+            "M+14 Werktage lands inside February — the old M+2 rule was six weeks late"
+        );
     }
 
     // ── GasBeschaffenheit validation ───────────────────────────────────────────

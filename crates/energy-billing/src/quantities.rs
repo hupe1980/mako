@@ -506,6 +506,7 @@ pub struct ServiceMeterInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DynamicInterval {
     /// Interval start (UTC).
+    #[serde(with = "time::serde::rfc3339")]
     pub timestamp_utc: OffsetDateTime,
     /// Energy in kWh for this interval.
     pub kwh: Decimal,

@@ -17,7 +17,13 @@ Key responsibilities:
 - Run the **Hampel-filter quality scorer** and **V01–V09/V11/V12 validation engine** on all inbound interval data. Emit `de.messwert.reading.quality.warning` CloudEvents when either fires, from every ingest door.
 - Schedule and track **reading orders** (Ablesesteuerung) for the market roles LF, MSB, NB and ESA (an ESA may order value delivery under §60 Abs. 1 MsbG). Auto-creates `INSRPT_STOERUNG` orders when a WiM INSRPT PID 23001 Störungsmeldung arrives.
 - Compute and serve **virtual meter time series** (Sum, Residual, PvSelfConsumption, GgvConstantAllocation, GgvProportionalAllocation per §42b EnWG Solarpaket I GGV community solar) on demand.
-- Generate **§ 40a Abs. 2 EnWG annual projections** (Verbrauchsschätzung — daily-average projection with automatic prior-year **seasonal correction** when the same window one year earlier has data) and **prior-period substitute values** for gap intervals — runs of up to three missing slots interpolate linearly between their real neighbours (the VDE-AR-N 4400 short-gap rule), longer runs use the Vergleichstag (same slot one week earlier); the audit row names the method that actually ran.
+- Generate **§ 40a Abs. 2 EnWG annual projections** — a daily-average
+  Verbrauchsschätzung, seasonally corrected against the same window a year
+  earlier where that has data.
+- Fill gap intervals with **prior-period substitute values**: up to three missing
+  slots interpolate linearly between their real neighbours (VDE-AR-N 4400
+  short-gap rule), longer runs take the Vergleichstag one week earlier. The audit
+  row names the method that actually ran.
 - Provide resampled Lastgang (hourly / daily / monthly / yearly buckets) and monthly Summenzeitreihe for MaBiS.
 - Provide a time-series query API for ERP and `netzbilanzd`.
 - Export BO4E `Lastgang` objects and `Zeitreihe` objects for ERP and API-Webdienste Strom consumers.
@@ -2074,20 +2080,21 @@ the gap as its resolution.
 consecutive read pair (15 min → `VIERTELSTUNDE`, 60 min → `MINUTE(60)`, 1440
 min → `TAG`). RLM reads are typically 15-minute intervals.
 
-**Point-in-time reconstruction — `?as_of=RFC3339`.** § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) lets an
-auditor reconstruct the exact billing basis as it stood at a past instant. Adding
-`&as_of=2026-02-05T00:00:00Z` reads the series through meterstore's
+**Point-in-time reconstruction — `?as_of=RFC3339`.** § 147 Abs. 1 AO / § 146
+Abs. 4 AO (GoBD) lets an auditor reconstruct the billing basis as it stood at a
+past instant. `&as_of=2026-02-05T00:00:00Z` reads the series through meterstore's
 **transaction-time axis** (`store.as_known_at`): version resolution runs under a
 `recorded_at` ceiling, so a correction delivered after that instant — **and an
-interval first stored after it** — are both invisible, and the values returned are
-the ones that were in force then. This is a true bitemporal read, not a value
-overlay: it reconstructs the *set* of readings, so a later-inserted interval no
-longer leaks into a historical view. It works across both tiers, so recent
-settlements reconstruct as faithfully as archived ones. A malformed `as_of` is a
-`400`, never a silent fall-back to current values. `GET /api/v1/zeitreihe/...`
-honours `?as_of=` identically; the non-authoritative ESA Typ-2 stream does not
-(it is never corrected). The correction *log* itself — who changed what, when and
-why — remains queryable via `GET /api/v1/corrections/{malo_id}`.
+interval first stored after it** — are both invisible.
+
+That makes it a true bitemporal read rather than a value overlay: it reconstructs
+the *set* of readings, so a later-inserted interval cannot leak into a historical
+view. It works across both tiers, and a malformed `as_of` is a `400`, never a
+silent fall-back to current values.
+
+`GET /api/v1/zeitreihe/...` honours `?as_of=` identically; the non-authoritative
+ESA Typ-2 stream does not, because it is never corrected. The correction *log* —
+who changed what, when and why — is `GET /api/v1/corrections/{malo_id}`.
 
 **OBIS codes.** Each `MeterRead` carries an optional `obis_code` field
 populated from the MSCONS PIA segment. Common values:

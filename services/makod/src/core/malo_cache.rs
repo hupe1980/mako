@@ -355,6 +355,7 @@ fn addr_index_suffix(
 pub struct MaloCacheStats {
     pub tenant_id: String,
     pub count: u64,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub last_upsert: Option<OffsetDateTime>,
 }
 

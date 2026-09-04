@@ -6,12 +6,25 @@
 //!
 //! # Check stages
 //!
-//! | Stage | Finding kind | Outcome |
-//! |---|---|---|
-//! | Period check | [`FindingKind::PeriodInvalid`] | `Dispute` |
-//! | Arithmetic check | [`FindingKind::ArithmeticError`] | `Dispute` |
-//! | Total check | [`FindingKind::TotalMismatch`] | `Warn` |
-//! | Tariff check | [`FindingKind::TariffDeviation`] | `Warn` or `Dispute` |
+//! Eight stages, in this order. The order matters twice: the currency check
+//! runs before the arithmetic that would otherwise compare a CHF amount against
+//! a EUR one, and the tariff check runs last because it is the only stage that
+//! reaches outside the document.
+//!
+//! | # | Stage | Finding kind | Outcome |
+//! |---|---|---|---|
+//! | 1 | Storno reference | [`FindingKind::StorniertWithoutReference`] | `Dispute` |
+//! | 2 | Period validity | [`FindingKind::PeriodInvalid`] | `Dispute` |
+//! | 3 | Zahlungsziel | [`FindingKind::ZahlungszielInvalid`] · [`FindingKind::ZahlungszielExceeded`] | `Dispute` · `Warn` |
+//! | 4 | Currency agreement | [`FindingKind::WaehrungMismatch`] | `Dispute` |
+//! | 5 | Position arithmetic | [`FindingKind::ArithmeticError`] | `Dispute` |
+//! | 6 | Document total | [`FindingKind::TotalMismatch`] | `Warn` |
+//! | 7 | Umsatzsteuer | [`FindingKind::SteuerMissing`] · [`FindingKind::SteuerMismatch`] · [`FindingKind::ReverseChargeStatesTax`] | `Dispute` |
+//! | 8 | Tariff / Angebot | [`FindingKind::TariffDeviation`] · [`FindingKind::TariffNotFound`] · [`FindingKind::AngebotDeviation`] · [`FindingKind::AngebotPositionUnknown`] | `Warn` or `Dispute` |
+//!
+//! Stage 8 is skipped for a Stornorechnung, which carries negated original
+//! amounts rather than tariff positions, and stage 3 is skipped when
+//! `CheckConfig::max_zahlungsziel_days` is zero.
 //!
 //! # Outcome escalation
 //!
@@ -397,7 +410,7 @@ impl InvoicCheckEngine {
 
         let storno = is_stornierung(rechnung);
 
-        // ── Stage 0: Stornierung reference check ──────────────────────────────
+        // ── Stage 1: Stornierung reference check ──────────────────────────────
         // When ist_storno=true, original_rechnungsnummer must be present.
         // Source: BK6-24-174 §5; Allgemeine Festlegungen §8.
         if storno
@@ -418,27 +431,31 @@ impl InvoicCheckEngine {
             ));
         }
 
-        // ── Stage 1: Period validity ──────────────────────────────────────────
+        // ── Stage 2: Period validity ──────────────────────────────────────────
         Self::check_periods(rechnung, &mut findings);
 
-        // ── Stage 1.5: Zahlungsziel check ─────────────────────────────────────
+        // ── Stage 3: Zahlungsziel check ───────────────────────────────────────
         // DTM+92 (faelligkeitsdatum) must not exceed max_zahlungsziel_days.
         // Source: §7 Allgemeine Festlegungen V6.1d; BK6-22-024 §5.
         if config.max_zahlungsziel_days > 0 {
             Self::check_zahlungsziel(rechnung, config, &mut findings);
         }
 
-        // ── Stage 2: Arithmetic (qty × unit_price ≈ gesamtpreis) ─────────────
+        // ── Stage 4: Currency agreement ───────────────────────────────────────
+        // Before the arithmetic, which would otherwise read a CHF `Betrag` as
+        // if it were EUR and find every later comparison consistent.
         Self::check_waehrung(rechnung, &mut findings);
+
+        // ── Stage 5: Arithmetic (qty × unit_price ≈ gesamtpreis) ──────────────
         Self::check_arithmetic(rechnung, config, &mut findings);
 
-        // ── Stage 3: Total consistency (Σ gesamtpreis ≈ gesamtnetto) ──────────
+        // ── Stage 6: Total consistency (Σ gesamtpreis ≈ gesamtnetto) ──────────
         let computed_total = Self::check_total(rechnung, config, &mut findings);
 
-        // ── Stage 3.5: The Umsatzsteuer block ─────────────────────────────────
+        // ── Stage 7: The Umsatzsteuer block ───────────────────────────────────
         Self::check_steuer(rechnung, config, &mut findings);
 
-        // ── Stage 4: Tariff check (PRICAT vs INVOIC unit price) ───────────────
+        // ── Stage 8: Tariff check (PRICAT vs INVOIC unit price) ───────────────
         // Skipped for Stornorechnungen: they carry negated original amounts,
         // not tariff positions. Skipping prevents false TariffDeviation disputes.
         if !storno {
@@ -456,7 +473,7 @@ impl InvoicCheckEngine {
 
     // ── Stage implementations ──────────────────────────────────────────────────
 
-    /// Stage 1.5: Validate `faelligkeitsdatum` (Zahlungsziel / DTM+92).
+    /// Stage 3: Validate `faelligkeitsdatum` (Zahlungsziel / DTM+92).
     ///
     /// Checks:
     /// - If `faelligkeitsdatum < rechnungsdatum`: invalid (past due before issued).
@@ -520,7 +537,7 @@ impl InvoicCheckEngine {
         }
     }
 
-    /// Stage 1: Verify that every billing period is orientated forwards.
+    /// Stage 2: Verify that every billing period is orientated forwards.
     ///
     /// **The two periods on a `Rechnung` use different interval conventions, and
     /// the check differs accordingly.** BO4E is not uniform here:
@@ -567,7 +584,7 @@ impl InvoicCheckEngine {
         }
     }
 
-    /// Stage 2: For each position with quantity + unit_price, verify
+    /// Stage 5: For each position with quantity + unit_price, verify
     /// `positions_menge × einzelpreis ≈ gesamtpreis` (BO4E v202607).
     ///
     /// Uses `billing::Amount::checked_sub` + `checked_mul_qty` — no `f64`
@@ -645,10 +662,10 @@ impl InvoicCheckEngine {
         }
     }
 
-    /// Stage 3: Verify Σ `gesamtpreis` ≈ `gesamtnetto`.
+    /// Stage 6: Verify Σ `gesamtpreis` ≈ `gesamtnetto`.
     ///
     /// Returns the computed sum (used in the `CheckReport`).
-    /// Stage 3.5: the Umsatzsteuer block.
+    /// Stage 7: the Umsatzsteuer block.
     ///
     /// §14 Abs. 4 Nr. 8 UStG makes the rate and the tax amount mandatory content
     /// — or, where the supply is not taxed by the issuer, a note saying so. An
@@ -804,7 +821,7 @@ impl InvoicCheckEngine {
         Some(computed)
     }
 
-    /// Stage 4: Compare `einzelpreis` against the tariff store (PRICAT 27003).
+    /// Stage 8: Compare `einzelpreis` against the tariff store (PRICAT 27003).
     fn check_tariffs(
         rechnung: &Rechnung,
         sender_mp_id: &str,
@@ -1152,7 +1169,7 @@ impl InvoicCheckEngine {
         }
     }
 
-    // ── Stage 5: MMM settlement price check ──────────────────────────────────
+    // ── MMM settlement price check (its own entry point, not part of the eight) ──
 
     /// Check 6 (MMM settlement): validate that `mehr_preis` / `minder_preis`
     /// positions in an MMM INVOIC (PIDs 31005, 31006, 31007, 31008) match the
@@ -1331,7 +1348,7 @@ impl InvoicCheckEngine {
     /// Arithmetic-only check for Stornorechnungen (cancellation invoices).
     ///
     /// Runs stages 0–3 (Storno reference, period, arithmetic, totals) only.
-    /// Stage 4 (tariff check) is skipped because a Stornierung carries negated
+    /// Stage 8 (tariff check) is skipped because a Stornierung carries negated
     /// amounts from the original invoice, not new tariff positions.
     ///
     /// Returns a `CheckReport` with outcome `AcceptedPartial` when all checks
@@ -1359,7 +1376,7 @@ impl InvoicCheckEngine {
     pub fn check_storno(pid: u32, rechnung: &Rechnung, config: &CheckConfig) -> CheckReport {
         let mut findings = Vec::new();
 
-        // Stage 0: Storno reference must be present.
+        // Stage 1: Storno reference must be present.
         if rechnung
             .original_rechnungsnummer
             .as_deref()
@@ -1376,20 +1393,20 @@ impl InvoicCheckEngine {
             ));
         }
 
-        // Stage 1: Period validity (same as full check).
+        // Stage 2: Period validity (same as full check).
         Self::check_periods(rechnung, &mut findings);
 
-        // Stage 1.5: Zahlungsziel check.
+        // Stage 3: Zahlungsziel check.
         if config.max_zahlungsziel_days > 0 {
             Self::check_zahlungsziel(rechnung, config, &mut findings);
         }
 
-        // Stage 2 + 3: Arithmetic and total (still apply to Storno amounts).
+        // Stages 4-6: currency, arithmetic and total (still apply to Storno amounts).
         Self::check_waehrung(rechnung, &mut findings);
         Self::check_arithmetic(rechnung, config, &mut findings);
         let computed_total = Self::check_total(rechnung, config, &mut findings);
 
-        // Stage 4: SKIPPED — Storno carries negated original amounts.
+        // Stage 8: SKIPPED — Storno carries negated original amounts.
 
         CheckReport::from_findings(pid, rechnung, findings, computed_total)
     }

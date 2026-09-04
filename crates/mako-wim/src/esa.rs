@@ -1330,6 +1330,7 @@ pub struct Angebot {
     /// von Werten ab Bestellung", a **duration** (DE 2379 `802`/`803`/`804`),
     /// resolved against the day the Angebot arrived. `Kann`.
     #[serde(default)]
+    #[serde(with = "time::serde::rfc3339::option")]
     pub einrichtung_bis: Option<time::OffsetDateTime>,
 }
 

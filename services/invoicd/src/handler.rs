@@ -1116,14 +1116,15 @@ const fn rechnung_empfaenger(
 }
 
 /// The [`RechnungsFamilie`](mako_pruefung::rechnung::RechnungsFamilie) whose
-/// walk answers this invoice, or `None` where mako carries no Codeliste for it.
+/// walk answers this invoice, or `None` where no walk decides it.
 ///
 /// Both facts are required and neither is guessable: the recipient's Marktrolle
 /// (`[identity] marktrolle`) narrows PID 31009 to at most two Use-Cases and
 /// `IMD+7081` picks between them. `None` means the tree is *named* correctly by
-/// [`mako_pruefung::codes::rechnungspruefung`] but its codes are not carried —
-/// `E_0566` and `E_0210` — so the answer goes out without a code rather than
-/// with one borrowed from another tree.
+/// [`mako_pruefung::codes::rechnungspruefung`] — `E_0566` and `E_0210`, whose
+/// Codelisten are carried — but its Prüfschritte are its own rather than the
+/// family walk's, so the answer goes out without a code rather than with one
+/// borrowed from a tree that asks different questions.
 fn familie_fuer(
     pid: u32,
     eigene_rolle: crate::config::EmpfaengerRolle,
