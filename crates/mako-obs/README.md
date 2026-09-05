@@ -3,7 +3,7 @@
 **Business-process observability library — process projections, KPI computation, and BNetzA regulatory reports.**
 
 `mako-obs` defines the domain types and repository trait used by the
-[`obsd`](../../services/obsd/) daemon. The library itself has no I/O; persistence
+[`obsd`](https://hupe1980.github.io/mako/docs/services/obsd/) daemon. The library itself has no I/O; persistence
 is implemented in `obsd` via PostgreSQL.
 
 ---
@@ -26,6 +26,7 @@ pub struct ProcessProjection {
     pub partner_mp_id: Option<String>,
     pub mdm_role: Option<String>,
     pub deadline_at: Option<OffsetDateTime>,
+    pub deadline_source: Option<String>,
     pub deadline_risk: DeadlineRisk,
     pub started_at: OffsetDateTime,
     pub last_event_at: OffsetDateTime,
@@ -47,10 +48,18 @@ via `ProcessState::from_ce_type`:
 | `de.mako.aperak.rejected`    | `Rejected` + ERC |
 | `de.mako.aperak.timeout`     | `AperakTimeout`  |
 | `de.mako.process.completed`  | `Completed`      |
-| `de.mako.process.failed`     | `Cancelled`      |
+| `de.mako.process.failed`     | `Failed`         |
 
-`ProcessState::is_terminal()` returns `true` for `Completed`, `Rejected`, and
-`Cancelled` — states that will receive no further events.
+`ProcessState::is_terminal()` returns `true` for `Completed`, `Rejected` and
+`Failed` — states that will receive no further events. `AperakTimeout` is
+deliberately **not** terminal: a counterparty that missed the acknowledgement
+window can still answer the business message, and the process then completes
+normally. The unsuccessful endings (`Rejected`, `Failed`) are
+`is_unsuccessful_ending()`, which is the STP denominator.
+
+The name is `Failed`, not `Cancelled`: nothing in mako emits a cancellation, and
+that name would file unrecoverable failures in a bucket the STP rate reads as a
+normal ending.
 
 ### `DeadlineRisk`
 
@@ -59,11 +68,18 @@ computed by `DeadlineRisk::classify(deadline, now)`:
 
 ```rust
 pub enum DeadlineRisk {
-    Green, // more than 24 h before deadline
-    Amber, // less than 24 h before deadline
-    Red,   // deadline has passed and process is still open
+    Unknown, // no Antwortfrist is published for this PID, so no risk is stateable
+    Green,   // more than AMBER_HOURS (24) before the deadline
+    Amber,   // less than AMBER_HOURS before the deadline
+    Red,     // the deadline has passed and the process is still open
 }
 ```
+
+A process with no `deadline_at` is `Unknown`, never `Green`: "we have not read
+that Festlegung" and "there is time" are different statements.
+`DeadlineRisk::classify_opt` is the `Option`-taking form. The 24 h in
+`AMBER_HOURS` is an operating convention shared with obsd's sweep window — no
+Festlegung states it.
 
 `obsd` re-evaluates `DeadlineRisk` on its deadline sweep and emits a
 `de.obs.deadline.approaching` CloudEvent for processes inside the warn window.
@@ -141,7 +157,8 @@ pub trait ProcessProjectionRepository: Send + Sync + 'static {
 advance a projection when the incoming event carries a later timestamp.
 `kpi_report` and `overdue_processes` filter to the given operator `tenant`
 (MP-ID / GLN). Queries are expressed with `ObsQuery` (filters on `state`, `pid`,
-`partner_mp_id`, `mdm_role`, `since`, `tenant`, and a `limit` defaulting to 100).
+`family`, `partner_mp_id`, `mdm_role`, `since`, `tenant`, and a `limit`
+defaulting to 100).
 
 Errors are reported through `ObsError` (`Database`, `NotFound`, `NoKpiData`,
 `Internal`).
@@ -197,8 +214,25 @@ Never enable `testing` in production builds.
 - **§ 6a EnWG** — informatorische Entflechtung
 - **§ 7a Abs. 5 EnWG** — Gleichbehandlungsprogramm and the Gleichbehandlungs­bericht
   the Gleichbehandlungsbeauftragte files by 31 March for the preceding calendar year
-- **BK6-24-174** — GPKE / WiM Strom process framework and Fristen
-- **BK7-24-01-009** — GeLi Gas / WiM Gas process framework and Fristen
+- **BK6-24-174** — GPKE Strom process framework and Fristen (Teil 2 states the
+  answer windows as clock times on the 1. Werktag nach dem Übertragungstag)
+- **BK6-22-024** — WiM (Messstellenbetrieb), Anlage 2a; the WiM Fristen for
+  **both** Sparten, never BK6-24-174
+- **BK7-24-01-009** — GeLi Gas 3.0 process framework and Fristen (WiM Gas adds
+  AWH WiM Gas V2.0)
 
 Deadlines themselves live in `mako-fristen`, not here: this crate holds the
 read-model and the report shapes.
+
+## Related crates
+
+| Crate | Role |
+|---|---|
+| [`mako-obs`](https://docs.rs/mako-obs) ← **this crate** | `ProcessProjection`, `KpiReport`, the repository trait, the § 7a Abs. 5 EnWG report shapes |
+| [`mako-events`](https://docs.rs/mako-events) | CloudEvents `type` catalog — the shared event vocabulary |
+| [`mako-fristen`](https://docs.rs/mako-fristen) | *When* an answer is due — Werktage, the MaKo holiday calendar, the per-PID Antwortfristen |
+| [`mako-engine`](https://docs.rs/mako-engine) | Event-sourced workflow runtime — `Workflow`, `Process`, `EventStore`, deadlines |
+| [`obsd`](https://hupe1980.github.io/mako/docs/services/obsd/) | Production daemon — the PostgreSQL implementation of the repository trait |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>

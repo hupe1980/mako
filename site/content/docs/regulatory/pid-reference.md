@@ -1,17 +1,18 @@
 +++
 title = "PID Reference"
-description = "Complete Prüfidentifikator (PID) reference for all German energy market processes. Covers BDEW PID 3.3 (FV2025-10-01, Fehlerkorrektur 27.03.2026), PID 4.0 (FV2026-10-01), and the DVGW gas transport PIDs (70001–70039). Includes communication roles (Von → An), response-trigger PIDs (Reaktion), and the Rust domain crate that routes each PID."
+description = "Every Prüfidentifikator mako routes: BDEW PID 3.3 and 4.0 plus the DVGW gas transport codes, with the roles that exchange each and the crate that handles it."
 weight = 11
 +++
-# Prüfidentifikator (PID) Reference
-
 **Source documents:**
 - BDEW EDI@Energy — *Anwendungsübersicht der Prüfidentifikatoren*:
   PID 3.3 (FV2025-10-01, Fehlerkorrektur 27.03.2026) · PID 4.0 (FV2026-10-01, published 01.04.2026)
 - DVGW EDI-DVGW — Prüfidentifikatoren 70000–79999 for GaBi Gas transport
 
 A Prüfidentifikator (PID) identifies a specific EDIFACT message use case within a
-business process. Each PID is bound to one EDIFACT format (UTILMD, MSCONS, INVOIC, …)
+business process. If the vocabulary here is new, the
+[reference vocabulary](@/docs/reference/_index.md#vocabulary) defines it, and the
+[process catalogue](@/docs/reference/processes.md) groups these PIDs into the
+end-to-end processes they belong to. Each PID is bound to one EDIFACT format (UTILMD, MSCONS, INVOIC, …)
 and one business context (GPKE, WiM, GeLi Gas, …). The routing layer
 (`mako_engine::pid_router::PidRouter`) dispatches inbound messages to the correct
 workflow by PID.
@@ -24,7 +25,21 @@ workflow by PID.
 | **Reaktion** | PID that this message _reacts to_ (i.e. is a response/follow-up to). `—` if the column is empty in the source xlsx. |
 | **⚡ / 🔥** | Sparte: ✅ = covered; — = not applicable. |
 | **3.3 / 4.0** | ✅ = present in BDEW PID overview for that format version; ⚠️ = absent (sunset or not-yet-added). |
-| **Crate / Workflow** | The `mako-*` crate and `workflow-name` that registers this PID in `PidRouter`. `—` = no workflow registers it. ⁽ᴺᴮ⁾ = NB-role conditional registration only. Multiple entries separated by ` · ` = same PID registered independently in different crates (commodity-isolated; each crate is loaded only in the relevant Strom or Gas deployment). |
+| **Crate / Workflow** | The `mako-*` crate and `workflow-name` that registers this PID in `PidRouter` — see below |
+
+Reading the **Crate / Workflow** column: `—` means no workflow registers the PID,
+and the cell says why. `⁽ᴺᴮ⁾` marks a registration that only happens in an
+NB-role deployment. Several entries separated by ` · ` mean the same PID is
+registered independently in more than one crate, which is safe because those
+crates are commodity-isolated: each is loaded only in the Strom or the Gas
+deployment, never both.
+
+A guard parses this column
+(`services/makod/tests/pid_reference_guard.rs`): a PID credited to a workflow
+must be one the compiled modules actually route, and the named workflow must be
+the one the router resolves. A message carrying an unrouted PID is dead-lettered
+as `UnknownPid`, so a row that promises handling it does not have is a
+documented lie the test refuses.
 
 **Commodity isolation is per *process family*, not per Sparte.** The Lieferanten­
 wechsel is genuinely two different Festlegungen — GPKE (`mako-gpke`) against GeLi
@@ -125,7 +140,7 @@ These PIDs are governed by DVGW, not BDEW, and so do not appear in the BDEW PID
 | 70039 | NOMRES | Bestätigung Flexibilitätsübertragung | NB an Transportkunde |
 
 Sources: DVGW-Nachrichtenbeschreibungen ALOCAT 5.11a §3.3, NOMINT 4.6 §4,
-NOMRES 4.7 §4. See [DVGW EDI](dvgw) for the parsing architecture.
+NOMRES 4.7 §4. See [DVGW EDI](@/docs/reference/dvgw.md) for the parsing architecture.
 
 ---
 
@@ -368,7 +383,7 @@ section on this page.
 | 55687 | Rückmeldung/Anfrage Daten der Tranche | GPKE Teil 4 | ÜNB → MSB | 55686 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55688 | Änderung Daten der MaLo | GPKE Teil 4 | NB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55689 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | ÜNB → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
-| 55690 | Lokationsbündelstruktur und DB | AWH NBW | NBA → NBN | — | — | — | ✅ | ✅ | — |
+| 55690 | Lokationsbündelstruktur und DB | AWH NBW | NBA → NBN | — | — | — | ✅ | ✅ | — (AWH NBW; makod registers no NBW module — mako-nbw is a domain crate with no PID family of its own) |
 | 55691 | Änderung Paket-ID der MaLo | GPKE Teil 4 / AWH NBW | NB → LF · NB → MSB · NB → ÜNB · NBA → NBN | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55692 | Rückmeldung/Anfrage Paket-ID der MaLo | GPKE Teil 4 | LF → NB · MSB → NB · ÜNB → NB | 55691 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55693 | Änderung Daten der TR | GPKE Teil 4 | LF → NB | — | — | ✅ | ⚠️ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |

@@ -1,10 +1,11 @@
 //! BDEW MaKo AS4 profile for German energy market communication.
 //!
 //! This crate encodes the **BDEW AS4-Profil v1.2** requirements on top
-//! of [`asx_rs`](https://docs.rs/asx-rs) v0.9, providing:
+//! of [`asx_rs`](https://docs.rs/asx-rs) v0.13, providing:
 //!
 //! - [`constants`] — BDEW-specific URIs and algorithm identifiers
-//! - [`pmode`] — [`BdewAction`] enum, [`bdew_pmode`] / [`bdew_pmode_sign_only`],
+//! - [`pmode`] — [`BdewAction`] enum, [`bdew_pmode`] / [`bdew_pmode_sign_only`]
+//! - [`partner_directory`] — [`PartnerDirectory`], GLN-to-endpoint resolution
 //! - [`profile`] — [`BdewAs4Profile`], [`bdew_mako_profile_stack`],
 //!   [`bdew_push_policy`] (inbound policy with `require_encrypted_inbound`)
 //! - [`testing`] *(feature)* — [`BdewTestPki`], [`MockAs4Endpoint`],

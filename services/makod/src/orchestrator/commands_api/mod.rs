@@ -222,7 +222,7 @@ use mako_gabi_gas::{
 };
 use mako_geli_gas::{
     GELI_GAS_DATENABRUF_WORKFLOW_NAME, GELI_GAS_SPERRPROZESSE_INVOIC_WORKFLOW_NAME,
-    GasSupplierChangeCommand, GeliGasDatanabrufCommand, GeliGasDatanabrufWorkflow,
+    GasSupplierChangeCommand, GeliGasDatenabrufCommand, GeliGasDatenabrufWorkflow,
     GeliGasLfAnmeldungCommand, GeliGasLfAnmeldungWorkflow, GeliGasSperrprozesseInvoicWorkflow,
     GeliGasSupplierChangeWorkflow, LF_ANMELDUNG_ANFRAGE_PIDS,
 };
@@ -728,11 +728,24 @@ where
         )
         .await?;
 
-    // Index the process under any outbound order Belegnummern (best-effort).
+    // Index the process under any outbound order Belegnummern. Best-effort in
+    // that one lost key does not stop the others being written and does not fail
+    // a command whose message is already enqueued — but not silent: an answer
+    // that references only this Belegnummer has no other way back to the
+    // process, so the loss has to be findable.
     for key in extra_keys.iter().filter(|k| !k.is_empty()) {
-        let _ = registry
+        if let Err(e) = registry
             .register_correlated(state.tenant_id, key, process_id, identity_for_keys.clone())
-            .await;
+            .await
+        {
+            tracing::warn!(
+                %process_id,
+                %key,
+                error = %e,
+                "commands api: Belegnummer registration failed — a response quoting this \
+                 reference cannot be correlated back to the process",
+            );
+        }
     }
 
     Ok(DispatchOutcome::Dispatched { process_id })

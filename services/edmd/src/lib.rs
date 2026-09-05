@@ -10,7 +10,8 @@
 //! ```text
 //! makod ──(CloudEvents)──► marktd ──(webhook fan-out)──► edmd POST /webhook
 //!                                                             │
-//!                                                    filter makopid ∈ MSCONS_PIDS
+//!                                                  filter makopid ∈ ALL_MSCONS_PIDS
+//!                                                        (here, not in marktd)
 //!                                                             │
 //!                                                   TimeSeriesRepository::store_receipt()
 //!                                                             │

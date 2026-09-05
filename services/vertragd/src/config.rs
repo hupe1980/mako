@@ -51,8 +51,10 @@ pub struct VertragdConfig {
     /// `outputd` — renders and delivers the § 41 Abs. 5 EnWG
     /// Preisänderungsanzeige.
     ///
-    /// Absent → the notice is emitted as a CloudEvent only, and a deployment
-    /// without an ERP webhook then schedules price changes and tells nobody.
+    /// Absent → the CloudEvent is the notice: it carries the Umfang and the
+    /// Sonderkündigungsrecht, and an ERP composes the letter. A deployment with
+    /// neither this nor an ERP webhook schedules price changes and tells
+    /// nobody.
     pub outputd_url: Option<String>,
     pub outputd_api_key: Option<String>,
 
@@ -60,8 +62,9 @@ pub struct VertragdConfig {
     /// customer notice this service issues.
     ///
     /// Configured rather than derived: `vertragd` holds customers, not the
-    /// operator's own letterhead. Absent → the notice is not issued, because a
-    /// Textform declaration that does not name its declarant is not Textform.
+    /// operator's own letterhead. Required wherever `outputd_url` is set: a
+    /// Textform declaration that does not name its declarant is not Textform,
+    /// so the notice fails and is retried rather than going out unsigned.
     #[serde(default)]
     pub absender: Option<AbsenderConfig>,
 

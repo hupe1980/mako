@@ -36,10 +36,37 @@
 //   "run-payout"         — POST an EEG payout run, PUT its pain.002 status
 //   "close-period"       — POST the Jahresabschluss and the Festschreibung seal
 //   "erase-pii"          — POST the GDPR Art. 17 anonymization
+//   "use-mcp"            — permission to speak MCP at all. The gate the shared
+//                          middleware applies to every frame; what a frame may
+//                          then *do* is decided per tool, below.
 //
-// The MCP surface is authenticated separately by `[mcp]` (McpAuth) and is
-// read-only by construction, so it carries no Cedar action. The inbound
-// `/webhook` is HMAC-authenticated, not OIDC, and likewise carries none.
+// The inbound `/webhook` is HMAC-authenticated, not OIDC, and carries no Cedar
+// action.
+//
+// The MCP surface
+// ---------------
+// It used to carry none either, exempted as "read-only by construction". It is
+// not: `post_manual_booking` posts a Buchung to a customer's Kontokorrent,
+// `run_abschlag_cycle` raises an Abschlagsforderung against every account due
+// that day, `import_payments` books a ZAHLUNG per CAMT.054 entry,
+// `update_abschlag` rewrites the monthly advance and the SEPA billing day, and
+// `run_sepa_collection` emits a bank-submittable pain.008 carrying every
+// mandate's IBAN. Five of thirteen tools, reachable with any token the verifier
+// accepted — or, before this, with none at all, since `McpAuth` was built
+// without a verifier and without this policy.
+//
+// The exemption is gone rather than made true. Deleting the five tools would
+// have been the other way to honour the comment, but they are the automation
+// the surface exists for, and a claim that has to be re-proved every time a
+// tool is added is the wrong shape of guarantee.
+//
+// `mcp_server::tool_action` therefore maps every tool to the action its REST
+// twin enforces, `mcp_server::mcp_auth_middleware` checks it before the frame
+// is dispatched, and a `tools/call` naming a tool with no mapping is refused.
+// Reads are mapped too, not only the five writes: `read-account` is open to any
+// token of the tenant while `read-banking` and `read-books` are held to LF/MSB,
+// so a blanket gate would let a role-less token read the mandate register and
+// the whole aging list through MCP after its REST twin refused.
 //
 // Roles are the platform's **market** roles (`mako_roles`). accountingd is an LF
 // service: the retail supplier keeps the Kundenkonto. MSB is admitted because a
@@ -138,6 +165,19 @@ permit(
 ) when {
     context.principal_tenant == context.resource_tenant &&
     context.principal_roles.contains("LF")
+};
+
+// ── Speaking MCP at all ───────────────────────────────────────────────────────
+// Deliberately the weakest grant in this file: it says only that the caller may
+// open the surface, list the tools and read a prompt. Every `tools/call` is then
+// held to the action its REST twin enforces, so this grant on its own reaches no
+// customer balance, no IBAN and no ledger write.
+permit(
+    principal,
+    action == Action::"use-mcp",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant
 };
 
 // Note on the role axis

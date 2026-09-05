@@ -60,8 +60,9 @@
 //!
 //! ## KWKG rates
 //!
-//! KWKG 2023 KWK-Zuschlag rates are determined by plant size and commissioning year
-//! (§7 KWKG 2023 Anlage).  §53 does NOT apply to KWKG.  See [`kwkg_zuschlag_lookup`].
+//! The KWK-Zuschlag is priced per Leistungsanteil and depends on whether the
+//! KWK-Strom is fed into a Netz der allgemeinen Versorgung, so it does not fit a
+//! capacity-keyed rate table — see [`crate::kwkg`]. § 53 EEG does not apply to it.
 
 use billing::{Amount, BillingError, RateLookup};
 use rust_decimal::Decimal;
@@ -343,36 +344,12 @@ pub fn guelle_lookup(eeg_year: i16) -> Option<RateLookup> {
 }
 
 // ── KWKG ──────────────────────────────────────────────────────────────────────
-
-/// Return the KWKG 2023 KWK-Zuschlag rate table.
-///
-/// The parameter to `rate_for()` is the **electric capacity in kW_el**.
-///
-/// Source: §7 KWKG 2023, Anlage (Vergütungssätze).
-///
-/// ## Example
-///
-/// ```rust
-/// use eeg_billing::rates;
-/// use rust_decimal::dec;
-///
-/// let table = rates::kwkg_zuschlag_lookup().unwrap();
-/// // 50 kW_el CHP plant
-/// assert_eq!(table.rate_for(dec!(50)).unwrap(), billing::Amount::parse("0.08000").unwrap());
-/// // 2,000 kW_el large plant
-/// assert_eq!(table.rate_for(dec!(2000)).unwrap(), billing::Amount::parse("0.04000").unwrap());
-/// ```
-pub fn kwkg_zuschlag_lookup() -> Option<RateLookup> {
-    // §7 KWKG 2023, Anlage: Vergütungssätze nach Leistungsklasse
-    RateLookup::builder()
-        .at_most(dec!(50), amount_ct("8.00")) // ≤50 kW_el:   8.00 ct/kWh
-        .at_most(dec!(100), amount_ct("6.00")) // ≤100 kW_el:  6.00 ct/kWh
-        .at_most(dec!(250), amount_ct("5.00")) // ≤250 kW_el:  5.00 ct/kWh
-        .at_most(dec!(2_000), amount_ct("4.00")) // ≤2 MW_el:    4.00 ct/kWh
-        .fallback(amount_ct("3.00")) // >2 MW_el:    3.00 ct/kWh
-        .build()
-        .ok()
-}
+//
+// The KWK-Zuschlag is priced per **Leistungsanteil** (§ 7 Abs. 1 and Abs. 2
+// KWKG), so it is not a `RateLookup`: a plant's rate is the capacity-weighted
+// mean of the bands its capacity spans, and it further depends on whether the
+// KWK-Strom is fed into a Netz der allgemeinen Versorgung and on the plant's
+// Anlagenart. [`crate::kwkg`] holds the computation.
 
 // ── Convenience helper ────────────────────────────────────────────────────────
 
@@ -415,8 +392,8 @@ fn amount_ct(ct_str: &str) -> Amount<5> {
 // | Biomasse (§§ 42–44) | 0,5 %/Jahr | **01.07.**2024 | § 44a |
 // | Geothermie | 0,5 %/Jahr | 01.01.2024 | § 45 Abs. 2 |
 //
-// Apply it with [`crate::degression::JaehrlicheAbsenkung`]. Every value here is
-// asserted against the statute by `statutory_rate_tests`.
+// [`aw_ct_bei_inbetriebnahme`] applies it. Every value here is asserted
+// against the statute by `statutory_rate_tests`.
 
 /// § 40 Abs. 1 EEG 2023 — **Wasserkraft**, by Bemessungsleistung.
 ///
@@ -626,22 +603,133 @@ pub fn lookup_rate_for(
         // Holzbiomasse has none of its own — both resolve from the DB series.
         E::Biomasse | E::Biogas => biomasse_lookup(eeg_year),
         E::BiomassHolz | E::Biomethan => None,
-        E::Kwk => kwkg_zuschlag_lookup(),
+        // The KWK-Zuschlag needs the Verwendung and the Anlagenart on top of the
+        // capacity, and is a blend across Leistungsanteile rather than one band's
+        // rate — `crate::kwkg::zuschlag_ct_kwh` prices it.
+        E::Kwk => None,
         // Gezeitenenergie is Wasserkraft (§ 3 Nr. 21 lit. a), settled from § 40.
         E::Wasserkraft | E::Gezeiten => wasserkraft_lookup(eeg_year),
         E::Geothermie => geothermie_lookup(eeg_year),
         // § 41 gives each gas its own ladder; they are not interchangeable.
         E::Deponiegas => deponiegas_lookup(eeg_year),
-        E::Klaegas => klaergas_lookup(eeg_year),
+        E::Klaergas => klaergas_lookup(eeg_year),
         E::Grubengas => grubengas_lookup(eeg_year),
     }
     .ok_or(BillingError::InvalidInput {
-        reason:
-            "no static rate table for this erzeugungsart/eeg_year combination — use einsd DB lookup"
-                .to_owned(),
+        reason: "no statutory rate table for this erzeugungsart/eeg_year combination — a KWK \
+                 plant is priced by `crate::kwkg`, a tendered one by its award"
+            .to_owned(),
     })?;
 
     table.rate_for(leistung_kwp)
+}
+
+// ── Date-keyed anzulegende Werte ─────────────────────────────────────────────
+
+/// The statutory annual Absenkung governing an Erzeugungsart, or `None` where
+/// the EEG provides none.
+///
+/// Solar is `None` here on purpose: § 49 steps **semi-annually** and is applied
+/// by [`crate::degression`], not by [`crate::degression::JaehrlicheAbsenkung`].
+/// Wind is `None` because it has no gesetzlich bestimmter Wert to absenken.
+#[must_use]
+pub fn jaehrliche_absenkung(
+    art: crate::ErzeugungsArt,
+) -> Option<crate::degression::JaehrlicheAbsenkung> {
+    use crate::ErzeugungsArt as E;
+    use crate::degression::JaehrlicheAbsenkung as A;
+    match art {
+        // § 40 Abs. 5 — Wasserkraft, and Gezeitenenergie with it (§ 3 Nr. 21 lit. a).
+        E::Wasserkraft | E::Gezeiten => Some(A::WASSERKRAFT),
+        // § 41 Abs. 4 — Deponie-, Klär- und Grubengas.
+        E::Deponiegas | E::Klaergas | E::Grubengas => Some(A::GASE),
+        // § 44a — die anzulegenden Werte der §§ 42 bis 44.
+        E::Biomasse | E::Biogas => Some(A::BIOMASSE),
+        // § 45 Abs. 2 — Geothermie.
+        E::Geothermie => Some(A::GEOTHERMIE),
+        // No gesetzlich bestimmter Wert, so nothing to absenken.
+        E::SolarAufdach
+        | E::SolarFreiflaeche
+        | E::SolarAgriPv
+        | E::SolarMieterstrom
+        | E::SolarStecker
+        | E::WindOnshore
+        | E::WindOffshore
+        | E::BiomassHolz
+        | E::Biomethan
+        | E::Kwk => None,
+    }
+}
+
+/// The **gross anzulegender Wert** in ct/kWh for a plant, keyed on its
+/// Inbetriebnahmedatum.
+///
+/// This is the entry point that applies the statutory Absenkung. Every §§ 40–45
+/// value is a Startwert that falls each year „für die nach diesem Zeitpunkt in
+/// Betrieb genommenen Anlagen", so the commissioning date — not the EEG version
+/// year — decides what a plant is paid:
+///
+/// | Erzeugungsart | Absenkung | ab | § |
+/// |---|---|---|---|
+/// | Wasserkraft | 0,5 %/Jahr | 01.01.2024 | § 40 Abs. 5 |
+/// | Deponie-/Klär-/Grubengas | 1,5 %/Jahr | 01.01.2024 | § 41 Abs. 4 |
+/// | Biomasse (§§ 42–44) | 0,5 %/Jahr | **01.07.**2024 | § 44a |
+/// | Geothermie | 0,5 %/Jahr | 01.01.2024 | § 45 Abs. 2 |
+/// | Solar | 1 % je Halbjahr | 01.02.2024 | § 49 |
+///
+/// `leistung_kw` is the figure the Erzeugungsart's own ladder is keyed on — the
+/// **Bemessungsleistung** for §§ 40–44, the installed capacity for § 48.
+///
+/// Returns `None` where no statutory value exists: wind, offshore, Biomethan,
+/// Holzbiomasse, KWK, and every plant above the top of its ladder.
+///
+/// ```rust
+/// use eeg_billing::{ErzeugungsArt, rates::aw_ct_bei_inbetriebnahme};
+/// use rust_decimal::dec;
+/// use time::macros::date;
+///
+/// // § 40 Abs. 1 Nr. 1 Startwert 12,03 ct, three § 40 Abs. 5 steps by March 2026.
+/// assert_eq!(
+///     aw_ct_bei_inbetriebnahme(ErzeugungsArt::Wasserkraft, dec!(300), date!(2026 - 03 - 01)),
+///     Some(dec!(11.85))
+/// );
+/// // Commissioned before the first step, the Startwert stands.
+/// assert_eq!(
+///     aw_ct_bei_inbetriebnahme(ErzeugungsArt::Wasserkraft, dec!(300), date!(2023 - 06 - 01)),
+///     Some(dec!(12.03))
+/// );
+/// ```
+#[must_use]
+pub fn aw_ct_bei_inbetriebnahme(
+    art: crate::ErzeugungsArt,
+    leistung_kw: Decimal,
+    inbetriebnahme: time::Date,
+) -> Option<Decimal> {
+    use crate::ErzeugungsArt as E;
+    // § 48 Abs. 2 i.V.m. § 49 — solar has its own semi-annual window series.
+    if matches!(
+        art,
+        E::SolarAufdach | E::SolarAgriPv | E::SolarMieterstrom | E::SolarStecker
+    ) {
+        return solar_pv_ueberschuss_aw_ct(leistung_kw, inbetriebnahme);
+    }
+    if art == E::SolarFreiflaeche {
+        return solar_pv_freiflaeche_aw_ct(inbetriebnahme);
+    }
+
+    let eeg_year = if inbetriebnahme >= EEG2023_START {
+        2023
+    } else {
+        i16::try_from(inbetriebnahme.year()).ok()?
+    };
+    let startwert = lookup_rate_for(art, leistung_kw, eeg_year)
+        .ok()?
+        .into_decimal()
+        * Decimal::from(100u32);
+    Some(match jaehrliche_absenkung(art) {
+        Some(absenkung) => absenkung.anzulegender_wert(startwert, inbetriebnahme),
+        None => startwert,
+    })
 }
 
 // ── §53 EEG — Vergütungsabzug ─────────────────────────────────────────────────
@@ -695,7 +783,7 @@ pub fn sect53_deduction(art: crate::technology::ErzeugungsArt) -> rust_decimal::
         | A::BiomassHolz
         | A::Biogas
         | A::Biomethan
-        | A::Klaegas
+        | A::Klaergas
         | A::Grubengas
         | A::Deponiegas
         | A::Wasserkraft
@@ -704,57 +792,6 @@ pub fn sect53_deduction(art: crate::technology::ErzeugungsArt) -> rust_decimal::
 
         // KWKG: §53 EEG does not apply to KWKG plants
         A::Kwk => dec!(0),
-    }
-}
-
-// ── §44 Güllekleinanlage ──────────────────────────────────────────────────────
-
-/// Return the **gross AW** for **§44 Güllekleinanlage** (manure-fed small biogas).
-///
-/// ## Eligibility criteria (§44 EEG 2023)
-///
-/// - Installed capacity **≤ 75 kW_el**
-/// - ≥ 80 % of energy input from liquid or solid manure (Gülle / Festmist)
-/// - Use [`crate::biomasse::BiomassSettlementData::new`] to determine eligibility.
-///
-/// When both criteria are met, the plant receives the Güllekleinanlage Anzulegender
-/// Wert instead of the standard Biomasse rate from [`biomasse_lookup`].
-///
-/// ## Net Vergütungssatz
-///
-/// Subtract the §53 deduction (0.2 ct/kWh for Biomasse) before storing:
-/// `net = gross_aw − sect53_deduction(ErzeugungsArt::Biogas)` = 16.90 − 0.20 = **16.70 ct/kWh**
-///
-/// ## Sources
-///
-/// - §44 Abs. 1 EEG 2023 (BGBl. I 2023 Nr. 1, 10.01.2023)
-/// - BNetzA Ausschreibungsergebnisse Biomasse (reference)
-///
-/// # Example
-///
-/// ```rust
-/// use eeg_billing::rates;
-/// use rust_decimal::dec;
-///
-/// // 50 kW Güllekleinanlage — eligible under §44 EEG 2023
-/// let table = rates::guellekleinanlage_rate(2023).expect("known year");
-/// assert_eq!(table.rate_for(dec!(50)).unwrap(), billing::Amount::parse("0.16900").unwrap());
-///
-/// // Plant above 75 kW — not returned; use biomasse_lookup instead
-/// assert!(table.rate_for(dec!(80)).is_err());
-/// ```
-pub fn guellekleinanlage_rate(eeg_year: i16) -> Option<RateLookup> {
-    match eeg_year {
-        // Source: §44 Abs. 1 EEG 2023 (BGBl I 2023 Nr. 1)
-        // Gross AW = 16.90 ct/kWh for ≤75 kW_el.
-        // Net (after §53 -0.2 ct) = 16.70 ct/kWh.
-        // Solarpaket I (BGBl I 2024 Nr. 107) did not change §44 rates.
-        2023..=2026 => RateLookup::builder()
-            .at_most(dec!(75), amount_ct("16.90")) // ≤75 kW_el (hard capacity ceiling per §44)
-            // No fallback: plants > 75 kW are NOT eligible for Güllekleinanlage rate.
-            .build()
-            .ok(),
-        _ => None,
     }
 }
 
@@ -886,6 +923,70 @@ mod statutory_rate_tests {
             lookup_rate_for(crate::ErzeugungsArt::WindOnshore, dec!(700), 2023).is_err(),
             "a wind plant is settled from its award, not from a table",
         );
+    }
+
+    /// **The §§ 40–45 values fall every year, keyed on the Inbetriebnahmedatum.**
+    ///
+    /// Each Absenkung applies „für die nach diesem Zeitpunkt in Betrieb
+    /// genommenen Anlagen", so a plant's value is its commissioning window's,
+    /// not the Startwert. Compounding runs on the unrounded chain and only the
+    /// answer is rounded to two decimals.
+    #[test]
+    fn the_statutory_absenkungen_are_applied_to_the_startwerte() {
+        use crate::ErzeugungsArt as E;
+        use time::macros::date;
+
+        // § 40 Abs. 5 — 0,5 % a year from 1 January 2024. 12,03 × 0,995³ = 11,85.
+        assert_eq!(
+            aw_ct_bei_inbetriebnahme(E::Wasserkraft, dec!(300), date!(2026 - 03 - 01)),
+            Some(dec!(11.85))
+        );
+        // § 41 Abs. 4 — three times as fast. 5,93 × 0,985 = 5,84.
+        assert_eq!(
+            aw_ct_bei_inbetriebnahme(E::Klaergas, dec!(400), date!(2024 - 06 - 01)),
+            Some(dec!(5.84))
+        );
+        // § 44a steps on 1 July, so a May 2024 plant is still on the Startwert.
+        assert_eq!(
+            aw_ct_bei_inbetriebnahme(E::Biomasse, dec!(120), date!(2024 - 05 - 01)),
+            Some(dec!(12.67))
+        );
+        assert_eq!(
+            aw_ct_bei_inbetriebnahme(E::Biomasse, dec!(120), date!(2024 - 07 - 01)),
+            Some(dec!(12.61))
+        );
+        // § 45 Abs. 2 — 25,20 × 0,995² = 24,948… → 24,95.
+        assert_eq!(
+            aw_ct_bei_inbetriebnahme(E::Geothermie, dec!(5000), date!(2025 - 06 - 01)),
+            Some(dec!(24.95))
+        );
+        // A plant commissioned before the first step keeps the Startwert.
+        assert_eq!(
+            aw_ct_bei_inbetriebnahme(E::Wasserkraft, dec!(300), date!(2023 - 06 - 01)),
+            Some(dec!(12.03))
+        );
+    }
+
+    /// **Solar degresses semi-annually under § 49**, so it must not also carry a
+    /// [`crate::degression::JaehrlicheAbsenkung`], and technologies without a
+    /// gesetzlich bestimmter Wert carry none at all.
+    #[test]
+    fn only_the_statutory_ladders_carry_an_annual_absenkung() {
+        use crate::ErzeugungsArt as E;
+        for art in [
+            E::SolarAufdach,
+            E::SolarFreiflaeche,
+            E::WindOnshore,
+            E::WindOffshore,
+            E::Biomethan,
+            E::BiomassHolz,
+            E::Kwk,
+        ] {
+            assert!(jaehrliche_absenkung(art).is_none(), "{art:?}");
+        }
+        for art in [E::Wasserkraft, E::Gezeiten, E::Grubengas, E::Geothermie] {
+            assert!(jaehrliche_absenkung(art).is_some(), "{art:?}");
+        }
     }
 
     /// Gezeitenenergie is Wasserkraft (§ 3 Nr. 21 lit. a), so it settles from

@@ -270,14 +270,14 @@ impl VorlaufShape {
             }
             Self::LatestMonateUndWerktageBefore { monate, werktage } => not_after(
                 uebertragungstag,
-                crate::sub_werktage(subtract_months(anchor, monate), werktage, cal),
-                add_months(crate::add_werktage(uebertragungstag, werktage, cal), monate),
+                crate::sub_werktage(crate::subtract_months(anchor, monate), werktage, cal),
+                crate::add_months(crate::add_werktage(uebertragungstag, werktage, cal), monate),
                 cal,
             ),
             Self::LatestMonateBefore(n) => not_after(
                 uebertragungstag,
-                subtract_months(anchor, n),
-                add_months(uebertragungstag, n),
+                crate::subtract_months(anchor, n),
+                crate::add_months(uebertragungstag, n),
                 cal,
             ),
             Self::Korridor(n) => {
@@ -318,26 +318,6 @@ fn not_after(
             earliest_possible,
         }
     }
-}
-
-/// Shift a date `n` calendar months back, clamping to the month's last day.
-fn subtract_months(date: Date, n: u32) -> Date {
-    shift_months(date, -i32::try_from(n).unwrap_or(i32::MAX))
-}
-
-/// Shift a date `n` calendar months forward, clamping to the month's last day.
-fn add_months(date: Date, n: u32) -> Date {
-    shift_months(date, i32::try_from(n).unwrap_or(i32::MAX))
-}
-
-fn shift_months(date: Date, delta: i32) -> Date {
-    let total = i32::from(u8::from(date.month())) - 1 + delta;
-    let year = date.year() + total.div_euclid(12);
-    let month = time::Month::try_from(u8::try_from(total.rem_euclid(12) + 1).unwrap_or(1))
-        .unwrap_or(time::Month::January);
-    // § 188 Abs. 3 BGB: a day the target month does not have becomes its last.
-    let last = time::util::days_in_month(month, year);
-    Date::from_calendar_date(year, month, date.day().min(last)).unwrap_or(date)
 }
 
 /// One Prozessschritt's Vorlauffrist, with its Fundstelle.

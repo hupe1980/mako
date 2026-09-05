@@ -32,10 +32,15 @@
 //! [`crate::pg::receipts::claim_erp_pending`] for why a pooled `SELECT … FOR
 //! UPDATE SKIP LOCKED` did not hold across the deliveries and let two replicas
 //! send everything twice.
+//!
+//! That same statement is what advances `erp_attempts`, so the budget in the
+//! table above is spent by the attempt being *made*. Nothing below depends on
+//! the outcome write landing: a receipt whose failure or dead-lettering was
+//! never recorded still runs out of attempts and leaves the outbox.
 
 use secrecy::ExposeSecret as _;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Poll interval, and the lease a claimed batch holds.
 const POLL: std::time::Duration = std::time::Duration::from_secs(30);
@@ -134,28 +139,64 @@ async fn flush(
                     process_id = %row.process_id, attempt = row.erp_attempts + 1,
                     "invoicd: ERP outbox delivery succeeded"
                 );
-                let _ = crate::pg::receipts::mark_erp_notified(
+                // The ERP has the event; what is at stake is only whether we
+                // remember that. A lost stamp leaves the row selectable, so the
+                // next tick sends the ERP the same receipt again — an
+                // at-least-once duplicate caused by our own database, not by
+                // the ERP. Nothing here can undo the POST, so this is logged at
+                // `error!` with the process_id rather than propagated: the
+                // remaining rows in the batch still deserve their deliveries.
+                if let Err(e) = crate::pg::receipts::mark_erp_notified(
                     pool,
                     row.process_id,
                     time::OffsetDateTime::now_utc(),
                 )
-                .await;
+                .await
+                {
+                    error!(
+                        error = %e, process_id = %row.process_id,
+                        "invoicd: ERP delivery succeeded but erp_notified_at was not stamped — \
+                         the ERP will be sent this receipt again"
+                    );
+                }
             }
             Err(e) if e.is_permanent() => {
                 warn!(
                     error = %e, process_id = %row.process_id,
                     "invoicd: ERP outbox permanent failure — dead-lettering (check ERP webhook config)"
                 );
-                let _ = crate::pg::receipts::dead_letter_erp(pool, row.process_id).await;
+                // The attempt is already counted by the claim, so losing this
+                // write no longer means an endless retry — it only means the
+                // row spends its remaining budget re-POSTing bytes the ERP has
+                // already refused before it dead-letters itself. Visible, but
+                // wasteful and wrong, so it is logged rather than discarded.
+                if let Err(db) = crate::pg::receipts::dead_letter_erp(pool, row.process_id).await {
+                    error!(
+                        error = %db, process_id = %row.process_id,
+                        "invoicd: could not dead-letter a permanently rejected ERP notification — \
+                         it will keep retrying until the attempt cap stops it"
+                    );
+                }
             }
             Err(e) => {
                 warn!(
                     error = %e, process_id = %row.process_id, attempt = row.erp_attempts + 1,
                     "invoicd: ERP outbox delivery failed — will retry"
                 );
-                let _ =
+                // Only the back-off schedule is lost here (the claim owns the
+                // counter), so the row simply retries at the lease interval
+                // instead of its backoff — a hot retry against an ERP that is
+                // probably already struggling, which is worth knowing about.
+                if let Err(db) =
                     crate::pg::receipts::record_erp_failure(pool, row.process_id, row.erp_attempts)
-                        .await;
+                        .await
+                {
+                    warn!(
+                        error = %db, process_id = %row.process_id,
+                        "invoicd: could not schedule the ERP retry back-off — the receipt retries \
+                         at the lease interval instead"
+                    );
+                }
             }
         }
     }

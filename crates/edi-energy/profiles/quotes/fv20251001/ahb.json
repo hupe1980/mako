@@ -284,7 +284,7 @@
           "nr": "00018",
           "operands": [
             {
-              "operand": "X [72]) ∨ ([940]"
+              "operand": "X (([939] [72]) ∨ ([940] [73])) ∧ [516]"
             }
           ]
         },
@@ -1845,7 +1845,7 @@
           "nr": "00018",
           "operands": [
             {
-              "operand": "X [72]) ∨ ([940]"
+              "operand": "X (([939] [72]) ∨ ([940] [73])) ∧ [516]"
             }
           ]
         },
@@ -1951,7 +1951,7 @@
           "nr": "00022",
           "operands": [
             {
-              "operand": "X ([31] ∧ ([65] ⊻"
+              "operand": "X ([31] ∧ ([65] ⊻ [66])) ⊻ ([942] [69] ∧ ([67] ⊻"
             }
           ]
         },
@@ -2647,7 +2647,7 @@
           "nr": "00018",
           "operands": [
             {
-              "operand": "X [72]) ∨ ([940]"
+              "operand": "X (([939] [72]) ∨ ([940] [73])) ∧ [516]"
             }
           ]
         },
@@ -3535,7 +3535,7 @@
           "nr": "00018",
           "operands": [
             {
-              "operand": "X [72]) ∨ ([940]"
+              "operand": "X (([939] [72]) ∨ ([940] [73])) ∧ [516]"
             }
           ]
         },
@@ -3623,7 +3623,7 @@
           "nr": "00021",
           "operands": [
             {
-              "operand": "X ([950] [501] ∧ ([50] ∨ [512] ∧ ([50] ∨ [51] ∨"
+              "operand": "X ([950] [501] ∧ ([50] ∨ [52])) ⊻ ([951] [502] ∧ ([52] ∨ [53])) ⊻ ([960] [512] ∧ ([50] ∨ [51] ∨ [52])) ⊻ ([961] [513] ∧ ([49] ∨ [50] ∨ [51]))"
             }
           ]
         },
@@ -4732,7 +4732,7 @@
           "nr": "00018",
           "operands": [
             {
-              "operand": "X [72]) ∨ ([940]"
+              "operand": "X (([939] [72]) ∨ ([940] [73])) ∧ [516]"
             }
           ]
         },
@@ -5626,7 +5626,7 @@
     "16": "Wenn in derselben SG27 LIN die Artikelnummer 9990001000780 vorhanden ist",
     "17": "Wenn das Angebot per REQOTE angefragt wurde",
     "18": "Wenn Angebot mehrere Marktlokationen abdeckt, an welchen der identische Anschlussnutzer vorhanden ist und deren messtechnische Einordnung iMS ist (Marktlokation aus SG11 LOC+172 und alle Marktlokationen, die in einem SG29 RFF+Z18 aufgeführt sind).",
-    "2": "Wenn in derselben SG27 LIN IMD DE7081 (Produkt-/ Leistungsbeschreibung) mit Code Z09 (Kann nicht angeboten werden) nicht vorhanden.",
+    "2": "Wenn in derselben SG27 LIN IMD DE7081 (Produkt-/ Leistungsbeschreibung) mit Code Leistungsbeschreibung) mit Code Z09 (Kann nicht angeboten werden) nicht vorhanden.",
     "20": "Wenn IMD++Z33 vorhanden",
     "2042": "Innerhalb dieser LIN- Position muss das PIA+Z02 (Artikel-ID) mindestens ein Mal angegeben werden und kann bis zu drei Mal angegeben werden.",
     "2060": "Pro Nachricht ist die SG27 LIN+Z64 (Erforderliches Produkt Schaltzeitdefinitionen) maximal einmal anzugeben",
@@ -5637,13 +5637,13 @@
     "2066": "Diese SG28 ist so oft zu wiederholen, wie zu den unterschiedlichen Messprodukt- Position-Codes zu dem innerhalb derselben SG27 LIN im PIA+5 DE7140 (Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW) angegebenen Produkt ein Produkt angegeben ist, das in der Codeliste der Konfigurationen im Kapitel 4.4 „Messprodukte mit Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW“ in der Spalte \"Auslöser\" mit dem Wert \"Bei Schwellwertunter- / - überschreitung\" gekennzeichnet ist.",
     "2068": "Pro SG27 LIN ist die SG31 PRI genau einmal anzugeben.",
     "2069": "Pro SG27 LIN ist die SG31 PRI genau einmal anzugeben. Dabei muss in der SG31 PRI im DE5284 eine Mengenangabe mit dem Code H87 (Stück) im DE6411 angegeben sein.",
-    "2070": "Pro SG27 LIN ist die SG31 PRI zweimal anzugeben. Dabei muss genau eine SG31 PRI mit Preis- und Mengenangabe und dem Code H87 (Stück) im DE6411 und genau eine SG31 PRI mit Preis- und Mengenangabe und dem Code DAY (Tag) im DE6411 vorhanden sein.",
-    "2071": "Diese SG31 PRI (Preisangabe zur Position) ist bis zu dreimal anzugeben. Es ist so oft anzugeben, wie innerhalb derselben SG27 LIN (Erforderliches Messprodukt für Werte nach Typ2 aus Backend) das PIA+Z02 (Artikel-ID) vorhanden ist.",
+    "2070": "Pro SG27 LIN ist die SG31 PRI zweimal anzugeben. Dabei muss genau eine SG31 PRI mit Preis- und Mengenangabe und dem Code H87 (Stück) im DE6411 und genau eine SG31 PRI mit Preis- und Mengenangabe und dem Code DAY (Tag) im DE6411 dem Code DAY (Tag) im DE6411 vorhanden sein.",
+    "2071": "Diese SG31 PRI (Preisangabe zur Position) ist bis zu dreimal anzugeben. Es ist so oft anzugeben, wie innerhalb anzugeben, wie innerhalb derselben SG27 LIN (Erforderliches Messprodukt für Werte nach Typ2 aus Backend) das PIA+Z02 (Artikel-ID) vorhanden ist.",
     "2072": "Diese SG31 PRI (Preisangabe zur Position) ist bis zu dreimal anzugeben. Es ist so oft anzugeben, wie innerhalb derselben SG27 LIN (Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW) das PIA+Z02 (Artikel-ID) vorhanden ist.",
     "2073": "Das PIA (OBIS-Kennzahl für Werte nach Typ 2 Backend) ist mindestens einmal anzugeben. Es kann in Abhängigkeit zu den anderen PIA Segmenten innerhalb derselben SG27 LIN (Erforderliches Messprodukt für Werte nach Typ2 aus Backend) maximal bis zu 23 mal angegeben werden sofern die anderen PIA Segmente innerhalb derselben SG27 LIN nicht mehr als einmal angegeben werden. Die maximale Anzahl an PIA-Segmenten je SG27 LIN ist 25.",
     "2074": "Pro Nachricht ist diese SG27 so oft zu wiederholen, bis für jedes angefragte Produkt derselben SG27 aus der Anfrage eine Angebotsposition angegeben wurde.",
-    "2075": "Pro SG27 LIN kann die SG27 PIA+Z02 (Artikel-ID) bis zu zweimal angegeben werden. Einmal für die Artikel-ID gemäß Preisblatt B des MSB und einmal für die Artikel-ID \"9991000003030-01\" (Pauschale Kosten für das Scheitern der Änderung der Technik an einer Lokation) gemäß Preisblatt B des MSB. Hat der MSB in der angegebenen Version des Preisblatt B keine Artikel-ID für \"9991000003030-01\" (Pauschale Kosten für das Scheitern der Änderung der Technik einer Lokation) angegeben, kann die SG27 PIA+Z02 (Artikel-ID) nur einmal angegeben werden.",
-    "2076": "Pro SG27 LIN kann die SG31 Preisangabe zur Position nur einmal angegeben werden. Die Angabe der Preisangaben zur Position bezieht sich auf die Artikel-ID bei der es sich nicht um die Artikel-ID \"9991000003030- 01\" (Pauschale Kosten für das Scheitern der Änderung der Technik an einer Lokation) gemäß Preisblatt B des MSB handelt.",
+    "2075": "Pro SG27 LIN kann die SG27 PIA+Z02 (Artikel-ID) bis zu SG27 PIA+Z02 (Artikel-ID) bis zu zweimal angegeben werden. Einmal für die Artikel-ID gemäß Preisblatt B des MSB und einmal für die Artikel-ID \"9991000003030-01\" (Pauschale Kosten für das Scheitern der Änderung der Technik an einer Lokation) gemäß Preisblatt B des MSB. Hat der MSB in der angegebenen Version des Preisblatt B keine Artikel-ID für \"9991000003030-01\" (Pauschale Kosten für das Scheitern der Änderung der Technik einer Lokation) angegeben, kann die SG27 PIA+Z02 (Artikel-ID) nur einmal angegeben werden.",
+    "2076": "Pro SG27 LIN kann die SG31 Preisangabe zur Position nur einmal angegeben werden. Die Angabe der Preisangaben zur Position bezieht sich auf die Artikel-ID bei der es sich nicht um die Artikel-ID \"9991000003030- 01\" (Pauschale Kosten für das Scheitern der Änderung der Technik an einer Lokation) gemäß Technik an einer Lokation) gemäß Preisblatt B des MSB handelt.",
     "21": "Wenn IMD++Z34 vorhanden",
     "22": "Wenn CCI+++Z75 vorhanden ist",
     "25": "Wenn SG28 CCI+++E13 CAV+MME vorhanden",
@@ -5653,7 +5653,7 @@
     "29": "Wenn DTM+469 in Anfrage (REQOTE) vorhanden war",
     "3": "Wenn CCI+++Z64 vorhanden ist",
     "30": "Wenn SG27 IMD+Z09 vorhanden",
-    "31": "Es sind nur die Artikelnummern erlaubt, die in der Codeliste der Artikelnummern des BDEW mit dem entsprechenden Prüfidentifikator versehen sind.",
+    "31": "Es sind nur die [68])) Artikelnummern erlaubt, die in der Codeliste der Artikelnummern des BDEW mit dem entsprechenden Prüfidentifikator versehen sind.",
     "39": "MP-ID nur aus Sparte Strom",
     "4": "Wenn am Gerät vorhanden und abweichend von Gerätenummer",
     "44": "Wenn MSBA nicht Eigentümer des Gerätes/der Geräte ist",
@@ -5666,7 +5666,7 @@
     "500": "Hinweis: Angabe eines technischen Ansprechpartners für die Geräteübernahme",
     "501": "Hinweis: Verwendung der ID der Marktlokation",
     "502": "Hinweis: Verwendung der ID der Messlokation",
-    "503": "Hinweis: Es ist die MP-ID des Eigentümers (MSB) zur bilateralen Klärung anzugeben, wenn z. B. der MSBA das Gerät / die Geräte selbst gepachtet hat.",
+    "503": "Hinweis: Es ist die MP-ID des Eigentümers (MSB) zur bilateralen Eigentümers (MSB) zur bilateralen Klärung anzugeben, wenn z. B. der MSBA das Gerät / die Geräte selbst gepachtet hat.",
     "504": "Hinweis: Wert aus BGM+311 DE1004 der REQOTE mit der die Angebotsanfrage erfolgt ist.",
     "505": "Hinweis: Wert aus BGM+Z29 DE1004 der REQOTE, mit der die Anfrage Rechnungsabwicklung erfolgt ist.",
     "506": "Hinweis: Wenn zu einer Position (z. B. Messwandlersatz) mehrere Gerätenummern existieren, sind die Gerätenummern in derselben Position (LIN-Segment) mittels Wiederholung der SG32 RFF+Z09 anzugeben",
@@ -5676,7 +5676,7 @@
     "512": "Hinweis: Verwendung der ID der Netzlokation",
     "513": "Hinweis: Verwendung der ID der Steuerbaren Ressource",
     "514": "Hinweis: Angabe gemäß Preisblatt des MSB. Bis zu einmal für die Parametrierung, bis zu einmal für den Betrieb und bis zu einmal für die Transaktion, sofern im Preisblatt des MSB vorhanden.",
-    "516": "Hinweis: Es darf nur eine Information im DE3148 übermittelt werden",
+    "516": "Hinweis: Es darf nur eine Information im DE3148 Information im DE3148 übermittelt werden",
     "517": "Hinweis: Wert aus BGM+Z93 (Bestellung eines Angebots Änderung der Technik der Lokation) DE1004 der REQOTE mit der die Anfrage Angebot Änderung Technik erfolgt ist.",
     "518": "Hinweis: Angabe gemäß Preisblatt B des MSB.",
     "519": "Hinweis: Wert aus BGM DE1004 der PRICAT mit der das Preisblatt B des MSB, auf dem dieses Angebot basiert, übermittelt wurde.",
@@ -5689,7 +5689,7 @@
     "56": "Wenn in LOC+172 DE3225 (Meldepunkt) die ID einer Messlokation angegeben ist.",
     "57": "Wenn in LOC+172 DE3225 (Meldepunkt) die ID einer Netzlokation angegeben ist.",
     "58": "Wenn in LOC+172 DE3225 (Meldepunkt) die ID einer Steuerbaren Ressource angegeben ist.",
-    "59": "Es sind nur die Konfigurations-Produkte erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.1 „Konfigurationsprodukte Schaltzeitdefinition“ enthalten sind.",
+    "59": "Es sind nur die Konfigurations-Produkte erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.1 Konfigurationen im Kapitel 4.1 „Konfigurationsprodukte Schaltzeitdefinition“ enthalten sind.",
     "60": "Es sind nur die Konfigurations-Produkte erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.2 „Konfigurationsprodukte Leistungskurvendefinition“ enthalten sind.",
     "61": "Es sind nur die Konfigurations-Produkte erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.3 „Konfigurationsprodukte Ad-hoc- Steuerkanal“ enthalten sind.",
     "62": "Es sind nur die Messprodukte erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.5 „Messprodukte für Werte nach Typ 2 aus Backend für LF und NB“ enthalten sind.",
@@ -5697,12 +5697,12 @@
     "65": "Wenn DTM+203 (Ausführungsdatum) im DE2380 < 202312312300?+00",
     "66": "Wenn DTM+469 (Beginn zum (nächstmöglichen Termin)) im DE2380 < 202312312300?+00",
     "67": "Wenn DTM+203 (Ausführungsdatum) im DE2380 ≥ 202312312300?+00",
-    "68": "Wenn DTM+469 (Beginn zum (nächstmöglichen Termin)) im DE2380 ≥ 202312312300?+00",
+    "68": "Wenn DTM+469 (Beginn zum (nächstmöglichen Termin)) im DE2380 ≥ 202312312300?+00 DE2380 ≥ 202312312300?+00",
     "69": "Es sind nur Werte aus der EDI@Energy Codeliste der Artikelnummern und Artikel-ID erlaubt, die im Kapitel 3.5 \"Abrechnung Messstellenbetrieb für die Sparte Strom\" genannt sind.",
     "70": "Es sind nur die Messprodukt-Position-Codes erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.7 „Art der Werte für Messprodukte nach Typ 2“ enthalten sind.",
-    "71": "Wenn innerhalb derselben SG27 LIN im PIA+5 DE7140 (Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW) ein Produkt angegeben ist, das in der Codeliste der Konfigurationen im Kapitel 4.4 „Messprodukte mit Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW“ in der Spalte \"Auslöser\" mit dem Wert \"Bei Schwellwertunter- / - überschreitung\" gekennzeichnet ist.",
+    "71": "Wenn innerhalb derselben SG27 LIN im PIA+5 DE7140 (Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW) ein Produkt angegeben ist, das in der Codeliste der Konfigurationen im Kapitel 4.4 „Messprodukte mit Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW“ in der Spalte \"Auslöser\" mit dem Wert \"Bei Schwellwertunter- / - überschreitung\" gekennzeichnet überschreitung\" gekennzeichnet ist.",
     "72": "wenn im DE3155 in demselben COM der Code EM vorhanden ist",
-    "73": "wenn im DE3155 in demselben COM der Code TE / FX / AJ / AL vorhanden ist",
+    "73": "wenn im DE3155 in demselben COM der Code TE / FX demselben COM der Code TE / FX / AJ / AL vorhanden ist",
     "74": "Es sind nur die Messprodukte erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.6.1 \"Werte nach Typ 2 aus Backend\" enthalten sind.",
     "75": "Es sind nur die Messprodukte erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.6.2 \"Werte nach Typ 2 aus SMGW\" enthalten sind.",
     "77": "Wenn in der Anfrage nach Werten ein Messprodukt enthalten war, das in der Codeliste der Konfigurationen im Kapitel 4.6.1 \"Werte nach Typ 2 aus Backend\" enthalten ist.",
@@ -5722,15 +5722,15 @@
     "90": "Es sind nur die Produkt-Codes erlaubt, die in der Codeliste der Konfigurationen im Kapitel 7 \"Produkte zur Bestellung einer Änderung an einer Lokation\" die in der Spalte \"Ebene\" mit dem Wert \"Messlokation\" vorhanden sind.",
     "903": "Format: Möglicher Wert: 1",
     "906": "Format: max. 3 Nachkommastellen",
-    "908": "Format: Mögliche Werte: 1 bis n",
-    "91": "Es sind nur die Produkt-Codes erlaubt, die in der Codeliste der Konfigurationen im Kapitel 7 \"Produkte zur Bestellung einer Änderung an einer Lokation\" die in der Spalte \"Ebene\" mit dem Wert \"Netzlokation\" vorhanden sind.",
-    "911": "Format: Mögliche Werte: 1 bis n, je Nachricht oder Segmentgruppe bei 1 beginnend und fortlaufend aufsteigend",
+    "908": "Format: Mögliche Werte: 1 bis n bis n",
+    "91": "Es sind nur die Produkt-Codes erlaubt, die in der Codeliste der Konfigurationen im Kapitel 7 \"Produkte zur Bestellung einer \"Produkte zur Bestellung einer Änderung an einer Lokation\" die in der Spalte \"Ebene\" mit dem Wert \"Netzlokation\" vorhanden sind.",
+    "911": "Format: Mögliche Werte: 1 bis n, je Nachricht oder Segmentgruppe bei 1 beginnend Segmentgruppe bei 1 beginnend und fortlaufend aufsteigend",
     "912": "Format: max. 6 Nachkommastellen",
     "914": "Format: Möglicher Wert: > 0",
     "92": "Es sind nur die Produkt-Codes erlaubt, die in der Codeliste der Konfigurationen im Kapitel 7 \"Produkte zur Bestellung einer Änderung an einer Lokation\" die in der Spalte \"Ebene\" mit dem Wert \"Steuerbare Ressource\" vorhanden sind.",
     "93": "Wenn RNG+Z03 (verbindliche Mengenangabe) in dieser SG31 nicht vorhanden",
     "931": "Format: ZZZ = +00",
-    "939": "Format: Die Zeichenkette muss die Zeichen @ und . enthalten",
+    "939": "Format: Die Zeichenkette muss die Zeichen @ und . enthalten enthalten",
     "94": "Wenn RNG+Z04 (unverbindliche Mengenangabe) in dieser SG31 nicht vorhanden",
     "940": "Format: Die Zeichenkette muss mit dem Zeichen + beginnen und danach dürfen nur noch Ziffern folgen",
     "942": "Format: n1-n2-n1-n3",

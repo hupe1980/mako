@@ -1,4 +1,4 @@
-//! § 60 Abs. 2 MsbG — confirmation loop for estimated/substituted readings.
+//! § 60 Abs. 1 MsbG — confirmation loop for estimated/substituted readings.
 //!
 //! Every stored ESTIMATED/SUBSTITUTED interval opens an entry in
 //! `estimated_read_confirmations`: the Messstellenbetreiber owes a
@@ -10,8 +10,9 @@
 //!
 //! ## Deadline
 //!
-//! No statute fixes a replacement deadline — § 60 Abs. 2 MsbG establishes
-//! the duty, not a date. The default of **8 weeks** aligns with the MaBiS
+//! No statute fixes a replacement deadline — § 60 Abs. 1 MsbG establishes
+//! the duty (the berechtigten Stellen are owed the aufbereiteten Messwerte, and
+//! an Ersatzwert is a stand-in for one that was never measured), not a date. The default of **8 weeks** aligns with the MaBiS
 //! Bilanzkreisabrechnung correction window (after it, a stale estimate is
 //! priced into balancing settlement); operators can tighten or relax it via
 //! `[confirmation] deadline_weeks`.
@@ -86,7 +87,7 @@ pub fn spawn_confirmation_worker(
                 tenant = %tenant,
                 newly_overdue,
                 deadline_weeks,
-                "edmd: confirmation-worker: estimated readings past the replacement deadline (§ 60 Abs. 2 MsbG)"
+                "edmd: confirmation-worker: estimated readings past the replacement deadline (§ 60 Abs. 1 MsbG)"
             );
 
             let Some(ref webhook_url) = erp_webhook_url else {
@@ -102,7 +103,7 @@ pub fn spawn_confirmation_worker(
                     "tenant": tenant,
                     "newly_overdue": newly_overdue,
                     "deadline_weeks": deadline_weeks,
-                    "rechtsgrundlage": "§ 60 Abs. 2 MsbG (Ersatzwertbildung/Plausibilisierung)",
+                    "rechtsgrundlage": "§ 60 Abs. 1 MsbG (Aufbereitung und Übermittlung an die berechtigten Stellen)",
                     "hinweis": "GET /api/v1/confirmations?status=UEBERFAELLIG listet die offenen Intervalle",
                 }),
             )

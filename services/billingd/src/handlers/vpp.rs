@@ -323,7 +323,7 @@ pub async fn post_vpp_billing(
 /// Which legal instrument a confirmed Steuerungsauftrag belongs to.
 ///
 /// § 14a EnWG netzorientierte Steuerung and § 41e flexibility dispatch reach the
-/// MSB as the *same* WiM Steuerungsauftrag (PID 55168), and one
+/// MSB as the *same* WiM Steuerungsauftrag, and one
 /// SteuerbareRessource can be subject to both. Only the sender separates them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Disposition {
@@ -358,7 +358,7 @@ pub(crate) fn disposition(sender_mp_id: &str, aggregator_mp_id: &str) -> Disposi
 ///
 /// Receives `de.vpp.dispatch.confirmed` CloudEvents emitted by `makod` when the
 /// MSB sends a positive `EndantwortPositiv` for a WiM Steuerungsauftrag
-/// (PID 55168), and writes one Gutschrift per dispatch against the
+/// and writes one Gutschrift per dispatch against the
 /// §41e Aggregatorvertrag in force **on the day the dispatch executed** —
 /// `vertragd` owns that contract; billingd keeps no copy.
 ///
@@ -562,7 +562,7 @@ pub async fn post_vpp_webhook(
     // ── 5b. Only the aggregator's own dispatch is a § 41e delivery ────────────
     //
     // § 14a EnWG netzorientierte Steuerung and § 41e flexibility dispatch reach
-    // the MSB as the *same* WiM Steuerungsauftrag (ORDERS/ORDRSP, PID 55168),
+    // the MSB as the *same* WiM Steuerungsauftrag (ORDERS/ORDRSP),
     // and a SteuerbareRessource can be subject to both. What separates them is
     // who sent it: the Netzbetreiber dimming a controllable load under § 14a, or
     // the Aggregator calling the flexibility it contracted under § 41e /
@@ -886,7 +886,7 @@ mod disposition_tests {
         );
     }
 
-    /// § 14a EnWG and § 41e ride the same Steuerungsauftrag (PID 55168), and one
+    /// § 14a EnWG and § 41e ride the same Steuerungsauftrag, and one
     /// SteuerbareRessource can carry both. Settling the Netzbetreiber's grid
     /// intervention here would credit the aggregator for flexibility it never
     /// dispatched, on top of the reduced Netzentgelt the customer already gets

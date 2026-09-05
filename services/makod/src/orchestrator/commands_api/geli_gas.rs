@@ -131,7 +131,7 @@ pub(super) fn cmd_geli_eog_anmelden<'a>(
 
 /// Dispatch `geli.datenabruf.anfragen` — LF requests Gas quality data from NB.
 ///
-/// Spawns a new [`GeliGasDatanabrufWorkflow`] and sends ORDERS 17103 outbound
+/// Spawns a new [`GeliGasDatenabrufWorkflow`] and sends ORDERS 17103 outbound
 /// to the GNB requesting Abrechnungsbrennwert and Zustandszahl.
 /// 10-Werktage response deadline registered atomically (BK7-24-01-009).
 ///
@@ -167,7 +167,7 @@ pub(super) async fn dispatch_geli_gas_datenabruf_anfragen(
 
     let pid = Pruefidentifikator::new(17103).map_err(DispatchError::InvalidPayload)?;
     let message_ref = MessageRef::new(format!("DATENABRUF-{}", uuid::Uuid::new_v4()));
-    let domain_cmd = GeliGasDatanabrufCommand::InitiateAnfrage {
+    let domain_cmd = GeliGasDatenabrufCommand::InitiateAnfrage {
         pid,
         sender: MarktpartnerCode::new(state.sender_party_id.clone()),
         receiver: gnb_mp_id,
@@ -176,7 +176,7 @@ pub(super) async fn dispatch_geli_gas_datenabruf_anfragen(
 
     let workflow_id = WorkflowId::new(GELI_GAS_DATENABRUF_WORKFLOW_NAME, latest_format_version());
     let process = mako_engine::process::Process::<
-        GeliGasDatanabrufWorkflow,
+        GeliGasDatenabrufWorkflow,
         Arc<mako_engine::store_slatedb::SlateDbStore>,
     >::new(
         Arc::clone(&state.store),
@@ -203,11 +203,29 @@ pub(super) async fn dispatch_geli_gas_datenabruf_anfragen(
         .await?;
 
     let identity = process.identity();
-    let _ = state
+    // The correlation index is how an inbound answer finds this
+    // process; it is append-only and nothing rebuilds it. Discarding a
+    // failure here left a live process that no ORDRSP/UTILMD answer
+    // could ever be routed to — the answer is dropped as
+    // `process_not_found` and the Frist expires against a process that
+    // was doing everything right. Not propagated: the process is spawned
+    // and its message already enqueued, so failing the caller now would
+    // have it re-issue the command and start a second one. Logged with
+    // the key and process id, which is what a repair needs.
+    if let Err(e) = state
         .store
         .as_process_registry()
         .register_correlated(state.tenant_id, malo_id.as_str(), process_id, identity)
-        .await;
+        .await
+    {
+        tracing::error!(
+            process_id = %process_id,
+            malo_id    = %malo_id,
+            error      = %e,
+            "geli gas: business-key registration failed — the answer to this process cannot \
+             be correlated back to it",
+        );
+    }
 
     Ok(DispatchOutcome::Spawned { process_id })
 }
@@ -445,11 +463,29 @@ pub(super) async fn dispatch_geli_gas_stornierung_initiieren(
         .await?;
 
     let identity = process.identity();
-    let _ = state
+    // The correlation index is how an inbound answer finds this
+    // process; it is append-only and nothing rebuilds it. Discarding a
+    // failure here left a live process that no ORDRSP/UTILMD answer
+    // could ever be routed to — the answer is dropped as
+    // `process_not_found` and the Frist expires against a process that
+    // was doing everything right. Not propagated: the process is spawned
+    // and its message already enqueued, so failing the caller now would
+    // have it re-issue the command and start a second one. Logged with
+    // the key and process id, which is what a repair needs.
+    if let Err(e) = state
         .store
         .as_process_registry()
         .register_correlated(state.tenant_id, malo_id.as_str(), process_id, identity)
-        .await;
+        .await
+    {
+        tracing::error!(
+            process_id = %process_id,
+            malo_id    = %malo_id,
+            error      = %e,
+            "geli gas: business-key registration failed — the answer to this process cannot \
+             be correlated back to it",
+        );
+    }
 
     Ok(DispatchOutcome::Spawned { process_id })
 }
@@ -604,11 +640,29 @@ pub(super) async fn dispatch_geli_lf_anmeldung(
         .await?;
 
     let identity = process.identity();
-    let _ = state
+    // The correlation index is how an inbound answer finds this
+    // process; it is append-only and nothing rebuilds it. Discarding a
+    // failure here left a live process that no ORDRSP/UTILMD answer
+    // could ever be routed to — the answer is dropped as
+    // `process_not_found` and the Frist expires against a process that
+    // was doing everything right. Not propagated: the process is spawned
+    // and its message already enqueued, so failing the caller now would
+    // have it re-issue the command and start a second one. Logged with
+    // the key and process id, which is what a repair needs.
+    if let Err(e) = state
         .store
         .as_process_registry()
         .register_correlated(state.tenant_id, malo_id.as_str(), process_id, identity)
-        .await;
+        .await
+    {
+        tracing::error!(
+            process_id = %process_id,
+            malo_id    = %malo_id,
+            error      = %e,
+            "geli gas: business-key registration failed — the answer to this process cannot \
+             be correlated back to it",
+        );
+    }
 
     Ok(DispatchOutcome::Spawned { process_id })
 }

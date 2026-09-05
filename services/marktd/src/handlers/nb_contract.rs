@@ -25,11 +25,7 @@ use mako_markt::{
     cloudevents::MarktEvent,
     domain::{MaloId, Sparte},
     error::MdmError,
-    repository::{
-        AppState, BillingSchedule, CorrelationIndex, MaloRepository, MeloRepository,
-        NbContractRecord, NbContractRepository, NetznutzerTyp, PartnerRepository,
-        SubscriptionRepository,
-    },
+    repository::{BillingSchedule, NbContractRecord, NbContractRepository, NetznutzerTyp},
 };
 use mako_service::cedar::CedarEnforcer;
 use rubo4e::current::Vertrag;
@@ -395,19 +391,6 @@ pub async fn get_nb_contract_by_malo(
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => e.into_response(),
     }
-}
-
-// Silence unused-import warnings for generic bounds that are needed for
-// the State extractor in other handlers but not used directly here.
-#[allow(dead_code)]
-fn _assert_bounds<Ma, Me, Su, Ci, Pa>(_: &AppState<Ma, Me, Su, Ci, Pa>)
-where
-    Ma: MaloRepository + Clone,
-    Me: MeloRepository + Clone,
-    Su: SubscriptionRepository + Clone,
-    Ci: CorrelationIndex + Clone,
-    Pa: PartnerRepository + Clone,
-{
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

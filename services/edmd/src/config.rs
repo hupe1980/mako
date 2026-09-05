@@ -192,7 +192,7 @@ pub struct Config {
     /// `enabled = true`. See [`KafkaIngestConfig`].
     #[serde(default)]
     pub kafka_ingest: Option<KafkaIngestConfig>,
-    /// § 60 Abs. 2 MsbG confirmation loop for estimated/substituted readings.
+    /// § 60 Abs. 1 MsbG confirmation loop for estimated/substituted readings.
     #[serde(default)]
     pub confirmation: ConfirmationConfig,
     /// §14a SMGW/CLS compliance sweep thresholds. See [`SmgwConfig`].
@@ -330,7 +330,7 @@ pub struct WebhookConfig {
     pub erp_webhook_secret: Option<String>,
 }
 
-/// `[confirmation]` — § 60 Abs. 2 MsbG estimated-reading confirmation loop.
+/// `[confirmation]` — § 60 Abs. 1 MsbG estimated-reading confirmation loop.
 ///
 /// Every stored ESTIMATED/SUBSTITUTED interval opens an obligation to
 /// replace it with a plausibilised real value. The daily worker marks
@@ -391,7 +391,8 @@ pub struct SmgwConfig {
     #[serde(default = "smgw_default_cert_warning_days")]
     pub cert_warning_days: i32,
     /// Hours of silence after which a gateway counts as a communication fault,
-    /// which is what leaves § 60 Abs. 2 MsbG Ersatzwerte owing.
+    /// which is what leaves the § 60 Abs. 1 MsbG delivery duty — and so the
+    /// Ersatzwerte that discharge it — owing.
     #[serde(default = "smgw_default_comm_fault_hours")]
     pub comm_fault_threshold_hours: i64,
     /// Seconds between sweeps. Default: daily.
@@ -438,7 +439,7 @@ impl Default for SmgwConfig {
 #[serde(deny_unknown_fields)]
 pub struct SurveillanceConfig {
     /// Whether the sweep runs. Default: true — an MSB that does not notice a
-    /// silent meter cannot meet § 60 Abs. 2 MsbG in time.
+    /// silent meter cannot meet its § 60 Abs. 1 MsbG delivery times.
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// Hours since a measuring point's newest interval **ended** after which it

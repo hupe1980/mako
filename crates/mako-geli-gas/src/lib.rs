@@ -145,8 +145,8 @@ pub use stammdatenaenderung::{
 };
 
 pub use datenabruf::{
-    GeliGasDatanabrufCommand, GeliGasDatanabrufEvent, GeliGasDatanabrufState,
-    GeliGasDatanabrufWorkflow, ORDERS_ANFRAGE_PIDS as GELI_GAS_DATENABRUF_ORDERS_PIDS,
+    GeliGasDatenabrufCommand, GeliGasDatenabrufEvent, GeliGasDatenabrufState,
+    GeliGasDatenabrufWorkflow, ORDERS_ANFRAGE_PIDS as GELI_GAS_DATENABRUF_ORDERS_PIDS,
     ORDRSP_ABLEHNUNG_PIDS as GELI_GAS_DATENABRUF_ORDRSP_PIDS,
     WORKFLOW_NAME as GELI_GAS_DATENABRUF_WORKFLOW_NAME,
 };

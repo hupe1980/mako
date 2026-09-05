@@ -1539,7 +1539,7 @@ pub struct VersorgungsStatusRecord {
     /// Set by `begin_eog_supply` when `lieferstatus` transitions to
     /// `Ersatzversorgung` or `Grundversorgung`; cleared on any other
     /// transition. For `Ersatzversorgung` this anchors the statutory
-    /// 3-month maximum (§38 Abs. 2 EnWG) enforced by the `processd`
+    /// 3-month maximum (§38 Abs. 4 EnWG) enforced by the `processd`
     /// EoG timer.
     #[serde(default, with = "date_iso::opt")]
     pub eog_seit: Option<Date>,
@@ -1865,7 +1865,7 @@ pub trait VersorgungsStatusRepository: Send + Sync {
     ///   (`eog_status` must be one of the two; any other value is an error),
     /// - the running assignment replaced by a single 100 % `gv_mp_id` one
     ///   beginning at `eog_seit`,
-    /// - `eog_seit = start of the fallback supply` (anchors the §38 Abs. 2
+    /// - `eog_seit = start of the fallback supply` (anchors the §38 Abs. 4
     ///   3-month maximum for `Ersatzversorgung`),
     ///
     /// while preserving every announced assignment — a pending regular supplier

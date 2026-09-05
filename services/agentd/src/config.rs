@@ -680,9 +680,8 @@ mod tests {
     /// Resolution reads the config without needing to own it.
     ///
     /// The runner hands `Daemon::build` an `Arc<Config>` and keeps its own
-    /// reference for the bind address, so an in-place `&mut` resolution cannot
-    /// work — an earlier version tried to unwrap the `Arc` and would have
-    /// panicked on every start.
+    /// reference for the bind address, so the `Arc` is always shared at this
+    /// point and an in-place `&mut` resolution cannot work.
     #[test]
     fn secrets_resolve_from_a_shared_config() {
         let shared = std::sync::Arc::new(cfg_with_key("sk-plain"));

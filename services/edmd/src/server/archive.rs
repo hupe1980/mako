@@ -253,7 +253,7 @@ pub(crate) async fn get_archive_portfolio(
     // predicate is defence in depth — a deployment writes only its own tenant —
     // but it keeps the aggregate correct even if a store is ever shared.
     //
-    // Non-billable qualities are excluded in the scan (§ 60 Abs. 2 MsbG) rather
+    // Non-billable qualities are excluded in the scan (§ 40a Abs. 2 EnWG) rather
     // than after materialising: it is the one part of the projection SQL *can*
     // express, and it is the part that removes the most rows.
     //
@@ -537,12 +537,27 @@ pub(crate) async fn get_archive_timeseries(
 // JSON rows (default) or an Arrow IPC stream (`format: "arrow_ipc"`), and carry
 // the tier provenance meterstore computed the answer against.
 //
-// Scope: an edmd deployment writes exactly one tenant (`cfg.tenant`) to every
-// row, so its store holds that tenant alone and the result is tenant-scoped by
-// construction. A caller that wants an explicit guard adds `WHERE "tenant" = …`;
-// the endpoint does not inject one, because it cannot rewrite arbitrary SQL
-// safely, and refuses the raw versioned relation so no query can double-count
-// corrected intervals.
+// Tenant scope: the endpoint **does** inject the predicate, and does not rely on
+// the deployment holding one tenant. Before the statement runs it calls
+// `store.scoped(TENANT_COL, cfg.tenant)`, which returns a store whose session
+// carries `tenant = <cfg.tenant>` as a row scope. meterstore applies that
+// equality inside the plan, below the projection — the same place a
+// transaction-time ceiling goes — so the SQL engine never sees a statement
+// without it and no `WHERE`, alias, subquery or `UNION` the caller writes can
+// omit or widen it. A scope also cannot be re-pointed: `scoped` refuses a second
+// value for a column it already holds. `tenant` is a declared merge-key column of
+// the table, which is what makes it scopable at all; naming a non-key column
+// would be an error, not a silent no-op, and the handler turns that into a 500
+// rather than running the query.
+//
+// What the scope confines is *rows*, not *relations*. Which relations a statement
+// may name is a separate check below: a name match on the uppercased SQL that
+// rejects the raw versioned table (summing it double-counts corrected intervals)
+// and both ESA Typ-2 relations (non-authoritative values that must not reach a
+// billing query) with a 403 naming the relation to use instead. That check is
+// what gives the caller a reason; scoping a store also builds a fresh session
+// holding only its own table, so a rejected name would otherwise surface as an
+// unresolved-table parse error.
 //
 // The value column is `value` and the interval start is `from` (a reserved word,
 // so quote it). Example:
@@ -608,7 +623,7 @@ pub(crate) async fn post_sql_query(
             .into_response();
     }
 
-    // Two relations are out of bounds for caller-supplied SQL.
+    // Three relations are out of bounds for caller-supplied SQL.
     //
     // The **raw, every-version** relation, because summing it double-counts
     // every corrected interval — callers use the resolved `meter_reads`.
@@ -617,10 +632,16 @@ pub(crate) async fn post_sql_query(
     // non-authoritative (Codeliste 1.4 Kap. 4.6): they never reconcile against
     // `meter_reads` and never reach a billing path, and edmd's claim is that the
     // separation is *structural* — the `Typ2Repository` trait shares no read
-    // method with the billing store. Every table lives in one DataFusion session,
-    // though, so a free-form `SELECT * FROM esa_typ2_reads` walked straight
-    // around that: the one query surface where the separation was a naming
-    // convention rather than a type.
+    // method with the billing store. All three of edmd's tables are built into
+    // one `MeterCatalog` and share its DataFusion session, though, so a free-form
+    // `SELECT * FROM esa_typ2_reads` walked straight around that: the one query
+    // surface where the separation was a naming convention rather than a type.
+    //
+    // Checked here, on the text, and before scoping — deliberately. It is the
+    // only place that can answer *why* a relation is refused and name the one to
+    // use instead. (The scoped session below happens to register this table
+    // alone, so an unrefused Typ-2 name would fail there too — as an unresolved
+    // identifier, which tells the caller nothing.)
     let store = state.repo.store();
     let typ2 = state.typ2_repo.store();
     let forbidden = [

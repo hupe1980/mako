@@ -2,11 +2,7 @@
 title = "BDEW AS4 Guide"
 description = "How to configure makod for BDEW AS4-Profil v1.2 production deployments. Covers the certificate triplet (TLS / signing / encryption), P-Mode registry, BDEW Verzeichnisdienst endpoint discovery, and testing without WIRK certificates."
 weight = 17
-[extra]
-mermaid = true
 +++
-# BDEW AS4 Guide
-
 AS4 became the mandatory transport for BDEW MaKo since **1 April 2024** (Strom, BK6-22-024)
 and **1 April 2025** (Gas, BK7-22-023). This guide covers everything needed to operate
 `makod` in a BDEW production environment.
@@ -278,16 +274,26 @@ metadata:
   name: makod-as4-certs
 type: Opaque
 stringData:
-  AS4_SIGNING_KEY_PEM:    <base64-encoded PEM>
-  AS4_SIGNING_CERT_PEM:   <base64-encoded PEM>
-  AS4_DECRYPTION_KEY_PEM: <base64-encoded PEM>
-  AS4_TRUST_ANCHOR_PEM:   <base64-encoded BDEW CA PEM>
+  MAKOD_AS4_SIGNING_KEY_PEM:    <PEM>
+  MAKOD_AS4_SIGNING_CERT_PEM:   <PEM>
+  MAKOD_AS4_DECRYPTION_KEY_PEM: <PEM>
+  MAKOD_AS4_TRUST_ANCHOR_PEM:   <BDEW CA PEM>
 ```
 
-Use `_FILE` suffix to load from a mounted secret:
+The `MAKOD_` prefix is part of the name — `makod`'s clap definitions read only
+the prefixed form (`services/makod/src/main.rs:470`).
 
-```bash
-MAKOD_AS4_SIGNING_KEY_PEM_FILE=/run/secrets/as4-signing-key  makod ...
+To keep the key material out of the environment entirely, mount it as a file and
+name the path in the config instead. Each PEM key has a `*_file` companion,
+resolved by `either_inline_or_file` (`services/makod/src/core/config.rs:533`);
+giving both is an error, not a precedence:
+
+```toml
+[as4]
+signing_key_pem_file    = "/run/secrets/as4-signing-key"
+signing_cert_pem_file   = "/etc/makod/signing.cert.pem"
+decryption_key_pem_file = "/etc/makod/decryption.key.pem"
+trust_anchor_pem_file   = "/etc/makod/bdew-ca.pem"
 ```
 
 ---
@@ -325,7 +331,8 @@ new `--as4-partner` / `--as4-partner-cert` flags.
 The BDEW Verzeichnisdienst ("Regelungen zum Verzeichnisdienst" v1.0, applicable 03.04.2025)
 is a registry for **API-Webdienste Strom endpoints** (SM-PKI certificate class EMT.API).
 It is **not** used for AS4 EDIFACT delivery — AS4 inbox endpoints are carried in EMT.MAK
-certificates and exchanged via PARTIN Kommunikationsdaten (PIDs 37000–37014).
+certificates and exchanged via PARTIN Kommunikationsdaten (PIDs 37000–37006
+Strom, 37008–37014 Gas).
 
 `makod` uses the Verzeichnisdienst exclusively to discover **MaLo-Identifikation callback
 URLs** (API-Kennung `maloIdV1`, stored as `CommunicationChannel { qualifier: "AW" }` in the
@@ -341,7 +348,7 @@ At startup and every 5 minutes, `makod` queries
 Static `--maloid-partner GLN=URL` entries always take priority.
 
 > **AS4 partner endpoints** (PARTIN COM qualifier `AK`) are populated by inbound PARTIN
-> messages (PIDs 37000–37014) or seeded at startup via `--as4-partner`. The Verzeichnisdienst
+> messages (PIDs 37000–37006 / 37008–37014) or seeded at startup via `--as4-partner`. The Verzeichnisdienst
 > is not involved in AS4 endpoint resolution.
 
 ---
@@ -401,10 +408,18 @@ sequenceDiagram
     end
 ```
 
+Retrying is not merely safe here, it is what the profile assumes: the P-Mode
+sets `ReceptionAwareness.DuplicateDetection` to true, so the receiver is
+required to eliminate the duplicate an InDoubt retry can produce
+(`services/makod/src/transport/as4_sender.rs:1001`). Since the `MessageId` is
+stable across attempts, a resend after an unverifiable receipt cannot deliver
+the business message twice.
+
 The retry budget is stated as time, not attempts: 72 hours from creation
-(`max_retry_window`), with an attempt ceiling only against runaway loops.
-Because everything but the message bytes is resolved per attempt, a
-configuration fix heals delivery without re-enqueueing.
+(`max_retry_window`, from `mako_as4::constants::MAX_RETRY_DURATION_SECS`), with
+an attempt ceiling only against runaway loops. Because everything but the
+message bytes is resolved per attempt, a configuration fix heals delivery
+without re-enqueueing.
 
 ---
 
@@ -418,7 +433,7 @@ to run integration tests locally immediately:
 ```toml
 [dev-dependencies]
 mako-as4 = { path = "../mako-as4", features = ["testing"] }
-asx-rs   = { version = "0.11", features = ["as4", "testing"] }
+asx-rs   = { version = "0.13", features = ["as4", "testing"] }
 ```
 
 No manual `CertHandle` construction or direct `zeroize` dependency is needed:
@@ -639,7 +654,8 @@ AlgorithmID/PartyUInfo/PartyVInfo = empty strings (§2.2.6.2.2)
 | Own decryption fails | Decryption key not configured | `--as4-decryption-key-pem` with EC private key PEM |
 | Trust verification failure | Self-signed cert or wrong CA | `--as4-trust-anchor-pem` must be the BDEW PKI CA (not the signing cert itself) |
 | Inbound messages not arriving | AS4 not configured | `--as4-addr :4080` + signing key/cert required |
-| "AS4 inbox dedup is volatile" warning | No `--data-dir` set | Add `--data-dir /var/lib/makod` for durable dedup (required for BDEW conformance) |
+| AS4 inbox dedup does not survive a restart | No `--data-dir` set — the store is in-memory | Add `--data-dir /var/lib/makod`; without it makod refuses to start unless `--allow-volatile` is given |
+| Duplicate AS4 processing across replicas | Two makod instances on one `--data-dir` | `SlateDbInboxStore` is linearisable within one instance only; scale out behind an external distributed lock and acknowledge with `--allow-multi-instance` |
 | Partner endpoint not found | P-Mode not registered | Add `--as4-partner GLN=URL` for the recipient GLN |
 
 ---

@@ -96,6 +96,7 @@ pub(crate) async fn enrich_gas_meter(
                 zaehlerstand_von,
                 zaehlerstand_bis,
                 is_estimated,
+                coverage_pct,
             })) => {
                 meter.kwh_hs = kwh_hs;
                 if meter.brennwert_kwh_per_qm3.is_none() {
@@ -114,6 +115,7 @@ pub(crate) async fn enrich_gas_meter(
                     meter.zaehlerstand_bis = zaehlerstand_bis;
                 }
                 meter.is_estimated |= is_estimated;
+                meter.coverage_pct = coverage_pct;
                 enriched_from_edmd_period = true;
             }
             Ok(None) => {

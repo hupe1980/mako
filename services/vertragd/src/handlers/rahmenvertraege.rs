@@ -11,7 +11,7 @@ use mako_service::{ApiError, ApiResult, oidc::Claims};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use super::{Ctx, ok, require_kunde};
+use super::{CedarEnforcer, Ctx, authorize, ok, require_kunde};
 use crate::{
     domain::{self, Vertragsart},
     events::build_cloud_event,
@@ -24,11 +24,13 @@ use crate::{
 /// Versorgungsverträge below it — the model for portfolio customers with many
 /// delivery points.
 pub async fn create(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(kunden_id): Path<Uuid>,
     Json(input): Json<pg::CreateRahmenvertragInput>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    authorize(&enforcer, &claims, "create-rahmenvertrag", ctx.tenant())?;
     require_kunde(&ctx, kunden_id).await?;
     let id = pg::insert_rahmenvertrag(&ctx.pool, kunden_id, ctx.tenant(), &input)
         .await
@@ -47,10 +49,12 @@ pub struct ListQuery {
 
 /// `GET /api/v1/rahmenvertraege` — operator list view.
 pub async fn list(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-rahmenvertrag", ctx.tenant())?;
     let rows = pg::list_all_rahmenvertraege(
         &ctx.pool,
         ctx.tenant(),
@@ -64,10 +68,12 @@ pub async fn list(
 
 /// `GET /api/v1/kunden/{id}/rahmenvertraege`
 pub async fn list_by_kunde(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(kunden_id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-rahmenvertrag", ctx.tenant())?;
     require_kunde(&ctx, kunden_id).await?;
     let rows = pg::list_rahmenvertraege_by_kunde(&ctx.pool, kunden_id, ctx.tenant())
         .await
@@ -77,10 +83,12 @@ pub async fn list_by_kunde(
 
 /// `GET /api/v1/rahmenvertraege/{id}` — with its child supply contracts.
 pub async fn get(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-rahmenvertrag", ctx.tenant())?;
     let rahmenvertrag = pg::fetch_rahmenvertrag(&ctx.pool, id, ctx.tenant())
         .await
         .map_err(ApiError::Internal)?
@@ -101,10 +109,12 @@ pub async fn get(
 /// prices; the `rechnungsempfaenger` block is the **Rahmenvertrag holder**,
 /// because a Sammelrechnung bills them rather than any one site's customer.
 pub async fn malos(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-rahmenvertrag", ctx.tenant())?;
     let rows = pg::list_rahmenvertrag_malos(&ctx.pool, id, ctx.tenant())
         .await
         .map_err(ApiError::Internal)?;
@@ -135,11 +145,13 @@ pub async fn malos(
 /// date that is lawful for most sites terminates those and reports the rest
 /// rather than terminating none or terminating all unlawfully.
 pub async fn kuendigen(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(rahmenvertrag_id): Path<Uuid>,
     Json(input): Json<pg::KuendigungInput>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    authorize(&enforcer, &claims, "kuendigen-rahmenvertrag", ctx.tenant())?;
     let rahmenvertrag = pg::fetch_rahmenvertrag(&ctx.pool, rahmenvertrag_id, ctx.tenant())
         .await
         .map_err(ApiError::Internal)?

@@ -236,13 +236,6 @@ where
         // asked for a conditional one and would otherwise be told it succeeded.
         IfMatch::Malformed => return malformed_if_match(),
     };
-    let exists = state
-        .malo_repo
-        .find(&malo_id, today_berlin())
-        .await
-        .ok()
-        .flatten()
-        .is_some();
 
     // L4 hard cut: validate and normalise the incoming BO4E payload.
     // Returns 422 on wrong _typ or invalid enum values (bilanzierungsmethode, netzebene, …).
@@ -357,10 +350,19 @@ where
         );
     }
 
-    let status = if exists {
-        StatusCode::OK
-    } else {
+    // 201 vs 200 comes from the write, not from a probe before it. The row is
+    // inserted with `version` 1 and every conflict does `version + 1`, so
+    // `version == 1` *is* "this PUT created it" — decided atomically by the
+    // upsert that returned it.
+    //
+    // The probe this replaces asked `find(...).ok().flatten().is_some()`, which
+    // reported "does not exist" for a row that does exist but no longer
+    // deserialises (the schema-drift path this module already logs) — and it
+    // raced two concurrent PUTs into both answering 201.
+    let status = if version == 1 {
         StatusCode::CREATED
+    } else {
+        StatusCode::OK
     };
     (
         status,

@@ -2,11 +2,7 @@
 title = "ERP Integration"
 description = "Integrate with your ERP using CloudEvents 1.0 JSON webhooks, the Command API, and typed BO4E market data. Covers HMAC-SHA256 signature verification, idempotency keys, payment lifecycle CloudEvents, and the full integration topology diagram."
 weight = 10
-[extra]
-mermaid = true
 +++
-# ERP Integration
-
 `makod` is a protocol processor, not a business system. It handles EDIFACT
 parsing, BDEW process rules, AS4 delivery, and regulatory deadlines. All
 contract data, billing logic, and master data live in your ERP.
@@ -74,10 +70,12 @@ Your ERP must accept `POST` requests at the configured URL:
 
 ```
 POST /mako/events
-Content-Type: application/cloudevents+json
-webhook-id:        01932a4f-7b3e-4c5d-8f6a-9e0b1c2d3e4f
-webhook-timestamp: 1786012800
-webhook-signature: v1,K5oT9r8GKYqrTwjUPD8ILPZIo2LaLaSw…
+Content-Type:      application/cloudevents+json
+X-Idempotency-Key: 01932a4f-7b3e-4c5d-8f6a-9e0b1c2d3e4f   ← always sent
+traceparent:       00-4bf92f…-00f067…-01                  ← when the inbound transport carried one
+webhook-id:        01932a4f-7b3e-4c5d-8f6a-9e0b1c2d3e4f   ┐
+webhook-timestamp: 1786012800                             ├ only when a secret is set
+webhook-signature: v1,K5oT9r8GKYqrTwjUPD8ILPZIo2LaLaSw…   ┘
 ```
 
 Body (CloudEvents 1.0 structured-mode JSON):
@@ -107,9 +105,10 @@ Body (CloudEvents 1.0 structured-mode JSON):
 }
 ```
 
-`webhook-id` is the CloudEvent's own `id`. It is the signature's message
-identity **and** your idempotency key — one value, not two headers that can
-disagree.
+`webhook-id`, `X-Idempotency-Key` and the CloudEvent's own `id` are the same
+value — one identity, not three headers that can disagree. `webhook-id` is what
+the signature covers; `X-Idempotency-Key` is what a signature-less deployment
+deduplicates on, and is sent unconditionally.
 
 **Step 4 — Verify the signature**
 
@@ -175,10 +174,11 @@ function verifyMakoWebhook(body: Buffer, secret: string, headers: Record<string,
 > semantics vary by use case. [Standard Webhooks] is the security layer mako
 > puts on top of it.
 
-> **Key rotation.** `webhook-signature` is a space-separated list, so during a
-> rollover mako can present the old and the new signature at once. Accept the
-> request if **any** entry matches, and a secret can be changed without a
-> flag-day across every integration.
+> **Key rotation.** `webhook-signature` is a space-separated list. mako's own
+> senders currently emit a single `v1` entry, but its *verifier*
+> (`mako_service::webhook::verify_signature`) accepts any matching entry and
+> skips entries of another version — so implement your receiver the same way and
+> a secret can later be rotated without a flag-day across every integration.
 
 [Standard Webhooks]: https://www.standardwebhooks.com/
 
@@ -210,7 +210,7 @@ message is dead-lettered.
 | edmd API → ERP | `GET /api/v1/lastgang/{malo_id}` | BO4E `Lastgang` — interval time series grouped by OBIS register |
 | edmd API → ERP | `GET /api/v1/billing-period/{malo_id}` | `MeterBillingPeriod` — arbeitsmenge, spitzenleistung, brennwert |
 | ERP → marktd | `PUT /api/v1/nb-contracts/{id}` | Upsert NB contract with full BO4E `Vertrag` payload |
-| obsd API → ERP | `GET /obs/kpis` | BNetzA KPI report — §20 EnWG parity, STP rates, decision times |
+| obsd API → ERP | `GET /obs/kpis` | BNetzA KPI report — § 7a Abs. 5 EnWG Gleichbehandlung parity, STP rates, decision times |
 
 ### ERP-facing integration topology
 
@@ -283,6 +283,30 @@ re-enqueued — no lost APERAK.
 The two workers are independent on purpose: an ERP that is down cannot delay an
 APERAK to a market partner, and a counterparty that is unreachable cannot stall
 the ERP feed.
+
+#### The payload-key seam
+
+An outbox entry is a **bare string plus untyped JSON**. A domain workflow writes
+`PendingOutbox::new("GabiFinalAllocationOverdue", recipient, json!({…}))`, and
+`map_message_type_to_erp_event` in `makod/src/core/erp_adapter.rs` reads that
+string back to pick an `ErpEventType`. Nothing in the type system links the two:
+renaming the constant on either side compiles cleanly and turns the notification
+into an unrecognised type the worker silently skips.
+
+The same holds one level down, for the `data` payload. Keys such as `gas_day`,
+`tx_id` or `zustimmung` are agreed by convention between the crate that writes
+them and the consumer that reads them — `billingd`'s
+`POST /api/v1/webhooks/vpp-dispatch` for the VPP payload, `processd` for the
+Abmeldeanfrage one. A `serde` struct on the reading side does not fail on a
+renamed key; it reads `None`.
+
+Two tests hold the seam where it has broken before:
+`every_enqueued_message_type_maps_to_a_cloud_event` enumerates every
+`message_type` a workflow enqueues and asserts each resolves, and
+`the_gabi_overdue_notification_carries_the_alocat_missing_type` pins the one
+mapping an agent subscribes to by name. **When you add an outbox message type,
+add it to that list** — a type absent from both is delivered to nobody and
+reports nothing.
 
 ### Event types
 
@@ -397,7 +421,8 @@ BO4E-typed JSON object. Deserialise using the ERP's own BO4E library.
 | `de.mako.process.completed` | Lieferbeginn/Lieferende confirmed | `Marktlokation` + `Vertrag` |
 | `de.mako.process.failed` | Fatal error / regulatory deadline exceeded | `Marktlokation` |
 | `de.mako.malo.identified` | MaLo-ID lookup resolved | `Marktlokation` |
-| `de.vpp.dispatch.confirmed` | WiM Steuerungsauftrag (PID 55168) positively confirmed by MSB — triggers VPP auto-billing in `billingd` | `{tx_id, location_id, max_power_kw, execution_time_from, execution_time_until, command_type, sender_mp_id, produkt_code}` |
+| `de.mako.abmeldeanfrage.beantwortet` | The LFA answered the NB's Anfrage zur Beendigung der Zuordnung (55010/55011/55012) — **or its 09:00 window lapsed**, which GPKE Teil 2 § 2.1.2 Nr. 4 reads as a Zustimmung. `processd` resumes the *Anmeldung* decision on it (`E_0623` Prüfschritte 30–50) | `{pid, malo_id, grid_operator, lfa_mp_id, anmeldung_process_id, zustimmung, fristablauf}` plus `antwortcode`, `grund` and `zuordnungsende` when the LFA named them |
+| `de.vpp.dispatch.confirmed` | WiM Steuerungsauftrag (PID 55168) positively confirmed by MSB — triggers VPP auto-billing in `billingd`. Only for `Konfiguration` (load-reduction) commands, never for `InitialZustand` resets | `{tx_id, location_id, location_type, max_power_kw, execution_time_from, execution_time_until, command_type, sender_mp_id, produkt_code}` |
 | `de.gabi.alocat.missing` | § 47 Ziffer 1 KoV XV final-allocation window (M+14 Werktage) closed with no binding final ALOCAT — the gas day's imbalance cannot be settled; open a Clearingfall with the FNB/MGV | `{gas_day, deadline_label, sender_eic, receiver_eic, pruefidentifikator}` |
 | `de.gabi.nomination.curtailed` | The FNB/MGV confirmed less than was nominated — NOMRES states no status, so the shortfall shows up only as a reduced quantity; the portfolio is short until the BKV re-nominates or buys the gap | `{gas_day, nominated_kwh, confirmed_kwh, curtailed_kwh, sender_eic, receiver_eic, pruefidentifikator, nomination_ref}` |
 | `de.gabi.nomination.rejected` | The FNB/MGV refused the nomination; nothing flows on it | `{gas_day, reason, nominated_kwh, sender_eic, receiver_eic, pruefidentifikator, nomination_ref}` |
@@ -468,8 +493,12 @@ in Python, `crypto.timingSafeEqual` in Node.js) to prevent timing attacks.
 
 ### No-secret mode
 
-If `--erp-webhook-secret` is omitted, the signature and timestamp headers are
-not sent. `webhook-id` still is, so your deduplication works either way.
+If `--erp-webhook-secret` is omitted, all three Standard Webhooks headers are
+omitted — `webhook-id` included, because the id, the timestamp and the signature
+are produced together by `mako_service::webhook::headers` and only make sense as
+a set. `X-Idempotency-Key` carries the same value unconditionally, so dedup on
+that and your receiver works either way.
+
 **Do not use no-secret mode in production.** Use it only in local development
 with loopback-only ERP endpoints.
 
@@ -1030,6 +1059,7 @@ With BO4E:
 | Component | Where | Role |
 |---|---|---|
 | `ErpAdapter` / `ErpEvent` traits | `mako-engine/src/erp.rs` | Outbound event contract |
+| `ErpEventType` (14 variants) | `mako-engine/src/erp.rs` | `cloud_event_type()` resolves each to a `mako-events` constant; `label()` gives the snake_case log/metric key |
 | `ErpCommandSource` trait | `mako-engine/src/erp.rs` | Inbound command contract |
 | `WebhookErpAdapter` (HMAC-SHA256 signed) | `makod/src/core/erp_adapter.rs` | Delivers CloudEvents to the ERP webhook |
 | `OutboxErpWorker` (exponential back-off) | `makod/src/core/erp_adapter.rs` | At-least-once delivery with retry + dead-letter |
@@ -1056,8 +1086,13 @@ With BO4E:
 
 ## Automated Billing Settlement
 
-For the Lieferant (LF) role, received INVOIC messages (PIDs 31001, 31002, 31005,
-31006) require a plausibility check before settlement. Rather than routing every
+A received INVOIC requires a plausibility check before settlement. `invoicd`
+covers **ten** inbound PIDs across four answer-command families — the GPKE
+Netznutzungs- and Mehr-/Mindermengen set (31001, 31002, 31005, 31006), the WiM
+pair (31003, 31009), GaBi Gas MMM (31007, 31008), and the two Sparte-neutral
+ones (31004 Storno, 31011 sonstige Leistung); the full table is in the
+[`invoicd` section of the architecture page](@/docs/architecture/_index.md#invoicd-automated-billing-settlement-8280).
+Rather than routing every
 invoice through the ERP, deploy [`invoicd`](@/docs/services/invoicd.md) as
 an autonomous sidecar. It subscribes to `de.mako.process.initiated` events from
 `marktd`, runs the `invoic-checker` pipeline, **persists every receipt to PostgreSQL**
@@ -1068,7 +1103,7 @@ issues the settlement command — all without any ERP involvement.
 
 ```
 NB (counterparty)
-    │  INVOIC (PID 31001/31002/31005/31006)
+    │  INVOIC (one of the ten routed PIDs; 31001/31002/31005/31006 shown)
     │  AS4/EDIFACT push
     ▼
 makod :8080
@@ -1087,7 +1122,7 @@ invoicd :8280
     │                              {"command": "gpke.abrechnung.annehmen",
     │                               "payload": {"invoice_ref": "..."}}
     │                              ↓  mark_dispatched(pool, process_id)
-    │                          makod emits REMADV (PID 33001/33002)
+    │                          makod emits REMADV 33001 (Zahlungsavis)
     │                          AS4 → NB
     │
     └─ dispute findings ─────► POST /api/v1/commands
@@ -1095,29 +1130,61 @@ invoicd :8280
                                     "payload": {"invoice_ref": "...",
                                                 "ablehnungsgrund": "..."}}
                                    ↓  mark_dispatched(pool, process_id)
-                               makod emits COMDIS (PID 29001)
+                               makod emits REMADV 33002 — or 33003/33004
+                               when the tree answers positionsscharf
                                AS4 → NB
 ```
 
-### Six plausibility checks
+**Settlement is „ganz oder gar nicht".** REMADV AHB 1.0a § 3 admits no
+Teilzahlung, so of the four REMADV Prüfidentifikatoren only **33001** confirms
+and 33002/33003/33004 are all Abweisungen: 33002 is the plain refusal that
+answers with one code (§ 3.1.1), while § 3.1.2's 33003 („Abweisung Kopf und
+Summe") and 33004 („Abweisung Position") carry a *set* of codes, one per
+disputed position. `RemadvAntwort::remadv_pid` picks between them from the shape
+of the decision tree's answer.
 
-| Check | What it verifies |
-|---|---|
-| Period validity | `rechnungsperiode.startdatum` ≤ `enddatum`; line-item periods via `lieferungszeitraum` |
-| Zahlungsziel | `faelligkeitsdatum` is not before `rechnungsdatum` (dispute) and does not exceed `max_zahlungsziel_days` — 30 days by default (warn). Source: §7 Allgemeine Festlegungen V6.1d |
-| Position arithmetic | `position.positions_menge × einzelpreis` ≈ `gesamtpreis` (within `arithmetic_tolerance`) |
-| Document total | Sum of `rechnungspositionen[*].gesamtpreis` ≈ `gesamtnetto` (within `total_tolerance`) |
-| Tariff match | Each position's unit price falls within the registered tariff band ± `tariff_tolerance`; a missing tariff entry for the MaLo + period is a finding whose severity follows `require_tariff` |
-| MMM settlement price | For MMM invoices (PIDs 31005, 31006, 31007, 31008), `mehr_preis` / `minder_preis` positions match the MMMA reference prices held in `marktd`, within tolerance |
+COMDIS **29001** is the other direction and is not part of this flow: it is the
+*invoicer's* refusal of a payer's REMADV — e.g. because the stated payment amount
+is wrong (COMDIS AHB 1.0). The same number is also the APERAK PID for a technical
+processing failure, which is a different message on a different clock.
 
-A Stornorechnung (`ist_storno = true`) must reference the original invoice via
-`original_rechnungsnummer`, and the tariff check is skipped for it — a Storno
-carries the negated original amounts, not tariff positions.
+### The eight-stage plausibility pipeline
 
-> **BO4E v202607 field names:** `Rechnungsposition` uses `gesamtpreis` (line total)
-> and `lieferungszeitraum` (delivery period) instead of the v202501 `teilsumme_netto`
-> and flat `lieferung_von` / `lieferung_bis` fields. Convenience methods
-> `.gesamtpreis_decimal()`, `.lieferung_von_date()`, and `.lieferung_bis_date()`
+`InvoicCheckEngine::check` runs eight stages in a fixed order, each appending to
+one `Vec<Finding>`. Where the order is load-bearing, the row says so.
+
+| # | Stage | What it verifies |
+|---|---|---|
+| 1 | Storno reference | `ist_storno = true` must name the original in `original_rechnungsnummer`. Source: BK6-24-174 §5; Allgemeine Festlegungen §8 |
+| 2 | Period validity | `rechnungsperiode.startdatum` ≤ `enddatum`; line-item periods via `lieferungszeitraum` |
+| 3 | Zahlungsziel | `faelligkeitsdatum` is not before `rechnungsdatum` (dispute) and does not exceed `max_zahlungsziel_days` — 30 days by default (warn). Source: §7 Allgemeine Festlegungen V6.1d |
+| 4 | Currency agreement | Runs **before** the arithmetic, which would otherwise read a CHF `Betrag` as EUR and find every later comparison consistent |
+| 5 | Position arithmetic | `position.positions_menge × einzelpreis` ≈ `gesamtpreis` (within `arithmetic_tolerance`) |
+| 6 | Document total | Sum of `rechnungspositionen[*].gesamtpreis` ≈ `gesamtnetto` (within `total_tolerance`) |
+| 7 | Umsatzsteuer | The per-rate `steuerbetraege` breakdown sums to `gesamtsteuer` — the figure the recipient's Vorsteuerabzug is computed from |
+| 8 | Tariff match | Each position's unit price falls within the registered tariff band ± `tariff_tolerance`; a missing tariff entry for the MaLo + period is a finding whose severity follows `require_tariff` |
+
+**Stage 3 compares calendar dates, not timestamps.** BO4E types both fields
+`date-time` and senders pin the timestamp to midnight in their own offset, so
+subtracting two `OffsetDateTime`s measures the offsets as well as the days —
+a 30-day Zahlungsziel reads as 29 or as 30-plus-two-hours depending on who sent
+it. `rechnungsdatum_date()` and `faelligkeitsdatum_date()` take the date in the
+offset the payload carries.
+
+**Stage 8 is skipped for a Stornorechnung.** A Storno carries the negated
+original amounts, not tariff positions, so comparing them would raise a
+`TariffDeviation` dispute on every correct correction.
+
+Two checks sit beside the pipeline, entered through their own functions rather
+than by `check`: `check_mmm_settlement` (MMM invoices — PIDs 31005, 31006,
+31007, 31008 — whose `mehr_preis` / `minder_preis` positions must match the
+MMMA reference prices held in `marktd`, within tolerance) and
+`check_msb_rechnung` / `check_esa_rechnung`, which price a WiM or ESA invoice
+against a `PreisblattMessung` or the accepted Angebot.
+
+> **BO4E field names:** `Rechnungsposition` carries the line total in `gesamtpreis`
+> and the delivery period in `lieferungszeitraum`. Convenience methods
+> `.gesamtpreis_decimal()`, `.lieferung_von_date()` and `.lieferung_bis_date()`
 > bridge the structural access.
 
 ### Payment deadline tracking (`pay_by`)

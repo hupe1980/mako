@@ -185,11 +185,15 @@ class TestQuotes:
 
 
 class TestCoverage:
-    def test_most_published_obligations_are_now_answerable(self):
-        """Every published obligation resolves to a message type makotest builds.
+    def test_every_published_obligation_is_answerable(self):
+        """Every published obligation's *answer* PID resolves to a buildable type.
 
         An obligation whose answer message type cannot be built is one no test
         can answer, however well the Frist and the Antwortcode are modelled.
+
+        The answer PID is the one that has to resolve. Falling back to the
+        trigger's message types would let a lost answer profile pass, because a
+        trigger and its answer usually share a message type.
         """
         from makotest import antwort_obligations, message_types_of
 
@@ -205,13 +209,10 @@ class TestCoverage:
             "CONTRL",
         }
         unanswerable = [
-            o.trigger_pid
+            (o.trigger_pid, o.bestaetigung_pid, message_types_of(o.bestaetigung_pid))
             for o in antwort_obligations()
-            if (
-                message_types_of(o.bestaetigung_pid)
-                or message_types_of(o.trigger_pid)
-                or ["?"]
-            )[0]
-            not in buildable
+            if not set(message_types_of(o.bestaetigung_pid)) & buildable
         ]
-        assert sorted(unanswerable) == []
+        assert unanswerable == [], (
+            f"an answer PID resolves to no buildable message type: {unanswerable}"
+        )

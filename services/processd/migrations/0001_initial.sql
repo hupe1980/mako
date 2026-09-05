@@ -83,7 +83,7 @@ CREATE TABLE anmeldung_decisions (
     antwortcode            TEXT,
     antwortcode_ebd        TEXT,
     detail                 TEXT,
-    -- §20 EnWG parity: TRUE when lf_mp_id = operator's own GLN
+    -- Gleichbehandlung: TRUE when lf_mp_id = operator's own GLN
     initiator_is_affiliate BOOLEAN     NOT NULL DEFAULT false,
     decided_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
     tenant                 TEXT        NOT NULL,
@@ -94,7 +94,7 @@ COMMENT ON TABLE anmeldung_decisions IS
     'NB STP decision audit log. Written before POST /api/v1/commands to makod. '
     'decision=Escalate when mako-pruefung requires operator review — a missing grid '
     'record, or a fact the EBD needs that the projection does not carry. '
-    'Used for BNetzA §20 EnWG parity reports and STP rate KPI.';
+    'Evidence for the § 7a Abs. 5 EnWG Gleichbehandlungsbericht (the § 20 Abs. 1 Satz 1 duty it shows compliance with mandates no report of its own), and the STP rate KPI.';
 
 -- STP rate KPI
 CREATE INDEX ad_tenant_decided ON anmeldung_decisions (tenant, decided_at DESC);

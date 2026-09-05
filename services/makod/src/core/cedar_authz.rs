@@ -45,7 +45,7 @@
 //! build up from nothing instead, start `makod` with
 //! `--cedar-no-default-policy` ([`DefaultPolicy::Deny`]); the baseline is then
 //! omitted and `--cedar-policy-dir` becomes the only source of access. That is
-//! the mode `cedar/conservative.cedar` and §9 EnWG role separation require.
+//! the mode `cedar/conservative.cedar` and § 6a EnWG role separation require.
 //!
 //! ## Operator ABAC policies
 //!
@@ -274,7 +274,7 @@ pub struct WebdiensteResource<'a> {
     pub tenant: &'a str,
 }
 
-/// Resource descriptor for process-state reads (§9 EnWG unbundling scope).
+/// Resource descriptor for process-state reads (§ 6a EnWG unbundling scope).
 pub struct ProcessResource<'a> {
     /// Operator tenant (MP-ID).
     pub tenant: &'a str,
@@ -282,7 +282,7 @@ pub struct ProcessResource<'a> {
     ///
     /// The workflow name encodes the Marktrolle side of the process, so a
     /// VIU deployment can write Cedar policies that keep an NB-scoped
-    /// principal out of LF process state (§9 EnWG Informatorisches
+    /// principal out of LF process state (§ 6a EnWG Informatorisches
     /// Unbundling) by matching on `context.workflow`.
     pub workflow: &'a str,
 }
@@ -336,7 +336,7 @@ pub enum DefaultPolicy {
     PermitAll,
     /// Omit the baseline. Access comes only from operator-supplied `permit`
     /// statements, so anything not granted is denied. Required for a
-    /// least-privilege deployment and for §9 EnWG role separation.
+    /// least-privilege deployment and for § 6a EnWG role separation.
     Deny,
 }
 
@@ -659,7 +659,7 @@ impl CedarAuthorizer {
 
     /// Evaluate authorization for a process-state read.
     ///
-    /// The `workflow` context lets §9 EnWG VIU deployments deny an NB-scoped
+    /// The `workflow` context lets § 6a EnWG VIU deployments deny an NB-scoped
     /// principal access to LF process state and vice versa.
     pub fn authorize_process_read(
         &self,
@@ -1179,7 +1179,7 @@ unless {
         }
     }
 
-    // ── Default-policy baseline (§9 EnWG / least privilege) ───────────────────
+    // ── Default-policy baseline (§ 6a EnWG / least privilege) ────────────────
 
     /// A least-privilege policy set is only least-privilege when the built-in
     /// catch-all is gone.
@@ -1267,7 +1267,7 @@ permit(
         );
     }
 
-    /// §9 EnWG informatorisches Unbundling: in a combined-role (VIU) deployment
+    /// § 6a EnWG informatorisches Unbundling: in a combined-role (VIU) deployment
     /// an NB-scoped principal must not read supply-side process state.
     ///
     /// This pins the mechanism both `get_process` and `list_overdue_deadlines`
@@ -1310,7 +1310,7 @@ when { context.workflow like "gpke-sperrung*" };
                     workflow: "gpke-lieferbeginn",
                 },
             ),
-            "§9 EnWG: the grid arm must not see supply-side process state"
+            "§ 6a EnWG: the grid arm must not see supply-side process state"
         );
     }
 }

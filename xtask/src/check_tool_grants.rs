@@ -24,6 +24,17 @@
 //!
 //! The server's annotation is the authority: it sits beside the code that does
 //! or does not write. This check makes the manifests agree with it.
+//!
+//! ## Documented counts, and the files that carry them
+//!
+//! The same walk answers a second question: whether the tool, prompt, grant and
+//! specialist counts stated across the docs still match the source. Each claim
+//! names a file and the phrase that file must contain, and the two halves are
+//! read differently. A file the repository **tracks** must be readable — a
+//! claim behind a path that no longer resolves passes forever, so a read error
+//! is a finding. A file the repository does not track may be absent from a
+//! checkout, so its claims are skipped and the skip is *printed*: a silent skip
+//! and a pass look identical on a CI log.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -684,17 +695,46 @@ fn inventory_matches_the_docs(workspace_root: &Path, tools: &BTreeMap<String, bo
     ];
     claims.extend(per_service_claims(tools, &per_service_prompts));
 
+    // A claim splits by whether its file is in the repository. A tracked file
+    // that cannot be read is a *finding*: the claim it carries then checks
+    // nothing, silently, for as long as the path stays wrong — a renamed page
+    // retires its own guard. An untracked one is normally absent, so it is
+    // skipped — but announced, because a claim skipped in silence reads exactly
+    // like a claim that passed.
+    let (optional, required): (Vec<_>, Vec<_>) =
+        claims.into_iter().partition(|(file, _)| is_untracked(file));
+
     let mut stale = Vec::new();
-    for (file, expected) in &claims {
-        let path = workspace_root.join(file);
-        match std::fs::read_to_string(&path) {
-            // `concepts/` is not in git, so a checkout without it is normal and
-            // must not fail the build — only a file that *exists* and disagrees
-            // is a finding.
-            Err(_) => continue,
+    let mut skipped_files: Vec<&str> = Vec::new();
+    let mut skipped_claims = 0usize;
+    for (file, expected) in &required {
+        match std::fs::read_to_string(workspace_root.join(file)) {
             Ok(src) if src.contains(expected.as_str()) => {}
             Ok(_) => stale.push(format!("{file}: expected to contain \"{expected}\"")),
+            Err(e) => stale.push(format!(
+                "{file}: cannot be read ({e}) — the claim \"{expected}\" is checked by nothing"
+            )),
         }
+    }
+    for (file, expected) in &optional {
+        match std::fs::read_to_string(workspace_root.join(file)) {
+            Ok(src) if src.contains(expected.as_str()) => {}
+            Ok(_) => stale.push(format!("{file}: expected to contain \"{expected}\"")),
+            Err(_) => {
+                skipped_claims += 1;
+                skipped_files.push(*file);
+            }
+        }
+    }
+    if skipped_claims > 0 {
+        skipped_files.sort_unstable();
+        skipped_files.dedup();
+        println!(
+            "check-tool-grants: {skipped_claims} documented claim(s) not checked — \
+             {} file(s) absent from this checkout: {}",
+            skipped_files.len(),
+            skipped_files.join(", ")
+        );
     }
 
     if stale.is_empty() {
@@ -712,6 +752,15 @@ fn inventory_matches_the_docs(workspace_root: &Path, tools: &BTreeMap<String, bo
         stale.join("\n  ")
     );
     false
+}
+
+/// Whether a documented claim lives in a file the repository does not track.
+///
+/// Only these may go unchecked when the file is missing. Everything else is in
+/// git, so a read error means the path is wrong — and a claim behind a wrong
+/// path passes forever.
+fn is_untracked(file: &str) -> bool {
+    file.starts_with("concepts/")
 }
 
 /// How many specialists this workspace ships, counted from the manifests.
@@ -785,4 +834,30 @@ fn tools_in(src: &str) -> Vec<(String, bool)> {
         out.push((wire, attr.contains("read_only_hint = true")));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_untracked;
+
+    /// The split that decides whether a missing file fails the build.
+    ///
+    /// A tracked page that stops resolving takes its claim out of the check
+    /// with nothing to show for it, which is how a renamed doc retires its own
+    /// guard. Only the untracked tree may be missing.
+    #[test]
+    fn only_untracked_files_may_be_absent() {
+        assert!(is_untracked("concepts/EDMD.md"));
+        assert!(is_untracked("concepts/MARKET_LANDSCAPE.md"));
+        for tracked in [
+            "README.md",
+            "site/templates/index.html",
+            "site/content/docs/services/agentd.md",
+            "services/agentd/README.md",
+            "services/agentd/policy/agentd.cedar",
+            ".github/copilot-instructions.md",
+        ] {
+            assert!(!is_untracked(tracked), "{tracked} is in git");
+        }
+    }
 }

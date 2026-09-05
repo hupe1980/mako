@@ -15,8 +15,8 @@ members = [
     "crates/redispatch-xml",
     "crates/dvgw-edi",
     "crates/mako-gabi-gas",
-    "crates/mako-nbw",
     "crates/mako-emob",
+    "crates/mako-nbw",
     "crates/mako-markt",
     "crates/mako-events",
     "crates/mako-obs",
@@ -54,6 +54,10 @@ authors     = ["hupe1980"]
 edition     = "2024"
 license     = "MIT OR Apache-2.0"
 repository  = "https://github.com/hupe1980/mako"
+# The documentation site. Without it, crates.io and docs.rs show a crate with
+# no route back to the platform it belongs to — and no crate declares
+# `documentation`, which is fine: crates.io falls back to docs.rs on its own.
+homepage    = "https://hupe1980.github.io/mako"
 rust-version = "1.94.1"
 
 [workspace.dependencies]

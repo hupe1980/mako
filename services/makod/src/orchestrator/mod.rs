@@ -13,4 +13,5 @@ pub mod dvgw_ingest;
 pub mod edifact_renderer;
 pub mod ingest_dispatcher;
 pub mod netzzugang;
+pub mod process_family;
 pub mod projection_worker;

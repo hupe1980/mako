@@ -58,14 +58,14 @@ use mako_gabi_gas::{
     GaBiGasMehrMindermengenWorkflow, GaBiGasNominationWorkflow, NominationCommand,
 };
 use mako_geli_gas::{
-    GeliGasDatanabrufWorkflow, GeliGasLfAnmeldungWorkflow, GeliGasLfStornierungWorkflow,
+    GeliGasDatenabrufWorkflow, GeliGasLfAnmeldungWorkflow, GeliGasLfStornierungWorkflow,
     GeliGasMsconsWorkflow, GeliGasPartinWorkflow, GeliGasSperrprozesseInvoicWorkflow,
     GeliGasSperrungLfWorkflow, GeliGasSperrungNbWorkflow, GeliGasStornierungWorkflow,
     GeliGasSupplierChangeWorkflow,
 };
 use mako_gpke::{
     GpkeAbrechnungWorkflow, GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
-    GpkeAnkuendigungZuordnungLfWorkflow, GpkeBeendigungZuordnungWorkflow, GpkeDatanabrufWorkflow,
+    GpkeAnkuendigungZuordnungLfWorkflow, GpkeBeendigungZuordnungWorkflow, GpkeDatenabrufWorkflow,
     GpkeKonfigurationAenderungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
     GpkeLfAnmeldungWorkflow, GpkeMesswerteLieferungWorkflow, GpkeNeuanlageWorkflow,
     GpkePartinWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow, GpkeStornierungWorkflow,
@@ -154,8 +154,9 @@ impl IngestOutcome {
 /// [`mako_engine::workflow::OccupiesBusinessKey::occupies_business_key`].
 ///
 /// A parameter rather than a `W::State: OccupiesBusinessKey` bound because only
-/// a handful of the ~45 workflow states dispatched here implement that trait,
-/// and the verdict is domain knowledge that belongs in the workflow's own crate
+/// 13 of the 63 workflow names dispatched here supply a verdict at all — 6
+/// through that trait, 7 through an inherent `!is_terminal()` closure — and the
+/// verdict is domain knowledge that belongs in the workflow's own crate
 /// — makod only *consumes* what a crate has already published (that trait, or an
 /// inherent `is_terminal()`). Families that publish neither pass `None` and keep
 /// the presence-based behaviour.
@@ -690,6 +691,15 @@ impl EdifactIngestDispatcher {
     /// correlated open process (an orphan reply is still `Skipped` downstream, as
     /// before). This never mis-books: it only redirects a reply to the family that
     /// already owns the invoice it answers.
+    ///
+    /// **INVOIC 31004 needs no override yet.** The Stornorechnung is
+    /// Sparte-neutral (INVOIC AHB §3.1.2) and cancels an invoice from any
+    /// billing family, so it looks like the same collision — but today it is
+    /// single-owner: only `mako_wim::invoic` registers it (`WIM_INVOIC_PIDS`),
+    /// and `wim-invoic` is the one arm that dispatches it. An override becomes
+    /// necessary the moment a second domain crate owns its own invoices' Storno,
+    /// because the static route would then send half the Stornos to the wrong
+    /// family.
     async fn correlation_route(&self, msg: &AnyMessage, static_name: &str) -> Option<String> {
         let key = match msg {
             AnyMessage::Remadv(_) => extract_invoice_ref_from_remadv(msg),
@@ -1246,12 +1256,25 @@ impl EdifactIngestDispatcher {
             .await?;
 
         let identity = process.identity();
+        // Best-effort per key — one failure must not stop the others, and the
+        // process is already running — but never silent: `register_extra_keys`
+        // a few lines up logs the same failure, and an index this path drops is
+        // an answer that later reports `process_not_found`.
         for k in extra_keys.iter().filter(|k| !k.is_empty()) {
-            let _ = self
+            if let Err(e) = self
                 .store
                 .as_process_registry()
                 .register_correlated(self.tenant_id, k, process_id, identity.clone())
-                .await;
+                .await
+            {
+                tracing::warn!(
+                    %process_id,
+                    key = %k,
+                    error = %e,
+                    "ingest dispatcher: correlation-key registration failed — a later message \
+                     quoting this reference cannot be correlated back to the process",
+                );
+            }
         }
 
         Ok(IngestOutcome::Dispatched {

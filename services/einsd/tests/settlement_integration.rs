@@ -216,8 +216,10 @@ async fn get_json(app: &axum::Router, uri: &str) -> (StatusCode, String) {
 
 /// Insert a plant directly.
 ///
-/// `foerderendedatum` is NOT NULL — the service derives it at registration from
-/// the commissioning date, so a direct insert has to supply it too.
+/// `foerderendedatum` is nullable — a KWKG plant has none, because § 8 KWKG caps
+/// the Zuschlag in Vollbenutzungsstunden rather than on a date. These fixtures
+/// are EEG plants, for which the service derives it at registration from the
+/// commissioning date, so a direct insert supplies it too.
 async fn seed_plant(pool: &PgPool, tr_id: &str, tenant: &str, extra_cols: &str, extra_vals: &str) {
     // The plant's operator is per tenant, so a second tenant needs its own.
     seed_operator_for(pool, "EB-1", tenant, "REGELBESTEUERUNG").await;
@@ -1814,7 +1816,7 @@ async fn a_correction_without_sect51_figures_keeps_the_accrual() {
     );
 
     // The chain is visible: the history lists both rows and says which is which.
-    let receipts = einsd::pg::list_settlement_receipts(&pool, TENANT, "TR-KORR", 10)
+    let receipts = einsd::pg::list_settlement_receipts(&pool, TENANT, "TR-KORR", None, None, 10)
         .await
         .expect("list receipts");
     assert_eq!(receipts.len(), 2);
@@ -1834,11 +1836,10 @@ async fn a_correction_without_sect51_figures_keeps_the_accrual() {
 
 /// The §48 Abs. 2a Volleinspeisung rates must actually be in the table.
 ///
-/// `verguetungsform` is part of the key on both sides. Without it the
-/// Volleinspeisung rows collide with the Überschuss rows on
-/// `(erzeugungsart, leistung_min_kwp, billing_start)`, the seed's
-/// `ON CONFLICT DO NOTHING` drops every one of them, the migration still
-/// reports success — and the lookup could not find them in any case.
+/// `verguetungsform` is part of the key on both sides: the § 48 Abs. 2a
+/// Volleinspeisung value and the Überschuss value of the same band and window
+/// are two different rates, and a lookup that omits the Vergütungsform would
+/// pick between them by row order.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn volleinspeisung_rates_survive_the_seed_and_are_selectable() {
@@ -1856,7 +1857,9 @@ async fn volleinspeisung_rates_survive_the_seed_and_are_selectable() {
     )
     .await
     .expect("lookup");
-    assert_eq!(ueberschuss, Some(dec!(8.1100)), "§48 Abs. 1 Nr. 1a");
+    // § 48 Abs. 2 Nr. 1 base 8,60 ct, one § 49 step, less the § 53 Abs. 1 Nr. 2
+    // deduction: 8,51 − 0,4.
+    assert_eq!(ueberschuss, Some(dec!(8.1100)), "§48 Abs. 2 Nr. 1 EEG 2023");
 
     let voll = einsd::pg::lookup_verguetungssatz(
         &pool,
@@ -1867,21 +1870,26 @@ async fn volleinspeisung_rates_survive_the_seed_and_are_selectable() {
     )
     .await
     .expect("lookup");
+    // (8,60 + 4,80) × 0,99 = 13,266 → 13,27, less 0,4.
     assert_eq!(
         voll,
-        Some(dec!(12.9100)),
-        "§48 Abs. 2a — the Volleinspeisung bonus row must exist and be reachable"
+        Some(dec!(12.8700)),
+        "§48 Abs. 2 Nr. 1 + Abs. 2a Nr. 1 EEG 2023"
     );
 }
 
-/// A KWKG plant capped in Vollbenutzungsstunden must not be given an EEG
-/// twenty-year Förderende.
+/// A KWKG plant must not be given an EEG twenty-year Förderende.
 ///
-/// §8 KWKG 2023 caps a plant above 2 MW in full-load hours, with a fifteen
-/// calendar-year backstop (Abs. 4) — not the EEG's `inbetriebnahme + 20 years`.
+/// § 8 KWKG measures the Förderdauer of every KWK plant in Vollbenutzungsstunden
+/// (Abs. 1–3) and caps „pro Kalenderjahr […] für **bis zu**" a falling number of
+/// them (Abs. 4). Both are counters against generation and Abs. 4 is a ceiling
+/// rather than a draw rate, so no date follows from either: the register stores
+/// none and `kwk_foerderdauer_h` ends the Zuschlag. Writing a date derived from
+/// the Abs. 4 caps would terminate a plant that runs fewer hours a year than the
+/// cap allows — five years early for a 30 000-h plant at 2 000 h/a.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn an_hour_capped_kwkg_plant_gets_the_kwkg_backstop() {
+async fn an_hour_capped_kwkg_plant_has_no_calendar_foerderende() {
     let Some((pool, _pg)) = test_pool("kwkg_foerderende").await else {
         return;
     };
@@ -1916,9 +1924,13 @@ async fn an_hour_capped_kwkg_plant_gets_the_kwkg_backstop() {
         .expect("fetch")
         .expect("plant exists");
     assert_eq!(
-        anlage.foerderendedatum,
-        time::macros::date!(2039 - 06 - 01),
-        "§8 Abs. 4 KWKG 2023: fifteen calendar years, not the EEG twenty"
+        anlage.foerderendedatum, None,
+        "§ 8 KWKG gives a KWK plant no calendar Förderende"
+    );
+    assert_eq!(
+        anlage.kwk_foerderdauer_h,
+        Some(30_000),
+        "the Vollbenutzungsstunden are what end it"
     );
 }
 
@@ -3115,7 +3127,7 @@ async fn an_unsettleable_registration_is_refused_with_the_field_named() {
             "a solar plant on the KWKG model",
             serde_json::json!({
                 "settlement_model": "KWKG_ZUSCHLAG",
-                "kwk_foerderdauer_years": 10,
+                "kwk_anlagenart": "NEU",
             }),
             "disagree",
         ),
@@ -3311,12 +3323,16 @@ async fn a_corrected_away_kwkg_month_releases_the_counter() {
         }
     };
 
-    settle(dec!(50000)).await;
-    assert_eq!(counter().await, dec!(50000));
+    // Every quantity here stays under the § 8 Abs. 4 KWKG Jahreskontingent —
+    // for this 9,5 kW plant in 2026 that is 9,5 × 3 300 h = 31 350 kWh — so the
+    // annual cap cannot clip a month and confound what this test is about. The
+    // cap has its own tests; this one is only about the release.
+    settle(dec!(20000)).await;
+    assert_eq!(counter().await, dec!(20000));
 
     // A correction that lowers the month gives the difference back.
-    settle(dec!(20000)).await;
-    assert_eq!(counter().await, dec!(20000), "a lowered month must release");
+    settle(dec!(8000)).await;
+    assert_eq!(counter().await, dec!(8000), "a lowered month must release");
 
     // And one that removes the month entirely releases all of it — this is the
     // case the `period.kwk_kwh > 0` guard silently dropped.
@@ -3326,6 +3342,121 @@ async fn a_corrected_away_kwkg_month_releases_the_counter() {
         dec!(0),
         "a month corrected away must not keep burning the §8 KWKG limit"
     );
+}
+
+/// **§ 7 Abs. 1 and Abs. 2 KWKG are different claims, and neither is a default.**
+///
+/// Abs. 1 prices KWK-Strom „der in ein Netz der allgemeinen Versorgung
+/// eingespeist wird" at 8 down to 3,4 ct; Abs. 2 prices KWK-Strom that is not at
+/// 5,41 down to 1 ct, and which Nummer of § 6 Abs. 3 opens the claim decides
+/// which of its three ladders applies. Assuming Abs. 1 where the register does
+/// not say pays a plant up to eight times the figure its own Absatz gives it.
+///
+/// The § 7 computation also has to reach a plant that carries a stored rate.
+/// Only a KWKAusV award — a figure the plant won, named by its
+/// `ausschreibungs_zuschlag_id` — displaces the ladder.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_kwk_verwendung_decides_the_sect7_ladder() {
+    use rust_decimal::dec;
+    let Some((pool, _pg)) = test_pool("kwk_verwendung").await else {
+        return;
+    };
+    seed_plant(
+        &pool,
+        "TR-KWKV",
+        TENANT,
+        ", kwk_foerderdauer_h, kwk_anlagenart, verguetungsform",
+        ", 30000, 'NEU', 'KWK_ZUSCHLAG'",
+    )
+    .await;
+    // 200 kW spans the first three bands of both ladders, so the two disagree.
+    sqlx::query(
+        "UPDATE eeg_anlagen
+            SET erzeugungsart = 'KWKG', settlement_model = 'KWKG_ZUSCHLAG', eeg_gesetz = 0,
+                leistung_kwp = 200, verguetungssatz_ct = 0
+          WHERE tr_id = 'TR-KWKV'",
+    )
+    .execute(&pool)
+    .await
+    .expect("make it a 200 kW KWKG plant");
+
+    // 1 000 kWh a month, so the settled EUR is the ct/kWh rate times ten.
+    let settle = || {
+        let pool = pool.clone();
+        async move {
+            let anlage = einsd::pg::fetch_anlage(&pool, TENANT, "TR-KWKV")
+                .await
+                .expect("fetch")
+                .expect("plant exists");
+            let input = einsd::pg::build_settle_input(
+                TENANT,
+                &anlage,
+                &regelbesteuert(),
+                2026,
+                6,
+                einsd::pg::SettleOverrides {
+                    einspeisemenge_kwh: Some(dec!(1000)),
+                    ..Default::default()
+                },
+            )
+            .expect("build settle input");
+            let mut tx = pool.begin().await.expect("begin");
+            let res = einsd::pg::run_settlement(&mut tx, input).await;
+            match res {
+                Ok(r) => {
+                    tx.commit().await.expect("commit");
+                    Ok(r.settlement_eur)
+                }
+                Err(e) => {
+                    tx.rollback().await.expect("rollback");
+                    Err(format!("{e:#}"))
+                }
+            }
+        }
+    };
+    let set_verwendung = |v: Option<&'static str>| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query("UPDATE eeg_anlagen SET kwk_verwendung = $1 WHERE tr_id = 'TR-KWKV'")
+                .bind(v)
+                .execute(&pool)
+                .await
+                .expect("set kwk_verwendung");
+        }
+    };
+
+    // With no Verwendung and no stored rate there is nothing to settle on, and
+    // the refusal names the column rather than paying 0 ct/kWh in silence.
+    let msg = settle().await.expect_err("an unpriceable plant is refused");
+    assert!(msg.contains("kwk_verwendung"), "{msg}");
+
+    // § 7 Abs. 1: 50×8 + 50×6 + 100×5 over 200 kW = 6 ct → 60.00 EUR.
+    set_verwendung(Some("NETZ_DER_ALLGEMEINEN_VERSORGUNG")).await;
+    assert_eq!(settle().await.expect("prices"), Some(dec!(60.00)));
+
+    // § 7 Abs. 2 Nr. 2: 50×4 + 50×3 + 100×2 over 200 kW = 2,75 ct → 27.50 EUR,
+    // less than half the Abs. 1 figure for the same plant.
+    set_verwendung(Some("NICHT_EINGESPEIST_KUNDENANLAGE")).await;
+    assert_eq!(settle().await.expect("prices"), Some(dec!(27.50)));
+
+    // A rate stored on the plant row does not displace the ladder.
+    sqlx::query("UPDATE eeg_anlagen SET verguetungssatz_ct = 3.00 WHERE tr_id = 'TR-KWKV'")
+        .execute(&pool)
+        .await
+        .expect("store a rate");
+    assert_eq!(settle().await.expect("prices"), Some(dec!(27.50)));
+
+    // A KWKAusV award does: it is a figure the plant won, not a § 7 value.
+    sqlx::query(
+        "UPDATE eeg_anlagen
+            SET ausschreibungs_zuschlag_id = 'KWKAusV-2026-1', zuschlagswert_ct = 5.50
+          WHERE tr_id = 'TR-KWKV'",
+    )
+    .execute(&pool)
+    .await
+    .expect("record the award");
+    assert_eq!(settle().await.expect("prices"), Some(dec!(55.00)));
 }
 
 /// Two overlapping settlements of the same plant must not each spend the same
@@ -3516,4 +3647,116 @@ async fn corrections_do_not_duplicate_the_untouched_original_in_the_audit_trail(
     .await
     .expect("initial receipt still present");
     assert_eq!(initial, dec!(1100));
+}
+
+// ── GET /settlements?year=&month= actually filters ───────────────────────────
+
+/// `SettlementsQuery` accepted `limit` alone, so `?year=2025&month=3` was
+/// dropped on the floor: the caller asking for one Abrechnungsmonat got the
+/// whole history back with a 200 and nothing to tell them the filter had not
+/// been applied. A wrong answer that looks like a right one.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_settlements_query_filters_by_year_and_month() {
+    let Some((pool, _pg)) = test_pool("settlements_filter").await else {
+        return;
+    };
+
+    for (year, month) in [(2025i16, 3i16), (2025, 4), (2026, 3)] {
+        sqlx::query(
+            "INSERT INTO settlement_receipts
+                 (tr_id, tenant, billing_year, billing_month, settlement_model, status)
+             VALUES ('TR-FILTER', $1, $2, $3, 'DIREKTVERMARKTUNG', 'calculated')",
+        )
+        .bind(TENANT)
+        .bind(year)
+        .bind(month)
+        .execute(&pool)
+        .await
+        .expect("seed receipt");
+    }
+
+    let period = |rows: &[serde_json::Value]| -> Vec<(i64, i64)> {
+        rows.iter()
+            .map(|r| {
+                (
+                    r["billing_year"].as_i64().expect("billing_year"),
+                    r["billing_month"].as_i64().expect("billing_month"),
+                )
+            })
+            .collect()
+    };
+
+    let all = einsd::pg::list_settlement_receipts(&pool, TENANT, "TR-FILTER", None, None, 50)
+        .await
+        .expect("unfiltered");
+    assert_eq!(all.len(), 3);
+
+    // Both filters: exactly one Abrechnungsmonat.
+    let one =
+        einsd::pg::list_settlement_receipts(&pool, TENANT, "TR-FILTER", Some(2025), Some(3), 50)
+            .await
+            .expect("year+month");
+    assert_eq!(period(&one), vec![(2025, 3)]);
+
+    // Year alone: every month of it.
+    let year =
+        einsd::pg::list_settlement_receipts(&pool, TENANT, "TR-FILTER", Some(2025), None, 50)
+            .await
+            .expect("year only");
+    assert_eq!(period(&year), vec![(2025, 4), (2025, 3)]);
+
+    // Month alone: that month across years — the year-on-year comparison.
+    let month = einsd::pg::list_settlement_receipts(&pool, TENANT, "TR-FILTER", None, Some(3), 50)
+        .await
+        .expect("month only");
+    assert_eq!(period(&month), vec![(2026, 3), (2025, 3)]);
+}
+
+/// …and the HTTP surface honours it, rather than deserialising the parameters
+/// into a struct that has no field for them.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_settlements_endpoint_honours_year_and_month() {
+    let Some((pool, _pg)) = test_pool("settlements_filter_http").await else {
+        return;
+    };
+    for (year, month) in [(2025i16, 3i16), (2026, 7)] {
+        sqlx::query(
+            "INSERT INTO settlement_receipts
+                 (tr_id, tenant, billing_year, billing_month, settlement_model, status)
+             VALUES ('TR-HTTP', $1, $2, $3, 'DIREKTVERMARKTUNG', 'calculated')",
+        )
+        .bind(TENANT)
+        .bind(year)
+        .bind(month)
+        .execute(&pool)
+        .await
+        .expect("seed receipt");
+    }
+
+    let app = test_router(pool.clone());
+    let (status, body) = get_json(
+        &app,
+        "/api/v1/anlagen/TR-HTTP/settlements?year=2026&month=7",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&body).expect("an array of receipts");
+    assert_eq!(rows.len(), 1, "the filter must be applied: {body}");
+    assert_eq!(rows[0]["billing_year"], 2026);
+    assert_eq!(rows[0]["billing_month"], 7);
+
+    // An out-of-range month is refused rather than silently matching nothing.
+    let (status, _) = get_json(&app, "/api/v1/anlagen/TR-HTTP/settlements?month=13").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // An unknown parameter is refused rather than ignored — the same failure
+    // mode one level up.
+    let (status, _) = get_json(&app, "/api/v1/anlagen/TR-HTTP/settlements?jahr=2026").await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a misspelt filter must not silently return everything"
+    );
 }

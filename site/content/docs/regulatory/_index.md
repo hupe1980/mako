@@ -5,21 +5,17 @@ weight = 5
 sort_by = "weight"
 template = "section.html"
 page_template = "page.html"
-[extra]
-mermaid = true
 +++
-# Regulatory
-
 BDEW market role model and identifier formats, BNetzA ruling index (BK6 / BK7),
 business-level process catalog, APERAK Fristen, and the complete
 Prüfidentifikator (PID) reference covering all 17 EDI@Energy message types.
 
 | Page | Content |
 |---|---|
-| [Domain Model](domain-model) | Party roles (LF, NB, MSB, BKV, …), market objects (MaLo, MeLo, NeLo, NeBe), identifier formats, EDIFACT encoding |
-| [BNetzA Regulatory Reference](bnetza) | BK6 / BK7 rulings, APERAK Fristen, process scopes |
-| [Process Catalog](processes) | Business-level catalog of all MaKo processes — GPKE, WiM, GeLi Gas, MaBiS, Redispatch 2.0 — with message flows and implementation status |
-| [PID Reference](pid-reference) | Complete Prüfidentifikator table for all process families, including the DVGW gas transport PIDs |
+| [Domain Model](@/docs/architecture/domain-model.md) | Party roles (LF, NB, MSB, BKV, …), market objects (MaLo, MeLo, NeLo, NeBe), identifier formats, EDIFACT encoding |
+| [BNetzA Regulatory Reference](@/docs/regulatory/bnetza.md) | BK6 / BK7 rulings, APERAK Fristen, process scopes |
+| [Process Catalog](@/docs/reference/processes.md) | Business-level catalog of all MaKo processes — GPKE, WiM, GeLi Gas, MaBiS, Redispatch 2.0 — with message flows and implementation status |
+| [PID Reference](@/docs/regulatory/pid-reference.md) | Complete Prüfidentifikator table for all process families, including the DVGW gas transport PIDs |
 
 ---
 
@@ -49,7 +45,7 @@ graph LR
     subgraph transport ["Transport & Metering"]
         AS4["AS4-Profil v1.2<br/>BrainpoolP256r1"]
         BSI["BSI TR-03109<br/>iMSys · §14a CLS"]
-        MsbG["§ 60 Abs. 2 MsbG<br/>Plausibilisierung · Ersatzwert"]
+        MsbG["§ 60 Abs. 1 MsbG<br/>Aufbereitung · Ersatzwert"]
         NNNEV["StromNEV/GasNEV/KAV<br/>Grid charges"]
     end
 
@@ -82,7 +78,7 @@ graph LR
 | **Residuallast** (ordinary supply, no special §) | Strom | `metering` crate (`Residual` rule), `edmd` |
 | **EEG 2000–2023 / KWKG** (Feed-in settlement) | Strom | `eeg-billing` crate (10 schemes), `einsd` |
 | **§14 Abs. 2 UStG** (Gutschriftverfahren — NB issues the EEG Gutschrift) | Strom | `eeg-billing` (`settlement_to_gutschrift`), `einsd` (`rechnung_json`) |
-| **§ 60 Abs. 2 MsbG** (Plausibilisierung und Ersatzwertbildung im Smart-Meter-Gateway) | Both | `metering` crate (V01–V09/V11/V12 validation, `fill_gaps`), `edmd` |
+| **§ 60 Abs. 1 MsbG** (der MSB hat die erhobenen Daten *aufzubereiten* und zu übermitteln — Plausibilisierung und Ersatzwertbildung; Abs. 2 Satz 2 lets that happen outside the Smart-Meter-Gateway) | Both | `metering` crate (V01–V09/V11/V12 validation, `fill_gaps`), `edmd` |
 | **§ 40a Abs. 2 EnWG** (Verbrauchsschätzung) · **§ 13 Abs. 1 StromGVV** (Abschlagshöhe) | Strom | `metering::project_annual_consumption`, `edmd /api/v1/forecast` |
 | **BSI TR-03109** (iMSys / SMGW lifecycle, §14a CLS channels) | Strom | `metering` (`SmgwSession`, `ClsChannel`), `edmd` |
 | **StromNEV / GasNEV / KAV** (grid charge settlement) | Both | `grid-billing` crate, `netzbilanzd` |

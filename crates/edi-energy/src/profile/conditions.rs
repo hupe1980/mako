@@ -13,7 +13,13 @@
 //! | `[901]`–`[999]` | Formatbedingung | does not gate presence |
 //! | `[2000]`–`[2499]` | Wiederholbarkeit | does not gate presence |
 //! | `[UB1]`–`[UB3]` | Zeitpunktangabe | does not gate presence |
-//! | `[nP…]` | Paket | a choice among alternatives |
+//! | `[nPa..b]` | Paket | yes — through its Paketvoraussetzung |
+//!
+//! A Paket citation is a macro: `[2P0..1]` stands for the Paketvoraussetzung
+//! the AHB's Paketübersicht prints for `2P`, which is an expression of the
+//! same shape (Kap. 6.9.1). The `a..b` suffix is the Paketmerkmal, the
+//! minimal and maximal repetition of the marked Qualifier/Code within the
+//! Paket (Kap. 6.9.2); [`Paket`] reads it.
 //!
 //! A Voraussetzung is checkable by definition ("werden nur Informationen
 //! verwendet, die an anderer Stelle im Anwendungsfall vorhanden sind", Kap.
@@ -80,8 +86,9 @@ pub struct Status {
 impl Status {
     /// Parse `Muss [10] ∧ [11]`, `X`, `M [7]` …
     ///
-    /// Returns `None` for text that does not start with a status word — an
-    /// extraction artefact, which the validator treats as unknown.
+    /// Returns `None` for text that does not start with a status word and for
+    /// an expression that does not read — both extraction artefacts, which the
+    /// validator treats as unknown rather than as an unconditional status.
     #[must_use]
     pub fn parse(text: &str) -> Option<Self> {
         let mut it = text.split_whitespace();
@@ -100,7 +107,7 @@ impl Status {
         let expr = if rest.is_empty() {
             None
         } else {
-            Expr::parse(&rest.join(" "))
+            Some(Expr::parse(&rest.join(" ")).ok()?)
         };
         Some(Self { kind, expr })
     }
@@ -111,6 +118,12 @@ impl Status {
 pub enum Expr {
     /// `[10]`, `[UB1]`, `[1P0..1]`
     Cond(String),
+    /// Juxtaposition — `[931] [494]`. Allgemeine Festlegungen 6.1d Kap. 6.4.6:
+    /// „Zwischen Formatbedingungen und Voraussetzungen wird kein Operator
+    /// genutzt“, and the Formatbedingung applies when the Voraussetzungen
+    /// right of it are met. It binds tighter than `∧`, so the `[901]` of
+    /// `[2] ∧ ([3] ∨ [4])[901] ∧ [555]` attaches to the bracketed group.
+    Then(Vec<Expr>),
     /// `∧` — all.
     And(Vec<Expr>),
     /// `∨` — at least one.
@@ -119,16 +132,138 @@ pub enum Expr {
     Xor(Vec<Expr>),
 }
 
-impl Expr {
-    /// Parse an expression of bracketed Bedingungen joined by `∧`, `∨`, `⊻`
-    /// with parentheses. Mixed operators without parentheses group left to
-    /// right (the AHBs parenthesise them).
+/// Why an expression does not read.
+///
+/// The AHB tables are extracted from a PDF, where a column break can cut an
+/// expression in half. Such a fragment parses into a different, valid-looking
+/// expression unless it is refused here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExprError {
+    /// A character that is neither a Bedingung, an operator nor a parenthesis.
+    Stray(char),
+    /// `[` with no `]`.
+    Unterminated,
+    /// `[]`.
+    EmptyCondition,
+    /// An operator with nothing to join, or two operators in a row.
+    MissingOperand,
+    /// The parentheses do not balance.
+    Parentheses,
+    /// No expression at all.
+    Empty,
+}
+
+impl fmt::Display for ExprError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Stray(c) => write!(f, "stray character {c:?}"),
+            Self::Unterminated => f.write_str("a `[` with no `]`"),
+            Self::EmptyCondition => f.write_str("an empty `[]`"),
+            Self::MissingOperand => f.write_str("an operator with no operand"),
+            Self::Parentheses => f.write_str("unbalanced parentheses"),
+            Self::Empty => f.write_str("no expression"),
+        }
+    }
+}
+
+/// Why an expression that reads cannot be evaluated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EvalError {
+    /// `∨` or `⊻` between a Voraussetzung and a Formatbedingung, a
+    /// Wiederholbarkeit or a Zeitpunktangabe. Allgemeine Festlegungen 6.1d
+    /// Kap. 6.4.6 joins a Formatbedingung to a Voraussetzung by juxtaposition
+    /// and a Zeitpunktangabe by `∧`; a choice between the two has no reading.
+    ChoiceOverNeutral,
+    /// A Paketvoraussetzung that leads back to its own Paket.
+    PaketCycle(String),
+    /// A Paketvoraussetzung that does not read.
+    PaketExpression(String, ExprError),
+}
+
+impl fmt::Display for EvalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ChoiceOverNeutral => f.write_str(
+                "∨/⊻ between a Voraussetzung and a Formatbedingung, Wiederholbarkeit or Zeitpunktangabe",
+            ),
+            Self::PaketCycle(p) => write!(f, "the Paketvoraussetzung of [{p}] cites [{p}]"),
+            Self::PaketExpression(p, e) => {
+                write!(f, "the Paketvoraussetzung of [{p}] does not read: {e}")
+            }
+        }
+    }
+}
+
+/// A Paket citation `[kPn..m]` (Allgemeine Festlegungen 6.1d Kap. 6.9.2).
+///
+/// `k` is the Paketkennzeichen, whose Paketvoraussetzung says whether the
+/// Paket applies at all; `n..m` is the Paketmerkmal, the minimal and maximal
+/// repetition of the marked Qualifier/Code within the Paket.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Paket {
+    /// The Paketkennzeichen, e.g. `1P`.
+    pub id: String,
+    /// Minimal repetition of the Qualifier/Code.
+    pub min: usize,
+    /// Maximal repetition; `None` where the AHB prints `n` for „nicht exakt
+    /// angegeben“.
+    pub max: Option<usize>,
+}
+
+impl Paket {
+    /// Read `1P0..1`, `10P1..1`, `2P0..n` — the text between the brackets.
     #[must_use]
-    pub fn parse(text: &str) -> Option<Self> {
-        let toks = lex(text);
+    pub fn parse(cited: &str) -> Option<Self> {
+        let p = cited.find('P')?;
+        let (number, rest) = cited.split_at(p);
+        if number.is_empty() || !number.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        let id = format!("{number}P");
+        let merkmal = &rest[1..];
+        if merkmal.is_empty() {
+            return Some(Self {
+                id,
+                min: 0,
+                max: None,
+            });
+        }
+        let (low, high) = merkmal.split_once("..")?;
+        Some(Self {
+            id,
+            min: low.parse().ok()?,
+            max: if high == "n" {
+                None
+            } else {
+                Some(high.parse().ok()?)
+            },
+        })
+    }
+}
+
+impl Expr {
+    /// Parse an expression of bracketed Bedingungen joined by `∧`, `∨`, `⊻`,
+    /// by juxtaposition, and grouped by parentheses.
+    ///
+    /// Juxtaposition binds tighter than the three operators. Mixed operators
+    /// group left to right; Allgemeine Festlegungen 6.1d Kap. 6.4.6 requires
+    /// parentheses there („ist eine Gewichtung durch Nutzung runder Klammern
+    /// vorgegeben“).
+    ///
+    /// # Errors
+    ///
+    /// When the text is not an expression — see [`ExprError`].
+    pub fn parse(text: &str) -> Result<Self, ExprError> {
+        let toks = lex(text)?;
+        if toks.is_empty() {
+            return Err(ExprError::Empty);
+        }
         let mut pos = 0;
         let e = parse_chain(&toks, &mut pos)?;
-        Some(e)
+        if pos != toks.len() {
+            return Err(ExprError::Parentheses);
+        }
+        Ok(e)
     }
 
     /// Every Bedingung number the expression cites.
@@ -139,20 +274,78 @@ impl Expr {
         out
     }
 
+    /// Every Paket the expression cites, with its Paketmerkmal.
+    #[must_use]
+    pub fn pakete(&self) -> Vec<Paket> {
+        self.cited()
+            .into_iter()
+            .filter(|id| ConditionKind::of(id) == ConditionKind::Paket)
+            .filter_map(Paket::parse)
+            .collect()
+    }
+
     fn collect<'a>(&'a self, out: &mut Vec<&'a str>) {
         match self {
             Expr::Cond(c) => out.push(c),
-            Expr::And(v) | Expr::Or(v) | Expr::Xor(v) => v.iter().for_each(|e| e.collect(out)),
+            Expr::Then(v) | Expr::And(v) | Expr::Or(v) | Expr::Xor(v) => {
+                for e in v {
+                    e.collect(out);
+                }
+            }
         }
     }
 
+    /// Whether every Bedingung this cites is a Hinweis.
+    ///
+    /// Allgemeine Festlegungen 6.1d Kap. 6.4.6: the part of a `⊻`/`∨`/`∧`
+    /// connection carrying a number between 500 and 899 „stellt … immer nur
+    /// einen Hinweis als solchen dar und ist damit nicht Bestandteil der
+    /// einzuhaltenden Voraussetzung“.
+    fn is_hinweis(&self) -> bool {
+        let cited = self.cited();
+        !cited.is_empty()
+            && cited
+                .iter()
+                .all(|id| ConditionKind::of(id) == ConditionKind::Hinweis)
+    }
+
+    /// Whether this cites anything that gates the place — a Voraussetzung or
+    /// a Paket. A Formatbedingung, a Wiederholbarkeit and a Zeitpunktangabe
+    /// do not (Kap. 6.4).
+    fn gates(&self) -> bool {
+        self.cited().iter().any(|id| {
+            matches!(
+                ConditionKind::of(id),
+                ConditionKind::Voraussetzung | ConditionKind::Paket
+            )
+        })
+    }
+
     /// Evaluate with `oracle` answering each Bedingung.
-    pub fn eval(&self, oracle: &mut dyn FnMut(&str) -> Truth) -> Truth {
+    ///
+    /// `Neutral` is the neutral element of `∧` and of juxtaposition. A `∨` or
+    /// `⊻` drops the Hinweis parts and then admits either all-`Neutral`
+    /// operands or none.
+    ///
+    /// # Errors
+    ///
+    /// When the oracle fails, or the expression joins a Voraussetzung and a
+    /// Formatbedingung, Wiederholbarkeit or Zeitpunktangabe by `∨`/`⊻`.
+    pub fn eval(
+        &self,
+        oracle: &mut dyn FnMut(&str) -> Result<Truth, EvalError>,
+    ) -> Result<Truth, EvalError> {
         match self {
             Expr::Cond(c) => oracle(c),
-            Expr::And(v) => {
-                let vals: Vec<Truth> = v.iter().map(|e| e.eval(oracle)).collect();
-                if vals.contains(&Truth::False) {
+            // Kap. 6.4.6: a Formatbedingung stands before the Voraussetzungen
+            // it applies under, and contributes nothing to whether the place
+            // is required — the same reading `∧` gives a neutral operand.
+            Expr::Then(v) | Expr::And(v) => {
+                let mut vals = Vec::with_capacity(v.len());
+                for e in v {
+                    vals.push(e.eval(oracle)?);
+                }
+                Ok(if vals.contains(&Truth::False) {
                     Truth::False
                 } else if vals.contains(&Truth::Unknown) {
                     Truth::Unknown
@@ -160,15 +353,11 @@ impl Expr {
                     Truth::Neutral
                 } else {
                     Truth::True
-                }
+                })
             }
             Expr::Or(v) => {
-                let vals: Vec<Truth> = v
-                    .iter()
-                    .map(|e| e.eval(oracle))
-                    .filter(|t| *t != Truth::Neutral)
-                    .collect();
-                if vals.is_empty() {
+                let vals = choice_values(v, oracle)?;
+                Ok(if vals.is_empty() {
                     Truth::Neutral
                 } else if vals.contains(&Truth::True) {
                     Truth::True
@@ -176,19 +365,18 @@ impl Expr {
                     Truth::Unknown
                 } else {
                     Truth::False
-                }
+                })
             }
+            // Kap. 6.4.6: „genau nur eine Bedingung bzw. eine geklammerte
+            // Aussage … darf erfüllt sein“ — two met operands settle it
+            // whatever the rest is.
             Expr::Xor(v) => {
-                let vals: Vec<Truth> = v
-                    .iter()
-                    .map(|e| e.eval(oracle))
-                    .filter(|t| *t != Truth::Neutral)
-                    .collect();
+                let vals = choice_values(v, oracle)?;
                 if vals.is_empty() {
-                    return Truth::Neutral;
+                    return Ok(Truth::Neutral);
                 }
                 let trues = vals.iter().filter(|t| **t == Truth::True).count();
-                if trues >= 2 {
+                Ok(if trues >= 2 {
                     Truth::False
                 } else if vals.contains(&Truth::Unknown) {
                     Truth::Unknown
@@ -196,31 +384,72 @@ impl Expr {
                     Truth::True
                 } else {
                     Truth::False
-                }
+                })
             }
         }
     }
 }
 
+/// The operands of a `∨`/`⊻` that carry a truth value.
+///
+/// Kap. 6.4.6 drops the Hinweis parts. What is left has to agree on whether
+/// it gates the place at all: a choice between a Voraussetzung and a
+/// Formatbedingung, a Wiederholbarkeit or a Zeitpunktangabe is not a choice
+/// the Allgemeine Festlegungen give a reading — they join a Formatbedingung
+/// by juxtaposition and a Zeitpunktangabe by `∧`. An operand that gates
+/// nothing and stands among its own kind is the neutral element.
+fn choice_values(
+    operands: &[Expr],
+    oracle: &mut dyn FnMut(&str) -> Result<Truth, EvalError>,
+) -> Result<Vec<Truth>, EvalError> {
+    let kept: Vec<&Expr> = operands.iter().filter(|e| !e.is_hinweis()).collect();
+    let gating = kept.iter().filter(|e| e.gates()).count();
+    if gating > 0 && gating < kept.len() {
+        return Err(EvalError::ChoiceOverNeutral);
+    }
+    let mut vals = Vec::with_capacity(kept.len());
+    for e in kept {
+        let t = e.eval(oracle)?;
+        if t != Truth::Neutral {
+            vals.push(t);
+        }
+    }
+    Ok(vals)
+}
+
+/// Binding strength: a citation, then juxtaposition, then the three operators.
+fn precedence(e: &Expr) -> u8 {
+    match e {
+        Expr::Cond(_) => 3,
+        Expr::Then(_) => 2,
+        Expr::And(_) | Expr::Or(_) | Expr::Xor(_) => 1,
+    }
+}
+
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fn operand(f: &mut fmt::Formatter<'_>, e: &Expr) -> fmt::Result {
+            if precedence(e) < 2 {
+                write!(f, "({e})")
+            } else {
+                write!(f, "{e}")
+            }
+        }
         fn join(f: &mut fmt::Formatter<'_>, v: &[Expr], op: &str) -> fmt::Result {
             for (i, e) in v.iter().enumerate() {
                 if i > 0 {
-                    write!(f, " {op} ")?;
+                    write!(f, "{op}")?;
                 }
-                match e {
-                    Expr::Cond(_) => write!(f, "{e}")?,
-                    _ => write!(f, "({e})")?,
-                }
+                operand(f, e)?;
             }
             Ok(())
         }
         match self {
             Expr::Cond(c) => write!(f, "[{c}]"),
-            Expr::And(v) => join(f, v, "∧"),
-            Expr::Or(v) => join(f, v, "∨"),
-            Expr::Xor(v) => join(f, v, "⊻"),
+            Expr::Then(v) => join(f, v, " "),
+            Expr::And(v) => join(f, v, " ∧ "),
+            Expr::Or(v) => join(f, v, " ∨ "),
+            Expr::Xor(v) => join(f, v, " ⊻ "),
         }
     }
 }
@@ -235,7 +464,7 @@ enum Tok {
     Close,
 }
 
-fn lex(text: &str) -> Vec<Tok> {
+fn lex(text: &str) -> Result<Vec<Tok>, ExprError> {
     let mut out = Vec::new();
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0;
@@ -246,7 +475,14 @@ fn lex(text: &str) -> Vec<Tok> {
                 while i < chars.len() && chars[i] != ']' {
                     i += 1;
                 }
-                out.push(Tok::Cond(chars[start..i.min(chars.len())].iter().collect()));
+                if i >= chars.len() {
+                    return Err(ExprError::Unterminated);
+                }
+                let id: String = chars[start..i].iter().collect();
+                if id.trim().is_empty() {
+                    return Err(ExprError::EmptyCondition);
+                }
+                out.push(Tok::Cond(id));
                 i += 1;
             }
             '∧' => {
@@ -269,53 +505,54 @@ fn lex(text: &str) -> Vec<Tok> {
                 out.push(Tok::Close);
                 i += 1;
             }
-            _ => i += 1,
+            c if c.is_whitespace() => i += 1,
+            c => return Err(ExprError::Stray(c)),
         }
     }
-    out
+    Ok(out)
 }
 
-fn parse_atom(toks: &[Tok], pos: &mut usize) -> Option<Expr> {
-    match toks.get(*pos)? {
-        Tok::Cond(c) => {
+fn parse_atom(toks: &[Tok], pos: &mut usize) -> Result<Expr, ExprError> {
+    match toks.get(*pos) {
+        Some(Tok::Cond(c)) => {
             *pos += 1;
-            Some(Expr::Cond(c.clone()))
+            Ok(Expr::Cond(c.clone()))
         }
-        Tok::Open => {
+        Some(Tok::Open) => {
             *pos += 1;
             let inner = parse_chain(toks, pos)?;
-            if toks.get(*pos) == Some(&Tok::Close) {
-                *pos += 1;
+            if toks.get(*pos) != Some(&Tok::Close) {
+                return Err(ExprError::Parentheses);
             }
-            Some(inner)
-        }
-        // A stray operator or close paren: skip it.
-        _ => {
             *pos += 1;
-            parse_atom(toks, pos)
+            Ok(inner)
         }
+        _ => Err(ExprError::MissingOperand),
     }
 }
 
-fn parse_chain(toks: &[Tok], pos: &mut usize) -> Option<Expr> {
-    let mut acc = parse_atom(toks, pos)?;
-    while let Some(op) = toks.get(*pos) {
-        let op = match op {
-            Tok::And | Tok::Or | Tok::Xor => op.clone(),
-            Tok::Close => break,
-            // Two conditions with no operator between them (`X [931] [494]`)
-            // are both required.
-            Tok::Cond(_) | Tok::Open => Tok::And,
-        };
-        if matches!(op, Tok::And | Tok::Or | Tok::Xor)
-            && toks.get(*pos) != Some(&Tok::Cond(String::new()))
-            && matches!(toks.get(*pos), Some(Tok::And | Tok::Or | Tok::Xor))
-        {
-            *pos += 1;
-        }
-        let Some(rhs) = parse_atom(toks, pos) else {
-            break;
-        };
+/// A maximal run of adjacent operands — `[931] [494]`, `([3] ∨ [4])[901]`.
+fn parse_juxtaposition(toks: &[Tok], pos: &mut usize) -> Result<Expr, ExprError> {
+    let mut items = vec![parse_atom(toks, pos)?];
+    while matches!(toks.get(*pos), Some(Tok::Cond(_) | Tok::Open)) {
+        items.push(parse_atom(toks, pos)?);
+    }
+    if items.len() == 1 {
+        Ok(items.remove(0))
+    } else {
+        Ok(Expr::Then(items))
+    }
+}
+
+fn parse_chain(toks: &[Tok], pos: &mut usize) -> Result<Expr, ExprError> {
+    let mut acc = parse_juxtaposition(toks, pos)?;
+    while let Some(op) = toks
+        .get(*pos)
+        .filter(|t| matches!(t, Tok::And | Tok::Or | Tok::Xor))
+        .cloned()
+    {
+        *pos += 1;
+        let rhs = parse_juxtaposition(toks, pos)?;
         acc = match (op, acc) {
             (Tok::And, Expr::And(mut v)) => {
                 v.push(rhs);
@@ -334,7 +571,7 @@ fn parse_chain(toks: &[Tok], pos: &mut usize) -> Option<Expr> {
             (_, a) => Expr::Xor(vec![a, rhs]),
         };
     }
-    Some(acc)
+    Ok(acc)
 }
 
 /// The value of a Bedingung.
@@ -590,15 +827,46 @@ pub fn is_precondition(text: &str) -> bool {
     t.starts_with("wenn ") || t.starts_with("falls ") || t.starts_with("sofern ")
 }
 
+/// `SG9` — or the AHB's `S9` — as a group name.
+fn group_name(word: &str) -> Option<String> {
+    let n = word.strip_prefix("SG").or_else(|| word.strip_prefix('S'))?;
+    (!n.is_empty() && n.chars().all(|c| c.is_ascii_digit())).then(|| format!("SG{n}"))
+}
+
+/// The group a demonstrative points at — „in dieser SG8", „im selben SG12".
+fn named_scope(words: &[&str]) -> Option<String> {
+    words
+        .windows(2)
+        .filter(|w| {
+            matches!(
+                w[0],
+                "dieser" | "diesem" | "diese" | "derselben" | "demselben" | "dieselbe" | "selben"
+            )
+        })
+        .find_map(|w| group_name(w[1].trim_end_matches([',', '.', ';'])))
+}
+
+/// Whether a word names a qualified segment — `NAD+MS`, `PIA+5`,
+/// `CCI+Z30++Z07`: three uppercase letters and at least one qualifier.
+fn names_qualified_segment(word: &str) -> bool {
+    let word = word.trim_end_matches([',', '.', ';', ')']);
+    let Some((tag, rest)) = word.split_once('+') else {
+        return false;
+    };
+    !rest.is_empty() && tag.len() == 3 && tag.chars().all(|c| c.is_ascii_uppercase())
+}
+
 /// The group a Voraussetzung names as its scope and the index of the word that
 /// carries the segment pattern (`PIA+Z02`, `QTY`).
 ///
 /// „SG9" — or the AHB's „S9" — names a group; the first one named is the scope
-/// („in derselben SG9 LIN das SG10 DTM+7 …"). A bare tag right after a group
-/// that is followed by an article („SG27 LIN ein PIA+Z02", „S9 LIN das SG10
-/// DTM+7") only names the group; the pattern comes later.
+/// („in derselben SG9 LIN das SG10 DTM+7 …"), unless a demonstrative points at
+/// another one („Wenn SG10 CCI+6++ZA8 … in dieser SG8 vorhanden"), which names
+/// the scope wherever it stands. A bare tag right after a group that is
+/// followed by an article („SG27 LIN ein PIA+Z02", „S9 LIN das SG10 DTM+7")
+/// only names the group; the pattern comes later.
 fn locate_pattern(words: &[&str]) -> (Scope, Option<usize>) {
-    let mut scope = Scope::Message;
+    let mut scope = named_scope(words).map_or(Scope::Message, Scope::Group);
     let mut tag_idx: Option<usize> = None;
     let mut after_group = false;
     let is_tag = |w: &str| {
@@ -609,12 +877,9 @@ fn locate_pattern(words: &[&str]) -> (Scope, Option<usize>) {
         let w = w.trim_end_matches([',', '.', ';']);
         // „SG9" — or the AHB's „S9" — names a group; the first one named
         // is the scope („in derselben SG9 LIN das SG10 DTM+7 …").
-        if let Some(n) = w.strip_prefix("SG").or_else(|| w.strip_prefix('S'))
-            && !n.is_empty()
-            && n.chars().all(|c| c.is_ascii_digit())
-        {
+        if let Some(n) = group_name(w) {
             if scope == Scope::Message {
-                scope = Scope::Group(format!("SG{n}"));
+                scope = Scope::Group(n);
             }
             after_group = true;
             continue;
@@ -669,6 +934,15 @@ impl Voraussetzung {
         // leading group name before the segment.
         let (scope, tag_idx) = locate_pattern(&words);
         let ti = tag_idx?;
+        // A Voraussetzung that names a second qualified segment („Wenn eine
+        // andere SG8 SEQ+Z27 …, mit dem RFF+Z18 … referenziert, mit
+        // PIA+5+9991000000078:Z11 … vorhanden ist") states a join between
+        // places, not the presence of one. Kap. 6.5 leaves what the reader
+        // cannot read undecided rather than answering it from the first
+        // pattern alone.
+        if words[ti + 1..].iter().any(|w| names_qualified_segment(w)) {
+            return None;
+        }
         let seg_word = words[ti].trim_end_matches([',', '.', ';', ')']);
         // „TAG DExxxx mit Wert v" — also „TAG (…) das DExxxx mit dem Wert v".
         let de_idx = words
@@ -740,32 +1014,151 @@ mod tests {
         let s = Status::parse("Muss [7] ∧ ([577] ⊻ [UB1])").unwrap();
         assert_eq!(s.expr.unwrap().to_string(), "[7] ∧ ([577] ⊻ [UB1])");
         let s = Status::parse("X [931] [494]").unwrap();
-        assert_eq!(s.expr.unwrap().to_string(), "[931] ∧ [494]");
+        assert_eq!(s.expr.unwrap().to_string(), "[931] [494]");
+    }
+
+    #[test]
+    fn juxtaposition_binds_tighter_than_the_operators() {
+        // Kap. 6.4.6: the Formatbedingung attaches to the bracketed group
+        // right of it, not to the whole chain.
+        let e = Expr::parse("[2] ∧ ([3] ∨ [4])[901] ∧ [555]").unwrap();
+        assert_eq!(e.to_string(), "[2] ∧ ([3] ∨ [4]) [901] ∧ [555]");
+        let Expr::And(v) = &e else { panic!("{e}") };
+        assert_eq!(v.len(), 3);
+        assert!(matches!(v[1], Expr::Then(_)), "{e}");
+        // A juxtaposition inside a choice stays inside it.
+        let e = Expr::parse("[5] ∨ [930][6]").unwrap();
+        let Expr::Or(v) = &e else { panic!("{e}") };
+        assert!(matches!(v[1], Expr::Then(_)), "{e}");
+    }
+
+    #[test]
+    fn truncated_expressions_are_refused() {
+        // A PDF column break cuts an expression in half; the fragment must
+        // not parse into a different, valid-looking one.
+        for text in [
+            "[321]) ∨",
+            "([67] ∧ ([529] ∨",
+            "([UB1] ∧ ⊻ [272]",
+            "[74]) ∨ ∧ [524]",
+            "∨ [508]",
+            "[492] ∧ [27] ∧",
+        ] {
+            assert!(Expr::parse(text).is_err(), "{text:?} must not read");
+        }
+        assert_eq!(Expr::parse("[10] & [11]"), Err(ExprError::Stray('&')));
+        assert_eq!(Expr::parse("[10"), Err(ExprError::Unterminated));
+        assert_eq!(Expr::parse("([10]"), Err(ExprError::Parentheses));
+    }
+
+    /// The oracle of a test: a fixed value per Bedingung, never an error.
+    fn answers(f: impl Fn(&str) -> Truth) -> impl FnMut(&str) -> Result<Truth, EvalError> {
+        move |c: &str| Ok(f(c))
     }
 
     #[test]
     fn expressions_evaluate_with_neutral_hinweise() {
         let e = Expr::parse("[10] ∧ [519]").unwrap();
-        let mut o = |c: &str| match c {
+        let mut o = answers(|c| match c {
             "10" => Truth::True,
             "519" => Truth::Neutral,
             _ => Truth::Unknown,
-        };
-        assert_eq!(e.eval(&mut o), Truth::True);
+        });
+        assert_eq!(e.eval(&mut o), Ok(Truth::True));
         let e = Expr::parse("[10] ⊻ [11]").unwrap();
-        let mut o = |c: &str| if c == "10" { Truth::True } else { Truth::False };
-        assert_eq!(e.eval(&mut o), Truth::True);
-        let mut o = |_: &str| Truth::True;
-        assert_eq!(e.eval(&mut o), Truth::False);
+        let mut o = answers(|c| if c == "10" { Truth::True } else { Truth::False });
+        assert_eq!(e.eval(&mut o), Ok(Truth::True));
+        let mut o = answers(|_| Truth::True);
+        assert_eq!(e.eval(&mut o), Ok(Truth::False));
         let e = Expr::parse("[1] ∨ [2]").unwrap();
-        let mut o = |c: &str| {
+        let mut o = answers(|c| {
             if c == "1" {
                 Truth::Unknown
             } else {
                 Truth::False
             }
-        };
-        assert_eq!(e.eval(&mut o), Truth::Unknown);
+        });
+        assert_eq!(e.eval(&mut o), Ok(Truth::Unknown));
+        // Kap. 6.4.6: the Hinweis part of a choice is not part of the
+        // Voraussetzung — it drops out instead of deciding the choice.
+        let e = Expr::parse("[10] ∨ [519]").unwrap();
+        let mut o = answers(|c| match c {
+            "10" => Truth::False,
+            _ => Truth::Neutral,
+        });
+        assert_eq!(e.eval(&mut o), Ok(Truth::False));
+        // A Formatbedingung is joined by juxtaposition and a Zeitpunktangabe
+        // by `∧`; a choice against one has no reading.
+        let e = Expr::parse("[10] ∨ [931]").unwrap();
+        let mut o = answers(|c| match c {
+            "10" => Truth::True,
+            _ => Truth::Neutral,
+        });
+        assert_eq!(e.eval(&mut o), Err(EvalError::ChoiceOverNeutral));
+        // Two Formatbedingungen may exclude each other with `⊻`.
+        let e = Expr::parse("[932] ⊻ [933]").unwrap();
+        let mut o = answers(|_| Truth::Neutral);
+        assert_eq!(e.eval(&mut o), Ok(Truth::Neutral));
+    }
+
+    #[test]
+    fn and_keeps_the_reference_truth_table() {
+        // The four-valued table Hochfrequenz's `ahbicht` states in
+        // `ConditionFulfilledValue.__and__` (MIT): neutral is the identity,
+        // and an unfulfilled operand settles the conjunction whatever the
+        // rest is.
+        let e = Expr::parse("[1] ∧ [2]").unwrap();
+        for (a, b, want) in [
+            (Truth::Unknown, Truth::False, Truth::False),
+            (Truth::Unknown, Truth::True, Truth::Unknown),
+            (Truth::Neutral, Truth::True, Truth::True),
+            (Truth::Neutral, Truth::Neutral, Truth::Neutral),
+            (Truth::True, Truth::True, Truth::True),
+        ] {
+            let mut o = answers(move |c| if c == "1" { a } else { b });
+            assert_eq!(e.eval(&mut o), Ok(want), "{a:?} ∧ {b:?}");
+        }
+        let e = Expr::parse("[1] ∨ [2]").unwrap();
+        for (a, b, want) in [
+            (Truth::Unknown, Truth::False, Truth::Unknown),
+            (Truth::Unknown, Truth::True, Truth::True),
+            (Truth::False, Truth::False, Truth::False),
+        ] {
+            let mut o = answers(move |c| if c == "1" { a } else { b });
+            assert_eq!(e.eval(&mut o), Ok(want), "{a:?} ∨ {b:?}");
+        }
+    }
+
+    #[test]
+    fn paketmerkmale_read() {
+        assert_eq!(
+            Paket::parse("1P0..1"),
+            Some(Paket {
+                id: "1P".into(),
+                min: 0,
+                max: Some(1)
+            })
+        );
+        assert_eq!(
+            Paket::parse("10P1..1"),
+            Some(Paket {
+                id: "10P".into(),
+                min: 1,
+                max: Some(1)
+            })
+        );
+        assert_eq!(
+            Paket::parse("2P0..n"),
+            Some(Paket {
+                id: "2P".into(),
+                min: 0,
+                max: None
+            })
+        );
+        assert_eq!(Paket::parse("UB1"), None);
+        let e = Expr::parse("[2P1..2] ⊻ [3P0..2]").unwrap();
+        let ids: Vec<String> = e.pakete().into_iter().map(|p| p.id).collect();
+        assert_eq!(ids, ["2P", "3P"]);
     }
 
     #[test]

@@ -365,7 +365,7 @@ pub(crate) async fn post_iot_reads(
             continue;
         }
 
-        // An outlier is flagged, not discarded: § 60 Abs. 2 MsbG substitution is a
+        // An outlier is flagged, not discarded: § 60 Abs. 1 MsbG substitution is a
         // downstream decision.
         // `PRELIMINARY` (MSCONS Z84, vorläufiger Wert): measured but not yet
         // confirmed. `FAULTY` would assert a defect the filter cannot establish.

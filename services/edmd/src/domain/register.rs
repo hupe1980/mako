@@ -160,7 +160,8 @@ enum Stage {
 /// The projection every path that sums readings must go through:
 ///
 /// 1. **Non-billable qualities are dropped.** `FAULTY`/`UNKNOWN` must not reach a
-///    settled figure (§ 60 Abs. 2 MsbG); a substitute value is what stands in
+///    settled figure (§ 40a Abs. 2 EnWG: an undeterminable consumption may only
+///    be billed as a labelled Schätzung); a substitute value is what stands in
 ///    for them.
 /// 2. **Registers that are not kWh are dropped** — see [`is_energy_register`].
 /// 3. **The other direction is dropped**, per [`EnergyDirection`]. A read whose
@@ -391,7 +392,7 @@ pub fn register_groups(reads: &[MeterRead]) -> Vec<RegisterGroup> {
 /// The companion figure to [`energy_intervals`], which drops non-billable
 /// readings: a caller that only sees the projection cannot tell a complete month
 /// from one where a third of the intervals arrived `FAULTY` and were filtered
-/// out. § 60 Abs. 2 MsbG turns on exactly that difference, so a settlement path
+/// out. § 40a Abs. 2 EnWG turns on exactly that difference, so a settlement path
 /// gated on data quality — § 51 EEG's negative-price reduction is the live one —
 /// needs both numbers.
 ///

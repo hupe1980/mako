@@ -49,10 +49,27 @@ impl Daemon for Vertragd {
         .await
         .context("OIDC setup")?;
 
+        // Authorization. `Claims` proves who is calling and that the token was
+        // issued for this deployment; the policy decides what that principal
+        // may do — and in particular separates the customer token `portald`
+        // forwards for the portal check from the operator identities that may
+        // read a customer's record or change a contract.
+        let enforcer = Arc::new(
+            mako_service::cedar::CedarEnforcer::from_policy_str(include_str!(
+                "../policies/vertragd.cedar"
+            ))
+            .context("vertragd.cedar must parse at startup")?,
+        );
+
         let mcp_state = Arc::new(mcp_server::VertragdMcpState {
             pool: pool.clone(),
             tenant: cfg.tenant.clone(),
-            auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
+            // `use-mcp` gates the whole MCP surface, which reads customer
+            // profiles and bank details across the tenant. Without it any token
+            // valid for this deployment reaches those tools, and a portal
+            // customer's token is one.
+            auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant)
+                .with_cedar(Arc::clone(&enforcer)),
         });
 
         let handler_ctx = Arc::new(handlers::Ctx {
@@ -61,12 +78,8 @@ impl Daemon for Vertragd {
             http: http.clone(),
         });
 
-        let app = handlers::router(handler_ctx)
+        let app = handlers::router(handler_ctx, enforcer)
             .merge(mcp_server::router(mcp_state, shutdown.clone()))
-            // Every authenticated handler extracts `Claims`, and the extractor
-            // rejects a token whose `mako_tenant` is not this deployment's. A
-            // route added later cannot forget the check without also dropping
-            // authentication — the omission is not silent.
             .layer(Extension(mako_service::oidc::ExpectedTenant(
                 cfg.tenant.clone(),
             )))

@@ -165,7 +165,7 @@ pub fn router(state: HandlerState) -> Router {
         .route("/api/v1/corrections/{malo_id}", post(post_corrections))
         // Bulk ingestion: batched direct-push reads (performance path for large MSCONS deliveries)
         .route("/api/v1/meter-reads/{malo_id}/bulk", post(post_bulk_reads))
-        // § 60 Abs. 2 MsbG auto-substitute: fill gaps using prior-period average method
+        // § 60 Abs. 1 MsbG auto-substitute: fill gaps using prior-period average method
         .route(
             "/api/v1/meter-reads/{malo_id}/substitute",
             post(post_substitute_values),
@@ -193,7 +193,7 @@ pub fn router(state: HandlerState) -> Router {
             "/api/v1/quality-assessments/{malo_id}",
             get(list_quality_assessments),
         )
-        // Annual forecast (§ 60 Abs. 2 MsbG Jahresprognose)
+        // Annual forecast (§ 40a Abs. 2 EnWG Verbrauchsschätzung / § 13 Abs. 1 StromGVV)
         .route("/api/v1/forecast/{malo_id}", get(get_annual_forecast))
         // Summenzeitreihe — MABIS-ready monthly aggregated series
         .route(
@@ -204,7 +204,7 @@ pub fn router(state: HandlerState) -> Router {
         .route("/api/v1/gas-quality/{malo_id}", get(get_gas_quality))
         // §22 EnWG Verlustenergie — indicative grid-loss balance
         .route("/api/v1/netzverlust", get(get_netzverlust))
-        // § 60 Abs. 2 MsbG — estimated-reading confirmation obligations
+        // § 60 Abs. 1 MsbG — estimated-reading confirmation obligations
         .route("/api/v1/confirmations", get(list_confirmations))
         // Delivery surveillance — the measuring points that stopped delivering.
         // The V-rules can only judge data that arrived; this is the other half.
@@ -433,7 +433,7 @@ pub struct RunConfig {
     pub rate_limit: mako_service::RateLimitConfig,
     /// Kafka ingest consumer (None or `enabled = false` → not started).
     pub kafka_ingest: Option<crate::config::KafkaIngestConfig>,
-    /// § 60 Abs. 2 MsbG confirmation loop (overdue escalation worker).
+    /// § 60 Abs. 1 MsbG confirmation loop (overdue escalation worker).
     pub confirmation: crate::config::ConfirmationConfig,
 }
 
@@ -644,7 +644,22 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
                         mako_events::mako::PROCESS_COMPLETED,
                         mako_events::mako::PROCESS_INITIATED,
                     ],
-                    makopid_filter: crate::domain::MSCONS_PIDS,
+                    // Empty on purpose: `marktd` has no PID filter. Its
+                    // `subscriptions` table narrows on `roles`, `event_types` and
+                    // `sparten` only, and `SubscriptionUpsertRequest` declares no
+                    // `makopid_filter` field — so the key this client puts in the
+                    // body is dropped by serde on arrival, silently, because the
+                    // DTO does not deny unknown fields.
+                    //
+                    // edmd used to send `MSCONS_PIDS` here, which read as
+                    // server-side narrowing and was not. It also would have been
+                    // the *wrong* set if it ever started working: `handler.rs`
+                    // branches on `ALL_MSCONS_PIDS`, a strict superset that adds
+                    // the Redispatch MSCONS PIDs 13020–13023/13026 — so switching
+                    // the filter on would have stopped exactly those deliveries.
+                    // The narrowing that actually runs is in `handler.rs`, on
+                    // every event marktd fans out.
+                    makopid_filter: &[],
                     active: true,
                 },
             )
@@ -735,7 +750,7 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
         );
     }
 
-    // § 60 Abs. 2 MsbG confirmation loop — escalates estimated/substituted
+    // § 60 Abs. 1 MsbG confirmation loop — escalates estimated/substituted
     // intervals that were never replaced by a plausibilised real value.
     if cfg.confirmation.enabled {
         crate::confirmation::spawn_confirmation_worker(

@@ -113,6 +113,18 @@ pub trait BillingProvider: Send + Sync {
         false
     }
 
+    /// The VAT rate this provider charges a position that states none of its own.
+    ///
+    /// Only a tax provider answers. The engine stamps it onto every supply
+    /// position before the tax pass, so the amount charged and the BG-23
+    /// breakdown that states it are read off the same number: a § 19 UStG
+    /// Kleinunternehmer document charges nothing and must therefore state
+    /// nothing, and an invoice that prints a 19 % Steuerbetrag beside
+    /// `mwst_eur = 0.00` is an unrechtmäßiger Steuerausweis (§ 14c Abs. 2 UStG).
+    fn charged_tax_rate(&self) -> Option<rust_decimal::Decimal> {
+        None
+    }
+
     /// Produce regulatory compliance warnings without generating billing positions.
     ///
     /// Called by [`BillingEngine::validate()`](crate::BillingEngine::validate) and

@@ -189,6 +189,9 @@ pub enum QuantityUnit {
     Kvar,
     /// Calendar months.
     Monat,
+    /// Calendar years — the unit of a charge whose published rate is annual and
+    /// whose quantity is the fraction of a year the settlement period covers.
+    Jahr,
 }
 
 // ── Sect14aModule ─────────────────────────────────────────────────────────────
@@ -379,7 +382,11 @@ pub enum SettlementStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[cfg_attr(feature = "bo4e", derive(serde::Deserialize))]
 pub enum KorrekturGrund {
-    /// Corrected metering — a replaced or re-read value (§ 60 Abs. 2 MsbG).
+    /// Corrected metering — a replaced or re-read value (§ 60 Abs. 1 MsbG:
+    /// the MSB owes the berechtigte Stellen *aufbereitete* data, and a
+    /// correction is how that duty is discharged once the first value was
+    /// wrong. Not Abs. 2, which only says where an iMS should do the
+    /// Aufbereitung and obliges nobody to form a value at all).
     Messwertkorrektur,
     /// The wrong tariff or price sheet version was applied.
     Tarifkorrektur,
@@ -1017,6 +1024,65 @@ impl<'de> serde::Deserialize<'de> for Reduktionsfaktor {
     }
 }
 
+/// A §14a **Modul 1** Jahresanteil — the fraction of a year the settlement
+/// period covers, by which the Netzbetreiber's annual pauschale is credited.
+///
+/// A newtype for the same reason as [`Reduktionsfaktor`]: the range carries the
+/// meaning. Outside `(0, 1]` the figure is not a share of a year — `1` on a
+/// monthly run credits the whole annual pauschale twelve times over the year,
+/// and a negative value turns the credit into a charge against the customer.
+///
+/// The range is necessary and not sufficient: `1` is a valid share of a year and
+/// the wrong one for a month. [`crate::settle_nne`] therefore also measures the
+/// share against the settlement period and warns when the two disagree.
+///
+/// It travels as a JSON **string** like every other `Decimal` on this crate's
+/// wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Jahresanteil(Decimal);
+
+impl Jahresanteil {
+    /// A twelfth — one calendar month of a year.
+    ///
+    /// One twelfth to the full precision `Decimal` carries. A shorter constant
+    /// under-credits: at six decimal places twelve monthly credits of a 120 EUR
+    /// pauschale come to 119.99952 EUR, and the operator keeps the difference on
+    /// every plant, every year.
+    pub const MONAT: Self = Self(rust_decimal::dec!(0.0833333333333333333333333333));
+
+    /// A whole year.
+    pub const JAHR: Self = Self(Decimal::ONE);
+
+    /// Build a share of a year.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::BillingError::InvalidInput`] outside `(0, 1]`.
+    pub fn new(anteil: Decimal) -> Result<Self, crate::error::BillingError> {
+        if anteil <= Decimal::ZERO || anteil > Decimal::ONE {
+            return Err(crate::error::BillingError::InvalidInput {
+                reason: format!("§14a Modul 1 Jahresanteil must be in (0, 1], got {anteil}"),
+            });
+        }
+        Ok(Self(anteil))
+    }
+
+    /// The share as a fraction of a year.
+    #[must_use]
+    pub const fn get(self) -> Decimal {
+        self.0
+    }
+}
+
+/// Deserialising goes through [`Jahresanteil::new`], so a share that arrives
+/// over the wire is range-checked exactly like one built in process.
+impl<'de> serde::Deserialize<'de> for Jahresanteil {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = <Decimal as serde::Deserialize>::deserialize(d)?;
+        Self::new(raw).map_err(serde::de::Error::custom)
+    }
+}
+
 /// A metered quantity priced at a rate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MengePreis {
@@ -1028,7 +1094,8 @@ pub struct MengePreis {
 
 /// How the Arbeitspreis is structured, and whether §14a applies.
 ///
-/// One enum rather than three independent field groups. The four variants are
+/// One enum rather than three independent field groups. The five variants —
+/// `Einheitlich`, the three §14a modules and `SpotpreisNetzentgelt` — are
 /// mutually exclusive **by construction**, which removes a whole class of defect:
 ///
 /// - The four HT/NT fields were 2⁴ states of which two were valid. Setting three
@@ -1062,10 +1129,13 @@ pub enum ArbeitspreisModell {
         /// full — Modul 1 does not touch the Arbeitspreis.
         basis: MengePreis,
         /// The Netzbetreiber's published annual pauschale, in EUR per year.
+        ///
+        /// A published amount, so it is non-negative; [`crate::settle_nne`]
+        /// refuses a negative one, which would turn the credit into a charge.
         pauschale_eur_pro_jahr: Decimal,
         /// The fraction of a year this settlement period covers, so the annual
         /// pauschale is credited pro rata.
-        jahresanteil: Decimal,
+        jahresanteil: Jahresanteil,
     },
 
     /// **§14a Modul 2** — the Arbeitspreis reduced by a percentage.
@@ -1188,10 +1258,61 @@ impl Blindarbeit {
 /// independent `Option`s cannot express.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Leistungspreis {
-    /// Peak demand in kW.
+    /// The Höchstleistung in kW the price is charged against.
+    ///
+    /// Which peak that is follows [`system`](Self::system): the
+    /// Jahreshöchstleistung „im Abrechnungsjahr" under §17 Abs. 2 Satz 2
+    /// StromNEV, the month's own Höchstleistung under a Monatsleistungspreis.
     pub spitzenleistung_kw: Decimal,
-    /// Rate in EUR per kW.
+    /// The Leistungspreis in EUR per kW, per the unit
+    /// [`system`](Self::system) names — EUR/kW·a for a Jahresleistungspreis,
+    /// EUR/kW·Monat for a Monatsleistungspreis.
     pub preis_eur_per_kw: Decimal,
+    /// Which Leistungspreissystem the price sheet states.
+    ///
+    /// Defaults to [`LeistungspreisSystem::Jahr`], the only one StromNEV itself
+    /// defines.
+    #[serde(default)]
+    pub system: LeistungspreisSystem,
+}
+
+/// Which Leistungspreissystem a price sheet bills under.
+///
+/// §17 Abs. 2 Satz 1 StromNEV builds the Netzentgelt „aus einem
+/// Jahresleistungspreis in Euro pro Kilowatt und einem Arbeitspreis in Cent pro
+/// Kilowattstunde", and Satz 2 states the entgelt: „Das Jahresleistungsentgelt
+/// ist das Produkt aus dem jeweiligen Jahresleistungspreis und der
+/// Jahreshöchstleistung in Kilowatt der jeweiligen Entnahme im Abrechnungsjahr."
+/// It is a product of two figures and nothing else — the ordinance sets no
+/// day-count convention for it, so there is no pro-rating to apply.
+///
+/// Abs. 8 nevertheless lets a Netzbetreiber offer Tagesleistungspreise for
+/// Landstrom „neben einem Jahres- und **Monatsleistungspreissystem**", which
+/// presupposes that a Monatsleistungspreissystem exists. StromNEV does not
+/// define it; it is published in the Netzbetreiber's own Preisblatt as a
+/// EUR/kW·Monat price against the month's Höchstleistung, paired with a higher
+/// Arbeitspreis. A settlement bills whichever of the two the price sheet states,
+/// and this enum is where it says which.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LeistungspreisSystem {
+    /// §17 Abs. 2 Satz 2 StromNEV — Jahresleistungspreis × Jahreshöchstleistung
+    /// im Abrechnungsjahr.
+    ///
+    /// The whole Abrechnungsjahr's Leistungsentgelt, so a settlement period
+    /// shorter than the year bills a year of demand.
+    /// [`crate::settle_nne`] warns when the two disagree rather than inventing a
+    /// share the price sheet does not publish.
+    #[default]
+    Jahr,
+    /// A Preisblatt Monatsleistungspreis — EUR/kW·Monat against the period's own
+    /// Höchstleistung, for the months the period covers.
+    ///
+    /// This is the system §17 Abs. 8 StromNEV names alongside the annual one.
+    Monat {
+        /// Months billed. A monthly settlement is `1`.
+        monate: Decimal,
+    },
 }
 
 /// A Gas NNE Grundpreis — monthly rate and the months billed.
@@ -1263,6 +1384,38 @@ impl SettlementPeriod {
     #[must_use]
     pub fn days(&self) -> i64 {
         (self.to - self.from).whole_days() + 1
+    }
+
+    /// The share of a year the period covers.
+    ///
+    /// Each calendar year the period touches contributes its own days over its
+    /// own length, so a period running 15 December 2023 to 14 January 2024 is
+    /// 17/365 + 14/366 and not 31 days over either year alone. Taking the
+    /// divisor from the starting year mis-scales every period that straddles a
+    /// leap-year boundary, and the error is silent because the figure still
+    /// looks like a plausible fraction.
+    ///
+    /// A full calendar year returns exactly `1`.
+    #[must_use]
+    pub fn jahresanteil(&self) -> Decimal {
+        let mut anteil = Decimal::ZERO;
+        for jahr in self.from.year()..=self.to.year() {
+            let Ok(jahresbeginn) = time::Date::from_ordinal_date(jahr, 1) else {
+                continue;
+            };
+            let jahrestage = time::util::days_in_year(jahr);
+            let Ok(jahresende) = time::Date::from_ordinal_date(jahr, jahrestage) else {
+                continue;
+            };
+            let von = self.from.max(jahresbeginn);
+            let bis = self.to.min(jahresende);
+            if von > bis {
+                continue;
+            }
+            let tage = (bis - von).whole_days() + 1;
+            anteil += Decimal::from(tage) / Decimal::from(jahrestage);
+        }
+        anteil
     }
 }
 
@@ -1671,10 +1824,16 @@ pub struct NneInput {
 ///
 /// ## Regulatory basis
 ///
-/// BNetzA BK6-22-300 Anlage 2 §3 — Modul 3: Spotpreis-Netzentgelt.
-/// The NNE varies per 15-min interval based on the spot market price.
-/// All controllable loads ≥ 3.7 kW registered under §14a must have Modul 1 at minimum;
-/// Modul 3 is the opt-in premium variant (lower NNE when spot prices are low).
+/// **Not a §14a module.** BK6-22-300 defines exactly three — Modul 1 (pauschale
+/// Reduzierung), Modul 2 (prozentuale Arbeitspreisreduzierung) and Modul 3
+/// (zeitvariable Netzentgelte in three Tarifstufen) — and none of them is
+/// spot-linked. See [`ArbeitspreisModell::SpotpreisNetzentgelt`], which states
+/// the same thing.
+///
+/// This models a Netzentgelt whose rate follows the spot price under the
+/// Netzbetreiber's own `PreisblattNetznutzung` formula: the NNE varies per
+/// 15-minute interval. The rates arrive already derived — this crate never
+/// queries a spot market.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SpotpreisInterval {
     /// UTC start of this controlled dispatch interval (ISO-8601).
@@ -2269,7 +2428,7 @@ mod input_model_tests {
                 preis_ct_per_kwh: dec!(3.5),
             },
             pauschale_eur_pro_jahr: dec!(120),
-            jahresanteil: dec!(1) / dec!(12),
+            jahresanteil: Jahresanteil::MONAT,
         };
         assert_eq!(
             modul1.menge_kwh(),
@@ -2297,7 +2456,7 @@ mod input_model_tests {
                         preis_ct_per_kwh: dec!(1),
                     },
                     pauschale_eur_pro_jahr: dec!(120),
-                    jahresanteil: dec!(1) / dec!(12),
+                    jahresanteil: Jahresanteil::MONAT,
                 },
                 Some(M::Modul1),
             ),

@@ -8,8 +8,8 @@
 |---|---|
 | HTTP port | `:8480` |
 | Database | PostgreSQL 15+ (single `process_projections` table) |
-| Inbound | All `de.mako.*` CloudEvents from `marktd` (wildcard subscriber) |
-| REST API | `GET /obs/processes`, `GET /obs/processes/{id}`, `GET /obs/kpis`, `GET /obs/overdue`, `GET /api/v1/audit/gleichbehandlung` |
+| Inbound | `de.mako.*` CloudEvents from `marktd` — the six projected types by default, widened with `[subscription].event_types` |
+| REST API | `GET /obs/processes`, `GET /obs/processes/{id}`, `GET /obs/kpis`, `GET /obs/overdue`, `GET /api/v1/audit/gleichbehandlung`; `GET /obs/metrics` (business gauges, unauthenticated — restrict at the ingress) |
 | MCP | 6 tools + 2 prompts at `/mcp` (see [MCP Tools](#mcp-tools)) |
 | Deadlines | `mako-fristen` — obsd computes none of its own; `makod` and `processd` read the same table |
 | § 7a Abs. 5 EnWG | `initiator_is_affiliate` on `ProcessProjection` — affiliate vs third-party evidence for the annual Gleichbehandlungsbericht (filed by 31 March) |
@@ -54,7 +54,7 @@ url     = "http://marktd:8180"
 api_key = "env:OBSD_MARKTD_API_KEY"
 
 [webhook]
-# Verifies inbound events from marktd (webhook-signature: sha256=…).
+# Verifies inbound events from marktd (Standard Webhooks: webhook-signature: v1,…).
 inbound_secret = "env:OBSD_INBOUND_SECRET"
 # Target + secret for the de.obs.* CloudEvents obsd emits (deadline.approaching,
 # stp.parity.alert). When outbound_url is unset the sweep workers do not run.
@@ -64,6 +64,11 @@ outbound_secret = "env:OBSD_OUTBOUND_SECRET"
 [subscription]
 webhook_url   = "http://obsd:8480/webhook"
 subscriber_id = "obsd"
+# Which types marktd fans out to this subscriber. Defaults to the six the
+# projection understands; `["de.mako.*"]` (or `[]`) registers for everything.
+# event_types = ["de.mako.process.initiated", "de.mako.process.completed",
+#                "de.mako.aperak.accepted", "de.mako.aperak.timeout",
+#                "de.mako.process.failed", "de.mako.aperak.rejected"]
 
 # [oidc]                                  # omit for dev mode
 # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
@@ -130,11 +135,11 @@ Response:
 
 ### `GET /obs/kpis`
 
-BNetzA KPI report — response times per PID and period.
+BNetzA KPI report — response times for one PID over one period.
 
 Query parameters:
-- `pid` — filter to a single PID
-- `period` — billing period in `YYYY-MM` format
+- `pid` — **required**. The report is per PID; a request without it is a `400`
+- `period` — calendar month as `YYYY-MM` (default: the current month)
 
 ```bash
 curl "http://localhost:8480/obs/kpis?pid=55001&period=2025-10"
@@ -172,7 +177,7 @@ Indexes cover `(pid, state)`, `(tenant, family, started_at)`, `malo_id`, `partne
 
 ## Event Routing
 
-`obsd` subscribes to **all** `de.mako.*` CloudEvents from `marktd` (wildcard subscription). Each event updates the `process_projections` row for the relevant `process_id`:
+`marktd` fans out the types named in `[subscription].event_types`; the handler additionally drops anything outside `de.mako.*`, and anything inside it that maps to no state. Each remaining event updates the `process_projections` row for the relevant `process_id`:
 
 | Event type | Action |
 |---|---|
@@ -218,7 +223,7 @@ The projection is fully rebuildable by replaying the CloudEvent history from `ma
 | `get_stp_rate` | Completions over processes that **ended** in the last N days. `aperak_timeout` is not an ending. No regulatory target exists |
 | `list_processes_by_family` | List processes by workflow family (`gpke` / `wim` / `geli-gas` / `wim-gas` / `gabi-gas` / `mabis`) |
 
-Two prompts (`process-kpis`, `investigate-overdue-process`) guide agents through a period's KPIs and a missed Antwortfrist. Both keep the two deadline clocks apart, and both say what a `null` rate means: nothing measurable in the bucket, not perfect performance.
+Two prompts: `audit-kpi` walks an agent through a reporting period's KPIs, `investigate-aperak-violation` through a missed APERAK acknowledgement.
 
 ## See Also
 

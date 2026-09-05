@@ -10,14 +10,19 @@
 //! - `Default::default()` — which *stamps* `_typ` on every BO **and** every COM.
 //!
 //! A hand-written discriminant is a fourth spelling, and it is the one that can
-//! be wrong. Two shapes are refused:
+//! be wrong. Three shapes are refused:
 //!
 //! ```ignore
 //! // 1. Redundant: `..Default::default()` on the same literal already sets it.
 //! Zaehlzeitdefinition { typ: Some(BoTyp::Zaehlzeitdefinition), ..Default::default() }
 //!
-//! // 2. Assembling a BO4E document as JSON, spelling `_typ` by hand.
+//! // 2. Assembling a BO4E document as JSON, with a `_typ` key of any value.
 //! serde_json::json!({ "_typ": "GESCHAEFTSPARTNER", "organisationsname": name })
+//! serde_json::json!({ "_typ": Geschaeftspartner::TYP_WIRE, "organisationsname": name })
+//!
+//! // 3. The same document with no discriminant at all, which the rule above
+//! //    cannot see: a BO4E field name written as a key is the tell.
+//! serde_json::json!({ "marktlokationsId": malo, "zeitlicheGueltigkeit": z })
 //! ```
 //!
 //! The second is the damaging one, and not because of the discriminant. A
@@ -26,6 +31,12 @@
 //! in `_additional` rather than rejecting them, so a misspelled field decodes
 //! cleanly, reads back as `None`, and ships with the value missing. A decode
 //! round-trip does not catch it either, for the same reason.
+//!
+//! That is why the `_typ` rule reads the **key**, not the value. A
+//! `"_typ": T::TYP_WIRE` inside an object literal has a correct discriminant
+//! and every one of the fields beside it is still unchecked, which is the whole
+//! damage. And a hand-built document need not spell `_typ` at all: the third
+//! rule flags an object literal carrying a BO4E field name, discriminant or no.
 //!
 //! Build the value typed and let `rubo4e` stamp the discriminant.
 //!
@@ -62,7 +73,7 @@ pub fn run(workspace_root: &Path) -> bool {
 
     if findings.is_empty() {
         println!(
-            "check-bo4e-discriminants: no hand-written `_typ` in shipped code \
+            "check-bo4e-discriminants: no BO4E document assembled by hand in shipped code \
              ({} documented exemption(s))",
             EXEMPT.len()
         );
@@ -70,7 +81,7 @@ pub fn run(workspace_root: &Path) -> bool {
     }
 
     eprintln!(
-        "ERROR: {} hand-written BO4E discriminant(s):\n",
+        "ERROR: {} hand-assembled BO4E document(s) or discriminant(s):\n",
         findings.len()
     );
     for f in &findings {
@@ -161,16 +172,75 @@ fn offending_lines(src: &str, typ_literal_exempt: bool) -> Vec<(usize, String)> 
             continue;
         }
 
-        // 2. `"_typ"` written as a value, i.e. followed by `:` and a string, or
-        //    inserted into a map. Reading (`get("_typ")`) is untouched.
+        // 2. `"_typ"` written as a key in an object literal, whatever the
+        //    value, or inserted into a map with a spelled-out discriminant.
+        //    Reading (`get("_typ")`, `json["_typ"]`) is untouched.
         if !typ_literal_exempt && writes_typ(&line) {
             out.push((
                 i + 1,
-                "`\"_typ\"` written by hand — build the value typed so rubo4e stamps it".to_owned(),
+                "`\"_typ\"` written as a key — a document assembled as a literal skips \
+                 every field-name check, whatever the discriminant beside them says"
+                    .to_owned(),
+            ));
+            continue;
+        }
+
+        // 3. A BO4E field name written as a key, with no discriminant needed.
+        if let Some(field) = writes_a_bo4e_field(&line) {
+            out.push((
+                i + 1,
+                format!(
+                    "`\"{field}\"` written as a JSON key — that is a BO4E field, and a \
+                     document built as a literal has no field-name check at all"
+                ),
             ));
         }
     }
     out
+}
+
+/// BO4E field names no other vocabulary in this workspace uses.
+///
+/// camelCase is the tell. BO4E's wire spells a compound field
+/// `zeitlicheGueltigkeit`; mako's own JSON — outbox payloads, REST projections,
+/// MCP results — is snake_case throughout, and its database columns are
+/// lower-case. So a camelCase key in an object literal is a BO4E document being
+/// assembled by hand.
+///
+/// Single-word names are deliberately absent. `netzebene`, `sparte` and
+/// `marktrolle` are BO4E fields *and* mako's own column names, and a rule over
+/// those reports every projection this workspace serves — which is how a guard
+/// gets turned off instead of fixed.
+const BO4E_FIELDS: &[&str] = &[
+    "marktlokationsId",
+    "messlokationsId",
+    "netzlokationsId",
+    "zeitlicheGueltigkeit",
+    "zusatzAttribute",
+    "obisKennzahl",
+    "netzebeneMessung",
+    "messtechnischeEinordnung",
+    "staffelgrenzeVon",
+    "staffelgrenzeBis",
+    "zeitvariablePreispositionen",
+    "technischeRessourcen",
+    "zaehlzeitDefinition",
+    "zugehoerigeMesslokation",
+    "bo4eVersion",
+];
+
+/// The BO4E field this line writes as a JSON key, if any.
+///
+/// A *key*, so `"obisKennzahl": value` counts and `.get("obisKennzahl")`,
+/// `#[serde(rename = "obisKennzahl")]` and a `("obisKennzahl", …)` tuple do
+/// not — reading a document, or naming the field on a typed struct, is exactly
+/// the right thing to do with it.
+fn writes_a_bo4e_field(line: &str) -> Option<&'static str> {
+    BO4E_FIELDS.iter().copied().find(|field| {
+        let needle = format!("\"{field}\"");
+        line.find(&needle)
+            .is_some_and(|at| line[at + needle.len()..].trim_start().starts_with(':'))
+    })
 }
 
 /// A `typ:` field written by hand — either a spelled-out discriminant
@@ -202,12 +272,17 @@ fn writes_discriminant_field(line: &str) -> bool {
     rest.starts_with("BoTyp::") || rest.starts_with("ComTyp::")
 }
 
-/// Does this line write a `_typ` **literal**?
+/// Does this line write a `_typ` key?
 ///
-/// Reading (`data.get("_typ")`) is fine, and so is writing a value that came
-/// *off a type* — the gate's own `obj.insert("_typ".into(), expected.into())`
-/// injects `T::TYP_WIRE`, which is the very thing this rule wants people to do.
-/// Only a spelled-out discriminant is refused.
+/// Reading (`data.get("_typ")`, `json["_typ"]`) is fine. Two writes are not:
+///
+/// * `"_typ": <anything>` inside an object literal. The value does not matter:
+///   `"_typ": T::TYP_WIRE` reads its discriminant off the type and the fields
+///   beside it are still spelled by hand, unchecked.
+/// * `.insert("_typ".into(), "MARKTLOKATION".into())` with a **literal** value.
+///   The gate's own injection passes `T::TYP_WIRE` into an already-decoded
+///   document rather than assembling one, which is the very thing this rule
+///   wants people to do.
 fn writes_typ(line: &str) -> bool {
     // `.insert("_typ".into(), "MARKTLOKATION".into())`
     if let Some(pos) = line.find(".insert(\"_typ\"") {
@@ -219,12 +294,11 @@ fn writes_typ(line: &str) -> bool {
         }
         return false;
     }
-    // `"_typ": "MARKTLOKATION"` inside a `json!` / map literal.
+    // `"_typ": …` inside a `json!` / map literal.
     let Some(pos) = line.find("\"_typ\"") else {
         return false;
     };
-    let rest = line[pos + 6..].trim_start();
-    rest.starts_with(':') && rest[1..].trim_start().starts_with('"')
+    line[pos + 6..].trim_start().starts_with(':')
 }
 
 /// Strip a trailing `//` comment, ignoring one inside a string literal.
@@ -252,4 +326,66 @@ fn was_cfg_test(src: &str, idx: usize) -> bool {
         .rev()
         .take(3)
         .any(|l| l.trim_start().starts_with("#[cfg(test)]"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{offending_lines, writes_a_bo4e_field, writes_typ};
+
+    /// The value is not the point. `T::TYP_WIRE` beside hand-spelled fields is
+    /// a correct discriminant on a document nothing checks — the shape the
+    /// module doc calls the damaging one.
+    #[test]
+    fn a_typ_key_is_a_finding_whatever_its_value() {
+        assert!(writes_typ(r#"    "_typ": "GESCHAEFTSPARTNER","#));
+        assert!(writes_typ(r#"    "_typ": Marktlokation::TYP_WIRE,"#));
+        assert!(writes_typ(r#"    "_typ": typ_of(&value),"#));
+    }
+
+    /// Reading a discriminant off a received document is the right thing.
+    #[test]
+    fn reading_a_typ_is_not_writing_one() {
+        assert!(!writes_typ(
+            r#"    let t = data.get("_typ").and_then(Value::as_str);"#
+        ));
+        assert!(!writes_typ(
+            r#"    assert_eq!(json["_typ"], "MARKTLOKATION");"#
+        ));
+        assert!(!writes_typ(
+            r#"    obj.insert("_typ".into(), expected.into());"#
+        ));
+    }
+
+    /// A hand-built BO4E document need not spell `_typ` at all — and without
+    /// one, the `_typ` rule sees nothing while every field name goes unchecked.
+    #[test]
+    fn a_bo4e_field_key_is_a_finding_without_any_discriminant() {
+        let src = r#"
+    let doc = serde_json::json!({
+        "marktlokationsId": malo,
+        "zeitlicheGueltigkeit": { "startdatum": from },
+    });
+"#;
+        let hits = offending_lines(src, false);
+        assert_eq!(hits.len(), 2, "{hits:?}");
+    }
+
+    /// Naming the field on a typed struct, or reading it, is not assembling a
+    /// document — and mako's own snake_case keys are not BO4E's.
+    #[test]
+    fn reads_renames_and_mako_keys_are_untouched() {
+        assert!(writes_a_bo4e_field(r#"    .get("zusatzAttribute")"#).is_none());
+        assert!(writes_a_bo4e_field(r#"    #[serde(default, rename = "obisKennzahl")]"#).is_none());
+        assert!(writes_a_bo4e_field(r#"    ("netzebene", wires::<Netzebene>()),"#).is_none());
+        assert!(writes_a_bo4e_field(r#"    "bilanzierungsmethode": methode,"#).is_none());
+        assert!(writes_a_bo4e_field(r#"    "mabis_zaehlpunkt": data.zp,"#).is_none());
+    }
+
+    /// Prose showing the shapes the rule refuses is documentation.
+    #[test]
+    fn comments_are_stripped_first() {
+        let src = "    // \"_typ\": \"MARKTLOKATION\" is what this refuses\n\
+                   \x20   /// `\"marktlokationsId\": id` is the shape to avoid\n";
+        assert!(offending_lines(src, false).is_empty());
+    }
 }

@@ -158,10 +158,11 @@ pub const ZP_NGZ_PIDS: [u32; 3] = [55_235, 55_236, 55_237];
 ///
 /// 55235–55237 (Zuordnung des ZP der NGZ zur NZR) are **MaBiS**, registered by
 /// `mako_mabis::MabisModule` and answered from `mako_pruefung::mabis` with
-/// `E_0102` / `E_0103`. MSCONS 13018 (Netzgangzeitreihe) and 13003 (NZR and
-/// the BK-SZR eMob) are MaBiS Summenzeitreihen and belong to `mabis-billing`.
-/// Registering any of them here would take them off a settlement stream that
-/// already handles them.
+/// `E_0102` / `E_0103`. MSCONS 13003 (NZR and the BK-SZR eMob) is a MaBiS
+/// Summenzeitreihe and belongs to `mabis-billing`; MSCONS 13018, which carries
+/// the Netzgangzeitreihe, is registered by `mako_gpke` (`gpke-messwerte`) under
+/// its AHB name „Lastgang Messlokation, Netzkoppelpunkt, Netzlokation".
+/// Registering either here would take it off a stream that already handles it.
 pub struct EmobModule;
 
 impl mako_engine::builder::EngineModule for EmobModule {

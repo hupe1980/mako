@@ -139,7 +139,9 @@ sniffing the body. The codes are stable and part of the API:
 | `ZEITRAUM_UEBERSCHREITET_SATZGRENZE` | 422 | the period straddles a rate boundary — the body names the Stichtage |
 | `VALIDATION_BLOCKED` | 422 | the engine refused — the body carries every blocking warning |
 | `SECT41A_NO_LASTGANG` | 422 | a dynamic tariff with no interval data to price |
-| `NO_METER_DATA`, `NO_ACTIVE_PRODUCT` | 422 | edmd/productd has nothing for this MaLo |
+| `NO_METER_DATA`, `NO_ACTIVE_PRODUCT` | 422 | edmd/productd has nothing for this MaLo, or a category mako reads from nowhere else arrived without its quantity |
+| `INCOMPLETE_METER_DATA` | 422 | the readings cover less of the period than the operator's `min_meter_coverage_pct` floor; unset, nothing is refused and the gap is a § 40a Abs. 2 EnWG estimate |
+| `TARIFWECHSEL_OHNE_TEILMENGEN` | 422 | the period splits into legs at different prices and the quantity arrived as one period total |
 | `MODEL_MISSING`, `XRECHNUNG_NOT_CONFORMANT` | 422 | the stored EN 16931 model is absent or does not satisfy its own BT-24 |
 | `UPSTREAM_UNAVAILABLE` | 502 | an upstream did not answer — the body names which |
 
@@ -177,7 +179,7 @@ buyer, and renders through `en16931-formats::cii::to_string_for(&…, &XRECHNUNG
 which **validates against the full XRechnung 3.0 profile before writing** — so a
 rejectable document is never emitted; on failure it returns the violated rules and
 the precise `buyer_gaps` (via `Party::missing_for`). `en16931`/`en16931-formats`
-are pinned to **v0.5.0**; cross-check against KoSIT/Mustang before production B2G.
+are pinned to **v0.6.0**; cross-check against KoSIT/Mustang before production B2G.
 
 ## The document a customer receives
 
@@ -301,7 +303,7 @@ slices. What that product **costs** on a given day is a catalogue fact, so
 `productd` owns it.
 
 ```text
-vertragd  GET /api/v1/malos/{malo}/produkte?from=&to=   → the slices, in order
+vertragd  GET /api/v1/malo/{malo_id}/produkte?from=&to=  → the slices, in order
 productd   POST /api/v1/products/{lf}/resolve            → one version per (code, date)
 ```
 
@@ -393,6 +395,43 @@ marktd_url      = "http://marktd:8180"
 vertragd_url    = "http://vertragd:9780"
 outputd_url     = "http://outputd:9880"   # renders the ZUGFeRD PDF; without it /pdf answers 502
 
+# The coverage a period must reach before billingd will invoice it, 0-100.
+# Unset by default, and then nothing is refused: § 40a Abs. 2 EnWG lets an
+# invoice rest on a Verbrauchsschätzung where the supplier cannot determine the
+# actual consumption for reasons it does not answer for, provided the document
+# says so prominently — the MENGE_UNVOLLSTAENDIG finding carries that duty.
+# One late MSCONS day in a 31-day month reports 96.77 %, and refusing it spends
+# the § 40c Abs. 2 EnWG six weeks waiting for a reading. Set a floor where you
+# would rather chase the readings than estimate below it.
+# min_meter_coverage_pct = 95
+
+# §40 Abs. 2 Nr. 1 EnWG — supplier identity as shown on invoices. The
+# statutory consumer hints (Schlichtungsstelle Energie §111b EnWG, BNetzA
+# Verbraucherservice, Energieberatung, §41c Wechselhinweis) are emitted into
+# every Rechnung automatically as `verbraucherinformationen`.
+seller_name    = "Stadtwerke Musterstadt GmbH"
+
+# §14 Abs. 4 Nr. 2 UStG — the seller's tax identifier. The statute names two and
+# requires **one**: set `seller_vat_id`, or `seller_tax_number`, or both.
+# billingd refuses to start with neither, because every invoice it issued would
+# omit a mandatory term. A §19 UStG Kleinunternehmer generally holds no
+# USt-IdNr. and configures only the Steuernummer.
+seller_vat_id    = "DE123456789"            # BT-31 USt-IdNr.
+seller_tax_number = "123/456/78901"         # BT-32 Steuernummer
+seller_iban    = "DE89370400440532013000"   # BT-84, XRechnung BG-16 SEPA credit transfer
+seller_bic     = "COBADEFFXXX"              # BT-86 (optional)
+
+# Outbound ERP CloudEvents. `erp_hmac_secret` signs them (webhook-signature,
+# HMAC-SHA256) so the receiver can verify the origin. Delivery is durable:
+# each event is written to the `event_outbox` table in the same transaction as
+# the business change (persist-before-dispatch) and drained by a background
+# worker with retry + dead-letter — a crash never drops an event.
+erp_webhook_url = "http://erp:8000/events"
+erp_hmac_secret = "env:BILLINGD_ERP_HMAC_SECRET"
+
+# Everything below is a table: TOML assigns a bare key to the section above it,
+# so a top-level key moved down here lands in that table and is ignored.
+
 [database]
 url = "postgresql://billingd:secret@db:5432/billingd"
 # pool_size = 10   # optional pool tuning (min_connections, acquire/idle/max_lifetime)
@@ -411,22 +450,6 @@ mwst_rate_reduced             = 0.07   # § 12 Abs. 2 UStG — Trinkwasser (Anla
 # allowance carrying its own VAT rate — what the BMF recommends for e-invoices
 # (Schreiben v. 15.10.2024, Rn. 48). A request may override it per invoice.
 settlement_form = "ENDRECHNUNG"
-
-# §40 Abs. 2 Nr. 1 EnWG — supplier identity as shown on invoices. The
-# statutory consumer hints (Schlichtungsstelle Energie §111b EnWG, BNetzA
-# Verbraucherservice, Energieberatung, §41c Wechselhinweis) are emitted into
-# every Rechnung automatically as `verbraucherinformationen`.
-seller_name    = "Stadtwerke Musterstadt GmbH"
-
-# §14 Abs. 4 Nr. 2 UStG — the seller's tax identifier. The statute names two and
-# requires **one**: set `seller_vat_id`, or `seller_tax_number`, or both.
-# billingd refuses to start with neither, because every invoice it issued would
-# omit a mandatory term. A §19 UStG Kleinunternehmer generally holds no
-# USt-IdNr. and configures only the Steuernummer.
-seller_vat_id    = "DE123456789"            # BT-31 USt-IdNr.
-seller_tax_number = "123/456/78901"         # BT-32 Steuernummer
-seller_iban    = "DE89370400440532013000"   # BT-84, XRechnung BG-16 SEPA credit transfer
-seller_bic     = "COBADEFFXXX"              # BT-86 (optional)
 
 # BG-5 / BG-6 — stated field by field, never parsed. A single free-text address
 # line was split on the last comma and the first space, so an operator whose
@@ -449,14 +472,6 @@ email        = "service@stadtwerke-musterstadt.de"  # BT-43
 [oidc]
 issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 audience = "api://mako-billingd"
-
-# Outbound ERP CloudEvents. `erp_hmac_secret` signs them (webhook-signature,
-# HMAC-SHA256) so the receiver can verify the origin. Delivery is durable:
-# each event is written to the `event_outbox` table in the same transaction as
-# the business change (persist-before-dispatch) and drained by a background
-# worker with retry + dead-letter — a crash never drops an event.
-erp_webhook_url = "http://erp:8000/events"
-erp_hmac_secret = "env:BILLINGD_ERP_HMAC_SECRET"
 ```
 
 ## A product that cannot price its commodity is refused
@@ -593,7 +608,13 @@ run_hour_utc         = 4
 abrechnungsinformation = true
 versand              = true    # default: issue and deliver each invoice
 jahresrechnung       = false   # default: skip settlements with no advance source
+catch_up_periods     = 13      # how far back a restarted sweep may bill, per contract
 ```
+
+`catch_up_periods` bounds the walk backwards over unbilled periods (default 13 —
+a year of monthly ones plus one). Without a bound, enabling the worker against a
+portfolio of long-running annual contracts issues a decade of back-dated invoices
+in one night.
 
 All outbound CloudEvents (invoices, settlements and monthly infos) go through
 the transactional outbox and are HMAC-signed with `erp_hmac_secret`
@@ -651,8 +672,7 @@ annual amount, instead of drifting up to 6 ct/year from naïve
 - **Zählerstände + Zählernummer (§40 Abs. 2 Nr. 6):** start/end register
   readings and the aggregate quality flag come from edmd's billing-period
   response (`zaehlerstand_anfang/ende`, `quality`, `messtyp`); estimated or
-  substituted values render the §40a EnWG / §60 Abs. 2 MsbG (Ersatzwert)
-  estimation notice and an
+  substituted values render the § 40a Abs. 2 EnWG estimation notice and an
   `ESTIMATED_READING` warning. The Zählernummer is resolved from the marktd
   device registry (MaLo → Lokationszuordnung → MeLo → Zähler).
 - **Vorjahresvergleich + Vergleichsgruppe (§40 Abs. 2 Nr. 7/8):** the

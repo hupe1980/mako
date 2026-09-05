@@ -12,7 +12,7 @@ use serde::Deserialize;
 use time::Date;
 use uuid::Uuid;
 
-use super::{Ctx, ok, require_kunde, require_vertrag};
+use super::{CedarEnforcer, Ctx, authorize, ok, require_kunde, require_vertrag};
 use crate::{
     domain::{self, Kuendigungsgrund, Vertragsart},
     events::build_cloud_event,
@@ -56,11 +56,13 @@ pub struct ByMaloQuery {
 /// - a gas component without a Messlokation — `start-supply-gas` needs the
 ///   Zählpunktbezeichnung and a MaLo-ID is not one.
 pub async fn create(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(kunden_id): Path<Uuid>,
     Json(input): Json<pg::CreateVersorgungsvertragInput>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    authorize(&enforcer, &claims, "create-vertrag", ctx.tenant())?;
     let kunde = require_kunde(&ctx, kunden_id).await?;
 
     let vertragsart = Vertragsart::from_db(input.vertragsart.as_deref().unwrap_or("SONDERVERTRAG"));
@@ -130,10 +132,12 @@ fn unprocessable_json(body: serde_json::Value) -> ApiError {
 
 /// `GET /api/v1/vertraege/{id}` — contract with its components.
 pub async fn get(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-vertrag", ctx.tenant())?;
     let vertrag = require_vertrag(&ctx, id).await?;
     let komponenten = pg::list_komponenten(&ctx.pool, id)
         .await
@@ -148,10 +152,12 @@ pub struct ListQuery {
 
 /// `GET /api/v1/vertraege` — open contracts.
 pub async fn list_open(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-vertrag", ctx.tenant())?;
     let rows = pg::list_offene_vertraege(
         &ctx.pool,
         ctx.tenant(),
@@ -164,10 +170,12 @@ pub async fn list_open(
 
 /// `GET /api/v1/kunden/{id}/vertraege`
 pub async fn list_by_kunde(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(kunden_id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-vertrag", ctx.tenant())?;
     require_kunde(&ctx, kunden_id).await?;
     let rows = pg::list_vertraege_by_kunde(&ctx.pool, kunden_id, ctx.tenant())
         .await
@@ -191,11 +199,13 @@ pub async fn list_by_kunde(
 /// answer window the two usually agree; across a month boundary they do not,
 /// and the answer would otherwise state a date a whole notice period out.
 pub async fn by_malo(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(malo_id): Path<String>,
     axum::extract::Query(q): axum::extract::Query<ByMaloQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-vertrag", ctx.tenant())?;
     let stichtag = match q.stichtag.as_deref() {
         Some(raw) => Some(
             Date::parse(raw, &time::format_description::well_known::Iso8601::DATE).map_err(
@@ -303,11 +313,13 @@ pub struct ProdukteQuery {
 /// **Point form** (`?as_of=`, default today) answers the single-product
 /// question.
 pub async fn malo_produkte(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(malo_id): Path<String>,
     Query(q): Query<ProdukteQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-vertrag", ctx.tenant())?;
     if let (Some(from), Some(to)) = (q.from, q.to) {
         if from > to {
             return Err(ApiError::bad_request("from must not be after to"));
@@ -356,11 +368,13 @@ pub async fn malo_produkte(
 /// it in the portal would put four statutes in a second place; asking here
 /// keeps one answer.
 pub async fn kuendigungsfrist(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(id): Path<Uuid>,
     Query(q): Query<KuendigungsfristQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-vertrag", ctx.tenant())?;
     let vertrag = require_vertrag(&ctx, id).await?;
     let kunde = require_kunde(&ctx, vertrag.kunden_id).await?;
     let eingang = q.eingang.unwrap_or_else(heute);
@@ -406,9 +420,11 @@ pub struct KuendigungsfristQuery {
 
 /// `GET /api/v1/vertraege/billing-candidates` — § 40b EnWG billing cadence feed.
 pub async fn billing_candidates(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-vertrag", ctx.tenant())?;
     let rows = pg::list_billing_candidates(&ctx.pool, ctx.tenant())
         .await
         .map_err(ApiError::Internal)?;
@@ -424,10 +440,12 @@ pub struct ExpiringQuery {
 /// `GET /api/v1/vertraege/expiring` — contracts whose term or price guarantee
 /// runs out soon.
 pub async fn expiring(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Query(q): Query<ExpiringQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-vertrag", ctx.tenant())?;
     let days = q.days.unwrap_or(30).clamp(1, 365);
     let rows = pg::find_expiring_vertraege(&ctx.pool, ctx.tenant(), days, false)
         .await
@@ -457,11 +475,13 @@ pub async fn expiring(
 /// EnWG Textform confirmation the supplier owes the customer — goes into the
 /// outbox.
 pub async fn kuendigen(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(id): Path<Uuid>,
     Json(input): Json<pg::KuendigungInput>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    authorize(&enforcer, &claims, "kuendigen-vertrag", ctx.tenant())?;
     let vertrag = require_vertrag(&ctx, id).await?;
     if !matches!(vertrag.status.as_str(), "AKTIV" | "TEILERFUELLUNG") {
         return Err(ApiError::conflict(format!(
@@ -558,10 +578,12 @@ pub async fn kuendigen(
 /// Allowed while the Lieferende is still ahead. The in-flight Lieferende UTILMD
 /// is the operator's to cancel in `processd`; the response says so.
 pub async fn widerruf_kuendigung(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "kuendigen-vertrag", ctx.tenant())?;
     let mut tx = ctx.pool.begin().await.map_err(anyhow_from)?;
     if let Err(e) = pg::widerruf_kuendigung(&mut tx, id, ctx.tenant()).await {
         let msg = e.to_string();
@@ -595,10 +617,12 @@ pub async fn widerruf_kuendigung(
 /// the outbound queue is withdrawn with it; one already sent to `processd` has
 /// to be cancelled there, and the response says which case this was.
 pub async fn stornieren(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "stornieren-vertrag", ctx.tenant())?;
     let vertrag = require_vertrag(&ctx, id).await?;
     if !matches!(vertrag.status.as_str(), "ANGELEGT" | "IN_BEARBEITUNG") {
         return Err(ApiError::conflict(format!(
@@ -628,11 +652,23 @@ pub async fn stornieren(
 /// A Tarifwechsel changes price, not supply: no UTILMD is sent, and the MaKo
 /// status is untouched.
 ///
-/// ## What is enforced
+/// ## Two different acts
 ///
-/// - **Preisgarantie.** A change taking effect inside the guarantee window is
-///   refused unless the operator overrides it, and every override is written to
-///   `preisgarantie_override_log` with the operator's token subject.
+/// `initiator` is required, because the law treats them differently.
+/// § 41 Abs. 5 Satz 1 EnWG binds a supplier who exercises a reserved right to
+/// change the contract, and Satz 4 gives the customer a fee-free termination
+/// right *because* the supplier exercised it. A tariff the customer asked for
+/// is an agreed change: it is confirmed, it carries no Sonderkündigungsrecht,
+/// and it is not held to the supplier's notice periods.
+///
+/// ## What is enforced for a supplier-initiated future change
+///
+/// - **§ 41 Abs. 5 Satz 3 EnWG.** `preise[]` states the Umfang of the change.
+///   Required where this deployment renders the Preisänderungsanzeige itself
+///   (`outputd_url` configured), because the lines are the document's content.
+///   Where the CloudEvent is the notice, the ERP composing the letter states
+///   the Umfang from its own price sheets, and the lines are optional — sent
+///   along when the caller has them, and marked absent on the event when not.
 /// - **§ 41 Abs. 5 Satz 2 EnWG.** The customer is owed a month's notice (two
 ///   weeks outside households); a Grundversorgungspreis needs the six weeks of
 ///   § 5 Abs. 2 StromGVV/GasGVV. A Wirksamkeit too close to today is refused
@@ -640,15 +676,23 @@ pub async fn stornieren(
 /// - **§ 5 Abs. 2 GVV.** A Grundversorgungspreis changes only at the start of a
 ///   month.
 ///
+/// ## What is enforced for every Tarifwechsel
+///
+/// - **Preisgarantie.** A change taking effect inside the guarantee window is
+///   refused unless the operator overrides it, and every override is written to
+///   `preisgarantie_override_log` with the operator's token subject.
+///
 /// A retroactive correction (`wirksamkeit <= today`) is exempt from the notice
 /// rules — it is not an announced price change but the repair of one already
 /// agreed.
 pub async fn tarifwechsel(
     claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(vertrag_id): Path<Uuid>,
     Json(input): Json<pg::TarifwechselInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "tarifwechsel-vertrag", ctx.tenant())?;
     let vertrag = require_vertrag(&ctx, vertrag_id).await?;
     let kunde = require_kunde(&ctx, vertrag.kunden_id).await?;
     let komp = pg::fetch_komponente(&ctx.pool, input.komp_id)
@@ -665,6 +709,9 @@ pub async fn tarifwechsel(
     let is_future = input.wirksamkeit > today;
     let art = Vertragsart::from_db(&vertrag.vertragsart);
     let regime = domain::preisanpassungsregime(art, kunde.haushaltskunde);
+    // Only the supplier exercising a change right owes the § 41 Abs. 5 notice,
+    // and only a change still ahead of its Wirksamkeit can be announced.
+    let anzeigepflichtig = is_future && input.initiator.owes_preisanpassungsanzeige();
 
     // ── Preisgarantie ────────────────────────────────────────────────────────
     if !input.override_preisgarantie
@@ -679,8 +726,30 @@ pub async fn tarifwechsel(
         })));
     }
 
+    // ── The announceable Umfang (§ 41 Abs. 5 Satz 3 EnWG) ────────────────────
+    // The requirement is on the notice, so it binds whoever composes it. Where
+    // this deployment renders the Preisänderungsanzeige itself, the lines *are*
+    // the page's content: without them the sweep would produce a document that
+    // states no Umfang, so the change is refused here instead. Where the
+    // CloudEvent is the notice, the ERP receiving it composes the letter from
+    // its own price sheets and states the Umfang there — the lines are welcome
+    // and travel with the event, but demanding them would make that integration
+    // impossible without telling any customer anything more.
+    if anzeigepflichtig && input.preise.is_empty() && ctx.cfg.outputd_url.is_some() {
+        return Err(unprocessable_json(serde_json::json!({
+            "error": "der Umfang der Preisänderung fehlt",
+            "hinweis": "preise[] mit {bezeichnung, einheit, bisher, neu} je geänderter \
+                        Preiskomponente angeben — diese Instanz erstellt die \
+                        Preisänderungsanzeige selbst und kann den Umfang nur aus ihnen \
+                        angeben",
+            "rechtsgrundlage": "§ 41 Abs. 5 Satz 3 EnWG",
+        })));
+    }
+
     // ── Notice period (§ 41 Abs. 5 EnWG / § 5 Abs. 2 GVV) ────────────────────
-    if is_future {
+    // Both rules bind the supplier changing its own prices. A tariff the
+    // customer asked for is an agreed change and is not held to them.
+    if anzeigepflichtig {
         let fruehestens = regime.fruehestens_wirksam(today);
         if input.wirksamkeit < fruehestens {
             return Err(unprocessable_json(serde_json::json!({
@@ -742,11 +811,12 @@ pub async fn tarifwechsel(
 
     // One act, whatever the date: open a slice from `wirksamkeit`. A future
     // change is a slice that starts in the future — there is no pending state
-    // and nothing to apply later, which is what let three columns and a daily
-    // worker phase go.
+    // and nothing to apply later.
     //
-    // The notice is owed only for a change that has not happened yet; a
-    // retroactive correction announces a date that has already passed.
+    // The notice is owed only where the supplier exercises a change right and
+    // the change has not happened yet; a retroactive correction announces a
+    // date that has already passed, and a switch the customer asked for is
+    // confirmed rather than announced.
     let preise = (!input.preise.is_empty())
         .then(|| serde_json::to_value(&input.preise))
         .transpose()
@@ -758,7 +828,8 @@ pub async fn tarifwechsel(
         &input.new_product_code,
         input.wirksamkeit,
         input.grund.as_deref(),
-        !is_future,
+        input.initiator,
+        !anzeigepflichtig,
         preise.as_ref(),
     )
     .await
@@ -781,6 +852,21 @@ pub async fn tarifwechsel(
             "new_product_code": input.new_product_code,
             "wirksamkeit": input.wirksamkeit.to_string(),
             "geplant": is_future,
+            "initiator": input.initiator,
+            // What the customer is to be told, and what they are not. A switch
+            // they asked for is confirmed; only the supplier exercising a
+            // change right announces one with a termination right attached.
+            "preisanpassungsanzeige_erforderlich": anzeigepflichtig,
+            "sonderkuendigungsrecht": if anzeigepflichtig {
+                serde_json::json!({
+                    "besteht": true,
+                    "rechtsgrundlage": "§ 41 Abs. 5 Satz 4 EnWG",
+                    "wirksam_zum": input.wirksamkeit.to_string(),
+                    "entgeltfrei": true,
+                })
+            } else {
+                serde_json::json!({ "besteht": false })
+            },
         }),
     );
     mako_service::outbox::enqueue(&mut tx, &ce)
@@ -795,7 +881,9 @@ pub async fn tarifwechsel(
         "wirksamkeit": input.wirksamkeit.to_string(),
         "wirksam_ab": input.wirksamkeit.to_string(),
         "rueckwirkend": !is_future,
-        "ankuendigungsfrist": if is_future { Some(regime) } else { None },
+        "initiator": input.initiator,
+        "preisanpassungsanzeige_erforderlich": anzeigepflichtig,
+        "ankuendigungsfrist": if anzeigepflichtig { Some(regime) } else { None },
     }))
 }
 
@@ -806,11 +894,13 @@ pub async fn tarifwechsel(
 /// `preisgarantie_bis` is derived from the COM's `zeitlicheGueltigkeit`, so the
 /// Tarifwechsel guard and the document the customer holds can never disagree.
 pub async fn put_preisgarantie(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(vertrag_id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<StatusCode> {
+    authorize(&enforcer, &claims, "write-preisgarantie", ctx.tenant())?;
     use rubo4e::current::Preisgarantie;
     // The BO4E gate, which for a `Preisgarantie` also checks the `Zeitraum` in
     // `zeitlicheGueltigkeit` — the very field `preisgarantie_bis` is derived
@@ -849,10 +939,12 @@ pub async fn put_preisgarantie(
 
 /// `GET /api/v1/vertraege/{id}/preisgarantie`
 pub async fn get_preisgarantie(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(vertrag_id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-vertrag", ctx.tenant())?;
     pg::fetch_preisgarantie(&ctx.pool, vertrag_id, ctx.tenant())
         .await
         .map_err(ApiError::Internal)?

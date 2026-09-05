@@ -429,6 +429,13 @@ pub struct PendingDelivery {
 /// is tolerable only because the far end can deduplicate — the portal
 /// republishes the same row, and the relay body carries the delivery id.
 ///
+/// `postal_push` says whether this deployment has a postal relay to push to.
+/// With `false`, `POST` rows are not claimed at all: they are letters a print
+/// service collects from [`postal_spool`], and a claim is the first step of a
+/// path that ends in `FAILED` — which would delete them from that spool, since
+/// it lists `PENDING` rows. The pull model is a supported integration, not a
+/// broken push, so it must not consume the retry budget.
+///
 /// # Errors
 ///
 /// Propagates database errors.
@@ -437,12 +444,14 @@ pub async fn claim_due(
     tenant: &str,
     limit: i64,
     retry_after: time::Duration,
+    postal_push: bool,
 ) -> Result<Vec<PendingDelivery>> {
     let rows = sqlx::query(
         r"WITH due AS (
               SELECT dd.delivery_id
               FROM document_deliveries dd
               WHERE dd.tenant = $1 AND dd.status = 'PENDING' AND dd.next_attempt_at <= now()
+                AND ($4 OR dd.channel <> 'POST')
               ORDER BY dd.next_attempt_at
               LIMIT $2
               FOR UPDATE SKIP LOCKED
@@ -460,6 +469,7 @@ pub async fn claim_due(
     .bind(tenant)
     .bind(limit)
     .bind(retry_after)
+    .bind(postal_push)
     .fetch_all(pool)
     .await
     .context("claim due deliveries")?;
@@ -585,6 +595,10 @@ pub async fn record_read(pool: &PgPool, tenant: &str, delivery_id: Uuid) -> Resu
 
 /// What a print service pulls: the `POST` deliveries still waiting, with the
 /// document ids whose bytes it then fetches.
+///
+/// `PENDING` is the whole spool, which is why [`claim_due`] must never let a
+/// `POST` row that has no relay to push to reach `FAILED`: a letter that left
+/// this list was never printed, and nobody is watching the status column.
 ///
 /// # Errors
 ///

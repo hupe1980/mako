@@ -3,8 +3,6 @@ title = "Platform"
 description = "Use Platform for multi-tenant gateways, test isolation, hot-reload, and custom DoS limits. Alternative to the global ReleaseRegistry singleton."
 weight = 13
 +++
-# Platform Guide
-
 The `Platform` struct provides explicit, isolated instances of the EDI@Energy processing pipeline. This is the recommended approach for multi-tenant servers, integration tests, and any application that needs more than one profile configuration at the same time.
 
 ---
@@ -20,7 +18,7 @@ The top-level `parse()` and `parse_interchange()` functions use `ReleaseRegistry
 | **Test isolation** | Concurrent tests that register custom profiles interfere with each other | Each test gets its own `Platform` |
 | **Multi-tenant gateways** | Strom and Gas tenants need different profile subsets | One `Platform` per tenant |
 | **Hot-reload** | New BDEW release requires a process restart | Swap `Arc<Platform>` at runtime |
-| **Custom DoS limits** | Global defaults may be too generous or too strict | `platform.parse_with_config(bytes, config)` |
+| **Custom DoS limits** | Global defaults may be too generous or too strict | `platform.parse_with_config(bytes, config)` for one message, `platform.parse_interchange_with_config(reader, config)` for an interchange |
 
 ---
 
@@ -64,21 +62,22 @@ To trim which built-in profiles are compiled in, use the crate's per-message-typ
 not enabled at build time is simply absent from `with_all_profiles()`.
 
 The one runtime constructor for a custom registry is
-`ReleaseRegistry::new(Vec<&'static dyn Profile>)` combined with
-`Platform::new(registry)`. This path is intended for callers that supply **their
-own** `Profile` implementations — for example, hand-written profiles for classic
-5.5.x archive releases that the crate does not bundle:
+`ReleaseRegistry::new(Vec<&'static Profile>)` combined with
+`Platform::new(registry)`:
 
 ```rust
-use edi_energy::{Platform, registry::{Profile, ReleaseRegistry}};
-
-// `my_profiles::register` pushes your own `&'static dyn Profile` implementations.
-let mut profiles: Vec<&'static dyn Profile> = Vec::new();
-my_profiles::register(&mut profiles);
+use edi_energy::{Platform, registry::ReleaseRegistry};
 
 let platform = Platform::new(ReleaseRegistry::new(profiles));
 let msg = platform.parse(bytes)?;
 ```
+
+`Profile` is a **struct**, not a trait — a profile is the MIG and AHB read as
+data (`crates/edi-energy/src/profile/mod.rs:31`), so there is nothing to
+implement. The `&'static Profile` values that go into that `Vec` are the
+crate-private generated statics, which is why this constructor is in practice
+for tests and benchmarks that want an isolated registry rather than a way to
+supply profiles of your own.
 
 You can also widen the receive tolerance on any platform:
 
@@ -94,12 +93,12 @@ let platform = Platform::with_all_profiles().with_receive_tolerance_days(3);
 
 ## Custom ParseConfig
 
-`Platform` does not store a `ParseConfig`. Instead, pass a config per call via
-`parse_with_config`. `ParseConfig` exposes its DoS limits as public fields, so
-build one from `ParseConfig::default()` with struct-update syntax:
+`Platform` does not store a `ParseConfig`; a config is passed per call.
+`ParseConfig` exposes its DoS limits as public fields, so build one from
+`ParseConfig::default()` with struct-update syntax:
 
 ```rust
-use edi_energy::{Platform, ParseConfig};
+use edi_energy::{ParseConfig, Platform};
 
 let config = ParseConfig {
     max_input_bytes: Some(512_000), // 512 KB
@@ -108,11 +107,21 @@ let config = ParseConfig {
 };
 
 let platform = Platform::with_all_profiles();
+
+// One message, the platform's registry, the caller's limits:
 let msg = platform.parse_with_config(bytes, config)?;
+
+// Interchange iteration takes the config and the platform's registry:
+for msg in platform.parse_interchange_with_config(reader, config) { /* ... */ }
+
+// Outside a platform entirely, `Parser` carries the config against the global
+// registry:
+let msg = edi_energy::Parser::with_config(config).parse(bytes)?;
 ```
 
-The interchange API takes a config the same way via
-`Platform::parse_interchange_with_config(reader, config)`.
+`parse_with_config` is the single-message counterpart of `parse`: same registry,
+same profile dispatch, with the DoS limits stated per call rather than taken from
+the global defaults.
 
 The only builder-style method on `ParseConfig` is `with_reference_date`, which
 pins the date used for profile validity lookups during validation (useful for
@@ -176,14 +185,19 @@ std::thread::spawn(move || {
 
 ## `ReleaseRegistry` Deep Dive
 
-`ReleaseRegistry` maps `(message_type_code, association_code)` pairs to `Arc<dyn Profile>` objects. Each profile bundles:
+`ReleaseRegistry` maps `(MessageType, Release)` to `&'static Profile`
+(`crates/edi-energy/src/registry/mod.rs:115`). Each profile bundles:
 
-- **MIG rule pack** — segment structure rules
-- **AHB rule packs** — per-PID validation rules
-- **Codelists** — allowed values per data element
-- **Metadata** — `valid_from`, `valid_until`, `source_document`
+- the **MIG** — the Nachrichtenstruktur and every place's Segmentlayout
+- the **AHB** — one Prüfschablone per Prüfidentifikator
+- **code lists** — the values each data element admits
+- **metadata** — `valid_from()`, `valid_until()`, `source_document()`
 
-The registry resolves the correct profile using the UNH association code (`DE 0057`) extracted from each parsed message.
+Resolution is by the UNH association code (`DE 0057`) **and** the reference date:
+several profiles may share one wire release code where BDEW revised a format
+without changing the EDIFACT version — COMDIS `1.0g` appears in both
+`fv20251001` and `fv20261001` — so the index keeps the candidates sorted by
+`valid_from` and picks the latest one at or before the date.
 
 ### Format boundaries
 

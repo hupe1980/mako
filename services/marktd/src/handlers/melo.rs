@@ -185,13 +185,23 @@ where
         // asked for a conditional one and would otherwise be told it succeeded.
         IfMatch::Malformed => return malformed_if_match(),
     };
-    let exists = state
-        .melo_repo
-        .find(&melo_id)
-        .await
-        .ok()
-        .flatten()
-        .is_some();
+    // Not `.ok().flatten().is_some()`: that reported "does not exist" both for a
+    // storage fault and for a row that exists but no longer deserialises, so a
+    // PUT over an existing MeLo answered `201 Created`. Unlike `malo`, the MeLo
+    // upsert takes its version from the caller rather than returning a
+    // post-increment one, so the answer cannot be derived from the write and
+    // this probe has to stay — but it has to be honest about not knowing.
+    let exists = match state.melo_repo.find(&melo_id).await {
+        Ok(found) => found.is_some(),
+        Err(e) => {
+            tracing::error!(melo_id = %melo_id, error = %e, "put_melo: existence probe failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "could not determine whether the MeLo exists"})),
+            )
+                .into_response();
+        }
+    };
 
     // L4 hard cut: validate and normalise the incoming BO4E Messlokation payload.
     let melo = match normalize_messlokation(req.data) {

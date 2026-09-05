@@ -145,10 +145,15 @@ impl Daemon for Einsd {
                     Ok(plants) if !plants.is_empty() => {
                         let today = mako_fristen::heute();
                         for plant in &plants {
-                            let days_remaining = (plant.foerderendedatum - today).whole_days();
+                            // The query selects on a BETWEEN, so a plant with no
+                            // calendar Förderende is never in this list.
+                            let Some(foerderende) = plant.foerderendedatum else {
+                                continue;
+                            };
+                            let days_remaining = (foerderende - today).whole_days();
                             tracing::info!(
                                 tr_id = %plant.tr_id,
-                                foerderendedatum = %plant.foerderendedatum,
+                                foerderendedatum = %foerderende,
                                 days_remaining,
                                 "foerderung_auslaufend — emitting CloudEvent"
                             );
@@ -157,7 +162,7 @@ impl Daemon for Einsd {
                                 &alert_client,
                                 &plant.tr_id,
                                 &plant.malo_id,
-                                plant.foerderendedatum,
+                                foerderende,
                                 days_remaining,
                             )
                             .await;

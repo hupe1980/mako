@@ -215,7 +215,8 @@ async fn anmeldung_decisions_insert_and_list() {
         malo_id: "12345678989".to_owned(),
         lf_mp_id: "9900100000001".to_owned(),
         decision: AnmeldungDecision::Accept,
-        antwortcode: None,
+        antwortcode: Some("A51".to_owned()),
+        antwortcode_ebd: Some("E_0623".to_owned()),
         detail: None,
         initiator_is_affiliate: false,
         decided_at: now,
@@ -231,6 +232,16 @@ async fn anmeldung_decisions_insert_and_list() {
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].process_id, process_id);
     assert!(matches!(records[0].decision, AnmeldungDecision::Accept));
+    // The tree round-trips. `antwortcode_ebd` was a column nothing wrote, so
+    // every stored decision named a code without saying which EBD published it.
+    assert_eq!(records[0].antwortcode.as_deref(), Some("A51"));
+    assert_eq!(records[0].antwortcode_ebd.as_deref(), Some("E_0623"));
+    let one = repo
+        .find_by_process_id(process_id, "9900357000004")
+        .await
+        .expect("find_by_process_id")
+        .expect("the decision");
+    assert_eq!(one.antwortcode_ebd.as_deref(), Some("E_0623"));
 
     // STP rate: 1 accept out of 1 → 100%
     let rate = repo

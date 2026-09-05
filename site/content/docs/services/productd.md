@@ -1,17 +1,77 @@
 +++
 title = "productd Operator Guide"
-description = "productd operator guide: Product & Tariff Catalog daemon (LF role). User-defined energy products (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE/SHARING); all prices in Tarifpreisblatt JSONB; product version history; MaLo→product assignment, 15-min EPEX Spot day-ahead prices for §41a dynamic tariffs."
+description = "Operator guide for productd, the LF product and tariff catalogue: Tarifpreisblätter, §41a EPEX dynamic pricing, the §41c comparison feed and B2B Angebote."
 weight = 31
-[extra]
-mermaid = true
 +++
-# `productd` — Product & Tariff Catalog
-
 `productd` is the single source of truth for **everything the LF sells** to end customers.
 `billingd` and the customer portal query it exclusively for pricing — `marktd` is never used
 for retail product pricing.
 
+The **LF** (Lieferant) is the energy supplier, one of the four German market roles
+alongside the NB (grid operator), MSB (metering operator) and BKV (balance
+responsible party) — see [Party Roles](@/docs/architecture/domain-model.md#party-roles-marktrollen).
+Every route is keyed by that supplier's **MP-ID**, its 13-digit BDEW-Codenummer
+([MP-ID](@/docs/architecture/domain-model.md#mp-id-marktpartner-13-digits)), and a
+product is priced against a **Marktlokation (MaLo)** — the grid point at which
+energy is taken or fed in
+([Market Objects](@/docs/architecture/domain-model.md#market-objects-objekte)).
+
 Port: **`:9080`**
+
+## Authentication
+
+`Claims` is an axum extractor, verified per request: the token's signature, its
+audience, and its `mako_tenant` claim, which must be this deployment's — a
+validly signed token from another operator in the same OIDC realm is otherwise
+indistinguishable from a local one, and the `401` detail deliberately does not
+echo the expected tenant back.
+
+## Authorization
+
+A verified token says *who* is calling. `policies/productd.cedar` says what they
+may do, and the two are separate decisions here because the Tarifpreisblatt this
+service stores is what the next `billingd` run bills, and nothing downstream
+re-checks it. `PUT /api/v1/products/{lf_mp_id}/{code}` rewrites a live tariff's
+Arbeitspreis; `PUT /api/v1/epex-prices/{date}` does the same for every § 41a
+dynamic tariff at once. The per-handler `lf_mp_id == claims.tenant()` check
+answers "is this my tenant's catalogue?", which is a different question.
+
+| Action | Routes | Who |
+|---|---|---|
+| `read-product` | product `GET`s, `/history`, `/energiemix`, `POST …/resolve` | any token of the tenant |
+| `read-marktpreise` | EPEX and nEHS `GET`s | any token of the tenant |
+| `write-product` | `PUT` / `DELETE` of a product and its `/energiemix` | LF, MSB, ESA, ADMIN |
+| `write-marktpreise` | `PUT /epex-prices/{date}`, `PUT /nehs-prices/{date}` | LF, MSB, ESA, ADMIN |
+| `read-angebot` | `GET /angebote[/{id}[/comparison]]` | LF, MSB, ESA, ADMIN |
+| `write-angebot` | `POST /angebote`, `PUT /angebote/{id}` | LF, MSB, ESA, ADMIN |
+| `versenden-angebot` | `POST /angebote/{id}/versenden` | LF, MSB, ESA, ADMIN |
+| `entscheiden-angebot` | `POST /angebote/{id}/annehmen`, `/ablehnen` | LF, MSB, ESA, ADMIN |
+| `expire-angebote` | `POST /angebote/expire` | LF, MSB, ESA, ADMIN |
+| `use-mcp` | the whole `/mcp` surface | LF, MSB, ESA, ADMIN |
+
+Reading carries no role requirement. The published subset of exactly that data
+already leaves the house unauthenticated under § 41c, `billingd` resolves
+products with a narrow service credential, and an auditor reading a price sheet
+moves no money. Everything that *sets* a price is held to a market role, as is
+the whole Angebot lifecycle — an Angebot names a prospect and quotes them a
+bespoke price, so even reading one is an operator's act.
+
+MSB and ESA are in that set deliberately: the `ENERGIEDIENSTLEISTUNG` category
+covers Messstellenbetrieb and the smart-meter services an MSB sells, and an ESA
+sells the same catalogue. A policy naming LF alone would lock an MSB deployment
+out of its own price sheet, and an endpoint no caller can reach is worse than one
+too many can.
+
+A denial is a bare `403`; which rule refused, and for which subject, goes to the
+log. There is deliberately no four-eyes split between drafting a price and
+publishing it: that needs a job-function axis, and `mako_roles` carries market
+roles only. `product_history` keeps every superseded version instead, so a price
+change is attributable where it is not separately approved.
+
+The `/mcp` surface is gated by the same verifier and the same policy — a JWT is
+checked for `use-mcp` — and a configured `[mcp]` key stays accepted for agent
+clients that mint no OIDC token. The two § 41c comparison-feed routes are public
+by statute — see [below](#ss-41c-enwg-comparison-feed).
 
 ---
 
@@ -53,7 +113,7 @@ graph LR
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `PUT` | `/api/v1/products/{lf_mp_id}/{product_code}` | Upsert product; archives previous version in `product_history`. Runs the `preistyp` whitelist (mako-only types move to the `mako:preistyp` ZusatzAttribut), then [the BO4E gate](@/docs/architecture/domain-model.md#the-bo4e-gate). What is stored is the canonical round-trip, so the gate's strict-enum stage is what keeps a `sparte` typo from being rewritten to the literal `"UNKNOWN"` |
+| `PUT` | `/api/v1/products/{lf_mp_id}/{product_code}` | Upsert product; archives the previous version in `product_history`. Runs the [`preistyp` whitelist](#two-vocabularies-one-field-and-why-they-are-kept-apart), then [the BO4E gate](@/docs/architecture/domain-model.md#the-bo4e-gate) |
 | `GET` | `/api/v1/products/{lf_mp_id}/{product_code}` | Fetch latest product |
 | `DELETE` | `/api/v1/products/{lf_mp_id}/{product_code}` | **Soft-delete** — sets `valid_to = today`; product retained for billing history; excluded from comparison feed |
 | `GET` | `/api/v1/products/{lf_mp_id}` | List products (`?category=&sparte=&kundentyp=&include_drafts=&include_expired=`) |
@@ -65,14 +125,15 @@ graph LR
 | `PUT` | `/api/v1/epex-prices/{date}` | Import EPEX day-ahead prices (96/92/100 15-min MTUs, or 24 hourly; idempotent) |
 | `GET` | `/api/v1/epex-prices/{date}/quarter-hourly` | 15-min MTU points `{mtu_start, price_ct_kwh}` |
 | `GET` | `/api/v1/epex-prices/{year}/{month}/average` | Monthly average — used by `einsd` Direktvermarktung |
-| `PUT` | `/api/v1/nehs-prices/{date}` | Import a dated nEHS certificate price (EUR/t CO₂) — EEX auction clearing (weekly from 01.07.2026, §10 BEHG corridor 55–65 €/t), Verkaufsphase (68 €) or manual. `source` ∈ `auktion`/`verkaufsphase`/`nachkauf`/`manual` (CHECK-constrained; anything else → 422) |
+| `PUT` | `/api/v1/nehs-prices/{date}` | Import a dated nEHS certificate price (EUR/t CO₂) — `source` ∈ `auktion`/`verkaufsphase`/`nachkauf`/`manual`, CHECK-constrained; anything else → 422. Each source is checked against what § 10 BEHG fixes for that year — see [nEHS certificate prices](#nehs-certificate-prices-behg) |
 | `GET` | `/api/v1/nehs-prices/latest?date=` | Most recent nEHS price at or before `date` — used by `billingd` for the Gas CO₂ component (CO2KostAufG §3) |
 | `POST/GET` | `/api/v1/angebote` | B2B Angebot (quotation) — ANGELEGT→VERSANDT→ANGENOMMEN/ABGELEHNT/ABGELAUFEN |
 | `GET` | `/api/v1/angebote/{id}` | One Angebot |
 | `GET` | `/api/v1/angebote/{id}/comparison` | Prices the scenarios and persists the BO4E `Angebot` to `angebote.bo4e` |
 | `POST` | `/api/v1/angebote/{id}/versenden` | ANGELEGT → VERSANDT |
-| `POST` | `/api/v1/angebote/{id}/annehmen` · `/ablehnen` | VERSANDT → ANGENOMMEN / ABGELEHNT |
-| `POST` | `/api/v1/angebote/expire` | Sweeps VERSANDT Angebote past `gueltig_bis` to ABGELAUFEN |
+| `PUT` | `/api/v1/angebote/{id}` | Edit before sending — `gueltig_bis`, `lieferbeginn`, `laufzeit_monate`, `positionen`, `varianten`, `notizen`. **`ANGELEGT` only**: once VERSANDT the customer holds the document |
+| `POST` | `/api/v1/angebote/{id}/annehmen` · `/ablehnen` | ANGELEGT **or** VERSANDT → ANGENOMMEN / ABGELEHNT. Acceptance also requires a priced `bo4e` — otherwise `de.tarif.angebot.angenommen` would carry an empty document |
+| `POST` | `/api/v1/angebote/expire` | Sweeps ANGELEGT and VERSANDT Angebote past `gueltig_bis` to ABGELAUFEN |
 | `GET` | `/health` | Liveness |
 | `GET` | `/health/ready` | Readiness |
 
@@ -106,12 +167,19 @@ Content-Type: application/json
 `billingd` extracts `grundpreis_ct_per_day` (20 ct/day) and `arbeitspreis_ct_per_kwh`
 (32 ct/kWh) by traversing `data.tarifpreise` keyed on `preistyp`.
 
+What a `PUT` stores is the **canonical round-trip** through `rubo4e`, not the
+request body — which is why the gate's strict-enum stage matters here. A
+`Sparte` that decodes to the `Unknown` catch-all serialises back as the literal
+string `"UNKNOWN"`, so skipping that stage would silently *replace* a typo with a
+value the caller never sent.
+
 
 ### Two vocabularies, one field — and why they are kept apart
 
 BO4E `Preistyp` defines **ten** values. mako prices things the standard does not
 model — an EEG-Marktprämie, a HEMS optimisation event, an E-Mobility roaming fee
-— so the accepted whitelist is a superset of about thirty.
+— so the accepted whitelist (`handlers::VALID_PREISTYPEN`) is a superset of thirty:
+those ten plus twenty mako extensions.
 
 Those extras do **not** go in the BO4E field. A document stamped
 `_typ: "TARIFPREISBLATT"` carrying `preistyp: "EEG_MARKTPRAEMIE"` is not valid
@@ -243,9 +311,22 @@ The rules live in `src/behg.rs` as pure functions with a test per phase.
 § 41c EnWG obliges suppliers to let third parties operating **independent
 comparison tools** use offer-relevant information free of charge, **in open data
 formats**, for Haushaltskunden and Kleinstunternehmen with an expected annual
-consumption below 100 000 kWh. That obligation is why these two routes — and
-only these two — carry no token; every other route in the service is
-authenticated.
+consumption below 100 000 kWh. An obligation to publish that is discharged only
+behind a bearer token is not discharged, so these two routes — and only these
+two — carry no token and no Cedar action; every other route in the service is
+authenticated and authorized.
+
+The line is mechanical, not conventional: every other handler names the `Claims`
+extractor in its signature, and `get_comparison_feed` / `get_comparison_feed_bo4e`
+are the only two that do not. `tests/authorization_guard.rs` asserts that as an
+equality, not a subset — the risk is a third route quietly joining them.
+
+What bounds the exemption is the query rather than the caller. Both routes read
+through one function whose `WHERE` clause pins `product_status = 'PUBLISHED'` and
+restricts the rows to the comparison categories (`STROM`, `GAS`, `WAERME`,
+`SOLAR`, `WAERMEPUMPE`, `WALLBOX`). A draft tariff, a withdrawn one and an
+Angebot are unreachable through them, and the guard asserts both bounds are still
+in the query — an open route's safety must be a checked fact, not a comment.
 
 
 
@@ -278,8 +359,8 @@ curl -s "http://productd:9080/api/v1/comparison-feed/bo4e?sparte=STROM&kundentyp
       "bezeichnung": "Mako Strom Premium",
       "anbietername": "9900357000004",
       "sparte": "STROM",
-      "kundentypen": ["Privat"],
-      "registeranzahl": "Eintarif",
+      "kundentypen": ["PRIVAT"],
+      "registeranzahl": "EINTARIF",
       "tariftyp": "SONDERTARIF",
       "tarifmerkmale": ["FESTPREIS"],
       "energiemix": {
@@ -303,14 +384,18 @@ curl -s "http://productd:9080/api/v1/comparison-feed/bo4e?sparte=STROM&kundentyp
 | `bezeichnung` | `product.name` |
 | `anbietername` | `lf_mp_id` |
 | `_id` | `product.product_code` |
-| `sparte` | `product.sparte` → `rubo4e::Sparte` |
-| `kundentypen` | `product.kundentyp` → `[rubo4e::Kundentyp]` |
+| `sparte` | `product.sparte` → `rubo4e::Sparte`; `WAERME` maps to `FERNWAERME`, which is what BO4E defines |
+| `kundentypen` | `product.kundentyp` → `[rubo4e::Kundentyp]`; the seven internal segments collapse to `PRIVAT` / `GEWERBE` |
 | `registeranzahl` | `product.register_count` → `rubo4e::Registeranzahl` |
 | `tariftyp` | `data.tariftyp` → `rubo4e::Tariftyp` |
-| `tarifmerkmale` | Derived: `FESTPREIS` if preisgarantie set; `PAKET` if BUNDLE; `ONLINE` if dynamic |
+| `tarifmerkmale` | Derived: `FESTPREIS` if preisgarantie set; `PAKET` if BUNDLE; `ONLINE` if dynamic; `STANDARD` when none applies |
 | `energiemix` | `product.energiemix` → `rubo4e::Energiemix` |
 | `zeitlicheGueltigkeit` | `product.valid_from/valid_to` → `rubo4e::Zeitraum` |
 | `vertragskonditionen` | `data.vertragskonditionen` → `rubo4e::Vertragskonditionen` |
+
+Every enum in that payload is emitted in its BO4E **wire** form — `PRIVAT`, not the
+internal `Haushalt`; `EINTARIF`, not `Eintarif` — because the value is serialised from
+the typed `rubo4e` enum rather than copied from the column.
 
 Both endpoints accept identical query parameters and return the same ETag/caching headers.
 
@@ -366,7 +451,7 @@ curl -s "http://productd:9080/api/v1/comparison-feed?sparte=STROM&kundentyp=Haus
       },
       "jahreskosten_supply_netto_eur": "1014.08",
       "jahreskosten_supply_brutto_eur": "1206.75",
-      "mwst_pct": "19",
+      "mwst_satz": "0.19",
       "laufzeit_monate": 12,
       "kuendigungsfrist_wochen": 4,
       "mindestlaufzeit_monate": 12,
@@ -390,6 +475,20 @@ Responses include `ETag` and `Cache-Control: public, max-age=300` (5-minute cach
 The ETag changes whenever any product in the result set is updated (`PUT /products`),
 so changes propagate to portals within 5 minutes of the next poll.
 
+### `mwst_satz` is a fraction, not a percentage
+
+> **`mwst_satz` carries `"0.19"`, not `19`.** It is the Umsatzsteuersatz as a
+> **share of the net**, exactly as the invoice applies it:
+> `jahreskosten_supply_brutto_eur = jahreskosten_supply_netto_eur × (1 + mwst_satz)`.
+> Reading it as a percentage and dividing by 100 understates the VAT by a factor
+> of 100 and shows a household a brutto barely above the netto.
+
+It is the product's own rate, not a fixed 19 %: a product may carry an
+`mwst_rate_override`, which is refused unless it lies in `0…1` for the same
+reason. Where the rate cannot be determined, `mwst_satz` and
+`jahreskosten_supply_brutto_eur` are both `null` — the feed states no brutto
+rather than one the invoice will not match.
+
 ### What `jahreskosten_supply_*` includes and excludes
 
 `jahreskosten_supply_netto_eur` = Grundpreis (EUR/a) + Arbeitspreis (EUR/a) **only**.
@@ -402,6 +501,10 @@ Jahresgesamtkosten = jahreskosten_supply_brutto_eur
                    + NNE_brutto (from marktd PreisblattNetznutzung by PLZ)
                    + Stromsteuer (2.05 ct/kWh × verbrauch_kwh / 100)
 ```
+
+The `_brutto` figure already carries the MwSt on the supply component at
+`mwst_satz`. The lines added on top are stated net, so the portal applies the
+rate to them itself.
 
 ### Pagination
 
@@ -498,7 +601,7 @@ Marktlokation carrying a bad key — `MaloId` validates the BDEW check digit.
 | `category` | TEXT | 14 values: `STROM`/`GAS`/`WAERME`/`WASSER`/`SOLAR`/`EEG`/`EINSPEISUNG`/`WAERMEPUMPE`/`WALLBOX`/`HEMS`/`EMOBILITY`/`ENERGIEDIENSTLEISTUNG`/`BUNDLE`/`SHARING` |
 | `product_status` | TEXT | `PUBLISHED` (default) — visible to billingd and portals; `DRAFT` — staged, invisible until published |
 | `name` | TEXT | Human-readable name |
-| `sparte` | TEXT | `STROM` / `GAS` / `WAERME` / NULL |
+| `sparte` | TEXT | `STROM` / `GAS` / `WAERME` / `WASSER` / NULL |
 | `register_count` | TEXT | `Eintarif` / `Zweitarif` / `Mehrtarif` |
 | `kundentyp` | TEXT | `Haushalt` / `Gewerbe` / `Waermepumpe` / `Ladesaeule` / `Einspeiser` / `HEMS` / `Gewerbe_RLM` |
 | `dyn_source` | TEXT | `"epex-spot-day-ahead"` for §41a; NULL for fixed. Only this value is accepted — all others are rejected with 422 |
@@ -551,18 +654,20 @@ Content-Type: application/json
 | `list_products` | List products for an LF MP-ID (filter by category / sparte) |
 | `get_product` | Full Tarifpreisblatt JSONB including Preisstaffeln and Energiemix |
 | `get_product_history` | Version history including Energiemix changes (§42 audit trail) |
-| `get_customer_product` | Currently active product for a MaLo |
+| `resolve_product` | Product versions by code + date, batched — the MCP side of `POST /products/{lf}/resolve` |
 | `get_epex_price` | 15-min MTU EPEX day-ahead prices for a date (§41a compliance check) |
-| `list_expiring_contracts` | MaLo→product assignments ending within N days (churn prevention) |
 | `list_angebote` | B2B quotations by status (ANGELEGT/VERSANDT/ANGENOMMEN/…) |
 | `get_angebot` | Full Angebot with enriched positions and variant comparisons |
-| — | The BO4E `Angebot` document is returned by `GET /angebote/{id}/comparison` and stored in `angebote.bo4e` |
 | `get_angebot_summary` | Plain-text Angebot summary for sales staff review |
 | `check_41a_epex_status` | §41a compliance: are tomorrow's EPEX prices imported? CRITICAL/WARNING/OK |
 | `get_product_energiemix` | §42 EnWG Energiemix disclosure (CO₂, fuel mix, certification) |
 | `validate_tariff_config` | Validate Tarifpreisblatt JSONB before PUT (same logic as REST) |
 | `explain_invoice_position` | How a `preistyp` maps to a billingd invoice output + formula |
 | `get_comparison_feed` | Retrieve the § 41c comparison portal feed (proxies the REST endpoint) |
+
+No tool returns the BO4E `Angebot` document: that comes from
+`GET /angebote/{id}/comparison`, which prices the scenarios, and is stored in
+`angebote.bo4e`.
 
 **Prompts:**
 - `configure-41a-tariff` — Step-by-step: configure a §41a EPEX dynamic tariff product (iMSys requirement, §41a guard)

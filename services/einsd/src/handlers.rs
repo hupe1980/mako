@@ -151,10 +151,19 @@ pub fn billing_month_range(year: i16, month: i16) -> Option<(OffsetDateTime, Off
 ///
 /// Returns [`Negativpreis::Unbekannt`] — leaving the two figures caller-supplied
 /// — when edmd is not configured, there is no feed-in or spot data, or the
-/// metering coverage / quality is below the §60 Abs. 2 MsbG threshold. Deriving
-/// on an incomplete or partly-faulty month would find too few negative-price kWh
-/// and thus *overpay*, so a gap is surfaced (logged) rather than silently
-/// under-reduced.
+/// metering coverage / quality is below the threshold this gate applies.
+/// Deriving on an incomplete or partly-faulty month would find too few
+/// negative-price kWh and thus *overpay*, so a gap is surfaced (logged) rather
+/// than silently under-reduced.
+///
+/// The threshold is a **billability** rule, not a metering-duty one: § 40a
+/// Abs. 2 EnWG permits settling on a Verbrauchsschätzung „unter angemessener
+/// Berücksichtigung der tatsächlichen Verhältnisse" where the actual figures
+/// cannot be determined, and Satz 3 requires the estimate, its ground and its
+/// factors to be stated „unter ausdrücklichem und optisch besonders
+/// hervorgehobenem Hinweis". A silently interpolated § 51 reduction is exactly
+/// the undisclosed estimate that forbids — so this refuses to derive rather
+/// than estimating without saying so.
 ///
 /// A month that genuinely had no qualifying negative quarter-hour returns
 /// [`Negativpreis::Ermittelt`] with zeroes. Collapsing that into "unknown" left
@@ -214,7 +223,10 @@ pub async fn derive_negativpreis_from_edmd(
         }
     };
 
-    // §60 Abs. 2 gate: auto-derive only on near-complete, fully-billable data.
+    // § 40a Abs. 2 EnWG gate: auto-derive only on near-complete, fully-billable
+    // data. Below it the figures would be an undisclosed estimate, which
+    // Satz 3 does not permit — the caller supplies them, or Ersatzwerte are
+    // backfilled and the estimate is stated as one.
     // `billable_pct` is absent when the MaLo reports no Einspeisung register at
     // all — which is not "0 % billable", it is nothing to judge, and it must not
     // pass a gate that exists to refuse incomplete data.
@@ -296,8 +308,9 @@ pub enum Negativpreis {
         quarter_hours: u64,
     },
     /// Nothing could be established — no edmd, no prices, or metering below the
-    /// §60 Abs. 2 MsbG threshold. The settlement is left unreduced and the
-    /// receipt records no §51 figures.
+    /// § 40a Abs. 2 EnWG billability threshold. The settlement is left
+    /// unreduced and the receipt records no §51 figures, rather than carrying
+    /// an estimate nothing on the document discloses (Satz 3).
     Unbekannt,
 }
 
@@ -905,15 +918,49 @@ pub async fn get_settlements(
             .into_response();
     }
 
-    match list_settlement_receipts(&pool, &cfg.tenant, &tr_id, q.limit.unwrap_or(24).min(200)).await
+    if let Some(month) = q.month
+        && !(1..=12).contains(&month)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "INVALID_MONTH",
+                "message": "month must be 1–12",
+            })),
+        )
+            .into_response();
+    }
+
+    match list_settlement_receipts(
+        &pool,
+        &cfg.tenant,
+        &tr_id,
+        q.year,
+        q.month,
+        q.limit.unwrap_or(24).min(200),
+    )
+    .await
     {
         Ok(rows) => Json(rows).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
 }
 
+/// `deny_unknown_fields` on purpose. This struct accepted `limit` alone while
+/// the documented URL carries `year` and `month`, so a caller asking for one
+/// Abrechnungsmonat got the whole history back with a 200 and no way to tell —
+/// the filter was applied by nobody and reported by nobody. Both parameters are
+/// implemented below; refusing the ones that are not keeps the next filter from
+/// failing the same silent way.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SettlementsQuery {
+    /// Abrechnungsjahr, e.g. `2026`.
+    pub year: Option<i16>,
+    /// Abrechnungsmonat, 1–12. A `year` may be given without a month; a month
+    /// without a year narrows every year to that month, which is what a
+    /// year-on-year comparison asks for.
+    pub month: Option<i16>,
     pub limit: Option<i64>,
 }
 
@@ -1065,9 +1112,10 @@ pub async fn get_marktwert(
 ///
 /// Every month of `year` settled on a **provisional** Jahresmarktwert, so the
 /// operator can recompute them once the ÜNB publish the binding figure. The
-/// recomputation is `POST /api/v1/settlements/{year}/{month}/correction`, which
-/// keeps the superseded receipt in `settlement_receipt_history` — a § 147 AO
-/// Buchungsbeleg is amended, not overwritten.
+/// recomputation is per plant:
+/// `POST /api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction`. It
+/// writes the correction *beside* the original receipt, which stays live and
+/// unchanged — a § 147 AO Buchungsbeleg is amended, not overwritten.
 pub async fn get_marktwert_nachbewertung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1089,8 +1137,8 @@ pub async fn get_marktwert_nachbewertung(
             "perioden": rows,
             "hinweis": "Anlage 1 Nr. 2 Satz 2 EEG 2023 — these were settled on a provisional \
                         Jahresmarktwert. Recompute each with POST \
-                        /api/v1/settlements/{year}/{month}/correction once the binding figure \
-                        is published.",
+                        /api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction once the \
+                        binding figure is published.",
         }))
         .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
@@ -1609,7 +1657,13 @@ pub async fn post_verguetungssatz_lookup(
         .into_response(),
         Ok(None) => (
             StatusCode::NOT_FOUND,
-            "No matching EEG tariff rate found. Use PUT /api/v1/verguetungssaetze to import additional rates.",
+            "No matching EEG tariff rate found. `eeg_verguetungssaetze` is statutory \
+             reference data seeded from `eeg_billing::seed` — there is no import API, \
+             and rows are not added per operator. Wind and KWKG are absent from the \
+             table by construction (§ 22 Abs. 2 / § 36h derive the value from a BNetzA \
+             Zuschlag, § 7 KWKG prices per Leistungsanteil), so state the plant's own \
+             `verguetungssatz_ct` — or `zuschlagswert_ct` for an awarded value — on \
+             POST /api/v1/anlagen.",
         )
             .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
@@ -3085,7 +3139,7 @@ pub async fn post_pflichtverstoss(
 /// Close the open breach of that Nummer. §52 Abs. 3 Satz 1 Nr. 1 then drops the
 /// rate to 2 €/kW **back to the beginning** for Nr. 1/3/4/11 — so months already
 /// settled at 10 € are overcharged until they are corrected, which is what
-/// `POST /api/v1/settlements/{year}/{month}/correction` is for.
+/// `POST /api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction` is for.
 ///
 /// `404` when no breach of that Nummer is open: a cure without a breach is a
 /// data error, not something to record.
@@ -3126,7 +3180,7 @@ pub async fn put_pflichtverstoss_behoben(
             "behoben_am": behoben_am.to_string(),
             "hinweis": "§52 Abs. 3 Satz 1 Nr. 1 EEG 2023 reduces the charge to 2 EUR/kW back to \
                         the beginning of the breach — correct any month already settled at 10 EUR \
-                        via POST /api/v1/settlements/{year}/{month}/correction",
+                        via POST /api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction",
         }))
         .into_response(),
         Ok(None) => (

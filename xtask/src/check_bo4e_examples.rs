@@ -19,6 +19,16 @@
 //! type and run through
 //! [`Bo4eExtensions::extension_paths`](rubo4e::json::Bo4eExtensions::extension_paths).
 //!
+//! A `_typ` that is no BO4E discriminant at all is its own finding. It is the
+//! same failure as a misspelt `_typ` key one step further along: `rubo4e` has no
+//! type to decode the object into, so every field it carries is unchecked, and
+//! an integrator who copies it posts a document mako's own gate refuses. Only
+//! the objects that actually decode are counted as checked, so the success line
+//! states the number of examples this guard stands behind.
+//!
+//! A `_typ` naming a real BO4E type this guard has no arm for is a COM or a BO
+//! outside the dispatch table: neither a finding nor counted.
+//!
 //! HTTP-style blocks (headers, blank line, body) are handled: the scan starts at
 //! the first `{`.
 //!
@@ -50,8 +60,16 @@ pub fn run(workspace_root: &Path) -> bool {
     let mut checked = 0usize;
 
     for dir in ["site/content", "concepts"] {
+        let root = workspace_root.join(dir);
+        if !root.is_dir() {
+            // A checkout without this directory is normal — say so, rather than
+            // letting a whole documentation tree fall out of the scan in
+            // silence.
+            println!("check-bo4e-examples: {dir}/ is absent from this checkout — not scanned");
+            continue;
+        }
         let mut files = Vec::new();
-        collect_md(&workspace_root.join(dir), &mut files);
+        collect_md(&root, &mut files);
         for path in files {
             let Ok(src) = std::fs::read_to_string(&path) else {
                 continue;
@@ -71,8 +89,9 @@ pub fn run(workspace_root: &Path) -> bool {
                     continue;
                 };
                 for object in objects_with_typ(&value) {
-                    checked += 1;
-                    check_one(&rel, &object, &mut findings);
+                    if check_one(&rel, &object, &mut findings) {
+                        checked += 1;
+                    }
                 }
                 // A misspelt discriminant carries no `_typ`, so the walk
                 // above never sees the block and nothing checks it. Worse than
@@ -97,7 +116,7 @@ pub fn run(workspace_root: &Path) -> bool {
     }
 
     eprintln!(
-        "ERROR: {} documented BO4E example(s) use a field BO4E does not define:\n",
+        "ERROR: {} documented BO4E example(s) name a type or a field BO4E does not define:\n",
         findings.len()
     );
     for f in &findings {
@@ -115,9 +134,12 @@ pub fn run(workspace_root: &Path) -> bool {
 }
 
 /// Decode one `_typ`-carrying object and report its extension fields.
-fn check_one(rel: &str, value: &serde_json::Value, findings: &mut Vec<String>) {
+///
+/// Returns `true` when the object decoded and its fields were checked, so the
+/// caller's count states what this guard stands behind rather than what it saw.
+fn check_one(rel: &str, value: &serde_json::Value, findings: &mut Vec<String>) -> bool {
     let Some(typ) = value.get("_typ").and_then(serde_json::Value::as_str) else {
-        return;
+        return false;
     };
 
     macro_rules! dispatch {
@@ -127,10 +149,25 @@ fn check_one(rel: &str, value: &serde_json::Value, findings: &mut Vec<String>) {
                     // A block that does not decode is prose, a fragment, or an
                     // ellipsis — not this guard's business. Only a document
                     // that *reads* can be checked for what it carries.
-                    Err(_) => return,
+                    Err(_) => return false,
                     Ok(v) => v.extension_paths(),
                 },)*
-                _ => return,
+                // A COM, or a BO outside the dispatch table: a real BO4E
+                // discriminant with nothing here to decode it into.
+                _ if rubo4e::current::BoTyp::from_wire(typ).is_ok()
+                    || rubo4e::current::ComTyp::from_wire(typ).is_ok() =>
+                {
+                    return false;
+                }
+                _ => {
+                    findings.push(format!(
+                        "{rel}: documented `_typ` {typ:?} names no BO4E type — `rubo4e` has \
+                         nothing to decode the object into, so none of its field names is \
+                         checked and an integrator who copies it posts a document the gate \
+                         refuses"
+                    ));
+                    return false;
+                }
             }
         };
     }
@@ -173,6 +210,7 @@ fn check_one(rel: &str, value: &serde_json::Value, findings: &mut Vec<String>) {
         }
         findings.push(format!("{rel}  {typ}.{path}"));
     }
+    true
 }
 
 /// Every object carrying a `_typ`, at any depth.
@@ -310,5 +348,48 @@ fn collect_md(dir: &Path, out: &mut Vec<PathBuf>) {
         } else if path.extension().is_some_and(|e| e == "md") {
             out.push(path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_one;
+
+    /// The spelling that shipped: `marktd`'s price-sheet examples documented
+    /// `PREISBLATT_NETZNUTZUNG`, which BO4E spells without the underscore, so
+    /// nothing decoded and nothing was checked while the success line counted
+    /// the object anyway.
+    #[test]
+    fn an_unknown_typ_is_a_finding_and_is_not_counted() {
+        let mut findings = Vec::new();
+        let value = serde_json::json!({
+            "_typ": "PREISBLATT_NETZNUTZUNG",
+            "bezeichnung": "Netznutzungspreise 2025",
+        });
+        assert!(!check_one("doc.md", &value, &mut findings));
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(findings[0].contains("names no BO4E type"), "{findings:?}");
+    }
+
+    /// The correct spelling decodes, is checked, and is counted.
+    #[test]
+    fn a_decodable_bo_is_checked_and_counted() {
+        let mut findings = Vec::new();
+        let value = serde_json::json!({
+            "_typ": "PREISBLATTNETZNUTZUNG",
+            "bezeichnung": "Netznutzungspreise 2025",
+        });
+        assert!(check_one("doc.md", &value, &mut findings));
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    /// A COM is a real BO4E discriminant with no arm in the dispatch table:
+    /// nothing to decode it into, and nothing to report.
+    #[test]
+    fn a_com_is_neither_a_finding_nor_counted() {
+        let mut findings = Vec::new();
+        let value = serde_json::json!({ "_typ": "BETRAG", "wert": "12.50" });
+        assert!(!check_one("doc.md", &value, &mut findings));
+        assert!(findings.is_empty(), "{findings:?}");
     }
 }

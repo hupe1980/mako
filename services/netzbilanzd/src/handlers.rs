@@ -14,7 +14,7 @@ use axum::{
     http::StatusCode,
 };
 use mako_markt::{makod_client::MakodClient, marktd_client::MarktdClient};
-use mako_service::{ApiError, ApiResult};
+use mako_service::{ApiError, ApiResult, cedar::CedarEnforcer, oidc::Claims};
 use serde::Deserialize;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -26,6 +26,37 @@ use crate::request::{BillingRunRequest, SettlementRequest};
 
 /// Shorthand for the handler's shared state.
 type Cfg = Extension<Arc<NetzbilanzConfig>>;
+/// Shorthand for the Cedar enforcer every routed handler consults.
+pub(crate) type Authz = Extension<Arc<CedarEnforcer>>;
+
+/// Authorize `action` for the caller against the service tenant.
+///
+/// Authentication establishes *who* is calling; this decides what they may do,
+/// and every routed handler runs it before it reads a row or reaches the wire.
+/// A token alone must not be enough to send an INVOIC to a market partner over
+/// AS4, reverse one that partner already holds, mark a receivable paid, or
+/// export the tenant's § 147 AO record for a whole period.
+///
+/// The denial reason names the principal, the action and the tenant, and goes
+/// to the log rather than the response: the caller learns that it may not, not
+/// which policy shape would let it.
+///
+/// # Errors
+///
+/// `403` when the policy does not permit the action.
+pub(crate) fn authorize(
+    enforcer: &CedarEnforcer,
+    claims: &Claims,
+    action: &'static str,
+    tenant: &str,
+) -> ApiResult<()> {
+    enforcer
+        .check(&claims.principal(), action, tenant)
+        .map_err(|e| {
+            tracing::warn!(action, sub = %claims.sub(), reason = %e, "netzbilanzd: authorization denied");
+            ApiError::Forbidden
+        })
+}
 
 // Every JSON request body in this service is `deny_unknown_fields`, for the
 // reason [`crate::request`] spells out: a field that is accepted and ignored is
@@ -81,11 +112,14 @@ async fn emit(
 /// - `422` when a position does not describe a computable settlement.
 /// - `409` when a position's MaLo, period and Prüfidentifikator are already billed.
 pub async fn run_billing(
+    claims: Claims,
+    Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(marktd): Extension<Arc<MarktdClient>>,
     Extension(cfg): Cfg,
     Json(mut req): Json<BillingRunRequest>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    authorize(&cedar, &claims, "run-settlement", &cfg.tenant)?;
     if req.positions.is_empty() {
         return Err(ApiError::bad_request("positions must not be empty"));
     }
@@ -249,7 +283,11 @@ pub async fn draft_positions(
     Ok(drafted)
 }
 
-/// Persist one settled invoice, translating a double-billing conflict into 409.
+/// Persist one settled invoice and the Abschlagsrechnungen it settles,
+/// translating a double-billing conflict into 409.
+///
+/// The two writes are one transaction step: an invoice that deducts an Anzahlung
+/// without the record of having done so lets the next invoice deduct it again.
 #[allow(clippy::too_many_arguments)]
 async fn store(
     conn: &mut sqlx::PgConnection,
@@ -300,15 +338,28 @@ async fn store(
         original_draft_id,
         korrektur_grund,
     };
-    pg::insert_draft(conn, &draft).await.map_err(|e| match e {
-        InsertDraftError::AlreadyBilled
-        | InsertDraftError::AbschlagAlreadyBilled
-        | InsertDraftError::DuplicateRechnungsnummer
-        | InsertDraftError::AlreadyReversed => {
-            ApiError::conflict(format!("{} ({e})", position.malo_id))
+    fn conflict(e: InsertDraftError, malo_id: &str) -> ApiError {
+        match e {
+            InsertDraftError::AlreadyBilled
+            | InsertDraftError::AbschlagAlreadyBilled
+            | InsertDraftError::AbschlagAlreadyDeducted
+            | InsertDraftError::DuplicateRechnungsnummer
+            | InsertDraftError::AlreadyReversed => ApiError::conflict(format!("{malo_id} ({e})")),
+            InsertDraftError::Database(e) => ApiError::Internal(e),
         }
-        InsertDraftError::Database(e) => ApiError::Internal(e),
-    })
+    }
+    let id = pg::insert_draft(conn, &draft)
+        .await
+        .map_err(|e| conflict(e, &position.malo_id))?;
+
+    // The deduction and the record of it are written together. An Abschlag is
+    // an Anzahlung settled once; without this row the next monthly invoice can
+    // name the same one and deduct it again, and both documents are
+    // well-formed.
+    pg::record_abschlag_verrechnungen(conn, &cfg.tenant, id, &position.abschlaege)
+        .await
+        .map_err(|e| conflict(e, &position.malo_id))?;
+    Ok(id)
 }
 
 /// The three amounts an invoice states, in units of 10⁻⁵ EUR.
@@ -426,10 +477,13 @@ fn next_cursor(rows: &[pg::DraftSummaryRow], limit: i64) -> Option<String> {
 ///
 /// Propagates database failures as 500.
 pub async fn list_drafts(
+    claims: Claims,
+    Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Cfg,
     Query(q): Query<DraftsQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&cedar, &claims, "read-settlement", &cfg.tenant)?;
     let limit = q.limit.unwrap_or(100).clamp(1, 1_000);
     let filter = DraftFilter {
         status: q.status.as_deref(),
@@ -459,10 +513,13 @@ pub async fn list_drafts(
 ///
 /// `404` when the draft does not exist for this tenant.
 pub async fn get_draft(
+    claims: Claims,
+    Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Cfg,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<pg::DraftRow>> {
+    authorize(&cedar, &claims, "read-settlement", &cfg.tenant)?;
     pg::fetch_draft(&pool, &cfg.tenant, id)
         .await
         .map_err(ApiError::Internal)?
@@ -485,11 +542,14 @@ pub async fn get_draft(
 /// - `409` when it is no longer in `draft` status.
 /// - `422` when the checker disputes the document, or `makod` refuses it.
 pub async fn dispatch_draft(
+    claims: Claims,
+    Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(makod): Extension<Arc<MakodClient>>,
     Extension(cfg): Cfg,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&cedar, &claims, "dispatch-settlement", &cfg.tenant)?;
     let mut tx = pool.begin().await.map_err(ApiError::from)?;
     let outcome = dispatch_one(&mut tx, &makod, &cfg, id).await?;
     emit(
@@ -638,6 +698,25 @@ async fn dispatch_one(
         return Err(ApiError::conflict("draft changed status concurrently"));
     }
 
+    // A dispatched Stornorechnung is the point the original stops standing, so
+    // this is where the Anzahlungen it had settled become available to the
+    // Korrekturrechnung that replaces it. Doing it when the Storno was merely
+    // *drafted* freed them against an invoice still in force, and a rejected
+    // Storno then left them free with nothing having been reversed.
+    if row.rechnungsart == "STORNORECHNUNG"
+        && let Some(original_id) = row.original_draft_id
+    {
+        let released = pg::release_abschlag_verrechnungen(&mut *conn, &cfg.tenant, original_id)
+            .await
+            .map_err(ApiError::Internal)?;
+        if released > 0 {
+            tracing::info!(
+                storno_draft_id = %id, original_draft_id = %original_id, released,
+                "netzbilanzd: Storno dispatched — Abschlagsverrechnungen released"
+            );
+        }
+    }
+
     Ok(DispatchOutcome {
         dispatch_ref,
         rechnungsnummer: row.rechnungsnummer,
@@ -655,13 +734,13 @@ fn makod_command(pid: u32, _sparte: &str) -> ApiResult<&'static str> {
     match (pid, ()) {
         // A payment on account. The Abschlag prices no energy, so nothing about
         // it is Sparte-specific.
-        (31001, ()) => Ok("invoic.nne-abschlag.stellen"),
-        (31002, ()) => Ok("invoic.nne.stellen"),
-        (31005, ()) => Ok("invoic.mmm.stellen"),
-        (31009, ()) => Ok("wim.msb-rechnung.stellen"),
+        (31001, ()) => Ok(mako_markt::commands::INVOIC_NNE_ABSCHLAG_STELLEN),
+        (31002, ()) => Ok(mako_markt::commands::INVOIC_NNE_STELLEN),
+        (31005, ()) => Ok(mako_markt::commands::INVOIC_MMM_STELLEN),
+        (31009, ()) => Ok(mako_markt::commands::WIM_MSB_RECHNUNG_STELLEN),
         // BK7-24-01-009 §5.4 — the GNB bills the LFG for abrechnungswürdige
         // Handlungen performed during the Sperrprozess.
-        (31011, ()) => Ok("invoic.sonstige-leistung.stellen"),
+        (31011, ()) => Ok(mako_markt::commands::INVOIC_SONSTIGE_LEISTUNG_STELLEN),
         (other, ()) => Err(ApiError::Internal(anyhow::anyhow!(
             "no makod command for Prüfidentifikator {other}"
         ))),
@@ -704,11 +783,14 @@ pub struct RejectRequest {
 ///
 /// `404` when the draft does not exist for this tenant or is no longer a draft.
 pub async fn reject_draft(
+    claims: Claims,
+    Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Cfg,
     Path(id): Path<Uuid>,
     Json(req): Json<RejectRequest>,
 ) -> ApiResult<StatusCode> {
+    authorize(&cedar, &claims, "amend-settlement", &cfg.tenant)?;
     if req.reason.trim().is_empty() {
         return Err(ApiError::bad_request("reason must not be empty"));
     }
@@ -741,11 +823,14 @@ pub struct DispatchBatchRequest {
 ///
 /// `400` for an empty or oversized batch.
 pub async fn post_dispatch_batch(
+    claims: Claims,
+    Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(makod): Extension<Arc<MakodClient>>,
     Extension(cfg): Cfg,
     Json(req): Json<DispatchBatchRequest>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    authorize(&cedar, &claims, "dispatch-settlement", &cfg.tenant)?;
     if req.draft_ids.is_empty() {
         return Err(ApiError::bad_request("draft_ids must not be empty"));
     }
@@ -849,11 +934,14 @@ pub struct StornoRequest {
 ///   replaying its stored input no longer reproduces the amounts it was issued
 ///   for.
 pub async fn post_storno(
+    claims: Claims,
+    Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Cfg,
     Path(id): Path<Uuid>,
     Json(req): Json<StornoRequest>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    authorize(&cedar, &claims, "correct-settlement", &cfg.tenant)?;
     let mut tx = pool.begin().await.map_err(ApiError::from)?;
 
     let (original, input) = pg::load_settlement_input(&mut tx, &cfg.tenant, id)
@@ -958,6 +1046,19 @@ pub async fn post_storno(
     )
     .await?;
 
+    // The original's Abschlag deductions are **not** released here.
+    //
+    // A Storno draft is a document that has not left the house: it can still be
+    // rejected. Releasing on creation freed the Anzahlungen while the original
+    // was still standing as a dispatched invoice that deducted them on the
+    // wire — so a rejected Storno left the Abschläge available to a second
+    // invoice and the customer's payment on account could be credited twice.
+    // They are released when the reversal is actually dispatched
+    // ([`dispatch_one`]), which is the point the original stops standing.
+    let held = pg::count_abschlag_verrechnungen(&mut *tx, &cfg.tenant, id)
+        .await
+        .map_err(ApiError::Internal)?;
+
     emit(
         &mut tx,
         &cfg,
@@ -983,7 +1084,13 @@ pub async fn post_storno(
             "original_rechnungsnummer": original.rechnungsnummer,
             "korrektur_grund": req.grund.code(),
             "total_eur": settled.settlement.total_eur.to_string(),
-            "next": "review, then PUT /api/v1/billing/drafts/{storno_draft_id}/dispatch",
+            // Abschlagsrechnungen the reversed invoice settles. They stay held
+            // until this Storno is dispatched — a reversal that is rejected
+            // instead leaves the original, and its deductions, standing.
+            "abschlaege_held": held,
+            "next": "review, then PUT /api/v1/billing/drafts/{storno_draft_id}/dispatch \
+                     — the Abschläge are released then, and the Korrekturrechnung \
+                     that replaces this invoice can deduct them",
         })),
     ))
 }
@@ -1037,12 +1144,15 @@ pub struct KorrekturRequest {
 /// - `422` when the corrected inputs do not describe a computable settlement,
 ///   or describe a different invoice than the one being corrected.
 pub async fn post_korrektur(
+    claims: Claims,
+    Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(marktd): Extension<Arc<MarktdClient>>,
     Extension(cfg): Cfg,
     Path(id): Path<Uuid>,
     Json(req): Json<KorrekturRequest>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    authorize(&cedar, &claims, "correct-settlement", &cfg.tenant)?;
     let mut tx = pool.begin().await.map_err(ApiError::from)?;
     let original = pg::fetch_draft(&mut *tx, &cfg.tenant, id)
         .await
@@ -1267,11 +1377,14 @@ pub struct MarkPaidRequest {
 ///
 /// `404` when the draft does not exist for this tenant or is not dispatched.
 pub async fn mark_paid(
+    claims: Claims,
+    Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Cfg,
     Path(id): Path<Uuid>,
     Json(req): Json<MarkPaidRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&cedar, &claims, "record-payment", &cfg.tenant)?;
     let mut tx = pool.begin().await.map_err(ApiError::from)?;
     if !pg::mark_paid(&mut tx, &cfg.tenant, id, &req.remadv_ref)
         .await
@@ -1313,11 +1426,14 @@ pub struct MarkDisputedRequest {
 ///
 /// `404` when the draft does not exist for this tenant or is not dispatched.
 pub async fn mark_disputed(
+    claims: Claims,
+    Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Cfg,
     Path(id): Path<Uuid>,
     Json(req): Json<MarkDisputedRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&cedar, &claims, "record-payment", &cfg.tenant)?;
     let mut tx = pool.begin().await.map_err(ApiError::from)?;
     if !pg::mark_disputed(&mut tx, &cfg.tenant, id, &req.erc_code, &req.reason)
         .await
@@ -1483,10 +1599,13 @@ pub struct SummaryQuery {
 ///
 /// `400` for a month outside 1–12.
 pub async fn get_billing_summary(
+    claims: Claims,
+    Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Cfg,
     Query(q): Query<SummaryQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&cedar, &claims, "read-settlement", &cfg.tenant)?;
     // The Abrechnungsmonat is a German calendar month.
     let today = mako_fristen::heute();
     let year = q.year.unwrap_or_else(|| today.year());
@@ -1540,10 +1659,13 @@ pub struct AuditExportQuery {
 ///
 /// Propagates database failures as 500.
 pub async fn get_billing_audit(
+    claims: Claims,
+    Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Cfg,
     Query(q): Query<AuditExportQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&cedar, &claims, "export-audit", &cfg.tenant)?;
     let limit = q.limit.unwrap_or(10_000).clamp(1, 50_000);
     let rows = pg::list_audit(
         &pool,
@@ -1586,11 +1708,14 @@ pub struct MaloHistoryQuery {
 ///
 /// Propagates database failures as 500.
 pub async fn get_malo_billing_history(
+    claims: Claims,
+    Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Cfg,
     Path(malo_id): Path<String>,
     Query(q): Query<MaloHistoryQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&cedar, &claims, "read-settlement", &cfg.tenant)?;
     let rows = pg::billing_history_for_malo(
         &pool,
         &cfg.tenant,
@@ -1628,11 +1753,14 @@ pub async fn get_malo_billing_history(
 /// - `409` when the draft has already left the house.
 /// - `422` when the payload is not a `rubo4e::current::Fremdkosten`.
 pub async fn put_fremdkosten(
+    claims: Claims,
+    Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Cfg,
     Path(draft_id): Path<Uuid>,
     Json(req): Json<pg::UpsertFremdkostenRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&cedar, &claims, "amend-settlement", &cfg.tenant)?;
     // The BO4E gate: the stored JSON has to *be* a Fremdkosten, not merely
     // carry the right `_typ`, because dispatch merges it into the document that
     // reaches the counterparty. Strict enums included — an out-of-schema
@@ -1673,10 +1801,13 @@ pub async fn put_fremdkosten(
 ///
 /// `404` when no Fremdkosten are attached for this tenant.
 pub async fn get_fremdkosten(
+    claims: Claims,
+    Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Cfg,
     Path(draft_id): Path<Uuid>,
 ) -> ApiResult<Json<pg::FremdkostenRow>> {
+    authorize(&cedar, &claims, "read-settlement", &cfg.tenant)?;
     pg::fetch_fremdkosten(&pool, &cfg.tenant, draft_id)
         .await
         .map_err(ApiError::Internal)?
@@ -1833,8 +1964,13 @@ mod tests {
         assert_eq!(next_cursor(&[], 10), None);
     }
 
-    /// NN-Rechnung Strom and Gas share PID 31002 but not the makod command —
-    /// the Gas one is what a GNB-role deployment is permitted to send.
+    /// NN-Rechnung Strom and Gas share PID 31002 **and** the makod command:
+    /// `makod_command` ignores its Sparte argument, because one command name
+    /// serves a business process across both Sparten.
+    ///
+    /// What does follow the Sparte is the asserted `marktrolle` — a gas invoice
+    /// asserts `GNB`, and only a `--marktrollen GNB` deployment passes makod's
+    /// licence check. See `marktrolle_for`.
     #[test]
     fn the_makod_command_follows_the_pid_and_the_sparte() {
         assert_eq!(

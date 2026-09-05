@@ -167,8 +167,8 @@ fn missing_caller_error() -> energy_api::Error {
 ///
 /// The calling market participant's Marktpartner-ID is **not** state: it
 /// arrives per request in [`CLIENT_MP_ID_HEADER`], set by the mTLS-terminating
-/// proxy. A `sender_party_id` field used to stand in for it and recorded the
-/// operator's own code as the sender of orders it received.
+/// proxy. Holding it on the handler would make every inbound order look as
+/// though this operator had sent it.
 #[derive(Clone)]
 pub struct MakodApiHandler {
     pub store: SlateDbStore,

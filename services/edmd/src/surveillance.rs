@@ -3,7 +3,7 @@
 //! # Why this exists
 //!
 //! Every other quality mechanism in `edmd` judges **data that arrived**. The
-//! V-rules run on an ingest batch; the Hampel scorer grades one; the § 60 Abs. 2
+//! V-rules run on an ingest batch; the Hampel scorer grades one; the § 60 Abs. 1
 //! confirmation loop chases estimates that were already written. All of them are
 //! triggered by a delivery.
 //!
@@ -16,7 +16,7 @@
 //! That failure surfaces at settlement: the Summenzeitreihe is short, the
 //! Bilanzkreis carries the difference, and the Mehr-/Mindermengensaldo lands on
 //! someone. By then the window in which the values could still have been re-read
-//! or substituted under § 60 Abs. 2 MsbG has usually closed.
+//! or substituted under § 60 Abs. 1 MsbG has usually closed.
 //!
 //! So this worker asks the complementary question — *which points have not
 //! delivered?* — and answers it on a cadence short enough to act on.
@@ -120,7 +120,9 @@ pub struct SurveillanceReport {
 /// spans both tiers — a point whose recent history has already settled into the
 /// cold tier is still visible. Only billable qualities count: a window full of
 /// `FAULTY` intervals is not a delivered window, and reporting it as covered
-/// would hide exactly the case § 60 Abs. 2 MsbG exists for.
+/// would hide exactly the case § 40a Abs. 2 EnWG exists for — a period whose
+/// actual consumption cannot be determined, which may only be billed on a
+/// labelled Schätzung, never on the FAULTY rows themselves.
 ///
 /// # Errors
 ///
@@ -378,7 +380,7 @@ pub async fn run_surveillance_sweep(
             state = finding.state.as_str(),
             hours_silent = finding.hours_silent,
             coverage_pct = format!("{:.1}", finding.coverage_pct),
-            "edmd: surveillance: measuring point is not delivering (§ 60 Abs. 2 MsbG)"
+            "edmd: surveillance: measuring point is not delivering (§ 60 Abs. 1 MsbG)"
         );
 
         if let Some(url) = erp_webhook_url {
@@ -394,7 +396,7 @@ pub async fn run_surveillance_sweep(
                     "coverage_pct":      finding.coverage_pct,
                     "interval_count":    finding.interval_count,
                     "window_from":       window_from.to_string(),
-                    "legal_basis":       "§ 60 Abs. 2 MsbG (Plausibilisierung und Ersatzwertbildung)",
+                    "legal_basis":       "§ 60 Abs. 1 MsbG (Übermittlung aufbereiteter Messwerte an die berechtigten Stellen)",
                     "recommended_action":
                         "Check the delivery path, then substitute the gap via \
                          POST /api/v1/meter-reads/{malo_id}/substitute if the values \
@@ -709,8 +711,8 @@ pub async fn get_delivery_surveillance(
                 "truncated": i64::try_from(items.len()).unwrap_or(i64::MAX) >= limit,
                 "points":    items,
                 "legal_basis":
-                    "§ 60 Abs. 2 MsbG — a measuring point that stops delivering leaves \
-                     Plausibilisierung und Ersatzwertbildung owing",
+                    "§ 60 Abs. 1 MsbG — a measuring point that stops delivering leaves \
+                     the Übermittlung an die berechtigten Stellen owing",
             }))
             .into_response()
         }

@@ -2,11 +2,7 @@
 title = "invoicd Operator Guide"
 description = "invoicd operator guide: INVOIC plausibility-check daemon (LF role). Checks the ten inbound billing PIDs against marktd price sheets, persists every receipt for § 147 AO / GoBD, answers the counterparty through makod, and notifies the ERP."
 weight = 24
-[extra]
-mermaid = true
 +++
-# `invoicd` Operator Guide
-
 `invoicd` is the **INVOIC plausibility-check daemon** for the LF (Lieferant) role.
 It subscribes to `marktd`'s fan-out, receives inbound INVOIC events, and:
 
@@ -19,6 +15,23 @@ It subscribes to `marktd`'s fan-out, receives inbound INVOIC events, and:
    the dispatch.
 4. Answers the counterparty through `makod` — accept or dispute.
 5. Notifies the ERP with `de.invoic.receipt.*`, durable at-least-once.
+
+**What the words mean.** **INVOIC** is the EDIFACT invoice message and
+**REMADV** the EDIFACT answer to one — a remittance advice, either „I will pay
+this" or „I dispute it". Each is stamped with a **Prüfidentifikator (PID)**, the
+five-digit BDEW code naming the business case it carries; the platform-wide list
+is the [PID reference](@/docs/regulatory/pid-reference.md). **LF** (Lieferant,
+the retail supplier), **NB** (Netzbetreiber, the grid operator), **MSB**
+(Messstellenbetreiber, the metering operator) and **ESA**
+(Energieserviceanbieter) are market roles — see
+[Party Roles](@/docs/architecture/domain-model.md#party-roles-marktrollen).
+A **Marktlokation (MaLo)** is the supply point an invoice is about
+([MaLo vs MeLo](@/docs/architecture/domain-model.md#malo-vs-melo-the-critical-distinction)),
+an **Abschlag** is a monthly advance payment, and **Mehr-/Mindermengen (MMM)**
+is the settlement of the gap between metered and balanced energy. `invoicd` is
+the *receiving* side: it reads invoices other market partners send this operator.
+Issuing this operator's own invoices is [billingd](@/docs/services/billingd.md)
+and [netzbilanzd](@/docs/services/netzbilanzd.md).
 
 Every PID takes this path; what varies is data in the routing table, not a copy
 of the pipeline. A PID with no route is ignored rather than answered with a
@@ -78,6 +91,7 @@ on the timestamp). Every `/api/v1/*` route requires a JWT and a Cedar action:
 | `/overdue-remadv` | `read-overdue-remadv` | any caller in the tenant |
 | `/receipts/{id}/confirm-payment`, `/dispatch-answer`, `/resolve-dispute` | `write-receipt` | **LF role** |
 | `/selbstausstellen` | `dispatch-selbstausstellen` | **LF role** |
+| `POST\|GET /mcp` | `use-mcp` | any caller in the tenant (the MCP surface is authenticated separately by `[mcp]`) |
 
 Cedar is deny-by-default, so an action the code checks and the policy does not
 permit is a permanent 403 no configuration can lift. `tests/cedar_actions.rs`
@@ -106,7 +120,7 @@ The distinction is load-bearing:
 - A document that types but breaks a **BO4E-stated rule** — a `gesamtbrutto`
   that is not net plus tax — is *not* refused. That invoice is **disputable**,
   and the market's answer to it is a REMADV naming the defect, which check
-  stage 3 below already produces. Refusing to parse would replace that answer
+  stage 7 below already produces. Refusing to parse would replace that answer
   with silence and a dead letter for an operator to find.
 
 ---
@@ -115,16 +129,16 @@ The distinction is load-bearing:
 
 | PID | Description | Direction | Sparte | Status |
 |-----|-------------|-----------|--------|--------|
-| 31001 | Abschlagsrechnung Netznutzung (NB → LF) | Inbound | Strom | ✅ |
-| 31002 | Netznutzungsabrechnung (NB → LF) | Inbound | Strom | ✅ |
+| 31001 | Abschlagsrechnung Netznutzung (NB → LF) | Inbound | ⚡🔥 | ✅ |
+| 31002 | NN-Rechnung — Netznutzungsabrechnung (NB → LF) | Inbound | ⚡🔥 | ✅ |
 | 31003 | WiM-Rechnung — Abrechnung von Dienstleistungen im Messwesen (MSBA → NB · MSBA → MSBN) | Inbound | ⚡🔥 | ✅ |
 | 31004 | Stornorechnung — universal Storno (GPKE/MMM/WiM/Kapazität/AWH/GeLi) | Inbound | **Strom + Gas** | ✅ arithmetic-only (`check_storno`) |
 | 31005 | MMM-Rechnung Mehr-/Mindermengensaldo | Inbound | Strom | ✅ |
 | 31006 | MMM Mehrmenge, selbst ausgestellt (LF → NB) | Inbound + Outbound | Strom | ✅ |
-| 31007 | GaBi Gas Aggreg. MMM-Rechnung (NB → MGV) | Inbound | Gas | ✅ + MMM check 6 |
-| 31008 | GaBi Gas selbst ausgest. Aggreg. MMM-Rechnung | Inbound | Gas | ✅ + MMM check 6 |
+| 31007 | GaBi Gas Aggreg. MMM-Rechnung (NB → MGV) | Inbound | Gas | ✅ + MMM-Preisprüfung |
+| 31008 | GaBi Gas selbst ausgest. Aggreg. MMM-Rechnung | Inbound | Gas | ✅ + MMM-Preisprüfung |
 | 31009 | MSB-Rechnung (MSB → **NB / LF / ESA**, WiM) | Inbound | Strom | ✅ `PreisblattMessung` — or the accepted **Angebot** toward an ESA |
-| 31011 | GeLi Gas Rechnung sonstige Leistung (AWH) | Inbound | Gas | ✅ |
+| 31011 | Rechnung sonstige Leistung (NB → LF) — in practice the Sperr-/Entsperrkosten | Inbound | **Strom + Gas** | ✅ |
 
 **PID 31009 (WiM MSB-Rechnung)** prices metering service, so it is checked
 against `PreisblattMessung`, not the NNE tariff. When the Rechnung is not
@@ -166,8 +180,10 @@ Rechnungstyp, so both ride the process rather than the BO4E document.
 ### The answer names the tree the Use-Case publishes
 
 A REMADV Abweisung carries `SG7 AJT`: DE 4465 the code, DE 1082 the
-**Entscheidungsbaum** that publishes it. The tree is not a constant — every
-invoice Use-Case has its own quartet, and PID 31009 alone has three of them:
+**Entscheidungsbaum** (EBD — the decision tree BDEW publishes per Use-Case,
+whose numbered Prüfschritte each carry the answer code a checker may return).
+The tree is not a constant — every invoice Use-Case has its own quartet, and
+PID 31009 alone has three of them:
 
 | PID | Empfänger | Rechnung | Nicht-Zahlungsavis | erneut | Storno |
 |---|---|---|---|---|---|
@@ -233,7 +249,7 @@ Five Prüfschritte need facts no INVOIC carries — whether the Rechnungsnummer 
 a repeat (50), whether the service was performed (310), whether the Artikel-ID
 was billed before (370), whether the § 14 Abs. 4 UStG content is complete (10),
 and whether the MSB's COMDIS rebutted the objections (`E_0266` 1). Each is
-optional on `EsaRechnungsFakten`, and an unknown answer never refuses. A
+optional on `mako_pruefung::RechnungsFakten`, and an unknown answer never refuses. A
 `marktd` outage likewise passes Prüfschritt 40 rather than refusing on evidence
 `invoicd` does not have.
 
@@ -257,17 +273,60 @@ German MGV.
 
 ## invoic-checker — checks
 
-| # | Check | PIDs | Outcome on failure |
-|---|-------|------|--------------------|
-| 0 | **Storno reference** — `ist_storno=true` must have `original_rechnungsnummer` | all | `Dispute` |
-| 1 | **Billing period validity** (boundaries consistent, in scope) | all | `Dispute` |
-| 1.5 | **Zahlungsziel** — `faelligkeitsdatum` must not precede `rechnungsdatum` (invalid: `Dispute`) or exceed `max_zahlungsziel_days` (exceeded: `Warn`) | all | `Dispute` or `Warn` |
-| 2 | **Position arithmetic** (unit price × quantity = line net; tolerance 1%) | all | `Dispute` |
-| 3 | **Document total** (sum of positions = Gesamtnetto; tolerance 1%) | all | `Warn` |
-| 4 | **Tariff unit price** within tolerance — ToU-aware: each INVOIC position’s text is matched against the `zaehlzeitregister` band code of `zeitvariablePreispositionen` entries. Flat positions fall back to `Preisstaffel` prices. **PID 31009:** uses `PreisblattMessung`. **Stornorechnungen: skipped** (`ist_storno=true` carries negated original amounts, not tariff positions) | all (not Storno) | `Warn` or `Dispute` |
-| 5 | **Tariff entry found** in price sheet | all (not Storno) | `Warn` or `Dispute` |
-| 6 | **MMM settlement price** — for Strom MMM PIDs (31005/31006): MMMA Strom reference; for Gas MMM PIDs (31007/31008): MMMA Gas reference (THE) | 31005/31006/31007/31008 | `Warn` or `Dispute` |
-| 6 | **AufAbschlag discount validation** — for PID 31009: every negative position must match a contracted `AufAbschlag` name from `PreisblattMessung.auf_abschlaege` (WiM PRICAT 27001–27003). AufAbschlag names are fetched from `marktd` and passed to `check_msb_rechnung_with_aufabschlaege` | 31009 | `Dispute` |
+| # | Stage | Finding | Outcome |
+|---|---|---|---|
+| 1 | **Storno reference** — `ist_storno=true` must name `original_rechnungsnummer` | `StorniertWithoutReference` | `Dispute` |
+| 2 | **Billing period validity** — boundaries present and consistent | `PeriodInvalid` | `Dispute` |
+| 3 | **Zahlungsziel** — `faelligkeitsdatum` not before `rechnungsdatum`, and within `max_zahlungsziel_days` | `ZahlungszielInvalid` · `ZahlungszielExceeded` | `Dispute` · `Warn` |
+| 4 | **Currency agreement** — every monetary field on one currency | `WaehrungMismatch` | `Dispute` |
+| 5 | **Position arithmetic** — quantity × unit price = line net | `ArithmeticError` | `Dispute` |
+| 6 | **Document total** — Σ line nets = `gesamtnetto` | `TotalMismatch` | `Warn` |
+| 7 | **Umsatzsteuer** — the § 14 Abs. 4 Nr. 8 UStG block: a rate and an amount, `gesamtbrutto = gesamtnetto + gesamtsteuer`, and no tax stated on a reverse-charge invoice | `SteuerMissing` · `SteuerMismatch` · `ReverseChargeStatesTax` | `Dispute` |
+| 8 | **Tariff / Angebot** — the unit price against the published Preisblatt, or against the accepted ESA offer | `TariffDeviation` · `TariffNotFound` · `AngebotDeviation` · `AngebotPositionUnknown` | `Warn` or `Dispute` |
+
+Stage 3 is skipped when `max_zahlungsziel_days = 0`. Stage 8 is skipped for a
+Stornorechnung, which carries the original's negated amounts rather than tariff
+positions. Stage 4 runs **before** the arithmetic on purpose: a `Betrag` marked
+`CHF` would otherwise be read as EUR and every later comparison would come out
+consistent.
+
+Which price basis stage 8 uses is the routing table's decision, not the stage's:
+
+| Route | Basis | PIDs |
+|---|---|---|
+| `Netznutzung` | `PreisblattNetznutzung` of the sending NB | 31001, 31002, 31011 |
+| `NetznutzungMitMmmStrom` / `…Gas` | the same sheet, **plus** a Mehr-/Mindermengen settlement-price check against the BDEW Strom series resp. the Gas MGV's | 31005, 31006 / 31007, 31008 |
+| `Messung` | `PreisblattMessung`, plus every negative position matched to a contracted `AufAbschlag` name (WiM PRICAT 27001–27003) | 31003, 31009 |
+| `ArithmetikNur` | none — stages 1–6 only | 31004, and any `ist_storno` document |
+
+Stage 8 is time-of-use aware. A Preisblatt may publish a flat
+`Preisposition.preisstaffeln` price *and* time-variable prices as
+`zeitvariablePreispositionen`, each carrying a `zaehlzeitregister` band code; an
+INVOIC position's text is matched against those band codes first, and falls back
+to the flat Preisstaffel when it names none. Without that a load-profile invoice
+with a night rate is disputed against the day price on every line.
+
+Toward an **ESA** the basis is the accepted Angebot instead of a Preisblatt, as
+described above. Both the `Messung` and the ESA entry point run the document
+stages 2–7 and replace stage 8 with their own price basis; neither runs stage 1,
+because a Storno is routed to `ArithmetikNur` before either is reached.
+
+The `Messung` path used to skip stages 3 and 7 — an MSB invoice stating no
+Umsatzsteuer at all, or one due before the day it was issued, was accepted. It
+was an omission rather than a rule about MSB invoices: the INVOIC AHB makes the
+Fälligkeitsdatum (`SG8 DTM+265`, MIG Nr. 00033) and the tax block (`TAX`
+Nr. 00058 with `MOA` Nr. 00061/00062) **Muss** on 31003 and 31009 exactly as on
+31001/31002, § 14 Abs. 4 Nr. 8 UStG reaches every invoice, and the *same* PID
+31009 already ran both stages when it arrived through the ESA door. Stage 7
+still tells an absent tax block apart from a reverse-charged zero: a § 13b
+invoice states 0,00 EUR with an `RCV` Steuerbetrag naming the ground, and that
+is not a `SteuerMissing`.
+
+The MMM settlement check is skipped, not disputed, when the month's reference
+prices are not yet published — the BDEW series lands after the
+Bilanzierungsmonat. An **unreachable `marktd` is not that state**: it aborts the
+check with a `ReferenceDataUnavailable` rather than reporting a complete check
+that silently omitted a stage.
 
 `Warn` outcomes auto-approve unless the total net invoice exceeds
 `auto_dispute_threshold_eur`. Set this to `0` to always approve warnings (default).
@@ -339,10 +398,11 @@ notice does not repeat every six hours until someone acts on it.
 ### Delivery guarantee — durable at-least-once
 
 The first attempt runs inline, immediately after the market answer is
-dispatched. On any failure the `erp_outbox` worker retries with backoff. It
-claims each batch with a lease (`UPDATE … RETURNING`, not a pooled
-`SELECT … FOR UPDATE`, whose locks do not survive the pooled statement), so
-replicas do not double-deliver:
+dispatched. It is **not** claimed and does not spend the budget: a receipt whose
+inline POST failed still has all five attempts. On any failure the `erp_outbox`
+worker retries with backoff, claiming each batch with a lease
+(`UPDATE … RETURNING`, not a pooled `SELECT … FOR UPDATE`, whose locks do not
+survive the pooled statement), so replicas do not double-deliver:
 
 | Attempt | Delay before retry |
 |---------|--------------------|
@@ -359,6 +419,13 @@ replicas do not double-deliver:
 
 **Request signing** (`[erp] hmac_secret`): when configured, every POST includes
 Standard Webhooks (`webhook-signature`) so the ERP can verify authenticity.
+
+**The attempt is counted by the claim, not by the outcome.** The same
+`UPDATE … RETURNING` that leases a batch raises `erp_attempts`, so the budget is
+spent by the attempt being *made*. Nothing after it depends on the outcome write
+landing: a receipt whose failure or dead-lettering was never recorded still runs
+out of attempts and leaves the outbox, rather than retrying forever because the
+statement that would have counted it was the one that was lost.
 
 **The market answer is dispatched before ERP notification** — a failed ERP
 webhook never blocks the regulatory obligation. Dead-lettered events are counted
@@ -493,6 +560,9 @@ flags. It discovers everything from the environment:
 Any TOML key may be overridden by an `INVOICD_`-prefixed environment variable
 (`__` separates nested sections, e.g. `INVOICD_DATABASE__URL`).
 
+The config struct is `deny_unknown_fields`: a misspelled key is a startup
+failure, not a silently ignored line.
+
 ```bash
 INVOICD_CONFIG=/etc/invoicd/invoicd.toml invoicd
 ```
@@ -505,8 +575,8 @@ addr = "0.0.0.0:8280"          # default
 
 [database]
 # Required for § 147 AO / § 14b UStG receipt retention (Buchungsbelege, 8 years).
-url             = "env:DATABASE_URL"   # required; use env: for secrets
-max_connections = 5                    # default
+url       = "env:DATABASE_URL"   # required; use env: for secrets
+pool_size = 10                   # default
 
 [identity]
 tenant     = "9900357000004"           # required — MP-ID of the operator
@@ -557,6 +627,9 @@ url = "http://edmd:8380"
 # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 # audience = "api://mako-invoicd"
 # jwks_refresh_secs = 300
+
+# [mcp]           # MCP authentication: API key, OIDC, or dev mode
+# api_key = "env:INVOICD_MCP_API_KEY"
 
 ```
 

@@ -642,7 +642,7 @@ class TestZaehlerstandsgangShape:
 class TestReadingQuality:
     """A gap and a substituted value are different obligations.
 
-    An Ersatzwert is delivered and billable (§ 60 Abs. 2 MsbG); a FAULTY reading
+    An Ersatzwert is delivered and billable (§ 40a Abs. 2 EnWG); a FAULTY reading
     is delivered and must not be billed; a gap is not delivered at all. A gateway
     that could only emit unqualified numbers could exercise none of it.
     """

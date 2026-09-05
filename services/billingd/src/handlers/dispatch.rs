@@ -4,6 +4,36 @@ use super::*;
 
 // ── Category dispatch via BillingEngine ──────────────────────────────────────
 
+/// The caller-supplied meter input for a delivery mako reads from nowhere else.
+///
+/// Only for a category whose provider **prices a delivered quantity**: an
+/// absent block defaults to zero, so the invoice charges the standing charges,
+/// bills nothing for the commodity and reads as an ordinary document.
+///
+/// A category billed per month and per event — HEMS, Energiedienstleistung, and
+/// an e-mobility product that prices no charging energy — has no such quantity.
+/// Its provider derives the month count from the billed period and treats an
+/// absent event count as no events, which is what a pure-subscription product
+/// is: `Quantities::empty_energy_sources` leaves those categories out for the
+/// same reason. Refusing them would reject a correct Grundgebühr invoice.
+///
+/// # Errors
+///
+/// `422 NO_METER_DATA` when it is absent.
+fn require_meter<T>(supplied: Option<T>, category: &str, malo_id: &str) -> BillingResult<T> {
+    supplied.ok_or_else(|| {
+        BillingError::unprocessable(
+            "NO_METER_DATA",
+            format!(
+                "no quantity supplied for {category} MaLo {malo_id}: mako holds no \
+                 meter source for this category, so the reading has to arrive with \
+                 the request. Billing it as zero would charge the Grundpreis and \
+                 leave the whole period's consumption uninvoiced."
+            ),
+        )
+    })
+}
+
 /// Build the `Quantities` for a billing request by resolving meter data.
 pub(crate) async fn build_quantities(
     deps: &BillingDeps,
@@ -62,26 +92,60 @@ pub(crate) async fn build_quantities(
             enrich_gas_meter(&mut meter, malo_id, period_from, period_to, edmd, marktd).await?;
             q.gas = Some(meter);
         }
+        // Neither `edmd` nor `marktd` holds a quantity for these: the request is
+        // their only source, so an absent delivery is a refusal and never a
+        // zero. A Fernwärme month billed as Grundpreis alone leaves the whole
+        // month's heat uninvoiced, reads as an ordinary invoice, and scores in
+        // the risk gate's SAMPLE band, so nothing holds it. The metered
+        // categories above refuse a missing reading; so do these.
         "WAERME" => {
-            q.heat = Some(req.waerme_meter.clone().unwrap_or_default());
+            q.heat = Some(require_meter(req.waerme_meter.clone(), "WAERME", malo_id)?);
         }
         "WASSER" => {
-            q.wasser = Some(req.wasser_meter.clone().unwrap_or_default());
+            q.wasser = Some(require_meter(req.wasser_meter.clone(), "WASSER", malo_id)?);
         }
         "SOLAR" => {
-            q.solar = Some(req.solar_meter.clone().unwrap_or_default());
+            q.solar = Some(require_meter(req.solar_meter.clone(), "SOLAR", malo_id)?);
         }
-        "EEG" | "EINSPEISUNG" => {
-            q.eeg = Some(req.eeg_meter.clone().unwrap_or_default());
+        "EEG" => {
+            q.eeg = Some(require_meter(req.eeg_meter.clone(), "EEG", malo_id)?);
         }
+        // `EinspeisungProvider` reads `Quantities::einspeisung`; the same
+        // `eeg_meter` body carries it, because a Direktvermarktung settlement
+        // states the same fed-in kWh.
+        "EINSPEISUNG" => {
+            q.einspeisung = Some(require_meter(
+                req.eeg_meter.clone(),
+                "EINSPEISUNG",
+                malo_id,
+            )?);
+        }
+        // Billed per month and per event: the month count comes from the billed
+        // period and an absent event count is no events, so a pure-subscription
+        // product bills a correct Grundgebühr invoice from no block at all.
         "HEMS" => {
-            q.hems = Some(req.hems_meter.clone().unwrap_or_default());
-        }
-        "EMOBILITY" => {
-            q.emobility = Some(req.emobility_meter.clone().unwrap_or_default());
+            q.hems = req.hems_meter.clone();
         }
         "ENERGIEDIENSTLEISTUNG" => {
-            q.service = Some(req.service_meter.clone().unwrap_or_default());
+            q.service = req.service_meter.clone();
+        }
+        // Charging energy is the one e-mobility figure only the caller holds,
+        // so it is required exactly when the product prices it. A service- and
+        // session-priced product carries no kWh and needs no block.
+        "EMOBILITY" => {
+            let prices_energy = matches!(
+                tariff,
+                Product::Emobility(p) if p.emobility_kwh_price_ct.is_some()
+            );
+            q.emobility = if prices_energy {
+                Some(require_meter(
+                    req.emobility_meter.clone(),
+                    "EMOBILITY",
+                    malo_id,
+                )?)
+            } else {
+                req.emobility_meter.clone()
+            };
         }
         // §42c EnWG: a sharing participant is an ordinary supply customer whose
         // bill carries a credit for their allocated community share. Both halves
@@ -110,7 +174,57 @@ pub(crate) async fn build_quantities(
             ));
         }
     }
+    require_coverage(deps.cfg.as_ref(), &q, malo_id, period_from, period_to)?;
     Ok(q)
+}
+
+/// Refuse a period below the operator's coverage floor.
+///
+/// A sum over the readings that arrived says nothing about the ones that did
+/// not: a month delivered up to the 3rd yields a plausible Arbeitsmenge and
+/// bills as a complete month.
+///
+/// § 40a Abs. 2 EnWG nonetheless makes such a period billable — the invoice
+/// „darf … auf einer Verbrauchsschätzung beruhen" where the supplier cannot
+/// determine the actual consumption for reasons it does not answer for, stated
+/// prominently on the document with its ground and its factors. So there is no
+/// statutory floor to enforce, the engine's `MENGE_UNVOLLSTAENDIG` finding
+/// carries the labelling duty, and this gate binds only where an operator set
+/// `min_meter_coverage_pct` themselves. Unset, nothing is refused: one late
+/// MSCONS day in a 31-day month reports 96.77 %, and refusing it spends the
+/// § 40c Abs. 2 EnWG six weeks waiting for a reading.
+///
+/// A source that states no coverage is not gated — the figure is a claim about
+/// completeness, and its absence is not the claim that the period is short.
+fn require_coverage(
+    cfg: &BillingdConfig,
+    q: &Quantities,
+    malo_id: &str,
+    period_from: time::Date,
+    period_to: time::Date,
+) -> BillingResult<()> {
+    let Some(minimum) = cfg.min_meter_coverage_pct() else {
+        return Ok(());
+    };
+    for (label, pct) in [
+        ("Strom", q.electricity.as_ref().and_then(|m| m.coverage_pct)),
+        ("Gas", q.gas.as_ref().and_then(|m| m.coverage_pct)),
+    ] {
+        let Some(pct) = pct.filter(|p| *p < minimum) else {
+            continue;
+        };
+        return Err(BillingError::unprocessable(
+            "INCOMPLETE_METER_DATA",
+            format!(
+                "{label} MaLo {malo_id}: only {pct} % of {period_from}..{period_to} is \
+                 covered by billable readings, below the operator's floor of \
+                 {minimum} %. Either the missing readings arrive, or the gap is \
+                 estimated under § 40a Abs. 2 EnWG and the estimate stated on the \
+                 invoice."
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Resolve everything a period needs and run it through the engine.
@@ -121,7 +235,7 @@ pub(crate) async fn build_quantities(
 /// [`Product`] into an [`Invoice`]. The only clock in the pipeline is the §40c
 /// deadline check at the end — the engine itself is clock-free by design.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn dispatch_invoice(
+async fn dispatch_invoice(
     deps: &BillingDeps,
     tariff: &Product,
     req: &CalculateRequest,
@@ -236,7 +350,29 @@ pub(crate) async fn dispatch_invoice(
                 .clone()
                 .unwrap_or_else(|| v.vertrag.id.clone())
         }),
+        // §36 / §38 / §41b EnWG — which supply regime this contract is under.
+        //
+        // Not cosmetic. `BillingContext::vertragsart` defaults to
+        // `Sondervertrag`, and nothing here ever set it, so the engine's
+        // § 38 Abs. 4 EnWG guard — an Ersatzversorgung ends three months after
+        // supply began, and a period past that is refused — could not fire from
+        // the service at all: every invoice, Ersatzversorgung included, was
+        // billed as a freely negotiated contract, and the `mako:vertragsart`
+        // ZusatzAttribut that discloses the GVV regime said SONDERVERTRAG.
+        //
+        // `vertragd` stores it (`versorgungsvertraege.vertragsart`, `NOT NULL`
+        // under a CHECK) and serves it on this same by-malo answer, so it costs
+        // no extra round trip. A MaLo with no contract in `vertragd` keeps the
+        // engine default, which claims no regime.
+        vertragsart: vertrag
+            .as_ref()
+            .map(|v| v.vertrag.regime())
+            .unwrap_or_default(),
         // §41 EnWG pro-rata: clip the billable days to the contract term.
+        //
+        // Also the anchor for the § 38 Abs. 4 EnWG three-month limit above: the
+        // engine measures from `vertragsbeginn` and falls back to the period's
+        // own first day, which can only report the limit early, never miss it.
         vertragsbeginn: vertrag.as_ref().map(|v| v.vertrag.vertragsbeginn),
         vertragsende: vertrag.as_ref().and_then(|v| v.vertrag.vertragsende),
         vertragsinformationen,
@@ -331,6 +467,88 @@ pub(crate) struct TariffLeg {
     /// for its own dates. A caller that already holds the split readings — the
     /// Tarifwechsel endpoint — supplies them here instead.
     pub(crate) meter: Option<MeterInput>,
+}
+
+/// The product legs covering a period, ready for [`dispatch_invoice_multi`].
+///
+/// One leg per product assignment in force inside the period, split further at
+/// every statutory rate boundary. A request that states its own product is one
+/// leg, since the caller has named the price for the whole period.
+///
+/// This is the only way to price a period correctly: an invoice covers a period,
+/// and both a Tarifwechsel (§ 41 Abs. 5 EnWG, a contract fact `vertragd` owns)
+/// and a VAT or levy Stichtag divide it into parts with different prices.
+/// Resolving one product "as of" a single day charges that day's price for every
+/// day of the period.
+///
+/// # Errors
+///
+/// `422 NO_ACTIVE_PRODUCT` when the MaLo has no assignment covering the period
+/// or an assigned code has no version valid on its leg's first day; `502` when
+/// `vertragd` or `productd` is unreachable.
+pub(crate) async fn resolve_legs(
+    req: &CalculateRequest,
+    deps: &BillingDeps,
+    malo_id: &str,
+    from: time::Date,
+    to: time::Date,
+) -> BillingResult<Vec<TariffLeg>> {
+    let cfg = deps.cfg.as_ref();
+    if let Some(tariff) = req.tariff.clone() {
+        return Ok(split_on_rate_boundaries(
+            cfg,
+            vec![TariffLeg {
+                tariff,
+                from,
+                to,
+                meter: None,
+            }],
+        ));
+    }
+    let slices = deps
+        .vertragd
+        .get_product_slices(malo_id, from, to)
+        .await
+        .map_err(|e| BillingError::upstream("vertragd", e))?;
+    if slices.is_empty() {
+        return Err(BillingError::unprocessable(
+            "NO_ACTIVE_PRODUCT",
+            format!("MaLo {malo_id} has no product assignment in {from}..{to} in vertragd"),
+        ));
+    }
+    // One round trip prices every leg: asking productd per leg is an N+1 on
+    // every invoice, and two calls could disagree if the catalogue changed
+    // between them.
+    let anfragen: Vec<(String, time::Date)> = slices
+        .iter()
+        .map(|s| (s.product_code.clone(), s.gueltig_von.max(from)))
+        .collect();
+    let produkte = deps
+        .productd
+        .resolve_products(&req.lf_mp_id, &anfragen)
+        .await
+        .map_err(|e| BillingError::upstream("productd", e))?;
+    let mut legs = Vec::with_capacity(slices.len());
+    for (slice, produkt) in slices.iter().zip(produkte) {
+        let am = slice.gueltig_von.max(from);
+        let tariff = produkt.ok_or_else(|| {
+            BillingError::unprocessable(
+                "NO_ACTIVE_PRODUCT",
+                format!(
+                    "product {} assigned to MaLo {malo_id} has no version valid on {am} \
+                     in productd",
+                    slice.product_code
+                ),
+            )
+        })?;
+        legs.push(TariffLeg {
+            tariff,
+            from: am,
+            to: slice.last_day(to),
+            meter: None,
+        });
+    }
+    Ok(split_on_rate_boundaries(cfg, legs))
 }
 
 /// Split legs further wherever a statutory rate boundary falls inside one.
@@ -433,7 +651,8 @@ impl LegSummary {
 /// # Errors
 ///
 /// Propagates whatever the underlying single-leg billing reports; a period with
-/// no legs at all is a caller error.
+/// no legs at all is a caller error, and so is a split period whose quantities
+/// arrive as one period total (`TARIFWECHSEL_OHNE_TEILMENGEN`).
 pub(crate) async fn dispatch_invoice_multi(
     deps: &BillingDeps,
     legs: &[TariffLeg],
@@ -442,13 +661,15 @@ pub(crate) async fn dispatch_invoice_multi(
     rechnungsnummer: &str,
     run: RunId<'_>,
 ) -> BillingResult<Billed> {
-    let Some((first, rest)) = legs.split_first() else {
+    let Some((_, rest)) = legs.split_first() else {
         return Err(BillingError::bad_request(
             "NO_TARIFF_LEG",
             "a billing period needs at least one product assignment",
         ));
     };
-    let cfg = deps.cfg.as_ref();
+    if !rest.is_empty() {
+        refuse_unapportionable_quantities(legs, req, malo_id)?;
+    }
 
     // The legs carry `/A`, `/B`, … for the trace; only the merged document is
     // issued, so only it consumes a number from the § 14 Abs. 4 Nr. 4 UStG
@@ -464,14 +685,33 @@ pub(crate) async fn dispatch_invoice_multi(
         }
     };
 
-    let mut billed = bill_leg(deps, first, req, malo_id, &leg_nr(0), run).await?;
-    for (i, leg) in rest.iter().enumerate() {
-        let next = bill_leg(deps, leg, req, malo_id, &leg_nr(i + 1), run).await?;
-        billed.invoice = billed.invoice.merge(next.invoice);
-        // The buyer is the same customer throughout; keep the first answer that
-        // resolved one.
-        billed.buyer = billed.buyer.or(next.buyer);
+    // How the period's days divide among its legs: the ratio a quantity stated
+    // once for the whole period is apportioned by.
+    let leg_days: Vec<u32> = legs
+        .iter()
+        .map(|l| u32::try_from((l.to - l.from).whole_days() + 1).unwrap_or(1))
+        .collect();
+
+    let last = legs.len() - 1;
+    let mut billed: Option<Billed> = None;
+    for (i, leg) in legs.iter().enumerate() {
+        let share = if rest.is_empty() {
+            energy_billing::DayApportionment::whole()
+        } else {
+            energy_billing::DayApportionment::new(&leg_days, i)
+        };
+        let next = bill_leg(deps, leg, req, malo_id, &leg_nr(i), run, i == last, &share).await?;
+        billed = Some(match billed {
+            None => next,
+            Some(acc) => Billed {
+                invoice: acc.invoice.merge(next.invoice),
+                // The buyer is the same customer throughout; keep the first
+                // answer that resolved one.
+                buyer: acc.buyer.or(next.buyer),
+            },
+        });
     }
+    let billed = billed.expect("legs is non-empty");
     if !rest.is_empty() {
         billed.invoice.assert_valid();
         tracing::info!(
@@ -479,11 +719,87 @@ pub(crate) async fn dispatch_invoice_multi(
             "billingd: period billed across a Tarifwechsel"
         );
     }
-    let _ = cfg;
     Ok(billed)
 }
 
-/// Bill one leg under its own statutory rates.
+/// Refuse a split period whose electricity or gas quantity arrives as one
+/// figure for the whole of it.
+///
+/// Each leg is priced at its own tariff and its own statutory rates, so it needs
+/// its own quantity. For electricity and gas the caller has a way to give it
+/// one, and so is asked for it rather than having a period total divided:
+///
+/// - **`meter`** — [`TariffLeg::meter`] carries a reading per leg, which is the
+///   shape the Tarifwechsel endpoint already sends. Omitted entirely, each leg
+///   is read from `edmd` for its own dates.
+/// - **`gas_meter`** carrying a volume or a kWh figure — omitted, `edmd`
+///   answers per leg with the Brennwert and Zustandszahl that applied to those
+///   days, which no apportionment of a period total can reconstruct.
+///
+/// Every other category is apportioned by days instead — see
+/// [`energy_billing::DayApportionment`] — because mako reads it from nowhere
+/// else and there is no per-leg field to fill in.
+fn refuse_unapportionable_quantities(
+    legs: &[TariffLeg],
+    req: &CalculateRequest,
+    malo_id: &str,
+) -> BillingResult<()> {
+    // One leg is one price for the whole period, so the period total *is* the
+    // leg's quantity and there is nothing to apportion. Refusing here would
+    // reject every ordinary single-tariff invoice.
+    if legs.len() < 2 {
+        return Ok(());
+    }
+    let mut carried: Vec<&str> = Vec::new();
+    if req.meter.is_some() && legs.iter().any(|l| l.meter.is_none()) {
+        carried.push("meter");
+    }
+    // A gas block with no quantity in it states only conversion factors; the
+    // reading itself still comes from edmd, per leg.
+    if req
+        .gas_meter
+        .as_ref()
+        .is_some_and(|m| m.messung_qm3 != Decimal::ZERO || m.kwh_hs.is_some())
+    {
+        carried.push("gas_meter");
+    }
+    if carried.is_empty() {
+        return Ok(());
+    }
+    let spans: Vec<String> = legs
+        .iter()
+        .map(|l| format!("{}..{}", l.from, l.to))
+        .collect();
+    Err(BillingError::unprocessable(
+        "TARIFWECHSEL_OHNE_TEILMENGEN",
+        format!(
+            "MaLo {malo_id}: the period splits into {} legs ({}) and the request states \
+             {} for the period as a whole. Each leg is priced at its own tariff and \
+             statutory rates, so it needs its own reading — supply the readings per leg, \
+             omit them so edmd answers per leg, or bill the legs as separate periods.",
+            legs.len(),
+            spans.join(", "),
+            carried.join(", "),
+        ),
+    ))
+}
+
+/// Bill one leg under its own statutory rates and its own share of the period.
+///
+/// `is_last` marks the leg that carries the facts belonging to the **period**
+/// rather than to any one part of it: the advances § 40 Abs. 1 EnWG has the
+/// settling invoice deduct, and the EEG credit. Each is a single figure for the
+/// whole document, so it rides on exactly one leg — carried on every leg, a
+/// year of twelve advances split at a levy Stichtag deducts them twice over and
+/// refunds a customer who owes money.
+///
+/// `share` is this leg's part of the quantities the caller stated once for the
+/// whole period. mako has no other source for them and [`TariffLeg`] has no
+/// field to carry them per leg, so they are apportioned by days rather than
+/// refused or invented — see [`energy_billing::DayApportionment`], which also
+/// says which figures are sums over days and which are carried whole. On a
+/// one-leg period the share is the whole and nothing is touched.
+#[allow(clippy::too_many_arguments)]
 async fn bill_leg(
     deps: &BillingDeps,
     leg: &TariffLeg,
@@ -491,19 +807,48 @@ async fn bill_leg(
     malo_id: &str,
     rechnungsnummer: &str,
     run: RunId<'_>,
+    is_last: bool,
+    share: &energy_billing::DayApportionment,
 ) -> BillingResult<Billed> {
     // A leg inside a VAT or levy window carries that window's rate — which is
     // the other reason a period is split, and why the rates are resolved per
     // leg rather than once for the whole period.
-    let rates = deps
+    let mut rates = deps
         .cfg
         .try_regulatory_rates_for_period(leg.tariff.category_str(), leg.from, leg.to)
         .map_err(|e| BillingError::unprocessable("REGULATORY_RATES", e.to_string()))?;
-    // The leg's own dates and, when the caller supplied one, its own reading.
+    // The nEHS certificate price is a series, read at the leg's own start: a
+    // period split at a BEHG Stichtag is split precisely because the CO₂ price
+    // changed inside it.
+    apply_nehs_market_price(
+        &mut rates,
+        leg.tariff.category_str(),
+        leg.from,
+        deps.cfg.as_ref(),
+        &deps.productd,
+    )
+    .await;
+    // The leg's own dates, its own reading where the caller supplied one, and
+    // its share of every period total.
     let leg_req = CalculateRequest {
         period_from: leg.from.to_string(),
         period_to: leg.to.to_string(),
         meter: leg.meter.clone().or_else(|| req.meter.clone()),
+        waerme_meter: req.waerme_meter.as_ref().map(|m| m.apportioned(share)),
+        wasser_meter: req.wasser_meter.as_ref().map(|m| m.apportioned(share)),
+        solar_meter: req.solar_meter.as_ref().map(|m| m.apportioned(share)),
+        eeg_meter: req.eeg_meter.as_ref().map(|m| m.apportioned(share)),
+        hems_meter: req.hems_meter.as_ref().map(|m| m.apportioned(share)),
+        emobility_meter: req.emobility_meter.as_ref().map(|m| m.apportioned(share)),
+        service_meter: req.service_meter.as_ref().map(|m| m.apportioned(share)),
+        energy_share: req.energy_share.as_ref().map(|m| m.apportioned(share)),
+        abschlaege: if is_last {
+            req.abschlaege.clone()
+        } else {
+            Vec::new()
+        },
+        // A EUR credit for the whole period, not a per-leg price.
+        eeg_gutschrift_eur: is_last.then_some(req.eeg_gutschrift_eur).flatten(),
         ..req.clone()
     };
     dispatch_invoice(
@@ -840,6 +1185,30 @@ mod leg_summary_tests {
         );
     }
 
+    /// An annual Fernwärme invoice covers a year end, and the § 10 BEHG step
+    /// there is the gas levy: a heat product's CO₂ cost is its own CO2KostAufG
+    /// § 3 figure and is the same on both sides. Splitting there would yield two
+    /// legs priced identically, so the period stays whole.
+    #[test]
+    fn a_year_crossing_waerme_period_stays_one_leg() {
+        let tariff: Product = serde_json::from_value(serde_json::json!({
+            "category": "WAERME",
+            "product_code": "WAERME-BASIS",
+            "waerme_arbeitspreis_ct_per_kwh": "11",
+        }))
+        .expect("a minimal WAERME product");
+        let out = super::split_on_rate_boundaries(
+            &cfg(),
+            vec![TariffLeg {
+                tariff,
+                from: date!(2025 - 07 - 01),
+                to: date!(2026 - 06 - 30),
+                meter: None,
+            }],
+        );
+        assert_eq!(out.len(), 1, "one CO₂ rate governs the whole heat year");
+    }
+
     #[test]
     fn a_period_inside_one_rate_regime_stays_one_leg() {
         let out = super::split_on_rate_boundaries(&cfg(), vec![leg("STROM-BASIS")]);
@@ -855,5 +1224,406 @@ mod leg_summary_tests {
         let s = LegSummary::of(&[leg("STROM-ALT"), leg("STROM-NEU")]);
         assert_eq!(s.product_code, "STROM-ALT+STROM-NEU");
         assert_eq!(s.category, "TARIFWECHSEL");
+    }
+}
+
+#[cfg(test)]
+mod quantity_source_tests {
+    use super::{TariffLeg, refuse_unapportionable_quantities, require_coverage, require_meter};
+    use crate::handlers::CalculateRequest;
+    use energy_billing::{MeterInput, Product, Quantities, WaermeMeterInput};
+    use rust_decimal::dec;
+    use time::macros::date;
+
+    fn cfg() -> crate::config::BillingdConfig {
+        serde_json::from_value(serde_json::json!({
+            "database": { "url": "postgres://localhost/x" },
+            "tenant": "9900357000004",
+            "productd_url": "http://localhost:9080",
+            "edmd_url": "http://localhost:8380",
+            "marktd_url": "http://localhost:8080"
+        }))
+        .expect("config parses")
+    }
+
+    /// One leg for January, a second for February — the shape of a period split
+    /// by a price change or a levy Stichtag.
+    fn strom_legs(n: usize) -> Vec<TariffLeg> {
+        let tariff: Product = serde_json::from_value(serde_json::json!({
+            "category": "STROM",
+            "product_code": "STROM-BASIS",
+            "arbeitspreis_ct_per_kwh": "30",
+        }))
+        .expect("a minimal STROM product");
+        let spans = [
+            (date!(2026 - 01 - 01), date!(2026 - 01 - 31)),
+            (date!(2026 - 02 - 01), date!(2026 - 02 - 28)),
+        ];
+        spans
+            .into_iter()
+            .take(n)
+            .map(|(from, to)| TariffLeg {
+                tariff: tariff.clone(),
+                from,
+                to,
+                meter: None,
+            })
+            .collect()
+    }
+
+    /// A category mako reads from nowhere else has to be told the quantity: an
+    /// all-zero default bills the Grundpreis and calls the period settled.
+    #[test]
+    fn a_category_with_no_meter_source_refuses_a_missing_reading() {
+        let err = require_meter::<WaermeMeterInput>(None, "WAERME", "51238696781")
+            .expect_err("no source, no invoice");
+        assert_eq!(err.code(), "NO_METER_DATA");
+        assert!(
+            require_meter(Some(WaermeMeterInput::default()), "WAERME", "51238696781").is_ok(),
+            "a supplied reading is billed, zero or not"
+        );
+    }
+
+    /// Each leg of a split period is priced at its own tariff, so it needs its
+    /// own quantity: one period total cannot be divided into them.
+    #[test]
+    fn a_split_period_refuses_a_period_total_quantity() {
+        let req = CalculateRequest {
+            meter: Some(MeterInput::default()),
+            ..Default::default()
+        };
+        let err = refuse_unapportionable_quantities(&strom_legs(2), &req, "51238696781")
+            .expect_err("nothing can apportion a period total across two prices");
+        assert_eq!(err.code(), "TARIFWECHSEL_OHNE_TEILMENGEN");
+    }
+
+    /// A period with one price has one tariff to price its total at.
+    #[test]
+    fn an_unsplit_period_takes_a_period_total_quantity() {
+        let req = CalculateRequest {
+            meter: Some(MeterInput::default()),
+            ..Default::default()
+        };
+        assert!(refuse_unapportionable_quantities(&strom_legs(1), &req, "51238696781").is_ok());
+    }
+
+    /// A caller that supplied a reading **per leg** has apportioned it already.
+    #[test]
+    fn legs_carrying_their_own_readings_are_billed() {
+        let req = CalculateRequest {
+            meter: Some(MeterInput::default()),
+            ..Default::default()
+        };
+        let mut legs = strom_legs(2);
+        for leg in &mut legs {
+            leg.meter = Some(MeterInput::default());
+        }
+        assert!(refuse_unapportionable_quantities(&legs, &req, "51238696781").is_ok());
+    }
+
+    /// § 40a Abs. 2 EnWG lets a period the supplier cannot fully measure be
+    /// billed on a labelled estimate, so mako gates nothing until an operator
+    /// sets a floor. One late MSCONS day in a 31-day month reports 96.77 %, and
+    /// refusing it spends the § 40c Abs. 2 six weeks waiting for a reading.
+    #[test]
+    fn an_unconfigured_coverage_floor_refuses_nothing() {
+        for pct in [dec!(96.77), dec!(9.68), dec!(0)] {
+            let q = Quantities {
+                electricity: Some(MeterInput {
+                    arbeitsmenge_kwh: dec!(500),
+                    coverage_pct: Some(pct),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            assert!(
+                require_coverage(
+                    &cfg(),
+                    &q,
+                    "51238696781",
+                    date!(2026 - 01 - 01),
+                    date!(2026 - 01 - 31),
+                )
+                .is_ok(),
+                "coverage {pct} % is billable as a § 40a Abs. 2 estimate"
+            );
+        }
+    }
+
+    /// An operator who sets a floor gets one: below it the period is refused,
+    /// at it and above it billed.
+    #[test]
+    fn a_configured_coverage_floor_binds_below_itself() {
+        let mut cfg = cfg();
+        cfg.min_meter_coverage_pct = Some(dec!(95));
+        let with = |pct| Quantities {
+            electricity: Some(MeterInput {
+                arbeitsmenge_kwh: dec!(500),
+                coverage_pct: Some(pct),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let err = require_coverage(
+            &cfg,
+            &with(dec!(9.68)),
+            "51238696781",
+            date!(2026 - 01 - 01),
+            date!(2026 - 01 - 31),
+        )
+        .expect_err("three days of readings are under the operator's floor");
+        assert_eq!(err.code(), "INCOMPLETE_METER_DATA");
+        assert!(
+            require_coverage(
+                &cfg,
+                &with(dec!(95)),
+                "51238696781",
+                date!(2026 - 01 - 01),
+                date!(2026 - 01 - 31),
+            )
+            .is_ok(),
+            "the floor itself is covered enough"
+        );
+    }
+
+    /// A Fernwärme period is billed from the caller's figures alone — mako reads
+    /// heat from nowhere else and a leg carries no heat reading of its own — so
+    /// a split period apportions the period total rather than refusing it.
+    /// Refusing it would leave the caller nothing to do: the heat block is
+    /// required, and its presence would be the ground for the refusal.
+    #[test]
+    fn a_split_period_bills_a_caller_only_quantity_by_apportioning_it() {
+        let req = CalculateRequest {
+            waerme_meter: Some(WaermeMeterInput {
+                kwh_waerme: dec!(12000),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(
+            refuse_unapportionable_quantities(&strom_legs(2), &req, "51238696781").is_ok(),
+            "a heat period total is apportioned, not refused"
+        );
+    }
+
+    /// The legs of a split period sum back to the quantity the caller stated,
+    /// each in proportion to its days — 31 of 59 and 28 of 59 here.
+    #[test]
+    fn apportioned_legs_sum_back_to_the_period_total() {
+        let legs = strom_legs(2);
+        let days: Vec<u32> = legs
+            .iter()
+            .map(|l| u32::try_from((l.to - l.from).whole_days() + 1).expect("a short leg"))
+            .collect();
+        assert_eq!(days, vec![31, 28]);
+        let total = dec!(12000);
+        let parts: Vec<_> = (0..legs.len())
+            .map(|i| {
+                WaermeMeterInput {
+                    kwh_waerme: total,
+                    ..Default::default()
+                }
+                .apportioned(&energy_billing::DayApportionment::new(&days, i))
+                .kwh_waerme
+            })
+            .collect();
+        assert_eq!(
+            parts.iter().copied().sum::<rust_decimal::Decimal>(),
+            total,
+            "no kWh is created or lost by the split: {parts:?}"
+        );
+        assert!(
+            parts[0] > parts[1],
+            "the longer leg carries more: {parts:?}"
+        );
+    }
+
+    /// A gas block that carries only conversion factors states no quantity, so
+    /// edmd still answers per leg and there is nothing to refuse.
+    #[test]
+    fn a_gas_block_without_a_reading_does_not_block_a_split_period() {
+        let req = CalculateRequest {
+            gas_meter: Some(energy_billing::GasMeterInput {
+                brennwert_kwh_per_qm3: Some(dec!(11.5)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(refuse_unapportionable_quantities(&strom_legs(2), &req, "51238696781").is_ok());
+        let with_reading = CalculateRequest {
+            gas_meter: Some(energy_billing::GasMeterInput {
+                messung_qm3: dec!(900),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let err = refuse_unapportionable_quantities(&strom_legs(2), &with_reading, "51238696781")
+            .expect_err("edmd holds the Brennwert of each leg's own days");
+        assert_eq!(err.code(), "TARIFWECHSEL_OHNE_TEILMENGEN");
+    }
+
+    /// A fully delivered period bills, and a source that states no coverage
+    /// makes no claim about completeness either way.
+    #[test]
+    fn full_coverage_and_an_unstated_coverage_both_bill() {
+        for pct in [Some(dec!(100)), None] {
+            let q = Quantities {
+                electricity: Some(MeterInput {
+                    arbeitsmenge_kwh: dec!(500),
+                    coverage_pct: pct,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            assert!(
+                require_coverage(
+                    &cfg(),
+                    &q,
+                    "51238696781",
+                    date!(2026 - 01 - 01),
+                    date!(2026 - 01 - 31),
+                )
+                .is_ok(),
+                "coverage {pct:?} must bill"
+            );
+        }
+    }
+}
+
+/// The § 38 Abs. 4 EnWG three-month limit, from `vertragd`'s answer to the wire.
+///
+/// `BillingContext::vertragsart` was never set anywhere in `billingd`, so it was
+/// `Sondervertrag` on every invoice the service produced. The engine's Pass 0
+/// refuses an Ersatzversorgung period past three months
+/// (`ERSATZVERSORGUNG_UEBER_3_MONATE`, `WarningSeverity::Error` →
+/// `EngineError::ValidationBlocked`), but that branch is gated on
+/// `vertragsart == Ersatzversorgung` — so the whole guard was dead in
+/// production: a substitute supply running past its statutory end billed
+/// cleanly, as a freely negotiated contract, and the `mako:vertragsart`
+/// ZusatzAttribut disclosed the wrong regime.
+///
+/// These build the context the way [`bill_one`] builds it — regime and
+/// Vertragsbeginn out of the same `vertragd` answer — and run it through the
+/// engine and this service's own error mapping.
+#[cfg(test)]
+mod ersatzversorgung_limit_tests {
+    use crate::clients::VertragByMalo;
+    use energy_billing::{
+        BillingContext, BillingEngine, BillingPeriod, InvoiceType, Quantities, RegulatoryRates,
+    };
+    use rust_decimal::dec;
+    use time::macros::date;
+
+    fn vertrag(vertragsart: &str, vertragsbeginn: &str) -> VertragByMalo {
+        serde_json::from_value(serde_json::json!({
+            "vertrag": {
+                "id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+                "vertrags_nr": "VV-2026-00000001",
+                "vertragsart": vertragsart,
+                "vertragsbeginn": vertragsbeginn,
+                "vertragsende": null,
+                "kuendigungsfrist_monate": 1,
+            },
+            "naechstmoeglicher_kuendigungstermin": null,
+        }))
+        .expect("by-malo answer")
+    }
+
+    /// The two lines `bill_one` sets from the contract answer, in isolation.
+    fn context(v: &VertragByMalo, from: time::Date, to: time::Date) -> BillingContext {
+        BillingContext {
+            malo_id: "51238696781".to_owned(),
+            lf_mp_id: "9900111000002".to_owned(),
+            rechnungsnummer: "RE-2026-0001".to_owned(),
+            issue_date: Some(to),
+            period: BillingPeriod::new(from, to).expect("period"),
+            invoice_type: InvoiceType::Initial,
+            regulatory_rates: RegulatoryRates::default(),
+            vertragsart: v.vertrag.regime(),
+            vertragsbeginn: Some(v.vertrag.vertragsbeginn),
+            vertragsende: v.vertrag.vertragsende,
+            ..Default::default()
+        }
+    }
+
+    fn quantities() -> Quantities {
+        Quantities {
+            electricity: Some(energy_billing::MeterInput {
+                arbeitsmenge_kwh: dec!(500),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// Supply that began on 1 January cannot lawfully still be Ersatzversorgung
+    /// in May, so the invoice for May is refused — as a 422 the caller can act
+    /// on, naming the code.
+    #[test]
+    fn an_ersatzversorgung_past_three_months_is_refused_through_the_service() {
+        let v = vertrag("ERSATZVERSORGUNG", "2026-01-01");
+        let ctx = context(&v, date!(2026 - 05 - 01), date!(2026 - 05 - 31));
+        let err = BillingEngine::new()
+            .bill(ctx, &quantities())
+            .expect_err("§ 38 Abs. 4 EnWG bars a fourth month of Ersatzversorgung");
+
+        let mapped: crate::error::BillingError = err.into();
+        assert_eq!(
+            mapped.status(),
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let body = mapped.body();
+        assert_eq!(body["error"]["code"], "VALIDATION_BLOCKED");
+        assert!(
+            body["error"]["warnings"]
+                .as_array()
+                .expect("warnings")
+                .iter()
+                .any(|w| w["code"] == "ERSATZVERSORGUNG_UEBER_3_MONATE"),
+            "the refusal must name the statutory limit: {body}"
+        );
+    }
+
+    /// The first three months bill normally — the guard is a limit, not a ban.
+    #[test]
+    fn an_ersatzversorgung_inside_three_months_bills() {
+        let v = vertrag("ERSATZVERSORGUNG", "2026-01-01");
+        let ctx = context(&v, date!(2026 - 02 - 01), date!(2026 - 02 - 28));
+        BillingEngine::new()
+            .bill(ctx, &quantities())
+            .expect("February is inside the three months");
+    }
+
+    /// …and the regime has to come off the wire for any of it to happen.
+    ///
+    /// This is the state `billingd` shipped in: nothing set `vertragsart`, so
+    /// the same period billed cleanly as a Sondervertrag. Fails if the field is
+    /// dropped again.
+    #[test]
+    fn without_the_regime_the_statutory_limit_cannot_fire() {
+        let v = vertrag("ERSATZVERSORGUNG", "2026-01-01");
+        let mut ctx = context(&v, date!(2026 - 05 - 01), date!(2026 - 05 - 31));
+        ctx.vertragsart = energy_billing::Vertragsart::Sondervertrag;
+        assert!(
+            BillingEngine::new().bill(ctx, &quantities()).is_ok(),
+            "a Sondervertrag has no three-month limit — which is exactly why the \
+             regime must be read from vertragd rather than defaulted"
+        );
+    }
+
+    /// `bill_one` must actually set it. The engine guard and the wire field are
+    /// both in place; the seam between them is one line, and it is the line
+    /// that was missing.
+    #[test]
+    fn bill_one_sets_the_regime_from_the_contract() {
+        let src = include_str!("dispatch.rs");
+        let start = src
+            .find("let ctx = BillingContext {")
+            .expect("bill_one's context");
+        let body = &src[start..start + 4000];
+        assert!(
+            body.contains("vertragsart:") && body.contains("regime()"),
+            "bill_one must set BillingContext::vertragsart from the vertragd answer"
+        );
     }
 }

@@ -78,7 +78,7 @@ impl NbContractRepository for PgNbContractRepository {
         .bind(&rec.vertragsstatus)
         .execute(&self.pool)
         .await
-        .map_err(|e| MdmError::Internal(e.to_string()))?;
+        .map_err(super::write_error)?;
 
         Ok(new_version)
     }

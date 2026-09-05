@@ -178,10 +178,11 @@ async fn evaluate_and_act(
         },
         None => Identifikation::Keine,
     };
-    // The facts behind Prüfschritte 40–90 come from the NB's own registry, and
-    // mako only holds them once the Marktlokation exists. An identified case
-    // therefore escalates unless an operator has confirmed them — which is what
-    // `PUT …/identifikation` records.
+    // The facts behind Prüfschritte 40–90 and 545 come from the NB's own
+    // registry, and mako only holds them once the Marktlokation exists. A
+    // Marktlokation being commissioned is not in `marktd` yet, so there is
+    // nothing to read: an identified case is answered all-clear on all six,
+    // and the operator's `PUT …/identifikation` is what stands behind that.
     let befund: Option<NeuanlageBefund> = fall.malo_id.as_ref().map(|_| NeuanlageBefund {
         nimmt_an_mako_teil: true,
         erstmalige_inbetriebnahme: true,

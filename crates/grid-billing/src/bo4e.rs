@@ -150,6 +150,7 @@ pub fn into_rechnung(document: &InvoiceDocument) -> Rechnung {
                 QuantityUnit::Kvarh => Mengeneinheit::Kvarh,
                 QuantityUnit::Kvar => Mengeneinheit::Kvar,
                 QuantityUnit::Monat => Mengeneinheit::Monat,
+                QuantityUnit::Jahr => Mengeneinheit::Jahr,
             };
             Rechnungsposition::builder()
                 .positionsnummer(i64::from(number))
@@ -262,8 +263,11 @@ fn zu_zahlen_eur(document: &InvoiceDocument) -> rust_decimal::Decimal {
 /// A EUR amount as BO4E states one.
 /// A BO4E date-only market value as the `date-time` the schema declares.
 ///
-/// BDEW INVOIC transmits `rechnungsdatum` and `faelligkeitsdatum` as DTM
-/// qualifier 102 — a bare `YYYYMMDD` — while BO4E types both `format: date-time`.
+/// BDEW INVOIC transmits `rechnungsdatum` as `DTM+137` and `faelligkeitsdatum`
+/// as `SG8 DTM+265`, both with DE 2379 = `303` — `CCYYMMDDHHMMZZZ`, a *timestamp*
+/// — while BO4E types both `format: date-time`. (The value is still a calendar
+/// date in meaning; the wire simply carries it at 303 precision. The only INVOIC
+/// DTM admitting `102` is `DTM+203`.)
 ///
 /// **Midnight UTC.** `Rechnung::rechnungsdatum_date()` reads the date in the
 /// offset the payload carries, so `+00:00` reads back as the date that went in

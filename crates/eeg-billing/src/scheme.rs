@@ -140,19 +140,31 @@ pub enum SettlementScheme {
         price_floor: Option<Decimal>,
     },
 
-    /// §7 KWKG 2023 — **KWK-Zuschlag** for combined heat-and-power plants.
+    /// § 7 KWKG — **KWK-Zuschlag** for combined heat-and-power plants.
     ///
-    /// Formula: `eligible_kwh × verguetungssatz_ct / 100`
-    /// `eligible_kwh` is prorated when the §8 KWKG hour-limit is approached.
+    /// Formula: `eligible_kwh × verguetungssatz_ct / 100`, where `eligible_kwh`
+    /// is bounded by both § 8 limits: the lifetime Vollbenutzungsstunden of
+    /// Abs. 1–3 and the Abs. 4 cap on the calendar year.
     KwkSurcharge {
-        /// KWK-Zuschlag rate in ct/kWh (§7 Abs. 1 KWKG 2023).
+        /// KWK-Zuschlag rate in ct/kWh.
+        ///
+        /// § 7 prices per Leistungsanteil, so this is the blended Mischsatz from
+        /// [`crate::kwkg::zuschlag_ct_kwh`], not one band's rate.
         verguetungssatz_ct: Decimal,
-        /// Cumulative kWh already paid in prior periods (for §8 KWKG hour-limit).
-        /// `None` → no hour-limit enforcement.
+        /// Cumulative kWh already paid over the plant's life (§ 8 Abs. 1–3).
+        /// `None` → no lifetime limit enforced.
         kwh_paid_gesamt: Option<Decimal>,
-        /// Maximum total eligible kWh = rated_kW_el × kwk_foerderdauer_h.
-        /// `None` → no hour-limit cap applied.
+        /// Lifetime kWh limit = `kwk_leistung_kw × Vollbenutzungsstunden`
+        /// (§ 8 Abs. 1–3). `None` → no lifetime cap applied.
         max_kwh: Option<Decimal>,
+        /// § 8 Abs. 4 — the kWh still payable in this calendar year: the year's
+        /// `kwk_leistung_kw × Jahreshöchstbetrag` less what the year has already
+        /// been paid for.
+        ///
+        /// `None` → the annual cap is not enforced. It binds independently of the
+        /// lifetime limit, and it is the one that decides what a single year can
+        /// be paid.
+        jahres_restkontingent_kwh: Option<Decimal>,
     },
 
     /// §50b EEG 2023 — **Flexibilitätsprämie** for *existing* biomass plants.

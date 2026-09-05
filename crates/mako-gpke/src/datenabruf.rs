@@ -6,6 +6,7 @@
 //!
 //! | PID   | Direction   | Description |
 //! |-------|-------------|-------------|
+//! | 17004 | LF → NB/MSB | Anforderung von Werten |
 //! | 17102 | LF → NB/MSB | Anfrage von Werten (data value request) |
 //! | 17113 | LF → NB/MSB | Reklamation von Werten/Lastgängen |
 //! | 19101 | NB → LF     | Ablehnung Anfrage Stammdaten |
@@ -66,7 +67,7 @@ pub const ANTWORT_WINDOW_LABEL: &str = "gpke-datenabruf-antwort";
 /// Events emitted by the GPKE Datenabruf workflow.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
-pub enum DatanabrufEvent {
+pub enum DatenabrufEvent {
     /// LF sent an ORDERS data request or reclamation.
     AnfrageGesendet {
         /// ORDERS Prüfidentifikator (17102 or 17113).
@@ -101,13 +102,13 @@ pub enum DatanabrufEvent {
     },
 }
 
-impl EventPayload for DatanabrufEvent {
+impl EventPayload for DatenabrufEvent {
     fn event_type(&self) -> &'static str {
         match self {
-            Self::AnfrageGesendet { .. } => "DatanabrufAnfrageGesendet",
-            Self::AnfrageAbgelehnt { .. } => "DatanabrufAnfrageAbgelehnt",
-            Self::DatenGeliefert { .. } => "DatanabrufDatenGeliefert",
-            Self::DeadlineExpired { .. } => "DatanabrufDeadlineExpired",
+            Self::AnfrageGesendet { .. } => "DatenabrufAnfrageGesendet",
+            Self::AnfrageAbgelehnt { .. } => "DatenabrufAnfrageAbgelehnt",
+            Self::DatenGeliefert { .. } => "DatenabrufDatenGeliefert",
+            Self::DeadlineExpired { .. } => "DatenabrufDeadlineExpired",
         }
     }
 }
@@ -138,7 +139,7 @@ pub struct AnfrageData {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
 #[derive(Default)]
-pub enum DatanabrufState {
+pub enum DatenabrufState {
     /// No request sent yet.
     #[default]
     New,
@@ -165,7 +166,7 @@ pub enum DatanabrufState {
     },
 }
 
-impl DatanabrufState {
+impl DatenabrufState {
     /// Stable string label for the current variant.
     #[must_use]
     pub fn label(&self) -> &'static str {
@@ -192,7 +193,7 @@ impl DatanabrufState {
 
 /// Commands for the GPKE Datenabruf workflow.
 #[derive(Clone)]
-pub enum DatanabrufCommand {
+pub enum DatenabrufCommand {
     /// LF sends a data-value request or reclamation.
     SendAnfrage {
         /// ORDERS PID (17102 or 17113).
@@ -229,25 +230,25 @@ pub enum DatanabrufCommand {
     },
 }
 
-impl CommandPayload for DatanabrufCommand {}
+impl CommandPayload for DatenabrufCommand {}
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
 /// GPKE Datenabruf workflow — LF-initiated data requests and reclamations.
-pub struct GpkeDatanabrufWorkflow;
+pub struct GpkeDatenabrufWorkflow;
 
-impl Workflow for GpkeDatanabrufWorkflow {
-    type State = DatanabrufState;
-    type Event = DatanabrufEvent;
-    type Command = DatanabrufCommand;
+impl Workflow for GpkeDatenabrufWorkflow {
+    type State = DatenabrufState;
+    type Event = DatenabrufEvent;
+    type Command = DatenabrufCommand;
 
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
     ) -> Option<Self::Command> {
         match (deadline.label(), state) {
-            (ANTWORT_WINDOW_LABEL, DatanabrufState::AnfrageGesendet(_)) => {
-                Some(DatanabrufCommand::TimeoutExpired {
+            (ANTWORT_WINDOW_LABEL, DatenabrufState::AnfrageGesendet(_)) => {
+                Some(DatenabrufCommand::TimeoutExpired {
                     deadline_id: deadline.deadline_id(),
                     label: deadline.label().into(),
                 })
@@ -258,36 +259,36 @@ impl Workflow for GpkeDatanabrufWorkflow {
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
         match event {
-            DatanabrufEvent::AnfrageGesendet {
+            DatenabrufEvent::AnfrageGesendet {
                 orders_pid,
                 recipient,
                 malo,
                 message_ref,
-            } => DatanabrufState::AnfrageGesendet(AnfrageData {
+            } => DatenabrufState::AnfrageGesendet(AnfrageData {
                 orders_pid: *orders_pid,
                 recipient: recipient.clone(),
                 malo: malo.clone(),
                 message_ref: message_ref.clone(),
             }),
-            DatanabrufEvent::AnfrageAbgelehnt {
+            DatenabrufEvent::AnfrageAbgelehnt {
                 ordrsp_pid, reason, ..
             } => match state {
-                DatanabrufState::AnfrageGesendet(anfrage) => DatanabrufState::Abgelehnt {
+                DatenabrufState::AnfrageGesendet(anfrage) => DatenabrufState::Abgelehnt {
                     anfrage,
                     ordrsp_pid: *ordrsp_pid,
                     reason: reason.clone(),
                 },
                 other => other,
             },
-            DatanabrufEvent::DatenGeliefert { .. } => match state {
-                DatanabrufState::AnfrageGesendet(anfrage) => {
-                    DatanabrufState::DatenErhalten { anfrage }
+            DatenabrufEvent::DatenGeliefert { .. } => match state {
+                DatenabrufState::AnfrageGesendet(anfrage) => {
+                    DatenabrufState::DatenErhalten { anfrage }
                 }
                 other => other,
             },
-            DatanabrufEvent::DeadlineExpired { .. } => match state {
-                DatanabrufState::AnfrageGesendet(anfrage) => {
-                    DatanabrufState::DeadlineExpired { anfrage }
+            DatenabrufEvent::DeadlineExpired { .. } => match state {
+                DatenabrufState::AnfrageGesendet(anfrage) => {
+                    DatenabrufState::DeadlineExpired { anfrage }
                 }
                 other => other,
             },
@@ -299,14 +300,14 @@ impl Workflow for GpkeDatanabrufWorkflow {
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
         match command {
-            DatanabrufCommand::SendAnfrage {
+            DatenabrufCommand::SendAnfrage {
                 orders_pid,
                 recipient,
                 malo,
                 message_ref,
                 payload,
             } => {
-                if !matches!(state, DatanabrufState::New) {
+                if !matches!(state, DatenabrufState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
                 }
                 if !ORDERS_ANFRAGE_PIDS.contains(&orders_pid.as_u32()) {
@@ -314,7 +315,7 @@ impl Workflow for GpkeDatanabrufWorkflow {
                         "not a valid Datenabruf ORDERS PID: {orders_pid}",
                     )));
                 }
-                let event = DatanabrufEvent::AnfrageGesendet {
+                let event = DatenabrufEvent::AnfrageGesendet {
                     orders_pid,
                     recipient: recipient.clone(),
                     malo: malo.clone(),
@@ -333,7 +334,7 @@ impl Workflow for GpkeDatanabrufWorkflow {
                 Ok(WorkflowOutput::with_outbox(vec![event], outbox))
             }
 
-            DatanabrufCommand::ReceiveAblehnung {
+            DatenabrufCommand::ReceiveAblehnung {
                 ordrsp_pid,
                 reason,
                 message_ref,
@@ -341,7 +342,7 @@ impl Workflow for GpkeDatanabrufWorkflow {
                 if state.is_terminal() {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
-                if !matches!(state, DatanabrufState::AnfrageGesendet(_)) {
+                if !matches!(state, DatenabrufState::AnfrageGesendet(_)) {
                     return Err(WorkflowError::invalid_state(
                         "AnfrageGesendet",
                         state.label(),
@@ -352,7 +353,7 @@ impl Workflow for GpkeDatanabrufWorkflow {
                         "not a valid Datenabruf ORDRSP rejection PID: {ordrsp_pid}",
                     )));
                 }
-                Ok(vec![DatanabrufEvent::AnfrageAbgelehnt {
+                Ok(vec![DatenabrufEvent::AnfrageAbgelehnt {
                     ordrsp_pid,
                     reason,
                     message_ref,
@@ -360,18 +361,18 @@ impl Workflow for GpkeDatanabrufWorkflow {
                 .into())
             }
 
-            DatanabrufCommand::NotifyDatenGeliefert { message_ref } => {
-                if !matches!(state, DatanabrufState::AnfrageGesendet(_)) {
+            DatenabrufCommand::NotifyDatenGeliefert { message_ref } => {
+                if !matches!(state, DatenabrufState::AnfrageGesendet(_)) {
                     return Ok(WorkflowOutput::events(vec![])); // idempotent
                 }
-                Ok(vec![DatanabrufEvent::DatenGeliefert { message_ref }].into())
+                Ok(vec![DatenabrufEvent::DatenGeliefert { message_ref }].into())
             }
 
-            DatanabrufCommand::TimeoutExpired { deadline_id, label } => {
+            DatenabrufCommand::TimeoutExpired { deadline_id, label } => {
                 if state.is_terminal() {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
-                Ok(vec![DatanabrufEvent::DeadlineExpired { deadline_id, label }].into())
+                Ok(vec![DatenabrufEvent::DeadlineExpired { deadline_id, label }].into())
             }
         }
     }

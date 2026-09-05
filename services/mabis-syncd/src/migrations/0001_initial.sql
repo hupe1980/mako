@@ -139,6 +139,10 @@ COMMENT ON TABLE submission_runs IS
 CREATE INDEX sr_period    ON submission_runs (bilanzierungsgebiet_id, period_from, period_to);
 CREATE INDEX sr_status    ON submission_runs (status) WHERE status <> 'acked';
 CREATE INDEX sr_tenant    ON submission_runs (tenant);
+-- What a retry must not re-file: the territories acked for a Bilanzierungsmonat
+-- within the same filing lineage (`corrects_run_id`). Keyed on the period rather
+-- than the run, because a retry is a new run with no series rows of its own.
+CREATE INDEX sr_tenant_period ON submission_runs (tenant, period_from, period_to);
 CREATE INDEX sr_triggered ON submission_runs (triggered_at DESC);
 
 -- Finding the version that settles: the highest one the BIKO has marked

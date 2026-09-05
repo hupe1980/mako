@@ -18,6 +18,78 @@ use crate::pg::PgAnmeldungRepository;
 use crate::pg::PgApprovalQueue;
 use crate::{handler::handle_webhook, mcp_server::ProcessdMcpState};
 
+// ── Approval-queue action endpoints ───────────────────────────────────────────
+
+/// HTTP method of a [`QueueRoute`].
+///
+/// An enum rather than a string so `QueueRoute::request` matches exhaustively:
+/// a method the loopback client cannot issue is a compile error, not a 405 in
+/// production.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueueMethod {
+    /// `POST`.
+    Post,
+}
+
+impl QueueMethod {
+    /// The axum routing-function name, as it appears in the router source.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Post => "post",
+        }
+    }
+}
+
+/// One approval-queue action endpoint: the method and path template the router
+/// registers.
+///
+/// Spelled once because there are two callers — the router below and the
+/// loopback call the MCP `approve_queue_entry` / `reject_queue_entry` tools
+/// make — and they drifted: the tools built a `PUT` to an `approval-queue`
+/// path that matches no route, so both tools returned 404 on every call for
+/// their whole existence. Nothing in the type system connects a `format!` path
+/// to a `.route()` string, so the connection is made here instead.
+#[derive(Debug, Clone, Copy)]
+pub struct QueueRoute {
+    /// The HTTP method the router registers this path under.
+    pub method: QueueMethod,
+    /// The axum path template, `{id}` included.
+    pub path_template: &'static str,
+}
+
+impl QueueRoute {
+    /// The concrete path for one queue entry.
+    #[must_use]
+    pub fn path_for(self, id: uuid::Uuid) -> String {
+        self.path_template.replace("{id}", &id.to_string())
+    }
+
+    /// Start the loopback request for this endpoint against `up`.
+    pub(crate) fn request(
+        self,
+        up: &mako_service::http::Upstream,
+        id: uuid::Uuid,
+    ) -> reqwest::RequestBuilder {
+        let path = self.path_for(id);
+        match self.method {
+            QueueMethod::Post => up.post(&path),
+        }
+    }
+}
+
+/// `POST /api/v1/queue/{id}/approve` — claim the entry and dispatch its command.
+pub const QUEUE_APPROVE: QueueRoute = QueueRoute {
+    method: QueueMethod::Post,
+    path_template: "/api/v1/queue/{id}/approve",
+};
+
+/// `POST /api/v1/queue/{id}/reject` — claim the entry and dispatch its refusal.
+pub const QUEUE_REJECT: QueueRoute = QueueRoute {
+    method: QueueMethod::Post,
+    path_template: "/api/v1/queue/{id}/reject",
+};
+
 // ── Module state bundles ───────────────────────────────────────────────────────
 
 /// State bundle for the NB module.
@@ -162,7 +234,7 @@ pub struct RunConfig {
 /// expiry + §38 EnWG Ersatzversorgung timer workers on `ctx.shutdown`.
 pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result<Router> {
     // ── Startup validation ────────────────────────────────────────────────────
-    // §20 EnWG parity: validate own_mp_id prefix matches the expected coding authority.
+    // Gleichbehandlung: validate own_mp_id prefix matches the expected coding authority.
     // BDEW-Codenummern start with "99" (NAD DE3055 = 293), DVGW with "98" (332).
     // A mismatch silently breaks `initiator_is_affiliate` comparisons for gas roles.
     {
@@ -180,7 +252,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
                     tracing::warn!(
                         own_mp_id = %cfg.own_mp_id,
                         "processd: own_mp_id appears to be a GS1 GLN (non-99/98 prefix). \
-                         §20 EnWG parity reporting may be incorrect for BDEW/DVGW market participants. \
+                         the Gleichbehandlungsbericht may be incorrect for BDEW/DVGW market participants. \
                          Expected: BDEW-Codenummer (99…) for Strom, DVGW-Codenummer (98…) for Gas."
                     );
                 }
@@ -190,7 +262,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
                     own_mp_id = %cfg.own_mp_id,
                     error = %e,
                     "processd: own_mp_id is not a valid 13-digit MarktpartnerId — \
-                     §20 EnWG parity comparisons will fail silently"
+                     the Gleichbehandlungsbericht's comparisons will fail silently"
                 );
             }
         }
@@ -534,11 +606,8 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         .route("/webhook", post(handle_webhook))
         .route("/api/v1/decisions", get(rest::list_decisions))
         .route("/api/v1/queue", get(rest::list_queue))
-        .route(
-            "/api/v1/queue/{id}/approve",
-            post(rest::approve_queue_entry),
-        )
-        .route("/api/v1/queue/{id}/reject", post(rest::reject_queue_entry))
+        .route(QUEUE_APPROVE.path_template, post(rest::approve_queue_entry))
+        .route(QUEUE_REJECT.path_template, post(rest::reject_queue_entry))
         .route("/api/v1/start-supply", post(rest::start_supply))
         .route("/api/v1/start-supply-gas", post(rest::start_supply_gas))
         .route("/api/v1/end-supply", post(rest::end_supply))

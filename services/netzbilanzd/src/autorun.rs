@@ -9,12 +9,13 @@ use std::sync::Arc;
 
 use axum::{Extension, Json, extract::Path, http::StatusCode};
 use mako_markt::marktd_client::MarktdClient;
-use mako_service::{ApiError, ApiResult};
+use mako_service::{ApiError, ApiResult, oidc::Claims};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use sqlx::PgPool;
 
 use crate::config::NetzbilanzConfig;
+use crate::handlers::{Authz, authorize};
 use crate::pg;
 use crate::request::{BillingPositionRequest, MmmRequest, NneRequest, SettlementRequest};
 
@@ -93,7 +94,13 @@ pub struct MmmAutoRunRequest {
 /// - `409` when the month is already billed.
 /// - `422` when the settlement is not computable, when both quantities are
 ///   zero, or when `edmd` is unreachable or unconfigured.
+// Every argument is an axum extractor the handler genuinely needs: the caller's
+// identity and the policy to judge it by, the pool, the configuration, the HTTP
+// client that reaches `edmd`, the MaLo and the body.
+#[allow(clippy::too_many_arguments)]
 pub async fn post_mmm_run(
+    claims: Claims,
+    Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(marktd): Extension<Arc<MarktdClient>>,
     Extension(cfg): Cfg,
@@ -101,6 +108,7 @@ pub async fn post_mmm_run(
     Path(malo_id): Path<String>,
     Json(req): Json<MmmAutoRunRequest>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    authorize(&cedar, &claims, "run-settlement", &cfg.tenant)?;
     let period_to = month_end(req.period_year, req.period_month)?;
     let period_from = period_to.replace_day(1).unwrap_or(period_to);
 
@@ -249,12 +257,15 @@ pub struct GgvNneRequest {
 /// - `409` when one of the tenants' periods is already billed.
 /// - `422` when a settlement is not computable.
 pub async fn post_ggv_nne(
+    claims: Claims,
+    Extension(cedar): Authz,
     Extension(pool): Extension<PgPool>,
     Extension(marktd): Extension<Arc<MarktdClient>>,
     Extension(cfg): Cfg,
     Path(ggv_malo_id): Path<String>,
     Json(req): Json<GgvNneRequest>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    authorize(&cedar, &claims, "run-settlement", &cfg.tenant)?;
     if req.tenant_consumption.is_empty() {
         return Err(ApiError::bad_request(
             "tenant_consumption must name at least one tenant MaLo and its metered kWh",

@@ -86,7 +86,8 @@ pub enum GatewayStatus {
     Revoked,
     /// Replaced by a new gateway — historical record only.
     Replaced,
-    /// Temporarily unreachable (communication fault, § 60 Abs. 2 MsbG substitution required).
+    /// Temporarily unreachable (communication fault): no delivery, so the
+    /// § 60 Abs. 1 MsbG duty stands open and substitute values are required.
     CommunicationFault,
 }
 
@@ -97,7 +98,9 @@ impl GatewayStatus {
         matches!(self, Self::Operational)
     }
 
-    /// `true` when § 60 Abs. 2 MsbG substitute values are required (no data delivery).
+    /// `true` when substitute values are required (no data delivery), because the
+    /// § 60 Abs. 1 MsbG duty to deliver aufbereitete Messwerte at the times the
+    /// berechtigten Stellen set is otherwise missed.
     #[must_use]
     pub fn requires_substitute_values(self) -> bool {
         matches!(
@@ -409,8 +412,13 @@ impl SmgwSession {
 
     /// `true` when the gateway has not been heard from in more than `threshold_hours`.
     ///
-    /// Per BSI TR-03109 and § 60 Abs. 2 MsbG: after 2 hours of silence, substitute values
-    /// must be generated and a Sonderablesung order should be created.
+    /// After 2 hours of silence, substitute values must be generated and a
+    /// Sonderablesung order should be created: nothing is being delivered, and
+    /// § 60 Abs. 1 MsbG owes the berechtigten Stellen aufbereitete Messwerte at
+    /// the times they set. § 60 Abs. 2 MsbG only says *where* that Aufbereitung
+    /// should run for an intelligentes Messsystem — im Smart-Meter-Gateway — and
+    /// mandates no substitution of its own. The 2 h threshold is operational
+    /// (BSI TR-03109 gateway communication profiles), not a statutory deadline.
     /// A gateway that has never been contacted counts as faulted.
     #[must_use]
     pub fn is_communication_fault(&self, now: OffsetDateTime, threshold_hours: i64) -> bool {
@@ -458,7 +466,7 @@ mod tests {
         }
     }
 
-    /// The § 60 Abs. 2 MsbG substitute trigger: silence past the threshold.
+    /// The § 60 Abs. 1 MsbG substitute trigger: silence past the threshold.
     #[test]
     fn communication_fault_is_measured_against_the_given_instant() {
         let mut gw = basic_gateway();

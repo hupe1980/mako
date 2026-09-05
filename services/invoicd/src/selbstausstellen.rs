@@ -233,7 +233,7 @@ async fn build_and_dispatch(
     let idempotency_key = format!("invoicd-31006-{}-{}", req.malo_id, rechnungsnummer);
     let cmd = mako_markt::makod_client::ForwardCommand {
         marktrolle: None,
-        command: "gpke.abrechnung.selbstausstellen".to_owned(),
+        command: mako_markt::commands::GPKE_ABRECHNUNG_SELBSTAUSSTELLEN.to_owned(),
         malo_id: Some(req.malo_id.clone()),
         melo_id: None,
         payload: serde_json::json!({

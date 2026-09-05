@@ -160,9 +160,12 @@ pub fn settle_dezentrale_einspeisung(
 
     let faktor = abschmelzfaktor(input.period.from());
     let base_eur = input.vermiedene_kosten_ct_per_kwh / dec!(100);
-    let reduced_eur = (base_eur * faktor).round_kfm(6);
-    // Negative: the NB pays out.
-    let net_eur = -(input.einspeisung_kwh * reduced_eur).round_kfm(5);
+    // Negative: the NB pays out, and the **rate** carries the sign. The energy
+    // fed in is a metered fact and stays positive, and a position whose stated
+    // quantity times its stated unit price is the opposite of its stated net is
+    // one the recipient's own arithmetic contradicts.
+    let reduced_eur = -(base_eur * faktor).round_kfm(6);
+    let net_eur = crate::billing::pos_net(input.einspeisung_kwh, reduced_eur);
 
     let mut positions = Vec::new();
     let mut warnings = Vec::new();
@@ -198,7 +201,7 @@ pub fn settle_dezentrale_einspeisung(
             spot_price_formula: None,
             trace: CalculationTrace {
                 explanation: format!(
-                    "{:.3} kWh × {:.6} EUR/kWh (= {:.6} × {faktor} Abschmelzung) = {:.5} EUR \
+                    "{:.3} kWh × {:.6} EUR/kWh (= −{:.6} × {faktor} Abschmelzung) = {:.5} EUR \
                      payable to the plant operator",
                     input.einspeisung_kwh,
                     reduced_eur,
@@ -323,6 +326,29 @@ mod tests {
             quarter.positions[0].trace.regulatory_reduction_factor,
             Some(dec!(0.25))
         );
+    }
+
+    /// **Invariant: the payment position multiplies out.**
+    ///
+    /// The §18 Entgelt is money the Netzbetreiber pays out, and the sign belongs
+    /// to the rate rather than to the net: a position stating a positive
+    /// quantity against a positive unit price with a negative net contradicts
+    /// its own arithmetic, which `invoic-checker` reads as a 200 % error and
+    /// refuses to dispatch.
+    #[test]
+    fn the_payment_position_states_a_negative_rate() {
+        let r =
+            settle_dezentrale_einspeisung(&base(p(date!(2026 - 01 - 01), date!(2026 - 01 - 31))))
+                .expect("settles");
+        let pos = &r.positions[0];
+        assert_eq!(
+            pos.quantity,
+            dec!(10000),
+            "the metered feed-in stays positive"
+        );
+        assert_eq!(pos.unit_price_eur, dec!(-0.006));
+        assert_eq!(pos.net_eur, dec!(-60.00000));
+        assert_eq!(pos.quantity * pos.unit_price_eur, pos.net_eur);
     }
 
     /// June–July 2026 crosses the first step and must be split, not averaged.

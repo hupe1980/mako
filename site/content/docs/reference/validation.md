@@ -2,12 +2,23 @@
 title = "Validation"
 description = "EDIFACT validation against the MIG and the AHB column: the checks, the ValidationReport, rule ids, Prüfidentifikatoren and release dates."
 weight = 11
-[extra]
-mermaid = true
 +++
-# Validation Guide
+Every EDI@Energy message can be validated against the officially registered
+BDEW profiles. This guide explains the validation model, how to read the report,
+and common patterns.
 
-Every EDI@Energy message can be validated against the officially registered BDEW profiles. This guide explains the validation model, how to read the report, and common patterns.
+Two BDEW documents define what "valid" means, and mako ships both as generated
+profiles ([vocabulary](@/docs/reference/_index.md#vocabulary)):
+
+- the **MIG** (Nachrichtenimplementierungshandbuch) — the message structure:
+  which segments exist, in which order and group, and what each data element may
+  carry. One per message type.
+- the **AHB** (Anwendungshandbuch) — one column per **Prüfidentifikator**, the
+  five-digit number that names the business case. The column narrows the MIG to
+  what *that* case must, may and must not send. It rides `SG1 RFF+Z13` in every
+  message type but APERAK and CONTRL, which carry it in `BGM` DE 1004; the
+  profile records which in its `pid_source`
+  (`crates/edi-energy/src/pid_scan.rs:48`).
 
 ---
 
@@ -33,23 +44,41 @@ flowchart LR
     REP -->|has errors| ERR["reject / route to APERAK"]
 ```
 
-| Layer | Checks |
-|---|---|
-| **1 — MIG** | Every segment is resolved to its place in the Nachrichtenstruktur (the MIG's running number `Nr`; `SG5 LOC+Z16` and `SG5 LOC+Z17` are two places). Mandatory places and groups, repetition limits, the Segmentlayout of each place — mandatory data elements, elements not used, representations (`n11`, `an..35`), code lists. A stray segment is reported and skipped, not allowed to unresolve the rest. |
-| **2 — AHB** | The Prüfschablone of the selected Anwendungsfall: every segment and group the column marks `Muss`/`Soll`/`Kann`, with its Bedingungen evaluated against the message; every data element's operands (`X`, `M [7]`, the codes admitted); a place or element the column does not list is not to be used. |
-| **3 — Semantic** | Cross-field rules the documents state in prose: period order (`DTM+163` ≤ `DTM+164`), Lokations-ID check digits, that a value declaring format `303` carries `CCYYMMDDHHMMZZZ`. |
+| Layer | Checks | Rule id prefix |
+|---|---|---|
+| **1 — MIG** | Structure, cardinality, Segmentlayout, code lists | `MIG-` |
+| **2 — AHB** | The Prüfschablone of the selected column | `AHB-` |
+| **3 — Semantic** | Cross-field rules the documents state in prose | `SEM-` |
+
+**Layer 1** resolves every segment to its *place* in the Nachrichtenstruktur —
+the MIG's running number `Nr`, of which `SG5 LOC+Z16` and `SG5 LOC+Z17` are two
+distinct ones. It then checks mandatory places and groups, repetition limits and
+each place's Segmentlayout: mandatory data elements, elements marked not-used,
+representations (`n11`, `an..35`) and code lists. A segment that fits no place is
+reported and skipped, not allowed to unresolve the rest of the message.
+
+**Layer 2** applies the Prüfschablone of the selected Anwendungsfall: the
+`Muss`/`Soll`/`Kann` the column gives each segment and group, with its
+Bedingungen evaluated against the message, and each data element's operands
+(`X`, `M [7]`, the codes admitted). A place or element the column does not list
+is not to be used.
+
+**Layer 3** covers what the documents state in prose only: period order
+(`DTM+163` ≤ `DTM+164`), Lokations-ID check digits, and that a value declaring
+format `303` really carries `CCYYMMDDHHMMZZZ`.
 
 MIG `M` always binds; MIG `R` (BDEW-erforderlich) is the union over all
-Anwendungsfälle and yields to the selected column.
+Anwendungsfälle and yields to the selected column
+(`crates/edi-energy/src/profile/validate.rs:238`).
 
 ### Before the layers — the envelope
 
-Two checks run at **parse** time and return `Err` rather than a report entry,
+Three checks run at **parse** time and return `Err` rather than a report entry,
 because a message that fails them has no coherent identity to validate:
 
 | Check | Rule |
 |---|---|
-| Interchange control reference | `UNZ` DE 0062 must equal `UNB` DE 0020 (EDIFACT syntax) |
+| Interchange control reference | `UNZ` DE 0020 must equal `UNB` DE 0020 (EDIFACT syntax) |
 | Declared counts | `UNT` DE 0074 = segments in the message (`UNH` and `UNT` included); `UNZ` DE 0036 = messages in the interchange — ISO 9735-1 Annex C.3.4 |
 | **Interchange party identity** | The `NAD+MS` / `NAD+MR` MP-IDs must equal `UNB` DE 0004 / DE 0010 — **Allgemeine Festlegungen V6.1d §2.13** |
 
@@ -64,7 +93,7 @@ authenticates the **envelope** sender, while consuming services read `NAD+MS`
 for consent gates, partner lookup and role resolution; tolerating a mismatch
 would let an authenticated partner attribute a message to a different market
 participant. A party absent from either side is not a mismatch — whether the
-omission is legal is an AHB (layer 4) question.
+omission is legal is a question for the AHB column, not for the envelope.
 
 ### Date formats — DE 2379
 
@@ -72,11 +101,13 @@ Each `DTM` place's layout fixes DE 2005 (the qualifier) **and** DE 2379 (the
 format) together:
 
 ```
-2005  Datums- oder Uhrzeit-Funktion, Qualifier   M an..3   137 Dokumenten-/Nachrichtendatum
-2379  Datums- oder Uhrzeit-Format, Code          R an..3   303 CCYYMMDDHHMMZZZ
+2005  Datums- oder Uhrzeit- oder Zeitspannen-Funktion, Qualifier  M an..3  137 Dokumenten-/Nachrichtendatum/-zeit
+2380  Datum oder Uhrzeit oder Zeitspanne, Wert                     R an..35
+2379  Datums- oder Uhrzeit- oder Zeitspannen-Format, Code          R an..3  303 CCYYMMDDHHMMZZZ
 ```
 
-so `DTM+137` is `303` in every EDI@Energy MIG, written on the wire as
+so `DTM+137` is `303` at all 32 of its places across the shipped MIGs — there is
+no `102` anywhere — written on the wire as
 `DTM+137:202610011200?+00:303'` — the `?` is the release character escaping the
 zone's `+`. The admissible formats are the place's own code list in `mig.json`;
 a qualifier with several places (`DTM+157` is `610` on a Clearingliste and
@@ -104,7 +135,9 @@ if report.is_valid() {
 }
 ```
 
-`validate()` uses the release detected from `UNH` and the Pruefidentifikator from `BGM` to select the correct profile automatically.
+`validate()` selects the profile automatically: the release from `UNH`, and the
+Prüfidentifikator from wherever the profile's `pid_source` says it lives —
+`SG1 RFF+Z13`, or `BGM` DE 1004 for APERAK and CONTRL.
 
 ---
 
@@ -159,21 +192,28 @@ report.total_issues()   // total issue count across all severities
 for issue in report.iter_issues() { /* ... */ }
 
 // Filtered by severity
-for e in report.errors()    { /* ... */ }  // &[ValidationIssue]
-for c in report.criticals() { /* ... */ }  // Iterator
-for w in report.warnings()  { /* ... */ }  // &[ValidationIssue]
-for i in report.infos()     { /* ... */ }  // &[ValidationIssue]
+for e in report.errors()   { /* ... */ }  // &[ValidationIssue]
+for w in report.warnings() { /* ... */ }  // &[ValidationIssue]
+for i in report.infos()    { /* ... */ }  // &[ValidationIssue]
 
-// Filtered by validation layer origin
-// Values: "parse", "directory", "mig", "ahb", "custom"
-for issue in report.issues_by_origin("ahb") { /* ... */ }
+// `Critical` issues live in the same bucket as `Error` ones, so `errors()`
+// already contains them. `criticals()` filters that bucket down to the
+// abort-level failures — an iterator, not a slice.
+for c in report.criticals() { /* ... */ }  // impl Iterator<Item = &ValidationIssue>
 
-// Filtered by rule ID prefix (zero-allocation iterator)
-for issue in report.issues_with_rule_prefix("AHB-55001-STS") { /* ... */ }
+// Filtered by rule ID prefix — a new report, so the result chains and renders
+// like any other
+let ahb_report = report.filter_by_rule_prefix("AHB-55001-STS");
 
-// Filtered by rule ID prefix (returns a new report for further chaining)
-let ahb_report = report.filter_by_rule_prefix("AHB-55001");
+// Filtered by an exact rule identifier
+let one_rule = report.filter_by_rule_id("MIG-UTILMD-DTM-137");
+
+// …or iterate that rule's issues without building a report
+for issue in report.issues_for_rule_id("MIG-UTILMD-DTM-137") { /* ... */ }
 ```
+
+The rule identifier carries the layer, so a prefix is also how you select one:
+`"AHB-"`, `"MIG-"`, `"SEM-"`.
 
 ### Converting to `Result`
 
@@ -181,8 +221,8 @@ let ahb_report = report.filter_by_rule_prefix("AHB-55001");
 // Ok(()) when no errors; Err(report) when errors are present (keeps the report)
 let _ = report.into_result();   // returns Result<(), EdiEnergyReport>
 
-// Ok(report) when valid; Err(Error::Validation { .. }) otherwise
-report.as_result()?;
+// Ok(report) when valid; Err(report) otherwise — the report is kept in both arms
+let report = report.result()?;
 
 // Ok(()) when no errors; Err(Error::Validation { .. }) otherwise
 report.into_error_result()?;
@@ -212,7 +252,7 @@ Each issue carries:
 
 | Level | Meaning | `is_valid()` impact |
 |---|---|---|
-| `Critical` | Unrecoverable structural damage | ❌ Invalid |
+| `Critical` | Unrecoverable structural damage — a malformed `UNH` envelope aborts further validation. Reported by both `errors()` and `criticals()` | ❌ Invalid |
 | `Error` | Rule violation — message must not be processed | ❌ Invalid |
 | `Warning` | Deviation — message should be reviewed | ✅ Valid (but flagged) |
 | `Info` | Informational observation | ✅ Valid |
@@ -290,19 +330,30 @@ rule can be looked up in the profile and in the published document.
 | `AHB-{PID}-{Nr}-{TAG}-{DE}-MISSING` | a data element the column marks `X`/`M` is empty |
 | `AHB-{PID}-{Nr}-{TAG}-{DE}-CODE` | the value is not one of the codes the column admits |
 | `AHB-{PID}-{Nr}-{TAG}-{DE}-NOT-PERMITTED` | a data element the column does not list carries a value |
+| `AHB-{PID}-{Nr}-{TAG}-{DE}-PAKET-MIN`, `…-PAKET-MAX` | a code marked by a Paket appears fewer/more times than the Paketmerkmal `a..b` allows |
 | `AHB-UNKNOWN-PID` | the Prüfidentifikator is not a column of this profile — AHB rules were not applied (warning) |
 | `AHB-SKIP-NO-PID` | no column could be selected (warning) |
 
-`{PID}` is the Prüfidentifikator; a message type published without them
-(CONTRL, APERAK) names its column `col1`, `col2`, …
+`{PID}` is the Prüfidentifikator. CONTRL is the one message type whose AHB
+publishes no Prüfidentifikatoren, so its three columns are named `col1`, `col2`,
+`col3`. (APERAK does publish them — `29001` and `29002`.)
 
-Examples:
+Examples, taken from the fixtures `tests/validation_snapshot.txt` pins:
+
 ```
-AHB-55001-00036-STS-MISSING        # 55001: SG4 STS Transaktionsgrund is Muss but absent
-AHB-55001-SG6-00057-MISSING        # 55001: SG6 RFF+Z13 is Muss but absent
-AHB-13002-00028-QTY-6411-NOT-PERMITTED   # 13002 lists no unit on QTY+220
-MIG-00050-LOC-3225-FORMAT          # LOC+Z16 DE 3225 is not an n11
+AHB-13002-00034-STS-MISSING         # 13002: SG10 STS Ersatzwertbildungsverfahren is Muss but absent
+AHB-13002-00011-NAD-3055-CODE       # SG2 NAD MP-ID Empfänger carries a code the column does not admit
+AHB-55240-00109-SEQ-NOT-PERMITTED   # 55240 does not list SG8 SEQ „Daten der Marktlokation"
+AHB-55242-SG5-00047-MISSING         # 55242: SG5 (LOC Marktlokation) is Muss but absent
+MIG-00050-LOC-3225-FORMAT           # SG5 LOC DE 3225 is not an n11
+AHB-col3-00002-UCI-MISSING          # CONTRL column 3: UCI is Muss but absent
 ```
+
+**A rule id is only meaningful together with the Formatversion.** The `Nr` is the
+MIG's running number, and BDEW renumbers when a place is inserted: the `SG5 LOC`
+of the Marktlokation is `00050` under `fv20251001` and `00047` under
+`fv20261001`, where `00050` has become the Steuerbare Ressource. Read a rule id
+against the profile the message resolved to, never against a different one.
 
 **Locating the rule in the profile**: `crates/edi-energy/profiles/{type}/fv{YYYYMMDD}/`
 — `mig.json` → `structure` → the node with that `nr` (its layout lists the data
@@ -320,21 +371,21 @@ the same for a message: every segment's `Nr` and every finding.
 
 ### Filtering by rule prefix
 
+`filter_by_rule_prefix` returns a report of its own, so the selection carries the
+Prüfidentifikator, the release and the rendering with it:
+
 ```rust
-// All AHB rules for PID 55001 (zero-allocation iterator)
-for issue in report.issues_with_rule_prefix("AHB-55001") { /* ... */ }
+// All AHB rules for PID 55001
+let pid_ahb = report.filter_by_rule_prefix("AHB-55001");
 
 // All AHB rules inside SG4 for PID 55001
-for issue in report.issues_with_rule_prefix("AHB-55001-SG4") { /* ... */ }
+let sg4 = report.filter_by_rule_prefix("AHB-55001-SG4");
 
 // All MIG rules for DTM
-for issue in report.issues_with_rule_prefix("MIG-DTM") { /* ... */ }
+let dtm = report.filter_by_rule_prefix("MIG-DTM");
 
-// All AHB rules regardless of PID
-for issue in report.issues_with_rule_prefix("AHB-") { /* ... */ }
-
-// By validation layer: "parse", "directory", "mig", "ahb", "custom"
-for issue in report.issues_by_origin("mig") { /* ... */ }
+// The whole AHB layer, regardless of PID
+let ahb = report.filter_by_rule_prefix("AHB-");
 ```
 
 ---
@@ -373,16 +424,37 @@ and, per data element, an operand on the element or on each of its codes:
 of them may carry Bedingungen — `Muss [10]`, `X [UB1] ∧ [496]`,
 `Soll ([92] ⊻ [93]) ∧ [126]` — whose texts the profile carries as printed:
 
+Allgemeine Festlegungen 6.1d Kap. 6.4 fixes what a Bedingung number means by its
+range, and the evaluator follows that split
+(`crates/edi-energy/src/profile/conditions.rs:1`):
+
 | Range | Kind | Evaluated? |
 |---|---|---|
-| `[1]`–`[499]` | Voraussetzung — „Wenn SG10 QTY DE6063 mit Wert 67 vorhanden", „Wenn SG5 LOC+Z17 nicht vorhanden", „mehr als einmal vorhanden", „… DE7140 bei der die letzten beiden Stellen mit dem Wert "01" …" (a suffix), `PIA+5+1-b?:1.9.e` (a lowercase letter stands for any one character) | against the message; the status binds when the expression holds |
-| `[500]`–`[899]` | Hinweis | neutral |
-| `[901]`–`[999]` | Formatbedingung | neutral (formats are the MIG's) |
-| `[2000]`–`[2499]`, `[UB1]`–`[UB3]` | Wiederholbarkeit, Zeitpunkt | neutral |
-| `[nP..]` | Paket | undecidable; the status is not enforced |
+| `[1]`–`[499]` | Voraussetzung | against the message; the status binds when the expression holds |
+| `[500]`–`[899]` | Hinweis | never binds |
+| `[901]`–`[999]` | Formatbedingung | neutral — formats are the MIG's |
+| `[2000]`–`[2499]` | Wiederholbarkeit | neutral — does not gate presence |
+| `[UB1]`–`[UB3]` | Zeitpunktangabe | neutral — does not gate presence |
+| `[nPa..b]` | Paket | through the Paketvoraussetzung, plus the `a..b` repetition check |
 
-A Voraussetzung the evaluator cannot read is undecidable and never a ground
-for rejection. `profile.pruefschablone(pid)` prints the whole column.
+A Voraussetzung is checkable by definition — Kap. 6.5 admits only „Informationen,
+die an anderer Stelle im Anwendungsfall vorhanden sind". The parser reads the
+shapes the AHBs actually print: „Wenn SG10 QTY DE6063 mit Wert 67 vorhanden",
+„Wenn SG5 LOC+Z17 nicht vorhanden", „mehr als einmal vorhanden", a value suffix
+(„… DE7140 bei der die letzten beiden Stellen mit dem Wert "01" …"), and
+wildcards such as `PIA+5+1-b?:1.9.e`, where a lowercase letter stands for any one
+character. Anything it cannot read evaluates to `Truth::Unknown`, which is never
+a ground for rejection.
+
+A Paket citation such as `[2P0..1]` is a macro (Kap. 6.9.1): `2P` stands for the
+Paketvoraussetzung the AHB's Paketübersicht prints, an expression of the same
+shape, and the `0..1` suffix is the Paketmerkmal — the minimal and maximal
+repetition of the marked Qualifier or Code inside the Paket (Kap. 6.9.2). Where
+the Paketvoraussetzung holds, the counts are enforced as
+`AHB-…-PAKET-MIN`/`-PAKET-MAX`. The minimum binds only where the operand itself
+does, because a `Soll`- or `Kann`-Operand is the sender's call.
+
+`profile.pruefschablone(pid)` prints the whole column.
 
 ---
 

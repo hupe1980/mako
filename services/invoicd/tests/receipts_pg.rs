@@ -290,12 +290,16 @@ async fn a_dead_lettered_receipt_is_never_claimed_again() {
     );
 }
 
-/// The retry budget terminates: five failures walk `erp_attempts` up to the
-/// cap. An over-large terminal backoff would raise `interval out of range` and
-/// abort the very UPDATE that raises the counter, so the budget must be
-/// expressible as an interval PostgreSQL accepts.
+/// The retry budget terminates **without any outcome write at all**.
+///
+/// Every claim is an attempt, and the claim is what counts it. This is the
+/// property that survives the bad day: a worker killed between the POST and the
+/// outcome update, or a database that refuses the update, records nothing — and
+/// when the counter lived in that update, the row came back due with its budget
+/// untouched and the ERP was POSTed the same receipt every lease period for
+/// ever. Not one `record_erp_failure` or `dead_letter_erp` runs here.
 #[tokio::test]
-async fn the_retry_budget_terminates() {
+async fn the_retry_budget_terminates_even_when_no_outcome_is_ever_recorded() {
     let (pool, _guard) = pool_or_skip!();
 
     let id = Uuid::new_v4();
@@ -303,10 +307,17 @@ async fn the_retry_budget_terminates() {
         .await
         .expect("persist the receipt");
 
+    // A zero lease makes the row due again at once, so this is the retry loop
+    // compressed in time.
     for attempt in 0..DEAD_LETTER_ATTEMPTS {
-        record_erp_failure(&pool, id, attempt)
+        let claimed = claim_erp_pending(&pool, TENANT, 10, 0)
             .await
-            .unwrap_or_else(|e| panic!("attempt {attempt} must be recordable: {e}"));
+            .expect("claim");
+        assert_eq!(claimed.len(), 1, "attempt {attempt} should still be due");
+        assert_eq!(
+            claimed[0].erp_attempts, attempt,
+            "the claim must report the attempts made before this one"
+        );
     }
 
     let attempts: i16 =
@@ -317,15 +328,45 @@ async fn the_retry_budget_terminates() {
             .expect("read attempts");
     assert_eq!(attempts, DEAD_LETTER_ATTEMPTS, "the budget is exhausted");
 
-    sqlx::query("UPDATE invoic_receipts SET erp_next_attempt_at = now() WHERE process_id = $1")
-        .bind(id)
-        .execute(&pool)
-        .await
-        .expect("force the row due");
     let pending = claim_erp_pending(&pool, TENANT, 10, 0)
         .await
         .expect("claim");
-    assert!(pending.is_empty(), "an exhausted row is out of the outbox");
+    assert!(
+        pending.is_empty(),
+        "the receipt is still being POSTed to the ERP after its budget ran out — the \
+         attempt counter did not advance because no outcome write ever landed"
+    );
+}
+
+/// The back-off schedule is `record_erp_failure`'s only job now, and an
+/// over-large terminal delay would raise `interval out of range` — which used to
+/// abort the very UPDATE that raised the counter, leaving the row at 4 and
+/// retrying for ever.
+#[tokio::test]
+async fn the_terminal_backoff_is_an_interval_postgresql_accepts() {
+    let (pool, _guard) = pool_or_skip!();
+
+    let id = Uuid::new_v4();
+    upsert_receipt(&pool, &receipt(id, DIRECTION_INBOUND))
+        .await
+        .expect("persist the receipt");
+
+    for attempt in 0..DEAD_LETTER_ATTEMPTS {
+        record_erp_failure(&pool, id, attempt)
+            .await
+            .unwrap_or_else(|e| panic!("attempt {attempt} must be schedulable: {e}"));
+    }
+
+    let attempts: i16 =
+        sqlx::query_scalar("SELECT erp_attempts FROM invoic_receipts WHERE process_id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("read attempts");
+    assert_eq!(
+        attempts, 0,
+        "scheduling a back-off must not touch the counter — the claim owns it"
+    );
 }
 
 /// A claimed batch is not claimable again while its lease holds.

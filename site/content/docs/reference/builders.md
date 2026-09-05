@@ -3,9 +3,10 @@ title = "Builders"
 description = "Fluent type-state builder API for constructing valid EDI@Energy EDIFACT messages: UTILMD, MSCONS, APERAK, CONTRL, INVOIC, REMADV, ORDERS, ORDRSP."
 weight = 12
 +++
-# Builder Guide
-
-The `edi_energy::builders` module provides a fluent, type-state builder API for constructing valid EDI@Energy EDIFACT messages programmatically.
+The `edi_energy::builders` module provides a fluent, type-state builder API for
+constructing valid EDI@Energy EDIFACT messages programmatically. Terms such as
+Prüfidentifikator, AHB and Marktlokation are defined in the
+[reference vocabulary](@/docs/reference/_index.md#vocabulary).
 
 ---
 
@@ -13,7 +14,7 @@ The `edi_energy::builders` module provides a fluent, type-state builder API for 
 
 - **Compile-time mandatory field enforcement** — the type-state pattern prevents calling `.build()` unless all required fields have been set.
 - **Correct segment ordering** — the builders emit segments in the order required by the relevant MIG profile.
-- **Domain types** — use `ObjectType`, `Pruefidentifikator`, and `Release` instead of raw strings.
+- **Domain types** — use `Lokationstyp`, `Pruefidentifikator` and `Release` instead of raw strings.
 - **Round-trip compatible** — the output can be re-parsed and validated by the same library.
 
 ---
@@ -28,17 +29,43 @@ The `edi_energy::builders` module provides a fluent, type-state builder API for 
 | `ContrlBuilder` | CONTRL (interchange control acknowledgements) |
 | `InvoicBuilder` | INVOIC (invoices) *(requires `invoic` feature)* |
 | `RemadvBuilder` | REMADV (remittance advice) *(requires `remadv` feature)* |
-| `OrdersBuilder` | ORDERS (orders, e.g. Sperrung/Konfiguration; **ESA Bestellung/Abbestellung 17007/17008 — full MIG conformance** via `.reference()` (SG1 RFF+Z13), `.item_description()` (IMD), `.location()` (LOC+172), plus the mandatory `UNS`) *(requires `orders` feature)* |
-| `OrdrespBuilder` | ORDRSP — the ESA-Antworten 19011–19014: `.order_reference()` writes the `SG1 RFF+ACW`/`ON` echo the ESA correlates by, `.adjustment()` the `SG2 AJT`, `.item_description()` the `IMD`, `.line_item()` the `SG27 LIN`; no `LOC` *(requires `ordrsp` feature)* |
-| `OrdchgBuilder` | ORDCHG (order changes/cancellations; **ESA Stornierung 39002 — full MIG conformance**; `.reference()` emits the mandatory SG1 RFF — ORDCHG carries **no** LOC) *(requires `ordchg` feature)* |
-| `IftstaBuilder` | IFTSTA (status reports) *(requires `iftsta` feature)* |
-| `InsrptBuilder` | INSRPT (Störungsmeldung / Ablesesteuerung; **AHB-conformant** — `.doc_reference()` → SG3 `DOC`, `.pruefidentifikator()` → SG4 `RFF+Z13`, `.position()` → SG7 `LIN`, `.status()` → `STS`, `.location()` → SG8 `LOC+172`. The AHB marks `BGM`/`DOC`/`DTM`/`LIN`/`LOC`/`NAD`/`RFF`/`STS` mandatory for every PID, so a message missing any of them parses but fails validation) *(requires `insrpt` feature)* |
-| `PartinBuilder` | PARTIN (party information) *(requires `partin` feature)* |
-| `PricatBuilder` | PRICAT (price catalogues) *(requires `pricat` feature)* |
-| `QuotesBuilder` | QUOTES (quotations / **ESA Angebot 15003 — full MIG+AHB conformance**; `.pruefidentifikator()`, `.order_reference()`, `.reference()` (SG1 RFF), `.location()`, `.bindungsfrist()` → `DTM+273`, `.reason()` → `FTX+ACB`, `.currency()` → `CUX`, `.contact()` → `CTA+COM`, `.product()` → `LIN+PIA`, `.price()` → `PRI`) *(requires `quotes` feature)* |
-| `ReqoteBuilder` | REQOTE (requests for quotation / **ESA Werteanfrage 35003 — full MIG conformance**; `.reference()` (SG1 RFF+Z13), `.location()` (LOC+172), `.contact()` (CTA+COM), `.free_text()` (FTX), `.characteristic()` (CCI), `.product()` (SG27 `LIN+<n>+<Z67|Z68>` + `PIA+5`), `.line_item()` (LIN)) *(requires `reqote` feature)* |
-| `ComdisBuilder` | COMDIS (commercial disputes) *(requires `comdis` feature)* |
-| `UtiltsBuilder` | UTILTS (Berechnungsformeln) *(requires `utilts` feature)* |
+| `OrdersBuilder` | ORDERS — orders (Sperrung, Konfiguration, ESA Bestellung/Abbestellung 17007/17008) *(`orders`)* |
+| `OrdrespBuilder` | ORDRSP — order answers, incl. the ESA-Antworten 19011–19014 *(`ordrsp`)* |
+| `OrdchgBuilder` | ORDCHG — order change / cancellation, incl. ESA Stornierung 39002 *(`ordchg`)* |
+| `IftstaBuilder` | IFTSTA — status reports *(`iftsta`)* |
+| `InsrptBuilder` | INSRPT — Störungsmeldung / Ablesesteuerung *(`insrpt`)* |
+| `PartinBuilder` | PARTIN — Kommunikationsdaten *(`partin`)* |
+| `PricatBuilder` | PRICAT — price lists *(`pricat`)* |
+| `QuotesBuilder` | QUOTES — quotations, incl. ESA Angebot 15003 *(`quotes`)* |
+| `ReqoteBuilder` | REQOTE — requests for quotation, incl. ESA Werteanfrage 35003 *(`reqote`)* |
+| `ComdisBuilder` | COMDIS — Handelsunstimmigkeit *(`comdis`)* |
+| `UtiltsBuilder` | UTILTS — Berechnungsformeln *(`utilts`)* |
+
+The ESA (Energieserviceanbieter) families are built out to full MIG conformance,
+because their messages are the ones mako both sends and has to read back:
+
+- **ORDERS** 17007/17008 — `.reference()` (SG1 `RFF+Z13`), `.item_description()`
+  (`IMD`), `.location()` (`LOC+172`), plus the mandatory `UNS`.
+- **ORDRSP** 19011–19014 — `.reference(qualifier, value)` is additive and writes
+  the `SG1 RFF+ACW`/`ON` echo the ESA correlates by; `.adjustment()` the
+  `SG2 AJT`, `.item_description()` the `IMD`, `.line_item()` the `SG27 LIN`.
+  ORDRSP carries no `LOC`.
+- **ORDCHG** 39002 — `.reference()` emits the mandatory SG1 `RFF`; ORDCHG
+  carries no `LOC` either.
+- **QUOTES** 15003 — `.reference(qualifier, value)` covers the SG1 `RFF`
+  qualifiers the MIG admits (`AAV`, `ACW`, `Z13`); the AHB needs `AAV` *and*
+  `Z13`, which is why there is no single-slot variant. Then `.location()`,
+  `.bindungsfrist()` → `DTM+273`, `.reason()` → `FTX+ACB`, `.currency()` →
+  `CUX`, `.contact()` → `CTA+COM`, `.product()` → `LIN+PIA`, `.price()` → `PRI`.
+- **REQOTE** 35003 — `.reference()` (SG1 `RFF+Z13`), `.location()` (`LOC+172`),
+  `.contact()` (`CTA+COM`), `.free_text()` (`FTX`), `.characteristic()` (`CCI`),
+  `.product()` (SG27 `LIN+<n>+<Z67|Z68>` + `PIA+5`), `.line_item()` (`LIN`).
+
+**INSRPT** is likewise AHB-conformant: `.doc_reference()` → SG3 `DOC`,
+`.pruefidentifikator()` → SG4 `RFF+Z13`, `.position()` → SG7 `LIN`, `.status()`
+→ `STS`, `.location()` → SG8 `LOC+172`. Its AHB marks
+`BGM`/`DOC`/`DTM`/`LIN`/`LOC`/`NAD`/`RFF`/`STS` mandatory for every
+Prüfidentifikator, so a message missing any of them parses but fails validation.
 
 ---
 
@@ -111,23 +138,34 @@ let r_contrl       = releases::contrl_fv20260101();   // 2.0b
 
 ## MSCONS Example
 
+A metering point is a sub-builder: `.metering_point(malo)` opens it, `.done()`
+closes it and returns to the message.
+
 ```rust
-use edi_energy::{
-    builders::MsconsBuilder,
-    releases,
-};
+use edi_energy::builders::{MsconsBuilder, QTY_ENERGIE_SUMMIERT};
+use edi_energy::{Pruefidentifikator, releases};
 
 let bytes = MsconsBuilder::new(releases::mscons_fv20261001().clone())
-    .pruefidentifikator(edi_energy::Pruefidentifikator::new(13001)?)
-    .sender("4012345000023")
-    .receiver("9900357000004")
-    .document_date("20261001")
-    .location("DE0001234567890")
-        .reading("MWH", "42.5", "163", "20261001")
+    .sender("9900357000004")
+    .receiver("9900077000006")
+    .pruefidentifikator(Pruefidentifikator::new(13003)?)   // MaBiS Summenzeitreihe
+    .message_ref("SZR0001")
+    .metering_point("11YAPG4CTRDNZ--P")
+        .balancing_period("202606")           // DTM+492, format 610
+        .version("20260714050000+00")         // DTM+293, format 304 — marks a correction
+        .quantity_for_period(
+            QTY_ENERGIE_SUMMIERT,             // DE 6063 = "79"
+            "12.5", "KWH",
+            "202606010000+00",                // DTM+163 interval start
+            "202606010015+00",                // DTM+164 interval end
+        )
         .done()
-    .build()?
     .serialize()?;
 ```
+
+`.quantity(qualifier, value, unit)` is the same without the interval bounds, for
+the non-interval cases; `.line_item(ObisCode)` and `.obis(ObisCode)` set the
+`LIN`/`PIA` of the current item.
 
 ---
 
@@ -135,36 +173,53 @@ let bytes = MsconsBuilder::new(releases::mscons_fv20261001().clone())
 
 ```rust
 use edi_energy::builders::AperakBuilder;
+use edi_energy::{Pruefidentifikator, releases};
 
 let bytes = AperakBuilder::new(releases::aperak_fv20261001().clone())
-    .pruefidentifikator(edi_energy::Pruefidentifikator::new(29001)?)
+    .pruefidentifikator(Pruefidentifikator::new(29002)?)  // 29002 = Ablehnung
     .sender("4012345000023")
     .receiver("9900357000004")
-    .referenced_message_id("MSG-ORIG-001")
-    .error_code("Z07")            // application-level rejection
-    .build()?
+    .acw_ref("MSG-ORIG-001")      // SG2 RFF+ACE / SG5 RFF+ACW — the message answered
+    .error_code("Z10")            // ERC — the application error
     .serialize()?;
 ```
 
+An APERAK always answers something, and the sender/receiver are the *reverse* of
+the message it answers. `AperakBuilder::for_receipt(&ReceiptContext)` fills the
+swap, the `acw_ref` and the document date from the received interchange, so the
+direction cannot be got backwards by hand.
+
 ---
 
-## ObjectType Domain Enum
+## Lokationstyp Domain Enum
 
-Use `ObjectType` wherever the EDIFACT IDE or LOC segment identifies a supply-point object:
+UTILMD names the object a Vorgang is about in `SG5 LOC` DE 3227 — not in `IDE`,
+whose DE 7495 has only `24` (Vorgang) and `Z01` (Liste). `Lokationstyp` is that
+qualifier as a type:
 
 ```rust
-use edi_energy::ObjectType;
+use edi_energy::Lokationstyp;
 
-let qualifier = ObjectType::Marktlokation.qualifier_code();   // "Z18"
-let qualifier = ObjectType::Messlokation.qualifier_code();    // "Z19"
-let qualifier = ObjectType::Tranche.qualifier_code();         // "Z30"
-let qualifier = ObjectType::Netzlokation.qualifier_code();    // "Z31"
-let qualifier = ObjectType::TechnischeRessource.qualifier_code(); // "Z32"
-let qualifier = ObjectType::SteuerungRessource.qualifier_code();  // "ZE7"
+Lokationstyp::Marktlokation.qualifier_code();        // "Z16"
+Lokationstyp::Messlokation.qualifier_code();         // "Z17"
+Lokationstyp::Netzlokation.qualifier_code();         // "Z18"
+Lokationstyp::SteuerbareRessource.qualifier_code();  // "Z19"  — § 14a EnWG
+Lokationstyp::TechnischeRessource.qualifier_code();  // "Z20"
+Lokationstyp::Tranche.qualifier_code();              // "Z21"
+Lokationstyp::RuhendeMarktlokation.qualifier_code(); // "Z22"
+Lokationstyp::Meldepunkt.qualifier_code();           // "172" — the Gas qualifier
 
-// Parse from raw qualifier string
-let obj = ObjectType::from_qualifier_code("Z18")?;
+// Parsing is fallible: an unknown or extension code is `None`, never a guess.
+assert_eq!(Lokationstyp::from_qualifier_code("Z16"), Some(Lokationstyp::Marktlokation));
+assert_eq!(Lokationstyp::from_qualifier_code("Z99"), None);
 ```
+
+UTILMD AHB Gas uses `172` for every Lokation and tells Markt- from Messlokation by
+the *format* of DE 3225 rather than by the qualifier, so the one `Meldepunkt`
+variant covers both on the Gas side.
+
+`UtilmdTransactionBuilder::location(Lokationstyp, id)` takes the type directly;
+`.marktlokation(id)` and `.messlokation(id)` are the two shorthands.
 
 ---
 
@@ -192,16 +247,22 @@ println!("{}", pid);           // "55001"
 
 ## Type-State Enforcement
 
-Builders use PhantomData type parameters to track which mandatory fields have been set. For example `UtilmdBuilder<NoPid, NoRelease>` cannot call `.build()` — only `UtilmdBuilder<HasPid, HasRelease>` can.
+Builders carry two `PhantomData` type parameters that track whether the sender
+and the receiver have been set. They start `Unset` and `.sender(…)` / `.receiver(…)`
+flip them to `Set` (`crates/edi-energy/src/builders/mod.rs:82`): `.build()` and
+`.serialize()` exist only on `UtilmdBuilder<Set, Set>`.
 
-This means missing mandatory fields are a **compile error**, not a runtime panic:
+Missing mandatory parties are therefore a **compile error**, not a runtime panic:
 
 ```rust
-// compile error: cannot call `.build()` without `.pruefidentifikator(…)`
+// compile error: `.serialize()` is not on UtilmdBuilder<Set, Unset>
 let result = UtilmdBuilder::new(release)
     .sender("4012345000023")
-    .build();  // ← won't compile
+    .serialize();  // ← won't compile: no receiver
 ```
+
+Everything else the AHB column demands is checked by validating the output —
+which is why every example here re-parses what it built.
 
 ---
 

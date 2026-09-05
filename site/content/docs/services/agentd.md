@@ -2,14 +2,10 @@
 title = "agentd Operator Guide"
 description = "agentd operator guide: 28 specialist manifests on agentplane — 26 read-only model-backed specialists and two deterministic coded specialists, with typed results, durable triage, semantic trust labels, journal-backed runs and role-scoped builds."
 weight = 38
-[extra]
-mermaid = true
 +++
-# `agentd` — Advisory Agent Plane
-
 `agentd` is the **AI automation layer** for the mako platform. It connects large
-language models to the production services via MCP, enabling automated analysis,
-decision support and workflow orchestration.
+language models to [the production services](@/docs/services/_index.md) via MCP, enabling
+automated analysis, decision support and workflow orchestration.
 
 Every specialist is a **declarative manifest** run by
 [agentplane](https://github.com/hupe1980/agentplane), a journal-first durable
@@ -17,6 +13,15 @@ agent runtime. Every model call and tool call is a journaled effect, so a run is
 resumable after a crash and replayable for audit.
 
 Port: **`:9580`**
+
+## The terms this page assumes
+
+| Term | What it is |
+|---|---|
+| **Marktrolle** | the role an operator plays in the German energy market — **LF** (supplier), **NB** (grid operator), **MSB** (metering operator), **BKV** (balancing-group manager). `agentd` builds role-scoped, so an LF binary contains no NB specialist. See [Party Roles](@/docs/architecture/domain-model.md#party-roles-marktrollen) |
+| **Marktlokation (MaLo)** | the delivery point a run is correlated on, identified by an 11-digit MaLo-ID — the unit a case, a memory subject and a GDPR erasure are all scoped to. See [Identifier Formats](@/docs/architecture/domain-model.md#identifier-formats) |
+| **Frist / Werktag** | a regulated deadline counted in BDEW Werktage. Agent approval windows resolve through the same calendar the protocol daemon [`makod`](@/docs/services/makod.md) uses for an EDIFACT Antwortfrist |
+| **APERAK** | the EDIFACT technical acknowledgement of a received market message. An APERAK timeout is one of the events that wakes `mako-agent` |
 
 | Endpoint | Description |
 |---|---|
@@ -140,8 +145,9 @@ one. What travels with it, and what deliberately does not, is set out under
 
 ### At-least-once delivery, at-most-once admission
 
-Inbound delivery is at-least-once: mako's fan-out retries until it sees a 2xx,
-and a dead-lettered delivery can be replayed by an operator days later.
+Inbound delivery is at-least-once: [`marktd`](@/docs/services/marktd.md)'s durable fan-out
+retries until it sees a 2xx, and a dead-lettered delivery can be replayed by an operator days
+later.
 
 **A `202` therefore has to mean *this message will be acted on*, not *this
 message was received*** — the emitter advances its outbox cursor past whatever
@@ -214,8 +220,8 @@ two disagree the first time somebody edits one.
 ### Fan-out
 
 When several specialists subscribe to one event they are independent opinions —
-a billing event runs an anomaly check *and* a regulatory guard — so each gets its
-own run and its own journal rather than sharing one.
+a [`billingd`](@/docs/services/billingd.md) event runs an anomaly check *and* a regulatory
+guard — so each gets its own run and its own journal rather than sharing one.
 
 There is deliberately **no first-wins mode**. Returning the first specialist and
 dropping the rest cancels the losers at their next `await`, and a cancelled
@@ -240,15 +246,16 @@ runtime control over a process that structurally holds both sets of keys.
 
 A role build therefore **does not contain** the other arm's specialists. An LF binary has no
 grid-billing and no Sperrung specialist compiled into it, so no configuration mistake can
-enable one. Cross-cutting specialists — protocol, deadlines, compliance, process — are in
-every build, because those surfaces exist for every Marktrolle.
+enable one. The five cross-cutting specialists carry no `#[cfg]` gate at all — protocol
+(`mako-agent`), deadlines, compliance, process and regulatory reporting — because those
+surfaces exist for every Marktrolle.
 
 | Build | Specialists |
 |---|---|
 | default (no flags) | all 28 |
-| `role-lf` | cross-cutting + 11 supply-side (billing, invoicing, contracts, tariffs, portal, VPP) |
-| `role-nb` | cross-cutting + 9 grid-side (NNE billing, Sperrung, EEG, MaBiS, GaBi Gas, Ersatzwerte) |
-| `role-msb` | cross-cutting + 3 metering (MSB history, meter data, SMGW diagnostics) |
+| `role-lf` | 5 cross-cutting + 11 supply-side (billing, invoicing, contracts, tariffs, portal, VPP) |
+| `role-nb` | 5 cross-cutting + 8 grid-side (NNE billing, Sperrung, EEG ×2, grid anomaly, MaBiS, GaBi Gas, einsd batch) |
+| `role-msb` | 5 cross-cutting + 4 metering (MSB history, meter data, Ersatzwerte, SMGW diagnostics) |
 
 `just clippy-roles` lints each profile and runs the guard test that asserts the exclusions,
 so a specialist added without a role decision fails the gate rather than quietly appearing
@@ -272,14 +279,14 @@ whether the agent is about to *act* or has finished *reporting*.
 | What waits | the run suspends before the tool call | nothing; the run completes and returns |
 | Who is asked | `oversight.approvers` | the rule's `audience` |
 | When it fires | reaching a mutating tool | the answer matches a predicate over `output.schema` |
-| Used by | `gabi-gas-agent`, the one specialist that can dispatch | 14 specialists, on a terminal finding |
+| Used by | — no active manifest grants a mutating tool | 18 specialists, on a terminal finding |
 
-The coded specialist is a third case, reaching the same worklist by a different
-road: a manifest with no `execution` block cannot declare `oversight` at all, so
-`deadline-alert-agent` opens its row from Rust through `StepCtx::open_task` when
-its worst severity is `BREACH` — same store, same audience rules, same
-escalation on expiry, and the run still completes because the Frist has already
-passed and there is nothing left to gate.
+The two coded specialists — `deadline-alert-agent` and `gabi-gas-agent` — are a
+third case, reaching the same worklist by a different road: a manifest with no
+`execution` block cannot declare `oversight` at all, so a terminal finding opens
+its row from Rust through `StepCtx::open_task` — same store, same audience rules,
+same escalation on expiry, and the run still completes because the finding is
+about something that has already happened and there is nothing left to gate.
 
 Triage exists because most specialists **cannot** act: a `tool-calling` agent's
 arguments come out of a model completion, which the taint gate refuses at a
@@ -368,14 +375,14 @@ events nobody correlated. A deadline nobody looks at is not a deadline.
 **approval** gates a real market message, so an unanswered window must send
 nothing: `deny`. A **triage row** gates nothing — the run already finished, and
 the row *is* the finding — so `deny` there would delete the delivery of a breach
-the agent correctly detected. All fourteen triage specialists declare
+the agent correctly detected. All eighteen triage specialists declare
 `escalate` with an `escalate_to` audience: the wider roles **join** the
 audience rather than replacing it, the stale reservation is cleared, and the row
 keeps waiting.
 
 Deadlines resolve through **mako's own BDEW Werktage calendar**, so
 `kind: working-days` means the same thing to an agent's approval window as it
-does to an APERAK Frist — same holiday table, same 17:00 Europe/Berlin cut-off,
+does to a [`makod`](@/docs/services/makod.md) APERAK Frist — same holiday table, same 17:00 Europe/Berlin cut-off,
 and the calendar's digest is journaled with the instant it produced, so a later
 correction cannot retroactively move a window somebody relied on.
 
@@ -502,16 +509,16 @@ total over what the model can actually return.
 
 A specialist's output is a recommendation with a § attached, so a wrong citation
 is a wrong answer that reads as a right one. Two rules: **quote the service that
-computes the number** where one exists — `sperrd`'s `frist_ueberschritten` for
-the GPKE execution window, `energy-billing`'s `guthabenerstattung` for the
-§ 40c Abs. 3 refund — because a restated rule is a second copy that drifts
+computes the number** where one exists — [`sperrd`](@/docs/services/sperrd.md)'s
+`frist_ueberschritten` for the GPKE execution window, `energy-billing`'s
+`guthabenerstattung` for the § 40c Abs. 3 refund — because a restated rule is a second copy that drifts
 silently; and **label anything else as ours**, because § 60 Abs. 2 MsbG names no
 substitution method and § 20 EnWG names no straight-through rate, so a table or a
 target attributed to either is an operating default wearing a statute.
 
 ### Knowledge is granted, not copied
 
-mako's MCP servers publish 57 step-by-step prompts across 15 servers, and 26
+mako's MCP servers publish 57 step-by-step prompts across 15 servers, and 25
 specialists declare `context.prompts` against their own service rather than
 carrying a hand-typed paraphrase in `constraints` — a second copy of a procedure
 that drifts the first time either side changes, with the copy being what the
@@ -519,8 +526,9 @@ model reads.
 
 A context grant is not a tool grant: reading a prompt authorises no action, but
 it does cross a trust and data-egress boundary, so it is declared where a
-reviewer sees it. The two that grant none need none — one has no model, the
-other's control flow is fixed before anything untrusted is read.
+reviewer sees it. The three that grant none need none: the two coded skills have no model
+to read a prompt, and `vpp-billing-agent`'s procedure is a completeness and arithmetic check
+whose steps are fixed before anything untrusted is read.
 
 ### Memory, scoped to the party the run is about
 
@@ -573,7 +581,18 @@ Four checks run in CI, and each closes a failure that is silent at runtime.
 | `cargo xtask check-tool-grants` | A grant naming a tool no MCP server declares; a `mutates` flag that disagrees with the server's own `read_only_hint`; a mutating grant on a `tool-calling` agent, which could never dispatch it |
 | `cargo xtask check-prompt-tools` | A *procedure* instructing a call the manifest never granted — **and** a grant no procedure step mentions |
 | `cargo xtask check-wire-timestamps` | A `time` value reaching a JSON wire as its component array instead of RFC 3339 |
-| `plane::` unit tests | An unsubscribed specialist, an answer-schema object that names its fields and then accepts others, a finding code the procedure emits and the schema cannot carry, a memory subject that pools customers, a terminal finding no triage rule reports, a role a manifest names that the policy set does not admit, a model id nobody reviewed |
+| `plane::` unit tests | Seven kinds of declaration that read as correct and are not — listed below |
+
+The `plane::` suite parses every manifest and refuses:
+
+- a specialist in `agents/` that the Rust subscription table never wires up, or the reverse;
+- an answer-schema object that names its fields and then accepts others;
+- a finding code the procedure emits that its schema cannot carry;
+- a memory subject that pools customers instead of binding `$correlation/malo`;
+- a terminal finding no triage rule reports;
+- a role a manifest names — approver, triage audience or `escalate_to` — that the Cedar
+  policy set does not admit;
+- a model id nobody reviewed.
 
 The prompt guard is the least obvious, and it runs in both directions.
 
@@ -1011,8 +1030,9 @@ There is no `time` attribute, and that is honest: time inside a run comes from
 journaled `clock.now` effects so a replay sees the instant the run saw, and
 stamping the moment the outbox swept would be a lie about when the run finished.
 
-`outcome` is one of `succeeded`, `failed`, `suspended`, `exhausted`,
-`quarantined`, `replanning`, `cancelled` or `not-admitted`. A **suspended** run is not a
+`outcome` is one of `completed`, `failed`, `suspended`, `exhausted`,
+`quarantined`, `replanning`, `cancelled` or `not-admitted` — the wire label for a successful
+run is `completed`, not `succeeded`. A **suspended** run is not a
 failure — it waits for a human decision or an inbound event — and a
 **quarantined** one means the durable record is untrustworthy, which is why it
 is its own outcome rather than `failed`.
@@ -1053,9 +1073,11 @@ graph LR
 The registration is made at **admission**, so no run exists unwatched, and the
 cursor advances **only on HTTP 2xx**. A crash between the POST and the cursor
 write re-delivers rather than loses; a receiver that is down for a deploy is
-caught up afterwards instead of having missed everything; one that has gone away
-is abandoned after the retry ceiling and reported, because a registration nobody
-removes is a queue that only grows. This is the same persist-before-dispatch
+caught up afterwards instead of having missed everything; one that has gone away — or that
+refuses permanently — is **parked** past the retry ceiling and reported. Parking is not
+deletion: the rows and the cursor survive and the registration is listed by
+`PushStore::parked`, so a registration nobody removes is a queue an operator can see rather
+than one that only grows. This is the same persist-before-dispatch
 discipline every other mako service applies to its transactional outbox.
 
 ```toml

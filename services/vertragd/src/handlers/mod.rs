@@ -8,9 +8,16 @@
 //! | [`stammdaten`] | GGV-Betreiber, § 41e Aggregatorverträge, dead-lettered outbound tasks |
 //! | [`inbound`] | Signed CloudEvent webhooks: MaKo outcomes and CPQ Angebote |
 //!
-//! Every route is authenticated. The `Claims` extractor verifies the token
-//! *and* rejects one issued for another tenant, so a route added later cannot
-//! forget the check without also dropping authentication.
+//! ## Authentication and authorization are two gates
+//!
+//! The `Claims` extractor verifies the token and rejects one issued for another
+//! tenant. That says *who* is calling and for which deployment — it does not say
+//! what they may do, and the token reaching these routes is not always an
+//! operator's: `portald` forwards an end customer's own token to the two routes
+//! whose answer is about that token's subject. So every route additionally calls
+//! `authorize`, which evaluates `policies/vertragd.cedar` and separates the
+//! customer-scoped actions from the operator ones. `tests/authorization_guard.rs`
+//! pins that every routed handler does both.
 
 pub mod inbound;
 pub mod kunden;
@@ -24,10 +31,12 @@ use axum::{
     Extension, Json, Router,
     routing::{delete, get, post, put},
 };
-use mako_service::{ApiError, ApiResult};
+use mako_service::{ApiError, ApiResult, oidc::Claims};
 use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;
+
+pub(crate) use mako_service::cedar::CedarEnforcer;
 
 use crate::config::VertragdConfig;
 
@@ -47,7 +56,11 @@ impl Ctx {
 }
 
 /// The domain router. `mako_service::run` adds health, tracing and shutdown.
-pub fn router(ctx: Arc<Ctx>) -> Router {
+///
+/// The Cedar enforcer is a parameter rather than a layer the caller adds
+/// afterwards: every handler extracts it, so a router built without one would
+/// answer 500 on every business route.
+pub fn router(ctx: Arc<Ctx>, enforcer: Arc<CedarEnforcer>) -> Router {
     Router::new()
         // ── Kunden ───────────────────────────────────────────────────────────
         .route(
@@ -167,9 +180,40 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
         .route("/api/v1/events", post(inbound::cloud_event))
         .route("/api/v1/webhooks/angebot", post(inbound::angebot))
         .layer(Extension(ctx))
+        .layer(Extension(enforcer))
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
+
+/// Authorize `action` for the caller against this deployment's tenant.
+///
+/// Authentication established *who* is calling; this decides what they may do.
+/// Every business route runs one of these before it touches the database:
+/// without it, the customer token `portald` forwards for the portal
+/// authorization check is a first-class principal on every other route — it
+/// could grant itself a portal login on another customer's account, read that
+/// customer's DSGVO export, or terminate their contract.
+///
+/// The denial is a bare `403`. Which rule refused, and for which subject, goes
+/// to the log: a caller holding a valid token learns nothing about the policy
+/// or about what exists behind the route it was refused.
+///
+/// # Errors
+///
+/// [`ApiError::Forbidden`] when the policy does not permit the action.
+pub(crate) fn authorize(
+    enforcer: &CedarEnforcer,
+    claims: &Claims,
+    action: &'static str,
+    tenant: &str,
+) -> ApiResult<()> {
+    enforcer
+        .check(&claims.principal(), action, tenant)
+        .map_err(|e| {
+            tracing::warn!(action, sub = %claims.sub(), error = %e, "vertragd: authorization denied");
+            ApiError::Forbidden
+        })
+}
 
 /// Wrap a serialisable value as a JSON response body.
 pub(crate) fn ok<T: Serialize>(v: T) -> ApiResult<Json<serde_json::Value>> {

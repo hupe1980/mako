@@ -429,6 +429,11 @@ impl PortaldMcpHandler {
                  1. Call `get_eeg_status(malo_id)` to get the plant details.\n\
                     Key fields: `foerderendedatum`, `eeg_gesetz`, `kw_peak`, `erzeugungsart`.\n\
                  2. Calculate `days_remaining = foerderendedatum - today`.\n\
+                    `foerderendedatum` is **null for a KWKG plant**: KWKG § 8 caps the\n\
+                    Zuschlag in Vollbenutzungsstunden, not on a calendar date, so there\n\
+                    is no end date to count down to. Read `kwk_foerderdauer_h` against\n\
+                    the hours already drawn instead, and never render a date-arithmetic\n\
+                    result from a null.\n\
                  3. Options by plant size:\n\
                     - **<= 100 kWp (small plants)**: POST_EEG_SPOT is typical. \n\
                       Customer receives hourly EPEX spot price. No paperwork required.\n\
@@ -481,7 +486,7 @@ impl ServerHandler for PortaldMcpHandler {
              - `customer-overview` — complete account overview workflow\n\
              - `billing-dispute` — investigate a disputed invoice\n\
              - `eeg-foerderung-check` — EEG Förderungsende options workflow\n\n\
-             **Informatorisches Unbundling (§9 EnWG):**\n\
+             **Informatorisches Unbundling (§ 6a EnWG):**\n\
              portald is an LF-role service. Unbundled NB services (netzbilanzd, sperrd)\n\
              are NOT accessible here. For full O2C cycle: use `billingd` MCP `order-to-cash` prompt.",
         )

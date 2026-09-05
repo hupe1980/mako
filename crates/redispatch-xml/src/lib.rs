@@ -35,6 +35,23 @@
 //! These are **not** EDIFACT. IFTSTA status messages for the Redispatch 2.0
 //! workflow are handled separately by the `edi-energy` crate.
 //!
+//! ## Validation is structural and semantic, never XSD
+//!
+//! This crate ships **no** schema bytes and performs **no** XSD validation.
+//! The BDEW XSDs are third-party copyrighted publications and are not
+//! redistributable, so embedding them here would put someone else's material in
+//! every copy of this crate and make a clean build depend on a file that is not
+//! part of it. A `bundled-schemas` Cargo feature once promised a
+//! `schema_bytes(DocumentType)` accessor for exactly that; it was declared
+//! empty, exported nothing, and has been removed — a feature flag that does
+//! nothing reads as a supported configuration.
+//!
+//! What replaces it is [`validation`]: the structural checks assert the
+//! cardinalities and required elements the XSDs express, and the semantic
+//! checks assert the rules the XSDs *cannot* express. Callers who must validate
+//! against the published schema do so with their own copy and their own XSD
+//! processor.
+//!
 //! # Market roles
 //!
 //! | Role | Abbrev. | Description |

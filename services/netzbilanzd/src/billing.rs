@@ -164,11 +164,19 @@ impl<'a> Resolver<'a> {
                     )
                 }),
             // The Strom Mehr-/Mindermengenpreise are einheitlich across the
-            // German market (§ 13 Abs. 3 StromNZV) and published monthly by the
-            // BDEW, so the month alone identifies them. There is no operator
-            // dimension to configure — an earlier `vnb_mp_id` setting made
-            // every Strom MMM settlement refuse until an operator named an ÜNB
-            // whose own series was never published.
+            // German market and published monthly by the BDEW, so the month
+            // alone identifies them. There is no operator dimension to
+            // configure — an earlier `vnb_mp_id` setting made every Strom MMM
+            // settlement refuse until an operator named an ÜNB whose own series
+            // was never published.
+            //
+            // The authority is keyed on the delivery period, not stated flat:
+            // § 13 Abs. 3 StromNZV to 31.12.2025, and § 20 Abs. 3 EnWG through
+            // the GPKE Festlegung (BK6-24-174) from 01.01.2026, since StromNZV
+            // ceased to have effect (Art. 15 Abs. 4 of the Gesetz v. 22.12.2023,
+            // BGBl. 2023 I Nr. 405). `grid_billing` resolves it per settlement
+            // via `RegulatoryRegime::for_period`; this comment must not
+            // contradict it.
             Sparte::Strom => self
                 .marktd
                 .get_mmm_strom(year, month)
@@ -379,6 +387,22 @@ pub fn render_and_check(
 /// compare a price sheet against itself. Stages 0–3 — Storno reference, period
 /// validity, arithmetic and total consistency — are the ones that catch an
 /// invoice the counterparty would dispute, and they need no store.
+///
+/// ## Why the outbound check runs at the inbound settings
+///
+/// [`CheckConfig::default`] is deliberate rather than incidental. This check
+/// exists to answer one question — *would the receiving LF dispute this?* — and
+/// the LF runs this same library at these same defaults. Tightening the
+/// tolerances here would refuse documents the counterparty accepts, and
+/// loosening them would send documents it rejects; either way the answer stops
+/// being the one the check is for.
+///
+/// That extends to severity. `TotalMismatch` is a warning rather than a dispute
+/// because the recipient treats it as one, and an issuer that blocked on it
+/// would hold back invoices the counterparty would have paid. What it does not
+/// extend to is silence: every finding is stored on the draft and returned in
+/// the drafting response, so a warned document reaches an operator before it
+/// reaches a counterparty.
 #[must_use]
 pub fn check(
     rechnung: &rubo4e::current::Rechnung,

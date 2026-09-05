@@ -190,7 +190,7 @@ fn build_aggregate_invoice(
     parts: Vec<(String, Invoice)>,
     extra_attrs: Vec<rubo4e::current::ZusatzAttribut>,
 ) -> anyhow::Result<(Invoice, serde_json::Value)> {
-    let ctx = BillingContext {
+    let mut ctx = BillingContext {
         malo_id: subject_id.to_owned(),
         lf_mp_id: lf_mp_id.to_owned(),
         rechnungsnummer,
@@ -206,6 +206,13 @@ fn build_aggregate_invoice(
     // (malo_id, number of positions contributed) — for the JSON annotation.
     let mut slices: Vec<(String, usize)> = Vec::with_capacity(parts.len());
     for (malo_id, invoice) in parts {
+        // The bundle settles what the parts settle. Each part's Abschlag
+        // deductions travel into `base` below, and the advance they deduct has
+        // to travel with them: the document's `abschlag_total_eur` comes from
+        // its context, so a bundle whose context named no advances would state
+        // the whole gross as due beside the deductions on its own page.
+        ctx.abschlage
+            .extend(invoice.context.abschlage.iter().cloned());
         let non_tax: Vec<BillingPosition> = invoice
             .positions
             .into_iter()
@@ -344,53 +351,6 @@ pub(crate) fn parse_period(from: &str, to: &str) -> BillingResult<(time::Date, t
         ));
     }
     Ok((pf, pt))
-}
-
-/// The product to bill: the request override, else the assignment in force.
-///
-/// Two services answer half the question each, and that is the point:
-/// **vertragd** says which product the customer is on — agreeing it is a
-/// Tarifwechsel under § 41 Abs. 5 EnWG, so it is a contract fact — and
-/// **productd** says what that product costs on the day in question.
-///
-/// # Errors
-///
-/// `422` when the MaLo has no assignment or the assigned code has no version
-/// valid on `am`; `502` when either service is unreachable.
-pub(crate) async fn resolve_tariff(
-    req: &CalculateRequest,
-    deps: &BillingDeps,
-    malo_id: &str,
-    am: time::Date,
-) -> BillingResult<Product> {
-    if let Some(t) = req.tariff.clone() {
-        return Ok(t);
-    }
-    let slices = deps
-        .vertragd
-        .get_product_slices(malo_id, am, am)
-        .await
-        .map_err(|e| BillingError::upstream("vertragd", e))?;
-    let Some(slice) = slices.into_iter().next() else {
-        return Err(BillingError::unprocessable(
-            "NO_ACTIVE_PRODUCT",
-            format!("MaLo {malo_id} has no product assignment on {am} in vertragd"),
-        ));
-    };
-    let produkte = deps
-        .productd
-        .resolve_products(&req.lf_mp_id, &[(slice.product_code.clone(), am)])
-        .await
-        .map_err(|e| BillingError::upstream("productd", e))?;
-    produkte.into_iter().next().flatten().ok_or_else(|| {
-        BillingError::unprocessable(
-            "NO_ACTIVE_PRODUCT",
-            format!(
-                "product {} assigned to MaLo {malo_id} has no version valid on {am} in productd",
-                slice.product_code
-            ),
-        )
-    })
 }
 
 /// Issue a persisted document: enqueue its event and stamp it `dispatched`.

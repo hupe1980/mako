@@ -8,16 +8,26 @@ and BNetzA rulings:
 - **BK6-24-174** (Beschluss 24.10.2024, gültig seit 06.06.2025) — GPKE Teil 1–3 (Lieferantenwechsel, Zuordnungsprozesse)
 - **BK6-22-024** (Beschluss 21.03.2024) — GPKE Teil 4 (Stammdatenprozesse, Konfigurationseinrichtung)
 
+A **Prüfidentifikator** (PID) is the five-digit BDEW code every message in these
+processes carries. It names the exact Anwendungsfall, and with it the rules, the
+Frist and the answer tree that apply — so the PID, not the EDIFACT message type,
+is what routes.
+
 ## Fristen — two clocks
 
-**APERAK** (the transport acknowledgement): **45 Minuten** on a Werktag for
-UTILMD and ORDERS; a Saturday arrival is due Sunday 12:00 Berlin, everything else
-12:00 of the next Werktag (APERAK AHB 1.1 § 2.4.1).
+**APERAK** (the transport acknowledgement): **45 Minuten** for UTILMD and
+ORDERS, except that a **Saturday** arrival is due Sunday 12:00 Berlin
+(APERAK AHB 1.1 § 2.4.1). Those are the only two Strom cases —
+`mako_fristen::aperak_strom_due_at` gives a Sunday arrival the 45 minutes too.
+The „nächster Werktag 12:00 Uhr" rule is **Gas** (§ 2.3.1) and belongs to
+`mako-geli-gas`.
 
 **The business answer** is per Prüfidentifikator and comes from
 `mako_fristen::antwort` — 11:00 / 06:00 / 05:00 / 09:00 Uhr des 1. WT nach dem ÜT
 for the GPKE Teil 2 core processes, 00:00 Uhr des 61. WT for a Neuanlage, the
-1. WT for a Sperr-/Entsperrauftrag, 2 WT for a Teil-4 Stammdaten-Rückmeldung.
+1. WT for a Sperr-/Entsperrauftrag (17115 / 17117 / 39000) but the **3. WT** for
+the Anfrage Sperrung 17116 the NB puts to the MSB, 2 WT for a Teil-4
+Stammdaten-Rückmeldung.
 
 GPKE Teil 2 states every window as a wall-clock instant on a Werktag, never as a
 duration: a message arriving Friday afternoon is answerable until Monday morning,
@@ -205,6 +215,8 @@ the deployment plays.
 | 17116 | Anfrage Sperrung (NB fragt MSB)                  | NB → MSB    | `gpke-sperrung`    | ✅ Implemented |
 | 17117 | Entsperrauftrag                                  | LF → NB     | both               | ✅ Implemented |
 | 39000 | Stornierung Sperr-/Entsperrauftrag (ORDCHG)      | LF → NB     | both               | ✅ Implemented |
+| 39001 | Weiterleitung der Stornierung (ORDCHG)           | NB → MSB    | `gpke-sperrung`    | ✅ Implemented |
+| 19118/19119 | Bestätigung / Ablehnung Anfrage Sperrung   | MSB → NB    | `gpke-sperrung`    | ✅ Implemented |
 | 19116/19117 | Bestätigung / Ablehnung (ORDRSP)           | NB → LF     | `gpke-sperrung-lf` | ✅ Implemented |
 | 19128/19129 | Bestätigung / Ablehnung Stornierung        | NB → LF     | `gpke-sperrung-lf` | ✅ Implemented |
 | 21039 | Auftragsstatus nach Ausführung (IFTSTA)          | NB → LF     | `gpke-sperrung-lf` | ✅ Implemented |
@@ -302,18 +314,18 @@ is required unless the message fails validation.
 
 ### ORDERS Datenabruf — Anfrage / Ablehnung (GPKE Teil 4)
 
-Workflow `gpke-datenabruf` handles the LF-side of data-request processes: the LF
-sends an ORDERS Anfrage to the NB or MSB and waits for a response or explicit
-rejection within 24 h.
+Workflow `gpke-datenabruf` handles the LF-side of the Geschäftsdatenanfrage: the
+LF sends an ORDERS Anfrage to the NB or MSB, and the positive answer comes back
+as **MSCONS** (`gpke-messwerte`) — only a refusal is an ORDRSP.
 
 | PID   | Process name (AHB)                                 | Direction   | Status         |
 |-------|----------------------------------------------------|-------------|----------------|
-| 17004 | Anfrage Datenabruf (allgemein)                     | LF → NB/MSB | ✅ Implemented |
-| 17102 | Anfrage Übermittlung Stammdaten Strom              | LF → NB/MSB | ✅ Implemented |
-| 17113 | Anfrage Übermittlung Werte                         | LF → NB/MSB | ✅ Implemented |
-| 19101 | Ablehnung Anfrage Datenabruf (NB → LF)             | NB → LF     | ↩ Derived      |
-| 19102 | Ablehnung Anfrage Stammdaten (NB → LF)             | NB → LF     | ↩ Derived      |
-| 19114 | Ablehnung Anfrage Werte (NB → LF)                  | NB → LF     | ↩ Derived      |
+| 17004 | Anforderung von Werten                             | LF → NB/MSB | ✅ Implemented |
+| 17102 | Anfrage von Werten                                 | LF → NB/MSB | ✅ Implemented |
+| 17113 | Reklamation von Werten/Lastgängen                  | LF → NB/MSB | ✅ Implemented |
+| 19101 | Ablehnung Anfrage Stammdaten                       | NB → LF     | ↩ Derived      |
+| 19102 | Ablehnung Anfrage Werte                            | NB/MSB → LF | ↩ Derived      |
+| 19114 | Ablehnung der Reklamation von Werten               | NB/MSB → LF | ↩ Derived      |
 
 > The response deadline (`gpke-datenabruf-antwort`) is **1 Werktag** —
 > „Unverzüglich, jedoch spätester ÜZ ist 1 WT nach dem ÜZ von Nr. 1", GPKE Teil 4
@@ -340,10 +352,9 @@ Allokationsliste, exchanged between LF and NB via ORDERS and answered with MSCON
 
 | Format version   | Valid from | Valid until | Profile status                   |
 |------------------|------------|-------------|----------------------------------|
-| `FV2025-06-06`   | 2025-06-06 | 2025-09-30  | ✓ available (UTILMD S1.2 — LFW24 cutover) |
-| `FV2025-10-01`   | 2025-10-01 | 2026-09-30  | ✓ available (UTILMD S2.1 — current) |
-| `FV2026-10-01`   | 2026-10-01 | —           | ✓ available (UTILMD S2.2 — upcoming) |
-| `FV2026-04-01`   | 2026-04-01 | 2026-09-30  | ✓ available (INVOIC 2.8e, REMADV 2.9f, ORDERS 1.4b) |
+| `FV2025-10-01`   | 2025-10-01 | 2026-09-30  | ✓ available (UTILMD S2.1) |
+| `FV2026-10-01`   | 2026-10-01 | —           | ✓ available (UTILMD S2.2) |
+| `FV2026-04-01`   | 2026-04-01 | 2026-09-30  | ✓ available (INVOIC 2.8e, REMADV 2.9e, ORDERS 1.4b) |
 
 > INVOIC (31001–31008) and ORDERS/ORDRSP Konfiguration (17134/17135, 19001/19002)
 > use their own versioned profiles (`fv20260401`), independent of the UTILMD
@@ -353,7 +364,7 @@ Allokationsliste, exchanged between LF and NB via ORDERS and answered with MSCON
 
 | Rust module                 | Workflow name                    | Contents                                                            |
 |-----------------------------|----------------------------------|---------------------------------------------------------------------|
-| `wechselprozesse`           | `gpke-supplier-change`           | PIDs 55001/55002/55016/55077/55557 (UTILMD supplier-switch + Kündigung, NB role) + IFTSTA Vollzugs-/Statusmeldungen 21024–21028/21033/21035 |
+| `wechselprozesse`           | `gpke-supplier-change`           | PIDs 55001/55004/55077 inbound (`UTILMD_ANFRAGE_PIDS`, NB role), answered 55002/55003 · 55005/55006 · 55078/55080 + IFTSTA 21024–21028/21033/21035/21045/21047 |
 | `stornierung`               | `gpke-stornierung`               | PIDs 55022–55024 (UTILMD Stornierung Zuordnungsprozess) + 55023/55024 derived |
 | `kuendigung`                | `gpke-kuendigung`                | PIDs 55016 → 55017/55018 (Kündigung, LFN → LFA — no NB in between), answered out of `E_0614` |
 | `zuordnungsmeldung`         | `gpke-zuordnungsmeldung`         | PIDs 55036/55037/55038 (Meldepflichten um den Lieferbeginn) + 55611 (Lieferende von NB an MSB/MSBZ); one-way, no Antwortnachricht |
@@ -371,7 +382,7 @@ Allokationsliste, exchanged between LF and NB via ORDERS and answered with MSCON
 | `abrechnungsdaten`          | `gpke-abrechnungsdaten`          | PIDs 55156/55220/55673 (Rückmeldung/Bestellung Abrechnungsdaten, LF → NB) → IFTSTA 21047 Bearbeitungsstand, `E_0595` |
 | `konfiguration`             | `gpke-konfiguration`             | PIDs 17134/17135 (ORDERS outbound) + 19001/19002 (ORDRSP inbound) — GPKE Teil 4 |
 | `konfiguration_aenderung`   | `gpke-konfiguration-aenderung`   | ORDERS/ORDRSP for configuration changes (NB role)                   |
-| `sperrung`                  | `gpke-sperrung`                  | PIDs 17115–17117 (ORDERS Sperrung Strom, NB → MSB)                 |
+| `sperrung`                  | `gpke-sperrung`                  | NB role: ORDERS 17115–17117 + ORDCHG 39000/39001 + ORDRSP 19118/19119 (the MSB's answer to a 17116) |
 | `sperrung_lf`               | `gpke-sperrung-lf`               | LF-side Sperrung: ORDERS 17115/17117 + ORDCHG 39000 outbound, ORDRSP 19116/19117 · 19128/19129 + IFTSTA 21039 inbound |
 | `ankuendigung_zuordnung_lf` | `gpke-ankuendigung-zuordnung-lf` | PIDs 55607–55609 (UTILMD Ankündigung Zuordnung LF)                 |
 | `partin`                    | `gpke-partin`                    | PIDs 37000–37006 (PARTIN Strom Kommunikationsdaten)                |
@@ -407,8 +418,29 @@ let events = process.execute(SupplierChangeCommand::ReceiveUtilmd {
 - BNetzA **BK6-24-174** (Beschluss 24.10.2024, gültig seit 06.06.2025) — GPKE Teil 1–3
 - BNetzA **BK6-22-024** (Beschluss 21.03.2024) — LFW24, superseded for the
   process descriptions by BK6-24-174
-- EDI@Energy UTILMD Strom AHB S2.2 (`FV2026-10-01`)
-- EDI@Energy INVOIC AHB 2.8e / AHB 1.0 (`FV2025-10-01` onwards)
+- EDI@Energy UTILMD Strom **AHB 2.2** (MIG release S2.2, `FV2026-10-01`);
+  AHB 2.1 / S2.1 for `FV2025-10-01`
+- EDI@Energy INVOIC **AHB 1.0a** (MIG release 2.8e, `FV2026-04-01`) — the
+  AHB and the MIG carry different version numbers, and 2.8e is the MIG's
 - EDI@Energy **APERAK AHB 1.1** (`FV2026-10-01`) — § 2.4.1 Strom, § 2.3.1 Gas.
   2.2 is the APERAK **MIG** revision; AHB and MIG carry different version numbers
   for every message type except UTILMD
+
+## Related crates
+
+The format layer and the domain packs meet in `makod`: a workflow crate knows the
+`Pruefidentifikator` and its own domain types, never an EDIFACT message type.
+
+| Crate | Role |
+|---|---|
+| [`mako-gpke`](https://docs.rs/mako-gpke) ← **this crate** | GPKE Strom workflows, PID routing, `GpkeModule` |
+| [`edi-energy`](https://docs.rs/edi-energy) | EDI@Energy EDIFACT — parse · validate · build (UTILMD, MSCONS, ORDERS, INVOIC, APERAK, …); joined to these workflows in `makod`, not depended on |
+| [`mako-engine`](https://docs.rs/mako-engine) | Event-sourced workflow runtime — `Workflow`, `Process`, `EventStore`, deadlines |
+| [`mako-fristen`](https://docs.rs/mako-fristen) | *When* an answer is due — Werktage, the MaKo holiday calendar, the per-PID Antwortfristen |
+| [`mako-pruefung`](https://docs.rs/mako-pruefung) | *What* the answer must be — the BDEW Entscheidungsbäume, executable; `makod` walks them beside these workflows |
+| [`mako-invoic`](https://docs.rs/mako-invoic) | The INVOIC settle/dispute state machine every billing family shares |
+| [`mako-geli-gas`](https://docs.rs/mako-geli-gas) | The Gas counterpart — GeLi Gas 3.0 |
+| [`makod`](https://hupe1980.github.io/mako/docs/services/makod/) | Production daemon — routes, adapts and renders these workflows |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>

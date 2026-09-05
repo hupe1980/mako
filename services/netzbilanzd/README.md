@@ -9,7 +9,7 @@ billing path.
 | Attribute | Value |
 |---|---|
 | **Port** | `:8680` |
-| **Database** | PostgreSQL — `invoice_drafts`, `invoice_number_seq`, `kostenblatt_records`, `fremdkosten_records` |
+| **Database** | PostgreSQL — `invoice_drafts`, `invoice_number_seq`, `abschlag_verrechnungen`, `kostenblatt_records`, `fremdkosten_records` |
 | **Calculation** | `grid-billing` — pure, I/O-free, every position carries a `CalculationTrace` and its `LegalReference`s |
 | **Money** | `i64` × 10⁻⁵ EUR end to end; net, Umsatzsteuer, gross **and what is left to collect** each stored, and checked to add up. A deduction may leave a Guthaben; it can never enlarge the invoice |
 | **Umsatzsteuer** | 19 % on network services; §13b reverse charge on Mehr-/Mindermengen when the counterparty holds §3g status |
@@ -202,7 +202,7 @@ The invoice that closes the period deducts them **by draft ID**:
 }
 ```
 
-Three properties of that deduction are enforced rather than trusted:
+Four properties of that deduction are enforced rather than trusted:
 
 - **It reduces what is owed, never what was supplied.** §14 Abs. 5 UStG taxes an Anzahlung when
   it is received, so the Abschlussrechnung must not tax the same money twice: `gesamtnetto` and
@@ -213,6 +213,12 @@ Three properties of that deduction are enforced rather than trusted:
   figure is precisely the one that can disagree with it.
 - **A reversed Abschlag is refused.** AHB rule **[519]** excludes a stornierte
   Abschlagsrechnung — nothing was paid on it, so deducting it would credit money that never moved.
+- **An Abschlag is deducted once.** Each deduction is a row in `abschlag_verrechnungen`, written in
+  the drafting transaction under a primary key on `(tenant, abschlag_draft_id)`, so a second invoice
+  naming the same Abschlag is a `409` (`AbschlagAlreadyDeducted`) instead of a second well-formed
+  credit. The rows are released when the consuming invoice is rejected, or when its Storno is
+  **dispatched** — not when the Storno is drafted, because a drafted reversal can still be rejected
+  and the original still stands on the wire until it goes out.
 
 Each deduction names the invoice it reconciles against (`SG51 RFF+AFL` + `DTM+3`), because a
 total the counterparty cannot break down is a total it will dispute.
@@ -365,6 +371,15 @@ settles against the schedule transmitted to the EIV, not against the measured La
 refuses to guess, because using the wrong counterfactual misstates the compensation in whichever
 direction the plant deviated.
 
+A **Duldungsfall** settles against the measured Lastgang, and the endpoint refuses a window the
+series does not span: an activation half of which is missing pays the Anlagenbetreiber for half of
+what it lost, and nothing in the kWh says so. Completeness is judged from the intervals — they must
+be contiguous, and what they leave uncovered at either end must be shorter than one interval. That
+is exactly the misalignment an activation running 10:07–11:07 against a quarter-hour series
+produces, and it is never what a genuinely absent interval looks like. The `coverage_pct` `edmd`
+reports is measured against the window **as requested**, so a fully metered hour of that shape
+reports around 75 %; it travels back with the figure as information, not as the test.
+
 The stateless BilAReM Kap.-3 Ausfallarbeit engine sits at `/api/v1/redispatch/ausfallarbeit/*`.
 
 ## Configuration
@@ -380,6 +395,10 @@ makod_url      = "http://makod:8080"
 makod_api_key  = "env:NETZBILANZD_MAKOD_API_KEY"
 edmd_url       = "http://edmd:8380"
 edmd_api_key   = "env:NETZBILANZD_EDMD_API_KEY"
+
+# Start without authentication (dev only). Without it the daemon refuses to
+# start unless [oidc] and inbound_secret are both configured.
+# allow_insecure_no_auth = true
 
 # All CloudEvents go here. Delivery is durable: each event is written to
 # `event_outbox` in the same transaction as the change it describes and drained
@@ -401,7 +420,49 @@ url = "postgres://nb:secret@db:5432/netzbilanzd"
 
 [mcp]
 api_key = "env:NETZBILANZD_MCP_API_KEY"
+
+# Verifies the bearer token on every REST route and on /mcp.
+[oidc]
+issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+audience = "api://mako-netzbilanzd"
 ```
+
+## Authentication and authorization
+
+Every REST route takes a verified OIDC token and is then checked against
+[`policies/netzbilanzd.cedar`](policies/netzbilanzd.cedar). The daemon refuses to start without
+`[oidc]`, without `inbound_secret`, or with an MCP surface that has neither `[oidc]` nor an `[mcp]`
+key — each of those doors opens invoice dispatch, Storno, mark-paid, the § 147 AO export or the
+Kostenblatt submission to anyone who can reach the port. `allow_insecure_no_auth = true` accepts
+that posture for local development and says so loudly at startup.
+
+| Action | Routes | Who |
+|---|---|---|
+| `read-settlement` | `GET /billing/drafts[/{id}]`, `/malo/{malo_id}`, `/summary`, `/fremdkosten/{draft_id}` | any caller of the tenant |
+| `export-audit` | `GET /billing/audit` | any caller of the tenant |
+| `read-kostenblatt` | `GET /redispatch/kostenblatt[/{activation_id}]`, `/kostenblatt/gaps/{year}/{month}` | any caller of the tenant |
+| `compute-ausfallarbeit` | `POST /redispatch/ausfallarbeit/*` | any caller of the tenant |
+| `run-settlement` | `POST /billing/run`, `/mmm-run/{malo_id}`, `/ggv-nne/{ggv_malo_id}` | NB, MSB |
+| `amend-settlement` | `PUT /billing/fremdkosten/{draft_id}`, `/drafts/{id}/reject` | NB, MSB |
+| `dispatch-settlement` | `PUT /billing/drafts/{id}/dispatch`, `POST /drafts/dispatch-batch` | NB, MSB |
+| `correct-settlement` | `POST /billing/drafts/{id}/storno`, `/korrektur` | NB, MSB |
+| `record-payment` | `PUT /billing/drafts/{id}/mark-paid`, `/mark-disputed` | NB, MSB |
+| `compute-kostenblatt` | `PUT /redispatch/kostenblatt/{activation_id}`, `POST …/compute` | NB, ÜNB |
+| `submit-kostenblatt` | `POST /redispatch/kostenblatt/submit/{year}/{month}` | NB, ÜNB |
+| `compute-verguetung` | `POST /redispatch/verguetung/{activation_id}/compute` | NB, ÜNB |
+| `use-mcp` | `/mcp` | any caller of the tenant |
+
+Reading is a different action from every write, so a token carrying no market role — an auditor's —
+reaches the § 147 AO export and can dispatch, reverse or settle nothing.
+
+`POST /api/v1/webhooks/remadv` is the one route with no bearer token: it is authenticated by the
+`inbound_secret` HMAC, which is also replay-checked.
+
+`tests/authorization_guard.rs` pins the surface in three directions, none of which the compiler
+sees: a handler with no `Claims` extractor is unauthenticated, a handler that takes `Claims` and
+authorizes nothing is open to every accepted token, and a Cedar action checked in code but absent
+from the policy is a permanent 403 (Cedar is default-deny) while a policy action nothing checks is a
+dead grant. The REMADV webhook is the one declared exception.
 
 ## MCP server
 

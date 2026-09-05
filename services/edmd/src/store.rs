@@ -556,7 +556,7 @@ impl MeterStoreTimeSeriesRepository {
     ///
     /// Ordinary ingest must not do this: a delivery that arrives late is
     /// legitimately shadowed by a newer one. An operator correction
-    /// (`POST /api/v1/corrections/{malo_id}`) and a § 60 Abs. 2 Ersatzwert are
+    /// (`POST /api/v1/corrections/{malo_id}`) and a § 60 Abs. 1 Ersatzwert are
     /// not deliveries — they are edmd asserting a value about a slot whose
     /// current content it has just judged unusable — and neither carries an
     /// MSCONS version, so through a plain `append` both resolve to `Shadowed`
@@ -588,10 +588,10 @@ impl MeterStoreTimeSeriesRepository {
     /// Aggregate a billing period from the resolved series and re-cache it.
     ///
     /// The read-through half of [`TimeSeriesRepository::billing_period`], split
-    /// out so the cache-hit path can fall back to it — a cached row whose Sparte
-    /// or quality does not decode is a row edmd did not write, and answering
-    /// from it would put a guessed commodity or a non-billable flag on an
-    /// invoice.
+    /// out so the cache-hit path can fall back to it — a cached row whose Sparte,
+    /// quality, Messtyp or Arbeitsmenge does not decode is a row edmd did not
+    /// write, and answering from it would put a guessed commodity, a
+    /// non-billable flag or a zero consumption on an invoice.
     async fn recompute_billing_period(
         &self,
         q: &BillingPeriodQuery,
@@ -599,7 +599,7 @@ impl MeterStoreTimeSeriesRepository {
         // On-the-fly aggregation from the resolved series, over the commodity's
         // own balancing period (Gastag for Gas).
         let (from_ts, to_ts) = period_window(q.sparte, q.period_from, q.period_to);
-        // Billable qualities only (§60 Abs. 2), pushed into the scan.
+        // Billable qualities only (§ 40a Abs. 2 EnWG), pushed into the scan.
         let reads: Vec<MeterRead> =
             read_all_channels(&self.store, &q.malo_id, &q.tenant, from_ts, to_ts, true).await?;
         if reads.is_empty() {
@@ -633,7 +633,23 @@ impl MeterStoreTimeSeriesRepository {
         let first_interval_min = intervals
             .first()
             .map(|iv| (iv.to - iv.from).whole_minutes().unsigned_abs());
+        // Two facts decide the Messtyp, and the interval length is only one of
+        // them. An RLM meter and an intelligentes Messsystem both deliver a
+        // quarter-hour series, so length alone can never name the iMSys — and
+        // an iMSys that is never named makes the § 40b Abs. 3 monthly
+        // Abrechnungsinformation undeliverable, § 41a dynamic billing
+        // impossible and § 14a Modul 3 unbillable.
+        //
+        // The second fact is provenance: `IngestionSource::DirectPush` is the
+        // Smart-Meter-Gateway door (`POST /api/v1/meter-reads/rlm/{malo}`,
+        // reached over SM-PKI), so a value that arrived through it came from a
+        // metering system within § 2 Satz 1 Nr. 7 MsbG. That is a recorded fact
+        // about the delivery, not an inference from the shape of the data.
+        let via_smgw = reads
+            .iter()
+            .any(|r| r.source == crate::domain::IngestionSource::DirectPush);
         let messtyp = match first_interval_min {
+            Some(m) if m <= 15 && via_smgw => Messtyp::IMsys,
             Some(m) if m <= 60 => Messtyp::Rlm,
             _ => Messtyp::Slp,
         };
@@ -653,6 +669,26 @@ impl MeterStoreTimeSeriesRepository {
             None
         };
         let worst_quality = crate::domain::worst_quality(&intervals);
+
+        // How much of the period the billable readings actually cover, measured
+        // against the requested window rather than against the extent of the
+        // data — measured against the data, a month whose last week never
+        // arrived reports 100 %. `metering::aggregate` owns the arithmetic
+        // (a duration ratio, so it is right at every resolution and on both DST
+        // days); edmd only decides what window it is measured against.
+        let coverage_pct = {
+            let agg = metering::aggregation::aggregate(
+                &intervals,
+                &metering::aggregation::AggregationConfig {
+                    include_spitzenleistung: false,
+                    period: Some((from_ts, to_ts)),
+                },
+            );
+            Decimal::from_f64_retain(agg.coverage_pct)
+                .unwrap_or(Decimal::ZERO)
+                .round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
+                .clamp(Decimal::ZERO, Decimal::ONE_HUNDRED)
+        };
 
         // § 40 Abs. 2 Nr. 6 EnWG: an energy invoice must show the opening and
         // closing register reading. They come from the Zählerstandsgang, which
@@ -683,6 +719,7 @@ impl MeterStoreTimeSeriesRepository {
             spitzenleistung_kw,
             brennwert_kwh_per_m3: None,
             zustandszahl: None,
+            coverage_pct,
             zaehlerstand_anfang,
             zaehlerstand_ende,
             quality: worst_quality,
@@ -709,8 +746,8 @@ impl MeterStoreTimeSeriesRepository {
                   (malo_id, period_from, period_to, messtyp, sparte,
                    arbeitsmenge_kwh, spitzenleistung_kw, quality, tenant,
                    arbeitsmenge_ht_kwh, arbeitsmenge_nt_kwh,
-                   zaehlerstand_anfang, zaehlerstand_ende)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                   zaehlerstand_anfang, zaehlerstand_ende, coverage_pct)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
               ON CONFLICT (malo_id, period_from, period_to, tenant)
               DO UPDATE SET messtyp             = EXCLUDED.messtyp,
                             sparte              = EXCLUDED.sparte,
@@ -721,6 +758,7 @@ impl MeterStoreTimeSeriesRepository {
                             arbeitsmenge_nt_kwh = EXCLUDED.arbeitsmenge_nt_kwh,
                             zaehlerstand_anfang = EXCLUDED.zaehlerstand_anfang,
                             zaehlerstand_ende   = EXCLUDED.zaehlerstand_ende,
+                            coverage_pct        = EXCLUDED.coverage_pct,
                             computed_at         = now()",
         )
         .bind(&result.malo_id)
@@ -736,6 +774,7 @@ impl MeterStoreTimeSeriesRepository {
         .bind(result.arbeitsmenge_nt_kwh)
         .bind(result.zaehlerstand_anfang)
         .bind(result.zaehlerstand_ende)
+        .bind(result.coverage_pct)
         .execute(&self.pool)
         .await;
         // A failed cache write is not a failed read — the aggregate is correct
@@ -897,7 +936,7 @@ fn read_to_stored(r: &MeterRead) -> Result<StoredSeries, EdmError> {
 /// under.
 ///
 /// The override exists for values **edmd itself authors** — an operator
-/// correction and a § 60 Abs. 2 Ersatzwert — which must supersede whatever
+/// correction and a § 60 Abs. 1 Ersatzwert — which must supersede whatever
 /// currently holds. See [`MeterStoreTimeSeriesRepository::append_superseding`].
 fn read_to_stored_at(r: &MeterRead, version: Option<Version>) -> Result<StoredSeries, EdmError> {
     let obis: Option<ObisCode> = r.obis_code.as_deref().and_then(|s| ObisCode::parse(s).ok());
@@ -1027,7 +1066,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         // displacements that DRIVE the § 60 audit — no separate re-read of prior
         // state (which would race exactly when two corrections arrive together).
         //
-        // A batch edmd **authored** takes the other route. A § 60 Abs. 2
+        // A batch edmd **authored** takes the other route. A § 60 Abs. 1
         // Ersatzwert stands in for a reading the substitution logic has already
         // judged unusable, so it has to become the current value. Through the
         // plain batch append it would be silently outranked by any `FAULTY`
@@ -1084,7 +1123,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             }
         }
 
-        // ── § 60 Abs. 6 audit + § 60 Abs. 2 confirmation, from displacements ──
+        // ── § 60 Abs. 6 audit + § 60 Abs. 1 confirmation, from displacements ──
         for d in &displacements {
             if !d.effect.changed_current_value() {
                 continue; // Shadowed / Duplicate: nothing became current.
@@ -1130,7 +1169,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 .map_err(pg_err)?;
             }
 
-            // § 60 Abs. 2: a measured/corrected value discharges an open
+            // § 60 Abs. 1: a measured/corrected value discharges an open
             // confirmation; an estimated/substituted one opens the obligation.
             match d.written.quality {
                 QualityFlag::Measured | QualityFlag::Corrected => {
@@ -1320,7 +1359,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             r"SELECT messtyp, sparte, arbeitsmenge_kwh, spitzenleistung_kw,
                      arbeitsmenge_ht_kwh, arbeitsmenge_nt_kwh,
                      brennwert_kwh_per_m3, zustandszahl,
-                     zaehlerstand_anfang, zaehlerstand_ende, quality
+                     zaehlerstand_anfang, zaehlerstand_ende, quality, coverage_pct
               FROM meter_billing_periods
               WHERE malo_id = $1 AND period_from = $2 AND period_to = $3 AND tenant = $4",
         )
@@ -1336,29 +1375,38 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             let dec = |c: &str| row.try_get::<Option<Decimal>, _>(c).ok().flatten();
             // A cache row that cannot be decoded is not a cache miss and not a
             // zero — it is a row edmd did not write, and answering from it would
-            // put a guessed Sparte or a non-billable quality on an invoice. The
-            // read falls through to the on-the-fly aggregation instead, which
-            // recomputes from the resolved series and rewrites the row.
+            // put a guessed Sparte, a non-billable quality, an SLP
+            // classification or a zero consumption on an invoice. The read falls
+            // through to the on-the-fly aggregation instead, which recomputes
+            // from the resolved series and rewrites the row.
             let decoded = (|| {
                 let sparte = str_to_sparte(&row.try_get::<String, _>("sparte").ok()?)?;
                 let quality = str_to_quality(&row.try_get::<String, _>("quality").ok()?)?;
-                Some((sparte, quality))
+                let messtyp = messtyp_from_str(&row.try_get::<String, _>("messtyp").ok()?)?;
+                // The billed quantity belongs to the same invariant: a cached
+                // row whose Arbeitsmenge does not decode is not a zero-
+                // consumption period, and answering with one bills the standing
+                // charges and states no consumption at all.
+                let arbeitsmenge_kwh = row.try_get::<Decimal, _>("arbeitsmenge_kwh").ok()?;
+                let coverage_pct = row.try_get::<Decimal, _>("coverage_pct").ok()?;
+                Some((sparte, quality, messtyp, arbeitsmenge_kwh, coverage_pct))
             })();
-            let Some((sparte, quality)) = decoded else {
+            let Some((sparte, quality, messtyp, arbeitsmenge_kwh, coverage_pct)) = decoded else {
                 tracing::warn!(
                     malo_id = %q.malo_id,
-                    "edmd: cached billing period holds an unreadable sparte/quality — recomputing"
+                    "edmd: cached billing period holds an unreadable sparte/quality/messtyp/\
+                     arbeitsmenge — recomputing"
                 );
                 return self.recompute_billing_period(q).await;
             };
-            let messtyp_str: String = row.try_get("messtyp").unwrap_or_else(|_| "SLP".into());
             return Ok(Some(MeterBillingPeriod {
                 malo_id: q.malo_id.clone(),
                 period_from: q.period_from,
                 period_to: q.period_to,
-                messtyp: messtyp_from_str(&messtyp_str),
+                messtyp,
                 sparte,
-                arbeitsmenge_kwh: row.try_get("arbeitsmenge_kwh").unwrap_or(Decimal::ZERO),
+                arbeitsmenge_kwh,
+                coverage_pct,
                 arbeitsmenge_ht_kwh: dec("arbeitsmenge_ht_kwh"),
                 arbeitsmenge_nt_kwh: dec("arbeitsmenge_nt_kwh"),
                 spitzenleistung_kw: dec("spitzenleistung_kw"),
@@ -1571,7 +1619,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             self.append_superseding(&corrected, subject.as_str())
                 .await?;
 
-            // 3. § 60 Abs. 2: a corrected real value discharges the open
+            // 3. § 60 Abs. 1: a corrected real value discharges the open
             //    confirmation for the slot.
             if matches!(
                 rec.corrected_quality,
@@ -2036,8 +2084,10 @@ fn correction_source_of(source: crate::domain::IngestionSource) -> &'static str 
     }
 }
 
-/// The § 60 Abs. 2 MsbG billable quality set — every flag except `FAULTY` and
-/// `UNKNOWN`. Derived from [`metering::QualityFlag::is_billable`] so it cannot
+/// The § 40a Abs. 2 EnWG billable quality set — every flag except `FAULTY` and
+/// `UNKNOWN`. A reading carrying either flag determines no actual consumption,
+/// so a bill covering that slot rests on a Verbrauchsschätzung or an Ersatzwert
+/// instead, expressly labelled (§ 40a Abs. 2 Satz 3 EnWG). Derived from [`metering::QualityFlag::is_billable`] so it cannot
 /// drift from the domain rule, and passed to
 /// [`SeriesQuery::quality_in`](meterstore::SeriesQuery::quality_in) to push the
 /// filter into the scan instead of re-deriving `NOT IN ('FAULTY','UNKNOWN')` at

@@ -42,6 +42,18 @@ fn normalise_weights(weights: &[Decimal]) -> Result<Vec<Decimal>, EngineError> {
     Ok(shares)
 }
 
+/// Whether two advance deductions are the same payment.
+///
+/// An [`AbschlagDeduction`] carries no identity of its own, so the payment is
+/// identified by everything the invoice states about it: the date, the gross
+/// amount, the rate it was invoiced at and its description.
+fn is_same_abschlag(a: &AbschlagDeduction, b: &AbschlagDeduction) -> bool {
+    a.datum == b.datum
+        && a.betrag_eur == b.betrag_eur
+        && a.ust_satz == b.ust_satz
+        && a.beschreibung == b.beschreibung
+}
+
 fn signed_split(
     total: Decimal,
     fractions: &[Decimal],
@@ -247,7 +259,8 @@ impl Invoice {
     /// - `netto_eur` = sum of non-Tax, non-Abschlag positions
     /// - `mwst_eur`  = sum of Tax positions
     /// - `brutto_eur` = netto + mwst
-    /// - `abschlag_total_eur` = negated sum of Abschlag positions (signed)
+    /// - `abschlag_total_eur` = the advances `context.abschlage` states, signed
+    ///   with the document
     /// - `zahlbetrag_eur` = brutto - abschlag_total_eur
     #[must_use]
     pub fn from_positions(
@@ -268,31 +281,42 @@ impl Invoice {
             .map(|p| p.net_eur)
             .sum();
         let brutto_eur = netto_eur + mwst_eur;
-        // Signed, not `.abs()`: an Abschlag position carries the deduction as a
-        // negative net, so the advance total is its negation. A Stornorechnung
-        // has already negated every position, which flips this total too — that
-        // is what makes the reversal the exact negation of the original
-        // (`−(B − A)`, not `−B − A`).
-        let abschlag_total_eur: Decimal = positions
-            .iter()
-            .filter(|p| p.category == PositionCategory::Abschlag)
-            .map(|p| -p.net_eur)
-            .sum();
-        let zahlbetrag_eur = brutto_eur - abschlag_total_eur;
-        // From the context, not the positions: an Abschlag position carries only
-        // the gross paid, while the rate it was invoiced at lives on the deduction.
-        // Sign-follows-the-document, as above.
+        // Sign-follows-the-document: a Stornorechnung is the exact negation of
+        // the original (`−(B − A)`, not `−B − A`), so the advance total flips
+        // with it.
         let reversal_sign = if context.invoice_type.is_reversal() {
             Decimal::NEGATIVE_ONE
         } else {
             Decimal::ONE
         };
-        let abschlag_ust_eur: Decimal = context
-            .abschlage
-            .iter()
-            .map(AbschlagDeduction::ust_eur)
-            .sum::<Decimal>()
-            * reversal_sign;
+        // From the context, not from the positions. Each advance is deducted
+        // once per **invoice**, and the context is the one place that states the
+        // invoice's advances: a period billed in several legs and merged carries
+        // several sets of positions but still one set of advances, so a sum over
+        // the positions would deduct each advance once per leg.
+        let abschlag_total_eur: Decimal = if context.invoice_type.settles_advances() {
+            context
+                .abschlage
+                .iter()
+                .map(|a| a.betrag_eur)
+                .sum::<Decimal>()
+                * reversal_sign
+        } else {
+            Decimal::ZERO
+        };
+        let zahlbetrag_eur = brutto_eur - abschlag_total_eur;
+        // The gross the customer paid carries its own tax at the rate the
+        // advance was invoiced at, which the deduction states separately.
+        let abschlag_ust_eur: Decimal = if context.invoice_type.settles_advances() {
+            context
+                .abschlage
+                .iter()
+                .map(AbschlagDeduction::ust_eur)
+                .sum::<Decimal>()
+                * reversal_sign
+        } else {
+            Decimal::ZERO
+        };
         let billing_run_id = context.billing_run_id.clone();
         Self {
             context,
@@ -843,6 +867,17 @@ impl Invoice {
     /// Uses the context from `self` (billing period, IDs) for the merged invoice.
     /// `other.context.period_to()` is used to update the effective period end.
     ///
+    /// The advances of both contexts travel with their positions, so the merged
+    /// document states each advance exactly as often as it carries a deduction
+    /// for it — the two can never fall out of step.
+    ///
+    /// An advance is a fact about the **period**, not about any one leg of it,
+    /// so one carried by both sides is one payment and is kept once. § 40
+    /// Abs. 1 EnWG has the settling invoice deduct each advance once; taking
+    /// the union deducts a year of advances twice over and refunds a customer
+    /// who owes money. A dropped duplicate is reported as `ABSCHLAG_DOPPELT`
+    /// rather than absorbed in silence.
+    ///
     /// ## Equivalent to `billing::merge_period_documents`
     ///
     /// This function applies the same logic as `billing::merge_period_documents` but
@@ -870,6 +905,32 @@ impl Invoice {
         positions.extend(other.positions);
         let mut all_warnings = self.warnings;
         all_warnings.extend(other.warnings);
+        let mut doppelt: Vec<String> = Vec::new();
+        for abschlag in other.context.abschlage {
+            if ctx
+                .abschlage
+                .iter()
+                .any(|kept| is_same_abschlag(kept, &abschlag))
+            {
+                doppelt.push(format!(
+                    "{} über {} EUR",
+                    abschlag.datum, abschlag.betrag_eur
+                ));
+                continue;
+            }
+            ctx.abschlage.push(abschlag);
+        }
+        if !doppelt.is_empty() {
+            all_warnings.push(BillingWarning {
+                code: "ABSCHLAG_DOPPELT",
+                severity: crate::position::WarningSeverity::Warning,
+                message: format!(
+                    "beide Teilrechnungen führen dieselbe Anzahlung: {} — je Zahlung wird \
+                     nach § 40 Abs. 1 EnWG genau ein Abzug ausgewiesen",
+                    doppelt.join(", ")
+                ),
+            });
+        }
         Invoice::from_positions(ctx, positions, all_warnings)
     }
 
@@ -932,13 +993,33 @@ impl Invoice {
             }
         }
 
+        // The advances travel with their deductions. Each share is a document in
+        // its own right, and its `abschlag_total_eur` comes from its context —
+        // so a context that did not carry the split advances would state a
+        // Zahlbetrag that contradicts the Abschlag positions on the same page.
+        let mut recipient_advances: Vec<Vec<AbschlagDeduction>> =
+            (0..n).map(|_| Vec::new()).collect();
+        for advance in &self.context.abschlage {
+            let split = signed_split(advance.betrag_eur, &shares, 2)?;
+            for (i, betrag_eur) in split.into_iter().enumerate() {
+                recipient_advances[i].push(AbschlagDeduction {
+                    betrag_eur,
+                    ..advance.clone()
+                });
+            }
+        }
+
         // Every recipient inherits the source warnings: `has_errors()` gates
         // dispatch, and a §41a iMSys mismatch on the building invoice applies to
         // every share of it.
         Ok(recipient_positions
             .into_iter()
             .zip(contexts)
-            .map(|(positions, ctx)| Invoice::from_positions(ctx, positions, self.warnings.clone()))
+            .zip(recipient_advances)
+            .map(|((positions, mut ctx), abschlage)| {
+                ctx.abschlage = abschlage;
+                Invoice::from_positions(ctx, positions, self.warnings.clone())
+            })
             .collect())
     }
 
@@ -1200,18 +1281,21 @@ fn negate_decimal_field(obj: &mut serde_json::Map<String, serde_json::Value>, ke
     }
 }
 
+/// Negate a BO4E `Betrag`'s `wert` in place.
+///
+/// Both JSON shapes are parsed as `Decimal` and re-emitted as a string: money
+/// never passes through an `f64` on any path in this crate, and a number that
+/// went out through one came back with a binary-rounding tail that the exact
+/// arithmetic everywhere else cannot reconcile.
 fn negate_wert_field(obj: &mut serde_json::Map<String, serde_json::Value>) {
     if let Some(v) = obj.get("wert") {
         let negated = match v {
-            serde_json::Value::String(s) => s
-                .parse::<Decimal>()
-                .ok()
-                .map(|d| serde_json::json!((-d).to_string())),
-            serde_json::Value::Number(n) => n.as_f64().map(|f| serde_json::json!(-f)),
+            serde_json::Value::String(s) => s.parse::<Decimal>().ok(),
+            serde_json::Value::Number(n) => n.to_string().parse::<Decimal>().ok(),
             _ => None,
         };
         if let Some(neg) = negated {
-            obj.insert("wert".to_owned(), neg);
+            obj.insert("wert".to_owned(), serde_json::json!((-neg).to_string()));
         }
     }
 }

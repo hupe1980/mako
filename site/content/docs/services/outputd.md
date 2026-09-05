@@ -1,12 +1,8 @@
 +++
 title = "outputd Operator Guide"
-description = "outputd operator guide: customer-communications daemon. Operator-owned Typst templates (content-addressed, append-only, publish gated by proof), the ZUGFeRD PDF/A-3 carrier around a caller's EN 16931 CII payload, Textform documents (Mahnung and Preisanpassung, § 126b BGB), the append-only store of issued documents, delivery over portal, e-mail and print spool with per-channel evidence, and the containerized external validation panel (veraPDF + Mustang)."
+description = "Operator guide for outputd, the customer-communications daemon: operator-owned Typst templates, the ZUGFeRD PDF/A-3 carrier, and delivery with per-channel evidence."
 weight = 33
-[extra]
-mermaid = true
 +++
-# `outputd` — Customer Communications
-
 `outputd` renders the documents a customer receives and delivers them. It owns
 **how documents look** — the operator's Typst templates, the render engine, the
 ZUGFeRD PDF/A-3 carrier, the publish gates and the append-only template store —
@@ -17,6 +13,29 @@ figures, vertragd for a price change. outputd never recomputes a number.
 
 The template system is deliberately not invoice-specific: one brand has one
 template store, and a logo change must reach the invoice *and* the Mahnung.
+
+**The vocabulary this page runs on.** A **Mahnung** is a dunning letter and a
+**Preisanpassung** a price-change notice; both must reach the customer in
+**Textform** (§ 126b BGB — a durable, readable, non-signed medium). **EN 16931**
+is the European semantic standard for an electronic invoice; **XRechnung** is
+Germany's national implementation of it, and **ZUGFeRD** a PDF/A-3 that carries
+the same data as an embedded XML attachment. The services named above act in the
+**LF** (Lieferant, supplier) role of German market communication; the roles and
+the market objects are the [domain model](@/docs/architecture/domain-model.md), and the shared vocabulary is
+the [glossary](@/docs/architecture/domain-model.md#glossary).
+
+Three kinds of document and one carrier format run through the page. A
+**Mahnung** is a dunning letter — a formal payment demand, computed by
+[accountingd](@/docs/services/accountingd.md). A **Preisanpassung** is the
+statutory price-change notice a supplier owes under § 41 Abs. 5 EnWG. Both are
+**Textform** documents: § 126b BGB wants a readable declaration on a durable
+medium naming the sender and the recipient, and nothing more — no signature, no
+registered post. An invoice, by contrast, goes out as **ZUGFeRD**: a PDF that
+also carries the machine-readable invoice XML inside it, so one file is both the
+page a human reads and the data a recipient's system books. **XRechnung** is
+Germany's national restriction of the same EN 16931 invoice model, mandatory
+toward public authorities; a document declares which of the two it is in the
+EN 16931 term **BT-24**, and outputd stamps the carrier from that.
 
 Port: `:9880`
 
@@ -32,7 +51,7 @@ Port: `:9880`
 | `GET` | `/api/v1/spool` | What a print service collects |
 | `GET` | `/api/v1/templates` | Every template this tenant published (`?kind=&limit=`) |
 | `POST` | `/api/v1/templates` | Prove a template, then store it forever |
-| `POST` | `/api/v1/templates/preview` | Render a candidate against the kind's specimen; stores nothing |
+| `POST` | `/api/v1/templates/preview` | Render an `INVOICE`/`MAHNUNG` candidate against its specimen; stores nothing |
 | `GET` | `/api/v1/templates/reference/{kind}` | The reference layout mako ships, one per kind |
 | `GET`/`PUT` | `/api/v1/templates/{kind}/current` | Which template is rolled out |
 | `GET` | `/api/v1/templates/by-hash/{hash}` | Resolve the layout an issued document used |
@@ -95,6 +114,11 @@ verifier accepts could roll out the layout every invoice and Mahnung of the
 tenant renders with, or render arbitrary content under the operator's
 Briefkopf. A template is not one document — it is the shape of all of them.
 
+`tests/authorization.rs` pins the two lists together in both directions: an
+action a handler checks and `policies/outputd.cedar` does not grant is a
+permanent 403 (Cedar is default-deny), and an action the policy grants that no
+handler checks usually means a route lost its guard.
+
 A preview is a read on purpose: it renders mako's own specimen, stores nothing,
 moves nothing and reaches no customer.
 
@@ -140,7 +164,7 @@ clock nobody can reconcile with the first.
 |---|---|---|---|
 | `PORTAL` | the document is in the store; `portald` serves it | published, then `read_at` when the customer opens it | on publish — it is then in the recipient's sphere, which is what § 126b BGB asks of a durable medium |
 | `EMAIL` | `POST` to a configured mail relay | the relay's message id | the relay reports the recipient's server accepted it |
-| `POST` | a spool a print service pulls (`GET /api/v1/spool`), or an optional push | the batch reference it reports back | the service reports it posted |
+| `POST` | a spool a print service pulls (`GET /api/v1/spool`); an optional push when `postal_relay_url` is set | the batch reference it reports back | the service reports it posted |
 | `ERP` | `POST` to the operator's own webhook | its response | the ERP reports it |
 
 outputd embeds **no SMTP client and no print driver**. Both are adapters an
@@ -172,6 +196,20 @@ At the ceiling a delivery becomes `FAILED` and is logged at `error`. That is the
 one outcome an operator must not have to go looking for: the platform believes
 it communicated something and the customer never received it.
 
+**A `POST` delivery with no `postal_relay_url` is not on that clock.** The pull
+model — the print service calls `GET /api/v1/spool`, fetches each document's
+bytes and reports back through `POST /deliveries/{id}/status` — is a supported
+integration and not a failed push, so the worker does not claim those rows at
+all: no attempt is recorded, the ceiling is never reached, and the letter stays
+`PENDING` in the spool for as long as nobody has collected it. Configuring
+`postal_relay_url` switches the same rows to the push model, where they are on
+the clock like any other channel.
+
+That the two agree matters more than which behaviour is chosen: the spool lists
+`PENDING` rows, so a `POST` row driven to `FAILED` by a retry budget disappears
+from the only list anyone looks at. It did, until this was fixed — a pull-only
+deployment lost every letter about half a day after issuing it, silently.
+
 ## Errors
 
 Every route answers failures with one envelope and a stable code. A template
@@ -189,14 +227,21 @@ the editor the operator is writing the template in:
 | Code | Status | Meaning |
 |---|---|---|
 | `UNKNOWN_TEMPLATE_KIND`, `INVALID_DATE`, `EMPTY_SOURCE` | 400 | a malformed request |
+| `SUBJECT_REF_REQUIRED`, `NO_CHANNEL`, `UNSCOPED_QUERY` | 400 | an issue or a query missing the key that scopes it |
 | `FORBIDDEN` | 403 | the Cedar policy denied the action |
 | `TEMPLATE_NOT_FOUND`, `NO_CURRENT_TEMPLATE` | 404 | nothing of this tenant answers to that |
+| `DOCUMENT_NOT_FOUND`, `PORTAL_DELIVERY_NOT_FOUND` | 404 | no such issued document / portal delivery in this tenant |
 | `TEMPLATE_IDENTITY_TAKEN` | 409 | you have already published this exact source under another kind |
 | `TEMPLATE_DID_NOT_COMPILE`, `TEMPLATE_REJECTED_BY_GATE` | 422 | with `diagnostics` |
+| `TEMPLATE_NOT_PUBLISHED` | 422 | the rollout names a hash never published as this kind |
 | `TEMPLATE_WRONG_KIND`, `SUBJECT_MUST_BE_A_MODEL`, `SUBJECT_MUST_BE_A_VIEW` | 422 | the render's parts do not agree |
-| `ATTACHMENT_REQUIRED`, `ATTACHMENT_NOT_ALLOWED`, `ATTACHMENT_UNUSABLE` | 422 | the carrier contract |
+| `ATTACHMENT_REQUIRED`, `ATTACHMENT_NOT_ALLOWED`, `ATTACHMENT_UNUSABLE`, `ATTACHMENT_NAME_INVALID` | 422 | the carrier contract |
 | `PDF_STANDARD_UNUSABLE` | 422 | a level that would silently drop the invoice |
+| `DATE_NOT_REPRESENTABLE` | 422 | a document date the PDF date format cannot carry |
+| `NO_SPECIMEN` | 422 | this kind has no preview specimen — publish it instead |
 | `RENDER_BUDGET_EXCEEDED` | 422 | the template is doing far more work than one document needs |
+
+## Templates
 
 The **layout** belongs to the operator — a [Typst](https://typst.app) template
 published over the API and pinned by hash. The **content** belongs to the
@@ -370,7 +415,11 @@ Textform template can never be stored as a proven carrier or the reverse.
 
 `POST /api/v1/templates/preview` runs the same render and returns the PDF
 without storing anything — the loop an operator actually works in, so iterating
-on a layout does not put a row in an append-only table each time.
+on a layout does not put a row in an append-only table each time. It covers
+`INVOICE` (stamped exactly as an issued one, so the file can go straight into
+veraPDF) and `MAHNUNG`. A `PREISANPASSUNG` candidate answers **422
+`NO_SPECIMEN`** and has to be checked by publishing it — the gate proves that
+kind, the preview path does not.
 
 ### Renders are reproducible
 
@@ -455,7 +504,7 @@ Mahnung.
 |---|---|---|
 | `GET` | `/api/v1/templates` | Every template this tenant published (`?kind=&limit=`), newest first, `is_current` marking the one in use — how a rollback finds its hash |
 | `POST` | `/api/v1/templates` | Prove a template and publish it; returns its hash, proof, page count and any Typst warnings. Idempotent — identical source stores nothing new |
-| `POST` | `/api/v1/templates/preview` | Render a candidate against the gate specimen and return the PDF. Stores nothing |
+| `POST` | `/api/v1/templates/preview` | Render an `INVOICE` or `MAHNUNG` candidate against its specimen and return the PDF. Stores nothing; `PREISANPASSUNG` answers `422 NO_SPECIMEN` |
 | `GET` | `/api/v1/templates/reference/{kind}` | The reference layout mako ships — one per kind, each passing its own gate |
 | `PUT` | `/api/v1/templates/{kind}/current` | Roll a published template out. `422` when the hash was never published |
 | `GET` | `/api/v1/templates/{kind}/current` | What this tenant renders with now |
@@ -485,7 +534,7 @@ artefact:
 | Carrier round-trip, `Divergence`, page content | mako's publish gate | enforced on every publish |
 | XMP well-formed, every `fx:` property declared in its extension schema | `tests/zugferd_carrier.rs` | enforced |
 | The incremental update disturbs **exactly one object**, `/ID` `/Root` `/Size` preserved | `tests/zugferd_carrier.rs` | enforced |
-| **PDF/A-3b conformance** | veraPDF 1.30.2 | **compliant, 0 failed rules** — both profiles and the pre-stamp control |
+| **PDF/A-3b conformance** | veraPDF (`verapdf/cli:latest`) | **compliant, 0 failed rules** — both profiles and the pre-stamp control |
 | XRechnung-profile payload (core + BR-DE) | `en16931 validate` | **valid — 0 findings of 282 rules** |
 | Carrier + payload against the ZUGFeRD specification | Mustang 2.25.0 (reference validator) | **valid, both profiles** — XRechnung profile with zero findings; core profile carries one upstream warning (below) |
 
@@ -535,7 +584,7 @@ Peppol publishes no CII Schematron at all. Empty is correct — do not "fix" it
 by omitting the element. The XRechnung-profile specimen validates with zero
 findings.
 
-> **Version note:** `en16931`/`en16931-formats` are pinned exactly at **0.5.0**.
+> **Version note:** `en16931`/`en16931-formats` are pinned exactly at **0.6.0**.
 > The ZUGFeRD PDF/A-3 carrier is written by `document::facturx` on top of Typst's
 > PDF/A enforcement; the `en16931-formats` `zugferd` feature is the *reader* the
 > publish gate checks the result with.
@@ -567,9 +616,14 @@ max_attempts        = 8             # default; with the doubling backoff, ~half 
 from_address        = "rechnung@stadtwerke-musterstadt.example"
 email_relay_url     = "https://mail-relay.internal/api/v1/send"
 email_relay_api_key = "env:OUTPUTD_MAIL_RELAY_KEY"
-# Optional: most print services pull from GET /api/v1/spool instead.
+# Optional: most print services pull from GET /api/v1/spool instead. Leaving it
+# unset selects the pull model — POST rows are never claimed by the worker and
+# wait in the spool; setting it switches them to the push model and its retries.
 postal_relay_url    = "https://druckdienstleister.example/api/v1/jobs"
 postal_relay_api_key = "env:OUTPUTD_PRINT_KEY"
+# The ERP channel — the operator's own system, which then owns delivery.
+erp_webhook_url     = "https://erp.internal/api/v1/documents"
+erp_api_key         = "env:OUTPUTD_ERP_KEY"
 
 # Subject lines per kind; a kind with no entry falls back to a built-in.
 [delivery.subjects]

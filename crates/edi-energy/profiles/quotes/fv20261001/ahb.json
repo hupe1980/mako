@@ -285,7 +285,7 @@
           "nr": "00018",
           "operands": [
             {
-              "operand": "X [72]) ⊻ ([940]"
+              "operand": "X (([939] [72]) ⊻ ([940] [73])) ∧ [516]"
             }
           ]
         },
@@ -1997,7 +1997,7 @@
           "nr": "00018",
           "operands": [
             {
-              "operand": "X [72]) ⊻ ([940]"
+              "operand": "X (([939] [72]) ⊻ ([940] [73])) ∧ [516]"
             }
           ]
         },
@@ -2103,7 +2103,7 @@
           "nr": "00022",
           "operands": [
             {
-              "operand": "X ([31] ∧ ([65] ⊻"
+              "operand": "X ([31] ∧ ([65] ⊻ [66])) ⊻ ([942] [69] ∧ ([67] ⊻"
             }
           ]
         },
@@ -2800,7 +2800,7 @@
           "nr": "00018",
           "operands": [
             {
-              "operand": "X [72]) ⊻ ([940]"
+              "operand": "X (([939] [72]) ⊻ ([940] [73])) ∧ [516]"
             }
           ]
         },
@@ -3689,7 +3689,7 @@
           "nr": "00018",
           "operands": [
             {
-              "operand": "X [72]) ⊻ ([940]"
+              "operand": "X (([939] [72]) ⊻ ([940] [73])) ∧ [516]"
             }
           ]
         },
@@ -3777,7 +3777,7 @@
           "nr": "00021",
           "operands": [
             {
-              "operand": "X ([950] [501] ∧ ([50] ∨ [512] ∧ ([50] ∨ [51] ∨"
+              "operand": "X ([950] [501] ∧ ([50] ∨ [52])) ⊻ ([951] [502] ∧ ([52] ∨ [53])) ⊻ ([960] [512] ∧ ([50] ∨ [51] ∨ [52])) ⊻ ([961] [513] ∧ ([49] ∨ [50] ∨ [51]))"
             }
           ]
         },
@@ -5735,7 +5735,7 @@
     "29": "Wenn DTM+469 in Anfrage (REQOTE) vorhanden war",
     "3": "Wenn CCI+++Z64 vorhanden ist",
     "30": "Wenn SG27 IMD+Z09 vorhanden",
-    "31": "Es sind nur die Artikelnummern erlaubt, die in der Codeliste der Artikelnummern des BDEW mit dem entsprechenden Prüfidentifikator versehen sind.",
+    "31": "Es sind nur die Artikelnummern [68])) erlaubt, die in der Codeliste der Artikelnummern des BDEW mit dem entsprechenden Prüfidentifikator versehen sind.",
     "39": "MP-ID nur aus Sparte Strom",
     "4": "Wenn am Gerät vorhanden und abweichend von Gerätenummer",
     "44": "Wenn MSBA nicht Eigentümer des Gerätes/der Geräte ist",

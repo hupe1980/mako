@@ -21,13 +21,17 @@
 #   makod     → enqueues UTILMD 55002 in outbox           (Bestätigung Anmeldung)
 #   outbox    → delivers UTILMD 55002 to webhook          (ERP receives confirmation)
 #
-# Build images first:
+# Build images first, from the repo root:
+#   just build-demo
+#
+# which is the three builds this file needs, tagged the way it expects:
 #   docker build --target runtime             -t makod:dev       .
 #   docker build --target marktd-runtime      -t marktd:dev      .
 #   docker build --target processd-runtime    -t processd:dev    .
 #
-# Or build all at once with docker buildx bake:
-#   docker buildx bake makod marktd processd
+# Not `docker buildx bake` — docker-bake.hcl is the CI push path
+# (push-by-digest), so it fails on the default docker driver and tags
+# ghcr.io/hupe1980/mako-* rather than the :dev images below.
 #
 # Run:
 #   docker compose up -d

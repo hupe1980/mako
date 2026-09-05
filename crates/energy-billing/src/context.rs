@@ -275,6 +275,18 @@ impl InvoiceType {
     pub fn is_reversal(&self) -> bool {
         matches!(self, Self::Cancellation { .. })
     }
+
+    /// `true` when this document discharges the advances the context carries.
+    ///
+    /// § 40 Abs. 1 EnWG makes the settling invoice itemise and deduct each
+    /// advance payment. An [`AdvancePayment`](Self::AdvancePayment) is the
+    /// document that *collects* one, so it discharges none: netting the
+    /// advances already paid against it would reduce the very request that asks
+    /// for the next.
+    #[must_use]
+    pub fn settles_advances(&self) -> bool {
+        !matches!(self, Self::AdvancePayment)
+    }
 }
 
 #[allow(clippy::derivable_impls)]

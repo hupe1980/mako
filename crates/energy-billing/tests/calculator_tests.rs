@@ -879,7 +879,7 @@ fn waermepumpe_modul1_steuerungsrabatt_reduces_brutto() {
         r#"{"category":"WAERMEPUMPE","grundpreis_ct_per_day":"10","arbeitspreis_ct_per_kwh":"20"}"#,
     );
     let with_m1 = j(
-        r#"{"category":"WAERMEPUMPE","grundpreis_ct_per_day":"10","arbeitspreis_ct_per_kwh":"20","sect14a_modul1_pauschale_eur_per_kw_year":"120"}"#,
+        r#"{"category":"WAERMEPUMPE","grundpreis_ct_per_day":"10","arbeitspreis_ct_per_kwh":"20","sect14a_modul1_pauschale_eur_per_year":"120"}"#,
     );
     let meter = MeterInput {
         arbeitsmenge_kwh: dec!(300),
@@ -907,11 +907,13 @@ fn waermepumpe_modul1_steuerungsrabatt_reduces_brutto() {
         r_with.brutto_eur < r_without.brutto_eur,
         "Modul 1 Steuerungsrabatt must reduce total"
     );
-    // 5 kW × 120 EUR/year × (31/365) ≈ 51.0 EUR netto → 60.7 EUR brutto reduction
+    // A flat annual reduction, pro-rated to the billed days and independent of
+    // the connected Leistung: 120 EUR/year × 31/365 ≈ 10.19 EUR netto →
+    // ≈ 12.13 EUR brutto.
     let savings = r_without.brutto_eur - r_with.brutto_eur;
     assert!(
-        savings > dec!(50) && savings < dec!(70),
-        "Expected ~58-60 EUR Modul 1 saving, got {savings}"
+        savings > dec!(11) && savings < dec!(13),
+        "Expected ~12 EUR Modul 1 saving for 31 of 365 days, got {savings}"
     );
 }
 
@@ -3021,7 +3023,9 @@ fn ggv_nutzungsplan_allocate_uses_lrm_for_exact_sum() {
         },
     ]);
     let plant_kwh = dec!(100.000);
-    let allocs = plan.allocate(plant_kwh);
+    let allocs = plan
+        .allocate(plant_kwh)
+        .expect("the shares partition the generation");
 
     // Sum must equal plant_kwh exactly (LRM guarantees this)
     let sum: Decimal = allocs.iter().map(|(_, k)| k).sum();
@@ -3157,7 +3161,7 @@ fn waerme_reduced_mwst_7pct_produces_correct_tax() {
     );
 }
 
-/// Multi-rate: electricity (19%) + FernwÃ¤rme in the 7% window on same invoice.
+/// Multi-rate: electricity (19%) + Fernwärme in the 7% window on same invoice.
 /// MwStProvider must generate two separate Tax positions.
 #[test]
 fn multi_rate_mwst_electricity_and_heat_on_same_invoice() {
@@ -4651,7 +4655,8 @@ fn metering_mode_imsys_stored_on_meter_input() {
 
 #[test]
 fn is_estimated_meter_produces_info_position() {
-    // § 60 Abs. 2 MsbG — estimated reading must be labeled on the invoice.
+    // § 40a Abs. 2 Satz 3 EnWG — the estimate must be labeled on the invoice,
+    // in one sentence with no source indentation carried into it.
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
@@ -4689,7 +4694,12 @@ fn is_estimated_meter_produces_info_position() {
     assert_eq!(
         est_pos.len(),
         1,
-        "Must have § 60 Abs. 2 MsbG estimated reading notice"
+        "Must have the § 40a Abs. 2 EnWG estimated reading notice"
+    );
+    assert!(
+        !est_pos[0].description.contains("  "),
+        "run of spaces in an invoice line: {:?}",
+        est_pos[0].description
     );
     assert!(
         est_pos[0].description.contains("Sch\u{00e4}tzung"),
@@ -5361,7 +5371,7 @@ fn sect14a_modul3_bills_three_bands() {
         "arbeitspreis_ct_per_kwh": "20.0",
         // BK6-22-300: Modul 3 is only offered in combination with Modul 1, and
         // only against an iMSys — both are preconditions the engine enforces.
-        "sect14a_modul1_pauschale_eur_per_kw_year": "0.0",
+        "sect14a_modul1_pauschale_eur_per_year": "0.0",
         "sect14a_modul3_nne_ht_ct_per_kwh": "12.0",
         "sect14a_modul3_nne_st_ct_per_kwh": "6.0",
         "sect14a_modul3_nne_nt_ct_per_kwh": "2.0",
@@ -5455,6 +5465,7 @@ fn ersatzversorgung_over_three_months_blocks_the_run() {
     let ctx = BillingContext {
         malo_id: "51238696781".to_owned(),
         vertragsart: energy_billing::Vertragsart::Ersatzversorgung,
+        vertragsbeginn: Some(date!(2026 - 01 - 01)),
         period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 04 - 30)).unwrap(),
         ..Default::default()
     };
@@ -5488,6 +5499,7 @@ fn ersatzversorgung_within_three_months_bills_and_names_the_regime() {
     let ctx = BillingContext {
         malo_id: "51238696781".to_owned(),
         vertragsart: energy_billing::Vertragsart::Ersatzversorgung,
+        vertragsbeginn: Some(date!(2026 - 01 - 15)),
         period: BillingPeriod::new(date!(2026 - 01 - 15), date!(2026 - 04 - 14)).unwrap(),
         ..Default::default()
     };
@@ -5620,7 +5632,7 @@ fn sect14a_modul1_and_modul2_together_are_refused() {
         "category": "WAERMEPUMPE",
         "arbeitspreis_ct_per_kwh": "28.0",
         "grundpreis_ct_per_day": "10.0",
-        "sect14a_modul1_pauschale_eur_per_kw_year": "110.0",
+        "sect14a_modul1_pauschale_eur_per_year": "110.0",
         "sect14a_modul2_nne_reduktion_ct_per_kwh": "3.0",
     }))
     .unwrap();
@@ -5654,7 +5666,7 @@ fn sect14a_modul1_combines_with_modul3() {
         "category": "WAERMEPUMPE",
         "arbeitspreis_ct_per_kwh": "28.0",
         "grundpreis_ct_per_day": "10.0",
-        "sect14a_modul1_pauschale_eur_per_kw_year": "24.0",
+        "sect14a_modul1_pauschale_eur_per_year": "24.0",
         "sect14a_modul3_nne_ht_ct_per_kwh": "12.0",
         "sect14a_modul3_nne_st_ct_per_kwh": "6.0",
         "sect14a_modul3_nne_nt_ct_per_kwh": "2.0",
@@ -6358,9 +6370,12 @@ fn modul3_needs_modul1_and_an_imsys() {
         "sect14a_modul3_nne_st_ct_per_kwh": "6.0",
         "sect14a_modul3_nne_nt_ct_per_kwh": "2.0",
     });
+    // Modul 1 is priced per kW of steuerbare Leistung, so the metering point
+    // states one — without it the reduction has no quantity to apply to.
     let q = |mode| Quantities {
         electricity: Some(MeterInput {
             arbeitsmenge_kwh: dec!(600),
+            spitzenleistung_kw: Some(dec!(11)),
             metering_mode: mode,
             ..Default::default()
         }),
@@ -6385,7 +6400,7 @@ fn modul3_needs_modul1_and_an_imsys() {
 
     // Bands with Modul 1, on an SLP meter → only the metering finding.
     let mut with_m1 = bands.clone();
-    with_m1["sect14a_modul1_pauschale_eur_per_kw_year"] = serde_json::json!("24.0");
+    with_m1["sect14a_modul1_pauschale_eur_per_year"] = serde_json::json!("24.0");
     let product: Product = serde_json::from_value(with_m1.clone()).unwrap();
     let msg = product
         .build_engine(&no_grid(), &rates_2026())
@@ -6747,4 +6762,768 @@ fn a_negated_correction_is_still_a_conformant_bo4e_document() {
         "the correction credits the original"
     );
     assert_eq!(typed.original_rechnungsnummer.as_deref(), Some("ORIG-1"));
+}
+
+// ── Money-correctness invariants ──────────────────────────────────────────────
+
+/// A period billed in several legs and merged is one invoice, so § 40 Abs. 1
+/// EnWG deducts each advance once — not once per leg.
+///
+/// The advances belong to the period, and the merged context carries them
+/// exactly as often as the merged positions carry a deduction for them.
+#[test]
+fn advances_are_deducted_once_per_invoice_not_once_per_leg() {
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30"}"#);
+    let advances = vec![
+        AbschlagDeduction {
+            datum: date!(2026 - 01 - 15),
+            betrag_eur: dec!(100.00),
+            ust_satz: dec!(0.19),
+            beschreibung: None,
+        },
+        AbschlagDeduction {
+            datum: date!(2026 - 02 - 15),
+            betrag_eur: dec!(100.00),
+            ust_satz: dec!(0.19),
+            beschreibung: None,
+        },
+    ];
+    let leg = |from, to, abschlage: Vec<AbschlagDeduction>| {
+        let ctx = BillingContext {
+            malo_id: "51238696781".to_owned(),
+            rechnungsnummer: "R-1".to_owned(),
+            period: BillingPeriod::new(from, to).unwrap(),
+            invoice_type: InvoiceType::Final,
+            regulatory_rates: rates_2026(),
+            abschlage,
+            ..Default::default()
+        };
+        tariff
+            .build_engine(&no_grid(), &rates_2026())
+            .bill(ctx, &elec(dec!(500)))
+            .expect("a priced leg")
+    };
+    // The advances ride on the last leg only; the first prices its own days.
+    let a = leg(date!(2026 - 01 - 01), date!(2026 - 01 - 31), Vec::new());
+    let b = leg(
+        date!(2026 - 02 - 01),
+        date!(2026 - 02 - 28),
+        advances.clone(),
+    );
+    let merged = a.merge(b);
+
+    assert_eq!(
+        merged.abschlag_total_eur,
+        dec!(200.00),
+        "the merged invoice deducts EUR 200 of advances, not EUR 400"
+    );
+    assert_eq!(
+        merged
+            .positions
+            .iter()
+            .filter(|p| p.category == PositionCategory::Abschlag)
+            .count(),
+        advances.len(),
+        "one Abschlag position per advance the invoice settles"
+    );
+    assert_eq!(
+        merged.zahlbetrag_eur,
+        merged.brutto_eur - dec!(200.00),
+        "zuZahlen is the gross less the advances, once"
+    );
+    assert!(
+        merged.zahlbetrag_eur > Decimal::ZERO,
+        "a customer who owes money is not refunded"
+    );
+}
+
+/// The minimum-invoice top-up widens the tax base and changes nothing else, so
+/// the advances stay deducted once.
+#[test]
+fn the_minimum_invoice_topup_does_not_rededuct_the_advances() {
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30"}"#);
+    let advance = AbschlagDeduction {
+        datum: date!(2026 - 01 - 15),
+        betrag_eur: dec!(50.00),
+        ust_satz: dec!(0.19),
+        beschreibung: None,
+    };
+    let (from, to) = period();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        rechnungsnummer: "R-MIN".to_owned(),
+        period: BillingPeriod::new(from, to).unwrap(),
+        invoice_type: InvoiceType::Final,
+        regulatory_rates: rates_2026(),
+        abschlage: vec![advance.clone()],
+        // Far above the ~EUR 36 gross of 100 kWh, so the top-up fires.
+        minimum_invoice_eur_brutto: Some(dec!(500.00)),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx, &elec(dec!(100)))
+        .expect("a topped-up invoice");
+
+    assert!(
+        invoice
+            .positions
+            .iter()
+            .any(|p| p.tags.iter().any(|t| t == "mindestbetrag")),
+        "the top-up fired — otherwise this proves nothing"
+    );
+    assert_eq!(
+        invoice
+            .positions
+            .iter()
+            .filter(|p| p.category == PositionCategory::Abschlag)
+            .count(),
+        1,
+        "one advance, one deduction"
+    );
+    assert_eq!(invoice.abschlag_total_eur, dec!(50.00));
+    assert_eq!(invoice.zahlbetrag_eur, invoice.brutto_eur - dec!(50.00));
+}
+
+/// An Abschlagsrechnung collects an advance; it discharges none.
+#[test]
+fn an_advance_request_does_not_deduct_the_advances_already_paid() {
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30"}"#);
+    let (from, to) = period();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        rechnungsnummer: "AB-1".to_owned(),
+        period: BillingPeriod::new(from, to).unwrap(),
+        invoice_type: InvoiceType::AdvancePayment,
+        regulatory_rates: rates_2026(),
+        abschlage: vec![AbschlagDeduction {
+            datum: date!(2026 - 01 - 15),
+            betrag_eur: dec!(120.00),
+            ust_satz: dec!(0.19),
+            beschreibung: None,
+        }],
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx, &elec(dec!(500)))
+        .expect("an advance request");
+    assert_eq!(invoice.abschlag_total_eur, Decimal::ZERO);
+    assert_eq!(invoice.zahlbetrag_eur, invoice.brutto_eur);
+}
+
+/// A capacity rate agreed per kW **and month** is owed for every month billed.
+#[test]
+fn the_rlm_leistungspreis_scales_with_the_billed_months() {
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"24",
+            "leistungspreis_strom_ct_per_kw_month":"500"}"#);
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(1_000_000),
+            spitzenleistung_kw: Some(dec!(200)),
+            metering_mode: MeteringMode::Rlm,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let bill_for = |from, to| {
+        let ctx = BillingContext {
+            malo_id: "51238696781".to_owned(),
+            rechnungsnummer: "R-LP".to_owned(),
+            period: BillingPeriod::new(from, to).unwrap(),
+            regulatory_rates: rates_2026(),
+            ..Default::default()
+        };
+        tariff
+            .build_engine(&no_grid(), &rates_2026())
+            .bill(ctx, &quantities)
+            .expect("an RLM invoice")
+            .total_by_tag("leistungspreis")
+    };
+    // 200 kW × 5,00 EUR/kW/Monat.
+    assert_eq!(
+        bill_for(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).round_kfm(2),
+        dec!(1000.00),
+        "one month is one month's Leistungspreis"
+    );
+    assert_eq!(
+        bill_for(date!(2026 - 01 - 01), date!(2026 - 12 - 31)).round_kfm(2),
+        dec!(12000.00),
+        "a year is twelve months' Leistungspreis"
+    );
+}
+
+/// § 51 Abs. 1 EEG 2023 reduces the **anzulegende Wert** to zero, and the
+/// Marktprämie is derived from that value — so the suspension governs the
+/// Marktprämie exactly as it governs the Einspeisevergütung.
+#[test]
+fn the_negative_price_suspension_reaches_the_marktpraemie() {
+    let tariff = j(
+        r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":"8.20",
+            "eeg_marktpraemie_ct_per_kwh":"5.00"}"#,
+    );
+    let (from, to) = period();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        rechnungsnummer: "GS-1".to_owned(),
+        period: BillingPeriod::new(from, to).unwrap(),
+        invoice_type: InvoiceType::CreditNote,
+        regulatory_rates: rates_2026(),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        eeg: Some(EegMeterInput {
+            einspeisung_kwh: dec!(1000),
+            kwh_during_negative_epex: Some(dec!(400)),
+        }),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx, &quantities)
+        .expect("an EEG credit note");
+
+    let suspended = invoice
+        .positions
+        .iter()
+        .find(|p| p.tags.iter().any(|t| t == "eeg_negativpreis_suspension"))
+        .expect("the suspension is stated on the document");
+    assert_eq!(suspended.quantity, dec!(400));
+
+    for tag in ["eeg_verguetung", "eeg_marktpraemie"] {
+        let pos = invoice
+            .positions
+            .iter()
+            .find(|p| p.tags.iter().any(|t| t == tag))
+            .unwrap_or_else(|| panic!("{tag} position"));
+        assert_eq!(
+            pos.quantity,
+            dec!(600),
+            "{tag} is paid on the 600 kWh outside the negative-price hours"
+        );
+    }
+}
+
+/// A standing charge accrues per day of supply, not per kWh drawn: the supplier
+/// owes the Netzbetreiber the GasNEV Grundpreis for a MaLo that consumed nothing.
+#[test]
+fn a_zero_consumption_gas_period_still_carries_the_nne_grundpreis() {
+    let tariff = j(r#"{"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":"9",
+            "gas_grundpreis_ct_per_day":"30"}"#);
+    let grid = GridInput {
+        gas_nne_grundpreis_eur_per_year: Some(dec!(120)),
+        ..Default::default()
+    };
+    let (from, to) = period();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        rechnungsnummer: "R-GAS0".to_owned(),
+        period: BillingPeriod::new(from, to).unwrap(),
+        regulatory_rates: rates_2026(),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        gas: Some(GasMeterInput {
+            messung_qm3: Decimal::ZERO,
+            kwh_hs: Some(Decimal::ZERO),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&grid, &rates_2026())
+        .bill(ctx, &quantities)
+        .expect("a zero-consumption gas invoice");
+
+    assert!(
+        invoice.total_by_tag("gas_nne_grundpreis") > Decimal::ZERO,
+        "the GasNEV Grundpreis is owed for every day of supply"
+    );
+    assert!(
+        invoice.total_by_tag("grundpreis") > Decimal::ZERO,
+        "the commodity Grundpreis is charged on the same basis"
+    );
+    assert_eq!(
+        invoice.total_by_tag("gas_nne_arbeitspreis"),
+        Decimal::ZERO,
+        "the per-kWh pass-throughs stay tied to the kWh"
+    );
+}
+
+/// § 14a EnWG Modul 1 is a flat annual amount, so it bills without a
+/// Spitzenleistung.
+///
+/// BK6-22-300 fixes it as `80 EUR + 3 750 kWh × Arbeitspreis × 0,2` — no per-kW
+/// component. An SLP heat pump reports no Spitzenleistung, and it is exactly
+/// the case the module exists for, so requiring one would refuse every
+/// household invoice the reduction applies to.
+#[test]
+fn modul1_bills_without_a_steuerbare_leistung() {
+    let tariff = j(r#"{"category":"WAERMEPUMPE","arbeitspreis_ct_per_kwh":"25",
+            "sect14a_modul1_pauschale_eur_per_year":"110"}"#);
+    let (from, to) = period();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        rechnungsnummer: "R-14A".to_owned(),
+        period: BillingPeriod::new(from, to).unwrap(),
+        regulatory_rates: rates_2026(),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx, &elec(dec!(3000)))
+        .expect("a flat annual reduction needs no Leistung");
+    let modul1 = invoice
+        .positions
+        .iter()
+        .find(|p| p.has_tag("sect14a_modul1"))
+        .expect("the Modul 1 credit is billed");
+    assert!(
+        modul1.net_eur < rust_decimal::Decimal::ZERO,
+        "Modul 1 is a reduction: {modul1:?}"
+    );
+    assert_eq!(modul1.unit, "Jahr", "it is priced per year, not per kW");
+}
+
+/// § 38 Abs. 4 EnWG measures the three months from the day the supply began, so
+/// billing it monthly does not restart the clock.
+#[test]
+fn monthly_billing_does_not_restart_the_ersatzversorgung_clock() {
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30"}"#);
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        vertragsart: energy_billing::Vertragsart::Ersatzversorgung,
+        vertragsbeginn: Some(date!(2026 - 01 - 01)),
+        // The fourth month, billed on its own.
+        period: BillingPeriod::new(date!(2026 - 04 - 01), date!(2026 - 04 - 30)).unwrap(),
+        regulatory_rates: rates_2026(),
+        ..Default::default()
+    };
+    let err = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx, &elec(dec!(300)))
+        .expect_err("a fourth month of Ersatzversorgung cannot exist");
+    assert!(
+        err.blocking_warnings()
+            .iter()
+            .any(|w| w.code == "ERSATZVERSORGUNG_UEBER_3_MONATE"),
+        "{err}"
+    );
+}
+
+/// An advance is a fact about the **period**, not about any one leg of it, so
+/// merging two legs that each carry it deducts it once. § 40 Abs. 1 EnWG has
+/// the settling invoice deduct each payment exactly once; deducting a year of
+/// advances twice over refunds a customer who owes money.
+#[test]
+fn merging_two_legs_deducts_a_shared_advance_once() {
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30"}"#);
+    let abschlag = energy_billing::AbschlagDeduction {
+        datum: date!(2026 - 01 - 15),
+        betrag_eur: dec!(120.00),
+        ust_satz: dec!(0.19),
+        beschreibung: Some("Abschlag Januar 2026".to_owned()),
+    };
+    let leg = |from, to| {
+        let ctx = BillingContext {
+            malo_id: "51238696781".to_owned(),
+            rechnungsnummer: "R-MERGE".to_owned(),
+            period: BillingPeriod::new(from, to).unwrap(),
+            invoice_type: InvoiceType::Final,
+            abschlage: vec![abschlag.clone()],
+            regulatory_rates: rates_2026(),
+            ..Default::default()
+        };
+        tariff
+            .build_engine(&no_grid(), &rates_2026())
+            .bill(ctx, &elec(dec!(300)))
+            .expect("a leg bills")
+    };
+    let merged = leg(date!(2026 - 01 - 01), date!(2026 - 01 - 31))
+        .merge(leg(date!(2026 - 02 - 01), date!(2026 - 02 - 28)));
+    assert_eq!(
+        merged.abschlag_total_eur,
+        dec!(120.00),
+        "one payment, one deduction"
+    );
+    assert!(
+        merged.warnings.iter().any(|w| w.code == "ABSCHLAG_DOPPELT"),
+        "the dropped duplicate is reported: {:?}",
+        merged.warnings
+    );
+}
+
+/// Two different advances both survive the merge — the dedup identifies a
+/// payment, it does not collapse the advance plan.
+#[test]
+fn merging_two_legs_keeps_two_different_advances() {
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30"}"#);
+    let leg = |from, to, datum, betrag| {
+        let ctx = BillingContext {
+            malo_id: "51238696781".to_owned(),
+            rechnungsnummer: "R-MERGE2".to_owned(),
+            period: BillingPeriod::new(from, to).unwrap(),
+            invoice_type: InvoiceType::Final,
+            abschlage: vec![energy_billing::AbschlagDeduction {
+                datum,
+                betrag_eur: betrag,
+                ust_satz: dec!(0.19),
+                beschreibung: None,
+            }],
+            regulatory_rates: rates_2026(),
+            ..Default::default()
+        };
+        tariff
+            .build_engine(&no_grid(), &rates_2026())
+            .bill(ctx, &elec(dec!(300)))
+            .expect("a leg bills")
+    };
+    let merged = leg(
+        date!(2026 - 01 - 01),
+        date!(2026 - 01 - 31),
+        date!(2026 - 01 - 15),
+        dec!(120.00),
+    )
+    .merge(leg(
+        date!(2026 - 02 - 01),
+        date!(2026 - 02 - 28),
+        date!(2026 - 02 - 15),
+        dec!(130.00),
+    ));
+    assert_eq!(merged.abschlag_total_eur, dec!(250.00));
+}
+
+/// A HEMS product is billed per month and per event. A pure-subscription one
+/// carries no quantity at all, so an absent usage block is not a missing
+/// reading — it is a month of subscription and no events, and the Grundgebühr
+/// invoice it produces is correct and complete.
+#[test]
+fn a_subscription_hems_product_bills_from_no_usage_block() {
+    let tariff = j(r#"{"category":"HEMS","hems_subscription_eur_per_month":"9.90"}"#);
+    let (from, to) = period();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        rechnungsnummer: "R-HEMS".to_owned(),
+        period: BillingPeriod::new(from, to).unwrap(),
+        regulatory_rates: rates_2026(),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx, &Quantities::default())
+        .expect("a subscription needs no meter reading");
+    let sub = invoice
+        .positions
+        .iter()
+        .find(|p| p.has_tag("hems_subscription"))
+        .expect("the Grundgebühr is billed");
+    assert_eq!(sub.unit, "Monate");
+    assert!(
+        invoice.brutto_eur > rust_decimal::Decimal::ZERO,
+        "{invoice:?}"
+    );
+}
+
+/// An e-mobility product that prices service and sessions rather than energy
+/// has no kWh to miss either.
+#[test]
+fn a_service_priced_emobility_product_bills_from_no_usage_block() {
+    let tariff = j(r#"{"category":"EMOBILITY","emobility_service_fee_eur":"4.90"}"#);
+    let (from, to) = period();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        rechnungsnummer: "R-EMOB".to_owned(),
+        period: BillingPeriod::new(from, to).unwrap(),
+        regulatory_rates: rates_2026(),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx, &Quantities::default())
+        .expect("a service fee needs no charging record");
+    assert!(
+        invoice
+            .positions
+            .iter()
+            .any(|p| p.has_tag("emobility_service")),
+        "{invoice:?}"
+    );
+}
+
+/// A quantity stated once for a period reaches the legs it is billed in
+/// proportion to their days, and the legs sum back to it exactly — nothing is
+/// created by the split, and nothing is lost.
+#[test]
+fn a_period_total_is_apportioned_across_legs_by_days() {
+    let days = [31_u32, 28, 31];
+    let total = dec!(1000);
+    let parts: Vec<rust_decimal::Decimal> = (0..days.len())
+        .map(|i| energy_billing::DayApportionment::new(&days, i).quantity(total))
+        .collect();
+    assert_eq!(
+        parts.iter().copied().sum::<rust_decimal::Decimal>(),
+        total,
+        "{parts:?}"
+    );
+    assert!(parts[1] < parts[0], "the short month takes less: {parts:?}");
+    assert!(
+        (parts[0] - parts[2]).abs() <= dec!(0.001),
+        "equal-length legs take equal shares but for the last one's residue: {parts:?}"
+    );
+}
+
+/// A peak is the highest interval of the period, so the leg containing it has
+/// the period's peak; only the sums over days are divided.
+#[test]
+fn apportioning_divides_the_delivery_and_keeps_the_peak() {
+    let leg = energy_billing::WaermeMeterInput {
+        kwh_waerme: dec!(12000),
+        spitzenleistung_kw: Some(dec!(48)),
+        months: Some(dec!(12)),
+    }
+    .apportioned(&energy_billing::DayApportionment::new(&[181, 184], 0));
+    assert_eq!(leg.spitzenleistung_kw, Some(dec!(48)));
+    assert!(leg.kwh_waerme < dec!(12000) && leg.kwh_waerme > dec!(5000));
+    assert!(leg.months < Some(dec!(12)));
+}
+
+/// A one-leg period is the whole period: every figure passes through untouched.
+#[test]
+fn an_unsplit_period_is_apportioned_to_itself() {
+    let whole = energy_billing::WaermeMeterInput {
+        kwh_waerme: dec!(12345.678),
+        spitzenleistung_kw: Some(dec!(48)),
+        months: Some(dec!(12)),
+    };
+    let same = whole.apportioned(&energy_billing::DayApportionment::whole());
+    assert_eq!(same.kwh_waerme, whole.kwh_waerme);
+    assert_eq!(same.months, whole.months);
+}
+
+/// An Ersatzversorgung has no contract, so the supply start is the fact most
+/// often absent. The § 38 Abs. 4 EnWG limit is still measured — from the
+/// period's own first day, which is never later than the true supply start —
+/// so a four-month Ersatzversorgung is blocked whether or not one was stated.
+#[test]
+fn a_missing_supply_start_still_blocks_a_four_month_ersatzversorgung() {
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30"}"#);
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        vertragsart: energy_billing::Vertragsart::Ersatzversorgung,
+        vertragsbeginn: None,
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 04 - 30)).unwrap(),
+        regulatory_rates: rates_2026(),
+        ..Default::default()
+    };
+    let err = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx, &elec(dec!(1200)))
+        .expect_err("four months of Ersatzversorgung cannot exist, stated start or not");
+    assert!(
+        err.blocking_warnings()
+            .iter()
+            .any(|w| w.code == "ERSATZVERSORGUNG_UEBER_3_MONATE"),
+        "{err}"
+    );
+}
+
+/// The three months are a limit, not a bar: an Ersatzversorgung inside them
+/// bills, and the assumed anchor is reported rather than blocking.
+#[test]
+fn an_ersatzversorgung_inside_three_months_bills_without_a_stated_start() {
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30"}"#);
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        rechnungsnummer: "R-EV".to_owned(),
+        vertragsart: energy_billing::Vertragsart::Ersatzversorgung,
+        vertragsbeginn: None,
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 03 - 31)).unwrap(),
+        regulatory_rates: rates_2026(),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx, &elec(dec!(900)))
+        .expect("three months of Ersatzversorgung is lawful and billable");
+    assert!(
+        invoice
+            .warnings
+            .iter()
+            .any(|w| w.code == "ERSATZVERSORGUNG_BEGINN_FEHLT"),
+        "the assumed anchor is stated: {:?}",
+        invoice.warnings
+    );
+    assert!(
+        !invoice
+            .warnings
+            .iter()
+            .any(|w| w.code == "ERSATZVERSORGUNG_UEBER_3_MONATE"),
+        "{:?}",
+        invoice.warnings
+    );
+}
+
+/// Every warning an operator reads is one sentence. A `format!` string broken
+/// across source lines without a continuation carries the indentation into the
+/// message, so the invariant is checked on the text itself.
+#[test]
+fn warning_messages_carry_no_source_indentation() {
+    let tariff =
+        j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30","grundpreis_eur_per_month":"12"}"#);
+    let (from, to) = period();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        rechnungsnummer: "R-COV".to_owned(),
+        period: BillingPeriod::new(from, to).unwrap(),
+        regulatory_rates: rates_2026(),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(500),
+            coverage_pct: Some(dec!(96.77)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx, &quantities)
+        .expect("a partially covered period is billable as a § 40a Abs. 2 estimate");
+    let w = invoice
+        .warnings
+        .iter()
+        .find(|w| w.code == "MENGE_UNVOLLSTAENDIG")
+        .expect("the gap is reported");
+    assert!(
+        !w.message.contains("  "),
+        "run of spaces in an operator-facing message: {:?}",
+        w.message
+    );
+    assert!(
+        w.message.contains("§ 40a Abs. 2 EnWG"),
+        "the message names the provision it rests on: {:?}",
+        w.message
+    );
+}
+
+/// A multi-day period whose every metered source reads zero bills the standing
+/// charges and nothing else — an invoice that reads as ordinary, so it is said.
+#[test]
+fn a_period_with_no_quantity_at_all_is_reported() {
+    let tariff =
+        j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30","grundpreis_eur_per_month":"12"}"#);
+    let (from, to) = period();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        rechnungsnummer: "R-0".to_owned(),
+        period: BillingPeriod::new(from, to).unwrap(),
+        regulatory_rates: rates_2026(),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx, &elec(Decimal::ZERO))
+        .expect("a Grundpreis-only invoice is lawful for a vacant delivery point");
+    assert!(
+        invoice.warnings.iter().any(|w| w.code == "KEINE_MENGE"),
+        "the empty quantity is stated on the document"
+    );
+}
+
+/// A gap in the readings leaves the invoice resting in part on a § 40a Abs. 2
+/// EnWG estimate, so a period
+/// short of full coverage bills a consumption for days no reading covers.
+#[test]
+fn a_partially_delivered_period_is_reported() {
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30"}"#);
+    let (from, to) = period();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        rechnungsnummer: "R-COV".to_owned(),
+        period: BillingPeriod::new(from, to).unwrap(),
+        regulatory_rates: rates_2026(),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(500),
+            coverage_pct: Some(dec!(9.68)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx, &quantities)
+        .expect("billable, but not complete");
+    assert!(
+        invoice
+            .warnings
+            .iter()
+            .any(|w| w.code == "MENGE_UNVOLLSTAENDIG"),
+        "the incomplete delivery is stated on the document"
+    );
+}
+
+/// § 19 UStG: a document that charges no VAT states none. `mwst_eur` and the
+/// per-rate breakdown are two views of one rate, so they can never disagree.
+#[test]
+fn a_kleinunternehmer_document_states_no_vat_rate() {
+    let tariff = j(
+        r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":"8.20",
+            "kleinunternehmer_19_ustg":true}"#,
+    );
+    let (from, to) = period();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        rechnungsnummer: "GS-19".to_owned(),
+        period: BillingPeriod::new(from, to).unwrap(),
+        invoice_type: InvoiceType::CreditNote,
+        regulatory_rates: rates_2026(),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        eeg: Some(EegMeterInput {
+            einspeisung_kwh: dec!(280),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx, &quantities)
+        .expect("a Kleinunternehmer Gutschrift");
+
+    assert_eq!(invoice.mwst_eur, Decimal::ZERO);
+    for subtotal in invoice.tax_subtotals(rates_2026().mwst_rate) {
+        assert_eq!(
+            subtotal.rate_percent,
+            Decimal::ZERO,
+            "a 19 % Steuerbetrag beside mwst_eur = 0 is an unrechtmäßiger \
+             Steuerausweis (§ 14c Abs. 2 UStG)"
+        );
+    }
+}
+
+/// A § 42b Nutzungsplan's shares partition the plant's generation exactly once.
+/// They are caller-supplied, so a plan entered as percentages is refused rather
+/// than aborting inside the split.
+#[test]
+fn a_nutzungsplan_whose_shares_are_percentages_is_refused() {
+    use energy_billing::{GgvNutzungsplan, GgvNutzungsplanEntry};
+    let plan = GgvNutzungsplan(vec![
+        GgvNutzungsplanEntry {
+            malo_id: "A".to_owned(),
+            fraction: dec!(60),
+        },
+        GgvNutzungsplanEntry {
+            malo_id: "B".to_owned(),
+            fraction: dec!(40),
+        },
+    ]);
+    let err = plan
+        .allocate(dec!(1000))
+        .expect_err("shares summing to 100 do not partition anything");
+    assert_eq!(err.code(), "NUTZUNGSPLAN_SHARES_INVALID");
 }

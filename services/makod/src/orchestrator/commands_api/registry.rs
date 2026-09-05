@@ -487,7 +487,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     },
     // ── GeLi Gas Datenabruf (ORDERS 17103 — LF requests Brennwert/Zustandszahl) ─
     // LF sends ORDERS 17103 outbound to NB/MSB requesting Gas quality data.
-    // Spawns a GeliGasDatanabrufWorkflow that tracks the 10-Werktage response.
+    // Spawns a GeliGasDatenabrufWorkflow that tracks the 10-Werktage response.
     CommandDescriptor {
         name: "geli.datenabruf.anfragen",
         permitted_roles: &[Marktrolle::Lfg],

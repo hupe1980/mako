@@ -31,6 +31,15 @@ run skips the territories the BIKO already accepted; re-sending one is a
 correction under a higher version, not a retry. The run still fails as a whole
 when any territory did not go out — a month settled short is not a success.
 
+A retry is a *new* run, so what it may skip is read for the whole
+Bilanzierungsmonat rather than for the run: acknowledgement is a property of the
+(Bilanzierungsgebiet, Bilanzierungsmonat) the BIKO holds, not of whichever of our
+runs filed it. A **correction** is told apart by its `corrects_run_id`: every run
+answering one negative Prüfmitteilung shares it, so a correction re-files the
+acked territory — which is the point of it — while a retry of that correction
+does not send it twice. A retry that finds every territory already acked files
+nothing and succeeds.
+
 ## The run refuses rather than under-reporting
 
 The BIKO cannot tell a short Summenzeitreihe from a complete one, and a filing
@@ -113,6 +122,13 @@ ones; filing the correction with `corrects_run_id` closes them.
 
 ```toml
 # mabis-syncd.toml
+# Top-level keys first: every block below is a table, and each nested block
+# rejects an unknown field, so a bare key placed under one fails startup.
+
+# de.mabis.* CloudEvents, drained from the transactional outbox.
+erp_webhook_url = "https://erp.example.com/webhooks/mabis"
+erp_hmac_secret = "env:MABIS_ERP_HMAC_SECRET"
+
 [http]
 addr = "0.0.0.0:8880"
 
@@ -140,10 +156,6 @@ api_key = "env:MABIS_MAKOD_API_KEY"
 [schedule]
 erstaufschlag_werktag = 10
 run_hour_utc          = 5    # 06:00 CET / 07:00 CEST
-
-# de.mabis.* CloudEvents, drained from the transactional outbox.
-erp_webhook_url = "https://erp.example.com/webhooks/mabis"
-erp_hmac_secret = "env:MABIS_ERP_HMAC_SECRET"
 
 [oidc]
 issuer   = "https://auth.example.com/realms/mako"

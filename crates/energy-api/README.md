@@ -2,10 +2,15 @@
 
 **BDEW API-Webdienste Strom — REST/WebSocket client and Axum server bindings.**
 
-Implements the German energy market **API-Webdienste Strom** specification
-(BDEW/VKU/GEODE, current version 1.3), providing typed REST and WebSocket
-clients for iMS grid control processes and a matching Axum server for hosting
-the receiving endpoints.
+Implements the German energy market **API-Webdienste Strom** — the REST/JSON
+transport that runs alongside the EDIFACT/AS4 channel — providing typed REST and
+WebSocket clients for iMS grid control processes and a matching Axum server for
+hosting the receiving endpoints.
+
+Two document families govern it and they version separately: the **OpenAPI /
+AsyncAPI specs** (all at `1.0.0`, see [Specification version](#specification-version))
+and the BDEW **API-Guideline** (`1.0a` since 06.06.2025, `1.0b` binding from
+01.10.2026) with **Regelungen zum Übertragungsweg für API-Webdienste 1.2**.
 
 ---
 
@@ -111,13 +116,14 @@ let app = Router::new()
 ## Identifiers
 
 All BDEW identifiers are the validated types from `rubo4e::identifiers` —
-`MaloId`, `MeloId`, `NeloId`, `SrId`, `TrId`, `MarktpartnerId` — not local
-`String` newtypes.
+`MaloId`, `MeloId`, `NeloId`, `SrId`, `TrId` and `MarktpartnerId` (re-exported
+here as `MarketPartnerId`) — not local `String` newtypes.
 
 `Deserialize` enforces the check digit, so a malformed identifier is rejected
 **at the API boundary** rather than entering the identification path. MaLo-Ident
-is the first binding API process in German MaKo (mandatory since 06.06.2025,
-2-hour deadline) and a precondition for every supplier switch, so this is the
+is the first binding API process in German MaKo (mandatory since 06.06.2025 with
+API-Guideline 1.0a, 2-hour deadline) and a precondition for every supplier
+switch, so this is the
 point where a bad ID would otherwise propagate into a switch.
 
 `MarketPartnerId` is a string, not an `i64`: BDEW codes may carry leading zeros,
@@ -153,11 +159,15 @@ electricity APIs and `EDI-Energy/api-directory-service` for the Verzeichnisdiens
 
 ## Regulatory references
 
-- **BDEW API-Webdienste Strom V1.3** — REST/JSON channel specification
-- **API Guideline 1.0b** — binding from 01.10.2026
+- **API-Guideline 1.0a / 1.0b** — the BDEW rules for the REST/JSON channel;
+  1.0a since 06.06.2025, 1.0b binding from 01.10.2026
+- **Regelungen zum Übertragungsweg für API-Webdienste 1.2** — mTLS and the
+  EMT.API certificate requirements
 - **§ 14a EnWG** — statutory basis for controllable consumption devices (iMS grid control)
 - **MsbG** — Messstellenbetriebsgesetz (smart meter rollout)
-- **BNetzA BK6-24-174** — WiM process documentation (PIDs 11021–11023 via this channel)
+- **BNetzA BK6-22-024** — the Festlegung behind both processes this channel
+  carries: MaLo-Ident for the 24-h Lieferantenwechsel, and WiM
+  (Messstellenbetrieb) for the iMS Universalbestellprozess, PIDs 11021–11023
 
 ---
 
@@ -165,8 +175,12 @@ electricity APIs and `EDI-Energy/api-directory-service` for the Verzeichnisdiens
 
 | Crate | Role |
 |---|---|
-| `energy-api` ← **this crate** | REST/WebSocket client + Axum server |
-| `mako-wim` | iMS process engine (WiM PIDs 11021–11023) |
-| `mako-as4` | AS4 transport (parallel EDIFACT channel) |
-| `makod` | Production daemon — mounts this crate's Axum routers |
-| `edi-energy` | EDIFACT parsing (parallel EDIFACT channel) |
+| [`energy-api`](https://docs.rs/energy-api) ← **this crate** | REST/WebSocket client + Axum server for the API-Webdienste |
+| [`mako-wim`](https://docs.rs/mako-wim) | The iMS process engine behind the WiM PIDs this API serves |
+| [`mako-as4`](https://docs.rs/mako-as4) | The parallel EDIFACT channel's transport |
+| [`edi-energy`](https://docs.rs/edi-energy) | The parallel EDIFACT channel's format layer |
+| [`mako-markt`](https://docs.rs/mako-markt) | Marktstammdaten — Marktlokation, Messlokation, Marktpartner, Rollenzuordnung |
+| [`makod`](https://hupe1980.github.io/mako/docs/services/makod/) | Production daemon — mounts this crate's Axum routers |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>

@@ -69,7 +69,9 @@ pub struct ReceiptRow {
     pub outcome: String,
     /// Serialised plausibility findings.
     pub findings: serde_json::Value,
-    /// Zahlungsziel from INVOIC `DTM+92`.
+    /// Zahlungsziel from INVOIC `SG8 DTM+265` (MIG Nr. 00033), whose DE 2379
+    /// admits only `303`. The INVOIC MIG publishes no qualifier 92 — that is
+    /// UTILMD's Vertragsbeginn, a different message.
     pub pay_by: Option<OffsetDateTime>,
     pub received_at: OffsetDateTime,
     pub checked_at: OffsetDateTime,
@@ -281,9 +283,18 @@ pub async fn mark_erp_notified(
     Ok(())
 }
 
-/// Count a failed ERP delivery and schedule the retry.
+/// Schedule the retry after a failed ERP delivery.
 ///
 /// Backoff: 30 s → 5 min → 30 min → 2 h, then the attempt cap stops it.
+///
+/// This does **not** advance `erp_attempts` — [`claim_erp_pending`] does, in the
+/// same statement that leases the row. Counting here instead made the whole
+/// retry budget depend on this one write landing: lose it (a database error, a
+/// worker killed between the POST and the update) and the row came back due with
+/// its budget untouched, so a receipt the ERP will never accept was POSTed every
+/// lease period for ever — precisely what the cap exists to stop. The inline
+/// first attempt in `handler::emit_receipt_event` is not claimed, so it passes
+/// the attempt count it observed.
 ///
 /// The terminal attempt keeps the last backoff rather than an "infinite" one:
 /// `now() + (i64::MAX/2 * INTERVAL '1 second')` raises `interval out of range`,
@@ -307,8 +318,7 @@ pub async fn record_erp_failure(
     };
     sqlx::query(
         r"UPDATE invoic_receipts
-          SET erp_attempts = erp_attempts + 1,
-              erp_next_attempt_at = now() + ($1 * INTERVAL '1 second')
+          SET erp_next_attempt_at = now() + ($1 * INTERVAL '1 second')
           WHERE process_id = $2",
     )
     .bind(delay_secs)
@@ -366,6 +376,18 @@ pub struct ErpPendingRow {
 /// equals the poll interval, so a worker that dies mid-batch releases its claim
 /// on the next tick instead of stranding the rows.
 ///
+/// # The claim is also what counts the attempt
+///
+/// `erp_attempts` is advanced here and nowhere else on the worker path, because
+/// `erp_attempts >= DEAD_LETTER_ATTEMPTS` *is* the dead-letter state. Advancing
+/// it after the delivery instead left the budget hostage to a write that can
+/// fail: a lost [`dead_letter_erp`] or [`record_erp_failure`] returned the row to
+/// the pending index with its budget intact, and a receipt the ERP had already
+/// refused with a 4xx was re-POSTed every lease period without limit. Counting
+/// at the claim means the budget is spent by the attempt being *made*, so the
+/// row reaches the dead-letter state on its own even when every outcome write is
+/// lost.
+///
 /// # Errors
 ///
 /// Returns `sqlx::Error` on database failure.
@@ -389,7 +411,9 @@ pub async fn claim_erp_pending(
             bool,
         ),
     >(
-        r"UPDATE invoic_receipts SET erp_next_attempt_at = now() + ($4 * INTERVAL '1 second')
+        r"UPDATE invoic_receipts
+             SET erp_attempts        = erp_attempts + 1,
+                 erp_next_attempt_at = now() + ($4 * INTERVAL '1 second')
           WHERE process_id IN (
               SELECT process_id FROM invoic_receipts
                WHERE tenant = $1
@@ -403,7 +427,13 @@ pub async fn claim_erp_pending(
           RETURNING process_id, pid, direction, sender_mp_id, outcome, pay_by,
                     -- ::bigint: jsonb_array_length returns int4, which does not
                     -- decode into the i64 below — the claim failed on every row.
-                    jsonb_array_length(findings)::bigint, erp_attempts,
+                    jsonb_array_length(findings)::bigint,
+                    -- The count *before* this attempt, which is what
+                    -- `ErpPendingRow::erp_attempts` means to its readers (the
+                    -- back-off step and the log's attempt number).
+                    -- ::smallint: int2 - int4 is int4, and the i16 below refuses
+                    -- to decode it — the same trap as the ::bigint above.
+                    (erp_attempts - 1)::smallint,
                     dispatched_at IS NOT NULL",
     )
     .bind(tenant)

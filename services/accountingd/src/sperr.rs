@@ -193,7 +193,7 @@ pub async fn run_sperr_sequence(
         pg::list_sperrauftrag_candidates(pool, tenant, threshold).await?
     {
         let cmd = ForwardCommand {
-            command: "gpke.sperrung.beauftragen".to_owned(),
+            command: mako_markt::commands::GPKE_SPERRUNG_BEAUFTRAGEN.to_owned(),
             marktrolle: Some("LF".to_owned()),
             malo_id: Some(malo_id.clone()),
             melo_id: None,
@@ -254,7 +254,7 @@ pub async fn run_sperr_sequence(
     for (case_id, malo_id, lf_mp_id, _) in pg::list_entsperrauftrag_candidates(pool, tenant).await?
     {
         let cmd = ForwardCommand {
-            command: "gpke.entsperrung.beauftragen".to_owned(),
+            command: mako_markt::commands::GPKE_ENTSPERRUNG_BEAUFTRAGEN.to_owned(),
             marktrolle: Some("LF".to_owned()),
             malo_id: Some(malo_id.clone()),
             melo_id: None,

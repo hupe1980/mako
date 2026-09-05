@@ -12,7 +12,9 @@
 
 use axum::{
     Router,
+    http::StatusCode,
     middleware::{self, Next},
+    response::IntoResponse as _,
 };
 use rmcp::{
     ErrorData as McpError, ServerHandler,
@@ -994,11 +996,118 @@ impl ServerHandler for AccountingdMcpHandler {
     }
 }
 
+// ── Per-tool authorization ────────────────────────────────────────────────────
+
+/// The Cedar action one MCP tool requires — the same action its REST twin
+/// enforces.
+///
+/// The blanket `use-mcp` gate the shared middleware applies cannot tell a read
+/// from a write, and this surface is not read-only: `post_manual_booking` posts
+/// a Buchung to a customer's Kontokorrent, `run_abschlag_cycle` raises an
+/// Abschlagsforderung against every account due that day, `import_payments`
+/// books a ZAHLUNG per CAMT.054 entry, `update_abschlag` rewrites the monthly
+/// advance and the SEPA billing day, and `run_sepa_collection` emits a
+/// bank-submittable pain.008 carrying every mandate's IBAN. The policy used to
+/// exempt the whole surface as "read-only by construction"; five of the
+/// thirteen tools disprove that.
+///
+/// Every tool is mapped, not only the five that write, because accountingd's
+/// *reads* are role-split too: `read-account` is open to any token of the
+/// tenant, while `read-banking` and `read-books` are held to LF/MSB. A blanket
+/// gate would let a role-less token read the mandate register and the whole
+/// aging list through MCP, which the REST twins of those tools refuse.
+///
+/// `None` means the tool is unknown here, which is refused rather than served:
+/// a tool added without an entry must fail closed, since the failure mode of an
+/// allowlist is the newest entry being the one it misses.
+pub fn tool_action(tool: &str) -> Option<&'static str> {
+    Some(match tool {
+        // Reads about one customer.
+        "get_balance"
+        | "list_ledger"
+        | "suggest_payment_match"
+        // A preview: it fetches the account and nets the year, and commits
+        // nothing (`POST /api/v1/jahresabschluss/{malo_id}` is what commits).
+        | "trigger_jahresabschluss" => "read-account",
+        // Tenant-wide book reads — the dunning list, the aging list, the HGB
+        // § 250 accrual position off the ledger.
+        "list_dunning" | "list_overdue" | "compute_bilanzielle_abgrenzung" => "read-books",
+        // The collection register: mandates, IBANs and the entries of a run.
+        "list_sepa_collections" => "read-banking",
+        // ── Writes ───────────────────────────────────────────────────────────
+        "update_abschlag" => "write-account",
+        "import_payments" => "import-payments",
+        "run_sepa_collection" => "manage-sepa",
+        "run_abschlag_cycle" | "post_manual_booking" => "post-entry",
+        _ => return None,
+    })
+}
+
+/// What a JSON-RPC frame asks for, as far as authorization is concerned.
+enum McpCall {
+    /// Not a `tools/call` — `initialize`, `tools/list`, a prompt. The blanket
+    /// `use-mcp` gate is the whole check.
+    NotATool,
+    /// A `tools/call` for a tool this build knows, and the action it needs.
+    Tool(&'static str),
+    /// A `tools/call` naming a tool with no entry in [`tool_action`].
+    UnknownTool(String),
+}
+
+fn classify(body: &[u8]) -> McpCall {
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return McpCall::NotATool;
+    };
+    if v.get("method").and_then(serde_json::Value::as_str) != Some("tools/call") {
+        return McpCall::NotATool;
+    }
+    let Some(name) = v
+        .get("params")
+        .and_then(|p| p.get("name"))
+        .and_then(serde_json::Value::as_str)
+    else {
+        return McpCall::NotATool;
+    };
+    match tool_action(name) {
+        Some(action) => McpCall::Tool(action),
+        None => McpCall::UnknownTool(name.to_owned()),
+    }
+}
+
+/// One MCP frame's size cap — the body must be buffered to read the tool name.
+const MAX_MCP_BODY: usize = 1024 * 1024;
+
 async fn mcp_auth_middleware(
     axum::extract::State(state): axum::extract::State<Arc<AccountingdMcpState>>,
     request: axum::extract::Request,
     next: Next,
 ) -> axum::response::Response {
+    let (parts, body) = request.into_parts();
+    let bytes = match axum::body::to_bytes(body, MAX_MCP_BODY).await {
+        Ok(b) => b,
+        Err(_) => {
+            return (StatusCode::PAYLOAD_TOO_LARGE, "MCP request body too large").into_response();
+        }
+    };
+    match classify(&bytes) {
+        McpCall::NotATool => {}
+        McpCall::Tool(action) => {
+            if let Err(resp) = state.auth.authorize(&parts.headers, action) {
+                return resp;
+            }
+        }
+        McpCall::UnknownTool(name) => {
+            tracing::warn!(tool = %name, "accountingd: MCP tool carries no Cedar action");
+            return (
+                StatusCode::FORBIDDEN,
+                format!(
+                    "403 Forbidden: MCP tool {name:?} carries no Cedar action, so it cannot be                      authorized — add it to `tool_action`"
+                ),
+            )
+                .into_response();
+        }
+    }
+    let request = axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes));
     state.auth.authenticate(request, next).await
 }
 

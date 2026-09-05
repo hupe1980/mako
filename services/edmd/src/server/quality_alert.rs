@@ -11,7 +11,7 @@
 //! `quality_warnings` and then went quiet.
 //!
 //! Quiet is the problem. The event is what starts `agentd`'s `meter-data-agent`
-//! (grade-F investigation) and `replacement-value-agent` (§ 60 Abs. 2 MsbG
+//! (grade-F investigation) and `replacement-value-agent` (§ 60 Abs. 1 MsbG
 //! Ersatzwertbildung). A billing-blocking interval nobody is told about sits in
 //! the store until a settlement run trips over it — by which point the
 //! measurement window that could have been re-read has closed.
@@ -97,10 +97,10 @@ pub(crate) async fn raise_quality_warning(
                 "billing_block_count": alert.validation.billing_block_count,
                 "rules": alert.validation.rules,
             },
-            "legal_basis": "§ 60 Abs. 2 MsbG Plausibilisierung",
+            "legal_basis": "§ 60 Abs. 1 MsbG (Aufbereitung: Plausibilisierung und Ersatzwertbildung)",
             "recommended_action":
                 "Investigate with agentd meter-data-agent or edmd MCP get_timeseries \
-                 before the next billing run; § 60 Abs. 2 Ersatzwertbildung via \
+                 before the next billing run; § 60 Abs. 1 Ersatzwertbildung via \
                  trigger_substitution where no measurement can be recovered",
         }),
     )

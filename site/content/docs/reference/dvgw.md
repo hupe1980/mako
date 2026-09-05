@@ -1,10 +1,8 @@
 +++
 title = "DVGW EDI"
-description = "dvgw-edi: parsing, validating and writing ALOCAT, NOMINT, NOMRES and SSQNOT for GaBi Gas 2.1. Covers message identity (carrier vs. document code), the Prüfidentifikator catalogue, DTM format codes, the position model, validation rules, and GaBi Gas workflow integration."
+description = "The dvgw-edi crate: parsing, validating and writing ALOCAT, NOMINT, NOMRES and SSQNOT for GaBi Gas 2.1 gas transport."
 weight = 14
 +++
-# DVGW EDI
-
 The `dvgw-edi` crate implements EDIFACT parsing, validation and writing for the
 German gas transport and balancing market (GaBi Gas 2.1, BNetzA BK7-24-01-008).
 It is the DVGW counterpart to `edi-energy`, which covers the BDEW EDI@Energy
@@ -44,7 +42,7 @@ Every DVGW format is a **subset of a UN/EDIFACT D.07A message**. `UNH` therefore
 names the carrier, never the DVGW message:
 
 ```text
-UNH+1+ORDERS:D:07A:UN:DVGW18'          ← the carrier
+UNH+1+ORDERS:D:07A:UN:DVGW17'          ← the carrier (Nachrichtentypen-Paket)
 BGM+01G::332+NOMINT00052'              ← this is what says NOMINT
 DTM+Z05:0:805'                         ← the timestamps below are UTC
 DTM+137:201801042056:203'              ← message date/time
@@ -59,7 +57,7 @@ QTY+Z03:6782:KW1'
 NAD+ZEU+BK-CODE-1::332'
 NAD+ZES+BK-CODE-2::332'
 UNS+S'
-UNT+19+1'
+UNT+16+1'
 ```
 
 Identity is resolved from `BGM` C002 DE 1001 (`DvgwDocument`), with the carrier
@@ -334,7 +332,7 @@ are returned as `Err`.
 | `DVGW-DTM-Z05` / `-137` / `-Z01` | all | Error | the three mandatory header `DTM` rows |
 | `DVGW-DTM-UNDECODABLE` | all | Error | value contradicts its own DE 2379 format |
 | `DVGW-PERIOD-INVERTED` | all | Error | a period must run forwards |
-| `DVGW-RFF-Z13` / `-RANGE` | all | Error | Prüfidentifikator present and in `70000–79999` |
+| `DVGW-RFF-Z13` / `-Z13-RANGE` | all | Error | Prüfidentifikator present and in `70000–79999` |
 | `DVGW-PID-FAMILY` | all | Warning | the `RFF+Z13` code belongs to this family |
 | `DVGW-PID-DOCUMENT` | all | Error | `BGM` DE 1001 is the code the Anwendungsfall publishes (`DvgwDocument::for_pid`) |
 | `DVGW-PID-RETIRED` | SSQNOT | Warning | 70096 / `STS+A2G` only for Zeiträume before 1.10.2015 (Hinweise [500]/[501]) |
@@ -492,14 +490,22 @@ messages validated through the AHB/MIG profile layer:
 
 | Type | Purpose |
 |---|---|
-| `GasDay` | Typed gas market day (DST-aware, 06:00 CET start, 23/25-hour DST days); `GasDay::containing` recovers it from a `DTM+Z01` period start |
+| `GasDay` | Typed gas market day (DST-aware, 06:00 CET start, 23/25-hour DST days); `GasDay::from_period(start, end)` recovers it from a `DTM+Z01` period, returning `None` unless the span is 23–25 h |
 | `GasQuantity` | Decimal-precision kWh_Hs with m³ + conversion metadata |
 | `GasBeschaffenheit` | Brennwert (Hs/Hu) + Zustandszahl; `.validate()` checks DVGW G 260 ranges |
-| `GasQualityFlag` | 7-state quality flag per § 60 Abs. 2 MsbG |
+| `GasQualityFlag` | 7-state quality flag — see the note below on where the substitution rules come from |
 | `AllocationVersion` | Initial/Correction(n)/Final per §§46/47 KoV XV |
-| `GasMarketRole` | 9-role typed enum (LF, NB, FNB, VNB, BKV, MGV, MSB, Händler, TNB) |
 | `GasImbalanceSaldo` | Mehr/Minder/Balanced with `ausgleichsenergie_price_ct_per_kwh` per KoV §9 |
-| `GasPortfolioBalance` | BKV portfolio across Bilanzkreise; `conservation_check()` per GaBi Gas 2.1 |
+| `GasMarketRole` | Which role a party plays, and whether it nominates, receives allocations, or carries an imbalance obligation |
+| `PortfolioPosition` | One Bilanzkreis' nomination against its allocation for a gas day |
+| `GasPortfolioBalance` | A BKV's positions aggregated across its Bilanzkreise; `conservation_check()` reports a `ConservationViolation` |
+
+**Where gas substitute values come from.** The authority is the
+Kooperationsvereinbarung — KoV XV §§ 46–47 together with DVGW G 685 — and **not**
+§ 60 Abs. 2 MsbG. That paragraph is a *Soll*-rule about processing inside the
+Smart-Meter-Gateway; its Satz 2 permits gas Aufbereitung outside the gateway
+permanently, and it obliges nobody to form an Ersatzwert at all
+(`crates/mako-gabi-gas/src/domain.rs:265`).
 
 ---
 

@@ -142,15 +142,16 @@ impl BillingProvider for ElectricityProvider {
             });
         }
 
-        // An estimated reading is billable (§ 60 Abs. 2 MsbG), but the caller
+        // An estimated reading is billable (§ 40a Abs. 2 EnWG), but the caller
         // must know it happened: the customer can demand a corrected invoice
         // once a real reading arrives, so dispatch systems treat it differently.
-        // This was an Info *position* only — visible on paper, invisible to code.
+        // A finding rather than an Info position alone, which paper shows and
+        // code cannot see.
         if meter.is_some_and(|m| m.is_estimated) {
             w.push(BillingWarning {
                 code: "ESTIMATED_READING",
                 severity: WarningSeverity::Warning,
-                message: "billed on an estimated reading (§ 60 Abs. 2 MsbG) — \
+                message: "billed on an estimated reading (§ 40a Abs. 2 EnWG) — \
                           expect a correction when the real reading arrives"
                     .to_owned(),
             });
@@ -552,9 +553,12 @@ impl BillingProvider for ElectricityProvider {
         // For large commercial customers on RLM metering (≥100 MWh/year) with
         // a capacity-based Leistungspreis in the supply contract.
         //
-        // Billed on Spitzenleistung (peak demand, kW) for the billing period.
-        // No pro-rating: the peak demand represents the contracted capacity
-        // for the full period (§41 EnWG, standard C&I supply contracts).
+        // Billed on Spitzenleistung (peak demand, kW). The rate is per kW *and
+        // month*, so it scales with the billed period's month fraction — an
+        // annual invoice owes twelve months of it, a half-month move-out half
+        // of one. Every capacity rate in the crate prorates to the period it is
+        // billed for; only the unit differs (the NNE Leistungspreis is per
+        // kW-year and scales in years).
         if let (Some(lp_ct_per_kw_month), Some(kw)) = (
             product.leistungspreis_strom_ct_per_kw_month,
             meter.spitzenleistung_kw.filter(|kw| *kw > Decimal::ZERO),
@@ -564,7 +568,7 @@ impl BillingProvider for ElectricityProvider {
                     "Leistungspreis",
                     kw,
                     "kW",
-                    lp_ct_per_kw_month / dec!(100),
+                    lp_ct_per_kw_month / dec!(100) * ctx.billed_months(),
                     PositionCategory::Commodity,
                 )
                 .with_legal_basis("§41 EnWG")
@@ -844,10 +848,7 @@ impl BillingProvider for ControllableLoadProvider {
         // picks one; Modul 3 adds to Modul 1 alone. So `Modul 1 + Modul 3` is
         // the only pair, and the three other pairings each reduce the same
         // network usage twice.
-        if self
-            .product
-            .sect14a_modul1_pauschale_eur_per_kw_year
-            .is_some()
+        if self.product.sect14a_modul1_pauschale_eur_per_year.is_some()
             && self
                 .product
                 .sect14a_modul2_nne_reduktion_ct_per_kwh
@@ -902,10 +903,7 @@ impl BillingProvider for ControllableLoadProvider {
         // product carrying only the bands prices a tariff that does not exist —
         // and the customer loses the Modul 1 reduction they are entitled to.
         if self.product.sect14a_modul3_nne_ht_ct_per_kwh.is_some()
-            && self
-                .product
-                .sect14a_modul1_pauschale_eur_per_kw_year
-                .is_none()
+            && self.product.sect14a_modul1_pauschale_eur_per_year.is_none()
         {
             w.push(BillingWarning {
                 code: "MODUL3_OHNE_MODUL1",
@@ -960,6 +958,7 @@ impl BillingProvider for ControllableLoadProvider {
                     .to_owned(),
             });
         }
+
         w
     }
 
@@ -1034,18 +1033,18 @@ impl BillingProvider for ControllableLoadProvider {
             );
         }
 
-        // Modul 1 — pauschale Reduzierung, published per kW and per year
-        if let (Some(m1_year), Some(kw)) = (
-            p.sect14a_modul1_pauschale_eur_per_kw_year,
-            meter.spitzenleistung_kw,
-        ) && m1_year > Decimal::ZERO
-            && kw > Decimal::ZERO
+        // Modul 1 — a flat annual amount, prorated by the period. BK6-22-300
+        // sets it as `80 EUR + 3 750 kWh × Arbeitspreis × 0,2`, so it carries no
+        // per-kW component and needs no Spitzenleistung: that is what makes it
+        // the module a household heat pump on an SLP meter can have at all.
+        if let Some(m1_year) = p.sect14a_modul1_pauschale_eur_per_year
+            && m1_year > Decimal::ZERO
         {
             positions.push(
                 BillingPosition::credit(
                     "§14a EnWG Modul 1 — pauschale Reduzierung",
-                    kw,
-                    "kW",
+                    Decimal::ONE,
+                    "Jahr",
                     m1_year * ctx.billed_years(),
                     PositionCategory::Credit,
                 )
@@ -1169,14 +1168,14 @@ impl BillingProvider for GasProvider {
             has_gas_work_price,
         ));
 
-        // §40a EnWG / § 60 Abs. 2 MsbG: an estimated reading is billable but
+        // § 40a Abs. 2 EnWG: an estimated reading is billable but
         // the caller must know it happened — dispatch systems treat it
         // differently and the customer can demand a corrected invoice.
         if quantities.gas.as_ref().is_some_and(|m| m.is_estimated) {
             w.push(BillingWarning {
                 code: "ESTIMATED_READING",
                 severity: WarningSeverity::Warning,
-                message: "billed on an estimated gas reading (§40a EnWG, § 60 Abs. 2 MsbG) — \
+                message: "billed on an estimated gas reading (§ 40a Abs. 2 EnWG) — \
                           expect a correction when the real reading arrives"
                     .to_owned(),
             });
@@ -1318,6 +1317,31 @@ impl BillingProvider for GasProvider {
             );
         }
 
+        // ── Gas NNE Grundpreis ─────────────────────────────────────────────────
+        // A standing charge accrues per day of supply, not per kWh drawn: the
+        // supplier owes the Netzbetreiber the GasNEV Grundpreis for a MaLo that
+        // consumed nothing, exactly as it owes the commodity Grundpreis above.
+        // Both therefore sit outside the consumption guard, as the electricity
+        // path's NNE Grundpreis does.
+        if let Some(nne_gp) = grid.gas_nne_grundpreis_eur_per_year {
+            // Leap-aware: an EUR/year rate divides by that year's actual days
+            // (366 in 2024/2028), or the daily rate overstates the Grundpreis.
+            let daily = nne_gp / Decimal::from(time::util::days_in_year(ctx.period_from().year()));
+            // Active contract days — see the Strom NNE Grundpreis.
+            positions.push(
+                BillingPosition::debit(
+                    "Gasnetznutzungsentgelt Grundpreis",
+                    Decimal::from(ctx.prorate_days().0),
+                    "Tage",
+                    daily,
+                    PositionCategory::GridCharge,
+                )
+                .with_legal_basis("GasNEV")
+                .with_tag("gas_nne_grundpreis")
+                .with_tag("nne"),
+            );
+        }
+
         // ── Arbeitspreis ───────────────────────────────────────────────────────
         if kwh_hs > Decimal::ZERO {
             // Resolve effective gas price: gas_indexed_price > seasonal > direct.
@@ -1373,8 +1397,8 @@ impl BillingProvider for GasProvider {
             // Applicable to RLM gas metering points with a capacity-based supply contract.
             // Triggered by gas_leistungspreis_ct_per_kw_month + GasMeterInput::spitzenleistung_kw.
             // The rate is per kW *and month*, so it scales with the billed
-            // period's month fraction — the same treatment as the Strom NNE
-            // Leistungspreis and the Fernwärme Leistungspreis.
+            // period's month fraction — the same treatment as the Strom and the
+            // Fernwärme Leistungspreis.
             if let (Some(lp_ct_per_kw_month), Some(kw)) = (
                 product.gas_leistungspreis_ct_per_kw_month,
                 meter.spitzenleistung_kw.filter(|kw| *kw > Decimal::ZERO),
@@ -1395,26 +1419,9 @@ impl BillingProvider for GasProvider {
                 );
             }
 
-            // ── Gas NNE ────────────────────────────────────────────────────────
-            if let Some(nne_gp) = grid.gas_nne_grundpreis_eur_per_year {
-                // Leap-aware: an EUR/year rate divides by that year's actual days
-                // (366 in 2024/2028), or the daily rate overstates the Grundpreis.
-                let daily =
-                    nne_gp / Decimal::from(time::util::days_in_year(ctx.period_from().year()));
-                // Active contract days — see the Strom NNE Grundpreis.
-                positions.push(
-                    BillingPosition::debit(
-                        "Gasnetznutzungsentgelt Grundpreis",
-                        Decimal::from(ctx.prorate_days().0),
-                        "Tage",
-                        daily,
-                        PositionCategory::GridCharge,
-                    )
-                    .with_legal_basis("GasNEV")
-                    .with_tag("gas_nne_grundpreis")
-                    .with_tag("nne"),
-                );
-            }
+            // ── Gas NNE Arbeitspreis, Konzessionsabgabe, Bilanzierungsumlage ──
+            // All three are per-kWh pass-throughs, so they belong under the
+            // consumption guard; the GasNEV Grundpreis above does not.
             if let Some(nne_ap_ct) = grid.gas_nne_arbeitspreis_ct_per_kwh {
                 positions.push(
                     BillingPosition::debit(
@@ -1581,11 +1588,11 @@ impl BillingProvider for GasProvider {
             });
         }
 
-        // ── §40a EnWG / § 60 Abs. 2 MsbG — estimated reading notice ──────────
+        // ── § 40a Abs. 2 EnWG — estimated reading notice ─────────────────────
         // The estimation basis must carry an explicit, prominently marked hint.
         if meter.is_estimated {
             positions.push(BillingPosition {
-                description: "Abrechnungswert: Schätzung gemäß §40a EnWG / § 60 Abs. 2 MsbG — \
+                description: "Abrechnungswert: Schätzung gemäß § 40a Abs. 2 EnWG — \
                               auf Wunsch Korrektur nach realer Ablesung"
                     .to_owned(),
                 legal_basis: Some("§40a EnWG".to_owned()),
@@ -2474,11 +2481,17 @@ impl BillingProvider for EegProvider {
                 .with_tag("eeg"),
             );
         }
+        // The Marktprämie is computed from the anzulegende Wert (§ 20 iVm
+        // Anlage 1 EEG 2023), and § 51 Abs. 1 EEG 2023 reduces that value to
+        // zero for the hours it applies to. So the suspension governs the
+        // Marktprämie exactly as it governs the Einspeisevergütung: both are
+        // paid on `billable_kwh`. Credited on the raw `kwh`, the Marktprämie
+        // pays for the very hours the invoice prints as unremunerated.
         if let Some(mp_ct) = product.eeg_marktpraemie_ct_per_kwh {
             positions.push(
                 BillingPosition::debit(
                     "EEG Marktprämie",
-                    kwh,
+                    billable_kwh,
                     "kWh",
                     mp_ct / dec!(100),
                     PositionCategory::Credit,
@@ -2488,6 +2501,11 @@ impl BillingProvider for EegProvider {
                 .with_tag("eeg"),
             );
         }
+        // A **contractual** Direktvermarktungsentgelt, not a statutory premium:
+        // EEG 2023 knows no standalone Managementprämie — the management cost is
+        // part of the anzulegende Wert the Marktprämie above is derived from.
+        // Being contractual, it is owed on every delivered kWh and § 51 Abs. 1
+        // EEG 2023, which reaches only the anzulegende Wert, does not touch it.
         if let Some(mgp_ct) = product.eeg_managementpraemie_ct_per_kwh {
             positions.push(
                 BillingPosition::debit(
@@ -2497,7 +2515,7 @@ impl BillingProvider for EegProvider {
                     mgp_ct / dec!(100),
                     PositionCategory::Credit,
                 )
-                .with_legal_basis("§20 Abs. 3 EEG 2023")
+                .with_legal_basis("Direktvermarktungsvertrag")
                 .with_tag("eeg_managementpraemie")
                 .with_tag("eeg"),
             );
@@ -3425,10 +3443,14 @@ impl BillingProvider for MwStProvider {
             ) {
                 continue;
             }
-            let effective_rate = p.applicable_tax_rate.unwrap_or(self.rate);
+            let effective_rate = p.applicable_tax_rate.unwrap_or(self.rate).normalize();
             if effective_rate.is_zero() {
                 continue; // zero rate \u2192 no tax position
             }
+            // Normalised, exactly as `tax_subtotals_of` groups the BG-23
+            // breakdown: `0.19` and `0.190` are one rate, and bucketing them
+            // apart rounded each half on its own, so `gesamtsteuer` could land
+            // a cent away from `\u03a3 steuerbetraege`.
             let key = effective_rate.to_string();
             let entry = rate_buckets
                 .entry(key)
@@ -3479,6 +3501,10 @@ impl BillingProvider for MwStProvider {
 
     fn is_tax_pass(&self) -> bool {
         true
+    }
+
+    fn charged_tax_rate(&self) -> Option<Decimal> {
+        Some(self.rate)
     }
 }
 
@@ -3636,12 +3662,17 @@ fn electricity_common_positions(
         }
     }
 
-    // ── § 60 Abs. 2 MsbG — Estimated reading notice ──────────────────────
+    // ── § 40a Abs. 2 EnWG — estimated reading notice ─────────────────────
+    // Satz 3 requires the estimate, the ground that makes it admissible and
+    // the factors behind it to be stated „unter ausdrücklichem und optisch
+    // besonders hervorgehobenem Hinweis", and Satz 1 measures it against the
+    // customer's own prior period or a comparable customer.
     if meter.is_estimated {
         positions.push(BillingPosition {
-            description: "Abrechnungswert: Schätzung gemäß § 60 Abs. 2 MsbG                               — Bestätigung innerhalb 8 Wochen"
+            description: "Abrechnungswert: Schätzung gemäß § 40a Abs. 2 EnWG — \
+                          auf Wunsch Korrektur nach realer Ablesung"
                 .to_owned(),
-            legal_basis: Some("§ 60 Abs. 2 MsbG".to_owned()),
+            legal_basis: Some("§ 40a Abs. 2 EnWG".to_owned()),
             quantity: Decimal::ZERO,
             unit: String::new(),
             unit_price_eur: Decimal::ZERO,

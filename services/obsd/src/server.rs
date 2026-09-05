@@ -570,7 +570,7 @@ async fn get_gleichbehandlung_report(
 
     if format == "csv" {
         let mut csv = String::from(
-            "pid,affiliate_total,affiliate_completed,affiliate_rejected,affiliate_frist_breached,             affiliate_completion_rate,third_party_total,third_party_completed,             third_party_rejected,third_party_frist_breached,third_party_completion_rate,gap_pp
+            "pid,affiliate_total,affiliate_completed,affiliate_rejected,affiliate_frist_breached,             affiliate_completion_rate,affiliate_frist_compliance_rate,third_party_total,             third_party_completed,third_party_rejected,third_party_frist_breached,             third_party_completion_rate,third_party_frist_compliance_rate,gap_pp,frist_gap_pp
 ",
         );
         for (pid, c) in &comparisons {
@@ -580,20 +580,29 @@ async fn get_gleichbehandlung_report(
                 g.completion_rate()
                     .map_or_else(String::new, |r| format!("{r:.4}"))
             };
+            let frist_rate = |g: &ParityGroup| {
+                g.frist_compliance_rate()
+                    .map_or_else(String::new, |r| format!("{r:.4}"))
+            };
             let gap = c.gap_pp.map_or_else(String::new, |g| format!("{g:.1}"));
+            let frist_gap = c
+                .frist_gap_pp
+                .map_or_else(String::new, |g| format!("{g:.1}"));
             csv.push_str(&format!(
-                "{pid},{},{},{},{},{},{},{},{},{},{},{gap}
+                "{pid},{},{},{},{},{},{},{},{},{},{},{},{},{gap},{frist_gap}
 ",
                 c.affiliate.total,
                 c.affiliate.completed,
                 c.affiliate.rejected,
                 c.affiliate.frist_breached,
                 rate(&c.affiliate),
+                frist_rate(&c.affiliate),
                 c.third_party.total,
                 c.third_party.completed,
                 c.third_party.rejected,
                 c.third_party.frist_breached,
                 rate(&c.third_party),
+                frist_rate(&c.third_party),
             ));
         }
         return (
@@ -614,6 +623,7 @@ async fn get_gleichbehandlung_report(
                 "affiliate": c.affiliate,
                 "third_party": c.third_party,
                 "gap_pp": c.gap_pp,
+                "frist_gap_pp": c.frist_gap_pp,
                 "favours": c.favours(),
             })
         })
@@ -629,9 +639,12 @@ async fn get_gleichbehandlung_report(
                   preceding calendar year; duties under § 6a EnWG (informatorische \
                   Entflechtung) and § 20 Abs. 1 Satz 1 EnWG (diskriminierungsfreier Netzzugang)",
         "gap_convention": "gap_pp = (affiliate completion rate − third-party completion rate) \
-                           × 100. Positive means the affiliate fared better. `null` when either \
-                           group is below the minimum sample size — an unstatable gap, not a \
-                           zero one.",
+                           × 100, and frist_gap_pp the same over the share answered inside the \
+                           published Antwortfrist. Positive means the affiliate fared better. \
+                           `null` when either group is below the minimum sample size — an \
+                           unstatable gap, not a zero one. The two are reported separately \
+                           because a rejection can be legitimate while a missed statutory \
+                           window is the disparity this filing is asked about.",
         "min_sample": mako_obs::domain::PARITY_MIN_SAMPLE,
         "threshold": "none published. The Bundesnetzagentur sets no numeric parity limit for \
                       this figure; the operator's escalation threshold is [worker] \

@@ -100,18 +100,66 @@ fn collect(dir: &Path, findings: &mut Vec<(PathBuf, usize, String)>) {
 
 /// Calls that turn a `time` value into something a consumer can read.
 ///
-/// `.ok()` and `.unwrap_or(…)` are deliberately **not** here: they change the
-/// `Option` wrapper and leave the component array exactly where it was. That
-/// distinction is the whole check — every field that shipped the bug had one of
-/// those and nothing else.
-const CONVERSIONS: &[&str] = &[
+/// `.ok()`, `.unwrap_or(…)`, `.map(…)` and `.and_then(…)` are deliberately
+/// **not** here: all four change the `Option` wrapper and leave the component
+/// array exactly where it was. That distinction is the whole check — every field
+/// that shipped the bug had one of those and nothing else. A `.map`/`.and_then`
+/// counts only when the conversion is written *inside* it, which
+/// [`maps_through_a_conversion`] decides.
+const CONVERSIONS: &[&str] = &[".format(", ".to_string()", "rfc3339", "unix_timestamp"];
+
+/// Names that say the callee turns a `time` value into text.
+///
+/// A `.and_then(fmt)` passes a helper rather than a closure, and the helper's
+/// name is all there is to read.
+const FORMATTING_NAMES: &[&str] = &[
     ".format(",
     ".to_string()",
-    ".map(",
-    ".and_then(",
     "rfc3339",
     "unix_timestamp",
+    "fmt",
+    "format",
 ];
+
+/// Whether a `.map(…)` / `.and_then(…)` on `line` converts inside its argument.
+///
+/// `.map(|t| t.format(&Rfc3339).ok())` converts; `.map(Some)` and
+/// `.and_then(|t| Some(t))` only move the value between `Option` wrappers and
+/// ship the component array unchanged. The argument is read to its balanced
+/// closing paren, so a conversion applied to some *other* sub-expression on the
+/// same line does not clear the timestamp.
+fn maps_through_a_conversion(line: &str) -> bool {
+    for opener in [".map(", ".and_then("] {
+        let mut rest = line;
+        while let Some(at) = rest.find(opener) {
+            let arg_start = at + opener.len();
+            let arg = balanced_argument(&rest[arg_start..]);
+            if FORMATTING_NAMES.iter().any(|n| arg.contains(n)) {
+                return true;
+            }
+            rest = &rest[arg_start..];
+        }
+    }
+    false
+}
+
+/// The text up to the paren that closes an argument list already opened.
+fn balanced_argument(rest: &str) -> &str {
+    let mut depth = 1usize;
+    for (i, c) in rest.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &rest[..i];
+                }
+            }
+            _ => {}
+        }
+    }
+    rest
+}
 
 fn scan(path: &Path, findings: &mut Vec<(PathBuf, usize, String)>) {
     let Ok(src) = std::fs::read_to_string(path) else {
@@ -145,7 +193,7 @@ fn offending_lines(src: &str) -> Vec<(String, usize)> {
         if !(line.contains("time::OffsetDateTime") || line.contains("time::Date")) {
             continue;
         }
-        if CONVERSIONS.iter().any(|c| line.contains(c)) {
+        if CONVERSIONS.iter().any(|c| line.contains(c)) || maps_through_a_conversion(line) {
             continue;
         }
         // A value expression continued on the next line is doing something.
@@ -157,60 +205,103 @@ fn offending_lines(src: &str) -> Vec<(String, usize)> {
     out
 }
 
-/// `OffsetDateTime`/`PrimitiveDateTime` fields of `Serialize` structs that carry
-/// no RFC 3339 adapter, as `(line, 1-based number)`.
+/// `OffsetDateTime`/`PrimitiveDateTime` fields of `Serialize` containers that
+/// carry no RFC 3339 adapter, as `(line, 1-based number)`.
 ///
-/// `time::Date` is not a finding: it derives as `"2026-06-01"`.
+/// A container is a `struct` with named fields **or** an `enum`: an
+/// event-sourced variant carries its fields the same way a struct does, and it
+/// is serialised by the same derive into the same stored stream. `time::Date` is
+/// not a finding: it derives as `"2026-06-01"`.
 ///
-/// Shallow on purpose, in the same way [`offending_lines`] is. It tracks one
-/// thing — whether the struct currently being read derives `Serialize` — and
-/// looks back over the field's own attribute block for a `time::serde` adapter.
-/// A field whose attributes span several lines is handled, because that is how
-/// `#[serde(default = …, with = …)]` is usually formatted.
+/// Shallow on purpose, in the same way [`offending_lines`] is. It tracks two
+/// things — whether the container currently being read derives `Serialize`, and
+/// the brace depth at which that container ends — and looks back over the
+/// field's own attribute block for a `time::serde` adapter. A field whose
+/// attributes span several lines is handled, because that is how
+/// `#[serde(default = …, with = …)]` is usually formatted, and so is a
+/// `#[derive(…)]` spread over several lines, which `rustfmt` produces as soon as
+/// the trait list is long enough.
 fn unformatted_derive_fields(src: &str) -> Vec<(String, usize)> {
     let lines: Vec<&str> = src.lines().collect();
     let mut out = Vec::new();
+    // A `#[derive(…)]` being accumulated until its closing paren.
+    let mut pending_derive: Option<String> = None;
+    // A completed `Serialize` derive waiting for the item header it applies to.
     let mut serialize_pending = false;
-    let mut in_serialize_struct = false;
+    // Brace depth just outside the container being read, `None` when outside one.
+    let mut container_base: Option<i32> = None;
+    let mut depth = 0i32;
 
     for (i, raw) in lines.iter().enumerate() {
         let line = raw.trim_start();
+        if line.starts_with("//") {
+            continue;
+        }
+        let delta = line.matches('{').count() as i32 - line.matches('}').count() as i32;
 
-        if line.starts_with("#[derive") && line.contains("Serialize") {
-            serialize_pending = true;
+        if let Some(buf) = pending_derive.as_mut() {
+            buf.push_str(line);
+            if parens_balanced(buf) {
+                serialize_pending = buf.contains("Serialize");
+                pending_derive = None;
+            }
+            continue;
+        }
+        if line.starts_with("#[derive") {
+            if parens_balanced(line) {
+                serialize_pending = line.contains("Serialize");
+            } else {
+                pending_derive = Some(line.to_owned());
+            }
             continue;
         }
         if serialize_pending {
-            if line.starts_with("#[") || line.starts_with("//") {
+            if line.starts_with("#[") {
                 continue;
             }
-            // A tuple or unit struct has no named fields to check.
-            in_serialize_struct = is_struct_header(line) && !line.trim_end().ends_with(';');
             serialize_pending = false;
+            // A tuple or unit struct has no named fields to check.
+            if (is_struct_header(line) || is_enum_header(line)) && !line.trim_end().ends_with(';') {
+                container_base = Some(depth);
+            }
+            depth += delta;
             continue;
         }
-        if !in_serialize_struct {
-            continue;
-        }
-        if line == "}" || raw.starts_with('}') {
-            in_serialize_struct = false;
-            continue;
-        }
-        let Some(ty) = named_field_type(line) else {
+
+        let Some(base) = container_base else {
+            depth += delta;
             continue;
         };
-        if !(ty.contains("OffsetDateTime") || ty.contains("PrimitiveDateTime")) {
-            continue;
+        if depth > base
+            && let Some(ty) = named_field_type(line)
+            && (ty.contains("OffsetDateTime") || ty.contains("PrimitiveDateTime"))
+        {
+            // Any adapter naming RFC 3339 counts, including a local one — a
+            // `Vec<OffsetDateTime>` has no `time::serde` module to point at.
+            let attributes = attribute_block_before(&lines, i);
+            if !(attributes.contains("rfc3339") || attributes.contains("serialize_with")) {
+                out.push(((*raw).to_owned(), i + 1));
+            }
         }
-        // Any adapter naming RFC 3339 counts, including a local one — a
-        // `Vec<OffsetDateTime>` has no `time::serde` module to point at.
-        let attributes = attribute_block_before(&lines, i);
-        if attributes.contains("rfc3339") || attributes.contains("serialize_with") {
-            continue;
+        depth += delta;
+        if depth <= base {
+            container_base = None;
         }
-        out.push(((*raw).to_owned(), i + 1));
     }
     out
+}
+
+/// Whether every `(` opened in `text` is closed again.
+fn parens_balanced(text: &str) -> bool {
+    let mut depth = 0i32;
+    for c in text.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            _ => {}
+        }
+    }
+    depth <= 0
 }
 
 /// `true` for the header line of a named-field struct.
@@ -223,10 +314,19 @@ fn is_struct_header(line: &str) -> bool {
         || (line.starts_with("pub") && line.contains("struct "))
 }
 
+/// `true` for the header line of an enum.
+///
+/// An enum's struct variants hold named fields, and the derive writes them into
+/// the same JSON a struct's would.
+fn is_enum_header(line: &str) -> bool {
+    line.starts_with("enum ") || (line.starts_with("pub") && line.contains("enum "))
+}
+
 /// The attribute lines immediately preceding the field at `index`, joined.
 ///
-/// Walks back until the previous field, a brace, or the struct header, so it
-/// cannot pick up the *previous* field's adapter.
+/// Walks back until the previous field, a brace, or the header of the struct or
+/// enum variant the field belongs to, so it cannot pick up a *neighbouring*
+/// field's or variant's adapter.
 fn attribute_block_before(lines: &[&str], index: usize) -> String {
     let mut block = String::new();
     for line in lines[..index].iter().rev() {
@@ -237,7 +337,9 @@ fn attribute_block_before(lines: &[&str], index: usize) -> String {
         if named_field_type(trimmed).is_some()
             || trimmed.starts_with('{')
             || trimmed.starts_with('}')
+            || trimmed.ends_with('{')
             || is_struct_header(trimmed)
+            || is_enum_header(trimmed)
         {
             break;
         }
@@ -248,10 +350,15 @@ fn attribute_block_before(lines: &[&str], index: usize) -> String {
 }
 
 /// The type of a `name: Type,` field line, if the line is one.
+///
+/// An enum's struct variant is often written on one line
+/// (`Sent { at: OffsetDateTime },`), so the field name is whatever follows the
+/// last brace, paren or comma ahead of the colon, and the type is read back to
+/// the brace that closes the variant.
 fn named_field_type(line: &str) -> Option<&str> {
     let (name, ty) = line.split_once(": ")?;
-    let name = name.trim().trim_start_matches("pub ").trim();
-    let name = name.rsplit(") ").next().unwrap_or(name).trim();
+    let name = name.rsplit(['{', '(', ',']).next().unwrap_or(name).trim();
+    let name = name.strip_prefix("pub ").unwrap_or(name).trim();
     if name.is_empty()
         || !name
             .chars()
@@ -259,7 +366,7 @@ fn named_field_type(line: &str) -> Option<&str> {
     {
         return None;
     }
-    let ty = ty.trim().trim_end_matches(',');
+    let ty = ty.trim().trim_end_matches([',', ' ', '}']).trim();
     (!ty.is_empty()).then_some(ty)
 }
 
@@ -356,6 +463,113 @@ pub struct ProcessProjection {
             unformatted_derive_fields(fixed).is_empty(),
             "{:?}",
             unformatted_derive_fields(fixed)
+        );
+    }
+
+    /// The shape the event-sourced crates use: a `Serialize` enum whose struct
+    /// variants carry the timestamps.
+    ///
+    /// Eleven fields across `mako-wim` and `mako-geli-gas` sat in exactly this
+    /// shape, writing `time`'s own format into the stored event stream, while a
+    /// guard that only entered `struct` headers reported the tree clean.
+    #[test]
+    fn an_enum_variants_fields_are_scanned() {
+        let shipped = r#"
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Event {
+    AngebotErhalten {
+        message_ref: MessageRef,
+        bindungsfrist: OffsetDateTime,
+        #[serde(default)]
+        fruehester_start: Option<OffsetDateTime>,
+    },
+    Abgelehnt {
+        grund: String,
+    },
+    BeendetDurchMsb { beendigung_zum: OffsetDateTime },
+}
+"#;
+        assert_eq!(unformatted_derive_fields(shipped).len(), 3);
+
+        let fixed = r#"
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Event {
+    AngebotErhalten {
+        message_ref: MessageRef,
+        #[serde(with = "time::serde::rfc3339")]
+        bindungsfrist: OffsetDateTime,
+        #[serde(default, with = "time::serde::rfc3339::option")]
+        fruehester_start: Option<OffsetDateTime>,
+    },
+    Abgelehnt {
+        grund: String,
+    },
+}
+"#;
+        assert!(
+            unformatted_derive_fields(fixed).is_empty(),
+            "{:?}",
+            unformatted_derive_fields(fixed)
+        );
+    }
+
+    /// `rustfmt` breaks a long trait list across lines, and the derive still
+    /// derives `Serialize`.
+    #[test]
+    fn a_multi_line_derive_still_names_serialize() {
+        let src = r#"
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+pub struct Row {
+    pub started_at: OffsetDateTime,
+}
+"#;
+        assert_eq!(unformatted_derive_fields(src).len(), 1);
+    }
+
+    /// A struct that follows a `Serialize` enum is a separate item, and the
+    /// enum's brace depth must not carry into it.
+    #[test]
+    fn a_container_ends_at_its_closing_brace() {
+        let src = r#"
+#[derive(Serialize)]
+pub enum Event {
+    Sent { at: OffsetDateTime },
+}
+
+#[derive(Debug)]
+pub struct Query {
+    pub since: OffsetDateTime,
+}
+"#;
+        let hits = unformatted_derive_fields(src);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(hits[0].0.contains("Sent {"));
+    }
+
+    /// `.map` and `.and_then` change the `Option` wrapper, exactly as `.ok()`
+    /// does. Only what is written inside them converts.
+    #[test]
+    fn mapping_without_a_conversion_is_not_formatting() {
+        let unconverted = r#"
+                "at": r.try_get::<Option<time::OffsetDateTime>, _>("at").ok().and_then(|t| t),
+                "seen": r.try_get::<time::OffsetDateTime, _>("seen").ok().map(Some),
+"#;
+        assert_eq!(offending_lines(unconverted).len(), 2);
+
+        let converted = r#"
+                "at": r.try_get::<time::OffsetDateTime, _>("at").ok().and_then(|t| t.format(&Rfc3339).ok()),
+                "seen": r.try_get::<Option<time::Date>, _>("seen").ok().flatten().map(|d| d.to_string()),
+"#;
+        assert!(
+            offending_lines(converted).is_empty(),
+            "{:?}",
+            offending_lines(converted)
         );
     }
 

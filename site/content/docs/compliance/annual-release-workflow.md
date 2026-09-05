@@ -1,10 +1,8 @@
 +++
 title = "Annual Release Workflow"
-description = "Step-by-step engineering playbook for incorporating a new BDEW release: sync-regulatories, sources.json, import-profiles, validate-profiles, check-pid-coverage, rollout and migration."
+description = "Step-by-step engineering playbook for incorporating a new BDEW release: mirror the documents, extend sources.json, import and validate the profiles, check PID coverage, roll out and migrate."
 weight = 12
 +++
-# Annual Release Workflow
-
 This document is the step-by-step engineering playbook for incorporating a new
 BDEW release into the `mako` workspace.  Follow the steps in order for every
 cutover.  Cutovers are staggered per message type — January 1, April 1 and
@@ -19,8 +17,9 @@ once per message type that moves.
   ```
   cargo build -p xtask
   ```
-- The BDEW PDFs live in `regulatories/bdew-mako/`, mirrored by
-  `cargo xtask sync-regulatories` (Step 0).
+- The BDEW PDFs live in a local document mirror that `cargo xtask sync-regulatories
+  --download` populates (Step 0), and it reports the directory it writes to. They are
+  third-party publications and are not part of the repository.
 
 ---
 
@@ -30,7 +29,7 @@ once per message type that moves.
 cargo xtask sync-regulatories
 ```
 
-Reports every document in force that `regulatories/bdew-mako/` does not hold —
+Reports every document in force that the mirror does not hold —
 a new Formatversion appears as a block of MIG/AHB entries sharing a
 `valid_from`. Add `--download` to fetch them; `--offline` checks the mirror
 against its manifest without the network.
@@ -44,7 +43,8 @@ against its manifest without the network.
 ## Step 1 — Name the profile
 
 Add one entry per moving message type (Strom and Gas are separate entries for
-UTILMD) to `crates/edi-energy/profiles/sources.json`:
+UTILMD) under the `profiles` object of
+`crates/edi-energy/profiles/sources.json`:
 
 ```json
 "utilmd/fv20271001": {
@@ -78,7 +78,7 @@ without `UNH`. When it refuses:
 
 ```bash
 BDEW_DEBUG=1 cargo xtask import-profiles --profile utilmd/fv20271001   # every row, its columns and cells
-cargo xtask pdf-grid regulatories/bdew-mako/UTILMD_AHB_Strom_2.3.pdf     # the grid the reader sees
+cargo xtask pdf-grid path/to/UTILMD_AHB_Strom_2.3.pdf                   # the grid the reader sees
 ```
 
 The fix belongs in `xtask/src/bdew/`, never in the JSON.

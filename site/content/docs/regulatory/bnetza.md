@@ -3,8 +3,6 @@ title = "BNetzA Regulatory Reference"
 description = "Complete BNetzA ruling index for German energy market communication: BK6 GPKE/WiM/MaBiS, BK7 GeLi Gas, current rulings, and Fristen."
 weight = 10
 +++
-# BNetzA Regulatory Reference
-
 Reference document for Bundesnetzagentur rulings that govern German energy market
 communication (MaKo). Extracted from official BNetzA pages as of 2026-07-23.
 
@@ -24,7 +22,9 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 **Page:** <https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/831_gpke/gpke_node.html>
 
 **Current ruling:**
-- **BK6-24-174** (Beschluss 24.10.2024) — GPKE Teil 1–3 + WiM + MaBiS
+- **BK6-24-174** (Beschluss 24.10.2024) — GPKE Teil 1–3 (Anlagen 1a–1c) + MaBiS.
+  **Not WiM**: the Wechselprozesse im Messwesen were not reissued here — see
+  [WiM](#wim-wechselprozesse-im-messwesen) below.
 - **BK6-22-024** (Beschluss 21.03.2024) — **LFW24-Festlegung** („beschleunigter werktäglicher
   Lieferantenwechsel in 24 Stunden", statutory anchor **§20a EnWG**): re-issued GPKE Teil 2
   und Teil 4 and absorbed the MPES processes into the GPKE (effective 06.06.2025).
@@ -152,7 +152,9 @@ siehe unten.
 - WiM-Rechnung (INVOIC, PID 31003) — Abrechnung von Dienstleistungen im Messwesen, beide Sparten
 - MSB-Rechnung (INVOIC, PID 31009) — Messstellenbetrieb an NB, LF oder ESA
 
-**Fristen (WiM Strom):** die fachliche Antwort ist **je Prozess** befristet — Kündigung (55039) **3 WT**, Anmeldung (55042) **5 WT**, Abmeldung (55051) **7 WT**, Verpflichtungsanfrage (55168) **1 WT** (BK6-22-024 Anlage 2a, Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2). Samstage, Sonntage und gesetzliche Feiertage sind keine Werktage.
+**Fristen (WiM Strom):** die fachliche Antwort ist **je Prozess** befristet — Kündigung (55039) **3 WT**, Anmeldung (55042) **5 WT**, Abmeldung (55051) **7 WT**, Verpflichtungsanfrage (55168) **1 WT** (BK6-22-024 Anlage 2a, Kap. 2.2.2 / 2.3.2 /
+2.4.2 / **2.4.2 Nr. 4** — the Verpflichtungsanfrage is Prozessschritt 3 of the
+*Ende Messstellenbetrieb*, not of Kap. 2.5 „Verpflichtung gMSB"). Samstage, Sonntage und gesetzliche Feiertage sind keine Werktage.
 
 > Davon zu unterscheiden ist die **APERAK**-Eingangsbestätigung: für UTILMD Strom **45 Minuten** an Werktagen (APERAK AHB §2.4.1) — eine eigene, deutlich kürzere Frist.
 
@@ -176,14 +178,28 @@ siehe unten.
 
 **Page:** <https://www.bundesnetzagentur.de/DE/Beschlusskammern/1_GZ/BK6-GZ/2023/BK6-23-241/BK6-23-241_beschluss.html>
 
-**Current rulings:**
+**Current ruling — and what it repealed:**
 
-| Az. | Topic | Effective |
+| Az. | Topic | Status |
 |---|---|---|
-| **BK6-20-059** | `AcknowledgementDocument` (6 h), `StatusRequest` (24 h) | 2021-10-01 |
-| **BK6-20-060** | `Stammdaten` forwarding (1 Werktag), Activation (5 min) | 2021-10-01 |
-| **BK6-20-061** | `Kostenblatt` submission (15th of following month) | 2021-10-01 |
-| **BK6-23-241** | Fortentwicklung der Bilanzierung von Redispatch-Maßnahmen (Beschluss 07.05.2026) — staged transition from Prognosemodell to Planwertmodell in Verteilnetzen | staged |
+| **BK6-23-241** | BilAReM — Fortentwicklung der Bilanzierung von Redispatch-Maßnahmen (Beschluss 07.05.2026) | in force, staged; 2026-07-01 for the ÜNB |
+| **BK6-20-059** | Datenformate und Übermittlungswege | TZ 1 **repealed** by BK6-23-241 TZ 1 with the end of 30.06.2026; TZ 2 survives until the new EDI@Energy documents apply |
+| **BK6-20-060** | Netzbetreiberkoordinierung — `Stammdaten` forwarding (1 Werktag), Activation (5 min) | **repealed** by BK6-23-241 TZ 4 |
+| **BK6-20-061** | Informationsbereitstellung — `Kostenblatt` (15th of the following month) | **repealed** by BK6-23-241 TZ 3 |
+
+BK6-23-241 replaces those three with an obligation rather than a table: TZ 7
+tells the ÜNB to develop bundesweit einheitliche Prozessbeschreibungen and
+submit them to the Beschlusskammer. Until those are published, the windows above
+are the operator's own configuration, not a Festlegung
+(`crates/mako-redispatch/src/fristen.rs:1`).
+
+The one Redispatch deadline that *is* published sits in the format
+documentation, not in a Festlegung: the `AcknowledgementDocument` is due
+„unverzüglich, jedoch spätestens **3 Minuten** nach Erhalt der Übertragungsdatei"
+(EDI@Energy `AcknowledgementDocument` Formatbeschreibung 1.0g, Stand
+01.10.2025). The widely quoted 6 hours was never that obligation — and the
+difference matters, because a 6-hour window is something a batch job satisfies
+while a 3-minute one has to be answered by the receiving process itself.
 
 **Scope:**
 - All German TSOs (ÜNB) and DSOs (VNB) plus connected asset operators (ANB)
@@ -337,7 +353,6 @@ registriert daraus die Prozessfrist, `processd` bemisst die Operator-Queue,
 | WiM Messwesen / MSB | BK6 | `mako-wim` | PIDs 31003, 31009 ✅ |
 | GeLi Gas Lieferantenwechsel + AWH Sperrprozesse | BK7 | `mako-geli-gas` | PID 31011 (Rechnung sonstige Leistung, NB → LF) ✅ |
 | GaBi Gas Bilanzierung / MMM Gas | BK7 | `mako-gabi-gas` | PIDs 31007–31008 (Aggreg. MMM, NB → MGV) + PID 31010 (Kapazitätsrechnung) ✅ |
-| Netzbetreiberwechsel Strom | BK6 | `mako-nbw` | ❌ PARTIN only |
 
 > INVOIC 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas) is billed by the GNB/VNB
 > to the LFN/LFA for AWH performed during the Sperrprozess — it belongs to GeLi Gas (BK7-24-01-009),

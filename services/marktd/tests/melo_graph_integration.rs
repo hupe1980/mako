@@ -924,3 +924,44 @@ async fn pg_container() -> Option<(String, PgContainer)> {
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
     Some((url, container))
 }
+
+/// The MaLo PUT answers `201` exactly once, and the answer comes from the write.
+///
+/// `put_malo` used to decide `201` vs `200` from a `find(...).ok().flatten()`
+/// probe taken *before* the upsert. That probe reported "does not exist" in two
+/// cases where the row does exist — a storage fault, and a row that no longer
+/// deserialises (the schema-drift path the handler already logs) — so a PUT
+/// over an existing MaLo answered `201 Created`. It also raced: two concurrent
+/// first-PUTs both probed "absent" and both answered `201`.
+///
+/// The version the upsert returns settles it without a probe: the row is
+/// inserted with `1` and every conflict does `version + 1`, so `version == 1`
+/// is exactly "this call created it". This pins that property of the
+/// repository, which is what the handler now reads.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_upsert_reports_creation_exactly_once() {
+    let Some((pool, _pg)) = test_pool("malo_created_once").await else {
+        return;
+    };
+    let repo = PgMaloRepository::new(pool.clone());
+    let id = malo_id(MALO_A);
+    let body = |n: u32| bo4e_malo(serde_json::json!({ "marktlokationsId": MALO_A, "n": n }));
+
+    let first = repo
+        .upsert(&id, Sparte::Strom, &body(1), vec![], None, "v202607.0.0")
+        .await
+        .expect("first upsert");
+    assert_eq!(first, 1, "a fresh MaLo is created at version 1 → 201");
+
+    for n in 2..=4 {
+        let again = repo
+            .upsert(&id, Sparte::Strom, &body(n), vec![], None, "v202607.0.0")
+            .await
+            .expect("subsequent upsert");
+        assert_eq!(
+            again, n as i64,
+            "an existing MaLo advances its version and must answer 200, never 201"
+        );
+    }
+}

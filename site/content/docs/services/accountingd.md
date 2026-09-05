@@ -1,15 +1,30 @@
 +++
 title = "accountingd Operator Guide"
-description = "accountingd operator guide — Massenkontokorrent / Customer Account Ledger (LF role). Tamper-evident double-entry ledger (the doubleentry crate — Merkle proofs, period seals), per-Marktlokation Kontokorrent + GL contra chart (SKR 03/04-aligned), FIFO open-item management, camt.053 + camt.054 XML and flat-export dedup import, SEPA pain.008 (multi-group single message, mandatory Gläubiger-ID) + pain.001 + pain.007 reversal XML, pain.002 status ingestion with Verification of Payee, ISO 20022 structured postal addresses (EPC cut-over 2026-11-15), Verzugszinsen §288 BGB, payment plans (Zahlungsvereinbarung), aging analysis, Mahnwesen automatic rule engine (Mahnstufe 1–3), OIDC/JWT auth, inbound HMAC verification, GDPR Art. 17 pseudonymization, balance reconciliation, EEG Gutschrift + Marktprämie ingest, Jahresabschluss §40 EnWG."
+description = "Operator guide for accountingd, the LF Massenkontokorrent: a tamper-evident double-entry ledger, SEPA and camt payment flows, Mahnwesen and Jahresabschluss."
 weight = 34
-[extra]
-mermaid = true
 +++
-# `accountingd` — Massenkontokorrent / Customer Account Ledger
-
 `accountingd` provides the **FI-CA equivalent** for the mako retail billing stack.
-Without it, `billingd` invoices are fire-and-forget — no Offene-Posten tracking,
-no automated dunning, no SEPA collection.
+Without it, [billingd](@/docs/services/billingd.md) invoices are
+fire-and-forget — no Offene-Posten tracking, no automated dunning, no SEPA
+collection.
+
+**The vocabulary this page runs on.** A **Marktlokation (MaLo)** is a supply
+point — the thing a customer account is keyed on here
+([MaLo vs MeLo](@/docs/architecture/domain-model.md#malo-vs-melo-the-critical-distinction)).
+**LF** is the *Lieferant*, the retail supplier whose books these are; **NB**
+(grid operator) and **MSB** (metering operator) are the other market roles that
+appear ([Party Roles](@/docs/architecture/domain-model.md#party-roles-marktrollen)).
+An **Abschlag** is a monthly advance payment on a supply not yet billed, and the
+**Jahresabschluss** the annual settlement that bills the year and nets the
+advances off. **Mahnwesen** is dunning: **Mahnstufe** 1–3 are escalating payment
+demands, and a **Mahngebühr** the fee charged for one. A **Sperrung** is the
+disconnection of a defaulting customer's supply — a regulated sequence, not a
+switch. *Offene Posten* are open items, *Kontokorrent* the customer's running
+account, *Verzug* the arrears, *Festschreibung* the irreversible closing of an
+accounting period. **SEPA message names** appear throughout: **pain.008** is a
+direct-debit collection, **pain.001** a credit transfer, **pain.007** a
+creditor's reversal of a collection, **pain.002** the bank's status reply, and
+the **camt.052/053/054** family the bank's account statements.
 
 Port: **`:9380`**
 
@@ -73,6 +88,7 @@ graph TB
 |---|---|---|
 | `RECHNUNG` | +debit | `de.billing.rechnung.erstellt` (`is_correction=false`) |
 | `STORNO` | ±signed | `de.billing.rechnung.erstellt` (`is_correction=true`) — billing reversal / Gutschrift (a Gutschrift is a negated Rechnung, not a separate event) |
+| `GUTSCHRIFT` | −credit | Operator-booked credit note via `POST /buchen`. No CloudEvent raises it: billingd's corrections arrive as `STORNO` |
 | `ZAHLUNG` | -credit | CAMT.054 import or `de.invoic.receipt.settled` |
 | `EEG_GUTSCHRIFT` | -credit | `de.eeg.verguetung.berechnet` — §21 EEG Einspeisevergütung |
 | `EEG_MARKTPRAEMIE` | -credit | `de.eeg.marktpraemie.berechnet` — §20 EEG Direktvermarktung |
@@ -136,11 +152,11 @@ The dunning engine operates in two modes: **automatic** (background worker) and 
 ```mermaid
 graph LR
     subgraph auto ["Auto-dunning worker (daily, dunning_auto_enabled=true)"]
-        trigger["balance_ct > 0<br/>+ oldest RECHNUNG > grace_days<br/>+ no active dunning case"]
+        trigger["verzug_ct > 0<br/>+ oldest charge older than grace_days<br/>+ no active dunning case"]
         a1["Auto: Mahnstufe 1<br/>created + fee1 (€0)"]
         a2["Auto: Mahnstufe 2<br/>+ fee2 (€5.00)"]
         a3["Auto: Mahnstufe 3<br/>+ fee3 (€10.00)<br/>→ opens §41f Sperr-Sequenz"]
-        trigger -->|"grade_days elapsed"| a1
+        trigger -->|"grace_days elapsed"| a1
         a1 -->|"due_date passed"| a2
         a2 -->|"due_date passed"| a3
     end
@@ -197,7 +213,7 @@ Stufe is 3.
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/webhook` | Ingest CloudEvents (billingd, einsd, invoicd) — HMAC-verified |
-| `GET/PUT` | `/api/v1/accounts/{malo_id}` | Account CRUD (IBAN, Abschlag, billing_day) — OIDC required for PUT |
+| `GET/PUT` | `/api/v1/accounts/{malo_id}` | Account master data (IBAN, Abschlag, billing_day) |
 | `GET` | `/api/v1/accounts/{malo_id}/balance` | Current balance in ct; status: overdue/credit/settled |
 | `GET` | `/api/v1/accounts/{malo_id}/ledger` | Ledger movements, newest first, with the `opening_ct` the window starts from |
 | `GET` | `/api/v1/accounts/{malo_id}/kontoauszug` | Account statement (portald-consumable); `?from=&to=` scopes it to a period and returns `eroeffnungssaldo_ct` / `bewegung_ct` / `schlusssaldo_ct` |
@@ -210,7 +226,7 @@ Stufe is 3.
 | `GET/PUT` | `/api/v1/accounts/{malo_id}/zahlungsinformation` | Typed `rubo4e::current::Zahlungsinformation`, through the same gate — its strict-enum stage is what keeps `zahlungsart`, which drives the SEPA collection path, from degrading to a mandate instruction nobody can act on |
 | `POST` | `/api/v1/accounts/{malo_id}/buchen` | **Manual booking** (operator-authorised ledger entry) |
 | `POST` | `/api/v1/accounts/{malo_id}/reconcile` | **Balance reconciliation** — detect/repair `balance_ct` cache drift |
-| `POST` | `/api/v1/accounts/{malo_id}/anonymize` | **GDPR Art. 17** pseudonymization (preserves ledger) — OIDC required |
+| `POST` | `/api/v1/accounts/{malo_id}/anonymize` | **GDPR Art. 17** pseudonymization (preserves ledger) |
 | `GET/POST` | `/api/v1/accounts/{malo_id}/interest-charges` | Verzugszinsen §288 BGB — list/book default interest |
 | `GET/POST` | `/api/v1/accounts/{malo_id}/payment-plans` | Zahlungsvereinbarung — list/create payment plans |
 | `GET` | `/api/v1/aging` | **Aging analysis** — receivables by 0–30d / 31–60d / 61–90d / >90d buckets |
@@ -219,7 +235,6 @@ Stufe is 3.
 | `GET` | `/api/v1/entries/{entry_id}/proof` | **Merkle inclusion proof** an entry is committed (content hash + tree head) |
 | `GET` | `/api/v1/periods/{period_id}/balance-proof` | **Balance proof** — what a customer's Kontokorrent closed at in a sealed period (§ 147 AO); query `malo_id`, `lf_mp_id` |
 | `GET` | `/api/v1/entries/consistency-proof` | **Consistency proof** the journal has only been appended to since `?since=<tree_size>` |
-| `POST` | `/api/v1/payments/import` | Ingest CAMT.054 bank statement (JSON array, deduplicated by `bank_transaction_id`) |
 | `GET` | `/api/v1/offene-posten` | Overdue accounts |
 | `GET` | `/api/v1/dunning` | Open dunning cases |
 | `POST` | `/api/v1/dunning/{account_id}/escalate` | Manual Mahnstufe escalation |
@@ -233,7 +248,7 @@ Stufe is 3.
 | `GET` | `/api/v1/sepa/mandates/dormant` | Mandates at or near the EPC 36-month dormancy limit |
 | `GET` | `/api/v1/payment-plans/{id}` | Get payment plan with full installment schedule |
 | `DELETE` | `/api/v1/payment-plans/{id}` | Cancel payment plan (CANCELLED status) |
-| `POST` | `/api/v1/sepa/mandates` | Register SEPA mandate (IBAN validated via mod-97) — OIDC required |
+| `POST` | `/api/v1/sepa/mandates` | Register SEPA mandate (IBAN validated via mod-97) |
 | `GET` | `/api/v1/sepa/mandates/{id}` | Fetch mandate |
 | `DELETE` | `/api/v1/sepa/mandates/{id}` | **Revoke mandate** (§58 ZAG) |
 | `POST` | `/api/v1/sepa/run` | Generate **and archive** one pain.008 message (one `PmtInf` group per SequenceType, mandatory Gläubiger-ID); `409` when the collection date has already been dispatched |
@@ -255,6 +270,12 @@ Stufe is 3.
 | `GET` | `/api/v1/business-partners/{kunden_nr}/balance` | Consolidated balance |
 | `GET` | `/metrics` | Prometheus financial + operational gauges |
 | `GET` | `/health` · `/health/ready` | Liveness / readiness |
+| `POST\|GET` | `/mcp` | MCP Streamable HTTP — `[mcp]` plus a Cedar action per tool |
+
+**Every `/api/v1/*` route** takes a JWT and a Cedar check; see
+[Authorization](#authorization-cedar) for which action each one needs. `/webhook`
+is HMAC-authenticated instead — `billingd`, `einsd` and `invoicd` hold no bearer
+token for this service.
 
 ---
 
@@ -287,8 +308,8 @@ Allowed `entry_type` values are `ledger::ENTRY_TYPES`: `RECHNUNG`, `STORNO`,
 The annual settlement compares actual billed amounts against advance payments collected:
 
 ```bash
-# Preview (dry_run=true)
-curl "http://accountingd:9380/api/v1/jahresabschluss/51238696012?year=2025&dry_run=true"
+# Preview (dry_run=true) — POST, like the commit: the route has no GET
+curl -X POST "http://accountingd:9380/api/v1/jahresabschluss/51238696012?year=2025&dry_run=true"
 
 # Commit
 curl -X POST "http://accountingd:9380/api/v1/jahresabschluss/51238696012?year=2025"
@@ -510,14 +531,21 @@ the Androhung with its own Frist. Without it the escalation chain runs on
 `paying_the_bill_stands_the_disconnection_sequence_down` and
 `dunning_fees_do_not_count_toward_the_disconnection_threshold` pin it.
 
-### No ERP webhook → notice phases paused
+### Two configuration keys gate the sequence
 
-The Androhung and Ankündigung are legal acts (letters the ERP renders and sends
-off the emitted CloudEvent). If `erp_webhook_url` is **not** configured there is
-no dispatch path, so Phases 1–2 are **paused** — no case is marked, so none can
-progress to a Sperrauftrag without its notices having been sent. (Phase 3 needs
-no ERP, but has no candidates until Phase 2 has run, so the sequence stays inert
-until a webhook is set.)
+**Without `makod_url` nothing runs at all.** The daily worker skips
+`run_sperr_sequence` outright when no `makod` client was built, so a deployment
+that never configured one has no Androhung, no Ankündigung and no Sperrauftrag —
+a startup warning says so. (`makod_url` without `makod_api_key` is a hard
+startup error instead: an unauthenticated command dispatch is silently refused
+and the sequence would stall at the Sperrauftrag.)
+
+**Without `erp_webhook_url` the notice phases are paused.** The Androhung and
+Ankündigung are legal acts — letters the ERP renders and sends off the emitted
+CloudEvent — so with no dispatch path no case is marked, and none can progress
+to a Sperrauftrag without its notices having been sent. Phase 3 needs no ERP,
+but has no candidates until Phase 2 has run, so the sequence stays inert until a
+webhook is set. A warning is logged on every cycle.
 
 ### §41f Abs. 6 — what the notices must say
 
@@ -583,14 +611,23 @@ Einzelbewertung of receivables, SAP-FI-CA "oldest-first"):
 ```json
 {
   "malo_id": "51238696012",
+  "balance_ct": 8500,
+  "balance_eur": "85.00",
+  "open_item_count": 2,
   "open_items": [
-    { "entry_id": "…", "entry_type": "RECHNUNG", "amount_ct": 8000,
-      "outstanding_ct": 0, "booking_date": "2026-05-15" },
     { "entry_id": "…", "entry_type": "RECHNUNG", "amount_ct": 12000,
-      "outstanding_ct": 15000, "booking_date": "2026-06-15" }
+      "outstanding_ct": 4500, "booking_date": "2026-06-15",
+      "document": "R2026-06-001" },
+    { "entry_id": "…", "entry_type": "MAHNGEBUEHR", "amount_ct": 500,
+      "outstanding_ct": 500, "booking_date": "2026-07-20",
+      "document": null }
   ]
 }
 ```
+
+A fully cleared debit is **not** in the list: the query keeps only debit items
+with a residual above zero, oldest first. `document` is the source-document
+reference the posting carries — a Rechnungsnummer where there is one.
 
 - `POST /api/v1/accounts/{malo_id}/clear` re-runs the match (idempotent — assigns
   nothing when everything is already cleared).
@@ -1117,7 +1154,7 @@ it refers to.
 ```mermaid
 graph LR
     subgraph out ["Outgoing"]
-        pain008["pain.008 SDD<br/>Direct Debit<br/>(N-5 scheduler + /sepa/run)"]
+        pain008["pain.008 SDD<br/>Direct Debit<br/>(pre-notification scheduler<br/>+ /sepa/run)"]
         pain001["pain.001 SCT / SCT Inst<br/>EEG Vergütung + Erstattungen<br/>(/eeg/payouts/run, auto_payout)"]
         pain007["pain.007 SDD Reversal<br/>creditor gives a settled<br/>collection back<br/>(/sepa/reversals)"]
     end
@@ -1196,13 +1233,20 @@ RCUR in separate payment-information blocks; they live in separate groups of
 the same file, so a collection run is a single bank submission and a single
 `sepa_collection_runs` audit row.
 
+The scheduler that drives this is the **pre-notification** worker, and its
+window is `sepa_pre_notification_days` — **14 calendar days by default**. The EPC
+SDD Core Rulebook requires the creditor to notify the debtor at least 14 calendar
+days before the due date unless the contract agrees a shorter period. It is not
+the bank submission lead time, which is a separate deadline owed to a different
+party; anything in your notes calling this "N-5" is describing that other clock.
+
 **The XML is only returned once the archive row exists**, and a collection date
 whose run has already been dispatched answers **`409`**. The stored pain.008 and
 its entries are the record of what the bank received: a pain.002 rejection names
 an `EndToEndId` and a camt booking a `PmtInfId`, so a second file for the same
 date is both an unattributable reply and — if it is submitted — a household
-debited twice. The N-5 scheduler holds an advisory lock for the same reason, so
-only one replica builds the day's batch.
+debited twice. The pre-notification scheduler holds an advisory lock for the same
+reason, so only one replica builds the day's batch.
 
 Response shape:
 ```json
@@ -1234,7 +1278,7 @@ Key features of the pain.008 generator:
   purposes and picking either would be false
 - **`with_description`**: Each entry carries `"Abschlag YYYY-MM"` as RemittanceInfo (`Ustrd`) — visible on debtor's bank statement. The 140-character limit binds on the *transliterated* text, so 140 German characters cannot silently become 141 and lose their tail
 - **Hard error**: missing or invalid `creditor_iban` returns HTTP 503 (no silent placeholder IBAN)
-- **N-5 scheduler**: Background worker auto-generates and dispatches the pain.008 message 5 days before each `billing_day`; persisted once per collection date in `sepa_collection_runs` for audit and ERP replay
+- **Pre-notification scheduler**: a daily worker builds and dispatches the pain.008 message `sepa_pre_notification_days` (default **14**, clamped to 1–60) before each `billing_day`, announcing `de.accounting.payment.due` — the event the ERP turns into the debtor's pre-notification. Persisted once per collection date in `sepa_collection_runs` for audit and ERP replay
 
 #### What a run collected
 
@@ -1250,13 +1294,35 @@ record.
 curl "http://accountingd:9380/api/v1/sepa/collections/{run_id}/entries"
 ```
 
-| `status` | Meaning |
-|---|---|
-| `SUBMITTED` | written when the pain.008 is generated |
-| `SETTLED` | an accepted pain.002 status, or a matching camt booking |
-| `REJECTED` | pain.002 `RJCT` — the collection never left the bank |
-| `RETURNED` | a camt Rückläufer after settlement (R-transaction) |
-| `REVERSED` | the creditor gave it back via pain.007 |
+| `status` | Set by | Reachable from | Typical `status_reason` |
+|---|---|---|---|
+| `SUBMITTED` | the pain.008 generator | — (the initial state) | — |
+| `SETTLED` | an accepted pain.002, or a matching camt booking | `SUBMITTED` | — |
+| `REJECTED` | pain.002 `RJCT` — the collection never left the bank | `SUBMITTED` | the report's own reason, e.g. `AM04` insufficient funds |
+| `RETURNED` | a camt Rückläufer (R-transaction) | `SUBMITTED`, `SETTLED` | `MS03` no reason given |
+| `REVERSED` | the creditor gave it back via `POST /sepa/reversals` | `SUBMITTED`, `SETTLED` | the pain.007 reason, e.g. `MD06` refund on the debtor's request |
+
+`status_reason` is the EPC/ISO reason code the reply carried, and `status_at`
+when it was applied. `RETURNED` and `REVERSED` are reachable from `SUBMITTED` as
+well as from `SETTLED` because an R-transaction lands either way round: a
+Rückläufer usually follows a settlement, but a camt can arrive before any
+pain.002 did.
+
+**The transition is guarded, and a refused one is not an error.** The status
+write carries `WHERE entry_id = … AND status = ANY(<legal predecessors>)` and
+reports whether it moved a row. A replayed pain.002, a Rückläufer for a
+collection the bank had already rejected, or a second reversal therefore changes
+nothing and is logged rather than raised — every caller acts on that answer
+rather than assuming the write landed. `POST /sepa/reversals` turns it into a
+**409** and rolls back the `sepa_reversals` row it had just written, so a
+collection that cannot carry a reversal never gets one recorded for it.
+
+**A pain.002 can also bounce a whole file** with no per-transaction detail — a
+schema fault, a creditor identity the bank refuses, a collection date it will not
+accept. That is matched on the `GrpHdr/MsgId` accountingd sent (quoted back as
+`OrgnlMsgId`) and moves every still-`SUBMITTED` entry of the run to `REJECTED`.
+Without it those collections would sit at `SUBMITTED` forever, waiting for money
+that is never coming.
 
 The row holds **no IBAN or account holder** — both stay on `sepa_mandates` and
 are reached through `mandate_id`, so GDPR Art. 17 erasure keeps working from one
@@ -1430,10 +1496,17 @@ to, keyed by the reference the bank echoes back:
 | a pain.001 EEG payout | `eeg_payout_orders.end_to_end_ref` | status, reason, `settled_at`, VoP outcome |
 | a pain.008 collection | `sepa_collection_entries.end_to_end_id` | `SETTLED` / `REJECTED` + `de.accounting.sepa.collection-rejected` |
 
-Both `OrgnlEndToEndId` and `OrgnlInstrId` are `0..1`; either is accepted, and a
-report naming neither is counted `unmatched` rather than guessed at. A missing
-`TxSts` falls back to the group status — and *no status at all* is not an
-acceptance.
+`OrgnlEndToEndId` and `OrgnlInstrId` are ISO 20022 elements of the pain.002
+message, not columns of any mako table; the `sepa` crate's `parse_pain002`
+reads them. Both are `0..1` in the schema, so either is accepted as the match
+key and a report naming neither is counted `unmatched` rather than guessed at.
+A missing `TxSts` falls back to the group status — and *no status at all* is not
+an acceptance.
+
+A **verification** status is discarded here on purpose: it says nothing about a
+collection's lifecycle. So is a still-in-flight one such as `PDNG` — there is
+nothing to record yet, and recording it would consume a transition the real
+answer needs.
 
 `NbOfTxsPerSts` is surfaced in the response: a VoP report on hundreds of payments
 states counts per outcome and itemises only the ones needing attention, so the
@@ -1518,11 +1591,21 @@ operator then acts on.
 ## Idempotency
 
 Every money movement carries an idempotency key into the doubleentry ledger — a
-CloudEvent id, a bank transaction id, or a deterministic string
-(`ABSCHLAG-{malo}-{YYYY}-{MM}`, `mahngebuehr:{malo}:{stufe}:{date}`, `bank:{txn}`).
+CloudEvent id, a bank transaction id, or a deterministic string:
+
+| Key | Written by |
+|---|---|
+| `ABSCHLAG-{malo}-{YYYY}-{MM}` | the Abschlagslauf; doubles as the demand reference on the register row |
+| `mahngebuehr:{case_id}:{stufe}` | the dunning fee, keyed on the **case** rather than the MaLo — a second case for the same customer charges its own fee |
+| `interest:{malo}:{from}:{to}` | a §288 BGB interest charge |
+| `bank:{txn}` | every bank import, from the bank's own transaction reference |
+| `jahresabschluss:{malo}:{year}` | the annual settlement |
+| `manual:{uuid}` | `POST /buchen` with no `reference_id` |
+
 An identical replay is a store-level no-op returning the original entry; the same
 key with different content is refused. The `/buchen` endpoint is idempotent when a
-`reference_id` is supplied (a fresh random key otherwise).
+`reference_id` is supplied — that value *is* the key — and books a new entry on
+every call otherwise.
 
 ---
 
@@ -1541,7 +1624,7 @@ key with different content is refused. The `/buchen` endpoint is idempotent when
 | `iban_hash` | App-computed **keyed BLAKE3** hash of the normalised IBAN — used for CAMT.054 matching even when the IBAN is encrypted (no pgcrypto) |
 | `iban_encrypted` | `false` (default) or `true` when column stores encrypted ciphertext |
 | `mandatsref` | Active SEPA mandate link (fast lookup) |
-| `sparte` | BO4E Sparte, learned from `de.billing.rechnung.erstellt` — drives the ISO 20022 `Purp/Cd` on the next collection |
+| `sparte` | BO4E Sparte, learned from `de.billing.rechnung.erstellt` — drives the ISO 20022 `Purp/Cd` on the next collection. Nullable: an account that has never been billed has no Sparte yet, and `STROM_UND_GAS` has no single ISO code, so both emit none |
 | `addr_town`, `addr_country`, `addr_street`, `addr_building_number`, `addr_post_code`, `addr_country_subdivision` | `PstlAdr` — `Cdtr/PstlAdr` when accountingd pays this account, and the fallback debtor address. Mandatory from the EPC cut-over on 2026-11-15 |
 | `vorauszahlung` | `rubo4e::current::Vorauszahlung` JSONB |
 | `zahlungsinformation` | `rubo4e::current::Zahlungsinformation` JSONB |
@@ -1553,7 +1636,7 @@ key with different content is refused. The `/buchen` endpoint is idempotent when
 
 The journal, per-account balances, the append-only Merkle log, period seals, and
 open-item clearing live in the `doubleentry` schema (the crate's own tables:
-`entries`, `postings`, `accounts`, `log_subtrees`, `seals`, `clearings`, …), applied
+`entries`, `postings`, `accounts`, `log_nodes`, `seals`, `clearings`, …), applied
 by `PgLedger::connect` at startup. There is no `ledger_entries`/`journal_lines`
 table in accountingd's `public` schema any more — `booking_date`/`value_date`
 (§238 HGB Buchungsdatum vs. Wertstellung), immutability, and the balance invariant
@@ -1583,8 +1666,10 @@ plus the `msg_id` a pain.002 reply quotes in `OrgnlMsgId`.
 
 One row per mandate collected in a run — the attribution key for pain.002 replies
 (`EndToEndId`), camt bookings (`Btch/PmtInfId`) and pain.007 reversals. Holds
-`mandatsref`, `end_to_end_id`, `payment_info_id`, `sequence_type`, `amount_ct` and
-a `status` (`SUBMITTED` → `SETTLED` / `REJECTED` / `RETURNED` / `REVERSED`).
+`mandatsref`, `end_to_end_id`, `payment_info_id`, `sequence_type`, `scheme`
+(`CORE` / `B2B`), `amount_ct`, and the status triple `status`
+(`SUBMITTED` → `SETTLED` / `REJECTED` / `RETURNED` / `REVERSED`, guarded — see
+above), `status_reason` (the EPC/ISO code the reply carried) and `status_at`.
 Deliberately holds **no IBAN**: that stays on `sepa_mandates`, reached through
 `mandate_id`, so GDPR erasure works from one place.
 
@@ -1598,13 +1683,20 @@ collection twice.
 
 ### `interest_charges`
 
-Verzugszinsen per §288 BGB. Links to a `MAHNGEBUEHR` ledger entry.
-Stores `principal_ct`, `interest_ct`, `rate_pct`, `ecb_base_rate_pct`, `customer_type` (B2C/B2B), `period_from`, `period_to`, `legal_basis`.
+Verzugszinsen per §288 BGB. Links to the **`VERZUGSZINSEN`** ledger entry it
+booked — not `MAHNGEBUEHR`; § 275 HGB puts Zinsen on their own P&L line.
+Stores `principal_ct`, `interest_ct`, `rate_pct`, `ecb_base_rate_pct`,
+`customer_type` (B2C/B2B), `period_from`, `period_to`, `legal_basis` and
+`rate_segments` — one object per §247 BGB rate in force during the period, which
+is the breakdown a disputing customer asks for when a Verzugszeitraum crosses a
+Stichtag. `UNIQUE (tenant, account_id, period_from, period_to)`.
 
 ### `ecb_base_rates`
 
-ECB Basiszinssatz history (§247 BGB). Updated twice per year (1 Jan + 1 Jul).
-Pre-seeded with rates through 2026-07-01. New rates must be inserted by the operator via SQL.
+Basiszinssatz history (§247 BGB). Despite the table name this is the *Deutsche
+Bundesbank's* announced figure, not the ECB main refinancing rate. Announced
+twice per year (1 Jan + 1 Jul); pre-seeded through 2026-07-01. New rates must be
+inserted by the operator via SQL.
 
 ### `payment_plans` + `payment_plan_installments`
 
@@ -1613,8 +1705,12 @@ Zahlungsvereinbarung lifecycle (ACTIVE/COMPLETED/CANCELLED/DEFAULTED).
 
 ### `bank_import_log`
 
-CAMT.054 deduplication log. `UNIQUE (tenant, bank_transaction_id)`. Prevents duplicate
-`ZAHLUNG`/`BANKRUECKLAST` entries on re-import of the same bank file.
+Deduplication log for **all four** import doors — camt.052/053/054 and the flat
+JSON export. `UNIQUE (tenant, bank_transaction_id)` prevents duplicate
+`ZAHLUNG`/`BANKRUECKLAST` entries on re-import of the same bank file, and is why
+a transaction reported intraday and again in the evening's camt.053 books once.
+Also stores `NtryDtls/Btch/PmtInfId`, the bank's own assertion of which
+submitted `PmtInf` group a booking aggregates.
 
 ### `dunning_cases`, `anonymization_log`, `auto_dunning_runs`
 
@@ -1637,14 +1733,112 @@ with `operator_sub` (JWT sub), `action` (endpoint), `old_values` and `new_values
 
 ### OIDC/JWT authentication
 
-All financial write endpoints (`PUT /accounts`, `POST /mandates`, `POST /interest-charges`,
-`POST /payment-plans`, `DELETE /payment-plans`, `POST /anonymize`) require a valid JWT via
-`Authorization: Bearer <token>`.
+Every `/api/v1/*` handler names a `Claims` extractor, so a request without a
+valid `Authorization: Bearer <token>` never reaches it. There is no global auth
+middleware: authentication is the extractor, which is why a handler that forgets
+it would be served to anyone — and why a guard test checks for it.
 
-When `[oidc]` is not configured, the service accepts all requests but emits a startup warning:
+When `[oidc]` is not configured the verifier is *disabled*: every request is
+accepted and given synthetic dev-admin claims (tenant = the configured tenant,
+all market roles plus `ADMIN`), so the Cedar checks below pass rather than
+fail. A startup warning says so:
+
 ```
-[WARN] OIDC disabled — financial write endpoints accept all requests (dev mode)
+[WARN] OIDC disabled -- financial write endpoints accept all requests (dev mode)
 ```
+
+Unlike `outputd` and `sperrd`, accountingd does **not** refuse to start without
+`[oidc]`. Treat the warning as the production alarm it is.
+
+### Authorization (Cedar)
+
+Authentication says *who* is calling; `policies/accountingd.cedar` says what they
+may do. Every handler checks one action before touching the database, and Cedar
+is default-deny.
+
+Reads are split three ways on purpose: a customer's balance, their IBAN and the
+whole book's aging list leak very different things.
+
+| Action | What it covers | Who |
+|---|---|---|
+| `read-account` | a customer's account, balance, Kontokorrent, Kontoauszug, open items, Vorauszahlung, payment plans, interest charges, business-partner aggregates | any authenticated caller in the tenant |
+| `read-banking` | a SEPA mandate or `Zahlungsinformation`, a run's collection entries, an EEG payout and its pain.001 XML | `LF`, `MSB` |
+| `read-books` | trial balance, aging, the dunning list, period seals, the audit proofs | `LF`, `MSB` |
+| `write-account` | `PUT` account master data, Abschlag, Vorauszahlung, `Zahlungsinformation`, the business-partner link | `LF`, `MSB` |
+| `post-entry` | a manual booking, a clearing, a clearing reset, an interest charge, a reconcile | `LF`, `MSB` |
+| `manage-sepa` | register or revoke a mandate, run a collection, import a pain.002, issue a pain.007 | `LF`, `MSB` |
+| `import-payments` | camt.052/053/054 and the flat payment import | `LF`, `MSB` |
+| `run-payout` | the EEG payout run and its pain.002 status | `LF`, `MSB` |
+| `manage-dunning` | Mahnstufe escalation and resolution, the §41g Abwendungsvereinbarung offer, placing and lifting a Mahnsperre, recording and closing a §41f Forderungseinwand | **`LF` only** |
+| `close-period` | the Jahresabschluss and the Festschreibung seal | **`LF` only** |
+| `erase-pii` | the GDPR Art. 17 anonymization | **`LF` only** |
+
+`read-banking` is separated from `read-account` because an IBAN, a mandate and a
+pain.001 are together everything needed to collect from — or pay out to — a bank
+account. `manage-dunning` is `LF`-only because every act under it moves a
+household customer toward, or away from, having their electricity cut off, and
+the §41f obligations rest on the supplier. `close-period` is `LF`-only because a
+Festschreibung is irreversible, and `erase-pii` because erasure is a
+data-protection act rather than an accounting one.
+
+The roles are the platform's **market** roles from the `mako_roles` claim.
+`MSB` is admitted alongside `LF` because a Messstellenbetreiber runs the same
+receivable machinery against its own Messentgelt invoices. There is deliberately
+no job-function axis (clerk / accountant / admin): no IdP in this platform issues
+such a claim, so a policy naming one would deny every caller. Separation of
+duties belongs in the IdP; `published_by`-style attribution keeps the acts
+traceable meanwhile.
+
+`tests/authorization_guard.rs` fails the build on three defects that are all
+silent at compile time: a routed handler with no `Claims` extractor (served to
+anyone), a handler with `Claims` but no Cedar check (any tenant's valid token
+accepted), and an action named in code but in no policy (a permanent 403, since
+Cedar is default-deny) or granted by policy and checked nowhere (usually a route
+that lost its guard). It cross-checks `main.rs` so that only **routed** handlers
+are held to the rule.
+
+#### The MCP surface is authorized per tool
+
+`policies/accountingd.cedar` used to exempt the whole `/mcp` surface, on the
+grounds that it was "read-only by construction". It is not. Five of its thirteen
+tools write:
+
+| Tool | What it does | Action |
+|---|---|---|
+| `post_manual_booking` | posts a Buchung to a customer's Kontokorrent | `post-entry` |
+| `run_abschlag_cycle` | raises an Abschlagsforderung against every account due that day | `post-entry` |
+| `import_payments` | books a `ZAHLUNG` per CAMT.054 entry | `import-payments` |
+| `update_abschlag` | rewrites the monthly advance and the SEPA billing day | `write-account` |
+| `run_sepa_collection` | emits a bank-submittable pain.008 carrying every mandate's IBAN | `manage-sepa` |
+
+`trigger_jahresabschluss` is a preview despite its name — committing the
+settlement is `POST /api/v1/jahresabschluss/{malo_id}` — so it is a read.
+
+The exemption is gone rather than made true: those five are the automation the
+surface exists for, and a claim that has to be re-proved every time a tool is
+added is the wrong shape of guarantee. `mcp_server::tool_action` now maps **every**
+tool to the Cedar action its REST twin enforces, the MCP middleware checks it
+before the frame is dispatched, and a `tools/call` naming a tool with no mapping
+is refused rather than served.
+
+Reads are mapped too, not only the five writes, because the reads are themselves
+role-split: `read-account` is open to any token of the tenant, while
+`read-banking` and `read-books` are held to `LF`/`MSB`. A blanket gate would have
+let a role-less token read the mandate register (`list_sepa_collections`) and the
+whole aging list (`list_overdue`) through MCP after their REST twins refused.
+
+`use-mcp` remains as the weakest grant in the policy — permission to open the
+surface, list the tools and read a prompt — and on its own reaches no balance, no
+IBAN and no ledger write. An API-key caller is a deployment-trusted boundary the
+shared middleware handles on its own, so an `[mcp]` key is still as powerful as
+the tools it can name: scope it at the ingress.
+
+`tests/authorization_guard.rs` pins the replacement claim: every declared tool
+has a mapping, and any tool whose body reaches a mutating pg/ledger call must map
+to a write action, not to one of the three reads. That last test is what would
+have caught the original defect — under the old exemption it fails for all five.
+
+`/webhook` is HMAC-authenticated and carries no Cedar action.
 
 ### Inbound webhook HMAC verification
 
@@ -1715,8 +1909,9 @@ creditor_name         = "Muster Energie GmbH"
 # pain008_schema      = "pain.008.001.02"   # default: pain.008.001.08
 # pain001_schema      = "pain.001.001.03"   # default: pain.001.001.09
 
-# SEPA N-5 pre-notification window (default: 5 calendar days)
-sepa_pre_notification_days = 5
+# Debtor pre-notification window: calendar days between the notice and the
+# collection date. Default 14, per the EPC SDD Core Rulebook; clamped to 1–60.
+sepa_pre_notification_days = 14
 
 # The operator's own postal address. Emitted as <Cdtr><PstlAdr> in pain.008 and
 # pain.007, and <Dbtr><PstlAdr> in pain.001 — the same legal entity on both
@@ -1746,7 +1941,7 @@ url = "postgresql://accountingd:secret@db:5432/accountingd"
 ```
 
 > **`creditor_iban` is required.** Missing or invalid `creditor_iban` causes `POST /sepa/run`
-> to return HTTP 503. The N-5 background worker also blocks (no silent placeholder IBAN fallback).
+> to return HTTP 503. The pre-notification worker also blocks (no silent placeholder IBAN fallback).
 
 ---
 
@@ -1764,14 +1959,32 @@ url = "postgresql://accountingd:secret@db:5432/accountingd"
 | `import_payments` | Import flat bank-export entries (deduplicated) |
 | `run_sepa_collection` | Generate a pain.008 message for all active mandates (preview — `POST /api/v1/sepa/run` is what archives it) |
 | `list_sepa_collections` | Collections and their lifecycle: `SUBMITTED` / `SETTLED` / `REJECTED` / `RETURNED` / `REVERSED`, filterable by status and MaLo |
-| `trigger_jahresabschluss` | Run annual settlement (dry-run or commit) |
+| `trigger_jahresabschluss` | Preview the annual settlement (`POST /api/v1/jahresabschluss/{malo_id}` is what commits it) |
 | `run_abschlag_cycle` | Process Abschlagslauf for a specific billing day |
 | `compute_bilanzielle_abgrenzung` | pRAP/aRAP calculation for HGB §250 period close |
 | `suggest_payment_match` | Reconcile an incoming transfer — exact resolution first, amount ranking only as a fallback |
 | `post_manual_booking` | Create an operator-authorised ledger entry |
 
-The `payment-reconciliation-agent` in `agentd` uses these tools for automated payment
-matching (powercloud-equivalent >98% match rate).
+One prompt: `check-customer-account` — review an account and plan collection
+action.
+
+**Five of the thirteen write**, so the surface is **not** read-only and is not
+exempt from the policy: `update_abschlag`, `import_payments`,
+`run_abschlag_cycle`, `post_manual_booking` and `run_sepa_collection` are each
+held to the Cedar action their REST twin enforces — see
+[The MCP surface is authorized per tool](#the-mcp-surface-is-authorized-per-tool).
+`trigger_jahresabschluss` is a preview despite its name, and reads.
+
+`run_sepa_collection` builds a pain.008 for a collection date two days out and
+returns it **without** writing a `sepa_collection_runs` row; `POST
+/api/v1/sepa/run` is the one that archives. It is still `manage-sepa` rather than
+a read: the file it hands back is submittable to the bank, and building it reads
+every active mandate's IBAN. Issuing a pain.007 reversal is deliberately not a
+tool at all.
+
+The `payment-reconciliation-agent` in [agentd](@/docs/services/agentd.md) uses
+these tools for automated payment matching (powercloud-equivalent >98% match
+rate).
 
 ---
 
@@ -1782,8 +1995,9 @@ cargo test -p accountingd --all-features        # unit + pure-logic integration 
 just test-accountingd-db                          # DB scenarios against a throwaway Postgres
 ```
 
-**Unit and pure-logic tests** (`unit_tests.rs`, `integration_tests.rs`, inline `#[cfg(test)]`)
-run without a database and cover:
+**Unit and pure-logic tests** (`unit_tests.rs`, `integration_tests.rs`,
+`authorization_guard.rs`, inline `#[cfg(test)]`) run without a database and
+cover:
 
 - IBAN validation (DE/GB/NL/AT/CH — checksum, length, lowercase, mod-97)
 - Entry-type sign conventions and STORNO vs KORREKTUR semantics
@@ -1793,6 +2007,8 @@ run without a database and cover:
 - pain.008 / pain.001 formatting: integer-only arithmetic, `CtrlSum`, FRST/RCUR separation,
   Gläubiger-ID inclusion, `creditor_name` regression guard
 - GDPR anonymization field-list completeness
+- The authorization surface: every routed handler names a `Claims` extractor and
+  a Cedar check, and the policy and the code name the same action set
 
 **DB scenario tests** (`db_scenarios.rs`, `#[ignore]` — require a live `DATABASE_URL`) exercise
 the doubleentry-backed ledger end-to-end against real PostgreSQL:

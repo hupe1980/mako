@@ -1086,7 +1086,7 @@ mod tests {
     /// in each:
     ///
     /// * A **triage** row gates nothing — the run already finished, and the row
-    ///   *is* the finding: a §20 EnWG parity deviation, an EEG breach, a
+    ///   *is* the finding: a Gleichbehandlung deviation, an EEG breach, a
     ///   §§41f/41g sequence out of compliance. `deny` expires it and takes it
     ///   out of the worklist, so a breach that was correctly detected and
     ///   correctly delivered is deleted when its window closes. `escalate` is

@@ -135,7 +135,7 @@ permit(
 // Grant MaKo::Action::"AdminMigrations" to a dedicated break-glass principal
 // in your site policy for the FV-cutover window, then remove it.
 
-// ── Process reads: workflow-scoped (§9 EnWG Informatorisches Unbundling) ──────
+// ── Process reads: workflow-scoped (§ 6a EnWG Informatorisches Unbundling) ──────
 // The context carries the process's workflow name, so a VIU site running with
 // `--cedar-no-default-policy` can split process reads into role-scoped
 // principals — an NB operator sees grid-side workflows and nothing else:

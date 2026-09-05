@@ -198,12 +198,14 @@ impl VertragdMcpHandler {
 
     /// List scheduled Tarifwechsel whose price-change notice is still owed.
     #[tool(
-        description = "List product slices that take effect in the future and whose § 41 Abs. 5 \
-                       EnWG price-change notice has not gone out yet. The required lead depends \
-                       on the contract: 6 weeks in the Grundversorgung (§ 5 Abs. 2 StromGVV / \
-                       GasGVV), 1 month for a Haushaltskunde in a Sondervertrag, 2 weeks \
-                       otherwise (§ 41 Abs. 5 Satz 2 EnWG). Each row states which applied and \
-                       whether the lead is actually met.",
+        description = "List supplier-initiated product slices that take effect in the future \
+                       and whose § 41 Abs. 5 EnWG price-change notice has not gone out yet. A \
+                       switch the customer asked for is not listed: it owes no notice. The \
+                       required lead depends on the contract: 6 weeks in the Grundversorgung \
+                       (§ 5 Abs. 2 StromGVV / GasGVV), 1 month for a Haushaltskunde in a \
+                       Sondervertrag, 2 weeks otherwise (§ 41 Abs. 5 Satz 2 EnWG). Each row \
+                       states which applied, whether the lead is actually met, and why the last \
+                       attempt to issue the notice failed.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_pending_tarifwechsel(
@@ -234,6 +236,8 @@ impl VertragdMcpHandler {
                     "fruehestens_wirksam": regime.fruehestens_wirksam(today).to_string(),
                     "frist_gewahrt": regime.frist.gewahrt(today, r.wirksam_ab),
                     "rechtsgrundlage": regime.rechtsgrundlage,
+                    "notif_versuche": r.notif_versuche,
+                    "notif_letzter_fehler": r.notif_letzter_fehler,
                 })
             })
             .collect();

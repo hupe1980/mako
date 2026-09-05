@@ -27,7 +27,7 @@
 /// | `BiomassHolz` | `"BIOMASSE_HOLZ"` |
 /// | `Biogas` | `"BIOGAS"` |
 /// | `Biomethan` | `"BIOMETHAN"` |
-/// | `Klaegas` | `"KLAEGAS"` |
+/// | `Klaergas` | `"KLAERGAS"` |
 /// | `Grubengas` | `"GRUBENGAS"` |
 /// | `Deponiegas` | `"DEPONIEGAS"` |
 /// | `Wasserkraft` | `"WASSERKRAFT"` |
@@ -87,7 +87,7 @@ pub enum ErzeugungsArt {
     /// Biomethan (upgraded biomethane).
     Biomethan,
     /// Klärgas (sewage gas).
-    Klaegas,
+    Klaergas,
     /// Grubengas (mine gas).
     Grubengas,
     /// Deponiegas (landfill gas).
@@ -119,7 +119,7 @@ impl ErzeugungsArt {
         Self::BiomassHolz,
         Self::Biogas,
         Self::Biomethan,
-        Self::Klaegas,
+        Self::Klaergas,
         Self::Grubengas,
         Self::Deponiegas,
         Self::Wasserkraft,
@@ -156,7 +156,7 @@ impl ErzeugungsArt {
                 | Self::BiomassHolz
                 | Self::Biogas
                 | Self::Biomethan
-                | Self::Klaegas
+                | Self::Klaergas
                 | Self::Grubengas
                 | Self::Deponiegas
         )
@@ -179,7 +179,7 @@ impl ErzeugungsArt {
             "BIOMASSE_HOLZ" => Ok(Self::BiomassHolz),
             "BIOGAS" => Ok(Self::Biogas),
             "BIOMETHAN" => Ok(Self::Biomethan),
-            "KLAEGAS" => Ok(Self::Klaegas),
+            "KLAERGAS" => Ok(Self::Klaergas),
             "GRUBENGAS" => Ok(Self::Grubengas),
             "DEPONIEGAS" => Ok(Self::Deponiegas),
             "WASSERKRAFT" => Ok(Self::Wasserkraft),
@@ -204,7 +204,7 @@ impl ErzeugungsArt {
             Self::BiomassHolz => "BIOMASSE_HOLZ",
             Self::Biogas => "BIOGAS",
             Self::Biomethan => "BIOMETHAN",
-            Self::Klaegas => "KLAEGAS",
+            Self::Klaergas => "KLAERGAS",
             Self::Grubengas => "GRUBENGAS",
             Self::Deponiegas => "DEPONIEGAS",
             Self::Wasserkraft => "WASSERKRAFT",

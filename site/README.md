@@ -71,8 +71,13 @@ palette into the generated SVG.
 | `content/docs/services/` | One page per service |
 | `content/docs/regulatory/` | BNetzA, BDEW, DVGW obligations |
 | `content/docs/reference/` | Processes, PIDs, validation |
-| `templates/` | Zola templates; `index.html` is the landing page |
-| `static/js/mermaid-init.js` | Diagram renderer |
+| `templates/base.html` | Shell: `<head>` (meta, Open Graph, per-page JSON-LD), header, footer |
+| `templates/index.html` | The landing page — a template, not content |
+| `templates/page.html`, `section.html` | Docs page and section index |
+| `templates/anchor-link.html` | Heading anchor; deliberately empty, the `#` comes from CSS so it stays out of copied headings and the search index |
+| `templates/robots.txt` | Rendered to `/robots.txt`; see the note inside it about GitHub Pages project paths |
+| `static/js/mermaid-init.js` | Diagram renderer. **The Mermaid major is pinned here**, in the import URL — there is no config key for it |
+| `static/js/search.js` | Client-side search over Zola's `fuse_json` index |
 | `tools/check-mermaid.mjs` | Diagram + renderer validation |
 
 `package.json` exists only for that checker. The published site is static and

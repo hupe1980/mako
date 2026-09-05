@@ -58,6 +58,20 @@ pub struct AnmeldungDecisionRecord {
     pub lf_mp_id: String,
     pub decision: AnmeldungDecision,
     pub antwortcode: Option<String>,
+    /// The EBD the Antwortcode was resolved against — `"E_0623"`, `"E_0607"`,
+    /// `"G_0012"`.
+    ///
+    /// `mako_pruefung::AntwortDetail` carries two tree names: `tree`, which is
+    /// always present and is the key the code was looked up under, and `ebd`,
+    /// which is what goes on the wire in `SG4 STS+E01` DE 1131 and is `None`
+    /// for the Gas Codelisten. This column takes **`tree`**: it is the audit
+    /// log's job to say which decision tree produced the finding, and a Gas
+    /// answer that names no EBD on the wire still came from exactly one — a
+    /// row with a bare `E15` and no tree cannot be read back at all.
+    ///
+    /// `None` only where no code was published: an Escalate, or the
+    /// Abmeldeanfrage leg that has not decided yet.
+    pub antwortcode_ebd: Option<String>,
     pub detail: Option<String>,
     pub initiator_is_affiliate: bool,
     #[serde(with = "time::serde::rfc3339")]
@@ -82,6 +96,7 @@ fn map_decision(row: &PgRow) -> Result<AnmeldungDecisionRecord, sqlx::Error> {
         lf_mp_id: row.try_get("lf_mp_id")?,
         decision,
         antwortcode: row.try_get("antwortcode")?,
+        antwortcode_ebd: row.try_get("antwortcode_ebd")?,
         detail: row.try_get("detail")?,
         initiator_is_affiliate: row.try_get("initiator_is_affiliate")?,
         decided_at: row.try_get("decided_at")?,
@@ -108,7 +123,7 @@ impl PgAnmeldungRepository {
     /// counter measures decisions rather than deliveries.
     pub async fn insert(&self, rec: &AnmeldungDecisionRecord) -> Result<bool, sqlx::Error> {
         sqlx::query(
-            "INSERT INTO anmeldung_decisions (id, process_id, pid, malo_id, lf_mp_id, decision, antwortcode, detail, initiator_is_affiliate, decided_at, tenant) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (process_id, tenant) DO NOTHING",
+            "INSERT INTO anmeldung_decisions (id, process_id, pid, malo_id, lf_mp_id, decision, antwortcode, antwortcode_ebd, detail, initiator_is_affiliate, decided_at, tenant) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (process_id, tenant) DO NOTHING",
         )
         .bind(rec.id)
         .bind(rec.process_id)
@@ -117,6 +132,7 @@ impl PgAnmeldungRepository {
         .bind(&rec.lf_mp_id)
         .bind(rec.decision.to_string())
         .bind(&rec.antwortcode)
+        .bind(&rec.antwortcode_ebd)
         .bind(&rec.detail)
         .bind(rec.initiator_is_affiliate)
         .bind(rec.decided_at)
@@ -132,7 +148,7 @@ impl PgAnmeldungRepository {
         limit: u32,
     ) -> Result<Vec<AnmeldungDecisionRecord>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, process_id, pid, malo_id, lf_mp_id, decision, antwortcode, detail, initiator_is_affiliate, decided_at, tenant FROM anmeldung_decisions WHERE tenant = $1 ORDER BY decided_at DESC LIMIT $2",
+            "SELECT id, process_id, pid, malo_id, lf_mp_id, decision, antwortcode, antwortcode_ebd, detail, initiator_is_affiliate, decided_at, tenant FROM anmeldung_decisions WHERE tenant = $1 ORDER BY decided_at DESC LIMIT $2",
         )
         .bind(tenant)
         .bind(limit as i64)
@@ -165,7 +181,7 @@ impl PgAnmeldungRepository {
         tenant: &str,
     ) -> Result<Option<AnmeldungDecisionRecord>, sqlx::Error> {
         let row = sqlx::query(
-            "SELECT id, process_id, pid, malo_id, lf_mp_id, decision, antwortcode, detail, \
+            "SELECT id, process_id, pid, malo_id, lf_mp_id, decision, antwortcode, antwortcode_ebd, detail, \
              initiator_is_affiliate, decided_at, tenant \
              FROM anmeldung_decisions WHERE process_id = $1 AND tenant = $2 LIMIT 1",
         )
@@ -176,7 +192,7 @@ impl PgAnmeldungRepository {
         row.as_ref().map(map_decision).transpose()
     }
 
-    /// List decisions where `initiator_is_affiliate = true` — §20 EnWG parity audit.
+    /// List decisions where `initiator_is_affiliate = true` — Gleichbehandlung evidence.
     pub async fn list_affiliate_decisions(
         &self,
         tenant: &str,
@@ -184,7 +200,7 @@ impl PgAnmeldungRepository {
         limit: u32,
     ) -> Result<Vec<AnmeldungDecisionRecord>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, process_id, pid, malo_id, lf_mp_id, decision, antwortcode, detail, \
+            "SELECT id, process_id, pid, malo_id, lf_mp_id, decision, antwortcode, antwortcode_ebd, detail, \
              initiator_is_affiliate, decided_at, tenant \
              FROM anmeldung_decisions \
              WHERE tenant = $1 AND initiator_is_affiliate = true \

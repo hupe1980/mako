@@ -261,6 +261,7 @@ pub enum WertebestellungEvent {
         /// Reference of the outbound QUOTES.
         message_ref: MessageRef,
         /// End of the MSB's own Bindungsfrist, which bounds the Bestellung.
+        #[serde(with = "time::serde::rfc3339")]
         bindungsfrist: OffsetDateTime,
     },
     /// UC 4.1 Nr. 2 — the request cannot be served; the process ends.
@@ -312,6 +313,7 @@ pub enum WertebestellungEvent {
         /// EDIFACT message reference.
         message_ref: MessageRef,
         /// Date on which delivery is to stop.
+        #[serde(with = "time::serde::rfc3339")]
         beendigung_zum: OffsetDateTime,
         /// AS4 acknowledgement that starts the 2 WT answer window.
         quittung: Zustellquittung,
@@ -338,6 +340,7 @@ pub enum WertebestellungEvent {
         /// Reference of the outbound notification.
         message_ref: MessageRef,
         /// Date from which delivery stops.
+        #[serde(with = "time::serde::rfc3339")]
         beendigung_zum: OffsetDateTime,
         /// Trigger (loss of Zuordnung, contract end, technical reason).
         reason: String,
@@ -495,6 +498,7 @@ pub enum WertebestellungState {
         /// Process data.
         data: Box<WertebestellungData>,
         /// End of the MSB's Bindungsfrist.
+        #[serde(with = "time::serde::rfc3339")]
         bindungsfrist: OffsetDateTime,
     },
     /// UC 4.1 Nr. 3 done; the MSB owes an ORDRSP within 2 WT.
@@ -514,6 +518,7 @@ pub enum WertebestellungState {
         /// Process data.
         data: Box<WertebestellungData>,
         /// Date delivery is to stop.
+        #[serde(with = "time::serde::rfc3339")]
         beendigung_zum: OffsetDateTime,
     },
     /// Bestellung cancelled before delivery began.

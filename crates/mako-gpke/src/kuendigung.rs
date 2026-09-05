@@ -60,11 +60,11 @@ pub const KUENDIGUNG_ANTWORT_WINDOW_LABEL: &str = "gpke-kuendigung-antwortfrist"
 
 // ── Domain events ─────────────────────────────────────────────────────────────
 
-/// Events emitted by the GPKE Beendigung-der-Zuordnung workflow.
+/// Events emitted by the GPKE Kündigung workflow.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum KuendigungEvent {
-    /// PID 55016 Anfrage zur Beendigung der Zuordnung received.
+    /// PID 55016 Kündigung Lieferbeginn received (LFN → LFA).
     KuendigungErhalten {
         /// Marktlokation EIC code.
         location_id: MaLo,
@@ -74,7 +74,8 @@ pub enum KuendigungEvent {
         receiver: MarktpartnerCode,
         /// EDIFACT document date (`YYYYMMDD`).
         document_date: String,
-        /// Requested Zuordnungsende date (`YYYYMMDD`).
+        /// Requested Kündigungstermin (`YYYYMMDD`) — `SG4 DTM+93` „Ende zum", or
+        /// `DTM+471` for a Kündigung „zum nächstmöglichen Termin".
         process_date: String,
         /// EDIFACT message reference.
         message_ref: MessageRef,
@@ -145,13 +146,14 @@ impl EventPayload for KuendigungEvent {
 pub struct KuendigungData {
     /// EIC/MaLo code.
     pub location_id: MaLo,
-    /// GLN of the NB who initiated the request.
+    /// MP-ID of the LFN that sent the Kündigung.
     pub sender: MarktpartnerCode,
-    /// GLN of the affected LFA.
+    /// MP-ID of the LFA whose contract is terminated.
     pub receiver: MarktpartnerCode,
     /// EDIFACT document date (`YYYYMMDD`).
     pub document_date: String,
-    /// Requested Zuordnungsende date (`YYYYMMDD`).
+    /// Requested Kündigungstermin (`YYYYMMDD`) — `SG4 DTM+93` „Ende zum", or
+    /// `DTM+471` for a Kündigung „zum nächstmöglichen Termin".
     pub process_date: String,
     /// BDEW Prüfidentifikator (55016).
     pub pruefidentifikator: Pruefidentifikator,
@@ -163,7 +165,7 @@ pub struct KuendigungData {
     pub vorgangsnummer: Option<String>,
 }
 
-/// State of a GPKE Beendigung-der-Zuordnung process.
+/// State of a GPKE Kündigung process.
 ///
 /// ```text
 /// New → Eingegangen → ValidationPassed → AntwortGesendet → Beendet
@@ -177,11 +179,11 @@ pub enum KuendigungState {
     /// No events yet.
     #[default]
     New,
-    /// Anfrage received.
+    /// Kündigung received.
     Eingegangen(KuendigungData),
     /// Validation passed; response not yet sent.
     ValidationPassed(KuendigungData),
-    /// Response dispatched; awaiting Zuordnungsende confirmation.
+    /// Response dispatched; awaiting the Kündigungstermin.
     AntwortGesendet {
         /// Data from the Anfrage.
         data: KuendigungData,
@@ -224,22 +226,23 @@ impl KuendigungState {
 
 // ── Domain commands ───────────────────────────────────────────────────────────
 
-/// Commands for the GPKE Beendigung-der-Zuordnung workflow.
+/// Commands for the GPKE Kündigung workflow.
 #[derive(Clone)]
 pub enum KuendigungCommand {
-    /// Inbound UTILMD PID 55016 Anfrage received from the AS4 layer.
+    /// Inbound UTILMD PID 55016 Kündigung received from the AS4 layer.
     ReceiveKuendigung {
         /// BDEW Prüfidentifikator (55016).
         pid: Pruefidentifikator,
-        /// GLN of the NB.
+        /// MP-ID of the sending LFN.
         sender: MarktpartnerCode,
-        /// GLN of the LFA.
+        /// MP-ID of the receiving LFA.
         receiver: MarktpartnerCode,
         /// Marktlokation EIC code.
         location_id: MaLo,
         /// EDIFACT document date (`YYYYMMDD`).
         document_date: String,
-        /// Requested Zuordnungsende date (`YYYYMMDD`).
+        /// Requested Kündigungstermin (`YYYYMMDD`) — `SG4 DTM+93` „Ende zum", or
+        /// `DTM+471` for a Kündigung „zum nächstmöglichen Termin".
         process_date: String,
         /// EDIFACT message reference.
         message_ref: MessageRef,

@@ -16,7 +16,7 @@ code focuses on domain logic instead of plumbing.
              │  webhook  builder   rate_limit cloudevent                     │
              └──────────────────────────────────────────────────────────────┘
                   ↑            ↑             ↑           ↑
-               makod        marktd        invoicd     processd  … (all 16)
+               makod        marktd        invoicd     processd  … (all 17)
 ```
 
 ---
@@ -30,17 +30,18 @@ code focuses on domain logic instead of plumbing.
 | `config` | `load_config`, `DatabaseConfig`, `HttpConfig` | Layered TOML + env-var config loading |
 | `shutdown` | `token()`, `serve()` | Graceful shutdown — SIGINT **and** SIGTERM |
 | `oidc` | `OidcConfig`, `OidcVerifier`, `Claims` | OIDC/JWT verification + `build_verifier()` factory |
-| `mcp_auth` | `McpAuth`, `McpAuthConfig`, `McpApiKey`, `McpIdentity` | Unified MCP server authentication |
-| `telemetry` | `init_tracing`, `init_tracing_from_env`, `OtelConfig` | Structured JSON logging + OTel OTLP |
+| `mcp_auth` | `McpAuth`, `McpAuthConfig`, `McpApiKey`, `McpIdentity` | Unified MCP server authentication (needs `cedar` **and** `oidc`) |
+| `telemetry` | `init_tracing`, `init_tracing_from_env`, `OtelConfig` | Structured JSON logging and the OTLP exporter |
 | `cedar` | `CedarEnforcer` | Cedar ABAC policy enforcement |
 | `health` | `health_routes` | `/health/live` + `/health/ready` endpoints |
 | `http` | `default_client` | `reqwest::Client` with connect + request timeouts |
-| `webhook` | `sign`, `verify_hmac`, `hmac_hex` | The one canonical HMAC-SHA256 signer/verifier (`sha256=<hex>`) |
+| `webhook` | `sign`, `headers`, `verify_request` | The one [Standard Webhooks](https://www.standardwebhooks.com/) signer/verifier (`webhook-signature: v1,<base64>`) |
 | `cloudevent` | `CloudEvent`, `source`, `post_ce_with_retry` | Canonical CloudEvents 1.0 envelope + signed, retried publisher |
 | `outbox` | `enqueue`, `OutboxWorker`, `ensure_schema` | Transactional outbox — persist-before-dispatch + drain worker + DLQ |
 | `builder` | `ServiceBuilder` | Composable Axum router with health, metrics, rate-limit |
-| `metrics` | Prometheus handler | Real `GET /metrics` when feature `metrics` is enabled |
-| `rate_limit` | `RateLimitConfig` | GCRA rate limiting via `governor` |
+| `metrics` | Prometheus handler | `GET /metrics` |
+| `rate_limit` | `RateLimitConfig` | GCRA rate limiting |
+| `worker_lock` | Postgres advisory locks | One runner per periodic background worker across replicas |
 
 ---
 
@@ -120,7 +121,6 @@ Services use shared structs from `mako-service` instead of defining their own:
 use mako_service::{DatabaseConfig, HttpConfig};
 use mako_service::mcp_auth::McpAuthConfig;
 use mako_service::oidc::OidcConfig;
-use mako_service::telemetry::OtelConfig;
 
 #[derive(serde::Deserialize)]
 struct MyConfig {
@@ -128,7 +128,6 @@ struct MyConfig {
     pub http:     HttpConfig,           // [http] section — listen addr
     pub mcp:      McpAuthConfig,        // [mcp] section — api_key + named keys
     pub oidc:     Option<OidcConfig>,   // [oidc] section — omit for dev mode
-    pub otel:     OtelConfig,           // [otel] section — omit to disable tracing
 }
 ```
 
@@ -153,9 +152,6 @@ api_key = "env:BILLING_BOT_KEY"
 [oidc]                   # omit section → dev mode (no auth required)
 issuer   = "https://login.microsoftonline.com/{tid}/v2.0"
 audience = "api://my-service"
-
-[otel]                   # omit section → disable distributed tracing
-endpoint = "http://otel-collector:4317"
 ```
 
 ### Environment-variable overrides
@@ -243,12 +239,19 @@ get `SIGTERM` first.
 
 ## Telemetry
 
-```rust,no_run
-// One-liner: reads LOG_LEVEL/RUST_LOG and OTEL_EXPORTER_OTLP_ENDPOINT from env
-let _guard = mako_service::init_tracing_from_env("my-service");
+`run::<D>()` installs the subscriber before anything else, so a service
+configures telemetry through the environment rather than through its TOML:
 
-// Explicit control:
-let _guard = mako_service::init_tracing("my-service", "debug", Some(&cfg.otel));
+| Variable | Effect |
+|---|---|
+| `<SERVICE>_LOG_LEVEL`, else `LOG_LEVEL`, else `RUST_LOG` | Filter directive; `info` when unset |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP/gRPC collector. Unset → no exporter, no overhead |
+| `OTEL_SERVICE_NAME` | `service.name` on the spans; the daemon's own name when unset |
+
+A daemon that owns its lifecycle can call the same thing directly:
+
+```rust,no_run
+let _guard = mako_service::init_tracing_from_env("my-service");
 ```
 
 > **Keep `_guard` alive** until process exit — dropping it flushes OTel spans.
@@ -330,7 +333,7 @@ let http = mako_service::http::default_client();
 `mako-service` owns the whole CloudEvents *transport* layer — the envelope, the
 outbound publisher, and the one HMAC signer/verifier — so every daemon puts the
 same bytes on the wire. The event *type* names (and the glob matcher) live in the
-zero-dependency [`mako-events`](../mako-events/) catalog; everything about how an
+zero-dependency [`mako-events`](https://docs.rs/mako-events) catalog; everything about how an
 event is built, signed, and delivered lives here.
 
 ### Emit an event
@@ -340,7 +343,7 @@ use mako_service::{CloudEvent, source, post_ce_with_retry, http::default_client}
 
 let ce = CloudEvent::new(
     source("billingd", &tenant),                 // urn:mako:billingd:tenant:<tenant>
-    mako_service::cloud_events::billing::RECHNUNG_ERSTELLT, // type from the catalog
+    mako_events::billing::RECHNUNG_ERSTELLT,      // type from the mako-events catalog
     &malo_id,                                     // subject
     serde_json::json!({ "betrag": "42.00" }),     // data
 );
@@ -357,16 +360,36 @@ now in **RFC3339**, `datacontenttype = "application/json"`. Extension attributes
 
 ### Sign / verify
 
-```rust,no_run
-use mako_service::webhook::{sign, verify_hmac};
+The scheme is [Standard Webhooks](https://www.standardwebhooks.com/), not a bare
+HMAC over the body. Three headers travel together and the signature covers
+`{id}.{timestamp}.{body}`:
 
-let header = sign(secret, &body);               // "sha256=<hex>" — the canonical form
-let ok = verify_hmac(secret, &body, provided);  // constant-time; tolerates bare hex too
+```text
+webhook-id:        de.mako.process.initiated/3f2b…   ← also the dedup key
+webhook-timestamp: 1786012800                        ← seconds since epoch
+webhook-signature: v1,K5oT9r…                        ← base64, space-separated list
 ```
 
-There is exactly **one** signer and **one** verifier in the workspace. `sign`
-always emits the `sha256=` prefix; `verify_hmac` accepts it or a bare hex digest,
-so producer and consumer can never disagree on the format.
+```rust,no_run
+use mako_service::webhook::{headers, verify_request};
+
+// Sending — all three at once, because sending two of them fails verification
+// for a reason nobody can read off the wire.
+for (name, value) in headers(secret, &ce.id, timestamp, &body) {
+    req = req.header(name, value);
+}
+
+// Receiving — one call checks the signature, refuses a timestamp outside
+// `webhook::TOLERANCE` (±5 min), and hands back the id to deduplicate on.
+// `secret = None` is dev mode: it verifies nothing but still returns the id.
+let dedup_key = verify_request(secret, request.headers(), &body)?;
+```
+
+Binding the id and the timestamp *into the signed material* is what makes replay
+protection part of the contract rather than each receiver's problem, and the
+signature header is a **list**, so a secret rollover can present two and have
+either verify. `verify_request` is the only entry point that enforces freshness
+and returns the dedup key, so neither half can be skipped by forgetting it.
 
 ### Never lose an event: the transactional outbox
 
@@ -407,9 +430,8 @@ so the table stays small.
 | `oidc` | `OidcVerifier`, `Claims` extractor, JWKS background refresh |
 | `cedar` | `CedarEnforcer`, Cedar ABAC policy evaluation |
 | `otel` | OpenTelemetry OTLP/gRPC traces via `tracing-opentelemetry` |
-| `metrics` | Real Prometheus `/metrics` + `mako_http_requests_total` counter |
+| `metrics` | Real Prometheus `/metrics` + `mako_http_requests_total` / `mako_http_request_duration_seconds` |
 | `rate-limit` | GCRA rate limiter via `governor` |
-| `kafka` | `KafkaBus` for high-throughput CloudEvent fan-out |
 
 Typical production config:
 
@@ -417,3 +439,17 @@ Typical production config:
 [dependencies]
 mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
 ```
+
+## Related crates
+
+This crate is **not published to crates.io**; it is workspace-internal.
+
+| Crate | Role |
+|---|---|
+| [`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service) ← **this crate** | Daemon SDK — config, OIDC/MCP auth, health, telemetry, outbox, CloudEvents transport |
+| [`mako-events`](https://docs.rs/mako-events) | The CloudEvents `type` catalog this crate's transport carries |
+| [`makod`](https://hupe1980.github.io/mako/docs/services/makod/) | The largest consumer — EDIFACT/AS4 ingest and every BDEW workflow |
+| [`marktd`](https://hupe1980.github.io/mako/docs/services/marktd/) · [`billingd`](https://hupe1980.github.io/mako/docs/services/billingd/) · [`invoicd`](https://hupe1980.github.io/mako/docs/services/invoicd/) · … | The other daemons, all built on `run::<D>()` |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>

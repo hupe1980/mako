@@ -745,7 +745,7 @@ pub async fn handle_webhook(
                     process_id = %process_id, pid, malo_id = %malo_id,
                     issue_count = validation.issue_count,
                     billing_block_count = validation.billing_block_count,
-                    "edmd: MSCONS ingest validation issues (§ 60 Abs. 2 MsbG — substitute values may be required)"
+                    "edmd: MSCONS ingest validation issues (§ 60 Abs. 1 MsbG — substitute values may be required)"
                 );
             }
             crate::server::quality_alert::raise_quality_warning(

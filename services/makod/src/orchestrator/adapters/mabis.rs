@@ -23,6 +23,18 @@ use mako_mabis::{
 /// [`BillingCommand::ReceiveIftsta`]. Any other message type is rejected with
 /// an error directing callers to use the aggregation layer.
 #[must_use]
+/// The `CCYYMM` Bilanzierungsmonat at the head of a `DTM` value.
+///
+/// The value is a wire string a counterparty controls. `str::get` is what makes
+/// this safe: a byte length of six says nothing about char boundaries, and a
+/// UNOC:3 interchange can put a multi-byte character in the sixth position, so
+/// a naive `&raw[..6]` panics the ingest task on a malformed message. An
+/// unusable date yields the empty period, which is what the callers already
+/// fall back to.
+fn billing_period_head(raw: &str) -> BillingPeriod {
+    BillingPeriod::new(raw.get(..6).unwrap_or(""))
+}
+
 pub fn mabis_registry() -> AdapterRegistry<MabisBillingWorkflow> {
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
@@ -105,12 +117,7 @@ pub fn mabis_clearingliste_registry() -> AdapterRegistry<MabisClearinglisteWorkf
                 .to_owned();
 
             // Derive billing period from document date: `YYYYMMDD` → `YYYYMM`.
-            // If document date is absent or shorter than 6 chars, store empty.
-            let billing_period = if document_date_str.len() >= 6 {
-                BillingPeriod::new(&document_date_str[..6])
-            } else {
-                BillingPeriod::new("")
-            };
+            let billing_period = billing_period_head(&document_date_str);
 
             Ok(ClearinglisteCommand::ReceiveClearingliste {
                 pid,
@@ -182,11 +189,7 @@ pub fn mabis_zp_lifecycle_registry() -> AdapterRegistry<MabisZpLifecycleWorkflow
                 .unwrap_or("")
                 .to_owned();
 
-            let billing_period = if document_date.len() >= 6 {
-                BillingPeriod::new(&document_date[..6])
-            } else {
-                BillingPeriod::new("")
-            };
+            let billing_period = billing_period_head(&document_date);
 
             // 55062/55063 are shared by eleven Summenzeitreihen, so the PID
             // alone does not say what was activated. The UTILMD carries the
@@ -349,16 +352,7 @@ pub fn mabis_listenabgleich_registry() -> AdapterRegistry<MabisListenabgleichWor
                 .iter()
                 .find(|d| d.qualifier == "157")
                 .and_then(|d| d.value_str())
-                .map_or_else(
-                    || {
-                        if document_date.len() >= 6 {
-                            BillingPeriod::new(&document_date[..6])
-                        } else {
-                            BillingPeriod::new("")
-                        }
-                    },
-                    |v| BillingPeriod::new(&v[..v.len().min(6)]),
-                );
+                .map_or_else(|| billing_period_head(&document_date), billing_period_head);
 
             // The `IDE+Z01` head carries what the whole list is about: its
             // Listennummer, the MaBiS-Zählpunkt in `SG5 LOC+Z15`, and the
@@ -503,11 +497,7 @@ pub fn mabis_summenzeitreihe_registry() -> AdapterRegistry<MabisBillingWorkflow>
                 .and_then(|d| d.value_str())
                 .unwrap_or("")
                 .to_owned();
-            let bilanzierungsmonat = if document_date.len() >= 6 {
-                BillingPeriod::new(&document_date[..6])
-            } else {
-                BillingPeriod::new("")
-            };
+            let bilanzierungsmonat = billing_period_head(&document_date);
 
             // Which phase the arrival falls in — the calendar decides, not the
             // message (Kap. 3.10 Tabelle 2).
@@ -664,11 +654,7 @@ pub fn mabis_profil_registry() -> AdapterRegistry<MabisProfilWorkflow> {
                 .and_then(|d| d.value_str())
                 .unwrap_or("")
                 .to_owned();
-            let bilanzierungsmonat = if document_date.len() >= 6 {
-                BillingPeriod::new(&document_date[..6])
-            } else {
-                BillingPeriod::new("")
-            };
+            let bilanzierungsmonat = billing_period_head(&document_date);
 
             Ok(ProfilCommand::ReceiveProfile {
                 pid,

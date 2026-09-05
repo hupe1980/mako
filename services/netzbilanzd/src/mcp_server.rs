@@ -55,7 +55,9 @@ pub struct NetzbilanzMcpState {
     pub pool: PgPool,
     /// The tenant every query is scoped to.
     pub tenant: String,
-    /// API-key / OIDC / dev-mode authentication.
+    /// Authentication for `/mcp`: an OIDC bearer verified and checked against
+    /// the `use-mcp` Cedar action, or a configured `[mcp]` key for agent
+    /// clients that mint no token.
     pub auth: mako_service::mcp_auth::McpAuth,
 }
 
@@ -473,7 +475,9 @@ impl NetzbilanzMcpHandler {
                 "**Prerequisites** — the published prices must be in `marktd`:\n\
                  - Gas: `PUT /api/v1/mmma-preise/gas/{year}/{month}` (Trading Hub Europe)\n\
                  - Strom: `PUT /api/v1/mmm-preise/strom/{year}/{month}` (the nationwide \
-                   BDEW series — § 13 Abs. 3 StromNZV, no per-operator variant)\n\n\
+                   BDEW series, no per-operator variant — § 13 Abs. 3 StromNZV for a \
+                   period to 31.12.2025, § 20 Abs. 3 EnWG via BK6-24-174 from \
+                   01.01.2026)\n\n\
                  **Per MaLo** — `POST /api/v1/billing/mmm-run/{malo_id}` with `nb_mp_id`, \
                  `lf_mp_id`, `sparte`, `period_year`, `period_month` and `bilanziert_kwh`.\n\n\
                  `bilanziert_kwh` is **required and cannot be auto-fetched**: it is what the \

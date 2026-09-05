@@ -167,7 +167,9 @@ strom_url = "https://www.bdew.de/…/Mehr-Mindermengen-Preise-Strom.csv"
 check_hour_utc = 6
 
 [mcp]
-path = "/mcp"
+# Shared McpAuthConfig: a bearer API key for agentd, plus optional named keys
+# for per-agent audit trails. The MCP path is fixed at `/mcp`.
+api_key = "env:AGENTD_KEY"
 ```
 
 Equivalent environment overrides:
@@ -202,11 +204,12 @@ path takes a bearer token and checks a Cedar action.
 | ESA consent | `read-einwilligung`, `write-einwilligung` | `MSB` or `ESA` role — § 49 Abs. 2 Nr. 9 MsbG; only the two parties to the relationship |
 | Operator | `manage-subscription`, `manage-fanout` | `ADMIN` role — a subscription is an outbound export channel for every event this hub emits |
 
-`tests/authorization_guard.rs` pins the surface in four ways: every action checked in code
+`tests/authorization_guard.rs` pins the surface in five ways: every action checked in code
 is permitted by the policy (a missing one is a permanent 403, not a compile error), every
-permitted action is checked somewhere, every handler module takes a `Claims` extractor, and
-no handler extracts `Claims` as a request `Extension` (nothing inserts it, so that is a
-guaranteed 500).
+permitted action is checked somewhere, every handler module takes a `Claims` extractor, no
+handler extracts `Claims` as a request `Extension` (nothing inserts it, so that is a
+guaranteed 500), and no request body carries a `tenant` field (the tenant comes from the
+token, never from the caller).
 
 ---
 
@@ -264,6 +267,7 @@ guaranteed 500).
 | `GET` | `/api/v1/partners/{mp_id}/as4-address` | AS4 endpoint (`Marktteilnehmer.makoadresse`) |
 | `GET` | `/api/v1/partners/{mp_id}/marktteilnehmer` | Typed BO4E `Marktteilnehmer` view |
 | `GET` | `/api/v1/nb-contracts` · `GET`/`PUT` `/api/v1/nb-contracts/{id}` | NB network contracts (full BO4E `Vertrag`) |
+| `GET` | `/api/v1/nb-contracts/by-malo/{malo_id}` | The contract covering one Marktlokation |
 | `GET`/`PUT` | `/api/v1/grundversorger/{nb_mp_id}` | § 36 Abs. 2 EnWG Feststellung (`?sparte=STROM\|GAS`) — read by the `processd` EoG closure |
 | `GET`/`PUT` | `/api/v1/energiemix/{nb_mp_id}` · `GET` `/history` | § 42 EnWG grid-area Energiemix |
 | `GET` | `/api/v1/nelos` · `GET`/`PUT` `/api/v1/nelos/{id}` | Netz-Element-Lokationen (Redispatch 2.0) |
@@ -273,6 +277,21 @@ guaranteed 500).
 | `PUT`/`GET` | `/api/v1/netzzugang/antraege` · `/{id}` · `PATCH /{id}/status` | § 20b EnWG Netzzugangsplattform requests |
 | `PUT`/`GET` | `/api/v1/msb-rahmenvertraege-gas` · `/{id}` | Gas MSB framework contracts (GeLi Gas 3.0 Tenor 13–16) |
 | `GET` | `/api/v1/correlations` · `/{id}` | Running MaKo processes per MaLo |
+
+### ESA (Kapitel 4.6 Messprodukte)
+
+Gated by `read-einwilligung` / `write-einwilligung` — `MSB` or `ESA` role only.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET`/`POST` | `/api/v1/esa/einwilligungen` | List / grant an Art.-7-GDPR Einwilligung (§ 49 Abs. 2 Nr. 9 MsbG) |
+| `GET`/`DELETE` | `/api/v1/esa/einwilligungen/{id}` | Fetch one · revoke it |
+| `GET`/`PUT` | `/api/v1/esa/framework/{msb_mp_id}/{esa_mp_id}` | The MSB↔ESA framework relationship |
+| `GET`/`PUT` | `/api/v1/esa/preise/{msb_mp_id}/{esa_mp_id}` | The accepted QUOTES 15003 Angebot — an ESA has no Preisblatt, so this is what `invoicd` checks INVOIC 31009 against |
+| `PUT` | `/api/v1/esa/messprodukte/{msb_mp_id}` | The MSB's Messprodukt-Katalog (`E_0252` PS 2, `E_0256` PS 4/5) |
+| `GET` | `/api/v1/esa/messprodukte/{msb_mp_id}/{messprodukt}` | One product's Angebot — empty is not a refusal |
+| `GET` | `/api/v1/esa/subscriptions/{bestellung_ref}` | Resolve a Wertebestellung's Messprodukt (read by `edmd`'s Typ-2 surveillance) |
+| `GET` | `/api/v1/esa/consent-check` | Inbound-message gate: revoked consent or no framework → `allowed: false` |
 
 ### Price sheets
 
@@ -313,12 +332,17 @@ Every entity event carries `marktmaloid` / `marktmeloid` where one applies (the 
 ordering key) and `marktsparte` where the Sparte is known.
 
 `de.markt.malo.updated`, `de.markt.melo.updated`, `de.markt.partner.updated`,
-`de.markt.nb-contract.updated`, `de.markt.versorgung.changed`,
+`de.markt.nb-contract.updated`, `de.markt.msb-rahmenvertrag-gas.updated`,
+`de.markt.netzzugang.antrag.updated`, `de.markt.versorgung.changed`,
 `de.markt.versorgung.gap-detected`, `de.markt.versorgung.eog-begonnen`,
 `de.markt.pricat.published`, `de.markt.sr.konfigurationsprodukt.updated`,
 `de.markt.geraet.konfiguration.updated`, `de.markt.mmma.import.success`,
 `de.markt.mmma.import.failed`, `de.markt.einwilligung.erteilt`,
 `de.markt.einwilligung.widerrufen`, `de.markt.subscription.test`.
+
+Applying a UTILMD Stammdatenänderung emits its own pair, carrying the applied `patch` for
+the ERP's audit: `de.markt.malo.stammdaten-geaendert` for a MaLo, and the object-generic
+`de.markt.stammdaten.geaendert` for a MeLo / NeLo / Tranche.
 
 ### Durable fan-out
 
@@ -372,16 +396,32 @@ not Sparte-scoped (a Marktpartner, a subscription test) and matches every `spart
 address — the worker POSTs from inside the deployment's network, and the shared HTTP client
 refuses redirects so the check cannot be bypassed with a `302`.
 
-Deliveries carry `webhook-signature: v1,<base64>` when a secret is set:
+Deliveries are signed [Standard Webhooks](https://www.standardwebhooks.com/) style when a
+secret is set: three headers, and the signature covers `{webhook-id}.{webhook-timestamp}.{body}`
+rather than the body alone, so a captured POST cannot be replayed. `webhook-signature` is a
+space-separated list, which is what makes secret rotation expressible.
+
+```text
+webhook-id:        de.markt.malo.updated/3f2b…    ← also the dedup key
+webhook-timestamp: 1786012800                     ← seconds since epoch
+webhook-signature: v1,K5oT9r…                     ← base64, space-separated list
+```
 
 ```python
-import hmac, hashlib
+import base64, hmac, hashlib
 
-def verify(secret: str, body: bytes, signature: str) -> bool:
-    received = signature.removeprefix("sha256=")
-    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, received)
+def verify(secret: str, headers, body: bytes) -> bool:
+    signed = b"%s.%s.%s" % (headers["webhook-id"].encode(),
+                            headers["webhook-timestamp"].encode(), body)
+    expected = base64.b64encode(
+        hmac.new(secret.encode(), signed, hashlib.sha256).digest()).decode()
+    return any(hmac.compare_digest(expected, sig.split(",", 1)[1])
+               for sig in headers["webhook-signature"].split()
+               if sig.startswith("v1,"))
 ```
+
+Verifying the signature is only half of it: refuse a `webhook-timestamp` more than **5 minutes**
+old (the tolerance the senders assume) and deduplicate on `webhook-id`.
 
 `DELETE` deactivates rather than removes: `event_delivery` rows reference the subscriber and
 are the record of whether a market event was delivered.
@@ -418,6 +458,15 @@ successor may start on the day its predecessor ends. Price-sheet natural keys ad
 use `UNIQUE NULLS NOT DISTINCT`, so "open-started" is one row rather than an unbounded
 family of them. `tests/temporal_constraints_integration.rs` pins all of it against a real
 PostgreSQL.
+
+**A refused overlap is a `422`.** PostgreSQL raises `23P01` (`exclusion_violation`)
+for these, a different code from the `23514` (`check_violation`) a column bound
+raises — and only the latter used to be translated, and only on `lf_zuordnung`,
+so all eight constraints answered `500` and told the operator the server had
+broken. Both codes now map to `422` on every write path, with the constraint name
+and "close the existing row at the new start date, or move `valid_from`" in the
+message. `tests/overlap_is_a_client_error.rs` drives each of the eight through
+the repository the API writes through and asserts the status.
 
 ---
 

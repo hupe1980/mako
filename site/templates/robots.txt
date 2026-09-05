@@ -1,0 +1,15 @@
+# Rendered by Zola to /robots.txt.
+#
+# Caveat worth knowing: `base_url` is a GitHub Pages *project* path
+# (https://hupe1980.github.io/mako), and crawlers only read robots.txt from the
+# host root — https://hupe1980.github.io/robots.txt, which this repository does
+# not own. So this file is advisory today and becomes authoritative the moment
+# the site moves to its own domain. The sitemap is discoverable regardless: it
+# is listed below, linked from <head>, and can be submitted directly.
+User-agent: *
+Allow: /
+# Nothing here is private and nothing is generated per-visitor, so there is
+# nothing to disallow. An empty Disallow says "all of it" explicitly.
+Disallow:
+
+Sitemap: {{ get_url(path="sitemap.xml", trailing_slash=false) | safe }}

@@ -414,23 +414,6 @@ where
         }
     }
 
-    /// Override the maximum number of delivery attempts before dead-lettering.
-    #[must_use]
-    #[allow(dead_code)] // builder method — used by integration tests and future callers
-    pub fn with_max_attempts(mut self, max_attempts: u32) -> Self {
-        self.max_attempts = max_attempts;
-        self
-    }
-
-    /// Override the base back-off interval.  The actual delay for attempt `n`
-    /// is `initial_backoff * 2^n`, capped at 1 hour.
-    #[must_use]
-    #[allow(dead_code)] // builder method — used by integration tests and future callers
-    pub fn with_initial_backoff(mut self, backoff: std::time::Duration) -> Self {
-        self.initial_backoff_secs = backoff.as_secs().max(1);
-        self
-    }
-
     /// Attach a graceful-shutdown token.
     ///
     /// Cancelling it makes [`OutboxErpWorker::run`] return at the next message
@@ -567,7 +550,11 @@ where
                 // obvious "initiated vs completed" dashboard read as though no
                 // process had ever finished.
                 if let Some(outcome) = terminal_outcome(&event.event_type) {
-                    let family = event.workflow_name.split('-').next().unwrap_or("unknown");
+                    // One derivation, shared with the initiation counter — the
+                    // two used to cut the workflow name differently and their
+                    // series never joined.
+                    let family =
+                        crate::orchestrator::process_family::from_workflow(&event.workflow_name);
                     EngineMetrics::global().process_completed(family, outcome);
                 }
 
@@ -592,7 +579,30 @@ where
                                 "OutboxErpWorker: max delivery attempts reached; dead-lettering",
                             );
                             self.dead_letter(&msg, &e.to_string());
-                            let _ = self.store.acknowledge(msg.message_id).await;
+                            // The acknowledge is what actually removes the
+                            // message; `pending_now` neither leases nor counts,
+                            // so a lost one means this exact message comes back
+                            // on the next poll and takes this branch again —
+                            // `attempt_count` is already past the cap and only
+                            // `reschedule` ever raises it. The ERP itself is
+                            // safe (the event carries `idempotency_key =
+                            // message_id`), but every cycle appends another
+                            // record to the dead-letter sink, which neither
+                            // deduplicates nor is unbounded: enough of them and
+                            // its buffer overflows and starts dropping other
+                            // services' rejections. Nothing above can act on
+                            // this, so it is logged loudly enough to be found.
+                            if let Err(ack) = self.store.acknowledge(msg.message_id).await {
+                                tracing::error!(
+                                    message_id   = %msg.message_id,
+                                    message_type = %msg.message_type,
+                                    recipient    = %msg.recipient,
+                                    error        = %ack,
+                                    "OutboxErpWorker: dead-lettered message not acknowledged — \
+                                     it stays in the outbox and will be dead-lettered again on \
+                                     every poll until this write succeeds",
+                                );
+                            }
                         } else {
                             // Exponential back-off: initial_backoff * 2^attempt_count,
                             // capped at 1 hour.
@@ -627,8 +637,26 @@ where
                         );
                         // Record durably, then acknowledge to prevent infinite
                         // redelivery — the dead-letter sink is the audit trail.
+                        // The order matters and stays: acknowledging first and
+                        // crashing would lose the audit record entirely, whereas
+                        // this way the worst case is a duplicate one.
                         self.dead_letter(&msg, &e.to_string());
-                        let _ = self.store.acknowledge(msg.message_id).await;
+                        // Same reasoning as the exhausted-budget branch above:
+                        // without the acknowledge the message is redelivered
+                        // indefinitely, re-POSTing to an ERP that has already
+                        // refused it permanently and appending a dead-letter
+                        // record each time.
+                        if let Err(ack) = self.store.acknowledge(msg.message_id).await {
+                            tracing::error!(
+                                message_id   = %msg.message_id,
+                                message_type = %msg.message_type,
+                                recipient    = %msg.recipient,
+                                error        = %ack,
+                                "OutboxErpWorker: dead-lettered message not acknowledged — \
+                                 it stays in the outbox and will be retried and dead-lettered \
+                                 again on every poll until this write succeeds",
+                            );
+                        }
                     }
                 }
             }

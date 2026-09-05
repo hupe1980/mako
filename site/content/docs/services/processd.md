@@ -1,21 +1,38 @@
 +++
 title = "processd Operator Guide"
-description = "processd operator guide: Process decision engine — NB Anmeldung STP, LF answers to every process the market asks a supplier about (Strom and Gas), MSB REQOTE and §14a ORDRSP, EoG gap closure. Role-gated binaries for §7 EnWG separation, Cedar ABAC on every route, MCP tools, PostgreSQL audit log."
+description = "Operator guide for processd, the process decision engine: NB Anmeldung straight-through processing, LF and MSB answers, role-gated binaries and Cedar ABAC."
 weight = 23
-[extra]
-mermaid = true
 +++
-# `processd` Operator Guide
-
 `processd` is the **process decision engine** — the service that automates
 regulatory decisions within mandatory deadlines.
+
+**What it decides, in plain terms.** German market communication (MaKo) runs on
+EDIFACT messages between four roles: the **LF** (Lieferant, the supplier), the
+**NB** (Netzbetreiber, the grid operator), the **MSB** (Messstellenbetreiber, the
+metering operator) and the **BKV** (Bilanzkreisverantwortlicher, who answers for
+a balancing circle). Each message carries a
+[**Prüfidentifikator (PID)**](@/docs/architecture/domain-model.md#prufidentifikator-pid) — a five-digit code
+naming the business case, so `55001` *is* „Anmeldung Lieferbeginn" — and each one
+the recipient must answer carries a [**Frist**](@/docs/architecture/domain-model.md#frist-and-werktag), a
+regulatory answer deadline counted in Werktage or fixed to a clock time. The
+BNetzA publishes the decision itself as an
+[**EBD**](@/docs/architecture/domain-model.md#ebd-entscheidungsbaumdiagramm) (Entscheidungsbaumdiagramm),
+a numbered decision tree such as `E_0622` whose leaves are the Antwortcodes the
+answer may state. `processd` walks those trees, dispatches the answer through
+[`makod`](@/docs/services/makod.md) before the Frist, and queues anything the
+tree cannot decide for an operator.
+
+Every term above is defined once in the [glossary](@/docs/architecture/domain-model.md#glossary). The objects,
+the roles and the identifier formats are the [domain model](@/docs/architecture/domain-model.md); which PID
+belongs to which business process is the
+[process map](@/docs/reference/processes.md).
 
 ```mermaid
 graph TB
     marktd["marktd :8180<br/>fan-out"]
     processd["processd :8580<br/>(this service)"]
     makod["makod :8080"]
-    pg["PostgreSQL<br/>anmeldung_decisions<br/>abmeldeanfragen<br/>approval_queue"]
+    pg["PostgreSQL<br/>anmeldung_decisions · abmeldeanfragen<br/>approval_queue · eog_activations<br/>neuanlage_faelle"]
 
     marktd -->|"de.mako.process.initiated<br/>de.markt.versorgung.gap-detected<br/>HMAC POST /webhook"| processd
 
@@ -27,7 +44,7 @@ graph TB
     end
 
     subgraph LF ["LF module (--features lf-only)"]
-        LFA["LF answers · Strom 55007 / 55010 / 55016<br/>Gas 44007 / 44010 / 44016"]
+        LFA["LF answers · Strom 55007 / 55010 / 55013 / 55016 / 55607<br/>Gas 44007 / 44010 / 44013 / 44016"]
         LFA --> pg
     end
 
@@ -56,7 +73,7 @@ graph TB
 │  GET  /api/v1/eog           ← EoG gap-closure case log (§36/§38) │
 │  GET  /api/v1/neuanlage     ← E_0608 case log                    │
 │  PUT  /api/v1/neuanlage/{id}/identifikation                      │
-│  GET  /health/live  /health/ready                                │
+│  GET  /health/live  /health/ready  /metrics                      │
 │  POST|GET /mcp       ← MCP Streamable HTTP (2025-11-25)          │
 └────────────────────────────────────────────────────────────────────┘
 ```
@@ -66,7 +83,7 @@ graph TB
 ## Role isolation
 
 `processd` is compiled with **feature flags** that gate which modules are included.
-This ensures §7 EnWG separation: an `nb-only` binary provably contains no LF PIDs.
+This ensures § 6a EnWG separation: an `nb-only` binary provably contains no LF PIDs.
 
 ```toml
 [features]
@@ -96,9 +113,44 @@ confirm no cross-contamination. Use separate container images compiled with
 
 ---
 
+## Authorization
+
+Every REST route authenticates through the `Claims` extractor and then evaluates
+one [Cedar](https://cedarpolicy.com) action against
+`services/processd/policies/processd.cedar`. There is **no global auth
+middleware**: a handler that does not name `Claims` is served to anyone, which is
+why the mapping is pinned by a guard rather than by review.
+
+| Route | Cedar action | Granted to |
+|---|---|---|
+| `GET /api/v1/decisions` | `read-decisions` | any caller of the tenant |
+| `GET /api/v1/queue` | `read-queue` | any caller of the tenant |
+| `GET /api/v1/eog` | `read-eog` | any caller of the tenant |
+| `GET /api/v1/neuanlage` | `read-neuanlage` | any caller of the tenant |
+| `POST /api/v1/queue/{id}/approve` · `/reject` | `decide-queue` | `NB`, `LF` or `MSB` — the role that owes the answer |
+| `PUT /api/v1/neuanlage/{id}/identifikation` | `identify-neuanlage` | `NB` — it ends the `E_0608` Prüflauf |
+| `POST /api/v1/start-supply[-gas]` · `end-supply[-gas]` | `initiate-supply` | `LF` — it commits the operator to a market position |
+| `POST`/`GET /mcp` | `use-mcp` | any caller of the tenant |
+
+The roles come from the `mako_roles` JWT claim and the tenant from
+`mako_tenant`, which must equal the deployment's own. `POST /webhook` is outside
+this table: it is authenticated by the `marktd` HMAC signature and its
+timestamp, not by a token.
+
+Cedar is default-deny, so the two directions fail differently: an action checked
+in a handler but named in no policy is a permanent `403`, and an action granted
+in the policy that no handler checks is a dead grant — an endpoint that lost its
+check, or one that no longer exists. `services/processd/tests/authorization_guard.rs`
+pins both, plus the `Claims` extractor on every route.
+
+Omitting `[oidc]` disables authentication entirely and accepts every request
+with synthetic dev-admin claims. That is a local-development mode; never ship it.
+
+---
+
 ## NB module — Anmeldung STP
 
-### Decision pipeline
+### Decision pipeline (`nb_module.rs`)
 
 ```text
 de.mako.process.initiated
@@ -167,8 +219,8 @@ them („im Fall von Geschäftsvorfall 3 allen LFA"), and Prüfschritte 500–54
 what came free: at least one release (510 → `A53`), enough percentage (520 →
 `A54`), and whether an unassigned share is left in the NB's own Bilanzkreis on a
 direktvermarktungspflichtige Marktlokation (530/540 → `A55` against `A56`, the
-trigger for „Herstellung einer 100 % LF-Zuordnung"). Four of the tree's six
-outcomes exist only here.
+trigger for „Herstellung einer 100 % LF-Zuordnung"). Four of the eight
+Antwortcodes the tree publishes exist only here.
 
 Prüfschritt 540 is not cosmetic. §20 Satz 1 Nr. 3 EEG pays the Marktprämie only
 while the Strom sits in a Bilanz- oder Unterbilanzkreis holding nothing but
@@ -297,7 +349,7 @@ turn on whether the Marktlokation is a „ruhende Marktlokation" of a Kundenanla
 is catalogued and unreachable. Prüfschritt 130 / 610 asks about the *already
 confirmed* Abmeldung's Transaktionsgrund — a fact about an earlier message —
 where `A10` / `A26` and „confirm" are both live outcomes, so it escalates rather
-than guess. Escalation is the § 20 EnWG-safe direction: an unfounded Ablehnung
+than guess. Escalation is the § 20 Abs. 1 Satz 1 EnWG-safe direction: an unfounded Ablehnung
 keeps a customer bound to a supplier they have left.
 
 ### STP rate targets
@@ -308,7 +360,7 @@ so STP improves markedly once it is provisioned. An **erzeugende** Marktlokation
 `[nb] einsd_url`: `E_0622` chooses between six published Vorlauffristen from the
 *bestehende* Veräußerungsform, and `E_0623` Prüfschritt 540 needs the
 Direktvermarktungspflicht — both register data, neither on the wire. A
-deployment without it escalates every 55077 — the § 20 EnWG-safe outcome, since
+deployment without it escalates every 55077 — the § 20 Abs. 1 Satz 1 EnWG-safe outcome, since
 none of the six is a defensible default.
 
 Grid records are the NB’s own grid topology — **not** from MaStR. Provision them via
@@ -325,11 +377,11 @@ environment) until you have verified:
 2. Partner directory populated for all expected LF MP-IDs
 3. At least one manual review cycle confirmed correct ERC codes
 
-### §20 EnWG — affiliate guard
+### Affiliate guard — § 20 Abs. 1 Satz 1 EnWG
 
 When `processd` is deployed in an **integrated NB+LF utility** (§6b EnWG),
 auto-acceptance is **always blocked** for Anmeldungen where the requesting LF
-is an **affiliate** of the NB operator. This implements the §20 EnWG
+is an **affiliate** of the NB operator. This implements the § 20 Abs. 1 Satz 1 EnWG
 Diskriminierungsfreiheitspflicht non-discrimination obligation.
 
 It applies to Abmeldungen as well as Anmeldungen — an affiliate must not get a
@@ -356,7 +408,8 @@ fail silently.
 
 `obsd` records `initiator_is_affiliate = true` on the resulting `ProcessProjection`
 and the KPI report exposes the parity delta for **BNetzA audit evidence**.
-See [obsd §20 EnWG parity](obsd#20-enwg-parity) for query examples.
+See [the obsd Gleichbehandlung parity report](@/docs/services/obsd.md#ss-7a-abs-5-enwg-gleichbehandlung-parity)
+for query examples.
 
 ### Selbstzahler — the Lieferantenwechsel carve-out
 
@@ -562,7 +615,7 @@ that somebody *has* terminated; `vertragsende` is the agreed Laufzeitende, which
 nobody terminated; `naechstmoeglicher_kuendigungstermin` is when notice could
 next take effect. The table above says which Prüfschritt reads which.
 
-Set `[lf] vertragd_url` to answer them. Without it those facts are
+Set `[vertragd] url` to answer them. Without it those facts are
 `Bekannt::Unbekannt` and any decision reaching one escalates to an operator —
 deliberately: a supplier with no contract database cannot claim a
 Vertragsbindung, and must not agree to release the customer instead.
@@ -616,7 +669,7 @@ resolved from the trigger PID at enqueue time.
 | GPKE Neuanlage 55600 / 55601 | 00:00 Uhr des 61. WT nach dem ÜT | BK6-24-174 Teil 2 § 2.2.2 (60 WT täglicher Prüflauf, `E_0608`) |
 | GPKE Sperr-/Entsperrauftrag 17115 / 17117 / 39000 | spätester ÜT ist der 1. WT nach dem ÜT | BK6-24-174 Teil 2 §§ 3.5.1.2 / 3.5.2.2 / 3.5.3.2 Nr. 2 |
 | GPKE Anfrage Sperrung an den MSB 17116 | 3. WT nach dem ÜT — Fristverstreichen gilt als Zustimmung | BK6-24-174 Teil 2 § 3.5.1.2 Nr. 4 |
-| GPKE Teil 4 Stammdaten-Rückmeldung 55109 / 55557 / 55639–55643 / 55693 | 2. WT nach dem ÜT | BK6-24-174 Teil 4 §§ 1.4.3 / 1.4.4 Nr. 2 |
+| GPKE Teil 4 Stammdaten-Rückmeldung 55109 / 55230 / 55557 / 55639–55643 / 55693 | 2. WT nach dem ÜT | BK6-22-024 Anlage 1d (GPKE Teil 4) §§ 1.4.3 / 1.4.4 Nr. 2 |
 | GPKE Teil 2 Bearbeitungsstand Abrechnungsdaten 55156 / 55220 / 55673 | 2. WT nach dem ÜT | BK6-24-174 Teil 2 §§ 3.1.1.2 / 3.1.2.2 / 3.1.3.2 |
 
 The 45-minute APERAK window on the same message is a separate clock and is `makod`'s to
@@ -625,7 +678,7 @@ answer.
 A background task runs every 60 s and sets `status = Expired` for stale entries. It is
 deliberately **not** role-gated, since every role build can enqueue.
 
-`decided_by` records the `sub` of the principal who approved or rejected (§ 20 EnWG parity
+`decided_by` records the `sub` of the principal who approved or rejected (Gleichbehandlung
 evidence and the GoBD trail both have to say *who* decided).
 
 **Operator workflow:**
@@ -745,11 +798,11 @@ curl -X POST http://makod:8080/api/v1/commands \
 
 The GNB responds with MSCONS 13007 (data delivery) or ORDRSP 19103 (rejection).
 Successful delivery automatically updates `edmd` `meter_billing_periods` via the
-existing `update_gas_quality` path.
+existing `record_gas_quality` path.
 
 ---
 
-## §20 EnWG parity
+## Gleichbehandlung evidence
 
 Every `anmeldung_decisions` row includes:
 
@@ -757,9 +810,9 @@ Every `anmeldung_decisions` row includes:
 initiator_is_affiliate BOOLEAN  -- TRUE when lf_mp_id == own_mp_id (integrated deployment)
 ```
 
-This field is the BNetzA audit evidence for §20 EnWG parity compliance.
+This field is the evidence behind the § 7a Abs. 5 EnWG Gleichbehandlungsbericht, which `obsd` assembles and the Gleichbehandlungsbeauftragte files with the Bundesnetzagentur by 31 March for the preceding calendar year. The duty it evidences is § 20 Abs. 1 Satz 1 EnWG, which mandates no report of its own.
 A systematically faster decision time for `initiator_is_affiliate = true` is
-a §20 EnWG violation in integrated §6b EnWG deployments.
+a § 20 Abs. 1 Satz 1 EnWG violation in integrated § 6b EnWG deployments.
 
 Use `obsd`'s parity report or query directly:
 
@@ -806,6 +859,13 @@ api_key = "env:MAKOD_API_KEY"   # required
 [marktd]
 url     = "http://marktd:8180"  # required
 api_key = "env:MARKTD_API_KEY"  # required
+
+# The contract layer. Optional — a pure NB deployment holds no contracts of its
+# own — but the LF and MSB modules both read it, so omitting it leaves every
+# contract fact `Unbekannt` and escalates the decisions that ask one.
+[vertragd]
+url     = "http://vertragd:9780"
+api_key = "env:VERTRAGD_API_KEY"
 
 [webhook]
 inbound_secret = "env:INBOUND_WEBHOOK_SECRET"   # optional; omit for dev
@@ -872,6 +932,12 @@ warn_days_before_expiry   = 14            # §38 Abs. 4 3-month warning lead
 # audience = "api://mako-processd"
 # jwks_refresh_secs = 300
 
+# [mcp]                 # /mcp bearer keys; omit *and* omit [oidc] and the MCP
+# api_key = "env:PROCESSD_MCP_API_KEY"        # surface runs unauthenticated
+# [[mcp.named_keys]]    # one named key per agent, so audit logs say which
+# name    = "agentd"
+# api_key = "env:AGENTD_MCP_KEY"
+
 # Tracing/OTel is configured from the environment (see the table below), not
 # from a [otel] block.
 ```
@@ -909,17 +975,30 @@ For Helm charts, map `[subscription]` to `values.yaml` under `processd.subscript
 
 ## MCP tools
 
+An MCP client reaches `/mcp` with a bearer token — an OIDC token or an `[mcp]`
+API key — and the transport evaluates `use-mcp` once for the whole surface. The
+`Role` column below is the module a tool reports on, not a separate grant: the
+approval queue itself is shared by every compiled role, so its tools reach NB and
+MSB entries too. `approve_queue_entry` and `reject_queue_entry` call processd's
+own REST route back over the loopback — `POST /api/v1/queue/{id}/approve` and
+`/reject`, built from the same constant the router registers — so the
+`decide-queue` check runs on them exactly as it would for an operator.
+
 | Tool | Role | Description |
 |------|------|-------------|
 | `list_decisions` | NB | Last N Anmeldung decisions with ERC codes and affiliate flag |
-| `get_decision` | NB | Single Anmeldung decision by UUID |
+| `get_decision` | NB | Single Anmeldung decision by `process_id` (UUID) |
 | `get_stp_rate` | NB | STP rate over last N days vs. 95 % target |
 | `get_stp_breakdown_by_erc` | NB | Rejection breakdown by ERC code |
-| `list_affiliate_decisions` | NB | Decisions involving affiliated suppliers (§20 EnWG parity) |
+| `list_affiliate_decisions` | NB | Decisions involving affiliated suppliers (Gleichbehandlung evidence) |
 | `list_pending_approvals` | LF | Pending approval queue entries (most urgent first) |
 | `get_queue_entry` | LF | Single queue entry by UUID |
 | `approve_queue_entry` | LF | Approve a queue entry (dispatches the response) |
 | `reject_queue_entry` | LF | Reject a queue entry with a reason code |
+
+Four guided prompts ship alongside them — `triage-nb-rejection`,
+`investigate-stp-drop`, `triage-msb-wechsel` and `trigger-lieferbeginn` — each
+pre-filling the tool calls for that investigation.
 
 ---
 
@@ -952,8 +1031,11 @@ Alert when:
 ## MSB module — WiM MSB-Wechsel STP
 
 `processd` evaluates inbound WiM MSB-Wechsel requests automatically:
-`role-nb-strom` answers 55042 (Anmeldung MSB) and 55051 (Ende MSB),
-`role-msb` answers 55039/44039 (Kündigung MSB) and 55168/44168 (Verpflichtungsanfrage) — **beide Sparten** under one feature, because AWH WiM Gas 2.0 restates WiM Strom Teil 1 use-case for use-case and one handler serves both.
+an NB build (`role-nb-strom` or `role-nb-gas`) answers 55042/44042 (Anmeldung
+MSB) and 55051/44051 (Ende MSB), `role-msb` answers 55039/44039 (Kündigung MSB)
+and 55168/44168 (Verpflichtungsanfrage). Both sets carry **beide Sparten**,
+because AWH WiM Gas 2.0 restates WiM Strom Teil 1 use-case for use-case and one
+handler serves both.
 STP target: **≥ 80 %**.
 
 The Prüfschritte are `mako_pruefung::msb`, the executable form of the published
@@ -977,7 +1059,8 @@ redelivery does not restart it.
 
 ### Anmeldung MSB (55042) — `E_0201`, answered by the NB
 
-WiM Strom Teil 1 Kap. 2.3.2 Nr. 2 names three checks, and no others:
+WiM Strom Teil 1 Kap. 2.3.2 Nr. 2 names three duties, and no others; the
+identification the tree asks ahead of them makes four rows:
 
 | Check | Outcome on failure |
 |---|---|
@@ -1010,7 +1093,7 @@ module uses: supply and market state from `marktd`, contract state from `vertrag
 | `vertragd` unreachable or unconfigured | Escalate |
 | `404` — this MSB holds no contract here | `ZC9` |
 | `beendet_am` set | `Z29` |
-| `gekuendigt_zum` set | the Kap. 2.2.3 table — `E15`, `Z01` to an earlier date, or `Z34` |
+| `kuendigung_zum` set | the Kap. 2.2.3 table — `E15`, `Z01` to an earlier date, or `Z34` |
 | Live, requested date on or after `naechstmoeglich` | `E15` |
 | Live, requested date inside the binding | `Z12`, naming `naechstmoeglich` |
 | Live, no `naechstmoeglich` recorded | Escalate |
@@ -1026,7 +1109,7 @@ and only one of them makes every requested date admissible.
 Kap. 2.4.2 Nr. 4 leaves the answer to the gMSB's own commercial judgement („nach
 eigenem Ermessen"), so it escalates with its 1-Werktag window attached.
 
-All escalated decisions still generate an `anmeldung_decisions` row for the §20 EnWG
+All escalated decisions still generate an `anmeldung_decisions` row for the Gleichbehandlung
 audit trail.
 
 ---
@@ -1035,7 +1118,7 @@ audit trail.
 
 When `processd` receives `de.mako.process.initiated` for PIDs 35001, 35002, 35004 or 35005 (REQOTE Preisanfrage from an nMSB), it **automatically dispatches a QUOTES response** sourced from the active `PreisblattMessung` in `marktd`. Dispatching from master data rather than from a manual ERP trigger is what keeps the response inside the REQOTE answer window.
 
-### Decision pipeline
+### Decision pipeline (REQOTE)
 
 ```
 de.mako.process.initiated (PIDs 35001/35002/35004/35005, REQOTE)
@@ -1188,7 +1271,7 @@ When an MSB receives a WiM Steuerungsauftrag (iMS ORDERS, `makoworkflow = wim-st
 
 If the `produktcode` is not contracted, `processd` dispatches `wim.steuerungsauftrag.ablehnen` immediately — preventing unauthorized control of customer assets.
 
-### Decision pipeline
+### Decision pipeline (§14a Steuerungsauftrag)
 
 ```
 de.mako.process.initiated (wim-steuerungsauftrag)

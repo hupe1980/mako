@@ -8,7 +8,7 @@
 //! - [`register`] — which OBIS registers may be folded into one energy figure.
 //! - [`repository`] — the `TimeSeriesRepository` + `Typ2Repository` traits.
 //! - [`validation`] — the one V-rule pass every ingest door, the MCP tool and
-//!   the § 60 Abs. 2 substitute path share.
+//!   the § 60 Abs. 1 substitute path share.
 //! - [`error`] — `EdmError`.
 
 pub mod error;

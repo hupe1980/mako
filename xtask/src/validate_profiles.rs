@@ -17,6 +17,8 @@
 //! - every AHB row names a segment `Nr` the MIG structure has, and every column
 //!   lists `UNH`;
 //! - every `[n]` a status expression or an operand cites has its Bedingung text;
+//! - every status and operand that cites a Bedingung reads as an expression,
+//!   bar the truncations [`crate::profile_expressions::ALLOWLIST_FILE`] records;
 //! - the `source.sha256` matches the mirrored document when the mirror is here.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -188,6 +190,9 @@ pub fn run(workspace_root: &str) -> bool {
     let manifest: BTreeMap<String, ManifestEntry> = load::<Manifest>(&root.join(MIRROR_MANIFEST))
         .map(|m| m.files)
         .unwrap_or_default();
+    let allowed = crate::profile_expressions::allowlist(root);
+    let bless = std::env::var_os("BLESS_PROFILE_EXPRESSIONS").is_some();
+    let mut found_expressions = crate::profile_expressions::Ledger::new();
 
     // Directories ↔ sources.json.
     let mut dirs: BTreeSet<String> = BTreeSet::new();
@@ -249,6 +254,15 @@ pub fn run(workspace_root: &str) -> bool {
                         "{dir}: {} Bedingungen are cited but have no text: {:?}",
                         missing.len(),
                         missing.iter().take(20).collect::<Vec<_>>()
+                    ));
+                }
+                let malformed = crate::profile_expressions::malformed(&raw);
+                if !malformed.is_empty() {
+                    found_expressions.insert(dir.clone(), malformed.clone());
+                }
+                if !bless {
+                    errors.extend(crate::profile_expressions::compare(
+                        dir, &malformed, &allowed,
                     ));
                 }
             }
@@ -398,12 +412,27 @@ pub fn run(workspace_root: &str) -> bool {
         }
     }
 
+    if bless {
+        if let Err(e) = crate::profile_expressions::bless(root, found_expressions.clone()) {
+            errors.push(format!("cannot write the expression ledger: {e}"));
+        }
+    }
+
     for e in &errors {
         eprintln!("error   {e}");
     }
+    let (kinds, occurrences) = found_expressions.values().fold((0, 0), |(k, o), m| {
+        (k + m.len(), o + m.values().sum::<usize>())
+    });
+    let mut worst: Vec<(&String, usize)> = found_expressions
+        .iter()
+        .map(|(dir, m)| (dir, m.values().sum::<usize>()))
+        .collect();
+    worst.sort_by_key(|(dir, n)| (std::cmp::Reverse(*n), dir.as_str()));
     eprintln!(
-        "validate-profiles: {} profiles, {} error(s)",
+        "validate-profiles: {} profiles, {occurrences} truncated status expression(s) in {kinds} distinct shapes; worst {:?}; {} error(s)",
         sources.profiles.len(),
+        worst.iter().take(5).collect::<Vec<_>>(),
         errors.len()
     );
     errors.is_empty()

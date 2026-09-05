@@ -6,7 +6,7 @@
 //!
 //! # Why the prices come from the caller and not from `productd`
 //!
-//! § 41 Abs. 5 Satz 1 wants the **Umfang** of the change, which the product
+//! § 41 Abs. 5 Satz 3 wants the **Umfang** of the change, which the product
 //! catalogue looks like the source for and is not, twice over: `vertragd` owns
 //! which product a Marktlokation is on and `productd` owns what it costs, and
 //! the two are deliberately uncoupled (BILLING.md § 3); and the question asked
@@ -15,9 +15,9 @@
 //!
 //! So the announced lines travel with the Tarifwechsel that schedules the
 //! change — the caller chose the tariff and holds both price sheets — and are
-//! stored on the slice. A change scheduled without them still emits its
-//! CloudEvent and is **not** turned into a document: a Preisänderungsanzeige
-//! stating no Umfang is not a valid one.
+//! stored on the slice. A supplier-initiated change cannot be scheduled without
+//! them: a Preisänderungsanzeige stating no Umfang is not a valid one, and a
+//! price change that cannot be validly announced must not take effect.
 
 use anyhow::{Context as _, Result};
 use mako_service::http::Upstream;

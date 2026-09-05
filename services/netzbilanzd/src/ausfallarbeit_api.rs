@@ -25,11 +25,20 @@
 //!   Kap.-3.2.2.1 Vergleichszeitraum out of a TR's quarter-hour series and
 //!   returns the `KF` to feed back as `kf` on a `wind_spitz` request.
 
-use axum::Json;
+use std::sync::Arc;
+
+use axum::{Extension, Json};
 use mako_redispatch::ausfallarbeit as engine;
-use mako_service::{ApiError, ApiResult};
+use mako_service::{ApiError, ApiResult, oidc::Claims};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+
+use crate::config::NetzbilanzConfig;
+use crate::handlers::{Authz, authorize};
+
+/// Shorthand for the handler's shared state — the tenant every authorization
+/// decision is made against.
+type Cfg = Extension<Arc<NetzbilanzConfig>>;
 
 /// Upper bound on intervals per request (~ one year of quarter-hours).
 const MAX_INTERVALLE: usize = 35_136;
@@ -315,8 +324,12 @@ fn interval_count(req: &AusfallarbeitComputeRequest) -> usize {
 /// - `400` for an empty or oversized interval series.
 /// - `422` when a variant's inputs do not describe a computable Ausfallarbeit.
 pub async fn post_ausfallarbeit_compute(
+    claims: Claims,
+    Extension(cedar): Authz,
+    Extension(cfg): Cfg,
     Json(req): Json<AusfallarbeitComputeRequest>,
 ) -> ApiResult<Json<AusfallarbeitComputeResponse>> {
+    authorize(&cedar, &claims, "compute-ausfallarbeit", &cfg.tenant)?;
     let n = interval_count(&req);
     if n == 0 {
         return Err(ApiError::bad_request("intervalle is empty"));
@@ -338,8 +351,12 @@ pub async fn post_ausfallarbeit_compute(
 /// - `400` when no TechnischeRessource is named.
 /// - `422` when the Kap.-3.4 cap cannot be applied to the given series.
 pub async fn post_ausfallarbeit_ueberbauung(
+    claims: Claims,
+    Extension(cedar): Authz,
+    Extension(cfg): Cfg,
     Json(req): Json<UeberbauungRequest>,
 ) -> ApiResult<Json<UeberbauungResponse>> {
+    authorize(&cedar, &claims, "compute-ausfallarbeit", &cfg.tenant)?;
     if req.trs.is_empty() {
         return Err(ApiError::bad_request("trs is empty"));
     }
@@ -408,8 +425,12 @@ pub struct KfBinResponse {
 /// `422` when `KF_V` falls outside `]0;1[`, or when the bin is unusable for a
 /// reason the Ersatzwert order does not cover.
 pub async fn post_ausfallarbeit_kf_bin(
+    claims: Claims,
+    Extension(cedar): Authz,
+    Extension(cfg): Cfg,
     Json(req): Json<KfBinRequest>,
 ) -> ApiResult<Json<KfBinResponse>> {
+    authorize(&cedar, &claims, "compute-ausfallarbeit", &cfg.tenant)?;
     let unprocessable = |e: engine::AusfallarbeitError| ApiError::unprocessable(e.to_string());
     let kf_v =
         engine::verlustfaktor(req.e_einsp_kwh, req.summe_e_wea_kwh).map_err(unprocessable)?;
@@ -464,8 +485,12 @@ pub struct MaloSplitResponse {
 /// - `400` when no TechnischeRessource capacity is given.
 /// - `422` when the installed capacities sum to zero or less.
 pub async fn post_ausfallarbeit_malo_split(
+    claims: Claims,
+    Extension(cedar): Authz,
+    Extension(cfg): Cfg,
     Json(req): Json<MaloSplitRequest>,
 ) -> ApiResult<Json<MaloSplitResponse>> {
+    authorize(&cedar, &claims, "compute-ausfallarbeit", &cfg.tenant)?;
     if req.p_inst_kw.is_empty() {
         return Err(ApiError::bad_request("p_inst_kw is empty"));
     }
@@ -481,6 +506,41 @@ mod tests {
 
     fn dec(v: f64) -> Decimal {
         Decimal::from_f64(v).expect("finite")
+    }
+
+    /// The tenant the test principal and the test configuration share — Cedar
+    /// permits nothing across that boundary.
+    const TENANT: &str = "9900357000004";
+
+    /// A dev principal for the tenant, as the disabled verifier mints one.
+    fn claims() -> Claims {
+        Claims(mako_service::oidc::OidcVerifier::disabled(TENANT).disabled_claims())
+    }
+
+    /// The service's own policy, so a test exercises the authorization the
+    /// router applies rather than a permissive stand-in.
+    fn enforcer() -> Authz {
+        Extension(Arc::new(
+            mako_service::cedar::CedarEnforcer::from_policy_str(include_str!(
+                "../policies/netzbilanzd.cedar"
+            ))
+            .expect("netzbilanzd.cedar parses"),
+        ))
+    }
+
+    /// The minimum configuration the daemon deserialises, for its tenant alone.
+    fn config() -> Cfg {
+        Extension(Arc::new(
+            serde_json::from_value(serde_json::json!({
+                "database": { "url": "postgres://localhost/netzbilanzd" },
+                "tenant": TENANT,
+                "marktd_url": "http://localhost:9180",
+                "marktd_api_key": "test",
+                "makod_url": "http://localhost:8080",
+                "makod_api_key": "test",
+            }))
+            .expect("the test configuration parses"),
+        ))
     }
 
     #[test]
@@ -559,9 +619,10 @@ mod tests {
         }))
         .expect("valid request");
 
-        let Json(body) = post_ausfallarbeit_vergleichszeitraum(Json(req))
-            .await
-            .expect("an admissible run exists");
+        let Json(body) =
+            post_ausfallarbeit_vergleichszeitraum(claims(), enforcer(), config(), Json(req))
+                .await
+                .expect("an admissible run exists");
         assert_eq!(body.kf, dec(0.8));
         assert_eq!(body.lage, engine::VergleichszeitraumLage::Danach);
         assert_eq!(body.viertelstunden.len(), 4);
@@ -593,9 +654,10 @@ mod tests {
         }))
         .expect("valid request");
 
-        let Json(body) = post_ausfallarbeit_vergleichstag(Json(req))
-            .await
-            .expect("an admissible day exists");
+        let Json(body) =
+            post_ausfallarbeit_vergleichstag(claims(), enforcer(), config(), Json(req))
+                .await
+                .expect("an admissible day exists");
         assert_eq!(body.tag, "2026-06-12");
         assert_eq!(body.lage, engine::VergleichszeitraumLage::Davor);
         assert_eq!(body.viertelstunden, 1, "the 06:00 value is under 10 %");
@@ -617,7 +679,11 @@ mod tests {
             }],
         }))
         .expect("valid request");
-        assert!(post_ausfallarbeit_vergleichstag(Json(req)).await.is_err());
+        assert!(
+            post_ausfallarbeit_vergleichstag(claims(), enforcer(), config(), Json(req))
+                .await
+                .is_err()
+        );
     }
 
     /// No admissible run is a `422`, not a fabricated Korrekturfaktor.
@@ -637,7 +703,7 @@ mod tests {
         }))
         .expect("valid request");
         assert!(
-            post_ausfallarbeit_vergleichszeitraum(Json(req))
+            post_ausfallarbeit_vergleichszeitraum(claims(), enforcer(), config(), Json(req))
                 .await
                 .is_err()
         );
@@ -653,7 +719,7 @@ mod tests {
             "summe_e_wea_kwh": "1000000"
         }))
         .expect("valid request");
-        let Json(body) = post_ausfallarbeit_kf_bin(Json(req))
+        let Json(body) = post_ausfallarbeit_kf_bin(claims(), enforcer(), config(), Json(req))
             .await
             .expect("computes");
         // Bin index = round(8.2 / 0.5) = 16; KF_LBin = 1000/2000 = 0.5;
@@ -676,7 +742,7 @@ mod tests {
             "summe_e_wea_kwh": "1000000"
         }))
         .expect("valid request");
-        let Json(body) = post_ausfallarbeit_kf_bin(Json(req))
+        let Json(body) = post_ausfallarbeit_kf_bin(claims(), enforcer(), config(), Json(req))
             .await
             .expect("computes");
         assert_eq!(body.kf_lbin_quelle, engine::KfLbinQuelle::Folgemonat);
@@ -694,7 +760,7 @@ mod tests {
             "summe_e_wea_kwh": "1000000"
         }))
         .expect("valid request");
-        let err = post_ausfallarbeit_kf_bin(Json(req))
+        let err = post_ausfallarbeit_kf_bin(claims(), enforcer(), config(), Json(req))
             .await
             .expect_err("KF_V above 1 is a data error");
         assert_eq!(err.status(), axum::http::StatusCode::UNPROCESSABLE_ENTITY);
@@ -708,7 +774,7 @@ mod tests {
             "p_inst_kw": ["3000", "1000"]
         }))
         .expect("valid request");
-        let Json(body) = post_ausfallarbeit_malo_split(Json(req))
+        let Json(body) = post_ausfallarbeit_malo_split(claims(), enforcer(), config(), Json(req))
             .await
             .expect("splits");
         assert_eq!(body.anteile, vec![dec(750.0), dec(250.0)]);
@@ -723,7 +789,7 @@ mod tests {
             "p_inst_kw": ["0", "0"]
         }))
         .expect("valid request");
-        let err = post_ausfallarbeit_malo_split(Json(req))
+        let err = post_ausfallarbeit_malo_split(claims(), enforcer(), config(), Json(req))
             .await
             .expect_err("zero installed capacity cannot be divided by");
         assert_eq!(err.status(), axum::http::StatusCode::UNPROCESSABLE_ENTITY);
@@ -852,8 +918,12 @@ pub struct VergleichstagResponse {
 /// - `422` when no day qualifies, or when the admitted quarter-hours carry no
 ///   irradiation at all — `G_VZ` would be zero.
 pub async fn post_ausfallarbeit_vergleichstag(
+    claims: Claims,
+    Extension(cedar): Authz,
+    Extension(cfg): Cfg,
     Json(req): Json<VergleichstagRequest>,
 ) -> ApiResult<Json<VergleichstagResponse>> {
+    authorize(&cedar, &claims, "compute-ausfallarbeit", &cfg.tenant)?;
     if req.kandidaten.is_empty() {
         return Err(ApiError::bad_request("kandidaten is empty"));
     }
@@ -896,8 +966,12 @@ pub async fn post_ausfallarbeit_vergleichstag(
 ///   then falls back to the vereinfachte Spitzabrechnung or the Pauschale, which
 ///   is a decision rather than a computation.
 pub async fn post_ausfallarbeit_vergleichszeitraum(
+    claims: Claims,
+    Extension(cedar): Authz,
+    Extension(cfg): Cfg,
     Json(req): Json<VergleichszeitraumRequest>,
 ) -> ApiResult<Json<VergleichszeitraumResponse>> {
+    authorize(&cedar, &claims, "compute-ausfallarbeit", &cfg.tenant)?;
     if req.kandidaten.is_empty() {
         return Err(ApiError::bad_request("kandidaten is empty"));
     }

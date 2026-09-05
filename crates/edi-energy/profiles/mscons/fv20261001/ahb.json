@@ -249,7 +249,7 @@
           "nr": "00006",
           "operands": [
             {
-              "operand": "X ([67] ∧ ([529] ∨"
+              "operand": "X ([67] ∧ ([529] ∨ [553]))"
             }
           ]
         },
@@ -496,7 +496,7 @@
           "nr": "00029",
           "operands": [
             {
-              "operand": "X ([931] [111] ∧ [495]) ⊻"
+              "operand": "X ([931] [111] ∧ [495]) ⊻ ([134] ∧ [135])"
             }
           ]
         },
@@ -529,7 +529,7 @@
           "nr": "00030",
           "operands": [
             {
-              "operand": "X [UB1] ∧ [495] ∧ ([130] ∨"
+              "operand": "X [UB1] ∧ [495] ∧ ([130] ∨ [133])"
             }
           ]
         },
@@ -1291,7 +1291,7 @@
             },
             {
               "code": "Z41",
-              "operand": "X [492] ∧"
+              "operand": "X [492] ∧ [32] ∧ [33]"
             }
           ]
         },
@@ -1483,7 +1483,7 @@
           "nr": "00015",
           "operands": [
             {
-              "operand": "M [131] ∧ [510] ∧ [522]) ⊻ ([950] ∧ [514] ∧ ([523] ∨"
+              "operand": "M [131] ∧ (([951] ∧ [510] ∧ [522]) ⊻ ([950] ∧ [514] ∧ ([523] ∨ [525])))"
             }
           ]
         },
@@ -1530,7 +1530,7 @@
           "nr": "00025",
           "operands": [
             {
-              "operand": "X ([68] ∧ [501] ∧ [566]) ⊻ ([90] [566]) ⊻ ∧ [501])"
+              "operand": "X ([68] ∧ [501] ∧ [566]) ⊻ ([90] ∧ [501])"
             }
           ]
         },
@@ -1554,7 +1554,7 @@
             },
             {
               "code": "67",
-              "operand": "X [68] ∧ ([35] ∨ ([32] ∧"
+              "operand": "X [68] ∧ ([35] ∨ ([32] ∧ [77]))"
             },
             {
               "code": "Z31",
@@ -1586,7 +1586,7 @@
           "nr": "00027",
           "operands": [
             {
-              "operand": "X ∧ ([931] [38]) ⊻ ∧ [495])"
+              "operand": "X ((([UB1] ∧ [119]) ⊻ ([931] [38]) ⊻ ([931] [144])) ∧ [495])"
             }
           ]
         },
@@ -1615,7 +1615,7 @@
           "nr": "00028",
           "operands": [
             {
-              "operand": "X ∧ ([931] [38]) ⊻ ∧ [495])"
+              "operand": "X ((([UB1] ∧ [119]) ⊻ ([931] [38]) ⊻ ([931] [144])) ∧ [495])"
             }
           ]
         },
@@ -1653,19 +1653,19 @@
             },
             {
               "code": "Z85",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "Z86",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "Z87",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "ZC3",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             }
           ]
         },
@@ -1701,7 +1701,7 @@
             },
             {
               "code": "ZS0",
-              "operand": "X [46] ∧"
+              "operand": "X [46] ∧ [568]"
             }
           ]
         },
@@ -1773,7 +1773,7 @@
             },
             {
               "code": "ZA5",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "ZA6",
@@ -1785,11 +1785,11 @@
             },
             {
               "code": "ZB0",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "ZB9",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "ZC2",
@@ -1805,7 +1805,7 @@
             },
             {
               "code": "ZJ9",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             }
           ]
         },
@@ -1905,7 +1905,7 @@
             },
             {
               "code": "ZS9",
-              "operand": "X [46] ∧"
+              "operand": "X [46] ∧ [570]"
             }
           ]
         },
@@ -1925,11 +1925,11 @@
           "operands": [
             {
               "code": "Z36",
-              "operand": "X [83] ∨ ([87]"
+              "operand": "X [83] ∨ ([87] ∧ [544])"
             },
             {
               "code": "Z37",
-              "operand": "X [84] ∨ ([88]"
+              "operand": "X [84] ∨ ([88] ∧ [545] ∧ [577])"
             },
             {
               "code": "Z38",
@@ -2376,7 +2376,7 @@
             },
             {
               "code": "Z42",
-              "operand": "X [492] ∧"
+              "operand": "X [492] ∧ [32] ∧ [33]"
             }
           ]
         },
@@ -2596,7 +2596,7 @@
           "nr": "00025",
           "operands": [
             {
-              "operand": "X ([69] ∧ [501] ∧ ([91] ∧ [501])"
+              "operand": "X ([69] ∧ [501] ∧ [566]) ⊻ ([91] ∧ [501])"
             }
           ]
         },
@@ -2660,7 +2660,7 @@
           "nr": "00027",
           "operands": [
             {
-              "operand": "X [UB1] ∧"
+              "operand": "X [UB1] ∧ [495]"
             }
           ]
         },
@@ -2689,7 +2689,7 @@
           "nr": "00028",
           "operands": [
             {
-              "operand": "X [UB1] ∧"
+              "operand": "X [UB1] ∧ [495]"
             }
           ]
         },
@@ -2732,7 +2732,7 @@
             },
             {
               "code": "610",
-              "operand": "X ([69] ∧ [581]) ⊻ ([91] ∧ ([578] ⊻"
+              "operand": "X ([69] ∧ [581]) ⊻ ([91] ∧ ([578] ⊻ [579]))"
             }
           ]
         },
@@ -2760,19 +2760,19 @@
             },
             {
               "code": "Z85",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "Z86",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "Z87",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "ZC3",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             }
           ]
         },
@@ -2808,7 +2808,7 @@
             },
             {
               "code": "ZS0",
-              "operand": "X [46] ∧"
+              "operand": "X [46] ∧ [568]"
             }
           ]
         },
@@ -2880,7 +2880,7 @@
             },
             {
               "code": "ZA5",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "ZA6",
@@ -2892,11 +2892,11 @@
             },
             {
               "code": "ZB0",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "ZB9",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "ZC2",
@@ -3004,7 +3004,7 @@
             },
             {
               "code": "ZS9",
-              "operand": "X [46] ∧"
+              "operand": "X [46] ∧ [570]"
             }
           ]
         },
@@ -3697,7 +3697,7 @@
           "nr": "00027",
           "operands": [
             {
-              "operand": "X [UB1] ∧"
+              "operand": "X [UB1] ∧ [495]"
             }
           ]
         },
@@ -3726,7 +3726,7 @@
           "nr": "00028",
           "operands": [
             {
-              "operand": "X [UB1] ∧"
+              "operand": "X [UB1] ∧ [495]"
             }
           ]
         },
@@ -5156,7 +5156,7 @@
             },
             {
               "code": "20",
-              "operand": "X [35] ∧ [36] ∧"
+              "operand": "X [35] ∧ [36] ∧ [12]"
             },
             {
               "code": "Z18",
@@ -5169,7 +5169,7 @@
           "nr": "00026",
           "operands": [
             {
-              "operand": "X ([902] ∧ [906]) [48])"
+              "operand": "X ([902] ∧ [906]) ∨ ([902] ∧ [907] [48])"
             }
           ]
         },
@@ -5246,7 +5246,7 @@
           "nr": "00029",
           "operands": [
             {
-              "operand": "X ([931] [111] ∧ [135])"
+              "operand": "X ([931] [111] ∧ [495]) ⊻ ([134] ∧ [135])"
             }
           ]
         },
@@ -5279,7 +5279,7 @@
           "nr": "00030",
           "operands": [
             {
-              "operand": "X [UB2] ∧ [495]"
+              "operand": "X [UB2] ∧ [495] ∧ ([130] ∨ [133])"
             }
           ]
         },
@@ -5346,15 +5346,15 @@
             },
             {
               "code": "Z85",
-              "operand": "X [4P0..1] ⊻ [6P0..1]"
+              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "Z86",
-              "operand": "X [4P0..1] ⊻ [6P0..1]"
+              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "Z87",
-              "operand": "X [4P0..1] ⊻ [6P0..1]"
+              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "ZC3",
@@ -5382,15 +5382,15 @@
           "operands": [
             {
               "code": "Z89",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "Z90",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "Z91",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "Z92",
@@ -5402,7 +5402,7 @@
             },
             {
               "code": "Z94",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "Z95",
@@ -5414,11 +5414,11 @@
             },
             {
               "code": "ZQ9",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "ZR0",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1]"
             }
           ]
         },
@@ -5454,11 +5454,11 @@
             },
             {
               "code": "Z80",
-              "operand": "X [4P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "Z81",
-              "operand": "X [4P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "Z82",
@@ -5466,15 +5466,15 @@
             },
             {
               "code": "Z98",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "Z99",
-              "operand": "X [6P0..1] ⊻ [8P0..1]"
+              "operand": "X [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "ZA0",
-              "operand": "X [4P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "ZA1",
@@ -5486,7 +5486,7 @@
             },
             {
               "code": "ZA5",
-              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
+              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "ZA6",
@@ -5502,7 +5502,31 @@
             },
             {
               "code": "ZA9",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
+            },
+            {
+              "code": "ZB0",
+              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
+            },
+            {
+              "code": "ZC4",
+              "operand": "X [4P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
+            },
+            {
+              "code": "ZR1",
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
+            },
+            {
+              "code": "ZR2",
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
+            },
+            {
+              "code": "ZR3",
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
+            },
+            {
+              "code": "ZR4",
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             }
           ]
         },
@@ -5869,7 +5893,7 @@
         {
           "nr": "00033",
           "status": [
-            "Soll ([92] ⊻ [93]"
+            "Soll ([92] ⊻ [93] ⊻ [94]) ∧ [126]"
           ]
         },
         {
@@ -6287,7 +6311,7 @@
           "nr": "00015",
           "operands": [
             {
-              "operand": "X ([951] [510] ∧ ⊻ ([950] [514] ∧ ([151] ⊻ [152] ∧"
+              "operand": "X ([951] [510] ∧ ([522] ∨ [524])) ⊻ ([950] [514] ∧ ([151] ⊻ [152] ∧ (([523] ∨ [525]))))"
             }
           ]
         },
@@ -6339,7 +6363,7 @@
             },
             {
               "code": "67",
-              "operand": "X ([152] ∧ [32] ∧ ([33] ∨ [36] ∨"
+              "operand": "X ([152] ∧ [32] ∧ ([33] ∨ [36] ∨ [42])) ⊻ [151]"
             },
             {
               "code": "201",
@@ -6347,7 +6371,7 @@
             },
             {
               "code": "20",
-              "operand": "X ([152] ∧ [35] ∧"
+              "operand": "X ([152] ∧ [35] ∧ ([33] ∨ [36]))"
             },
             {
               "code": "187",
@@ -6360,7 +6384,7 @@
           "nr": "00026",
           "operands": [
             {
-              "operand": "X ∧ [937] ([902] ∧ [907] [48] ∧ [62]) ∨ ([910] ∧ [906] [62]) [152]) ⊻ ([902] ∧ [906] ∧ [151])"
+              "operand": "X (([902] ∧ [937] [46] ∧ [573]) ∨ ([902] ∧ [907] [48] ∧ [62]) ∨ ([910] ∧ [906] [62]) [152]) ⊻ ([902] ∧ [906] ∧ [151])"
             }
           ]
         },
@@ -6379,7 +6403,7 @@
           "nr": "00027",
           "operands": [
             {
-              "operand": "X ∧"
+              "operand": "X ((([UB2] ∧ [119]) ⊻ ([931] [38])) ∧ [495])"
             }
           ]
         },
@@ -6408,7 +6432,7 @@
           "nr": "00028",
           "operands": [
             {
-              "operand": "X ∧"
+              "operand": "X ((([UB2] ∧ [119]) ⊻ ([931] [38])) ∧ [495])"
             }
           ]
         },
@@ -6475,15 +6499,15 @@
             },
             {
               "code": "Z85",
-              "operand": "X [4P0..1] ⊻ [6P0..1]"
+              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "Z86",
-              "operand": "X [4P0..1] ⊻ [6P0..1]"
+              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "Z87",
-              "operand": "X [4P0..1] ⊻ [6P0..1]"
+              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "ZC3",
@@ -6511,15 +6535,15 @@
           "operands": [
             {
               "code": "Z89",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "Z90",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "Z91",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "Z92",
@@ -6531,7 +6555,7 @@
             },
             {
               "code": "Z94",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "Z95",
@@ -6543,11 +6567,11 @@
             },
             {
               "code": "ZQ9",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "ZR0",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "ZS0",
@@ -6587,11 +6611,11 @@
             },
             {
               "code": "Z80",
-              "operand": "X [4P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "Z81",
-              "operand": "X [4P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "Z82",
@@ -6599,15 +6623,15 @@
             },
             {
               "code": "Z98",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "Z99",
-              "operand": "X [6P0..1] ⊻ [8P0..1]"
+              "operand": "X [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "ZA0",
-              "operand": "X [4P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "ZA1",
@@ -6619,7 +6643,7 @@
             },
             {
               "code": "ZA5",
-              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
+              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "ZA6",
@@ -6635,7 +6659,35 @@
             },
             {
               "code": "ZA9",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
+            },
+            {
+              "code": "ZB0",
+              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
+            },
+            {
+              "code": "ZC4",
+              "operand": "X [4P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
+            },
+            {
+              "code": "ZJ9",
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
+            },
+            {
+              "code": "ZR1",
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
+            },
+            {
+              "code": "ZR2",
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
+            },
+            {
+              "code": "ZR3",
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
+            },
+            {
+              "code": "ZR4",
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             }
           ]
         },
@@ -6965,7 +7017,7 @@
         {
           "nr": "00033",
           "status": [
-            "Soll ([92] ⊻ [93] [152]"
+            "Soll ([92] ⊻ [93] ⊻ [94]) ∧ [126] ∧ [152]"
           ]
         },
         {
@@ -7379,7 +7431,7 @@
           "nr": "00015",
           "operands": [
             {
-              "operand": "X ([951] [575] ∧ [35] ∧"
+              "operand": "X ([951] (([510] ∧ [35]) ∨ ([535] ∧ ([32] ∧ ([36] ∨ [80]))))) ⊻ ([960] [575] ∧ [35] ∧ ([36] ∨ [33]))"
             }
           ]
         },
@@ -7489,11 +7541,11 @@
             },
             {
               "code": "67",
-              "operand": "X [35] ∨ ([32] ∧"
+              "operand": "X [35] ∨ ([32] ∧ ([36] ∨ [80]))"
             },
             {
               "code": "Z18",
-              "operand": "X [35] ∨ ([32] ∧"
+              "operand": "X [35] ∨ ([32] ∧ ([36] ∨ [80]))"
             }
           ]
         },
@@ -7588,19 +7640,19 @@
             },
             {
               "code": "Z85",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "Z86",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "Z87",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "ZC3",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             }
           ]
         },
@@ -7704,7 +7756,7 @@
             },
             {
               "code": "ZA5",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "ZA6",
@@ -7716,11 +7768,11 @@
             },
             {
               "code": "ZB0",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "ZB9",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "ZC2",
@@ -7736,7 +7788,7 @@
             },
             {
               "code": "ZJ9",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             }
           ]
         },
@@ -8451,7 +8503,7 @@
           "nr": "00015",
           "operands": [
             {
-              "operand": "X [950] ∨"
+              "operand": "X [950] (([514] ∨ [518]) ∧ ([35] ∨ ([32] ∧ [77])))"
             }
           ]
         },
@@ -8561,7 +8613,7 @@
             },
             {
               "code": "67",
-              "operand": "X [35] ∨ ([32] ∧"
+              "operand": "X [35] ∨ ([32] ∧ [77])"
             },
             {
               "code": "Z18",
@@ -8660,19 +8712,19 @@
             },
             {
               "code": "Z85",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "Z86",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "Z87",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "ZC3",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             }
           ]
         },
@@ -8780,7 +8832,7 @@
             },
             {
               "code": "ZA5",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "ZA6",
@@ -8792,11 +8844,11 @@
             },
             {
               "code": "ZB0",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "ZB9",
-              "operand": "X [4P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1]"
             },
             {
               "code": "ZC2",
@@ -9523,7 +9575,7 @@
           "nr": "00015",
           "operands": [
             {
-              "operand": "X ([951] ∧ [36]) ⊻ ([32] ∧ [42]) ∧ [510]) ⊻ ([32] ∧ [36] ∧ [535]) ⊻"
+              "operand": "X ([951] ((([35] ∧ [36]) ⊻ ([32] ∧ [42]) ∧ [510]) ⊻ ([32] ∧ [36] ∧ [535]) ⊻ ([32] ∧ [33] ∧ [519]))) ⊻ ([950] (([32] ∧ [33]) ∧ ([514] ∧ [520])) ⊻ ([32] ∧ [141] ∧ [514]))"
             }
           ]
         },
@@ -9633,7 +9685,7 @@
             },
             {
               "code": "67",
-              "operand": "X ([32] ∧ ([33] ∨ [36] ∨"
+              "operand": "X ([32] ∧ ([33] ∨ [36] ∨ ∨ [141]))"
             },
             {
               "code": "201",
@@ -9744,15 +9796,15 @@
             },
             {
               "code": "Z85",
-              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "Z86",
-              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "Z87",
-              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻ [6P0..1]"
             },
             {
               "code": "ZC3",
@@ -9820,7 +9872,7 @@
             },
             {
               "code": "ZS0",
-              "operand": "X ([46] ∧ [568]) ⊻ ([32] ∧"
+              "operand": "X ([46] ∧ [568]) ⊻ ([32] ∧ [36] ∧ [572])"
             }
           ]
         },
@@ -9856,11 +9908,11 @@
             },
             {
               "code": "Z80",
-              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "Z81",
-              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "Z82",
@@ -9872,11 +9924,11 @@
             },
             {
               "code": "Z99",
-              "operand": "X [6P0..1] ⊻ [7P0..1] ⊻"
+              "operand": "X [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "ZA0",
-              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "ZA1",
@@ -9908,11 +9960,11 @@
             },
             {
               "code": "ZB0",
-              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻ [8P0..1]"
+              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "ZC4",
-              "operand": "X [4P0..1] ⊻ [7P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "ZJ9",
@@ -9920,7 +9972,7 @@
             },
             {
               "code": "ZR1",
-              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "ZR2",
@@ -9928,11 +9980,11 @@
             },
             {
               "code": "ZR3",
-              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "ZR4",
-              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             }
           ]
         },
@@ -10036,7 +10088,7 @@
             },
             {
               "code": "ZS9",
-              "operand": "X ([46] ∧ [570]) ⊻ ([32] ∧"
+              "operand": "X ([46] ∧ [570]) ⊻ ([32] ∧ [36] ∧ [571])"
             }
           ]
         },
@@ -18356,7 +18408,7 @@
           "nr": "00015",
           "operands": [
             {
-              "operand": "X ([951] ∧ [36]) ∨ ([950] ([32] ∧ [33]) ∧ [514])"
+              "operand": "X ([951] (([32] ∧ [36]) ∨ ([35] ∧ [36])) ∧ [510]) ∨ ([950] ([32] ∧ [33]) ∧ [514])"
             }
           ]
         },
@@ -18495,11 +18547,11 @@
             },
             {
               "code": "67",
-              "operand": "X ([32] ∧ ([33] ∨"
+              "operand": "X ([32] ∧ ([33] ∨ [36]))"
             },
             {
               "code": "201",
-              "operand": "X ([32] ∧ ([33] ∨ ⊻ ([35] ∧ [36])"
+              "operand": "X ([32] ∧ ([33] ∨ [36])) ⊻ ([35] ∧ [36])"
             },
             {
               "code": "20",
@@ -18512,7 +18564,7 @@
           "nr": "00026",
           "operands": [
             {
-              "operand": "X ([902] ∧ [907]) ∨"
+              "operand": "X ([902] ∧ [907]) ∨ (([910] ∧ [907]) ([49] ∨ [50]))"
             }
           ]
         },
@@ -18662,11 +18714,11 @@
             },
             {
               "code": "Z80",
-              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "Z81",
-              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "Z82",
@@ -18678,11 +18730,11 @@
             },
             {
               "code": "Z99",
-              "operand": "X [6P0..1] ⊻ [7P0..1] ⊻"
+              "operand": "X [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "ZA0",
-              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "ZA1",
@@ -18714,15 +18766,15 @@
             },
             {
               "code": "ZB0",
-              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻ [8P0..1]"
+              "operand": "X [4P0..1] ⊻ [5P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "ZC4",
-              "operand": "X [4P0..1] ⊻ [7P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "ZR1",
-              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "ZR2",
@@ -18730,11 +18782,11 @@
             },
             {
               "code": "ZR3",
-              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             },
             {
               "code": "ZR4",
-              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻"
+              "operand": "X [4P0..1] ⊻ [6P0..1] ⊻ [7P0..1] ⊻ [8P0..1]"
             }
           ]
         },
@@ -20913,7 +20965,7 @@
           "nr": "00015",
           "operands": [
             {
-              "operand": "X ([950] ([514] ∨ ([951] [510]) ∨ ([960] [575])"
+              "operand": "X ([950] ([514] ∨ [518])) ∨ ([951] [510]) ∨ ([960] [575])"
             }
           ]
         },
@@ -21969,7 +22021,7 @@
     "573": "Hinweis: Eine Energiemenge in der Sparte Gas ist gemäß DVGW G685 Arbeitsblatt 4 Kapitel 5.3 auf ganze Kilowattstunden zu runden.",
     "574": "Hinweis: Wert aus BGM DE1004 der ORDERS mit der die Bestellung der Werte nach Typ 2 erfolg ist",
     "575": "Hinweis: Verwendung der ID der Netzlokation",
-    "577": "Hinweis: Dieser Code ist auch zu verwenden, wenn aufgrund der Beendigung einer Messlokation (Stilllegung) die Beendigung der Marktlokation (Stilllegung) zu unterschiedlichen Zeitpunkten erfolgt, das heißt die Beendigung der Messlokation vor der Beendigung der Marktlokation erfolgt. Die Energiemenge ist bis zum Endezeitpunkt der Marklokation zu übermitteln, wenngleich der letzte Zählerstand der Messlokation zu einem früheren Zeitpunkt liegt.",
+    "577": "Hinweis: Dieser Code ist auch zu verwenden, wenn aufgrund der Beendigung einer Messlokation (Stilllegung) die Beendigung der Marktlokation (Stilllegung) zu (Stilllegung) zu unterschiedlichen Zeitpunkten erfolgt, das heißt die Beendigung der Messlokation vor der Beendigung der Marktlokation erfolgt. Die Energiemenge ist bis zum Endezeitpunkt der Marklokation zu übermitteln, wenngleich der letzte Zählerstand der Messlokation zu einem früheren Zeitpunkt liegt.",
     "578": "Hinweis: Wenn es sich um die Übermittlung des Leistungswertes für die Netzentgelte mit Jahresleistungspreissyste m handelt.",
     "579": "Hinweis: Wenn es sich um die Übermittlung des Leistungswertes für die Netzentgelte mit Monatsleistungspreissyst em handelt.",
     "580": "Hinweis: Wenn es sich um die Übermittlung des Leistungswertes für die Netzentgelte mit Tagesleistungspreissyste m handelt.",

@@ -7,7 +7,7 @@
 | HTTP port | `:8380` · MCP `POST\|GET /mcp` (15 tools, 5 prompts) |
 | Database | PostgreSQL 17+ (sqlx 0.8, `migrations/0001_schema.sql`) |
 | Readings | `meter_reads`, `esa_typ2_reads`, `meter_readings` — meterstore-owned, hot PostgreSQL window + settled Iceberg V2 history |
-| Own tables | `meter_billing_periods`, `zsg_conversion_log`, `ablese_auftraege`, `meter_read_corrections`, `substitute_value_log`, `quality_assessments`, `direct_push_sessions`, `gdpr_deletions` |
+| Own tables | 16 — `meter_billing_periods`, `zsg_conversion_log`, `ablese_auftraege`, `meter_read_corrections`, `substitute_value_log`, `quality_assessments`, `direct_push_sessions`, `gdpr_deletions` and seven more; see [Database Schema](#database-schema) |
 | Auth | OIDC/JWT + Cedar ABAC — reads tenant-scoped, writes role-gated; service-to-service keys via `[[oidc.service_keys]]`. Refuses to start without `[oidc]` unless `allow_insecure_no_auth` |
 | Lifecycle | `mako_service::run` — tracing, tuned pool, migrations, DB-ping readiness, `/metrics`, graceful shutdown |
 | Rate limiting | Per-tenant and global GCRA; `429` carries `Retry-After` |
@@ -18,7 +18,7 @@
 
 | Door | Path |
 |---|---|
-| MSCONS | CloudEvents from `marktd` — billing PIDs 13005–13025 → `meter_reads`, **13027** → `esa_typ2_reads` |
+| MSCONS | CloudEvents from `marktd` — `domain::ALL_MSCONS_PIDS` (Messwesen 13002–13019/13025/13028 plus the Redispatch 2.0 series 13020–13023/13026) → `meter_reads`, **13027** → `esa_typ2_reads` |
 | Direct push | `POST /api/v1/meter-reads/rlm/{malo_id}` (Strom), `.../gas/{malo_id}` (m³→kWh_Hs), `.../iot/{malo_id}` — idempotent on `session_id` |
 | Bulk | `POST /api/v1/meter-reads/{malo_id}/bulk` — up to 50 000 intervals, validated and written in one statement |
 | Zählerstandsgang | `POST\|GET /api/v1/zaehlerstandsgang/{malo_id}` |
@@ -51,7 +51,7 @@ batch. It annotates, never rejects: billability is a separate decision from
 storage (§ 147 AO / GoBD).
 
 One pass — `domain::validation::findings` — is shared by every door, the MCP
-`validate_timeseries` tool and the § 60 Abs. 2 substitute path. The batch splits
+`validate_timeseries` tool and the § 60 Abs. 1 substitute path. The batch splits
 by **(Sparte, OBIS register)** first: V01/V02 are statements about a single
 series, and a prosumer MeLo delivering import beside export at one slot would
 otherwise trip V02 on every interval. Thresholds come from
@@ -118,14 +118,25 @@ the same instants.
 Where no honest difference exists — a backwards step no `register_digits`
 explains, a jump beyond `max_plant_power_kw` — **no interval is emitted** and the
 reason goes to `zsg_conversion_log`. The hole surfaces as a V01 gap and the § 60
-Abs. 2 substitute path fills it with its own row, so the two logs together say
+Abs. 1 substitute path fills it with its own row, so the two logs together say
 "this quarter-hour is an Ersatzwert *because* the register went backwards here".
 
 ---
 
 ## Substitutes, corrections and confirmations
 
-A § 60 Abs. 2 substitute is filed **under the register it fills** — the request's
+**The authority is § 60 Abs. 1 MsbG**, not Abs. 2: the Messstellenbetreiber owes
+the berechtigten Stellen the *aufbereiteten* Messwerte at the times they set, and
+Plausibilisierung und Ersatzwertbildung is that Aufbereitung. § 60 Abs. 2 MsbG is
+a *Soll* about **where** it runs for an intelligentes Messsystem — im
+Smart-Meter-Gateway, once the BSI rates it possible and the BNetzA has made the
+§ 75 Satz 1 Nr. 4 Festlegung — and obliges nobody to form an Ersatzwert; its
+Satz 2 is what lets `edmd` do the Aufbereitung outside the gateway at all (for
+gas permanently, through berechtigte Stellen nach § 49 Abs. 2). On the bill the
+same gap is **§ 40a Abs. 2 EnWG**: a consumption that cannot be determined may be
+billed on a Schätzung, expressly and prominently labelled (Satz 3).
+
+A § 60 Abs. 1 substitute is filed **under the register it fills** — the request's
 `obis_code`, or the point's dominant energy register. An unlabelled reading *is*
 the canonical total register, so on a dual-tariff point reporting only HT and NT
 an unlabelled substitute would make the month read as its own decomposition.
@@ -211,7 +222,7 @@ rollout obligation).
 
 | Path | Purpose |
 |---|---|
-| `GET /api/v1/energy/{malo_id}?direction=` | **The canonical projected series** — one direction through `domain::register`, with quality, duration-ratio coverage at the observed cadence and `billable_pct` for the § 60 Abs. 2 gate |
+| `GET /api/v1/energy/{malo_id}?direction=` | **The canonical projected series** — one direction through `domain::register`, with quality, duration-ratio coverage at the observed cadence and `billable_pct` for the § 40a Abs. 2 EnWG gate |
 | `GET /api/v1/deliveries/{malo_id}` | BO4E `Energiemenge` for ERP billing import |
 | `GET /api/v1/lastgang/{malo_id}` · `/zeitreihe/{malo_id}` | API-Webdienste Strom shapes; Arrow IPC on `Accept: application/vnd.apache.arrow.stream` |
 | `GET /api/v1/billing-period/{malo_id}` · `/billing-periods` | `MeterBillingPeriod` for `netzbilanzd`; the plural answers from the **readings**, not the cache, and reports `truncated` |
@@ -286,8 +297,11 @@ door — the same predicate as the `202` status, so the two cannot disagree) ·
 ## Quick Start
 
 ```bash
-edmd --config edmd.toml
+EDMD_CONFIG=edmd.toml edmd
 ```
+
+There are **no command-line flags** but `--check`: the runner owns the lifecycle
+and the config file owns the settings.
 
 Migrations run automatically at startup from `migrations/0001_schema.sql`.
 The schema is designed for a fresh install — no incremental migration state is maintained.
@@ -532,7 +546,8 @@ designed for a fresh install, so no incremental migration state is maintained.
 | Area | Tables |
 |---|---|
 | Metered data receipts | `meter_data_receipts` · `meter_billing_periods` (billing-period cache) |
-| Corrections & substitution | `meter_read_corrections` · `substitute_value_log` |
+| Corrections & substitution | `meter_read_corrections` · `substitute_value_log` · `estimated_read_confirmations` (the obligation an ESTIMATED/SUBSTITUTED interval opens) |
+| Zählerstandsgang | `zsg_conversion_log` — why a register step produced no interval |
 | Quality | `quality_assessments` |
 | Surveillance | `delivery_surveillance` (open-issue register: which points stopped, keyed `(tenant, stream, malo_id, obis_code, subscription_ref)` — `stream` separates Typ-1 from ESA Typ-2, `subscription_ref` separates two ESA subscriptions at one Meldepunkt) |
 | Reading orders | `ablese_auftraege` |
@@ -556,13 +571,17 @@ so two tenants' readings for one measuring point never merge.
 
 ## Event Routing
 
-`edmd` subscribes to `de.mako.process.completed` events from `marktd` where `makopid`
-is in the MSCONS PID set (`edmd::domain::MSCONS_PIDS`). On receipt:
+`edmd` subscribes to **both** `de.mako.process.completed` and
+`de.mako.process.initiated` from `marktd` — the completions carry the MSCONS
+deliveries, and 55001 / 55004 / 55007 open the supply-handover reading orders.
+Narrowing by PID happens in `handler.rs` on receipt, against
+`domain::ALL_MSCONS_PIDS`; anything else falls through to `204`. On an MSCONS
+completion:
 
 1. Verifies the Standard Webhooks signature (if configured)
 2. Parses `data` into a `MeterDataReceipt`
 3. Upserts the receipt row (idempotent on `process_id`)
-4. Stores typed interval reads
+4. Stores typed interval reads — `esa_typ2_reads` for 13027, `meter_reads` otherwise
 
 ---
 

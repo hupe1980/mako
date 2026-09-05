@@ -101,10 +101,10 @@ CREATE TABLE eeg_anlagen (
         'WIND_OFFSHORE',    -- §§70ff EEG
         -- Biomass / Gas
         'BIOMASSE',         -- generic solid biomass
-        'BIOMASSE_HOLZ',    -- wood biomass (§42a EEG restricted)
+        'BIOMASSE_HOLZ',    -- wood biomass (§§ 42/43 EEG; no separate Holzbiomasse restriction)
         'BIOGAS',           -- fermentation biogas
         'BIOMETHAN',        -- upgraded biogas (grid injection)
-        'KLAEGAS',          -- sewage gas (§41 EEG)
+        'KLAERGAS',          -- sewage gas (§41 EEG)
         'GRUBENGAS',        -- mine gas (§41 EEG)
         'DEPONIEGAS',       -- landfill gas (§41 EEG)
         -- Hydro / Geo
@@ -117,10 +117,14 @@ CREATE TABLE eeg_anlagen (
 
     -- Feed-in tariff fixed at inbetriebnahme for the full Förderungsdauer (§25 EEG)
     verguetungssatz_ct NUMERIC(8, 4) NOT NULL CHECK (verguetungssatz_ct >= 0),
-    foerderendedatum   DATE         NOT NULL,
+    -- The EEG Förderende. NULL where the plant has none: § 8 KWKG measures the
+    -- Zuschlag in Vollbenutzungsstunden (Abs. 1-3) and caps each calendar year
+    -- separately (Abs. 4), so a KWK plant is ended by kwk_foerderdauer_h and
+    -- never by a date.
+    foerderendedatum   DATE,
 
     -- Which §48 rate column the plant is paid from. Überschusseinspeisung and
-    -- Volleinspeisung differ by the §48 Abs. 2a bonus — 8,11 vs. 12,91 ct/kWh
+    -- Volleinspeisung differ by the §48 Abs. 2a bonus — 8,11 vs. 12,87 ct/kWh
     -- for a ≤10 kWp roof plant — so the rate lookup cannot answer without it.
     -- KWK_ZUSCHLAG is the KWKG column.
     verguetungsform    TEXT        NOT NULL DEFAULT 'UEBERSCHUSS' CHECK (verguetungsform IN (
@@ -177,10 +181,25 @@ CREATE TABLE eeg_anlagen (
     -- §24 EEG 2023 Zusammenlegung (merged plants)
     parent_tr_id               TEXT,
 
-    -- KWKG: KWK-Zuschlag duration
-    kwk_foerderdauer_h         INTEGER,    -- full-load hours (>2 MW: 30,000 h)
-    kwk_foerderdauer_years     SMALLINT,   -- years (≤2 MW)
-    kwk_strom_kwh_gesamt       NUMERIC(14, 3), -- accumulated kWh for hour-limit tracking
+    -- KWKG §§7, 8: KWK-Zuschlag rate inputs and Förderdauer
+    -- §8 measures the Förderdauer of every plant in Vollbenutzungsstunden and
+    -- caps each calendar year separately (Abs. 4); it has no capacity band and
+    -- no year-based duration, so there is no years column.
+    kwk_anlagenart             TEXT CHECK (kwk_anlagenart IN (
+        'NEU', 'MODERNISIERT', 'NACHGERUESTET')),
+    kwk_verwendung             TEXT CHECK (kwk_verwendung IN (
+        'NETZ_DER_ALLGEMEINEN_VERSORGUNG', 'NICHT_EINGESPEIST_BIS100KW',
+        'NICHT_EINGESPEIST_KUNDENANLAGE', 'NICHT_EINGESPEIST_STROMKOSTENINTENSIV',
+        'NICHT_EINGESPEIST_BRANCHE_ANLAGE2')),
+    kwk_kostenanteil           NUMERIC(5, 4),  -- §8 Abs. 2/3 share of Neuerrichtungskosten
+    -- §7 Abs. 1 Satz 2: the 0,5 ct uplift on Nr. 5 lit. a is payable only
+    -- "soweit das Bundesministerium ... dies im Bundesanzeiger veroeffentlicht
+    -- hat". FALSE until an operator records that it did.
+    kwk_bmwk_feststellung      BOOLEAN     NOT NULL DEFAULT FALSE,
+    kwk_foerderdauer_h         INTEGER,        -- §8 Abs. 1–3 Vollbenutzungsstunden
+    kwk_strom_kwh_gesamt       NUMERIC(14, 3), -- lifetime kWh paid (§8 Abs. 1–3)
+    kwk_kwh_jahr               NUMERIC(14, 3), -- kWh paid in kwk_kwh_jahr_year (§8 Abs. 4)
+    kwk_kwh_jahr_year          SMALLINT,
 
     -- §50 EEG: Flexibilitätsprämie (biomass demand response)
     flex_leistung_kw           NUMERIC(8, 3),
@@ -201,18 +220,20 @@ CREATE TABLE eeg_anlagen (
     mastr_nummer               TEXT,
     mastr_datum                DATE,
 
-    -- The operator. Payout account and § 19 UStG status live on `einspeiser`
-    -- because both belong to the person, not the installation — see that
-    -- table's comment. Nullable so a plant can be registered before its
-    -- operator record exists; `settle` refuses to issue a Gutschrift without
-    -- one rather than guessing the VAT.
-    -- The Anlagenbetreiber. Mandatory: § 7 Abs. 1 EEG 2023 puts the payment on
-    -- the Netzbetreiber, and a plant nobody can be paid for is not a plant this
-    -- service can act on.
+    -- The Anlagenbetreiber. Payout account and § 19 UStG status live on
+    -- `einspeiser` because both belong to the person, not the installation —
+    -- see that table's comment.
+    --
+    -- Mandatory: § 7 Abs. 1 EEG 2023 puts the payment on the Netzbetreiber, and
+    -- a plant nobody can be paid for is not a plant this service can act on. The
+    -- operator is registered first; `fk_anlage_einspeiser` below enforces it.
     einspeiser_id              TEXT        NOT NULL,
 
     -- ── Plant attributes ────────────────────────────────────
-    -- 'Neubau' | 'Repowering' | 'Modernisierung'
+    -- Parsed by `InbetriebnahmeTyp::from_db_str` (eeg-billing), which accepts
+    -- exactly: ERSTINBETRIEBNAHME | WIEDERINBETRIEBNAHME | MODERNISIERUNG |
+    -- REPOWERING | ZUSAMMENLEGUNG | ERWEITERUNG. Anything else is rejected,
+    -- so the spelling here is load-bearing rather than descriptive.
     inbetriebnahme_typ         TEXT,
     -- §36h EEG 2023: Wind Standortgütegrad for Korrekturfaktor computation
     wind_guetegrad             NUMERIC(5, 3),
@@ -335,7 +356,7 @@ CREATE TABLE eeg_anlagen (
     -- ── §§42–44 EEG 2023: Biomass fuel composition ───────────────────────────
     biomasse_hauptbrennstoff   TEXT,
     biomasse_guelle_anteil     NUMERIC(5, 4),
-    biomasse_energiepflanzen_anteil NUMERIC(5, 4),
+    biomasse_getreide_mais_anteil NUMERIC(5, 4),  -- §39i Abs. 1
 
     created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -353,7 +374,8 @@ CREATE INDEX eeg_anlagen_einspeiser ON eeg_anlagen (tenant, einspeiser_id);
 
 COMMENT ON TABLE eeg_anlagen IS
     'Central EEG/KWKG plant register. Composite PK (tr_id, tenant) for multi-tenant isolation. '
-    'foerderendedatum = inbetriebnahme + 20 years for EEG; reset on repowering.';
+    'foerderendedatum = inbetriebnahme + 20 years for EEG (reset on repowering), '
+    'NULL for a KWKG plant, whose Zuschlag ends on Vollbenutzungsstunden (§ 8 KWKG).';
 
 CREATE INDEX ea_malo_tenant      ON eeg_anlagen (malo_id, tenant);
 CREATE INDEX ea_foerderend       ON eeg_anlagen (foerderendedatum, tenant) WHERE status = 'aktiv';
@@ -485,6 +507,9 @@ CREATE TABLE settlement_receipts (
     gutschrift_nummer           TEXT,
     bo4e_version                TEXT        NOT NULL DEFAULT '202607.1.0',
     -- 'calculated' | 'price_missing' | 'no_data' | 'error' | 'foerderung_beendet'
+    -- | 'jahreskontingent_erschoepft' (§ 8 Abs. 4 KWKG: the calendar year's
+    -- Vollbenutzungsstunden are used up; the Förderung resumes in January)
+    -- | 'sanctioned' | 'kein_anspruch' | 'unknown'
     status                      TEXT        NOT NULL DEFAULT 'calculated',
     -- Active | Reduced | Suspended | PostEeg | Ended (at time of settlement)
     settlement_state            TEXT,
@@ -597,111 +622,325 @@ COMMENT ON TABLE settlement_receipt_history IS
 CREATE INDEX srh_original_id ON settlement_receipt_history (original_id);
 CREATE INDEX srh_tr_id       ON settlement_receipt_history (tr_id, tenant, billing_year, billing_month);
 
--- ── EEG/KWKG tariff reference table ──────────────────────────────────────────
--- Lookup table for statutory feed-in tariff / premium rates.
--- verguetungsform: UEBERSCHUSS | VOLLEINSPEISUNG | KWK_ZUSCHLAG
--- Quarterly degression (§23a EEG) is applied by the eeg-billing degression module.
--- Import updated rates via PUT /api/v1/verguetungssaetze or xtask import.
+-- ── EEG tariff reference table ───────────────────────────────────────────────
+-- Statutory Einspeisevergütung by Erzeugungsart, Vergütungsform, capacity band
+-- and Inbetriebnahme window. The §§ 40–49 Absenkungen are already folded into
+-- the rows, so a lookup is a table read and never a computation.
 
 CREATE TABLE eeg_verguetungssaetze (
     id                  SERIAL      PRIMARY KEY,
     erzeugungsart       TEXT        NOT NULL,
     leistung_min_kwp    NUMERIC(10, 3) NOT NULL,
     leistung_max_kwp    NUMERIC(10, 3),         -- NULL = no upper bound
+    -- Same vocabulary as eeg_anlagen.verguetungsform, so the lookup can join one
+    -- against the other. No KWK_ZUSCHLAG rows are seeded: § 7 KWKG prices per
+    -- Leistungsanteil, so a plant's Zuschlag is a blend across the bands its
+    -- capacity spans and no single-rate row can state it.
     verguetungsform     TEXT        NOT NULL DEFAULT 'UEBERSCHUSS' CHECK (verguetungsform IN (
         'UEBERSCHUSS', 'VOLLEINSPEISUNG', 'KWK_ZUSCHLAG'
     )),
-    billing_start       DATE        NOT NULL,
-    billing_end         DATE,                   -- NULL = currently valid
+    billing_start       DATE        NOT NULL,   -- first Inbetriebnahmedatum in the window
+    billing_end         DATE,                   -- last Inbetriebnahmedatum; NULL = open-ended
     verguetungssatz_ct  NUMERIC(8, 4) NOT NULL,
     eeg_gesetz          SMALLINT    NOT NULL,
     notes               TEXT,
-    -- verguetungsform is part of the key. Without it the §48 Abs. 2a
-    -- Volleinspeisung rates collide with the Überschuss rates of the same band
-    -- and start date, and the seed's ON CONFLICT DO NOTHING dropped every one of
-    -- them — leaving the Volleinspeisung tariff simply absent from the table.
+    -- verguetungsform is part of the key: the §48 Abs. 2a Volleinspeisung rate
+    -- and the Überschuss rate of the same band and window are two different
+    -- values, and one row cannot hold both.
     UNIQUE (erzeugungsart, verguetungsform, leistung_min_kwp, billing_start),
     CONSTRAINT evs_band_forward CHECK (leistung_max_kwp IS NULL OR leistung_max_kwp > leistung_min_kwp),
     CONSTRAINT evs_period_forward CHECK (billing_end IS NULL OR billing_end >= billing_start)
 );
 
 COMMENT ON TABLE eeg_verguetungssaetze IS
-    'EEG/KWKG statutory tariff reference. '
-    'verguetungssatz_ct = NET rate for EEG (§53 deduction already applied where applicable). '
-    'Quarterly degression computed by eeg-billing degression module for post-billing_start quarters.';
+    'Statutory EEG Einspeisevergütung reference, generated from eeg_billing::seed. '
+    'verguetungssatz_ct is the NET rate: anzulegender Wert less the §53 Abs. 1 deduction. '
+    'billing_start/billing_end bound the plant Inbetriebnahmedatum, not the settled month.';
 
 CREATE INDEX evs_lookup ON eeg_verguetungssaetze
     (erzeugungsart, verguetungsform, billing_start, billing_end);
 
--- Seed: EEG 2023 + Solarpaket I rates (BGBl. I Nr. 107, 16.05.2024)
--- Operators MUST verify against current BNetzA publications before production use.
+-- Seed: the §§ 40–49 EEG 2023 Einspeisevergütung series, one row per
+-- (Erzeugungsart, Vergütungsform, Leistungsband, Inbetriebnahme-Fenster).
+--
+-- GENERATED from `eeg_billing::seed::verguetungssatz_rows()`. Edit the crate and
+-- regenerate; `tests/verguetungssaetze_seed_guard.rs` fails when the two drift.
+--
+-- Rates are NET: the anzulegender Wert less the § 53 Abs. 1 deduction (0,4 ct
+-- for solar, 0,2 ct for the rest). The window bounds the plant's
+-- **Inbetriebnahmedatum**, because every §§ 40–49 Absenkung applies „für die
+-- nach diesem Zeitpunkt in Betrieb genommenen Anlagen"; a plant keeps its
+-- window's value for its whole Förderdauer.
+--
+-- Wind is absent: § 22 Abs. 2 makes its claim depend on a BNetzA Zuschlag and
+-- § 36h derives the value from it, so awarded values are imported per plant.
+-- KWKG is absent too: § 7 prices per Leistungsanteil, so a plant's Zuschlag is a
+-- blend across the bands its capacity spans and no single-rate row can state it.
 INSERT INTO eeg_verguetungssaetze (erzeugungsart, leistung_min_kwp, leistung_max_kwp, verguetungsform, verguetungssatz_ct, billing_start, billing_end, eeg_gesetz, notes) VALUES
--- Solar Aufdach / SOLAR — Überschusseinspeisung (§48 Abs. 1 EEG 2023, Solarpaket I)
-('SOLAR_AUFDACH',   0,   10, 'UEBERSCHUSS',   8.11, '2024-05-01', NULL, 2023, 'Solarpaket I §48 Abs. 1 Nr. 1a, ≤10 kWp'),
-('SOLAR_AUFDACH',  10,   40, 'UEBERSCHUSS',   7.03, '2024-05-01', NULL, 2023, 'Solarpaket I §48 Abs. 1 Nr. 1b, >10–40 kWp'),
-('SOLAR_AUFDACH',  40,  100, 'UEBERSCHUSS',   5.74, '2024-05-01', NULL, 2023, 'Solarpaket I §48 Abs. 1 Nr. 1c, >40–100 kWp'),
-('SOLAR_AUFDACH', 100,  400, 'UEBERSCHUSS',   4.30, '2024-05-01', NULL, 2023, 'Solarpaket I §48 Abs. 1 Nr. 1d, >100–400 kWp'),
-('SOLAR_AUFDACH', 400, 1000, 'UEBERSCHUSS',   3.14, '2024-05-01', NULL, 2023, 'Solarpaket I §48 Abs. 1 Nr. 1e, >400 kWp–1 MWp'),
--- Solar Aufdach — Volleinspeisung (§48 Abs. 2a EEG 2023). The Zuschlag is not one
--- figure: these rows carry +4.8 ct/kWh over the Überschuss rate up to 10 kWp and
--- +3.8 ct/kWh above it (12.91-8.11, 10.83-7.03, 9.54-5.74). A new band takes the
--- step its size falls in, not the first one.
-('SOLAR_AUFDACH',   0,   10, 'VOLLEINSPEISUNG', 12.91, '2024-05-01', NULL, 2023, 'Solarpaket I §48 Abs. 2a, ≤10 kWp'),
-('SOLAR_AUFDACH',  10,   40, 'VOLLEINSPEISUNG', 10.83, '2024-05-01', NULL, 2023, 'Solarpaket I §48 Abs. 2a, >10–40 kWp'),
-('SOLAR_AUFDACH',  40,  100, 'VOLLEINSPEISUNG',  9.54, '2024-05-01', NULL, 2023, 'Solarpaket I §48 Abs. 2a, >40–100 kWp'),
--- Pre-Solarpaket I rates (EEG 2023 initial, 2023-02–2024-04)
-('SOLAR_AUFDACH',   0,  10, 'UEBERSCHUSS', 7.71, '2023-02-01', '2024-04-30', 2023, 'EEG 2023 initial §48 Abs. 1 Nr. 1a'),
-('SOLAR_AUFDACH',  10,  40, 'UEBERSCHUSS', 6.69, '2023-02-01', '2024-04-30', 2023, 'EEG 2023 initial §48 Abs. 1 Nr. 1b'),
-('SOLAR_AUFDACH',  40, 100, 'UEBERSCHUSS', 5.76, '2023-02-01', '2024-04-30', 2023, 'EEG 2023 initial §48 Abs. 1 Nr. 1c'),
--- EEG 2021 solar
-('SOLAR_AUFDACH',   0,  10, 'UEBERSCHUSS', 9.58, '2021-01-01', '2021-12-31', 2021, 'EEG 2021 ≤10 kWp'),
-('SOLAR_AUFDACH',  10,  40, 'UEBERSCHUSS', 9.33, '2021-01-01', '2021-12-31', 2021, 'EEG 2021 10–40 kWp'),
--- EEG 2017 solar
-('SOLAR_AUFDACH',   0,  10, 'UEBERSCHUSS', 9.87, '2017-04-01', '2020-12-31', 2017, 'EEG 2017 ≤10 kWp avg'),
--- Wind onshore has NO statutory anzulegender Wert. § 22 Abs. 2 Satz 1 EEG 2023:
--- the claim exists "nur, solange und soweit ein von der Bundesnetzagentur
--- erteilter Zuschlag für die Anlage wirksam ist", and § 36h Abs. 1 then derives
--- the value from that Zuschlagswert times the Gütefaktor-Korrekturfaktor. A row
--- here read "EEG 2023 §21 Onshore ≤750 kW, 7.35 ct" — § 21 is Einspeisevergütung
--- und Mieterstromzuschlag, and 750 kW is the *solar* second-segment threshold
--- from § 22 Abs. 3. Awarded values are imported per plant, not seeded.
--- KWKG 2023 (§7 Abs. 1 KWKG 2023)
-('KWKG',    0,   50, 'KWK_ZUSCHLAG', 8.00, '2023-01-01', NULL, 0, 'KWKG 2023 §7 Abs. 1 Nr. 1, ≤50 kW_el'),
-('KWKG',   50,  100, 'KWK_ZUSCHLAG', 6.00, '2023-01-01', NULL, 0, 'KWKG 2023 §7 Abs. 1 Nr. 2, >50–100 kW_el'),
-('KWKG',  100,  250, 'KWK_ZUSCHLAG', 5.00, '2023-01-01', NULL, 0, 'KWKG 2023 §7 Abs. 1 Nr. 3, >100–250 kW_el'),
-('KWKG',  250, 2000, 'KWK_ZUSCHLAG', 4.00, '2023-01-01', NULL, 0, 'KWKG 2023 §7 Abs. 1 Nr. 4, >250 kW–2 MW_el'),
-('KWKG', 2000, NULL, 'KWK_ZUSCHLAG', 3.00, '2023-01-01', NULL, 0, 'KWKG 2023 §7 Abs. 1 Nr. 5, >2 MW_el'),
--- Biomasse — § 42 Satz 1 EEG 2023 gives ONE statutory tier (≤150 kW); above it
--- the value is set by tender (§ 22 Abs. 4). §§ 43/44 are separate, higher claims
--- for plants that qualify, not tiers of § 42.
-('BIOMASSE',   0, 150, 'UEBERSCHUSS', 12.67, '2023-01-01', NULL, 2023, 'EEG 2023 §42 Satz 1, ≤150 kW Bemessungsleistung'),
-('BIOGAS',     0, 500, 'UEBERSCHUSS', 14.16, '2023-01-01', NULL, 2023, 'EEG 2023 §43 Abs. 1 Nr. 1 Bioabfallvergärung, ≤500 kW'),
-('BIOGAS',   500, 20000, 'UEBERSCHUSS', 12.41, '2023-01-01', NULL, 2023, 'EEG 2023 §43 Abs. 1 Nr. 2 Bioabfallvergärung, ≤20 MW'),
--- Deponie-, Klär- und Grubengas — § 41 EEG 2023 gives each gas its own ladder.
--- These were seeded as a flat 12.50 / 12.50 / 9.10, which paid Klärgas more than
--- twice its statutory value.
-('DEPONIEGAS',    0,  500, 'UEBERSCHUSS', 7.46, '2023-01-01', NULL, 2023, 'EEG 2023 §41 Abs. 1 Nr. 1, ≤500 kW'),
-('DEPONIEGAS',  500, 5000, 'UEBERSCHUSS', 5.17, '2023-01-01', NULL, 2023, 'EEG 2023 §41 Abs. 1 Nr. 2, ≤5 MW'),
-('KLAEGAS',       0,  500, 'UEBERSCHUSS', 5.93, '2023-01-01', NULL, 2023, 'EEG 2023 §41 Abs. 2 Nr. 1, ≤500 kW'),
-('KLAEGAS',     500, 5000, 'UEBERSCHUSS', 5.17, '2023-01-01', NULL, 2023, 'EEG 2023 §41 Abs. 2 Nr. 2, ≤5 MW'),
-('GRUBENGAS',     0, 1000, 'UEBERSCHUSS', 5.98, '2023-01-01', NULL, 2023, 'EEG 2023 §41 Abs. 3 Nr. 1, ≤1 MW'),
-('GRUBENGAS',  1000, 5000, 'UEBERSCHUSS', 3.81, '2023-01-01', NULL, 2023, 'EEG 2023 §41 Abs. 3 Nr. 2, ≤5 MW'),
-('GRUBENGAS',  5000, NULL, 'UEBERSCHUSS', 3.37, '2023-01-01', NULL, 2023, 'EEG 2023 §41 Abs. 3 Nr. 3, >5 MW'),
--- Geothermie — § 45 Abs. 1 EEG 2023, flat. Absent from the seed entirely before.
-('GEOTHERMIE',    0, NULL, 'UEBERSCHUSS', 25.20, '2023-01-01', NULL, 2023, 'EEG 2023 §45 Abs. 1, flat'),
--- Wasserkraft — § 40 Abs. 1 EEG 2023, seven tiers by Bemessungsleistung. The
--- seed had three (12.48 / 8.59 / 7.56), none of which is a statutory value.
-('WASSERKRAFT',     0,   500, 'UEBERSCHUSS', 12.03, '2023-01-01', NULL, 2023, 'EEG 2023 §40 Abs. 1 Nr. 1, ≤500 kW'),
-('WASSERKRAFT',   500,  2000, 'UEBERSCHUSS',  7.93, '2023-01-01', NULL, 2023, 'EEG 2023 §40 Abs. 1 Nr. 2, ≤2 MW'),
-('WASSERKRAFT',  2000,  5000, 'UEBERSCHUSS',  6.07, '2023-01-01', NULL, 2023, 'EEG 2023 §40 Abs. 1 Nr. 3, ≤5 MW'),
-('WASSERKRAFT',  5000, 10000, 'UEBERSCHUSS',  5.32, '2023-01-01', NULL, 2023, 'EEG 2023 §40 Abs. 1 Nr. 4, ≤10 MW'),
-('WASSERKRAFT', 10000, 20000, 'UEBERSCHUSS',  5.13, '2023-01-01', NULL, 2023, 'EEG 2023 §40 Abs. 1 Nr. 5, ≤20 MW'),
-('WASSERKRAFT', 20000, 50000, 'UEBERSCHUSS',  4.12, '2023-01-01', NULL, 2023, 'EEG 2023 §40 Abs. 1 Nr. 6, ≤50 MW'),
-('WASSERKRAFT', 50000,  NULL, 'UEBERSCHUSS',  3.37, '2023-01-01', NULL, 2023, 'EEG 2023 §40 Abs. 1 Nr. 7, >50 MW');
--- No ON CONFLICT clause on purpose: it would swallow key collisions, and the §48
--- Abs. 2a Volleinspeisung block collides with the Überschuss rows on
--- (erzeugungsart, leistung_min_kwp, billing_start). A migration that reports
--- success must not leave those rates missing.
+('SOLAR_AUFDACH', 0, 10, 'UEBERSCHUSS', 8.20, '2023-01-01', '2024-01-31', 2023, '§48 Abs. 2 Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'UEBERSCHUSS', 7.10, '2023-01-01', '2024-01-31', 2023, '§48 Abs. 2 Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 1000, 'UEBERSCHUSS', 5.80, '2023-01-01', '2024-01-31', 2023, '§48 Abs. 2 Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'UEBERSCHUSS', 8.11, '2024-02-01', '2024-07-31', 2023, '§48 Abs. 2 Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'UEBERSCHUSS', 7.03, '2024-02-01', '2024-07-31', 2023, '§48 Abs. 2 Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 1000, 'UEBERSCHUSS', 5.74, '2024-02-01', '2024-07-31', 2023, '§48 Abs. 2 Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'UEBERSCHUSS', 8.03, '2024-08-01', '2025-01-31', 2023, '§48 Abs. 2 Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'UEBERSCHUSS', 6.95, '2024-08-01', '2025-01-31', 2023, '§48 Abs. 2 Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 1000, 'UEBERSCHUSS', 5.68, '2024-08-01', '2025-01-31', 2023, '§48 Abs. 2 Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'UEBERSCHUSS', 7.94, '2025-02-01', '2025-07-31', 2023, '§48 Abs. 2 Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'UEBERSCHUSS', 6.88, '2025-02-01', '2025-07-31', 2023, '§48 Abs. 2 Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 1000, 'UEBERSCHUSS', 5.62, '2025-02-01', '2025-07-31', 2023, '§48 Abs. 2 Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'UEBERSCHUSS', 7.86, '2025-08-01', '2026-01-31', 2023, '§48 Abs. 2 Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'UEBERSCHUSS', 6.80, '2025-08-01', '2026-01-31', 2023, '§48 Abs. 2 Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 1000, 'UEBERSCHUSS', 5.56, '2025-08-01', '2026-01-31', 2023, '§48 Abs. 2 Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'UEBERSCHUSS', 7.78, '2026-02-01', '2026-07-31', 2023, '§48 Abs. 2 Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'UEBERSCHUSS', 6.73, '2026-02-01', '2026-07-31', 2023, '§48 Abs. 2 Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 1000, 'UEBERSCHUSS', 5.50, '2026-02-01', '2026-07-31', 2023, '§48 Abs. 2 Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'UEBERSCHUSS', 7.70, '2026-08-01', '2027-01-31', 2023, '§48 Abs. 2 Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'UEBERSCHUSS', 6.66, '2026-08-01', '2027-01-31', 2023, '§48 Abs. 2 Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 1000, 'UEBERSCHUSS', 5.44, '2026-08-01', '2027-01-31', 2023, '§48 Abs. 2 Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'UEBERSCHUSS', 7.62, '2027-02-01', '2027-07-31', 2023, '§48 Abs. 2 Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'UEBERSCHUSS', 6.59, '2027-02-01', '2027-07-31', 2023, '§48 Abs. 2 Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 1000, 'UEBERSCHUSS', 5.38, '2027-02-01', '2027-07-31', 2023, '§48 Abs. 2 Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'UEBERSCHUSS', 7.54, '2027-08-01', '2028-01-31', 2023, '§48 Abs. 2 Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'UEBERSCHUSS', 6.52, '2027-08-01', '2028-01-31', 2023, '§48 Abs. 2 Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 1000, 'UEBERSCHUSS', 5.32, '2027-08-01', '2028-01-31', 2023, '§48 Abs. 2 Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'UEBERSCHUSS', 7.46, '2028-02-01', '2028-07-31', 2023, '§48 Abs. 2 Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'UEBERSCHUSS', 6.45, '2028-02-01', '2028-07-31', 2023, '§48 Abs. 2 Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 1000, 'UEBERSCHUSS', 5.26, '2028-02-01', '2028-07-31', 2023, '§48 Abs. 2 Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'UEBERSCHUSS', 7.38, '2028-08-01', '2029-01-31', 2023, '§48 Abs. 2 Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'UEBERSCHUSS', 6.38, '2028-08-01', '2029-01-31', 2023, '§48 Abs. 2 Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 1000, 'UEBERSCHUSS', 5.21, '2028-08-01', '2029-01-31', 2023, '§48 Abs. 2 Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'UEBERSCHUSS', 7.30, '2029-02-01', '2029-07-31', 2023, '§48 Abs. 2 Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'UEBERSCHUSS', 6.32, '2029-02-01', '2029-07-31', 2023, '§48 Abs. 2 Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 1000, 'UEBERSCHUSS', 5.15, '2029-02-01', '2029-07-31', 2023, '§48 Abs. 2 Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'UEBERSCHUSS', 7.22, '2029-08-01', '2030-01-31', 2023, '§48 Abs. 2 Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'UEBERSCHUSS', 6.25, '2029-08-01', '2030-01-31', 2023, '§48 Abs. 2 Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 1000, 'UEBERSCHUSS', 5.10, '2029-08-01', '2030-01-31', 2023, '§48 Abs. 2 Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'UEBERSCHUSS', 7.15, '2030-02-01', '2030-07-31', 2023, '§48 Abs. 2 Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'UEBERSCHUSS', 6.18, '2030-02-01', '2030-07-31', 2023, '§48 Abs. 2 Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 1000, 'UEBERSCHUSS', 5.04, '2030-02-01', '2030-07-31', 2023, '§48 Abs. 2 Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'UEBERSCHUSS', 7.07, '2030-08-01', '2030-12-31', 2023, '§48 Abs. 2 Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'UEBERSCHUSS', 6.12, '2030-08-01', '2030-12-31', 2023, '§48 Abs. 2 Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 1000, 'UEBERSCHUSS', 4.99, '2030-08-01', '2030-12-31', 2023, '§48 Abs. 2 Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'VOLLEINSPEISUNG', 13.00, '2023-01-01', '2024-01-31', 2023, '§48 Abs. 2 Nr. 1 + Abs. 2a Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'VOLLEINSPEISUNG', 10.90, '2023-01-01', '2024-01-31', 2023, '§48 Abs. 2 Nr. 2 + Abs. 2a Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 100, 'VOLLEINSPEISUNG', 10.90, '2023-01-01', '2024-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 100, 400, 'VOLLEINSPEISUNG', 9.00, '2023-01-01', '2024-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 4 EEG 2023'),
+('SOLAR_AUFDACH', 400, 1000, 'VOLLEINSPEISUNG', 7.70, '2023-01-01', '2024-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 5 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'VOLLEINSPEISUNG', 12.87, '2024-02-01', '2024-07-31', 2023, '§48 Abs. 2 Nr. 1 + Abs. 2a Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'VOLLEINSPEISUNG', 10.79, '2024-02-01', '2024-07-31', 2023, '§48 Abs. 2 Nr. 2 + Abs. 2a Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 100, 'VOLLEINSPEISUNG', 10.79, '2024-02-01', '2024-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 100, 400, 'VOLLEINSPEISUNG', 8.91, '2024-02-01', '2024-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 4 EEG 2023'),
+('SOLAR_AUFDACH', 400, 1000, 'VOLLEINSPEISUNG', 7.62, '2024-02-01', '2024-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 5 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'VOLLEINSPEISUNG', 12.73, '2024-08-01', '2025-01-31', 2023, '§48 Abs. 2 Nr. 1 + Abs. 2a Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'VOLLEINSPEISUNG', 10.68, '2024-08-01', '2025-01-31', 2023, '§48 Abs. 2 Nr. 2 + Abs. 2a Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 100, 'VOLLEINSPEISUNG', 10.68, '2024-08-01', '2025-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 100, 400, 'VOLLEINSPEISUNG', 8.81, '2024-08-01', '2025-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 4 EEG 2023'),
+('SOLAR_AUFDACH', 400, 1000, 'VOLLEINSPEISUNG', 7.54, '2024-08-01', '2025-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 5 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'VOLLEINSPEISUNG', 12.60, '2025-02-01', '2025-07-31', 2023, '§48 Abs. 2 Nr. 1 + Abs. 2a Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'VOLLEINSPEISUNG', 10.56, '2025-02-01', '2025-07-31', 2023, '§48 Abs. 2 Nr. 2 + Abs. 2a Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 100, 'VOLLEINSPEISUNG', 10.56, '2025-02-01', '2025-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 100, 400, 'VOLLEINSPEISUNG', 8.72, '2025-02-01', '2025-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 4 EEG 2023'),
+('SOLAR_AUFDACH', 400, 1000, 'VOLLEINSPEISUNG', 7.46, '2025-02-01', '2025-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 5 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'VOLLEINSPEISUNG', 12.47, '2025-08-01', '2026-01-31', 2023, '§48 Abs. 2 Nr. 1 + Abs. 2a Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'VOLLEINSPEISUNG', 10.45, '2025-08-01', '2026-01-31', 2023, '§48 Abs. 2 Nr. 2 + Abs. 2a Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 100, 'VOLLEINSPEISUNG', 10.45, '2025-08-01', '2026-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 100, 400, 'VOLLEINSPEISUNG', 8.63, '2025-08-01', '2026-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 4 EEG 2023'),
+('SOLAR_AUFDACH', 400, 1000, 'VOLLEINSPEISUNG', 7.38, '2025-08-01', '2026-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 5 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'VOLLEINSPEISUNG', 12.34, '2026-02-01', '2026-07-31', 2023, '§48 Abs. 2 Nr. 1 + Abs. 2a Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'VOLLEINSPEISUNG', 10.35, '2026-02-01', '2026-07-31', 2023, '§48 Abs. 2 Nr. 2 + Abs. 2a Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 100, 'VOLLEINSPEISUNG', 10.35, '2026-02-01', '2026-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 100, 400, 'VOLLEINSPEISUNG', 8.54, '2026-02-01', '2026-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 4 EEG 2023'),
+('SOLAR_AUFDACH', 400, 1000, 'VOLLEINSPEISUNG', 7.30, '2026-02-01', '2026-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 5 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'VOLLEINSPEISUNG', 12.22, '2026-08-01', '2027-01-31', 2023, '§48 Abs. 2 Nr. 1 + Abs. 2a Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'VOLLEINSPEISUNG', 10.24, '2026-08-01', '2027-01-31', 2023, '§48 Abs. 2 Nr. 2 + Abs. 2a Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 100, 'VOLLEINSPEISUNG', 10.24, '2026-08-01', '2027-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 100, 400, 'VOLLEINSPEISUNG', 8.45, '2026-08-01', '2027-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 4 EEG 2023'),
+('SOLAR_AUFDACH', 400, 1000, 'VOLLEINSPEISUNG', 7.23, '2026-08-01', '2027-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 5 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'VOLLEINSPEISUNG', 12.09, '2027-02-01', '2027-07-31', 2023, '§48 Abs. 2 Nr. 1 + Abs. 2a Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'VOLLEINSPEISUNG', 10.13, '2027-02-01', '2027-07-31', 2023, '§48 Abs. 2 Nr. 2 + Abs. 2a Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 100, 'VOLLEINSPEISUNG', 10.13, '2027-02-01', '2027-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 100, 400, 'VOLLEINSPEISUNG', 8.36, '2027-02-01', '2027-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 4 EEG 2023'),
+('SOLAR_AUFDACH', 400, 1000, 'VOLLEINSPEISUNG', 7.15, '2027-02-01', '2027-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 5 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'VOLLEINSPEISUNG', 11.96, '2027-08-01', '2028-01-31', 2023, '§48 Abs. 2 Nr. 1 + Abs. 2a Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'VOLLEINSPEISUNG', 10.03, '2027-08-01', '2028-01-31', 2023, '§48 Abs. 2 Nr. 2 + Abs. 2a Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 100, 'VOLLEINSPEISUNG', 10.03, '2027-08-01', '2028-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 100, 400, 'VOLLEINSPEISUNG', 8.27, '2027-08-01', '2028-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 4 EEG 2023'),
+('SOLAR_AUFDACH', 400, 1000, 'VOLLEINSPEISUNG', 7.07, '2027-08-01', '2028-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 5 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'VOLLEINSPEISUNG', 11.84, '2028-02-01', '2028-07-31', 2023, '§48 Abs. 2 Nr. 1 + Abs. 2a Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'VOLLEINSPEISUNG', 9.92, '2028-02-01', '2028-07-31', 2023, '§48 Abs. 2 Nr. 2 + Abs. 2a Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 100, 'VOLLEINSPEISUNG', 9.92, '2028-02-01', '2028-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 100, 400, 'VOLLEINSPEISUNG', 8.19, '2028-02-01', '2028-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 4 EEG 2023'),
+('SOLAR_AUFDACH', 400, 1000, 'VOLLEINSPEISUNG', 7.00, '2028-02-01', '2028-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 5 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'VOLLEINSPEISUNG', 11.72, '2028-08-01', '2029-01-31', 2023, '§48 Abs. 2 Nr. 1 + Abs. 2a Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'VOLLEINSPEISUNG', 9.82, '2028-08-01', '2029-01-31', 2023, '§48 Abs. 2 Nr. 2 + Abs. 2a Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 100, 'VOLLEINSPEISUNG', 9.82, '2028-08-01', '2029-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 100, 400, 'VOLLEINSPEISUNG', 8.10, '2028-08-01', '2029-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 4 EEG 2023'),
+('SOLAR_AUFDACH', 400, 1000, 'VOLLEINSPEISUNG', 6.93, '2028-08-01', '2029-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 5 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'VOLLEINSPEISUNG', 11.60, '2029-02-01', '2029-07-31', 2023, '§48 Abs. 2 Nr. 1 + Abs. 2a Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'VOLLEINSPEISUNG', 9.72, '2029-02-01', '2029-07-31', 2023, '§48 Abs. 2 Nr. 2 + Abs. 2a Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 100, 'VOLLEINSPEISUNG', 9.72, '2029-02-01', '2029-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 100, 400, 'VOLLEINSPEISUNG', 8.02, '2029-02-01', '2029-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 4 EEG 2023'),
+('SOLAR_AUFDACH', 400, 1000, 'VOLLEINSPEISUNG', 6.85, '2029-02-01', '2029-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 5 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'VOLLEINSPEISUNG', 11.48, '2029-08-01', '2030-01-31', 2023, '§48 Abs. 2 Nr. 1 + Abs. 2a Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'VOLLEINSPEISUNG', 9.62, '2029-08-01', '2030-01-31', 2023, '§48 Abs. 2 Nr. 2 + Abs. 2a Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 100, 'VOLLEINSPEISUNG', 9.62, '2029-08-01', '2030-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 100, 400, 'VOLLEINSPEISUNG', 7.93, '2029-08-01', '2030-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 4 EEG 2023'),
+('SOLAR_AUFDACH', 400, 1000, 'VOLLEINSPEISUNG', 6.78, '2029-08-01', '2030-01-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 5 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'VOLLEINSPEISUNG', 11.36, '2030-02-01', '2030-07-31', 2023, '§48 Abs. 2 Nr. 1 + Abs. 2a Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'VOLLEINSPEISUNG', 9.52, '2030-02-01', '2030-07-31', 2023, '§48 Abs. 2 Nr. 2 + Abs. 2a Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 100, 'VOLLEINSPEISUNG', 9.52, '2030-02-01', '2030-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 100, 400, 'VOLLEINSPEISUNG', 7.85, '2030-02-01', '2030-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 4 EEG 2023'),
+('SOLAR_AUFDACH', 400, 1000, 'VOLLEINSPEISUNG', 6.71, '2030-02-01', '2030-07-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 5 EEG 2023'),
+('SOLAR_AUFDACH', 0, 10, 'VOLLEINSPEISUNG', 11.24, '2030-08-01', '2030-12-31', 2023, '§48 Abs. 2 Nr. 1 + Abs. 2a Nr. 1 EEG 2023'),
+('SOLAR_AUFDACH', 10, 40, 'VOLLEINSPEISUNG', 9.42, '2030-08-01', '2030-12-31', 2023, '§48 Abs. 2 Nr. 2 + Abs. 2a Nr. 2 EEG 2023'),
+('SOLAR_AUFDACH', 40, 100, 'VOLLEINSPEISUNG', 9.42, '2030-08-01', '2030-12-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 3 EEG 2023'),
+('SOLAR_AUFDACH', 100, 400, 'VOLLEINSPEISUNG', 7.77, '2030-08-01', '2030-12-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 4 EEG 2023'),
+('SOLAR_AUFDACH', 400, 1000, 'VOLLEINSPEISUNG', 6.64, '2030-08-01', '2030-12-31', 2023, '§48 Abs. 2 Nr. 3 + Abs. 2a Nr. 5 EEG 2023'),
+('WASSERKRAFT', 0, 500, 'UEBERSCHUSS', 11.83, '2023-01-01', '2023-12-31', 2023, '§40 Abs. 1 Nr. 1 EEG 2023'),
+('WASSERKRAFT', 500, 2000, 'UEBERSCHUSS', 7.73, '2023-01-01', '2023-12-31', 2023, '§40 Abs. 1 Nr. 2 EEG 2023'),
+('WASSERKRAFT', 2000, 5000, 'UEBERSCHUSS', 5.87, '2023-01-01', '2023-12-31', 2023, '§40 Abs. 1 Nr. 3 EEG 2023'),
+('WASSERKRAFT', 5000, 10000, 'UEBERSCHUSS', 5.12, '2023-01-01', '2023-12-31', 2023, '§40 Abs. 1 Nr. 4 EEG 2023'),
+('WASSERKRAFT', 10000, 20000, 'UEBERSCHUSS', 4.93, '2023-01-01', '2023-12-31', 2023, '§40 Abs. 1 Nr. 5 EEG 2023'),
+('WASSERKRAFT', 20000, 50000, 'UEBERSCHUSS', 3.92, '2023-01-01', '2023-12-31', 2023, '§40 Abs. 1 Nr. 6 EEG 2023'),
+('WASSERKRAFT', 50000, NULL, 'UEBERSCHUSS', 3.17, '2023-01-01', '2023-12-31', 2023, '§40 Abs. 1 Nr. 7 EEG 2023'),
+('WASSERKRAFT', 0, 500, 'UEBERSCHUSS', 11.77, '2024-01-01', '2024-12-31', 2023, '§40 Abs. 1 Nr. 1 EEG 2023'),
+('WASSERKRAFT', 500, 2000, 'UEBERSCHUSS', 7.69, '2024-01-01', '2024-12-31', 2023, '§40 Abs. 1 Nr. 2 EEG 2023'),
+('WASSERKRAFT', 2000, 5000, 'UEBERSCHUSS', 5.84, '2024-01-01', '2024-12-31', 2023, '§40 Abs. 1 Nr. 3 EEG 2023'),
+('WASSERKRAFT', 5000, 10000, 'UEBERSCHUSS', 5.09, '2024-01-01', '2024-12-31', 2023, '§40 Abs. 1 Nr. 4 EEG 2023'),
+('WASSERKRAFT', 10000, 20000, 'UEBERSCHUSS', 4.90, '2024-01-01', '2024-12-31', 2023, '§40 Abs. 1 Nr. 5 EEG 2023'),
+('WASSERKRAFT', 20000, 50000, 'UEBERSCHUSS', 3.90, '2024-01-01', '2024-12-31', 2023, '§40 Abs. 1 Nr. 6 EEG 2023'),
+('WASSERKRAFT', 50000, NULL, 'UEBERSCHUSS', 3.15, '2024-01-01', '2024-12-31', 2023, '§40 Abs. 1 Nr. 7 EEG 2023'),
+('WASSERKRAFT', 0, 500, 'UEBERSCHUSS', 11.71, '2025-01-01', '2025-12-31', 2023, '§40 Abs. 1 Nr. 1 EEG 2023'),
+('WASSERKRAFT', 500, 2000, 'UEBERSCHUSS', 7.65, '2025-01-01', '2025-12-31', 2023, '§40 Abs. 1 Nr. 2 EEG 2023'),
+('WASSERKRAFT', 2000, 5000, 'UEBERSCHUSS', 5.81, '2025-01-01', '2025-12-31', 2023, '§40 Abs. 1 Nr. 3 EEG 2023'),
+('WASSERKRAFT', 5000, 10000, 'UEBERSCHUSS', 5.07, '2025-01-01', '2025-12-31', 2023, '§40 Abs. 1 Nr. 4 EEG 2023'),
+('WASSERKRAFT', 10000, 20000, 'UEBERSCHUSS', 4.88, '2025-01-01', '2025-12-31', 2023, '§40 Abs. 1 Nr. 5 EEG 2023'),
+('WASSERKRAFT', 20000, 50000, 'UEBERSCHUSS', 3.88, '2025-01-01', '2025-12-31', 2023, '§40 Abs. 1 Nr. 6 EEG 2023'),
+('WASSERKRAFT', 50000, NULL, 'UEBERSCHUSS', 3.14, '2025-01-01', '2025-12-31', 2023, '§40 Abs. 1 Nr. 7 EEG 2023'),
+('WASSERKRAFT', 0, 500, 'UEBERSCHUSS', 11.65, '2026-01-01', '2026-12-31', 2023, '§40 Abs. 1 Nr. 1 EEG 2023'),
+('WASSERKRAFT', 500, 2000, 'UEBERSCHUSS', 7.61, '2026-01-01', '2026-12-31', 2023, '§40 Abs. 1 Nr. 2 EEG 2023'),
+('WASSERKRAFT', 2000, 5000, 'UEBERSCHUSS', 5.78, '2026-01-01', '2026-12-31', 2023, '§40 Abs. 1 Nr. 3 EEG 2023'),
+('WASSERKRAFT', 5000, 10000, 'UEBERSCHUSS', 5.04, '2026-01-01', '2026-12-31', 2023, '§40 Abs. 1 Nr. 4 EEG 2023'),
+('WASSERKRAFT', 10000, 20000, 'UEBERSCHUSS', 4.85, '2026-01-01', '2026-12-31', 2023, '§40 Abs. 1 Nr. 5 EEG 2023'),
+('WASSERKRAFT', 20000, 50000, 'UEBERSCHUSS', 3.86, '2026-01-01', '2026-12-31', 2023, '§40 Abs. 1 Nr. 6 EEG 2023'),
+('WASSERKRAFT', 50000, NULL, 'UEBERSCHUSS', 3.12, '2026-01-01', '2026-12-31', 2023, '§40 Abs. 1 Nr. 7 EEG 2023'),
+('WASSERKRAFT', 0, 500, 'UEBERSCHUSS', 11.59, '2027-01-01', '2027-12-31', 2023, '§40 Abs. 1 Nr. 1 EEG 2023'),
+('WASSERKRAFT', 500, 2000, 'UEBERSCHUSS', 7.57, '2027-01-01', '2027-12-31', 2023, '§40 Abs. 1 Nr. 2 EEG 2023'),
+('WASSERKRAFT', 2000, 5000, 'UEBERSCHUSS', 5.75, '2027-01-01', '2027-12-31', 2023, '§40 Abs. 1 Nr. 3 EEG 2023'),
+('WASSERKRAFT', 5000, 10000, 'UEBERSCHUSS', 5.01, '2027-01-01', '2027-12-31', 2023, '§40 Abs. 1 Nr. 4 EEG 2023'),
+('WASSERKRAFT', 10000, 20000, 'UEBERSCHUSS', 4.83, '2027-01-01', '2027-12-31', 2023, '§40 Abs. 1 Nr. 5 EEG 2023'),
+('WASSERKRAFT', 20000, 50000, 'UEBERSCHUSS', 3.84, '2027-01-01', '2027-12-31', 2023, '§40 Abs. 1 Nr. 6 EEG 2023'),
+('WASSERKRAFT', 50000, NULL, 'UEBERSCHUSS', 3.10, '2027-01-01', '2027-12-31', 2023, '§40 Abs. 1 Nr. 7 EEG 2023'),
+('WASSERKRAFT', 0, 500, 'UEBERSCHUSS', 11.53, '2028-01-01', '2028-12-31', 2023, '§40 Abs. 1 Nr. 1 EEG 2023'),
+('WASSERKRAFT', 500, 2000, 'UEBERSCHUSS', 7.53, '2028-01-01', '2028-12-31', 2023, '§40 Abs. 1 Nr. 2 EEG 2023'),
+('WASSERKRAFT', 2000, 5000, 'UEBERSCHUSS', 5.72, '2028-01-01', '2028-12-31', 2023, '§40 Abs. 1 Nr. 3 EEG 2023'),
+('WASSERKRAFT', 5000, 10000, 'UEBERSCHUSS', 4.99, '2028-01-01', '2028-12-31', 2023, '§40 Abs. 1 Nr. 4 EEG 2023'),
+('WASSERKRAFT', 10000, 20000, 'UEBERSCHUSS', 4.80, '2028-01-01', '2028-12-31', 2023, '§40 Abs. 1 Nr. 5 EEG 2023'),
+('WASSERKRAFT', 20000, 50000, 'UEBERSCHUSS', 3.82, '2028-01-01', '2028-12-31', 2023, '§40 Abs. 1 Nr. 6 EEG 2023'),
+('WASSERKRAFT', 50000, NULL, 'UEBERSCHUSS', 3.09, '2028-01-01', '2028-12-31', 2023, '§40 Abs. 1 Nr. 7 EEG 2023'),
+('WASSERKRAFT', 0, 500, 'UEBERSCHUSS', 11.47, '2029-01-01', '2029-12-31', 2023, '§40 Abs. 1 Nr. 1 EEG 2023'),
+('WASSERKRAFT', 500, 2000, 'UEBERSCHUSS', 7.50, '2029-01-01', '2029-12-31', 2023, '§40 Abs. 1 Nr. 2 EEG 2023'),
+('WASSERKRAFT', 2000, 5000, 'UEBERSCHUSS', 5.69, '2029-01-01', '2029-12-31', 2023, '§40 Abs. 1 Nr. 3 EEG 2023'),
+('WASSERKRAFT', 5000, 10000, 'UEBERSCHUSS', 4.96, '2029-01-01', '2029-12-31', 2023, '§40 Abs. 1 Nr. 4 EEG 2023'),
+('WASSERKRAFT', 10000, 20000, 'UEBERSCHUSS', 4.78, '2029-01-01', '2029-12-31', 2023, '§40 Abs. 1 Nr. 5 EEG 2023'),
+('WASSERKRAFT', 20000, 50000, 'UEBERSCHUSS', 3.80, '2029-01-01', '2029-12-31', 2023, '§40 Abs. 1 Nr. 6 EEG 2023'),
+('WASSERKRAFT', 50000, NULL, 'UEBERSCHUSS', 3.07, '2029-01-01', '2029-12-31', 2023, '§40 Abs. 1 Nr. 7 EEG 2023'),
+('WASSERKRAFT', 0, 500, 'UEBERSCHUSS', 11.42, '2030-01-01', '2030-12-31', 2023, '§40 Abs. 1 Nr. 1 EEG 2023'),
+('WASSERKRAFT', 500, 2000, 'UEBERSCHUSS', 7.46, '2030-01-01', '2030-12-31', 2023, '§40 Abs. 1 Nr. 2 EEG 2023'),
+('WASSERKRAFT', 2000, 5000, 'UEBERSCHUSS', 5.66, '2030-01-01', '2030-12-31', 2023, '§40 Abs. 1 Nr. 3 EEG 2023'),
+('WASSERKRAFT', 5000, 10000, 'UEBERSCHUSS', 4.94, '2030-01-01', '2030-12-31', 2023, '§40 Abs. 1 Nr. 4 EEG 2023'),
+('WASSERKRAFT', 10000, 20000, 'UEBERSCHUSS', 4.75, '2030-01-01', '2030-12-31', 2023, '§40 Abs. 1 Nr. 5 EEG 2023'),
+('WASSERKRAFT', 20000, 50000, 'UEBERSCHUSS', 3.78, '2030-01-01', '2030-12-31', 2023, '§40 Abs. 1 Nr. 6 EEG 2023'),
+('WASSERKRAFT', 50000, NULL, 'UEBERSCHUSS', 3.05, '2030-01-01', '2030-12-31', 2023, '§40 Abs. 1 Nr. 7 EEG 2023'),
+('DEPONIEGAS', 0, 500, 'UEBERSCHUSS', 7.26, '2023-01-01', '2023-12-31', 2023, '§41 Abs. 1 Nr. 1 EEG 2023'),
+('DEPONIEGAS', 500, 5000, 'UEBERSCHUSS', 4.97, '2023-01-01', '2023-12-31', 2023, '§41 Abs. 1 Nr. 2 EEG 2023'),
+('DEPONIEGAS', 0, 500, 'UEBERSCHUSS', 7.15, '2024-01-01', '2024-12-31', 2023, '§41 Abs. 1 Nr. 1 EEG 2023'),
+('DEPONIEGAS', 500, 5000, 'UEBERSCHUSS', 4.89, '2024-01-01', '2024-12-31', 2023, '§41 Abs. 1 Nr. 2 EEG 2023'),
+('DEPONIEGAS', 0, 500, 'UEBERSCHUSS', 7.04, '2025-01-01', '2025-12-31', 2023, '§41 Abs. 1 Nr. 1 EEG 2023'),
+('DEPONIEGAS', 500, 5000, 'UEBERSCHUSS', 4.82, '2025-01-01', '2025-12-31', 2023, '§41 Abs. 1 Nr. 2 EEG 2023'),
+('DEPONIEGAS', 0, 500, 'UEBERSCHUSS', 6.93, '2026-01-01', '2026-12-31', 2023, '§41 Abs. 1 Nr. 1 EEG 2023'),
+('DEPONIEGAS', 500, 5000, 'UEBERSCHUSS', 4.74, '2026-01-01', '2026-12-31', 2023, '§41 Abs. 1 Nr. 2 EEG 2023'),
+('DEPONIEGAS', 0, 500, 'UEBERSCHUSS', 6.82, '2027-01-01', '2027-12-31', 2023, '§41 Abs. 1 Nr. 1 EEG 2023'),
+('DEPONIEGAS', 500, 5000, 'UEBERSCHUSS', 4.67, '2027-01-01', '2027-12-31', 2023, '§41 Abs. 1 Nr. 2 EEG 2023'),
+('DEPONIEGAS', 0, 500, 'UEBERSCHUSS', 6.72, '2028-01-01', '2028-12-31', 2023, '§41 Abs. 1 Nr. 1 EEG 2023'),
+('DEPONIEGAS', 500, 5000, 'UEBERSCHUSS', 4.59, '2028-01-01', '2028-12-31', 2023, '§41 Abs. 1 Nr. 2 EEG 2023'),
+('DEPONIEGAS', 0, 500, 'UEBERSCHUSS', 6.61, '2029-01-01', '2029-12-31', 2023, '§41 Abs. 1 Nr. 1 EEG 2023'),
+('DEPONIEGAS', 500, 5000, 'UEBERSCHUSS', 4.52, '2029-01-01', '2029-12-31', 2023, '§41 Abs. 1 Nr. 2 EEG 2023'),
+('DEPONIEGAS', 0, 500, 'UEBERSCHUSS', 6.51, '2030-01-01', '2030-12-31', 2023, '§41 Abs. 1 Nr. 1 EEG 2023'),
+('DEPONIEGAS', 500, 5000, 'UEBERSCHUSS', 4.45, '2030-01-01', '2030-12-31', 2023, '§41 Abs. 1 Nr. 2 EEG 2023'),
+('KLAERGAS', 0, 500, 'UEBERSCHUSS', 5.73, '2023-01-01', '2023-12-31', 2023, '§41 Abs. 2 Nr. 1 EEG 2023'),
+('KLAERGAS', 500, 5000, 'UEBERSCHUSS', 4.97, '2023-01-01', '2023-12-31', 2023, '§41 Abs. 2 Nr. 2 EEG 2023'),
+('KLAERGAS', 0, 500, 'UEBERSCHUSS', 5.64, '2024-01-01', '2024-12-31', 2023, '§41 Abs. 2 Nr. 1 EEG 2023'),
+('KLAERGAS', 500, 5000, 'UEBERSCHUSS', 4.89, '2024-01-01', '2024-12-31', 2023, '§41 Abs. 2 Nr. 2 EEG 2023'),
+('KLAERGAS', 0, 500, 'UEBERSCHUSS', 5.55, '2025-01-01', '2025-12-31', 2023, '§41 Abs. 2 Nr. 1 EEG 2023'),
+('KLAERGAS', 500, 5000, 'UEBERSCHUSS', 4.82, '2025-01-01', '2025-12-31', 2023, '§41 Abs. 2 Nr. 2 EEG 2023'),
+('KLAERGAS', 0, 500, 'UEBERSCHUSS', 5.47, '2026-01-01', '2026-12-31', 2023, '§41 Abs. 2 Nr. 1 EEG 2023'),
+('KLAERGAS', 500, 5000, 'UEBERSCHUSS', 4.74, '2026-01-01', '2026-12-31', 2023, '§41 Abs. 2 Nr. 2 EEG 2023'),
+('KLAERGAS', 0, 500, 'UEBERSCHUSS', 5.38, '2027-01-01', '2027-12-31', 2023, '§41 Abs. 2 Nr. 1 EEG 2023'),
+('KLAERGAS', 500, 5000, 'UEBERSCHUSS', 4.67, '2027-01-01', '2027-12-31', 2023, '§41 Abs. 2 Nr. 2 EEG 2023'),
+('KLAERGAS', 0, 500, 'UEBERSCHUSS', 5.30, '2028-01-01', '2028-12-31', 2023, '§41 Abs. 2 Nr. 1 EEG 2023'),
+('KLAERGAS', 500, 5000, 'UEBERSCHUSS', 4.59, '2028-01-01', '2028-12-31', 2023, '§41 Abs. 2 Nr. 2 EEG 2023'),
+('KLAERGAS', 0, 500, 'UEBERSCHUSS', 5.22, '2029-01-01', '2029-12-31', 2023, '§41 Abs. 2 Nr. 1 EEG 2023'),
+('KLAERGAS', 500, 5000, 'UEBERSCHUSS', 4.52, '2029-01-01', '2029-12-31', 2023, '§41 Abs. 2 Nr. 2 EEG 2023'),
+('KLAERGAS', 0, 500, 'UEBERSCHUSS', 5.13, '2030-01-01', '2030-12-31', 2023, '§41 Abs. 2 Nr. 1 EEG 2023'),
+('KLAERGAS', 500, 5000, 'UEBERSCHUSS', 4.45, '2030-01-01', '2030-12-31', 2023, '§41 Abs. 2 Nr. 2 EEG 2023'),
+('GRUBENGAS', 0, 1000, 'UEBERSCHUSS', 5.78, '2023-01-01', '2023-12-31', 2023, '§41 Abs. 3 Nr. 1 EEG 2023'),
+('GRUBENGAS', 1000, 5000, 'UEBERSCHUSS', 3.61, '2023-01-01', '2023-12-31', 2023, '§41 Abs. 3 Nr. 2 EEG 2023'),
+('GRUBENGAS', 5000, NULL, 'UEBERSCHUSS', 3.17, '2023-01-01', '2023-12-31', 2023, '§41 Abs. 3 Nr. 3 EEG 2023'),
+('GRUBENGAS', 0, 1000, 'UEBERSCHUSS', 5.69, '2024-01-01', '2024-12-31', 2023, '§41 Abs. 3 Nr. 1 EEG 2023'),
+('GRUBENGAS', 1000, 5000, 'UEBERSCHUSS', 3.55, '2024-01-01', '2024-12-31', 2023, '§41 Abs. 3 Nr. 2 EEG 2023'),
+('GRUBENGAS', 5000, NULL, 'UEBERSCHUSS', 3.12, '2024-01-01', '2024-12-31', 2023, '§41 Abs. 3 Nr. 3 EEG 2023'),
+('GRUBENGAS', 0, 1000, 'UEBERSCHUSS', 5.60, '2025-01-01', '2025-12-31', 2023, '§41 Abs. 3 Nr. 1 EEG 2023'),
+('GRUBENGAS', 1000, 5000, 'UEBERSCHUSS', 3.50, '2025-01-01', '2025-12-31', 2023, '§41 Abs. 3 Nr. 2 EEG 2023'),
+('GRUBENGAS', 5000, NULL, 'UEBERSCHUSS', 3.07, '2025-01-01', '2025-12-31', 2023, '§41 Abs. 3 Nr. 3 EEG 2023'),
+('GRUBENGAS', 0, 1000, 'UEBERSCHUSS', 5.51, '2026-01-01', '2026-12-31', 2023, '§41 Abs. 3 Nr. 1 EEG 2023'),
+('GRUBENGAS', 1000, 5000, 'UEBERSCHUSS', 3.44, '2026-01-01', '2026-12-31', 2023, '§41 Abs. 3 Nr. 2 EEG 2023'),
+('GRUBENGAS', 5000, NULL, 'UEBERSCHUSS', 3.02, '2026-01-01', '2026-12-31', 2023, '§41 Abs. 3 Nr. 3 EEG 2023'),
+('GRUBENGAS', 0, 1000, 'UEBERSCHUSS', 5.43, '2027-01-01', '2027-12-31', 2023, '§41 Abs. 3 Nr. 1 EEG 2023'),
+('GRUBENGAS', 1000, 5000, 'UEBERSCHUSS', 3.39, '2027-01-01', '2027-12-31', 2023, '§41 Abs. 3 Nr. 2 EEG 2023'),
+('GRUBENGAS', 5000, NULL, 'UEBERSCHUSS', 2.97, '2027-01-01', '2027-12-31', 2023, '§41 Abs. 3 Nr. 3 EEG 2023'),
+('GRUBENGAS', 0, 1000, 'UEBERSCHUSS', 5.34, '2028-01-01', '2028-12-31', 2023, '§41 Abs. 3 Nr. 1 EEG 2023'),
+('GRUBENGAS', 1000, 5000, 'UEBERSCHUSS', 3.33, '2028-01-01', '2028-12-31', 2023, '§41 Abs. 3 Nr. 2 EEG 2023'),
+('GRUBENGAS', 5000, NULL, 'UEBERSCHUSS', 2.92, '2028-01-01', '2028-12-31', 2023, '§41 Abs. 3 Nr. 3 EEG 2023'),
+('GRUBENGAS', 0, 1000, 'UEBERSCHUSS', 5.26, '2029-01-01', '2029-12-31', 2023, '§41 Abs. 3 Nr. 1 EEG 2023'),
+('GRUBENGAS', 1000, 5000, 'UEBERSCHUSS', 3.28, '2029-01-01', '2029-12-31', 2023, '§41 Abs. 3 Nr. 2 EEG 2023'),
+('GRUBENGAS', 5000, NULL, 'UEBERSCHUSS', 2.88, '2029-01-01', '2029-12-31', 2023, '§41 Abs. 3 Nr. 3 EEG 2023'),
+('GRUBENGAS', 0, 1000, 'UEBERSCHUSS', 5.18, '2030-01-01', '2030-12-31', 2023, '§41 Abs. 3 Nr. 1 EEG 2023'),
+('GRUBENGAS', 1000, 5000, 'UEBERSCHUSS', 3.23, '2030-01-01', '2030-12-31', 2023, '§41 Abs. 3 Nr. 2 EEG 2023'),
+('GRUBENGAS', 5000, NULL, 'UEBERSCHUSS', 2.83, '2030-01-01', '2030-12-31', 2023, '§41 Abs. 3 Nr. 3 EEG 2023'),
+('BIOMASSE', 0, 150, 'UEBERSCHUSS', 12.47, '2023-01-01', '2024-06-30', 2023, '§42 Satz 1 EEG 2023'),
+('BIOMASSE', 0, 150, 'UEBERSCHUSS', 12.41, '2024-07-01', '2025-06-30', 2023, '§42 Satz 1 EEG 2023'),
+('BIOMASSE', 0, 150, 'UEBERSCHUSS', 12.34, '2025-07-01', '2026-06-30', 2023, '§42 Satz 1 EEG 2023'),
+('BIOMASSE', 0, 150, 'UEBERSCHUSS', 12.28, '2026-07-01', '2027-06-30', 2023, '§42 Satz 1 EEG 2023'),
+('BIOMASSE', 0, 150, 'UEBERSCHUSS', 12.22, '2027-07-01', '2028-06-30', 2023, '§42 Satz 1 EEG 2023'),
+('BIOMASSE', 0, 150, 'UEBERSCHUSS', 12.16, '2028-07-01', '2029-06-30', 2023, '§42 Satz 1 EEG 2023'),
+('BIOMASSE', 0, 150, 'UEBERSCHUSS', 12.09, '2029-07-01', '2030-06-30', 2023, '§42 Satz 1 EEG 2023'),
+('BIOMASSE', 0, 150, 'UEBERSCHUSS', 12.03, '2030-07-01', '2030-12-31', 2023, '§42 Satz 1 EEG 2023'),
+('BIOGAS', 0, 500, 'UEBERSCHUSS', 13.96, '2023-01-01', '2024-06-30', 2023, '§43 Abs. 1 Nr. 1 EEG 2023'),
+('BIOGAS', 500, 20000, 'UEBERSCHUSS', 12.21, '2023-01-01', '2024-06-30', 2023, '§43 Abs. 1 Nr. 2 EEG 2023'),
+('BIOGAS', 0, 500, 'UEBERSCHUSS', 13.89, '2024-07-01', '2025-06-30', 2023, '§43 Abs. 1 Nr. 1 EEG 2023'),
+('BIOGAS', 500, 20000, 'UEBERSCHUSS', 12.15, '2024-07-01', '2025-06-30', 2023, '§43 Abs. 1 Nr. 2 EEG 2023'),
+('BIOGAS', 0, 500, 'UEBERSCHUSS', 13.82, '2025-07-01', '2026-06-30', 2023, '§43 Abs. 1 Nr. 1 EEG 2023'),
+('BIOGAS', 500, 20000, 'UEBERSCHUSS', 12.09, '2025-07-01', '2026-06-30', 2023, '§43 Abs. 1 Nr. 2 EEG 2023'),
+('BIOGAS', 0, 500, 'UEBERSCHUSS', 13.75, '2026-07-01', '2027-06-30', 2023, '§43 Abs. 1 Nr. 1 EEG 2023'),
+('BIOGAS', 500, 20000, 'UEBERSCHUSS', 12.02, '2026-07-01', '2027-06-30', 2023, '§43 Abs. 1 Nr. 2 EEG 2023'),
+('BIOGAS', 0, 500, 'UEBERSCHUSS', 13.68, '2027-07-01', '2028-06-30', 2023, '§43 Abs. 1 Nr. 1 EEG 2023'),
+('BIOGAS', 500, 20000, 'UEBERSCHUSS', 11.96, '2027-07-01', '2028-06-30', 2023, '§43 Abs. 1 Nr. 2 EEG 2023'),
+('BIOGAS', 0, 500, 'UEBERSCHUSS', 13.61, '2028-07-01', '2029-06-30', 2023, '§43 Abs. 1 Nr. 1 EEG 2023'),
+('BIOGAS', 500, 20000, 'UEBERSCHUSS', 11.90, '2028-07-01', '2029-06-30', 2023, '§43 Abs. 1 Nr. 2 EEG 2023'),
+('BIOGAS', 0, 500, 'UEBERSCHUSS', 13.54, '2029-07-01', '2030-06-30', 2023, '§43 Abs. 1 Nr. 1 EEG 2023'),
+('BIOGAS', 500, 20000, 'UEBERSCHUSS', 11.84, '2029-07-01', '2030-06-30', 2023, '§43 Abs. 1 Nr. 2 EEG 2023'),
+('BIOGAS', 0, 500, 'UEBERSCHUSS', 13.47, '2030-07-01', '2030-12-31', 2023, '§43 Abs. 1 Nr. 1 EEG 2023'),
+('BIOGAS', 500, 20000, 'UEBERSCHUSS', 11.78, '2030-07-01', '2030-12-31', 2023, '§43 Abs. 1 Nr. 2 EEG 2023'),
+('GEOTHERMIE', 0, NULL, 'UEBERSCHUSS', 25.00, '2023-01-01', '2023-12-31', 2023, '§45 Abs. 1 EEG 2023'),
+('GEOTHERMIE', 0, NULL, 'UEBERSCHUSS', 24.87, '2024-01-01', '2024-12-31', 2023, '§45 Abs. 1 EEG 2023'),
+('GEOTHERMIE', 0, NULL, 'UEBERSCHUSS', 24.75, '2025-01-01', '2025-12-31', 2023, '§45 Abs. 1 EEG 2023'),
+('GEOTHERMIE', 0, NULL, 'UEBERSCHUSS', 24.62, '2026-01-01', '2026-12-31', 2023, '§45 Abs. 1 EEG 2023'),
+('GEOTHERMIE', 0, NULL, 'UEBERSCHUSS', 24.50, '2027-01-01', '2027-12-31', 2023, '§45 Abs. 1 EEG 2023'),
+('GEOTHERMIE', 0, NULL, 'UEBERSCHUSS', 24.38, '2028-01-01', '2028-12-31', 2023, '§45 Abs. 1 EEG 2023'),
+('GEOTHERMIE', 0, NULL, 'UEBERSCHUSS', 24.25, '2029-01-01', '2029-12-31', 2023, '§45 Abs. 1 EEG 2023'),
+('GEOTHERMIE', 0, NULL, 'UEBERSCHUSS', 24.13, '2030-01-01', '2030-12-31', 2023, '§45 Abs. 1 EEG 2023');
 
 -- ── EPEX Spot monthly reference prices ───────────────────────────────────────
 -- Required for DIREKTVERMARKTUNG (Marktprämie) and POST_EEG_SPOT settlement.

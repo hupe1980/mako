@@ -3,8 +3,6 @@ title = "Release Lifecycle"
 description = "BDEW format version lifecycle: active, upcoming, and archived states. How mako-engine handles concurrent FV coexistence with WorkflowVersionPolicy::ForwardCompatible."
 weight = 11
 +++
-# Annual BDEW Release Lifecycle
-
 EDI@Energy specifications are updated on a recurring cycle. This document describes how new BDEW releases are incorporated into `edi-energy`, how they are rolled out across the platform, and what the `xtask` automation covers.
 
 ---
@@ -50,7 +48,7 @@ Every profile subdirectory follows the naming convention `fv<YYYYMMDD>`, where t
 ## Adding a Release
 
 ```bash
-# 1. Mirror the new documents (regulatories/ is gitignored)
+# 1. Mirror the new BDEW documents into the local document mirror
 cargo xtask sync-regulatories --download
 
 # 2. Name the profile: release, dates, AHB version, the two PDFs
@@ -208,12 +206,12 @@ let platform = Platform::with_all_profiles().with_receive_tolerance_days(3);
 any historical date:
 
 ```rust
-use edi_energy::{parse_with_config, ParseConfig};
+use edi_energy::{ParseConfig, Parser};
 use time::macros::date;
 
 // Select profiles as they stood on 3 October 2026
-let config = ParseConfig::new().with_reference_date(date!(2026-10-03));
-let msg = parse_with_config(bytes, config)?;
+let config = ParseConfig::default().with_reference_date(date!(2026-10-03));
+let msg = Parser::with_config(config).parse(bytes)?;
 ```
 
 ---

@@ -17,7 +17,7 @@
 //! [`findings`] is the single V-rule pass. It splits by `(Sparte, register)`,
 //! configures each group from [`config_for`], and returns the issues tagged with
 //! the register they are about. Ingest annotation ([`ValidatedReads::validate`]),
-//! the MCP `validate_timeseries` tool and the § 60 Abs. 2 substitute path all go
+//! the MCP `validate_timeseries` tool and the § 60 Abs. 1 substitute path all go
 //! through it, because a validator that answers differently depending on which
 //! surface asked is worse than one that does not exist: it is consulted exactly
 //! when nobody is checking. A per-surface `ValidationConfig::default()` —
@@ -27,7 +27,7 @@
 //!
 //! ## The rule set is `metering`'s, not a fixed V01–V10
 //!
-//! `metering` 0.18 runs **V01–V09, V11 and V12**. There is no V10: it was a
+//! `metering` runs **V01–V09, V11 and V12**. There is no V10: it was a
 //! "register rollover" rule comparing consecutive interval energies, which is
 //! meaningless because a [`MeterInterval`](metering::MeterInterval) carries the
 //! energy *in* an interval and not a cumulative Zählerstand — for it to fire, one
@@ -340,7 +340,7 @@ pub fn findings_with_coverage(
 /// ## An annotation names the interval, not the batch
 ///
 /// A row carries **its own** findings. Copying the whole batch's issue list onto
-/// every implicated row would make a downstream § 60 Abs. 2 MsbG substitution
+/// every implicated row would make a downstream § 60 Abs. 1 MsbG substitution
 /// decision reread the same month-wide list on each of 2 976 intervals and learn
 /// nothing about the one in front of it. The batch-level
 /// counts stay, because "how bad is this delivery" is a real question too; they
@@ -384,7 +384,7 @@ fn validate_and_annotate(batch: &mut [MeterRead], ctx: IngestContext<'_>) -> Bat
         source = %ctx.source,
         issue_count,
         billing_block_count,
-        "edmd: ingest validation issues (§ 60 Abs. 2 MsbG)"
+        "edmd: ingest validation issues (§ 60 Abs. 1 MsbG)"
     );
 
     let mut per_row: BTreeMap<usize, Vec<serde_json::Value>> = BTreeMap::new();

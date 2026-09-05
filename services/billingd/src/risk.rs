@@ -408,7 +408,7 @@ pub fn assess(
             30,
             format!(
                 "{} aufeinanderfolgende Rechnungen auf Schätzbasis — reale Ablesung anfordern \
-                 (§ 60 Abs. 2 MsbG)",
+                 (§ 40a Abs. 2 EnWG)",
                 ctx.recent_estimated_count
             ),
         );

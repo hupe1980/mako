@@ -10,7 +10,7 @@ Bilanzkreis of the supplier the customer chose — quarter hour by quarter hour,
 across DSO borders, with intraday supplier changes.
 
 This crate holds the **allocation engine, its invariants, and the three
-Modellwechsel state machines**: pure domain, no I/O, no wire rendering. The
+Modellwechsel legs**: pure domain, no I/O, no wire rendering. The
 decision trees live in `mako_pruefung::emob` and the answer Fristen in
 `mako_fristen::antwort::EMOB`, because that is where every other market process
 keeps them.
@@ -46,10 +46,11 @@ claims routinely exceed the NGZ has a metering problem, not a rounding one.
 
 ### 2. The Anmeldung answer window is seven Werktage
 
-Only the **Abmeldung** (55242 → 55243) is three — it has no LF leg to wait for.
-Three cannot work for the Anmeldung: the VNB may spend 3 WT sending the 55240
-and the LF has 3 WT of its own, so `E_0510` Prüfschritt 1 — „Ging innerhalb der
-Antwortfrist eine Ablehnung des Lieferanten ein?" — is undecidable before the
+Three Werktage is the window on the other two legs: the LF's answer to a 55240,
+and the VNB's answer to an **Abmeldung** (55242 → 55243), which has no LF leg to
+wait for. It cannot work for the Anmeldung — the VNB may spend 3 WT sending the
+55240 and the LF has 3 WT of its own, so `E_0510` Prüfschritt 1 („Ging innerhalb
+der Antwortfrist eine Ablehnung des Lieferanten ein?") is undecidable before the
 6. WT. The windows and a `const` assertion that pins the relation live in
 `mako_fristen::antwort`.
 
@@ -108,7 +109,7 @@ adapts and renders them.
 A `Viertelstunde` is an instant plus fifteen minutes of real time, and German
 local time is offset from UTC by whole hours — so a UTC-aligned quarter hour is
 aligned in Europe/Berlin too, and the 92- and 100-slot days are simply days with
-fewer or more instants in them. Nothing in this crate counts „96".
+fewer or more instants in them. No day is assumed to hold 96 of them.
 
 ## Provenance rides on every value
 
@@ -147,6 +148,20 @@ same pattern as `Nmsb`/`Amsb` and `Lfn`/`Lfa`.
 - **BK6-24-267** (15.05.2025), bestandskräftig
 - **UTILMD AHB Strom 2.2** Kap. 11; **EBD 4.3** Kap. 17
 - **MaBiS** BK6-24-174 Anlage 3, Kap. 3.8 / 3.10 / 5
+
+## Related crates
+
+| Crate | Role |
+|---|---|
+| [`mako-emob`](https://docs.rs/mako-emob) ← **this crate** | The Modell 2 allocation engine, its invariants and the three Modellwechsel legs |
+| [`mako-engine`](https://docs.rs/mako-engine) | Event-sourced workflow runtime — `Workflow`, `Process`, `EventStore`, deadlines |
+| [`mako-fristen`](https://docs.rs/mako-fristen) | *When* an answer is due — Werktage, the MaKo holiday calendar, the per-PID Antwortfristen |
+| [`mako-pruefung`](https://docs.rs/mako-pruefung) | Where the `E_0510`–`E_0513` Entscheidungsbäume live (`mako_pruefung::emob`) |
+| [`mako-mabis`](https://docs.rs/mako-mabis) | The Summenzeitreihen the virtual Bilanzierungsgebiet settles through |
+| [`makod`](https://hupe1980.github.io/mako/docs/services/makod/) | Production daemon — routes, adapts and renders these workflows |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>
 
 ## License
 

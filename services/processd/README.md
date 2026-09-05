@@ -30,7 +30,7 @@ What it cannot decide it puts in front of an operator with the deadline attached
 | **MSB** | 55039 | WiM Kündigung MSB (MSBN → MSBA) | 3 WT | MeLo / partner checks |
 | **MSB** | 55168 | WiM Verpflichtungsanfrage (NB → gMSB) | 1 WT | operator queue |
 | **MSB** | 35001, 35002, 35004, 35005 | REQOTE Preisanfrage | 5 WT | `PreisblattMessung` from `marktd` |
-| **MSB** | 35003 | ESA Werteanfrage (WiM Teil 2 Kap. 4) | 5 WT | operator queue — `E_0253` publishes no tree |
+| **MSB** | 35003 | ESA Werteanfrage (WiM Teil 2 Kap. 4) | 5 WT | `mako_pruefung::esa::wertebestellung` (`E_0252`) — refusals dispatch, a surviving Anfrage queues |
 | **MSB** | 17007 | ESA Bestellung von Werten | 2 WT | `mako_pruefung::esa::wertebestellung` (`E_0256`) |
 | **MSB** | 39002 | ESA Stornierung der Bestellung | 2 WT | `mako_pruefung::esa::wertebestellung` (`E_0257`) |
 | **MSB** | 17008 | ESA Abbestellung von Werten | 2 WT | `mako_pruefung::esa::wertebestellung` (`E_0254`) |
@@ -138,7 +138,7 @@ de.mako.process.initiated
 
 **Anything the NB does not dispatch lands in the queue, with its deadline.**
 `anmeldung_decisions` is the audit log and carries no Frist. Escalations, and Accepts held
-back by `auto_accept = false` or the § 20 EnWG affiliate rule, go to `approval_queue` with
+back by `auto_accept = false` or the § 20 Abs. 1 Satz 1 EnWG affiliate rule, go to `approval_queue` with
 the answer Frist attached and both commands already resolved from the trigger PID.
 
 ### Three trees, three alphabets
@@ -232,7 +232,7 @@ deciding once, and counts the Prüfungen as evidence the obligation was met.
 Prüfschritte 10–30 (Kundenanlagen-Herauslösung) and 60–90 (ESV-Ende, Aufhebung
 einer zukünftigen Zuordnung) need Transaktionsgründe and prior process history
 the projection does not carry; they escalate rather than guess. Escalation is
-the § 20 EnWG-safe direction — an unfounded Ablehnung keeps a customer bound to
+the § 20 Abs. 1 Satz 1 EnWG-safe direction — an unfounded Ablehnung keeps a customer bound to
 a supplier they have left.
 
 STP is ~60 % without `malo_grid` coverage (missing records escalate) and ≥ 95 %
@@ -241,10 +241,13 @@ Marktlokation additionally needs `[nb] einsd_url` — for the `E_0622` Vorlauffr
 and the `E_0623` Prüfschritt 540 Direktvermarktungspflicht; without it every
 55077 escalates.
 
-**§ 20 EnWG parity.** Every decision row carries `initiator_is_affiliate`
+**Gleichbehandlung evidence.** Every decision row carries `initiator_is_affiliate`
 (`lf_mp_id == own_mp_id`), and `auto_accept` is suppressed for affiliate-initiated
 An- *and* Abmeldungen so an affiliate never gets a faster automatic path than a
-third party.
+third party. The duty is § 20 Abs. 1 Satz 1 EnWG — diskriminierungsfreier
+Netzzugang, which mandates no report of its own; the artefact the column feeds is
+the § 7a Abs. 5 EnWG Gleichbehandlungsbericht, which `obsd` assembles and the
+Gleichbehandlungsbeauftragte files by 31 March for the preceding calendar year.
 
 ## LF decision pipeline
 
@@ -304,13 +307,15 @@ them: approving a queue entry dispatches the market answer, and `start-supply` /
 | `use-mcp` | any principal of the tenant | `/mcp` |
 
 The deciding principal's `sub` is recorded twice: in `approval_queue.decided_by` and on
-the dispatched command (`approved_by` / `rejected_by`). § 20 EnWG parity evidence and the
+the dispatched command (`approved_by` / `rejected_by`). Gleichbehandlung evidence and the
 GoBD trail both have to say *who* decided, and the command alone answers neither for an
 entry that expired unanswered.
 
 `tests/authorization_guard.rs` pins the surface: every action checked in code is
 permitted by policy (an unpermitted one is a permanent 403), every permitted
-action is checked somewhere, and every routed handler takes a `Claims` extractor.
+action is checked somewhere, every routed handler takes a `Claims` extractor, and
+none of them extracts `Claims` as a request `Extension` (nothing inserts it, so
+that is a guaranteed 500).
 
 ---
 
@@ -430,6 +435,7 @@ principal needs `manage-subscription` on `marktd` (ADMIN role).
 |---|---|
 | `anmeldung_decisions` | NB STP audit log for both An- and Abmeldung decisions — `UNIQUE (process_id, tenant)`, so an at-least-once redelivery does not double-record |
 | `approval_queue` | Entries awaiting an operator — from **every** compiled role — with the market command to dispatch on approve/reject, the business Frist they expire at, and `decided_by` once decided. A background worker expires `Pending` rows past `expires_at`; it is deliberately **not** role-gated, because the NB, LF and MSB all enqueue |
+| `abmeldeanfragen` | The two-phase Anmeldung: one row per Anmeldung waiting on the Abmeldeanfrage `E_0624` answers, holding the replayable `AnmeldungAnfrage` plus one answer per LFA. A Geschäftsvorfall 3 asks every Tranchen-LFA, so it resolves only when all have answered or the 09:00 window lapses |
 | `eog_activations` | EoG case log; the daily § 38 Abs. 4 timer scans it |
 | `neuanlage_faelle` | `E_0608` case log; the daily Prüflauf re-runs the tree per open case and counts the Prüfungen |
 
@@ -467,7 +473,7 @@ cargo run -p processd --no-default-features --features nb-only
 cargo run -p processd --no-default-features --features lf-only
 cargo run -p processd --no-default-features --features msb-only
 
-# Integrated §6b EnWG
+# One operator holding several Marktrollen
 cargo run -p processd --no-default-features --features integrated
 ```
 
@@ -499,7 +505,7 @@ just test-processd-db                    # SQL suite against a real PostgreSQL
 | WiM-Rechnung Antwort (REMADV) | zum Zahlungsziel; NB bei 31009: 4. WT davor | BK6-22-024 WiM Strom Teil 1, Kap. 3.6.3.8.2 / 3.7.2 / 6.2 |
 | APERAK technical acknowledgement | 45 min (Strom UTILMD) | APERAK AHB 1.0 § 2.4.1 — answered by `makod` |
 | § 38 Abs. 4 Ersatzversorgung maximum | 3 months from Zuordnungsbeginn | EnWG |
-| § 20 EnWG parity audit | provable at BNetzA | `initiator_is_affiliate` |
+| § 7a Abs. 5 EnWG Gleichbehandlungsbericht | filed by 31 March for the preceding year | `initiator_is_affiliate` |
 
 Every Frist is read from one table, `mako_fristen::antwort`, by both
 `processd` (to size the operator queue) and `makod` (to register the process

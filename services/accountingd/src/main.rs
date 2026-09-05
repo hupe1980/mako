@@ -398,14 +398,25 @@ impl Daemon for Accountingd {
             .layer(Extension(Arc::clone(&ledger)))
             .layer(Extension(iban_hash_key))
             // OIDC verifier extension — enables Claims extractor on write endpoints
-            .layer(Extension(oidc));
+            .layer(Extension(oidc.clone()));
 
         // ── MCP server ────────────────────────────────────────────────────────────
+        // Gated by the same verifier and the same policy as the REST surface.
+        // This surface is not read-only: five of its thirteen tools post a
+        // Buchung, raise the month's Abschlagsforderungen, book a CAMT.054
+        // payment, rewrite a customer's advance, or emit a bank-submittable
+        // pain.008 — so `mcp_server::tool_action` maps every tool to the Cedar
+        // action its REST twin enforces, and an unmapped tool is refused.
         let mcp_state = std::sync::Arc::new(mcp_server::AccountingdMcpState {
             pool: pool.clone(),
             ledger: Arc::clone(&ledger),
             tenant: cfg.tenant.clone(),
-            auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
+            auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
+                &cfg.mcp,
+                oidc,
+                Some(Arc::clone(&cedar)),
+                &cfg.tenant,
+            ),
             creditor_iban: cfg.creditor_iban.clone(),
             creditor_name: cfg.creditor_name.clone(),
             creditor_id: cfg.creditor_id.clone(),

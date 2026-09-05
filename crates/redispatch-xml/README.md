@@ -33,15 +33,19 @@ messages (EDIFACT) are handled by the `edi-energy` crate.
 
 | Document type | XSD version | Valid from |
 |---|---|---|
-| `ActivationDocument` | 1.1f | 2025-10-01 |
+| `ActivationDocument` | 1.1f | 2026-04-01 |
+| `AcknowledgementDocument` | 1.0g | 2026-04-01 |
+| `Kaskade` | 1.0 | 2026-04-01 |
 | `PlannedResourceScheduleDocument` | 1.0f | 2025-10-01 |
-| `AcknowledgementDocument` | 1.0f | 2025-10-01 |
 | `Stammdaten` (master data) | 1.4b | 2025-10-01 |
 | `StatusRequest_MarketDocument` | 1.1 | 2025-10-01 |
 | `Unavailability_MarketDocument` | 1.1b | 2025-10-01 |
-| `Kaskade` | 1.0 | 2025-10-01 |
 | `NetworkConstraintDocument` | 1.1b | 2025-10-01 |
 | `Kostenblatt` | 1.0d | 2025-10-01 |
+
+Versions and Anwendungszeitpunkte are BDEW's own catalogue metadata; a
+`Fehlerkorrektur` supersedes its base revision without bumping the version, and
+the conformance test below always reads the newest revision on disk.
 
 XSD schemas and application guidelines are published by BDEW at
 [bdew-mako.de](https://www.bdew-mako.de/market_communication/documents)
@@ -51,7 +55,7 @@ XSD schemas and application guidelines are published by BDEW at
 
 ## XSD conformance is checked, not assumed
 
-`tests/xsd_coverage.rs` reads the published XSDs from `regulatories/bdew-mako/`
+`tests/xsd_coverage.rs` reads the published XSDs out of the local document mirror
 and asserts that **every element BDEW declares appears in the model**, scoped per
 document. Anything deliberately left out is listed in `NOT_MODELLED` with a
 reason; an unexplained entry fails the test.
@@ -71,9 +75,11 @@ a document that genuinely omitted it. It caught, among others:
 | `Available_Period` / `Point` absent from `Unavailability` `TimeSeries` | The availability curve itself. The model reduced an unavailability to a date range, dropping the per-interval capacity that bounds `P_bean` in `BilAReM` Kap. 3.2.2.1 |
 | One `TechnischeParameter` type shared across three different XSD complexTypes | The whole TR nameplate (Nettonennleistung, Nabenhöhe, storage capacities …) was dropped |
 
-The XSDs are third-party publications and are **not tracked in git**, so the test
-skips — visibly — when `regulatories/bdew-mako/` is absent.
-`regulatories/README.md` carries the download URL for each file.
+The XSDs are third-party publications and are **not redistributed with this
+crate**, so the test skips — visibly, with a message — when no local copy is
+present. They are published at
+[bdew-mako.de](https://www.bdew-mako.de/market_communication/documents)
+(topicGroupId 25), and the determination behind them is BNetzA BK6-23-241.
 
 ---
 
@@ -114,8 +120,8 @@ let doc: ActivationDocument = parse_as(xml_bytes)?;
 | `serialize_as(doc, decl)` | Serialize any `Serialize` type to XML bytes |
 | `validate(doc)` | Run structural + semantic validation, return `ValidationResult` |
 | `Document::mrid(&self)` | Primary document identifier — correlation key for process routing |
-| `Document::sender_id(&self)` | Sender GLN / EIC (13 digits) |
-| `Document::receiver_id(&self)` | Receiver GLN / EIC (13 digits) |
+| `Document::sender_id(&self)` | Sender identifier, as it appears in the document |
+| `Document::receiver_id(&self)` | Receiver identifier, as it appears in the document |
 | `ValidationResult::into_errors()` | Consume result — `Ok(warnings)` or `Err(errors)` with the full list |
 
 ---
@@ -127,10 +133,13 @@ let doc: ActivationDocument = parse_as(xml_bytes)?;
 - **`TimeInterval`** — parses/serializes `"yyyy-mm-ddThh:mmZ/yyyy-mm-ddThh:mmZ"`,
   validates UTC and start-before-end. Implements `Display`.
 - **`Decimal3`** — non-negative `f64` serialized as `"NNN.NNN"` (3 dp). Implements `Display`.
-- **`AttrV<T>`** — ENTSO-E attr-v pattern wrapper with `From<T>`, `Display`, `Deref`.
+- **`AttrV<T>`** — ENTSO-E attr-v wrapper (`<Element v="…"/>`) with `new`,
+  `value()`, `From<T>` and `Display`; `AttrVWithScheme<T, S>` adds the
+  `codingScheme` attribute.
 - All public fallible constructors are annotated `#[must_use]`.
-- Enums open for extension: `Direction`, `MeasureUnit`, `CodingScheme`, `ControlZone`
-  are all `#[non_exhaustive]`.
+- Enums open for extension: `Direction`, `MeasureUnit`, `MarketRoleType` and
+  `ControlZone` are `#[non_exhaustive]`. `CodingScheme` is **not** — its three
+  values (`A10` GS1, `NDE` BDEW, `A01` EIC) are the closed set the XSDs admit.
 
 ---
 
@@ -150,7 +159,11 @@ let doc: ActivationDocument = parse_as(xml_bytes)?;
 
 | Crate | Role |
 |---|---|
-| `redispatch-xml` ← **this crate** | XML format layer (parse / serialize / validate) |
-| `mako-redispatch` | Event-sourced process engine — 8 workflows, `RedispatchRouter`, `RedispatchModule` |
-| `edi-energy` | IFTSTA status messages (EDIFACT, PIDs 21037/21038) |
-| `mako-engine` | Event-sourced workflow runtime (`Workflow`, `Process`, `EventStore`) |
+| [`redispatch-xml`](https://docs.rs/redispatch-xml) ← **this crate** | The XML format layer — parse · serialize · validate against the published XSDs |
+| [`mako-redispatch`](https://docs.rs/mako-redispatch) | Event-sourced process engine — 8 workflows, `RedispatchRouter`, `RedispatchModule` |
+| [`edi-energy`](https://docs.rs/edi-energy) | IFTSTA status messages (EDIFACT, PIDs 21037/21038) |
+| [`mako-engine`](https://docs.rs/mako-engine) | Event-sourced workflow runtime — `Workflow`, `Process`, `EventStore`, deadlines |
+| [`makod`](https://hupe1980.github.io/mako/docs/services/makod/) | Production daemon — routes both the XML and the EDIFACT leg |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>

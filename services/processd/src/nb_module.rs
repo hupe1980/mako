@@ -20,7 +20,7 @@
 //! The Anwendungsübersicht der Prüfidentifikatoren 4.0 (lfd. Nr. 20030) has it
 //! going **LFN → LFA**, answered 55017/55018 by the *Altlieferant* under EBD
 //! `E_0614`. Evaluating it here would make an `nb-only` binary answer a
-//! supplier-role message — the § 7 EnWG separation the Cargo features exist for
+//! supplier-role message — the § 6a EnWG separation the Cargo features exist for
 //! — with grid-topology checks the LFA has no basis for. The answer belongs to
 //! the supplier role and is decided there.
 //!
@@ -48,7 +48,7 @@
 //! - GPKE: BK6-24-174 Teil 2 (SD Lieferbeginn, SD Lieferende von LF an NB)
 //! - GeLi Gas: BK7-24-01-009 Kap. 3.2.2 / 3.2.3
 //! - EBD 4.3 Kap. 6.6.1 (`E_0622`), 6.3.1 (`E_0607`)
-//! - § 20 EnWG parity: `initiator_is_affiliate` recorded on every decision
+//! - Gleichbehandlung: `initiator_is_affiliate` recorded on every decision
 
 use mako_markt::makod_client::{ForwardCommand, MakodClient};
 use mako_pruefung::nb::types::{
@@ -671,7 +671,7 @@ pub async fn evaluate_and_decide(
     );
 
     // ── 5. Persist decision ───────────────────────────────────────────────
-    let (decision, antwortcode, detail) = classify(&result);
+    let (decision, antwortcode, antwortcode_ebd, detail) = classify(&result);
 
     let rec = AnmeldungDecisionRecord {
         id: Uuid::new_v4(),
@@ -681,6 +681,7 @@ pub async fn evaluate_and_decide(
         lf_mp_id: lf_mp_id.clone(),
         decision,
         antwortcode: antwortcode.clone(),
+        antwortcode_ebd,
         detail: detail.clone(),
         initiator_is_affiliate,
         decided_at: now,
@@ -1197,7 +1198,7 @@ pub async fn resume_after_lfa_antwort(
     );
 
     let now = OffsetDateTime::now_utc();
-    let (decision, code, detail) = classify(&result);
+    let (decision, code, ebd, detail) = classify(&result);
     let rec = AnmeldungDecisionRecord {
         id: Uuid::new_v4(),
         process_id: anmeldung_process_id,
@@ -1206,6 +1207,7 @@ pub async fn resume_after_lfa_antwort(
         lf_mp_id: waiting.lfn_mp_id.clone(),
         decision,
         antwortcode: code,
+        antwortcode_ebd: ebd,
         detail,
         // Phase one already wrote the § 20 parity row for this process, and
         // `insert` is ON CONFLICT DO NOTHING on `(process_id, tenant)` — so
@@ -1802,7 +1804,7 @@ async fn decide_abmeldung(
 
     info!(%process_id, pid, %malo_id, outcome = ?result, "processd NB: E_0607 result");
 
-    let (decision, antwortcode, detail) = classify(&result);
+    let (decision, antwortcode, antwortcode_ebd, detail) = classify(&result);
     let rec = AnmeldungDecisionRecord {
         id: Uuid::new_v4(),
         process_id,
@@ -1811,6 +1813,7 @@ async fn decide_abmeldung(
         lf_mp_id: lf_mp_id.clone(),
         decision,
         antwortcode,
+        antwortcode_ebd,
         detail,
         initiator_is_affiliate,
         decided_at: now,
@@ -1829,7 +1832,7 @@ async fn decide_abmeldung(
 
     match &result {
         NbEntscheidung::Accept(_) => {
-            // § 20 EnWG parity applies to the Abmeldung too: an affiliate must
+            // The § 20 Abs. 1 Satz 1 duty applies to the Abmeldung too: an affiliate must
             // not get an automatic path a third party does not get.
             if initiator_is_affiliate {
                 warn!(%process_id, pid, %malo_id, %lf_mp_id,
@@ -1899,17 +1902,26 @@ fn received_at(event: &serde_json::Value) -> OffsetDateTime {
 ///
 /// The Antwortcode is recorded on an **Accept** too: `SG4 STS+E01` is Muss on
 /// every Antwortnachricht, so a Bestätigung states `A51` / `A58` / `E15` and the
-/// § 20 EnWG parity log has to be able to show which one went out.
-fn classify(result: &NbEntscheidung) -> (AnmeldungDecision, Option<String>, Option<String>) {
+/// Gleichbehandlung log has to be able to show which one went out.
+fn classify(
+    result: &NbEntscheidung,
+) -> (
+    AnmeldungDecision,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
     match result {
         NbEntscheidung::Accept(a) => (
             AnmeldungDecision::Accept,
             Some(a.antwortcode.clone()),
+            Some(a.tree.clone()),
             Some(a.bedeutung.clone()),
         ),
         NbEntscheidung::Reject(r) => (
             AnmeldungDecision::Reject,
             Some(r.antwort.antwortcode.clone()),
+            Some(r.antwort.tree.clone()),
             Some(r.detail.clone()),
         ),
         // An owed Abmeldeanfrage is not a decision yet, and it is not an
@@ -1918,15 +1930,19 @@ fn classify(result: &NbEntscheidung) -> (AnmeldungDecision, Option<String>, Opti
         NbEntscheidung::AnfrageErforderlich { lfa_mp_ids, .. } => (
             AnmeldungDecision::Escalate,
             None,
+            None,
             Some(format!(
                 "waiting on the Anfrage zur Beendigung der Zuordnung to {lfa_mp_ids:?} \
                  (GPKE Teil 2 § 2.1.2 Nr. 3); the LFA answers by 09:00 Uhr des 1. WT and \
                  silence counts as Zustimmung"
             )),
         ),
-        NbEntscheidung::Escalate { reason } => {
-            (AnmeldungDecision::Escalate, None, Some(reason.clone()))
-        }
+        NbEntscheidung::Escalate { reason } => (
+            AnmeldungDecision::Escalate,
+            None,
+            None,
+            Some(reason.clone()),
+        ),
     }
 }
 
@@ -2113,9 +2129,10 @@ mod tests {
         assert!(out.needs_abmeldeanfrage(), "{out:?}");
         // …and the audit log records *why* nothing went out, without claiming
         // an operator has to act.
-        let (decision, code, detail) = classify(&out);
+        let (decision, code, ebd, detail) = classify(&out);
         assert_eq!(decision, AnmeldungDecision::Escalate);
         assert!(code.is_none(), "no answer reached the wire");
+        assert!(ebd.is_none(), "no tree published a code either");
         assert!(
             detail.as_deref().is_some_and(|d| d.contains("09:00")),
             "{detail:?}"
@@ -2147,9 +2164,46 @@ mod tests {
         assert_eq!(out.antwortcode(), Some("A50"));
         assert!(out.is_reject());
         // …and the answer is dispatchable, unlike an escalation.
-        let (decision, code, _) = classify(&out);
+        let (decision, code, ebd, _) = classify(&out);
         assert_eq!(decision, AnmeldungDecision::Reject);
         assert_eq!(code.as_deref(), Some("A50"));
+        // `A50` is published by `E_0623` and by nothing else. The audit row has
+        // to carry the tree or the code cannot be read back: `A02` alone means
+        // three unrelated things across `E_0607`, `E_0622` and `E_0609`.
+        assert_eq!(ebd.as_deref(), Some("E_0623"));
+    }
+
+    /// Every decision that publishes a code names the tree it came from.
+    ///
+    /// The column existed and nothing wrote it, so `anmeldung_decisions` held
+    /// bare Antwortcodes: `A02` with no tree is not a finding an auditor
+    /// holding the published EBDs can locate.
+    #[test]
+    fn a_published_code_always_names_its_tree() {
+        // `E_0623` Zustimmung (silence from the LFA), `E_0623` Ablehnung, and
+        // the `E_0607` Abmeldung tree — three different trees, one shape.
+        let mut zustimmung = anmeldung(Marktlokationsart::Verbrauchend);
+        zustimmung.abmeldeanfrage = Abmeldeanfrage::Gestellt { antwort: None };
+        let ablehnung = {
+            let mut a = anmeldung(Marktlokationsart::Verbrauchend);
+            a.abmeldeanfrage = Abmeldeanfrage::Gestellt {
+                antwort: Some(LfaAntwort::Widerspruch {
+                    code: "A35".to_owned(),
+                    grund: None,
+                }),
+            };
+            a
+        };
+        for anfrage in [zustimmung, ablehnung] {
+            let out = mako_pruefung::evaluate_lieferbeginn(&anfrage, None);
+            let (_, code, ebd, _) = classify(&out);
+            assert!(code.is_some(), "{out:?}");
+            assert_eq!(
+                ebd.as_deref(),
+                Some("E_0623"),
+                "a published code must carry its tree: {out:?}"
+            );
+        }
     }
 
     /// `SG12 NAD+Z09` is Muss on the 55010 for a verbrauchende Marktlokation

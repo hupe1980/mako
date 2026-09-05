@@ -5,10 +5,14 @@ weight = 4
 sort_by = "weight"
 template = "section.html"
 page_template = "page.html"
-[extra]
-mermaid = true
 +++
-# Services
+mako implements the BDEW **Marktkommunikation** — the regulated message exchange between the
+four German energy-market roles: **LF** (Lieferant, the retail supplier), **NB**
+(Netzbetreiber, the grid operator), **MSB** (Messstellenbetreiber, the metering operator) and
+**BKV** (Bilanzkreisverantwortlicher, who answers for a balancing group). Each service below
+runs as one or more of those roles; see
+[Party Roles](@/docs/architecture/domain-model.md#party-roles-marktrollen) for what each one
+owns.
 
 mako consists of **17 independently deployable services**, each built as a self-contained Docker image with:
 - TOML configuration with `_FILE` suffix for Kubernetes secrets
@@ -38,13 +42,13 @@ graph TB
 
     subgraph nb_billing ["Invoice & Grid Billing (NB)"]
         invoicd[":8280 invoicd<br/>INVOIC 8-stage plausibility<br/>auto-settle/dispute"]
-        netzbilanzd[":8680 netzbilanzd<br/>NNE/KA/MMM/MSB billing<br/>GridSettlement · CalculationTrace"]
+        netzbilanzd[":8680 netzbilanzd<br/>NNE/KA/MMM/MSB billing<br/>SettlementResult · CalculationTrace"]
         sperrd[":8780 sperrd<br/>Sperr-/Entsperrauftrag queue<br/>ORDERS 17115/17117 · IFTSTA 21039"]
     end
 
     subgraph data ["Energy Data & Observability"]
         edmd[":8380 edmd<br/>MSCONS · iMSys direct push<br/>Hampel · V01–V09/V11/V12 · virtual"]
-        obsd[":8480 obsd<br/>process projections · KPI<br/>§20 EnWG parity report"]
+        obsd[":8480 obsd<br/>process projections · KPI<br/>§7a Abs. 5 EnWG parity report"]
         mabis[":8880 mabis-syncd<br/>MaBiS Summenzeitreihe<br/>MSCONS 13003 · 10. Werktag · MCP"]
         einsd[":9180 einsd<br/>EEG/KWKG settlement<br/>10 schemes · §14 UStG Gutschrift"]
     end
@@ -61,7 +65,7 @@ graph TB
         portald[":9480 portald<br/>customer portal read-model<br/>§41 self-service"]
     end
 
-    agentd[":9580 agentd<br/>28 declarative manifests on agentplane<br/>journaled effects · strict replay<br/>approval on mutating tools · A2A cards<br/>OIDC · HMAC · Anthropic/OpenAI/Bedrock"]
+    agentd[":9580 agentd<br/>28 declarative manifests on agentplane<br/>journaled effects · strict replay<br/>human triage worklist · A2A cards<br/>OIDC · HMAC · 5 model backends"]
 
     ext -->|AS4 / REST| makod
     makod <-->|CloudEvents| marktd
@@ -82,7 +86,7 @@ graph TB
 |---|---|---|---|
 | [makod](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 71 workflows over 469 Prüfidentifikatoren, AS4/REST/iMS |
 | [marktd](@/docs/services/marktd.md) | `:8180` | All | Market Data Hub — MaLo/MeLo/contracts, VersorgungsStatus, typed BO4E API, durable fan-out, MMMA monthly import worker |
-| [processd](@/docs/services/processd.md) | `:8580` | NB + LF + MSB | Process Decision Engine — Anmeldung STP ≥95%, LF answers to the NB-initiated GPKE processes, MSB REQOTE auto-response, §14a Steuerungsauftrag produktcode check; role-gated binaries (§ 7 EnWG) |
+| [processd](@/docs/services/processd.md) | `:8580` | NB + LF + MSB | Process Decision Engine — Anmeldung STP ≥95%, LF answers to the NB-initiated GPKE processes, MSB REQOTE auto-response, §14a Steuerungsauftrag produktcode check; role-gated binaries (§ 6a EnWG) |
 
 ## Invoice & Grid Billing
 
@@ -96,10 +100,16 @@ graph TB
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [edmd](@/docs/services/edmd.md) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Kafka batch ingest, Hampel quality scoring, V01–V09/V11/V12 validation, virtual meters (§42b EnWG GGV), § 40a Abs. 2 EnWG Verbrauchsschätzung (annual projection), Resampling, Ablesesteuerung (INSRPT auto-order), meterstore hot/cold tiering (PostgreSQL + Apache Iceberg) with cross-tier OLAP + a read-only Iceberg REST catalog; Cedar write actions role-gated (MSB/NB/admin); 15-tool MCP server |
+| [edmd](@/docs/services/edmd.md) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Kafka batch ingest, quality scoring and validation, virtual meters, tiered storage; 15-tool MCP server |
 | [mabis-syncd](@/docs/services/mabis-syncd.md) | `:8880` | ÜNB/NB | MaBiS synchronisation — aggregates quarter-hourly Lastgang per Bilanzierungsgebiet via `SummenzeitreiheBuilder`, files with the BIKO as MSCONS 13003 on the 10. Werktag; records the BIKO-assigned Datenstatus and open Korrekturbedarf; emits `de.mabis.*` failure events; 4-tool read-only MCP server |
 | [einsd](@/docs/services/einsd.md) | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 10 settlement schemes; issues the **§14 UStG Gutschrift** (Gutschriftverfahren) per billable settlement as a BO4E `Rechnung` with per-rate USt breakdown; 19-tool MCP server |
 | [obsd](@/docs/services/obsd.md) | `:8480` | All | Business-process observability — per-PID KPIs with the APERAK and Antwortfrist clocks reported separately, deadlines read from `mako-fristen` (never computed here), `completed_at` cycle-time tracking, `GET /api/v1/audit/gleichbehandlung` for the § 7a Abs. 5 EnWG filing, 6-tool MCP server |
+
+`edmd`'s quality layer is Hampel scoring plus the V01–V09/V11/V12 validation rules; its
+derived products are virtual meters (§ 42b EnWG GGV), the § 40a Abs. 2 EnWG
+Verbrauchsschätzung, Resampling and Ablesesteuerung (INSRPT auto-order). `meterstore` tiers
+hot PostgreSQL against cold Apache Iceberg with cross-tier OLAP and a read-only Iceberg REST
+catalog, and every Cedar write action is role-gated to MSB/NB/admin.
 
 ## Retail Billing (LF)
 
@@ -107,8 +117,13 @@ graph TB
 |---|---|---|---|
 | [productd](@/docs/services/productd.md) | `:9080` | LF | Product & Tariff Catalog — user-defined energy products, EPEX Spot for §41a, B2B Angebote/quotations |
 | [billingd](@/docs/services/billingd.md) | `:9280` | LF | Energy Billing Engine — 13 categories, §41a dynamic, §42b EnWG GGV community solar, EN 16931 e-invoicing (XRechnung 3.0 CII / PEPPOL UBL); the ZUGFeRD PDF renders via outputd |
-| [outputd](@/docs/services/outputd.md) | `:9880` | — | Customer Communications — operator Typst templates (content-addressed, append-only, publish gated by proof), ZUGFeRD PDF/A-3 carrier around the caller's CII, Textform kinds (Mahnung § 126b BGB, Preisanpassung § 41 Abs. 5 EnWG), the append-only store of issued documents, and delivery over portal, e-mail, print spool and ERP with per-channel evidence |
+| [outputd](@/docs/services/outputd.md) | `:9880` | — | Customer Communications — operator Typst templates, the ZUGFeRD PDF/A-3 carrier, the append-only store of issued documents and their delivery |
 | [accountingd](@/docs/services/accountingd.md) | `:9380` | LF | Customer Account Ledger — tamper-evident double-entry ledger (`doubleentry`: Merkle proofs, period seals for GoBD/§146 AO); per-MaLo Kontokorrent, FIFO open-item clearing, Summen- und Saldenliste §238 HGB, Verzugszinsen §288 BGB, Zahlungsvereinbarung; SEPA pain.008 and CAMT.054; dunning delivered through outputd; §40b Abs. 1 Jahresabschluss; GDPR Art. 17 |
+
+`outputd`'s templates are content-addressed and append-only, and a publish is gated by
+proof; besides the invoice it renders the Textform kinds — Mahnung (§ 126b BGB) and
+Preisanpassung (§ 41 Abs. 5 EnWG) — and delivers over portal, e-mail, print spool and ERP
+with per-channel evidence.
 
 ## B2C & AI
 
@@ -116,7 +131,14 @@ graph TB
 |---|---|---|---|
 | [vertragd](@/docs/services/vertragd.md) | `:9780` | LF + MSB | Contract & Customer Management — Kunden (B2C+B2B), Rahmenverträge, Versorgungsverträge, kunden_identitaeten (N portal users per company), Tarifwechsel with its § 41 Abs. 5 EnWG Preisänderungsanzeige (rendered and delivered through outputd), Kündigung, OIDC→MaLo auth gateway for portald |
 | [portald](@/docs/services/portald.md) | `:9480` | LF | Customer Portal gateway — stateless aggregation over all LF services plus the §41 EnWG self-service writes (Tarifwechsel, Kündigung, SEPA, GDPR Art. 16) and the document inbox served out of outputd; every route resolves customer ownership through `vertragd`; 8-tool operator MCP server |
-| [agentd](@/docs/services/agentd.md) | `:9580` | All | Multi-agent LLM orchestration — **28 declarative manifests** run on the agentplane durable runtime, activated via `[bundled_agents]`; one journaled run per subscribing specialist (no first-wins); human approval on mutating tools; OIDC auth on `/api/v1/run`; inbound HMAC; A2A agent cards; MCP tools across the production services |
+| [agentd](@/docs/services/agentd.md) | `:9580` | All | Multi-agent LLM orchestration — **28 declarative manifests** on the agentplane durable runtime, every effect journaled; read-only by construction, so oversight is a triage worklist |
+
+`agentd`'s manifests are activated through `[bundled_agents]`. One event yields one journaled
+run per subscribing specialist — there is no first-wins mode, because cancelling a loser
+leaves an unknown outcome on the record. No active manifest grants a mutating tool, so a
+finding opens a triage row beside the answer rather than suspending the run in front of it.
+`POST /api/v1/run` is OIDC-authenticated, the inbound webhook is HMAC-verified, and each
+specialist publishes an A2A agent card derived from its manifest.
 
 ---
 
@@ -163,10 +185,12 @@ What every service gets for free from the runner:
 | **Shutdown** | SIGINT/SIGTERM graceful drain; workers observe `ctx.shutdown` |
 | **Health probe** | `--check` in-container HEALTHCHECK (no shell, no curl) |
 
-Event-emitting services (billingd, einsd, accountingd, netzbilanzd, vertragd, invoicd) add a
-**transactional outbox**: each outbound CloudEvent is written to `event_outbox` *in the same
-transaction* as the business change and drained by a background `OutboxWorker` with retry and a
-status-column dead-letter queue. Because the event is committed atomically with the data that
+Event-emitting services — accountingd, billingd, einsd, mabis-syncd, netzbilanzd and
+vertragd — add the SDK's **transactional outbox**: each outbound CloudEvent is written to
+`event_outbox` *in the same transaction* as the business change and drained by a background
+`OutboxWorker` with retry and a status-column dead-letter queue. (`marktd` keeps its own
+`event_log` outbox ahead of the durable fan-out, and `invoicd` retries its ERP notifications
+from columns on `invoic_receipts` rather than from an `event_outbox`.) Because the event is committed atomically with the data that
 justifies it, a crash between "commit" and "deliver" can never drop or duplicate it —
 persist-before-dispatch. Emission always goes through one builder and one signer
 (`CloudEvent::new` + `post_ce_with_retry`; Standard Webhooks (`webhook-signature`)).

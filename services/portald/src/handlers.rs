@@ -537,11 +537,19 @@ pub async fn post_portal_tarifwechsel(
         Err(resp) => return resp,
     };
 
+    // A switch the customer made in the portal is not a supplier exercising a
+    // reserved right to change the contract, so § 41 Abs. 5 EnWG does not
+    // attach: Satz 1 obliges notice of a *beabsichtigte* unilateral change and
+    // Satz 4 hangs the Sonderkündigungsrecht on that same act. `vertragd`
+    // decides that from `initiator`, which is required and has no default
+    // precisely because confirming a customer's own choice and announcing an
+    // imposed change are different legal acts.
     let body = serde_json::json!({
         "komp_id":          komp_id,
         "new_product_code": req.new_product_code,
         "wirksamkeit":      req.wirksamkeit,
         "grund":            req.grund,
+        "initiator":        "KUNDE",
     });
     match vertragd
         .post_json(&format!("/api/v1/vertraege/{vtid}/tarifwechsel"), &body)

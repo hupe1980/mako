@@ -27,7 +27,10 @@ fn position(malo: Option<&str>) -> PositionCostBreakdown {
         levies_eur: dec!(5125),
         total_netto_eur: dec!(75400),
         total_brutto_eur: dec!(89726),
+        mwst_satz: dec!(0.19),
         arbeitspreis_ct_per_kwh: Some(dec!(19.9)),
+        arbeitspreis_ht_ct_per_kwh: None,
+        arbeitspreis_nt_ct_per_kwh: None,
         grundpreis_eur_per_year: Some(dec!(240)),
     }
 }

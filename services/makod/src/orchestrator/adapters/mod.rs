@@ -165,9 +165,9 @@ use mako_geli_gas::{
 use mako_gpke::{
     AbrechnungsdatenCommand as GpkeAbrechnungsdatenCommand, AllokationslisteCommand,
     AnfrageBestellungCommand, AnkuendigungZuordnungLfCommand, BeendigungZuordnungCommand,
-    DatanabrufCommand, GpkeAbrechnungWorkflow, GpkeAbrechnungsdatenWorkflow,
+    DatenabrufCommand, GpkeAbrechnungWorkflow, GpkeAbrechnungsdatenWorkflow,
     GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
-    GpkeAnkuendigungZuordnungLfWorkflow, GpkeBeendigungZuordnungWorkflow, GpkeDatanabrufWorkflow,
+    GpkeAnkuendigungZuordnungLfWorkflow, GpkeBeendigungZuordnungWorkflow, GpkeDatenabrufWorkflow,
     GpkeKonfigurationAenderungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
     GpkeLfAnmeldungWorkflow, GpkeMesswerteLieferungWorkflow, GpkeNeuanlageWorkflow,
     GpkePartinWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow, GpkeStornierungCommand,
@@ -279,7 +279,16 @@ fn dtm303_to_rfc3339(value: &str, format: Option<&str>) -> Option<String> {
         return None;
     }
     // `202606010000+00` — 12 digits, then a signed two-digit hour offset.
-    let (stamp, offset) = value.split_at(value.len().checked_sub(3)?);
+    //
+    // The value is a wire string a counterparty controls, and `split_at` panics
+    // on a byte index that is not a char boundary — a UNOC:3 interchange can put
+    // a multi-byte character here. A malformed DTM is a fact about the message,
+    // so it has to become `None` rather than unwind the ingest task.
+    let split = value.len().checked_sub(3)?;
+    if !value.is_char_boundary(split) {
+        return None;
+    }
+    let (stamp, offset) = value.split_at(split);
     if stamp.len() != 12 || !stamp.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }

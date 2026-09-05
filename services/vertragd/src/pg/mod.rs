@@ -35,16 +35,18 @@ pub use kunden::{
     upsert_kunde, upsert_person, upsert_zahlungsinformation,
 };
 pub use lifecycle::{
-    AutoRenewalRow, ExpiringVertragRow, StuckKomponenteRow, apply_auto_renewal,
-    find_auto_renewal_due, find_auto_renewal_overdue, find_expiring_vertraege,
-    find_stuck_komponents, mark_ablauf_notified, mark_auto_renewal_notified,
+    AutoRenewalRow, ExpiringVertragRow, LOCK_ABLAUF, LOCK_AUTO_RENEWAL, LOCK_PREISANPASSUNG,
+    StuckKomponenteRow, apply_auto_renewal, find_auto_renewal_due, find_auto_renewal_overdue,
+    find_expiring_vertraege, find_stuck_komponents, mark_ablauf_notified,
+    mark_auto_renewal_notified, release_worker_lock, try_worker_lock,
 };
 pub use messstellenvertrag::{
     MessstellenvertragRow, MessstellenvertragView, UpsertMessstellenvertragInput,
     find_messstellenvertrag, record_kuendigung, upsert_messstellenvertrag,
 };
 pub use produkte::{
-    AnzupassenderPreis, MaloProduktSlice, ProduktSlice, malo_slices, offene_preisanpassungen,
+    AnzupassenderPreis, Initiator, MaloProduktSlice, ProduktSlice, malo_slices,
+    offene_preisanpassungen, unangekuendigt_wirksame,
 };
 pub use vertraege::{
     BillingCandidateRow, CreateKomponenteInput, CreateRahmenvertragInput,

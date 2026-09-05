@@ -21,7 +21,7 @@ Port: `:9880`
 |---|---|
 | **Render API** | `POST /api/v1/render/{kind}` — `{model \| view, template_hash?, attachment?: {xml, specification_id}, date, ident}` → PDF + `X-Mako-Template-Hash` for the caller to pin. An `INVOICE` sends the **EN 16931 model** and outputd projects the page view from it; a Textform kind sends its own view. Stores nothing |
 | **Document API** | `POST /api/v1/documents/{kind}` — the same render, **recorded** and queued for delivery. Idempotent on `subject_ref` (a Rechnungsnummer, a dunning-case id, a slice id), so a retrying issuer cannot send a second notice. `GET /documents` is the customer's inbox; `/documents/{id}/content` reproduces the bytes as issued (§ 14 Abs. 1 UStG, § 147 AO — never a re-render) |
-| **Delivery** | One track per (document, channel) with backoff, an attempt ceiling and evidence. `PORTAL`, `EMAIL`, `POST` and `ERP`; no SMTP client and no print driver — `EMAIL`/`POST` are HTTP relays an operator points at what they already run, and the print service can also *pull* `GET /api/v1/spool`. `SENT` ≠ `DELIVERED`: arrival comes back through `POST /deliveries/{id}/status` |
+| **Delivery** | One track per (document, channel) with backoff, an attempt ceiling (`max_attempts`, default 8) and evidence. `PORTAL`, `EMAIL`, `POST` and `ERP`; no SMTP client and no print driver — `EMAIL`/`POST` are HTTP relays an operator points at what they already run, and the print service can also *pull* `GET /api/v1/spool`. `SENT` ≠ `DELIVERED`: arrival comes back through `POST /deliveries/{id}/status`, and a portal read through `POST /deliveries/{id}/read` |
 | **Authz** | Cedar ABAC (`policies/outputd.cedar`) on every route: tenant isolation everywhere, plus a market-role gate (`LF`/`MSB`/`ESA`) on publishing, rolling out and rendering |
 | **Errors** | One envelope, one stable code — and a template that does not compile returns its diagnostics as a **list**, not a blob: `{"error":{"code":"TEMPLATE_DID_NOT_COMPILE","diagnostics":["/template.typ:12:4: …"]}}` |
 | **Typst sandbox** | no filesystem, no network, no packages, no clock (`datetime.today()` is the *document's* date); renders capped at cores − 1 on the blocking pool, 20 s budget |
@@ -79,6 +79,42 @@ share `zugferd::Profile`.
 
 The Textform kinds send their view directly: their producer has no EN 16931
 model, and their view *is* the contract.
+
+## Configuration
+
+```toml
+# outputd.toml
+port   = 9880
+tenant = "9900357000004"   # the operator's MP-ID; every template row is scoped to it
+
+[database]
+url = "postgresql://outputd:secret@db:5432/outputd"
+
+# Required in production. Without it anyone can roll out the layout every
+# invoice and Mahnung renders with; `allow_insecure_no_auth = true` is the
+# dev-only escape hatch and says so at startup.
+[oidc]
+issuer   = "https://auth.example.de/realms/mako"
+audience = "outputd"
+
+# How issued documents leave. Nothing here is an SMTP client or a print driver:
+# each is an HTTP relay answering 2xx on acceptance. Configure none and the
+# PORTAL channel still works, which is the one § 41 Abs. 5 EnWG and § 126b BGB
+# actually ask for — Textform on a durable medium, not registered post.
+[delivery]
+enabled            = true
+email_relay_url    = "http://mail-relay:8000/send"
+email_relay_api_key = "env:OUTPUTD_EMAIL_RELAY_KEY"
+# Omit postal_relay_url and POST deliveries wait in GET /api/v1/spool for the
+# print service to pull, which is how most Druckdienstleister integrate.
+# postal_relay_url = "http://print:8000/jobs"
+erp_webhook_url    = "http://erp:8000/documents"
+from_address       = "rechnung@example.de"
+max_attempts       = 8                       # ~half a day with the doubling backoff
+
+[delivery.subjects]
+MAHNUNG = "Zahlungserinnerung"
+```
 
 Full operator guide: `site/content/docs/services/outputd.md`.
 

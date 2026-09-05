@@ -152,6 +152,28 @@ pub struct BillingdConfig {
     #[serde(default)]
     pub seller_contact: Option<String>,
 
+    /// The share of a billing period that must be covered by billable readings
+    /// before `billingd` will invoice it, 0–100.
+    ///
+    /// **Unset by default, and then nothing is refused.** § 40a Abs. 2 EnWG
+    /// makes a partially covered period billable: where the supplier cannot
+    /// determine the actual consumption for reasons it does not answer for,
+    /// the invoice „darf … auf einer Verbrauchsschätzung beruhen", stated on
+    /// the document „unter ausdrücklichem und optisch besonders
+    /// hervorgehobenem Hinweis" together with its ground and its factors. The
+    /// engine carries that duty as the `MENGE_UNVOLLSTAENDIG` finding on every
+    /// period below full coverage. Refusing instead would trade a lawful
+    /// labelled estimate for a certain § 40c Abs. 2 EnWG deadline breach — one
+    /// late MSCONS day in a 31-day month reports 96.77 %.
+    ///
+    /// Set it where an operator wants a floor below which it would rather
+    /// chase the readings than estimate; a period under it is then refused
+    /// with `INCOMPLETE_METER_DATA`.
+    ///
+    /// Read through [`BillingdConfig::min_meter_coverage_pct`].
+    #[serde(default)]
+    pub min_meter_coverage_pct: Option<Decimal>,
+
     /// §40 Abs. 2 Nr. 8 EnWG — annual consumption of the comparable customer
     /// group in kWh/a (e.g. Stromspiegel reference value for the operator's
     /// dominant customer segment). Pro-rated to each billing period. When
@@ -223,6 +245,13 @@ pub struct BillingdConfig {
 }
 
 impl BillingdConfig {
+    /// The coverage floor a period must reach before it is invoiced, 0–100, or
+    /// `None` where the operator set none and § 40a Abs. 2 EnWG governs alone.
+    #[must_use]
+    pub fn min_meter_coverage_pct(&self) -> Option<Decimal> {
+        self.min_meter_coverage_pct
+    }
+
     /// Refuse to start on a configuration that cannot behave as documented.
     ///
     /// Covers removed keys and settings whose values contradict each other.

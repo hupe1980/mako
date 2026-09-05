@@ -12,8 +12,9 @@ use super::*;
 ///
 /// Extracts INVOIC fields to construct a [`InvoicCommand::ReceiveInvoic`]
 /// for the WiM Strom MSB-Rechnung (PID 31009). This PID is explicitly excluded
-/// from `mako-gpke`'s GPKE_INVOIC_PIDS. (The Gas WiM-Rechnung 31003 lives in
-/// `mako-wim-gas`, duplicated per Sparte.)
+/// from `mako-gpke`'s GPKE_INVOIC_PIDS. (The WiM-Rechnung 31003 is the separate
+/// MSBA → MSBN invoice and runs in **both** Sparten — WiM Strom Teil 1 and AWH
+/// WiM Gas 2.0 — through `mako-wim`, which is not split per Sparte.)
 #[must_use]
 pub fn wim_invoic_registry() -> AdapterRegistry<WimInvoicWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -683,9 +684,12 @@ pub fn extract_zak_ze_zaehlwerke(segs: &[OwnedSegment]) -> Vec<serde_json::Value
                 let times: Vec<String> = switches
                     .iter()
                     .map(|p| {
-                        // "HHMM:code" → "HH:MM"
+                        // "HHMM:code" → "HH:MM". `len()` counts bytes, so the
+                        // ASCII check is what makes the split safe: a wire
+                        // element carrying a multi-byte character would
+                        // otherwise slice inside it and panic the ingest task.
                         let raw = p.split(':').next().unwrap_or(p);
-                        if raw.len() == 4 {
+                        if raw.len() == 4 && raw.is_ascii() {
                             format!("{}:{}", &raw[..2], &raw[2..])
                         } else {
                             raw.to_owned()

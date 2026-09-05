@@ -1,15 +1,21 @@
 +++
 title = "mabis-syncd Operator Guide"
-description = "mabis-syncd operator guide: MaBiS Summenzeitreihe synchronisation daemon. Aggregates per-MaLo Lastgang time series from edmd and submits monthly Summenzeitreihen to the BIKO via makod as MSCONS PID 13003, per BK6-24-174 Anlage 3 MaBiS. PostgreSQL-backed status and Datenstatus tracking."
+description = "Operator guide for mabis-syncd: aggregates MaBiS Summenzeitreihen per Bilanzierungsgebiet and submits them to the BIKO on the Erstaufschlag-Werktag."
 weight = 37
-[extra]
-mermaid = true
 +++
-# `mabis-syncd` Operator Guide
-
 `mabis-syncd` is the **MaBiS synchronisation daemon** — the service that
 aggregates per-MaLo Lastgang data from `edmd` and submits monthly
 **Summenzeitreihen** to the BIKO (Bilanzkoordinator).
+
+**MaBiS** (Marktregeln für die Bilanzkreisabrechnung Strom) is the BNetzA process by which
+electricity balance groups are settled after the fact. A **Summenzeitreihe** is the monthly
+quarter-hour series a grid operator files for one **Bilanzierungsgebiet** — its balancing
+territory — so the BIKO can settle every **Bilanzkreis** (balance group) drawing from it.
+**MaLo** is the [Marktlokation](@/docs/architecture/domain-model.md#malo-vs-melo-the-critical-distinction),
+the commercial delivery point the market settles against; its **Lastgang** is the metered
+quarter-hour series for it. Metering data comes from [`edmd`](@/docs/services/edmd.md),
+master data from [`marktd`](@/docs/services/marktd.md), and the message leaves through
+[`makod`](@/docs/services/makod.md).
 
 A Summenzeitreihe is an **MSCONS** message, Prüfidentifikator **13003**
 ("Übertragung Summenzeitreihe", MSCONS AHB 3.2 §8.3.1). UTILTS carries
@@ -36,7 +42,8 @@ point's draw rather than the aggregate of a Bilanzierungsgebiet. The OBIS in
 `PIA` carries DE 7143 `SRW`, which marks the value as an OBIS-Kennzahl rather
 than a Medium (`Z08`).
 
-The renderer dispatches on the Prüfidentifikator:
+The **Prüfidentifikator** (PID) is the code the BDEW rulebooks use to name one business
+message in one direction; the renderer dispatches on it:
 
 | PID | Anwendungsfall | BGM 1001 | Shape |
 |---|---|---|---|
@@ -45,6 +52,7 @@ The renderer dispatches on the Prüfidentifikator:
 | 13015 | Arbeit / Leistungsmaximum im Kalenderjahr vor Lieferbeginn | `Z27` | work entry plus one or two monthly maxima |
 | 13016 | Energiemenge und Leistungsmaximum | `Z28` | same |
 | 13019 | Energiemenge (Strom) | `7` | work entry only |
+| 13027 | Werte nach Typ 2 (MSB → ESA) | `Z83` | per-interval values; `AHB-13027-BGM-1001-Q` admits only `Z83` |
 
 `BGM` DE 1001 names what kind of document the message is and the receiver routes
 by it, so it is set per Anwendungsfall rather than left at a default — a
@@ -339,9 +347,9 @@ derives a Datenstatus; it only records what the BIKO sent.
 
 ### Fristen (§3.10, Tabelle 2)
 
-Werktage after the end of the Bilanzierungsmonat. The whole table is executable
-as `mako_mabis::Bilanzierungsmonat`; `mabis-syncd` files a **BG-SZR
-(Kategorie B)**, which is the first row:
+Werktage after the end of the Bilanzierungsmonat — and they measure **arrival at the BIKO**,
+not dispatch. Tabelle 2 is executable as `mako_mabis::Bilanzierungsmonat`; `mabis-syncd`
+files a **BG-SZR (Kategorie B)**, which is the first row:
 
 | Zeitreihe | BKA Erstaufschlag | BKA Clearing | KBKA |
 |---|---|---|---|
@@ -353,6 +361,10 @@ as `mako_mabis::Bilanzierungsmonat`; `mabis-syncd` files a **BG-SZR
 |---|---|---|
 | Vorläufige Bilanzierung | 18. WT, Datenstand 15. WT | 8. WT of month 5, Datenstand end of month 4 |
 | Abrechnungsrelevante Bilanzierung | 42. WT, Datenstand 30. WT | end of month 8, Datenstand end of month 7 |
+
+The Redispatch-Ausfallarbeit series are **not** in Tabelle 2 — Kap. 17.3.1.3 gives them
+their own, with the BK-SZR windows plus a *tägliche* AAÜZ due the day after the Liefertag
+and with no Clearingphase at all. `mabis-syncd` files none of them.
 
 **The BG/BK offset is two Werktage and it is not cosmetic.** Within the
 Erstaufschlag a new version is assigned `Abrechnungsdaten` automatically; after
@@ -486,13 +498,16 @@ be withdrawn once the BIKO acks it. Every route is therefore authorised, and the
 service refuses to start without `[oidc]` unless
 `allow_insecure_no_auth = true` is set explicitly.
 
+`services/mabis-syncd/policies/mabis-syncd.cedar` states **four actions in three grants**:
+
 | Route | Cedar action | Granted to |
 |---|---|---|
 | `GET /api/v1/runs`, `/runs/{id}`, `/korrekturbedarf` | `read-mabis-run` | any caller in the tenant |
+| `/mcp` | `use-mcp` | any caller in the tenant — same grant as the reads |
 | `POST /api/v1/datenstatus`, `/pruefmitteilung` | `record-biko-response` | any caller in the tenant |
 | `POST /api/v1/sync`, `PUT /api/v1/runs/{id}/retry` | `trigger-mabis-run` | **NB / ÜNB** |
 
-Three different powers, three actions. Filing is restricted to the roles that
+Three different powers, three grants. Filing is restricted to the roles that
 aggregate a Bilanzierungsgebiet and have standing to send a Summenzeitreihe in
 the tenant's name. Recording an inbound BIKO response only states what arrived,
 so the ingest identity that relays IFTSTA needs none of that power. Read access

@@ -39,31 +39,41 @@ fn demo_json_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// What one fixture had to say for itself.
+#[derive(Debug)]
+enum Gated {
+    /// Decoded as the BO4E type its `_typ` names and put through the gate.
+    Checked,
+    /// No BO4E discriminant at all — a service-native fixture (an `einsd`
+    /// Anlage, a `marktd` partner), which the gate has nothing to say about.
+    NotBo4e,
+    /// A `_typ` no arm below covers, so nothing decoded the document and no
+    /// field name in it was checked.
+    Uncovered(String),
+}
+
 /// Decode `data` as the BO4E type its `_typ` names and run the outbound check.
-///
-/// Returns `Ok(None)` for a payload carrying no BO4E discriminant at all —
-/// those are service-native fixtures (an `einsd` Anlage, a `marktd` partner),
-/// not BO4E documents, and the gate has nothing to say about them.
-fn check(data: &serde_json::Value) -> Result<Option<&'static str>, Bo4eRejection> {
+fn check(data: &serde_json::Value) -> Result<Gated, Bo4eRejection> {
     macro_rules! gated {
         ($($typ:literal => $ty:ty),* $(,)?) => {
             match data.get("_typ").and_then(serde_json::Value::as_str) {
                 $(Some($typ) => {
                     let v: $ty = gate::decode(data.clone())?;
                     ensure_conformant(&v)?;
-                    Ok(Some($typ))
+                    Ok(Gated::Checked)
                 })*
-                _ => Ok(None),
+                Some(other) => Ok(Gated::Uncovered(other.to_owned())),
+                None => Ok(Gated::NotBo4e),
             }
         };
     }
     gated! {
-        "MARKTLOKATION"          => rubo4e::current::Marktlokation,
-        "MESSLOKATION"           => rubo4e::current::Messlokation,
-        "NETZLOKATION"           => rubo4e::current::Netzlokation,
-        "GESCHAEFTSPARTNER"      => rubo4e::current::Geschaeftspartner,
-        "PREISBLATT_NETZNUTZUNG" => rubo4e::current::PreisblattNetznutzung,
-        "RECHNUNG"               => rubo4e::current::Rechnung,
+        "MARKTLOKATION"         => rubo4e::current::Marktlokation,
+        "MESSLOKATION"          => rubo4e::current::Messlokation,
+        "NETZLOKATION"          => rubo4e::current::Netzlokation,
+        "GESCHAEFTSPARTNER"     => rubo4e::current::Geschaeftspartner,
+        "PREISBLATTNETZNUTZUNG" => rubo4e::current::PreisblattNetznutzung,
+        "RECHNUNG"              => rubo4e::current::Rechnung,
     }
 }
 
@@ -119,15 +129,24 @@ fn every_demo_bo4e_fixture_is_conformant() {
             // `lokationsadresse._typ` under a typeless parent — is a BO4E
             // document whose spelling drifted, and skipping it is how
             // `eeg-billing/fixtures/malo.json` kept its ID silently dropped.
-            Ok(None) if looks_like_bo4e(data) => failures.push(format!(
+            Ok(Gated::NotBo4e) if looks_like_bo4e(data) => failures.push(format!(
                 "{rel}: looks like a BO4E document but names no `_typ` \
                  (keys: {}) — `decode` would drop every typed field",
                 data.as_object()
                     .map(|o| o.keys().cloned().collect::<Vec<_>>().join(", "))
                     .unwrap_or_default()
             )),
-            Ok(None) => {}
-            Ok(Some(_)) => checked += 1,
+            Ok(Gated::NotBo4e) => {}
+            // A `_typ` with no arm is the same silent pass as no `_typ` at all:
+            // the document is never decoded, so no field name in it is checked
+            // and no price it carries is looked at. A misspelt discriminant in
+            // the arm list is enough to put a fixture there, which is why an
+            // uncovered `_typ` fails rather than passing.
+            Ok(Gated::Uncovered(typ)) => failures.push(format!(
+                "{rel}: fixture names `_typ` {typ:?} which this gate does not cover \
+                 — add an arm to `check`, or the document ships unvalidated"
+            )),
+            Ok(Gated::Checked) => checked += 1,
             Err(e) => failures.push(format!(
                 "{rel}: {}",
                 serde_json::to_string(&e.to_json()).unwrap_or_else(|_| "<unprintable>".to_owned())
@@ -147,4 +166,24 @@ fn every_demo_bo4e_fixture_is_conformant() {
         failures.len(),
         failures.join("\n  ")
     );
+}
+
+/// The gate must not answer "nothing to check" for a document that names a type.
+///
+/// An arm whose spelling drifts from BO4E's — `PREISBLATT_NETZNUTZUNG` for
+/// `PREISBLATTNETZNUTZUNG` — takes its fixture out of the scan without changing
+/// a single assertion, so the drift has to be a failure in its own right.
+#[test]
+fn a_typ_no_arm_covers_is_a_failure() {
+    let uncovered = serde_json::json!({ "_typ": "PREISBLATT_NETZNUTZUNG" });
+    assert!(
+        matches!(check(&uncovered), Ok(Gated::Uncovered(t)) if t == "PREISBLATT_NETZNUTZUNG"),
+        "a `_typ` outside the arm list must be reported, not skipped"
+    );
+
+    let covered = serde_json::json!({ "_typ": "PREISBLATTNETZNUTZUNG" });
+    assert!(matches!(check(&covered), Ok(Gated::Checked)));
+
+    let native = serde_json::json!({ "anlagen_schluessel": "EEG-1" });
+    assert!(matches!(check(&native), Ok(Gated::NotBo4e)));
 }

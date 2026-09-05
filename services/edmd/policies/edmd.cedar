@@ -47,7 +47,7 @@ permit(
      context.principal_roles.contains("admin"))
 };
 
-// Stored-series mutation: bulk import, § 60 Abs. 6 MsbG corrections, § 60 Abs. 2
+// Stored-series mutation: bulk import, § 60 Abs. 6 MsbG corrections, § 60 Abs. 1
 // MsbG substitute values, virtual-meter configuration, quality rescore. Operated
 // by the metering-side roles (MSB field data, NB grid operations) or an
 // operator account.

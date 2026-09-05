@@ -15,7 +15,7 @@
 //! | `list_reading_orders`        | List Ablesesteuerung reading orders for a MaLo |
 //! | `list_overdue_reading_orders`| Reading orders past `ausfuehrt_bis` (§ 40b Abs. 1 EnWG compliance) |
 //! | `trigger_jahresablesung`     | Launch Jahresablesung campaign for a NB grid area |
-//! | `trigger_substitution`       | Generate + store § 60 Abs. 2 MsbG Ersatzwerte for a gap window |
+//! | `trigger_substitution`       | Generate + store § 60 Abs. 1 MsbG Ersatzwerte for a gap window |
 //! | `get_correction_history`     | § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit: list corrections for a MaLo |
 //! | `validate_timeseries`        | Run the metering validation rules (V01–V09/V11/V12) on meter reads |
 //! | `get_quality_assessments`    | Per-batch quality history (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD)) |
@@ -526,8 +526,8 @@ impl EdmdMcpHandler {
             .map_err(|e| McpError::internal_error(e.message, None))
         } else {
             // On-the-fly aggregation from the version-resolved series. `query`
-            // does not filter quality, so non-billable values (§60 Abs. 2:
-            // `QualityFlag::is_billable`) are dropped here.
+            // does not filter quality, so non-billable values (§ 40a Abs. 2
+            // EnWG: `QualityFlag::is_billable`) are dropped here.
             let reads = self
                 .state
                 .repo
@@ -672,7 +672,7 @@ POST the returned text to agentd POST /api/v1/rag/ingest with source=msb-{malo_i
         let mut doc = format!(
             "# MSB Device History: MaLo {malo_id}\nPeriod: last {days} days (since {since_date})\n\n",
             malo_id = p.malo_id,
-            since_date = since.date(),
+            since_date = mako_fristen::berlin_date(since),
         );
 
         // Reading orders section
@@ -1114,7 +1114,7 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
     }
 
     #[tool(
-        description = "Generate and store § 60 Abs. 2 MsbG Ersatzwerte (substitute values) for a gap window. Methods: PriorPeriodAverage (default), LinearInterpolation, ZeroFill, LastValueCarryForward. Never overwrites a billable reading; every substitute is logged to substitute_value_log (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit trail). Runs the same core as POST /api/v1/meter-reads/{malo_id}/substitute.",
+        description = "Generate and store § 60 Abs. 1 MsbG Ersatzwerte (substitute values) for a gap window. Methods: PriorPeriodAverage (default), LinearInterpolation, ZeroFill, LastValueCarryForward. Never overwrites a billable reading; every substitute is logged to substitute_value_log (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit trail). Runs the same core as POST /api/v1/meter-reads/{malo_id}/substitute.",
         annotations(
             destructive_hint = true,
             idempotent_hint = true,
@@ -1460,8 +1460,9 @@ impl EdmdMcpHandler {
                        rule the configuration or the data left inert found nothing, so a clean \
                        result is only as strong as the rules behind it. V12 needs \
                        `max_plant_power_kw`. \
-                       Use before billing to detect intervals requiring § 60 Abs. 2 MsbG \
-                       substitute values.",
+                       Use before billing to detect intervals requiring § 60 Abs. 1 MsbG \
+                       substitute values (§ 40a Abs. 2 EnWG: an undeterminable consumption \
+                       may only be billed as a labelled estimate).",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn validate_timeseries(
@@ -1553,7 +1554,7 @@ impl EdmdMcpHandler {
             "issue_count": found.len(),
             "issues": issues_json,
             "_note": if billing_block_count > 0 {
-                format!("{billing_block_count} interval(s) require § 60 Abs. 2 MsbG substitute values before billing")
+                format!("{billing_block_count} interval(s) require § 60 Abs. 1 MsbG substitute values before billing (§ 40a Abs. 2 EnWG)")
             } else {
                 "All intervals are billing-eligible".to_owned()
             }
@@ -1722,10 +1723,10 @@ impl EdmdMcpHandler {
         .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 
-    /// Get § 60 Abs. 2 MsbG annual energy forecast (Jahresprognose) for a MaLo.
+    /// Get the § 40a Abs. 2 EnWG annual energy forecast (Jahresprognose) for a MaLo.
     #[tool(
         name = "get_annual_forecast",
-        description = "Compute § 60 Abs. 2 MsbG annual energy consumption forecast (Jahresprognose) \
+        description = "Compute the § 40a Abs. 2 EnWG annual energy consumption forecast (Jahresprognose) \
                        for a MaLo from available meter reads. Returns projected_annual_kwh, \
                        observed_kwh, observed_days, seasonal_correction_applied. \
                        Minimum 7 days of data required. \
@@ -1811,7 +1812,7 @@ impl EdmdMcpHandler {
                 "confidence_lower_kwh": forecast.confidence_lower.map(|d| d.to_string()),
                 "confidence_upper_kwh": forecast.confidence_upper.map(|d| d.to_string()),
                 "prediction_interval_note": metering::AnnualForecast::prediction_interval_note(),
-                "legal_basis": "§ 60 Abs. 2 MsbG Jahresprognose",
+                "legal_basis": "§ 40a Abs. 2 EnWG (Verbrauchsschätzung) · § 13 Abs. 1 StromGVV (Abschlagshöhe)",
             }))
             .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))
             .map_err(|e| McpError::internal_error(e.to_string(), None)),
@@ -1911,12 +1912,12 @@ impl ServerHandler for EdmdMcpHandler {
              - `list_reading_orders` — Ablesesteuerung reading orders for a MaLo\n\
              - `list_overdue_reading_orders` — overdue reading orders (§ 40b Abs. 1 EnWG compliance)\n\
              - `trigger_jahresablesung` — launch annual SLP reading campaign\n\
-             - `trigger_substitution` — generate + store § 60 Abs. 2 MsbG Ersatzwerte for a gap window\n\
+             - `trigger_substitution` — generate + store § 60 Abs. 1 MsbG Ersatzwerte for a gap window\n\
              - `get_correction_history` — § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) bitemporal correction audit trail\n\
              - `validate_timeseries` — V01–V09/V11/V12 validation (gaps, overlaps, outliers, DST, quality)\n\
              - `get_quality_assessments` — per-batch quality history (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD))\n\
              - `get_summenzeitreihe` — monthly aggregated kWh for MaBiS / GPKE Teil 1 Kap. 8.4\n\
-             - `get_annual_forecast` — § 60 Abs. 2 MsbG Jahresprognose from available reads\n\
+             - `get_annual_forecast` — § 40a Abs. 2 EnWG Jahresprognose from available reads\n\
              - `get_gas_quality` — PID 13007 Brennwert + Zustandszahl for Gas kWh_Hs conversion\n\
              \n\
              ## Prompts (5)\n\
@@ -1927,7 +1928,7 @@ impl ServerHandler for EdmdMcpHandler {
              - Grade F blocks billing; grade C/F emits de.messwert.reading.quality.warning.\n\
              - Direct push: POST /api/v1/meter-reads/rlm/{malo_id} for 15-min RLM.\n\
              - Virtual meters: GET /api/v1/virtual/{id}/lastgang (§42b EnWG GGV).\n\
-             - Substitute values: POST /api/v1/meter-reads/{malo_id}/substitute (§ 60 Abs. 2 MsbG).",
+             - Substitute values: POST /api/v1/meter-reads/{malo_id}/substitute (§ 60 Abs. 1 MsbG).",
         )
     }
 }

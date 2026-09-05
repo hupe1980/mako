@@ -35,13 +35,12 @@ pub enum FoerderendeGrund {
     /// the plant receives no payment unless it wins a new tender.
     AuctionAwardExpired,
 
-    /// KWK hour-limit exhausted (§8 KWKG 2023 for plants >2 MW).
+    /// § 8 Abs. 1–3 KWKG — the plant's Vollbenutzungsstunden are used up.
     ///
-    /// Plant exhausted its full-load-hour cap (kwk_max_kwh). Status = FoerderungBeendet.
+    /// § 8 measures every KWK plant's Förderdauer in Vollbenutzungsstunden,
+    /// whatever its capacity, so this is how KWKG support ends. Status =
+    /// FoerderungBeendet.
     KwkHourLimitExhausted,
-
-    /// KWKG year-limit reached (§8 KWKG 2023 for plants ≤2 MW).
-    KwkYearLimitReached,
 
     /// Voluntary termination: operator opts out of EEG support.
     VoluntaryTermination,
@@ -127,6 +126,7 @@ impl SanktionStatus {
             typ: self.typ,
             leistung_kw,
             monate_des_verstosses: self.monate_aktiv,
+            beginn: Some(self.onset_date),
             nachtraeglich_erfuellt: self.erfuellt,
             technischer_defekt: false, // SanktionStatus tracks ongoing violations, not defects
         })

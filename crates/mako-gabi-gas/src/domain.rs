@@ -6,7 +6,7 @@
 //! - [`GasQuantity`] — Decimal-precise energy in kWh_Hs with m³ conversion
 //! - [`GasBeschaffenheit`] — Brennwert (Hs/Hu) and Zustandszahl from DVGW G 685
 //! - [`GasBeschaffenheitValidationError`] — DVGW G 260 range check results
-//! - [`GasQualityFlag`] — measurement quality state per § 60 Abs. 2 MsbG
+//! - [`GasQualityFlag`] — measurement quality state per KoV XV §§ 46–47 / DVGW G 685
 //! - [`Bilanzkreis`] — BKV balance group with period and status
 //! - [`DeliveryPoint`] — entry/exit point (Einspeise- / Ausspeisepunkt)
 //! - [`GasImbalanceSaldo`] — nomination vs. allocation deviation with Ausgleichsenergie price
@@ -262,14 +262,23 @@ impl std::error::Error for GasBeschaffenheitValidationError {}
 
 // ── GasQualityFlag ────────────────────────────────────────────────────────────
 
-/// Quality flag for a gas measurement interval per § 60 Abs. 2 MsbG.
+/// Quality flag for a gas measurement interval, per KoV XV §§ 46–47 and DVGW
+/// G 685.
 ///
 /// Gas measurements can originate from direct measurement (MSCONS), be estimated
 /// by a standard load profile (SLP), or be replaced by a substitute value when
 /// the primary measurement is unavailable.
 ///
 /// The flag determines whether an interval is billable and which regulatory
-/// handling applies (§ 60 Abs. 2 MsbG Ersatzwertbildung for Gas RLM).
+/// handling applies. The authority is the Kooperationsvereinbarung, **not**
+/// § 60 Abs. 2 MsbG: that provision is a *Soll*-rule about where processing
+/// happens — „im Smart-Meter-Gateway" — scoped to intelligente Messsysteme and
+/// gated on a BSI assessment. Its Satz 2 is a *permission*, not an exclusion:
+/// Datenübermittlung und Aufbereitung may happen „außerhalb des
+/// Smart-Meter-Gateways", transitionally in general and „für den Bereich Gas
+/// durch berechtigte Stellen nach § 49 Absatz 2 und **dauerhaft**". So gas
+/// processing never has to sit in a gateway — but that is a permission to
+/// process elsewhere, and it still obliges nobody to form an Ersatzwert.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum GasQualityFlag {
@@ -277,7 +286,24 @@ pub enum GasQualityFlag {
     Measured,
     /// Value estimated using SLP Gas standard load profile (G0, H0, G1–G6).
     Estimated,
-    /// Value substituted per § 60 Abs. 2 MsbG (prior-period average, SLP scaling, or linear).
+    /// Value substituted by the party the Kooperationsvereinbarung names, whose
+    /// rule differs by Fallgruppe — this is one flag over two regimes:
+    ///
+    /// - **RLM** (§ 46 Ziffer 1 KoV XV): the *Ausspeisenetzbetreiber* forms it
+    ///   „nach DVGW-Arbeitsblatt G 685" while plausibilising the reported
+    ///   Lastgänge, up to [`RLM_PLAUSIBILISIERUNG_WERKTAGE`] after the delivery
+    ///   month.
+    /// - **SLP** (§ 46 Ziffer 3 KoV XV): „Es erfolgt für SLP-Entnahmestellen
+    ///   keine Ersatzwertbildung oder Brennwertkorrektur gemäß G 685." The one
+    ///   exception is a missing allocation: where the Ausspeisenetzbetreiber's
+    ///   value is not with the Marktgebietsverantwortlicher by D-1 12:00, *the
+    ///   MGV* forms it — the Vortageswert divided by that day's hour count and
+    ///   multiplied by the gas day's — and returns it by D-1 15:00. Beyond
+    ///   that, an SLP substitute is only reachable through the § 47
+    ///   Allokationsclearing.
+    ///
+    /// So an SLP interval carrying this flag outside those two paths is a bug,
+    /// not a quality state.
     Substituted,
     /// Value calculated from a DVGW G 685 conversion (m³ × Hs × Z).
     Calculated,
@@ -315,11 +341,21 @@ impl GasQualityFlag {
 
 /// CloudEvent type constants for GaBi Gas domain events (`de.gabi.*`).
 ///
-/// Re-exported from the workspace-wide [`mako_events`] catalog (single
-/// source of truth). Use `de.gabi.*` as a single glob in `agentd.toml`
-/// the `gabi-gas-agent` manifest's `## TRIGGERED BY` block and the `builtin`
-/// subscription table, which together decide what wakes it on GaBi Gas
-/// events.
+/// Re-exported from the workspace-wide [`mako_events`] catalog, which is the
+/// single source of truth — including for which of these are actually emitted.
+/// Only four are: [`ALOCAT_MISSING`](mako_events::gabi::ALOCAT_MISSING),
+/// [`NOMINATION_CURTAILED`](mako_events::gabi::NOMINATION_CURTAILED),
+/// [`NOMINATION_REJECTED`](mako_events::gabi::NOMINATION_REJECTED) and
+/// [`NOMRES_MISSING`](mako_events::gabi::NOMRES_MISSING), all of them failures.
+/// The other ten are declared and unemitted, and the [`mako_events::gabi`]
+/// module doc records what each would still need — do not subscribe to one on
+/// the strength of it being declared here.
+///
+/// The one live subscription reflects that: `gabi-gas-agent` triggers on the
+/// concrete [`ALOCAT_MISSING`](mako_events::gabi::ALOCAT_MISSING), in both its
+/// manifest's `## TRIGGERED BY` block and the `builtin` subscription table, not
+/// on a `de.gabi.*` glob — a glob here would advertise ten types that never
+/// arrive.
 pub use mako_events::gabi as cloud_events;
 
 // ── GasQuantity ───────────────────────────────────────────────────────────────

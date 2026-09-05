@@ -693,14 +693,14 @@ async fn a_claimed_delivery_is_not_claimed_again() {
     .await
     .expect("issue");
 
-    let first = docs::claim_due(&pool, TENANT, 10, time::Duration::minutes(5))
+    let first = docs::claim_due(&pool, TENANT, 10, time::Duration::minutes(5), true)
         .await
         .expect("claim");
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].attempts, 1, "the claim counts the attempt");
     assert_eq!(first[0].channel, Channel::Portal);
 
-    let second = docs::claim_due(&pool, TENANT, 10, time::Duration::minutes(5))
+    let second = docs::claim_due(&pool, TENANT, 10, time::Duration::minutes(5), true)
         .await
         .expect("claim again");
     assert!(second.is_empty(), "the backoff holds the claim");
@@ -786,6 +786,87 @@ async fn a_failing_delivery_retries_and_then_gives_up() {
         .unwrap();
     assert_eq!(rows[0].status, "FAILED");
     assert!(rows[0].delivered_at.is_none());
+}
+
+/// A `POST` delivery with no postal relay is a letter waiting to be collected,
+/// and it stays in the spool however long nobody collects it.
+///
+/// The pull model — the print service calls `GET /api/v1/spool`, fetches the
+/// bytes and reports back — is how most Druckdienstleister integrate, and it is
+/// what a deployment with no `postal_relay_url` has chosen. The worker used to
+/// treat it as a failed push instead: every tick claimed the row, `deliver`
+/// bailed with "no postal_relay_url configured", and at `max_attempts` the row
+/// became `FAILED`. `postal_spool` lists `PENDING` rows, so about half a day
+/// after issuing, every letter silently left the spool — unprinted, unsent, and
+/// visible only in a status column nobody queries.
+///
+/// The test runs the real worker loop past the retry ceiling, advancing the
+/// backoff clock between passes so the budget would genuinely be spent.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_postal_delivery_without_a_relay_stays_in_the_spool() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    let (issued, _) = docs::issue(
+        &pool,
+        &a_document("case-post", b"%PDF-1.7".as_slice()),
+        &[Channel::Post],
+    )
+    .await
+    .expect("issue");
+    assert_eq!(issued.deliveries[0].status, "PENDING");
+
+    // The pull deployment: delivery is on, and no relay of any kind exists.
+    let cfg = outputd::config::DeliveryConfig::default();
+    assert!(cfg.postal_relay_url.is_none());
+    let http = reqwest::Client::new();
+
+    for _ in 0..=cfg.max_attempts + 1 {
+        outputd::delivery::worker::tick(&pool, TENANT, &cfg, &http)
+            .await
+            .expect("tick");
+        // Advance the backoff clock: without this the ceiling is days away and
+        // the loop proves nothing about what happens when it is reached.
+        sqlx::query("UPDATE document_deliveries SET next_attempt_at = now()")
+            .execute(&pool)
+            .await
+            .expect("advance the backoff clock");
+    }
+
+    let rows = docs::deliveries_of(&pool, issued.document.document_id)
+        .await
+        .expect("deliveries");
+    assert_eq!(
+        rows[0].status, "PENDING",
+        "a letter nobody has collected yet is not a failed delivery"
+    );
+    assert_eq!(
+        rows[0].attempts, 0,
+        "no push was attempted, so no attempt may be counted against the budget"
+    );
+
+    let spool = docs::postal_spool(&pool, TENANT, 100).await.expect("spool");
+    assert!(
+        spool
+            .iter()
+            .any(|d| d.delivery_id == issued.deliveries[0].delivery_id),
+        "the print service must still find the letter in GET /api/v1/spool"
+    );
+
+    // And the pull half closes the loop: the print service reports back and the
+    // row leaves the spool the way a delivered letter should.
+    docs::record_success(
+        &pool,
+        TENANT,
+        issued.deliveries[0].delivery_id,
+        true,
+        Some(serde_json::json!({ "batch": "DRUCK-2026-09-05" })),
+    )
+    .await
+    .expect("report collected");
+    let spool = docs::postal_spool(&pool, TENANT, 100).await.expect("spool");
+    assert!(spool.is_empty(), "a collected letter leaves the spool");
 }
 
 /// The document list refuses to answer without a customer scope. `portald`

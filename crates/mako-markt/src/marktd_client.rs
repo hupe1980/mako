@@ -63,6 +63,22 @@ pub enum MarktdClientError {
     /// Response body could not be deserialized.
     #[error("marktd response deserialization failed: {0}")]
     Deserialization(String),
+
+    /// The circuit breaker is open, so no request was made.
+    ///
+    /// Distinct from [`Self::Http`] because nothing was attempted, and — the
+    /// reason this variant exists — distinct from `Ok(None)`, which means
+    /// marktd answered **404: this Marktpartner has no such sheet on record**.
+    /// Collapsing the two let a caller price an invoice as though no Preisblatt
+    /// were published, and report a plausibility verdict on it, whenever marktd
+    /// had merely been unreachable often enough to trip the breaker.
+    #[error("marktd circuit open for {endpoint} ({mp_id}) — no request attempted")]
+    CircuitOpen {
+        /// The endpoint that would have been called.
+        endpoint: String,
+        /// The Marktpartner whose sheet was wanted.
+        mp_id: String,
+    },
 }
 
 impl From<reqwest::Error> for MarktdClientError {
@@ -1110,9 +1126,16 @@ impl MarktdClient {
                     mp_id,
                     %billing_date,
                     endpoint,
-                    "MarktdClient: circuit open — degrading to structural checks only"
+                    "MarktdClient: circuit open — refusing rather than reporting the sheet as absent"
                 );
-                return Ok(None);
+                // Not `Ok(None)`: that is marktd's 404, and it means the sheet
+                // is genuinely not on record. A caller that cannot tell the two
+                // apart checks an invoice without the Preisblatt and still
+                // reports a verdict on it.
+                return Err(MarktdClientError::CircuitOpen {
+                    endpoint: endpoint.to_owned(),
+                    mp_id: mp_id.to_owned(),
+                });
             }
         } // Release mutex before the async HTTP call.
 
@@ -1887,11 +1910,22 @@ mod tests {
         )
     }
 
+    /// An open circuit refuses; it does not answer "no sheet on record".
+    ///
     /// `get_preisblatt_messung` shares the TTL/circuit-breaker hardening with
     /// `get_preisblatt`: after `CB_FAILURE_THRESHOLD` consecutive failures the
-    /// circuit opens and the client degrades to `Ok(None)` instead of erroring.
+    /// circuit opens and no request is made. What it returns then matters.
+    ///
+    /// It used to return `Ok(None)` — the same value marktd's **404** produces,
+    /// which means *this Marktpartner has no such Preisblatt published*. A
+    /// caller cannot tell those apart, so `invoicd` priced an invoice as though
+    /// no Preisblatt existed and still reported a plausibility verdict on it,
+    /// for as long as the breaker stayed open. `invoicd` had its own copy of
+    /// this bug (`.await.ok().flatten()`) and fixing it there was not enough:
+    /// the breaker re-opened the hole one layer down, and every other
+    /// price-sheet consumer had it too.
     #[tokio::test]
-    async fn preisblatt_messung_circuit_opens_after_threshold() {
+    async fn an_open_circuit_is_not_a_missing_preisblatt() {
         let client = unreachable_client();
         let date = time::Date::from_calendar_date(2026, time::Month::July, 1).expect("date");
 
@@ -1900,15 +1934,18 @@ mod tests {
             assert!(r.is_err(), "closed circuit surfaces the network error");
         }
 
-        // Circuit is now open — degrade to Ok(None) without a network call.
+        // Circuit is now open: refuse without a network call, and say why.
         let r = client.get_preisblatt_messung("9900000000001", date).await;
-        assert!(matches!(r, Ok(None)), "open circuit degrades to Ok(None)");
+        assert!(
+            matches!(&r, Err(MarktdClientError::CircuitOpen { .. })),
+            "an open circuit must be distinguishable from a 404, got {r:?}"
+        );
 
-        // The breaker is shared across sheet kinds: Netznutzung degrades too.
+        // The breaker is shared across sheet kinds: Netznutzung refuses too.
         let r = client.get_preisblatt("9900000000001", date).await;
         assert!(
-            matches!(r, Ok(None)),
-            "breaker is shared with get_preisblatt"
+            matches!(&r, Err(MarktdClientError::CircuitOpen { .. })),
+            "breaker is shared with get_preisblatt, got {r:?}"
         );
     }
 

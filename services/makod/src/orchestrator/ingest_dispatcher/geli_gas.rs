@@ -368,7 +368,7 @@ impl EdifactIngestDispatcher {
                         10,
                         HolidayCalendar::BdewMaKo,
                     );
-                    self.spawn_or_resume::<GeliGasDatanabrufWorkflow>(
+                    self.spawn_or_resume::<GeliGasDatenabrufWorkflow>(
                         malo_id.as_str(),
                         mako_geli_gas::GELI_GAS_DATENABRUF_WORKFLOW_NAME,
                         cmd,
@@ -381,7 +381,7 @@ impl EdifactIngestDispatcher {
                     let cmd =
                         adapters::geli_gas_datenabruf_ablehnung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.resume_by_key::<GeliGasDatanabrufWorkflow>(
+                    self.resume_by_key::<GeliGasDatenabrufWorkflow>(
                         malo_id.as_str(),
                         mako_geli_gas::GELI_GAS_DATENABRUF_WORKFLOW_NAME,
                         cmd,

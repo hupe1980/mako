@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="mako">
+  <!-- Square brand mark: the bolt from mako-logo.svg, centred in a 32×32 box.
+       mako-logo.svg is the full wordmark (viewBox 120×32); rendered into the
+       28×28 header slot it collapsed to a 28×7 smear beside the "mako"
+       wordmark next to it, and its near-black text fill vanished against a dark
+       tab bar. Amber alone reads on both light and dark backgrounds, so this
+       mark needs no theme variant. -->
+  <polygon points="16,2 8,17 15,17 8,30 24,13 17,13 24,2" fill="#f59e0b"/>
+</svg>

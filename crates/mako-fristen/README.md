@@ -6,7 +6,7 @@ Deadlines are the regulatory asset the [mako](https://github.com/hupe1980/mako)
 platform is built around, and this crate is the one answer to *when is this due*.
 It depends on nothing but `time`, so any service can read it without pulling in
 a workflow engine — which is what keeps the calendar, the per-Prüfidentifikator
-answer tables and the alerting from each carrying a copy that disagrees with the
+(PID — the five-digit BDEW code naming a message's Anwendungsfall) answer tables and the alerting from each carrying a copy that disagrees with the
 others.
 
 ```rust
@@ -41,14 +41,14 @@ others. They differ by orders of magnitude and they fail for different reasons.
 | **APERAK** | 45 min Strom weekday; Gas: next Werktag 12:00 (Folgeprozess) or 3 Werktage (Initialprozess) | the message was accepted for processing |
 | **Antwortfrist** | per PID — 11:00 of the 1. Werktag for a GPKE Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for WiM Strom | the *business* answer is owed |
 
-**There is no 24-hour GPKE window**, under BK6-22-024 or anything else. A flat
+**There is no 24-hour GPKE window**, under BK6-24-174 or anything else. A flat
 24 h is neither of the two real clocks, and it is wrong in the direction that
 does not announce itself: it reports a lapsed Frist as still running.
 
 The same trap has a Gas half. **„10 Werktage" is the GeLi Gas supplier's
 *Vorlauffrist*** — how far ahead of Lieferbeginn the LF must send (GeLi Gas 3.0
-Kap. 3.2.3) — and not the Netzbetreiber's answer window, which is 4 / 3 / 2
-Werktage by Geschäftsvorfall. Both constants are spelled out in `antwort` so a
+Kap. 3.2.3) — and not the Netzbetreiber's answer window, which is 4 / 3 / 2 / 3
+Werktage by Geschäftsvorfall (44001 / 44004 / 44013 / 44016). Both constants are spelled out in `antwort` so a
 reader who reaches for the familiar number finds the correction:
 `GPKE_IS_NOT_TWENTY_FOUR_HOURS` and
 `TEN_WERKTAGE_IS_THE_SUPPLIERS_VORLAUFFRIST`.
@@ -74,6 +74,21 @@ Every window in `antwort`, `meldung` and `vorlauf` carries the document and
 chapter it was read from. A window with no source is absent from the table
 rather than filled with a plausible default: a fabricated Frist fails silently,
 in whichever direction it was guessed.
+
+## Related crates
+
+The crates below read their deadlines from here rather than carrying a copy of them.
+
+| Crate | Role |
+|---|---|
+| [`mako-fristen`](https://docs.rs/mako-fristen) ← **this crate** | Werktage, the BDEW MaKo holiday calendar, the per-PID Antwort-, Meldungs- and Vorlauffristen |
+| [`mako-pruefung`](https://docs.rs/mako-pruefung) | *What* the answer must be — the BDEW Entscheidungsbäume, executable |
+| [`mako-engine`](https://docs.rs/mako-engine) | Event-sourced workflow runtime — `Workflow`, `Process`, `EventStore`, deadlines |
+| [`edi-energy`](https://docs.rs/edi-energy) | The EDIFACT layer whose CONTRL / APERAK clocks are defined here |
+| [`mako-gpke`](https://docs.rs/mako-gpke) · [`mako-geli-gas`](https://docs.rs/mako-geli-gas) · [`mako-wim`](https://docs.rs/mako-wim) · [`mako-mabis`](https://docs.rs/mako-mabis) | The domain packs that arm these windows |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>
 
 ## License
 

@@ -1,9 +1,12 @@
 name: Security Audit
 
-# Weekly advisory sweep over the *unchanged* main branch. The push/PR CI lane
-# already runs cargo-deny on every change; this schedule exists to catch
-# advisories published *after* the last push — a dependency that was clean on
-# merge day and had a RUSTSEC entry filed on Wednesday.
+# Weekly sweep over the *unchanged* main branch: advisories filed since the last
+# push, and a time-boxed run of the fuzz targets that guard the untrusted-input
+# boundary. The push/PR CI lane already runs cargo-deny on every change and
+# compiles every fuzz target; this schedule is what actually *executes* them.
+#
+# Advisories: this catches entries published after the last push — a dependency
+# that was clean on merge day and had a RUSTSEC entry filed on Wednesday.
 #
 # cargo-deny (not rustsec/audit-check), for two load-bearing reasons:
 #  - audit-check builds cargo-audit from source under the repo's pinned
@@ -34,3 +37,52 @@ jobs:
         with:
           command: check advisories
           arguments: --all-features
+
+  # ── Fuzzing ─────────────────────────────────────────────────────────────────
+  #
+  # The targets under `fuzz/` cover the boundaries where bytes from outside the
+  # trust perimeter first meet mako's parsers: EDIFACT interchanges from trading
+  # partners, AS4 SOAP envelopes arriving pre-authentication, OBIS codes and
+  # metering series out of MSCONS, and retail-catalogue JSONB. The property is
+  # the same everywhere — arbitrary input returns `Err`, never a panic.
+  #
+  # This is a cron job rather than a CI gate because only a *run* can find a
+  # panic, and a run long enough to be worth anything costs minutes per target.
+  # The push/PR lane compiles the targets so they cannot rot between sweeps.
+  #
+  # `fuzz/corpus/` is gitignored, so each sweep starts from an empty corpus and
+  # keeps nothing: the value here is the unstructured-input targets, where random
+  # mutation reaches interesting states within the time box. Two minutes apiece
+  # keeps the whole job inside a quarter of an hour.
+  fuzz:
+    name: Fuzz the untrusted-input boundary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # libFuzzer needs `-Z sanitizer`, which is nightly-only. The `+nightly`
+      # in the run step overrides the repository's `rust-toolchain.toml` pin.
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "fuzz"
+      - uses: taiki-e/install-action@cargo-fuzz
+
+      - name: Run each target for two minutes
+        working-directory: fuzz
+        run: |
+          set -euo pipefail
+          for target in $(cargo +nightly fuzz list); do
+            echo "==> $target"
+            cargo +nightly fuzz run "$target" -- \
+              -max_total_time=120 -rss_limit_mb=4096
+          done
+
+      # A crash writes the reproducing input to `fuzz/artifacts/<target>/`.
+      # Without it the failure log names a file nobody can retrieve.
+      - name: Upload crash reproducers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

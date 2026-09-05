@@ -27,8 +27,28 @@ pub struct NetzbilanzConfig {
 
     /// MCP server authentication. Supports API-key, OIDC, or dev mode.
     /// See `[mcp]` section in TOML — e.g. `api_key = "env:NETZBILANZD_MCP_API_KEY"`.
+    ///
+    /// With neither a key here nor `[oidc]`, `/mcp` runs in dev mode and serves
+    /// the whole invoice register to anyone who can reach the port.
+    /// [`Self::check_auth_posture`] refuses that.
     #[serde(default)]
     pub mcp: mako_service::mcp_auth::McpAuthConfig,
+
+    /// OIDC/JWT verification for every REST route.
+    ///
+    /// Absent, every request is admitted with synthetic dev claims — invoice
+    /// dispatch, Storno, mark-paid, the § 147 AO export and the Redispatch
+    /// Kostenblatt submission included. [`Self::check_auth_posture`] refuses
+    /// that unless [`Self::allow_insecure_no_auth`] asks for it by name.
+    #[serde(default)]
+    pub oidc: Option<mako_service::oidc::OidcConfig>,
+
+    /// Start without authentication.
+    ///
+    /// A posture that has to be asked for by name rather than reached by
+    /// leaving a section out of the TOML.
+    #[serde(default)]
+    pub allow_insecure_no_auth: bool,
     /// Optional ERP webhook URL — receives CloudEvents
     /// `de.netzbilanz.invoic.drafted` and `de.netzbilanz.invoic.dispatched`.
     pub erp_webhook_url: Option<String>,
@@ -58,6 +78,72 @@ fn default_tenant() -> String {
 }
 
 impl NetzbilanzConfig {
+    /// Refuse to start in a posture that leaves money-moving routes open.
+    ///
+    /// The three mechanisms are checked together because each guards a
+    /// different door into the same daemon, and any one of them left open is
+    /// enough: OIDC guards the operator API, the `[mcp]` key or OIDC guards the
+    /// MCP surface, and the inbound HMAC guards the one route no bearer token
+    /// ever reaches.
+    ///
+    /// # Errors
+    ///
+    /// When any of them is unconfigured and `allow_insecure_no_auth` is not set.
+    pub fn check_auth_posture(&self) -> anyhow::Result<()> {
+        if self.allow_insecure_no_auth {
+            tracing::warn!(
+                "netzbilanzd: allow_insecure_no_auth is set — invoice dispatch, Storno, \
+                 mark-paid, the § 147 AO audit export and the Kostenblatt submission are \
+                 served to any caller, and the REMADV webhook accepts unsigned bodies"
+            );
+            return Ok(());
+        }
+        let mut fehlt = Vec::new();
+        if self.oidc.is_none() {
+            fehlt.push(
+                "[oidc] — without it every REST route is admitted with dev claims: \
+                 PUT /api/v1/billing/drafts/{id}/dispatch sends an INVOIC to a market \
+                 partner over AS4, POST …/storno reverses one, PUT …/mark-paid falsifies \
+                 a receivable, GET /api/v1/billing/audit exports the § 147 AO / § 14b UStG \
+                 record, and POST /api/v1/redispatch/kostenblatt/submit/{year}/{month} \
+                 files the month's Redispatch costs"
+                    .to_owned(),
+            );
+        }
+        if self.oidc.is_none() && !self.has_mcp_key() {
+            fehlt.push(
+                "[mcp] api_key (or [oidc]) — without either, /mcp runs in dev mode and \
+                 serves the tenant's whole invoice register and its Redispatch cost \
+                 sheets to any caller"
+                    .to_owned(),
+            );
+        }
+        if self.inbound_secret.is_none() {
+            fehlt.push(
+                "inbound_secret — without it POST /api/v1/webhooks/remadv accepts any \
+                 unsigned body, and a forged REMADV marks an invoice paid or disputes one \
+                 that was not"
+                    .to_owned(),
+            );
+        }
+        anyhow::ensure!(
+            fehlt.is_empty(),
+            "netzbilanzd refuses to start: {}. Configure them, or set \
+             allow_insecure_no_auth = true to accept an unauthenticated deployment.",
+            fehlt.join("; ")
+        );
+        Ok(())
+    }
+
+    /// Whether `[mcp]` carries a usable API key — primary or named.
+    ///
+    /// An empty string is not a key: `McpAuth::from_auth_config_oidc` skips it,
+    /// so treating it as configured would report a door as locked that is open.
+    fn has_mcp_key(&self) -> bool {
+        self.mcp.api_key.as_ref().is_some_and(|k| !k.is_empty())
+            || self.mcp.named_keys.iter().any(|k| !k.api_key.is_empty())
+    }
+
     /// `edmd`, addressed and credentialed, or `None` when it is not configured.
     ///
     /// The single place `edmd_url` and `edmd_api_key` are read: every caller

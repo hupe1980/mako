@@ -32,6 +32,11 @@
 //! | `POST` | `/api/v1/redispatch/ausfallarbeit/*` | BilAReM Kap. 3 compute surface |
 //! | `POST` | `/mcp` | Read-only MCP tooling |
 //!
+//! Every route above takes a verified OIDC bearer and a Cedar decision from
+//! `policies/netzbilanzd.cedar`, except `POST /api/v1/webhooks/remadv`, which is
+//! authenticated by the `inbound_secret` HMAC. The daemon refuses to start
+//! where either is unconfigured.
+//!
 //! Liveness and readiness (`/health`, `/health/ready`) are mounted by
 //! `mako_service::run`.
 
@@ -72,9 +77,37 @@ impl Daemon for Netzbilanzd {
     }
 
     async fn build(cfg: Arc<NetzbilanzConfig>, ctx: ServiceContext) -> anyhow::Result<Router> {
+        // Fail closed before anything is bound. Every route below moves money
+        // or discloses the § 147 AO record, and the REMADV webhook closes a
+        // receivable on an inbound event, so an unauthenticated deployment is
+        // a posture the operator has to ask for by name.
+        cfg.check_auth_posture()?;
+
         let pool = ctx.pool().clone();
         let shutdown = ctx.shutdown.clone();
         let http = Arc::new(ctx.http.clone());
+
+        // ── OIDC/JWT authentication ──────────────────────────────────────────
+        let oidc = mako_service::oidc::OidcConfig::build_verifier(
+            cfg.oidc.as_ref(),
+            &ctx.http,
+            &cfg.tenant,
+            shutdown.clone(),
+        )
+        .await
+        .context("OIDC setup")?;
+
+        // ── Cedar ABAC ───────────────────────────────────────────────────────
+        // Authentication says who is calling; this says what they may do. The
+        // two are separate decisions: an auditor reads the § 147 AO export with
+        // the same token shape an operator dispatches invoices with, and only
+        // the policy tells those apart.
+        let cedar = Arc::new(
+            mako_service::cedar::CedarEnforcer::from_policy_str(include_str!(
+                "../policies/netzbilanzd.cedar"
+            ))
+            .context("netzbilanzd.cedar must parse at startup")?,
+        );
 
         let makod = Arc::new(MakodClient::new(
             &cfg.makod_url,
@@ -86,10 +119,19 @@ impl Daemon for Netzbilanzd {
             (*http).clone(),
         ));
 
+        // The MCP tools read the whole invoice register, so they are gated by
+        // the same verifier and the same policy as the REST surface: a JWT is
+        // verified and checked for `use-mcp`, and a configured `[mcp]` key
+        // stays accepted for agent clients that mint no OIDC token.
         let mcp_state = Arc::new(mcp_server::NetzbilanzMcpState {
             pool: pool.clone(),
             tenant: cfg.tenant.clone(),
-            auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
+            auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
+                &cfg.mcp,
+                oidc.clone(),
+                Some(Arc::clone(&cedar)),
+                &cfg.tenant,
+            ),
         });
 
         spawn_workers(&pool, &cfg, &shutdown);
@@ -102,6 +144,8 @@ impl Daemon for Netzbilanzd {
                 post(handlers::post_remadv_webhook),
             )
             .merge(mcp_server::router(mcp_state, shutdown))
+            .layer(Extension(oidc))
+            .layer(Extension(cedar))
             .layer(Extension(Arc::clone(&cfg)))
             .layer(Extension(makod))
             .layer(Extension(marktd))

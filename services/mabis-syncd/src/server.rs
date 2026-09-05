@@ -424,8 +424,11 @@ async fn retry_run(
     tokio::spawn(async move {
         // A retry of a failed run is a fresh submission attempt, so it takes a
         // new version rather than reusing the one that failed. Territories the
-        // BIKO already acked are not re-filed - `submit_all_to_makod` reads
-        // them from `submission_series`.
+        // BIKO already acked are not re-filed: `run_aggregation` reads them
+        // from `submission_series` for the whole **Bilanzierungsmonat** — not
+        // for the new run, which has no rows of its own yet — and hands them to
+        // `submit_all_to_makod` as the skip list. A retry that finds every
+        // territory already acked files nothing and succeeds.
         match engine
             .run_aggregation(period_from, period_to, corrects_run_id, None)
             .await

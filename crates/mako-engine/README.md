@@ -45,7 +45,7 @@ PidRouter    ──► inbound routing   ──► Process
 | `OutboxStore` | Transactional outbox for AS4 message delivery |
 | `DeadlineStore` | Regulatory deadline scheduling (APERAK Fristen) |
 | `SnapshotStore` | Optional snapshot layer for O(k) state reconstruction |
-| `PidRouter` | Routes inbound messages to the correct workflow by Prüfidentifikator |
+| `PidRouter` | Routes inbound messages to the correct workflow by **Prüfidentifikator** (PID) — the five-digit BDEW code naming the Anwendungsfall, not the EDIFACT message type |
 | `ProcessRegistry` | Maps conversation IDs to `ProcessIdentity` |
 | `DeadLetterSink` | Receives unroutable or duplicate messages with structured reasons |
 
@@ -82,7 +82,8 @@ let resumed  = ctx.resume::<MyWorkflow>(identity);
 ## Implementing a workflow
 
 ```rust,ignore
-use mako_engine::workflow::{Workflow, WorkflowResult};
+use mako_engine::error::WorkflowError;
+use mako_engine::workflow::{Workflow, WorkflowOutput};
 
 pub struct MyWorkflow;
 
@@ -91,17 +92,25 @@ impl Workflow for MyWorkflow {
     type Event   = MyEvent;
     type State   = MyState;
 
-    /// Pure function — no I/O, no clock, no global state.
-    fn handle(state: &Self::State, cmd: Self::Command) -> WorkflowResult<Self::Event> {
-        // business logic here
-    }
-
     /// Pure function — rebuild state from one event at a time.
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
         // state transition here
     }
+
+    /// Pure function — no I/O, no clock, no global state.
+    fn handle(
+        state: &Self::State,
+        command: Self::Command,
+    ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // business logic here
+    }
 }
 ```
+
+A `WorkflowOutput` carries the events *and* the outbox messages they imply. The
+outbox half is only persisted when the command is dispatched through
+`Process::execute_and_enqueue`; plain `Process::execute` ignores it. An empty
+output is how a workflow says "already processed" — a no-op, not an error.
 
 > `handle()` and `apply()` **must be pure**. All parsing, validation, and
 > I/O happens at the transport boundary before a command is constructed.
@@ -120,23 +129,28 @@ impl Workflow for MyWorkflow {
 
 ## Regulatory deadlines
 
-APERAK response deadlines are encoded via `DeadlineStore`. Each domain crate
-uses the correct helper from `fristen`:
-
-Every business answer window comes from **one** table,
+Deadlines are scheduled through `DeadlineStore`; the *numbers* never live beside
+a call site. Every business answer window comes from one table,
 `mako_fristen::antwort`, keyed on the inbound Prüfidentifikator:
 
-| Process family | Deadline shape |
+| Family | Deadline shape |
 |---|---|
-| GPKE | a clock time on the *n*-th Werktag after the ÜT (11:00 / 06:00 / 05:00 / 09:00 on the 1., 00:00 on the 61. for a Neuanlage) |
-| GPKE Sperrung / Teil 4 | „spätester ÜT ist der *n*. WT nach dem ÜT" — 1 WT, 2 WT, 10 WT |
+| GPKE Strom | a clock time on the *n*-th Werktag after the ÜT (11:00 / 06:00 / 05:00 / 09:00 on the 1., 00:00 on the 61. for a Neuanlage) |
+| GPKE Sperrung / Teil 4 | „spätester ÜT ist der *n*. WT nach dem ÜT" — 1 WT, 2 WT, 10 WT (BK6-22-024 Anlage 1d) |
 | WiM, beide Sparten | 3 / 5 / 7 / 1 Werktage, per PID |
 | GeLi Gas | „Ablauf des *n*. Werktags nach Eingang" — 4 / 3 / 2 WT |
-| INVOIC | zum Zahlungsziel der Rechnung (`SG8 DTM+265`) |
+| NZR-EMob / Modell 2 | day-granular Werktage between two Netzbetreiber (55238–55243) |
 
-The **APERAK** deadline is a separate clock: 45 minutes on a Werktag
-(`fristen::aperak_strom_due_at`). A PID with no published window returns `None` —
-unknown, never unbounded.
+`antwortfrist` returns `None` for a PID the Festlegungen do not quantify. That is
+**unknown**, never unbounded and never "no deadline".
+
+Two clocks sit outside that table and are deliberately separate:
+
+- the **APERAK** technical acknowledgement — 45 minutes on a Werktag
+  (`mako_fristen::aperak_strom_due_at`), with its own Gas variants;
+- an **INVOIC** answer, which counts back from the Zahlungsziel the invoice
+  itself carries (`SG8 DTM+265`) rather than forward from receipt — that one is
+  `mako_fristen::vorlauf`.
 
 **Saturday is not a Werktag.** GPKE (BK6-24-174) Teil 1: *"alle Tage ..., die kein Samstag, Sonntag oder gesetzlicher Feiertag sind"*. A holiday observed in any single Bundesland counts nationwide, and 24.12. and 31.12. count as holidays.
 Deadline arithmetic uses **German local time (CET/CEST)** via the `time` crate.
@@ -163,10 +177,18 @@ after the `FV2026-10-01` cutover. Do not use `Pinned` as default.
 
 | Crate | Role |
 |---|---|
-| `mako-engine` ← **this crate** | Runtime |
-| `mako-gpke` | GPKE domain workflows |
-| `mako-wim` | WiM Strom domain workflows |
-| `mako-geli-gas` | GeLi Gas 3.0 domain workflows |
-| `mako-mabis` | MABIS billing workflows |
-| `edi-energy` | EDIFACT parse / validate (transport boundary) |
-| `makod` | Production daemon — assembles all modules |
+| [`mako-engine`](https://docs.rs/mako-engine) ← **this crate** | The runtime — `Workflow`, `Process`, `EventStore`, outbox, deadline scheduler |
+| [`mako-gpke`](https://docs.rs/mako-gpke) | GPKE Strom — Lieferantenwechsel, Zuordnung, Netznutzungsabrechnung |
+| [`mako-wim`](https://docs.rs/mako-wim) | WiM Strom und Gas — Wechselprozesse im Messwesen |
+| [`mako-geli-gas`](https://docs.rs/mako-geli-gas) | GeLi Gas — Lieferantenwechsel Gas |
+| [`mako-mabis`](https://docs.rs/mako-mabis) | MaBiS — Bilanzkreisabrechnung Strom |
+| [`mako-gabi-gas`](https://docs.rs/mako-gabi-gas) | GaBi Gas — Gasbilanzierung |
+| [`mako-redispatch`](https://docs.rs/mako-redispatch) | Redispatch 2.0 |
+| [`mako-emob`](https://docs.rs/mako-emob) | NZR-EMob / Modell 2 |
+| [`edi-energy`](https://docs.rs/edi-energy) | EDI@Energy EDIFACT — parse · validate · build (UTILMD, MSCONS, ORDERS, INVOIC, APERAK, …) |
+| [`mako-fristen`](https://docs.rs/mako-fristen) | *When* an answer is due — Werktage, the MaKo holiday calendar, the per-PID Antwortfristen |
+| [`mako-events`](https://docs.rs/mako-events) | CloudEvents `type` catalog — the shared event vocabulary |
+| [`makod`](https://hupe1980.github.io/mako/docs/services/makod/) | Production daemon — assembles every module |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>

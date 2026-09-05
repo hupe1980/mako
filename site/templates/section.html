@@ -5,11 +5,24 @@
   {% set current = section.permalink %}{% include "partials/sidebar.html" %}
 
   <article class="doc">
+    {%- set docs = get_section(path="docs/_index.md", metadata_only=true) -%}
+    {% if section.permalink != docs.permalink %}
+    <nav class="doc-breadcrumb" aria-label="Breadcrumb">
+      <a href="{{ docs.permalink | safe }}">Docs</a>
+    </nav>
+    {% endif %}
     <h1>{{ section.title }}</h1>
     {% if section.description %}<p class="doc-lead">{{ section.description }}</p>{% endif %}
 
+    {#- Same leading-h1 removal as `page.html`; see the note there. -#}
+    {%- set body = section.content -%}
+    {%- set parts = body | split(pat="</h1>") -%}
+    {%- if parts | length > 1 and body | trim | truncate(length=3, end="") == "<h1" -%}
+      {%- set body = body | replace(from=parts[0] ~ "</h1>", to="") -%}
+    {%- endif -%}
+
     <div class="doc-body">
-      {{ section.content | safe }}
+      {{ body | safe }}
     </div>
 
     {# Landing cards: subsections (on the docs root) or pages (within a subsection) #}
@@ -18,7 +31,7 @@
       {% for sub_path in section.subsections %}
         {% set sub = get_section(path=sub_path) %}
         <a class="card" href="{{ sub.permalink | safe }}">
-          <h3>{{ sub.title }}</h3>
+          <h2>{{ sub.title }}</h2>
           {% if sub.description %}<p>{{ sub.description }}</p>{% endif %}
           <span class="card-count">{{ sub.pages | length }} page{{ sub.pages | length | pluralize }}</span>
         </a>
@@ -30,7 +43,7 @@
     <div class="card-grid">
       {% for p in section.pages %}
         <a class="card" href="{{ p.permalink | safe }}">
-          <h3>{{ p.title }}</h3>
+          <h2>{{ p.title }}</h2>
           {% if p.description %}<p>{{ p.description | truncate(length=140) }}</p>{% endif %}
         </a>
       {% endfor %}

@@ -398,14 +398,26 @@ async fn katalog_lieferbar(
 /// under.
 const fn answer_command(pid: u32) -> Option<(&'static str, &'static str)> {
     match pid {
-        17_007 => Some(("wim.wertebestellung.bestellung-beantworten", "MSB")),
-        17_008 => Some(("wim.wertebestellung.abbestellung-beantworten", "MSB")),
-        39_002 => Some(("wim.wertebestellung.stornierung-beantworten", "MSB")),
+        17_007 => Some((
+            mako_markt::commands::WIM_WERTEBESTELLUNG_BESTELLUNG_BEANTWORTEN,
+            "MSB",
+        )),
+        17_008 => Some((
+            mako_markt::commands::WIM_WERTEBESTELLUNG_ABBESTELLUNG_BEANTWORTEN,
+            "MSB",
+        )),
+        39_002 => Some((
+            mako_markt::commands::WIM_WERTEBESTELLUNG_STORNIERUNG_BEANTWORTEN,
+            "MSB",
+        )),
         // The Werteanfrage has two answers with two different commands. Only
         // the **refusal** is automatable: `E_0252`'s positive exit is „Angebot
         // erstellen", which needs prices the Festlegung does not specify, so a
         // surviving Anfrage always reaches an operator instead.
-        35_003 => Some(("wim.wertebestellung.anfrage-ablehnen", "MSB")),
+        35_003 => Some((
+            mako_markt::commands::WIM_WERTEBESTELLUNG_ANFRAGE_ABLEHNEN,
+            "MSB",
+        )),
         _ => None,
     }
 }
@@ -1025,8 +1037,8 @@ async fn enqueue(
     // same command name.
     let entry = if payload.pid == mako_fristen::antwort::ESA_WERTEANFRAGE_PID {
         entry.with_commands(
-            "wim.wertebestellung.anbieten",
-            "wim.wertebestellung.anfrage-ablehnen",
+            mako_markt::commands::WIM_WERTEBESTELLUNG_ANBIETEN,
+            mako_markt::commands::WIM_WERTEBESTELLUNG_ANFRAGE_ABLEHNEN,
             Some("MSB"),
         )
     } else if let Some((command, marktrolle)) = answer_command(payload.pid) {

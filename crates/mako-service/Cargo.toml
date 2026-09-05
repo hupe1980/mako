@@ -6,6 +6,7 @@ authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace     = true
 rust-version.workspace = true
 publish          = false
 
@@ -28,7 +29,13 @@ cedar = ["dep:cedar-policy"]
 ## Enables OIDC/JWT verification via `OidcVerifier`.
 ## Wire in via `OidcVerifier::new(...)` and `Extension<OidcVerifier>`.
 ## Provides the `Claims` Axum extractor for use in handlers.
-oidc = ["dep:jsonwebtoken"]
+##
+## Implies `cedar`: `oidc.rs` builds a `cedar::CedarPrincipal` from the verified
+## claims, so `oidc` without `cedar` does not compile. It was previously left to
+## each caller to enable both, which meant a crate that wanted only
+## authentication had to name an authorization feature it does not use — and one
+## that omitted it got a build error rather than a clear signal.
+oidc = ["dep:jsonwebtoken", "cedar"]
 
 ## Enables real Prometheus metrics at `GET /metrics`.
 ## Registers `mako_http_requests_total` and `mako_http_request_duration_seconds`

@@ -11,7 +11,8 @@
 //! | **BSI TR-03109-1** | SMGW architecture, incl. the CLS channel a control command travels over. |
 //! | **BSI TR-03109-4** | SM-PKI: certificate runtimes are binding here; the renewal lead time and the overlap ("Zertifikatswechsel") window are fixed by the Root-CP. |
 //! | **BK6-22-300** (27.11.2023, in force 01.01.2024) | §14a EnWG netzorientierte Steuerung — the Konfigurationsprodukt a CLS channel needs before a DSO may control the load. |
-//! | **§ 60 Abs. 2 MsbG** | Plausibilisierung und Ersatzwertbildung — what a silent gateway leaves owing. |
+//! | **§ 60 Abs. 1 MsbG** | The delivery duty a silent gateway breaks: the Messstellenbetreiber owes the *aufbereiteten* Messwerte to the berechtigten Stellen at the times **they** set, so silence past a delivery time is the breach, and Plausibilisierung/Ersatzwertbildung is the Aufbereitung that discharges it. |
+//! | **§ 60 Abs. 2 MsbG** | A *Soll*-rule about **where** that Aufbereitung runs: for an intelligentes Messsystem the Plausibilisierung und Ersatzwertbildung *sollen* happen im Smart-Meter-Gateway, once the BSI rates it technically possible and the BNetzA has made the § 75 Satz 1 Nr. 4 Festlegung. It obliges nobody to form an Ersatzwert; until that Festlegung its Satz 2 lets the Messstellenbetreiber do the Aufbereitung outside the gateway (for gas, permanently, through berechtigte Stellen nach § 49 Abs. 2) — which is what `edmd` does. |
 //!
 //! ### Citations this module must not carry
 //!
@@ -55,7 +56,7 @@
 //! | `CERT_EXPIRING` | WARNING | TLS cert expiry ≤ 30 days | Renewal required |
 //! | `TLS_CERT_MISSING` | CRITICAL | No TLS cert in session | SMGW Admin Protocol broken |
 //! | `CLS_NOT_COMPLIANT` | WARNING | Active channel, no Konfigurationsprodukt | DSO control impossible |
-//! | `COMMUNICATION_FAULT` | CRITICAL | No contact > 2h | § 60 Abs. 2 MsbG substitution + Sonderablesung |
+//! | `COMMUNICATION_FAULT` | CRITICAL | No contact > 2h | § 60 Abs. 1 MsbG delivery times missed — Ersatzwerte + Sonderablesung |
 //! | `GATEWAY_REVOKED` | CRITICAL | `status = REVOKED` | Security incident — replace immediately |
 //!
 //! ## Certificate-expiry advance warning
@@ -299,11 +300,12 @@ pub fn check_session_compliance(
             description: match hours {
                 Some(h) => format!(
                     "SMGW {} no contact for {h}h (threshold: {comm_fault_threshold_hours}h) \
-                     — § 60 Abs. 2 MsbG substitute values required",
+                     — § 60 Abs. 1 MsbG delivery duty unmet, substitute values required",
                     session.device_id
                 ),
                 None => format!(
-                    "SMGW {} has never been contacted — § 60 Abs. 2 MsbG substitute values required",
+                    "SMGW {} has never been contacted — § 60 Abs. 1 MsbG delivery duty unmet, \
+                     substitute values required",
                     session.device_id
                 ),
             },

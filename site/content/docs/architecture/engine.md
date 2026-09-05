@@ -2,11 +2,7 @@
 title = "Process Engine"
 description = "mako-engine architecture: event-sourced Workflow FSMs, atomic dual-write, DeadlineStore, OutboxWorker, PidRouter, ProcessRegistry, SlateDB backend, format-version coexistence, and ForwardCompatible policy."
 weight = 14
-[extra]
-mermaid = true
 +++
-# Process Engine Guide (`mako-engine`)
-
 `mako-engine` is an event-sourced process runtime for long-running German energy
 market workflows. It handles the stateful side of MaKo: tracking in-flight
 Lieferbeginn, Gerätewechsel, and billing processes as append-only event streams,
@@ -296,13 +292,29 @@ Within a single process the store uses a per-key `DashMap<_, Arc<Mutex<()>>>` to
 
 ## Regulatory Fristen (`fristen` module)
 
-| Process family | Unit | Function |
+**`mako_fristen::antwort::antwort_deadline(pid, received)` is the one resolver.**
+It answers for every family below, keyed on the inbound PID, and returns `None`
+for a PID the Festlegungen do not quantify — *unknown*, never *unbounded*. The
+per-family entries differ only in the `FristShape` they carry.
+
+| Process family (`Family`) | Shape | Windows |
 |---|---|---|
-| GPKE | per-PID clock time on a Werktag (11:00 / 06:00 / 05:00 / 09:00 des 1. WT nach dem ÜT) | `mako_fristen::antwort::antwort_deadline(pid, received)` |
-| WiM, beide Sparten | 3 / 5 / 7 / 1 Werktage, per PID | `antwort_frist_werktage(pid)` → `fristen::deadline_at_werktage` |
-| GeLi Gas | Ablauf des 4. / 3. / 2. Werktags nach Eingang | `mako_fristen::antwort::antwort_deadline(pid, received)` |
-| INVOIC | zum Zahlungsziel der Rechnung; der NB bei 31009 zum 4. WT davor | `mako_fristen::vorlauf::rechnung_antwort_spaetester_uet` |
-| MaBiS | no response Frist — the clearing window of Kap. 3.10 Tabelle 2 bounds it | `mako_mabis::Bilanzierungsmonat::clearing` |
+| `Gpke` | wall-clock time on the *n*-th Werktag after the ÜT, or **am ÜT** | 11:00 (55001, 55077) · 06:00 (55004) · 05:00 (55007) · 09:00 (55010) · 15:00 am ÜT (55013, 55607) |
+| `Wim` | Werktage per PID | 3 (55039) / 5 (55042) / 7 (55051) / 1 (55168) |
+| `WimGas` | the same four on the Gas twins | 3 (44039) / 5 (44042) / 7 (44051) / 1 (44168) |
+| `GeliGas` | Ablauf des *n*-ten Werktags nach Eingang | 4 (44001) / 3 (44004, 44007, 44010, 44016) / 2 (44013) |
+| `Emob` | Ablauf des *n*-ten Werktags | 7 (55238) / 3 (55240, 55242) |
+
+Two obligations sit outside that catalogue because they are not keyed on an
+inbound PID:
+
+| Obligation | Resolver |
+|---|---|
+| INVOIC — zum Zahlungsziel der Rechnung; der NB bei 31009 zum 4. WT davor | `mako_fristen::vorlauf::rechnung_antwort_spaetester_uet` |
+| MaBiS — **no response Frist is published**; the Kap. 3.10 Tabelle 2 clearing window bounds it instead | `mako_mabis::Bilanzierungsmonat::clearing(zeitreihe, lauf)` |
+
+`mako_wim::antwort_frist_werktage(pid)` returns the bare Werktage count for a WiM
+PID, for callers that need the number rather than a resolved instant.
 
 **Saturday is not a Werktag.** GPKE (BK6-24-174) Teil 1 Kap. 7: *"alle Tage ..., die kein Samstag, Sonntag oder gesetzlicher Feiertag sind"*. A holiday observed in any single Bundesland counts nationwide, and 24.12. and 31.12. count as holidays. Allgemeine Festlegungen 6.1d states the same definition under *WT*.
 
@@ -348,22 +360,26 @@ timeline
 
 ### `WorkflowVersionPolicy`
 
-Every workflow must declare how it handles messages from a different format
-version than the one it was started with:
+A workflow declares how it handles a message encoded under a different format
+version than the one it was started with. `ForwardCompatible` carries
+`#[default]`, so a workflow that overrides nothing already has it — the override
+below is what a *deviation* looks like:
 
 ```rust
 impl Workflow for MyWorkflow {
     fn version_policy() -> WorkflowVersionPolicy {
-        WorkflowVersionPolicy::ForwardCompatible   // ← required default for all MaKo
+        WorkflowVersionPolicy::Pinned   // ← a deliberate narrowing, not the default
     }
 }
 ```
 
-| Policy | Meaning | When to use |
+`WorkflowVersionPolicy::accepts(fv, creation_fv)` decides:
+
+| Policy | Acceptance | When to use |
 |---|---|---|
-| `ForwardCompatible` | Accept newer-version messages during the old version's lifetime | **Default for all MaKo workflows** — e.g. a FV2025 process can receive a FV2026-encoded APERAK |
-| `Pinned` | Accept only the format version recorded at process creation | Special-purpose only; never the default |
-| `Explicit(list)` | Accept exactly the format versions in `list` | When the acceptable set is fixed and known at compile time (e.g. a billing process handling exactly FV2025-10-01 and FV2026-10-01) |
+| `ForwardCompatible` | **always** — every FV is acceptable | **The default for all MaKo workflows.** A FV2025 process can receive a FV2026-encoded APERAK |
+| `Pinned` | `fv == creation_fv` | Only a workflow guaranteed to complete inside one release cycle (< 6 months), so no counterparty message can cross an April-1 or October-1 boundary |
+| `Explicit(list)` | `fv` is in `list` | When the acceptable set is fixed and known at compile time (e.g. a billing process handling exactly FV2025-10-01 and FV2026-10-01) |
 
 > **Do not default to `Pinned`.** A `Pinned` policy on any GPKE/WiM/GeLi Gas
 > workflow will cause the process to reject APERAKs sent by counterparties that
@@ -484,13 +500,13 @@ Partners are managed at runtime via the REST admin API — see
 
 | Crate | Process family | Key inbound PIDs | APERAK Frist |
 |---|---|---|---|
-| `mako-gpke` | GPKE — Lieferbeginn/-ende Strom, NB-Abmeldeanfrage (Beendigung der Zuordnung), Ersatz-/Grundversorgung, Neuanlage, ORDERS Sperrung (NB role), INVOIC billing, Konfiguration | 55001–55002, 55010 (55011/55012 out), 55013–55015, 55016–55018, 55555, 55600/55601, 17115–17117 (NB inbound), 31001–31008, 17134/17135, 19001/19002 | per PID, from `mako_fristen::antwort` |
+| `mako-gpke` | GPKE — Lieferbeginn/-ende Strom, NB-Abmeldeanfrage (Beendigung der Zuordnung), Ersatz-/Grundversorgung, Neuanlage, ORDERS Sperrung (NB role), INVOIC billing, Konfiguration | 55001–55002, 55010 (55011/55012 out), 55013–55015, 55016–55018, 55555, 55600/55601, 55607–55609, 17115–17117 (NB inbound), **INVOIC 31001/31002/31005/31006** (`GPKE_INVOIC_PIDS`) + REMADV 33001–33004, 17134/17135, 19001/19002 | per PID, from `mako_fristen::antwort` |
 | `mako-wim` | WiM **Strom und Gas** — Messstellenwechsel, Geräteübernahme, Weiterverpflichtung, INSRPT, WiM-Rechnung | 55039/55042/55051/55168 · 44039/44042/44051/44168 · 44183, 17001/17002/17009, 19001–19004/19015/19016, 23001–23012, 31009/31003/31004 | **3 / 5 / 7 / 1 Werktage**, per PID, in beiden Sparten |
 | `mako-geli-gas` | GeLi Gas — Lieferbeginn/-ende Gas, Stornierung (44022–44024, beide Use-Cases), Gas Sperrung (LF role), Gas Datenabruf, INVOIC 31011 | 44001–44024, 17103, 17104, 19103, 19104, 19116, 19117, 19128, 19129, 31011 | per PID, from `mako_fristen::antwort` |
-| `mako-mabis` | MABIS — Bilanzkreisabrechnung | 13003 (MSCONS Summenzeitreihe, IFTSTA 21000–21005) | n/a (batch, not saga) |
+| `mako-mabis` | MaBiS — Bilanzkreisabrechnung Strom, the MaBiS-ZP lifecycle, Clearingliste und Listenabgleich | MSCONS 13001/13003/13010–13012, IFTSTA Datenstatus 21000–21007, ORDERS 17211, UTILMD 55065–55067/55069/55070/55073, and 55235–55237 (Zuordnung des ZP der NGZ zur NZR — MaBiS, not NZR-EMob) | none published — the Kap. 3.10 clearing window bounds it |
 | `mako-gabi-gas` | GaBi Gas 2.1 — allocation, nomination and Mehr-/Mindermengenmeldung (ALOCAT/NOMINT/NOMRES/SSQNOT) + Kapazitäts-/Mehr-Mindermengen-INVOIC | INVOIC 31007/31008/31010, ORDERS 17110, ORDRSP 19110, MSCONS 13013, DVGW 70001–70039, 70095–70096 | KoV deadlines (GasDay D-1 14:00 etc.) |
 | `mako-emob` | NZR-EMob / Modell 2 — the three Modellwechsel legs (Anmeldung, Zuordnungsende, Abmeldung) | 55238/55239, 55240/55241, 55242/55243 | 7 / 3 Werktage, per PID; an unanswered leg **escalates** rather than confirming |
-| `mako-redispatch` | Redispatch 2.0 — activation, Stammdaten and the six acknowledge-and-forward document families | XML document types; IFTSTA 21037/21038, MSCONS 13021/13022, ORDERS 17209 | 3 min ACK (FB 1.0g); the rest are operator-set |
+| `mako-redispatch` | Redispatch 2.0 — activation, Stammdaten and the six acknowledge-and-forward document families | XML document types; IFTSTA 21035–21038, MSCONS 13020–13023/13026 (Ausfallarbeit + meteorologische Daten), ORDERS 17209, ORDRSP 19204, 19301/19302 | 3 min ACK (FB 1.0g); the rest are operator-set |
 
 ### The module contract
 

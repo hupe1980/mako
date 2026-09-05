@@ -334,12 +334,16 @@ pub struct ControllableLoadProduct {
     #[serde(default)]
     pub sect14a_steuerungsentschaedigung_ct_per_kwh: Option<Decimal>,
     /// §14a **Modul 1** — pauschale Reduzierung des Netzentgelts, published by
-    /// the Netzbetreiber as an annual amount per kW (EUR/kW/year).
+    /// the Netzbetreiber as a flat annual amount (EUR/year).
     ///
-    /// Needs no additional metering, which is why it is the default where the
-    /// connection holder makes no choice. It **may be combined with Modul 3**.
+    /// BK6-22-300 fixes it nationwide as `80 EUR + 3 750 kWh × Arbeitspreis im
+    /// Standardtarif × 0,2`, which lands between 110 and 190 EUR/year depending
+    /// on the Netzbetreiber. There is no per-kW component: the reduction is the
+    /// same whatever the steuerbare Leistung, which is precisely why it needs
+    /// no additional metering and is the default where the connection holder
+    /// makes no choice. It **may be combined with Modul 3**.
     #[serde(default)]
-    pub sect14a_modul1_pauschale_eur_per_kw_year: Option<Decimal>,
+    pub sect14a_modul1_pauschale_eur_per_year: Option<Decimal>,
     /// §14a Steuerungsentschädigung as an annual capacity rate (EUR/kW/year),
     /// pro-rated by the hours actually dimmed. Not a BK6-22-300 module.
     #[serde(default)]

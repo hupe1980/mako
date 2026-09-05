@@ -67,7 +67,10 @@ CREATE TABLE invoic_receipts (
     -- invoic_checker findings (Vec<Finding> as JSONB).
     findings                JSONB       NOT NULL DEFAULT '[]',
 
-    -- Zahlungsziel from INVOIC DTM+92 (rubo4e Rechnung.faelligkeitsdatum).
+    -- Zahlungsziel from INVOIC SG8 DTM+265 (rubo4e Rechnung.faelligkeitsdatum).
+    -- The INVOIC MIG publishes no DTM qualifier 92 at all (that is UTILMD's
+    -- Vertragsbeginn); the Fälligkeitsdatum is Nr. 00033 in the SG8 PYT group,
+    -- and its DE 2379 admits only 303 (CCYYMMDDHHMMZZZ).
     pay_by                  TIMESTAMPTZ,
 
     -- Dispute resolution.

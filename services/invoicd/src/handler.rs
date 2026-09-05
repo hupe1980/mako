@@ -40,7 +40,7 @@ use mako_markt::makod_client::{ForwardCommand, MakodClient};
 use rubo4e::current::Rechnung;
 use secrecy::{ExposeSecret, SecretString};
 use time::OffsetDateTime;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::pg;
@@ -76,10 +76,17 @@ pub struct HandlerState {
 
 /// `POST /webhook` — receive a `MarktEvent` CloudEvent from `marktd`.
 ///
-/// Always answers `204` once the signature verifies: the event is `marktd`'s to
-/// retry only when delivery failed, and a business-level problem is recorded in
-/// `invoic_dlq` rather than bounced back as an HTTP error that would be retried
-/// forever with the same result.
+/// Answers `204` once the signature verifies: a business-level problem is
+/// recorded in `invoic_dlq` rather than bounced back as an HTTP error that would
+/// be retried forever with the same result.
+///
+/// The one exception is `503`, for the case where a redelivery *would* have a
+/// different result: reference data this service must have to check the invoice
+/// — a Preisblatt, the Mehr-/Mindermengenpreise, the accepted ESA-Angebot —
+/// could not be read. Then nothing is recorded and nothing is answered, and the
+/// sender's outbox retries with backoff (it dead-letters a 4xx and retries a
+/// 5xx). The alternative is a plausibility verdict reached without the price
+/// basis, which reads exactly like one reached with it.
 pub async fn handle_webhook(
     State(state): State<HandlerState>,
     headers: HeaderMap,
@@ -129,8 +136,9 @@ pub async fn handle_webhook(
         return StatusCode::NO_CONTENT.into_response();
     };
 
-    process_invoic(&state, route, process_id, data).await;
-    StatusCode::NO_CONTENT.into_response()
+    process_invoic(&state, route, process_id, data)
+        .await
+        .into_response()
 }
 
 /// Everything one inbound INVOIC needs, once the envelope has been read.
@@ -169,19 +177,24 @@ const RECHNUNGSTYP_ESA: &str = "KON";
 const RECHNUNGSTYP_TECHNIK: &str = "TEC";
 
 /// Check one INVOIC and answer it.
+///
+/// Returns the status the webhook answers with: `204` for anything this service
+/// has finished with — answered, deliberately not answered, or dead-lettered —
+/// and `503` when it could not check the invoice at all and wants the event
+/// again.
 async fn process_invoic(
     state: &HandlerState,
     route: &'static PidRoute,
     process_id: Uuid,
     data: &serde_json::Value,
-) {
+) -> StatusCode {
     let pid = route.pid;
     let incoming = match extract(state, route, process_id, data).await {
         Ok(i) => i,
         Err(reason) => {
             warn!(pid, %process_id, %reason, "invoicd: INVOIC dead-lettered");
             dead_letter(state, process_id, pid, data, &reason).await;
-            return;
+            return StatusCode::NO_CONTENT;
         }
     };
 
@@ -190,7 +203,24 @@ async fn process_invoic(
         report,
         markt_antwort,
         storno_antwort,
-    } = run_check(state, route, &incoming, process_id).await;
+    } = match run_check(state, route, &incoming, process_id).await {
+        Ok(c) => c,
+        Err(missing) => {
+            // Deliberately **not** dead-lettered. The DLQ is the operator's
+            // list of invoices that need a human, and nothing resolves a row in
+            // it — an outage that redelivery would fix would leave an open
+            // entry for every invoice it touched. The retry belongs to the
+            // sender's outbox, and its own dead-letter is the escalation.
+            warn!(
+                pid, %process_id, upstream = missing.upstream,
+                reference = %missing.what, detail = %missing.detail,
+                "invoicd: INVOIC not checked — the reference data it is checked \
+                 against was unavailable; asking for redelivery rather than \
+                 answering the market on a verdict reached without it"
+            );
+            return StatusCode::SERVICE_UNAVAILABLE;
+        }
+    };
     let checked_at = OffsetDateTime::now_utc();
 
     let verdict = Verdict::of(
@@ -246,7 +276,7 @@ async fn process_invoic(
             &format!("receipt persist failed: {err}"),
         )
         .await;
-        return;
+        return StatusCode::NO_CONTENT;
     }
 
     // ── Answer the market partner — or deliberately do not ──────────────────
@@ -280,7 +310,7 @@ async fn process_invoic(
             },
         )
         .await;
-        return;
+        return StatusCode::NO_CONTENT;
     }
 
     let (command, payload) = if verdict.dispute {
@@ -369,6 +399,7 @@ async fn process_invoic(
         },
     )
     .await;
+    StatusCode::NO_CONTENT
 }
 
 /// Read the event payload into [`Incoming`], or say why it cannot be processed.
@@ -484,12 +515,50 @@ struct Checked {
 /// relationship, and this is what we agreed to pay", and it is the same fact
 /// that makes the answer window the 4. WT before the Zahlungsziel rather than
 /// the LF's *zum* Zahlungsziel.
+/// A lookup this service must have to reach a plausibility verdict did not
+/// answer.
+///
+/// # Why an error and not a default
+///
+/// Every one of these lookups returns `Result<Option<T>, _>`, and the two
+/// negative answers mean opposite things: `Ok(None)` is „no Preisblatt is on
+/// record for this Marktpartner" — a finding about the invoice — while `Err` is
+/// „I could not ask". Collapsing them with `.ok().flatten()` produced a verdict
+/// that *looks* authoritative but was reached without the price basis: an
+/// overpriced INVOIC came back `Ok` and was answered with a Zahlungsavis
+/// because `marktd` was briefly unreachable, and nothing in the receipt says so.
+///
+/// So the invoice is not answered at all. `handle_webhook` turns this into a
+/// `503`, which the sender's outbox retries with backoff (a 4xx it would
+/// dead-letter) — the same treatment a failed receipt write already gets, and
+/// for the same reason: the REMADV window is days, and a wrong answer to the
+/// market cannot be taken back.
+#[derive(Debug)]
+struct ReferenceDataUnavailable {
+    /// The service that did not answer.
+    upstream: &'static str,
+    /// The reference datum, in the terms the operator would look it up by.
+    what: String,
+    /// What the client reported.
+    detail: String,
+}
+
+impl std::fmt::Display for ReferenceDataUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} did not answer for {}: {} — the invoice is not checked without it",
+            self.upstream, self.what, self.detail
+        )
+    }
+}
+
 async fn run_check(
     state: &HandlerState,
     route: &PidRoute,
     inc: &Incoming,
     process_id: Uuid,
-) -> Checked {
+) -> Result<Checked, ReferenceDataUnavailable> {
     // ── The ESA's Stornorechnung: `E_0267` ───────────────────────────────────
     //
     // A Storno is answered — or deliberately **not** answered — on how the
@@ -498,9 +567,9 @@ async fn run_check(
     // receipts table; an original nothing can be found for leaves the tree at
     // Prüfschritt 10 and refuses, which is the honest answer.
     if invoic_checker::is_stornierung(&inc.rechnung)
-        && let Some(fakten) = esa_storno_fakten(state, inc).await
+        && let Some(fakten) = esa_storno_fakten(state, inc).await?
     {
-        return Checked {
+        return Ok(Checked {
             report: InvoicCheckEngine::check_storno(route.pid, &inc.rechnung, &state.check_config),
             markt_antwort: None,
             // A Storno belongs to whichever Use-Case issued the invoice it
@@ -514,11 +583,11 @@ async fn run_check(
                 &inc.rechnung,
                 &fakten,
             )),
-        };
+        });
     }
     if route.check == CheckKind::Messung && !invoic_checker::is_stornierung(&inc.rechnung) {
         let billing_date = billing_date_of(&inc.rechnung);
-        let agreed = esa_preise(state, inc, billing_date).await;
+        let agreed = esa_preise(state, inc, billing_date).await?;
         // **The wire states the Use-Case.** `IMD+7081` = `KON` („Abrechnung von
         // Konfigurationen (Universalbestellprozess)") is the ESA billing of WiM
         // Teil 2 Kap. 4.5 — the Kapitel-4.6 Messprodukte *are* the
@@ -568,7 +637,7 @@ async fn run_check(
                     .is_some(),
                 None => false,
             };
-            return Checked {
+            return Ok(Checked {
                 report: InvoicCheckEngine::check_esa_rechnung(
                     &inc.sender_mp_id,
                     &inc.rechnung,
@@ -584,7 +653,7 @@ async fn run_check(
                     mako_pruefung::HolidayCalendar::BdewMaKo,
                 )),
                 storno_antwort: None,
-            };
+            });
         }
 
         // ── Abrechnung der Leistungen des Preisblatts B ───────────────────────
@@ -600,8 +669,8 @@ async fn run_check(
             && familie != mako_pruefung::rechnung::ESA
         {
             let fakten = preisblatt_b_fakten(state, inc, process_id).await;
-            return Checked {
-                report: run_report(state, route, inc).await,
+            return Ok(Checked {
+                report: run_report(state, route, inc).await?,
                 markt_antwort: Some(invoic_checker::antwort_auf_rechnung(
                     familie,
                     &inc.rechnung,
@@ -611,14 +680,14 @@ async fn run_check(
                     mako_pruefung::HolidayCalendar::BdewMaKo,
                 )),
                 storno_antwort: None,
-            };
+            });
         }
     }
-    Checked {
-        report: run_report(state, route, inc).await,
+    Ok(Checked {
+        report: run_report(state, route, inc).await?,
         markt_antwort: None,
         storno_antwort: None,
-    }
+    })
 }
 
 /// What the recipient's own records contribute to a **Preisblatt-B** invoice.
@@ -707,12 +776,14 @@ fn billing_date_of(rechnung: &Rechnung) -> time::Date {
 async fn esa_storno_fakten(
     state: &HandlerState,
     inc: &Incoming,
-) -> Option<invoic_checker::StornoEmpfaengerFakten> {
+) -> Result<Option<invoic_checker::StornoEmpfaengerFakten>, ReferenceDataUnavailable> {
     let billing_date = billing_date_of(&inc.rechnung);
-    if esa_preise(state, inc, billing_date).await.is_empty() {
-        return None;
+    if esa_preise(state, inc, billing_date).await?.is_empty() {
+        return Ok(None);
     }
-    let original = inc.rechnung.original_rechnungsnummer.as_deref()?;
+    let Some(original) = inc.rechnung.original_rechnungsnummer.as_deref() else {
+        return Ok(None);
+    };
     // The receipt of the original carries the outcome we sent: `Ok` means a
     // Zahlungsavis went out, `Dispute` a Nicht-Zahlungsavis, and no row at all
     // means we never answered it.
@@ -726,29 +797,43 @@ async fn esa_storno_fakten(
             // Not a guess: without the original's outcome the tree cannot reach
             // 70 or 80, and answering either way is wrong half the time.
             warn!(error = %e, original, "invoicd: original receipt lookup failed — E_0267 skipped");
-            return None;
+            return Ok(None);
         }
     };
-    Some(invoic_checker::StornoEmpfaengerFakten {
+    Ok(Some(invoic_checker::StornoEmpfaengerFakten {
         ursprungsrechnung_bekannt: !matches!(
             ursprungsantwort,
             mako_pruefung::esa::UrsprungsAntwort::Unbeantwortet
         ),
         ..invoic_checker::StornoEmpfaengerFakten::neu(ursprungsantwort)
-    })
+    }))
 }
 
 /// The accepted QUOTES 15003 of this (MSB, us) pair, as `(Artikel-ID, Preis)`.
+///
+/// An empty list is a fact — no offer of this MSB's is on record, so this is not
+/// an ESA relationship — and it **selects the branch** in [`run_check`]. That is
+/// exactly why a failed lookup cannot be flattened into one: it would route an
+/// ESA invoice down the LF path, check it against a Preisblatt that does not
+/// govern it, and answer on the wrong Frist.
 async fn esa_preise(
     state: &HandlerState,
     inc: &Incoming,
     billing_date: time::Date,
-) -> Vec<(String, invoic_checker::amount::EuroAmount)> {
-    state
+) -> Result<Vec<(String, invoic_checker::amount::EuroAmount)>, ReferenceDataUnavailable> {
+    let preise = state
         .marktd
         .esa_preise(&inc.sender_mp_id, &state.tenant, billing_date)
         .await
-        .unwrap_or_default()
+        .map_err(|e| ReferenceDataUnavailable {
+            upstream: "marktd",
+            what: format!(
+                "the accepted ESA-Angebot of MSB {} at {billing_date}",
+                inc.sender_mp_id
+            ),
+            detail: e.to_string(),
+        })?;
+    Ok(preise
         .iter()
         .filter_map(|p| {
             Some((
@@ -756,10 +841,14 @@ async fn esa_preise(
                 invoic_checker::amount::euro_from_decimal(p.betrag)?,
             ))
         })
-        .collect()
+        .collect())
 }
 
-async fn run_report(state: &HandlerState, route: &PidRoute, inc: &Incoming) -> CheckReport {
+async fn run_report(
+    state: &HandlerState,
+    route: &PidRoute,
+    inc: &Incoming,
+) -> Result<CheckReport, ReferenceDataUnavailable> {
     let pid = route.pid;
     let rechnung = &inc.rechnung;
 
@@ -767,7 +856,11 @@ async fn run_report(state: &HandlerState, route: &PidRoute, inc: &Incoming) -> C
     // whatever its PID. Comparing those against a tariff disputes every line,
     // so the arithmetic-only check applies to the flag as well as to PID 31004.
     if route.check == CheckKind::ArithmetikNur || invoic_checker::is_stornierung(rechnung) {
-        return InvoicCheckEngine::check_storno(pid, rechnung, &state.check_config);
+        return Ok(InvoicCheckEngine::check_storno(
+            pid,
+            rechnung,
+            &state.check_config,
+        ));
     }
 
     let billing_date = billing_date_of(rechnung);
@@ -779,12 +872,23 @@ async fn run_report(state: &HandlerState, route: &PidRoute, inc: &Incoming) -> C
         // decision here. Reaching this line means no offer is on record, so the
         // invoice is an MSB-Rechnung toward an NB or an LF and prices against
         // the published `PreisblattMessung`.
+        // `Ok(None)` is „this MSB has published no PreisblattMessung", which the
+        // engine reports as `TariffNotFound`. An `Err` is „marktd did not
+        // answer", which is not a fact about the MSB at all — and the two used
+        // to be the same `None`, so an outage silently downgraded the check to
+        // arithmetic and still returned a verdict.
         let sheet = state
             .marktd
             .get_preisblatt_messung(&inc.sender_mp_id, billing_date)
             .await
-            .ok()
-            .flatten();
+            .map_err(|e| ReferenceDataUnavailable {
+                upstream: "marktd",
+                what: format!(
+                    "the PreisblattMessung of MSB {} at {billing_date}",
+                    inc.sender_mp_id
+                ),
+                detail: e.to_string(),
+            })?;
         // Discount lines are validated against the AufAbschlag entries carried
         // on the sheet (PRICAT 27001–27003), so the MSB cannot add undocumented
         // ones. The list is an extension field on `PreisblattMessung`.
@@ -802,23 +906,35 @@ async fn run_report(state: &HandlerState, route: &PidRoute, inc: &Incoming) -> C
                     })
             })
             .unwrap_or_default();
-        return InvoicCheckEngine::check_msb_rechnung_with_aufabschlaege(
+        return Ok(InvoicCheckEngine::check_msb_rechnung_with_aufabschlaege(
+            // The routed PID, not a literal: 31003 and 31009 both arrive here and
+            // the report is documented as carrying the PID it checked.
+            pid,
             &inc.sender_mp_id,
             rechnung,
             sheet.as_ref(),
             &contracted,
             &state.check_config,
-        );
+        ));
     }
 
     let mut store = invoic_checker::tariff::InMemoryPreisblattStore::new();
-    if let Some(sheet) = state
+    // The Preisblatt *is* the price basis of this check. An empty store makes
+    // every line `TariffNotFound`; reaching that state because marktd was
+    // unreachable states to the market that the NB published no Preisblatt.
+    let sheet = state
         .marktd
         .get_preisblatt(&inc.sender_mp_id, billing_date)
         .await
-        .ok()
-        .flatten()
-    {
+        .map_err(|e| ReferenceDataUnavailable {
+            upstream: "marktd",
+            what: format!(
+                "the PreisblattNetznutzung of {} at {billing_date}",
+                inc.sender_mp_id
+            ),
+            detail: e.to_string(),
+        })?;
+    if let Some(sheet) = sheet {
         store.insert(inc.sender_mp_id.clone(), sheet);
     }
     let mut report = InvoicCheckEngine::check(
@@ -831,20 +947,28 @@ async fn run_report(state: &HandlerState, route: &PidRoute, inc: &Incoming) -> C
 
     // ── Stage 6: Mehr-/Mindermengen settlement prices ────────────────────────
     let (year, month) = (billing_date.year(), billing_date.month() as u8);
+    // Not yet published is a real state — the BDEW series lands after the
+    // Bilanzierungsmonat — and stage 6 is skipped for it. An unreachable marktd
+    // is not that state: skipping on it lets a Mehrmengen line billed at any
+    // price pass a check that reports itself as complete.
+    let mmm_unavailable =
+        |e: mako_markt::marktd_client::MarktdClientError, series: &str| ReferenceDataUnavailable {
+            upstream: "marktd",
+            what: format!("the {series} Mehr-/Mindermengenpreise for {year}-{month:02}"),
+            detail: e.to_string(),
+        };
     let prices = match route.check {
         CheckKind::NetznutzungMitMmmStrom => state
             .marktd
             .get_mmm_strom(year, month)
             .await
-            .ok()
-            .flatten()
+            .map_err(|e| mmm_unavailable(e, "Strom"))?
             .map(|r| (r.mehr_ct_kwh, r.minder_ct_kwh)),
         CheckKind::NetznutzungMitMmmGas => state
             .marktd
             .get_mmma_gas(year, month, GAS_MGV)
             .await
-            .ok()
-            .flatten()
+            .map_err(|e| mmm_unavailable(e, "Gas"))?
             .map(|r| (r.mehr_ct_kwh, r.minder_ct_kwh)),
         _ => None,
     };
@@ -858,7 +982,7 @@ async fn run_report(state: &HandlerState, route: &PidRoute, inc: &Incoming) -> C
                 year, month, "invoicd: MMM reference prices not in marktd — stage 6 skipped"
             );
         }
-        return report;
+        return Ok(report);
     };
 
     let findings =
@@ -878,7 +1002,7 @@ async fn run_report(state: &HandlerState, route: &PidRoute, inc: &Incoming) -> C
         report.outcome = report.outcome.max(escalation);
         report.findings.extend(findings);
     }
-    report
+    Ok(report)
 }
 
 /// Trading Hub Europe — the single German Gas Marktgebietsverantwortlicher
@@ -1057,26 +1181,65 @@ pub async fn emit_receipt_event(state: &HandlerState, ctx: &PaymentEventCtx<'_>)
     match mako_service::post_ce_with_retry(&state.http_client, url, &ce, secret).await {
         Ok(()) => {
             debug!(process_id = %ctx.process_id, "invoicd: ERP receipt event delivered");
-            let _ = pg::receipts::mark_erp_notified(
+            // Losing this stamp is the one outcome the outbox worker cannot
+            // repair: the row stays selectable, so the worker will POST the
+            // same receipt to the ERP a second time. `emit_receipt_event`
+            // returns `()` to a caller that has already dispatched the market
+            // answer and must not be failed by an ERP courtesy notification, so
+            // the disposition is to make the duplicate findable rather than to
+            // propagate it.
+            if let Err(e) = pg::receipts::mark_erp_notified(
                 &state.pool,
                 ctx.process_id,
                 OffsetDateTime::now_utc(),
             )
-            .await;
+            .await
+            {
+                error!(
+                    error = %e, process_id = %ctx.process_id,
+                    "invoicd: ERP receipt event delivered but erp_notified_at was not stamped — \
+                     the outbox worker will send the ERP this receipt again"
+                );
+            }
         }
         Err(e) if e.is_permanent() => {
             warn!(
                 process_id = %ctx.process_id, erp_url = %url, error = %e,
                 "invoicd: ERP webhook rejected the event — dead-lettering (check ERP webhook config)"
             );
-            let _ = pg::receipts::dead_letter_erp(&state.pool, ctx.process_id).await;
+            // Left to the outbox worker, and verified rather than assumed: the
+            // worker is spawned under exactly the condition that lets this
+            // function run at all (`cfg.erp.webhook_url` is `Some`, see
+            // `server::build` — it feeds both `HandlerState::erp_webhook_url`
+            // and `erp_outbox::spawn`), and it claims on
+            // `erp_notified_at IS NULL`, which this row still satisfies. Its own
+            // 4xx branch dead-letters it, so the loss costs one extra POST, not
+            // an unbounded retry. Logged anyway, because "the next component
+            // will handle it" is exactly the assumption that should leave a
+            // trace when it turns out to be wrong.
+            if let Err(db) = pg::receipts::dead_letter_erp(&state.pool, ctx.process_id).await {
+                warn!(
+                    error = %db, process_id = %ctx.process_id,
+                    "invoicd: could not dead-letter the rejected ERP notification inline — \
+                     leaving it to the outbox worker, which will retry once and dead-letter it"
+                );
+            }
         }
         Err(e) => {
             warn!(
                 process_id = %ctx.process_id, erp_url = %url, error = %e,
                 "invoicd: ERP webhook delivery failed — the outbox worker will retry"
             );
-            let _ = pg::receipts::record_erp_failure(&state.pool, ctx.process_id, 0).await;
+            // Same reasoning: only the 30 s back-off is at stake, and the
+            // worker's next tick re-attempts the row regardless.
+            if let Err(db) = pg::receipts::record_erp_failure(&state.pool, ctx.process_id, 0).await
+            {
+                warn!(
+                    error = %db, process_id = %ctx.process_id,
+                    "invoicd: could not schedule the ERP retry back-off — the outbox worker \
+                     picks the receipt up on its next tick instead"
+                );
+            }
         }
     }
 }
@@ -1359,6 +1522,203 @@ mod tests {
             ist_storno: Some(true),
             ..Rechnung::default()
         }
+    }
+
+    // ── Reference data that could not be read ────────────────────────────────
+
+    /// A `HandlerState` whose only live upstream is the `marktd` at `url`.
+    ///
+    /// The pool is lazy and points nowhere: these paths run before anything is
+    /// persisted, and a test that needed a database to prove a lookup failure
+    /// would be testing the harness.
+    fn state_with_marktd(url: &str) -> HandlerState {
+        HandlerState {
+            marktd: mako_markt::marktd_client::MarktdClient::new(
+                url,
+                SecretString::from("k"),
+                reqwest::Client::new(),
+            ),
+            makod: MakodClient::new("http://127.0.0.1:1", SecretString::from("k")),
+            check_config: Arc::new(CheckConfig::default()),
+            inbound_secret: Arc::new(None),
+            auto_dispute_threshold_raw: 0,
+            pool: sqlx::PgPool::connect_lazy("postgres://nobody@127.0.0.1:1/none")
+                .expect("a lazy pool connects to nothing"),
+            tenant: "9900357000004".to_owned(),
+            marktrolle: crate::config::EmpfaengerRolle::Lieferant,
+            erp_webhook_url: None,
+            erp_hmac_secret: None,
+            edmd: None,
+            http_client: reqwest::Client::new(),
+        }
+    }
+
+    fn an_invoice() -> Incoming {
+        Incoming {
+            invoice_ref: "R-1".to_owned(),
+            sender_mp_id: "9900077000006".to_owned(),
+            receiver_gln: "9900357000004".to_owned(),
+            malo_id: None,
+            rechnung: Rechnung::default(),
+            rechnung_json: serde_json::json!({}),
+            bestellung_ref: None,
+            rechnungstyp: None,
+        }
+    }
+
+    /// A stand-in `marktd` that answers `503` under `broken` and `404`
+    /// everywhere else — the two negative answers side by side, so a test can
+    /// pin that they are not the same thing.
+    ///
+    /// Returns the state pointed at it and the server task; abort the task at
+    /// the end of the test.
+    async fn marktd_broken_under(
+        broken: &'static str,
+    ) -> (HandlerState, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let app = axum::Router::new().fallback(move |uri: axum::http::Uri| async move {
+            if uri.path().starts_with(broken) {
+                StatusCode::SERVICE_UNAVAILABLE
+            } else {
+                StatusCode::NOT_FOUND
+            }
+        });
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (state_with_marktd(&format!("http://{addr}")), server)
+    }
+
+    /// A `marktd` that answers `404` — no Preisblatt is on record for this
+    /// Marktpartner — is a **finding about the invoice**, and the check still
+    /// reaches a verdict on it.
+    ///
+    /// This is the control for the tests below: the fix must separate the two
+    /// negative answers, not refuse both.
+    #[tokio::test]
+    async fn a_preisblatt_that_does_not_exist_is_still_a_verdict() {
+        let (state, server) = marktd_broken_under("/nothing-is-broken").await;
+        for pid in [31002u32, 31005, 31009] {
+            let route = route_for(pid).expect("routed");
+            let report = run_report(&state, route, &an_invoice())
+                .await
+                .unwrap_or_else(|e| panic!("PID {pid}: a 404 is an answer, not an outage: {e}"));
+            assert_eq!(report.pid, pid);
+        }
+        server.abort();
+    }
+
+    /// Stage 6 is skipped when the Mehr-/Mindermengenpreise are not published
+    /// yet — the BDEW series lands after the Bilanzierungsmonat — but **not**
+    /// when marktd fails to say. Skipping on a failure lets a Mehrmengen line
+    /// billed at any price pass a check that reports itself as complete.
+    #[tokio::test]
+    async fn unreadable_mmm_prices_are_not_unpublished_ones() {
+        let (state, server) = marktd_broken_under("/api/v1/mmm-preise").await;
+        let route = route_for(31005).expect("routed");
+        let err = run_report(&state, route, &an_invoice())
+            .await
+            .expect_err("the settlement prices are the basis of stage 6");
+        assert_eq!(err.upstream, "marktd");
+        assert!(
+            err.what.contains("Mehr-/Mindermengenpreise"),
+            "the operator is told which reference datum was missing, got {:?}",
+            err.what
+        );
+        server.abort();
+    }
+
+    /// The webhook asks for the event again rather than answering the invoice.
+    ///
+    /// `204` is „this service is finished with the event" — answered,
+    /// deliberately unanswered, or dead-lettered. An invoice that could not be
+    /// checked is none of those: the sender's outbox retries a `5xx` with
+    /// backoff and dead-letters a `4xx`, so `503` is what asks for the
+    /// redelivery that might succeed. The DLQ is deliberately not used: nothing
+    /// resolves a row in it, so an outage would leave one open per invoice it
+    /// touched even after the redelivery worked.
+    #[tokio::test]
+    async fn the_webhook_asks_for_redelivery_when_it_cannot_check() {
+        use axum::response::IntoResponse as _;
+
+        let (state, server) = marktd_broken_under("/api/v1").await;
+        let event = serde_json::json!({
+            "type": mako_events::mako::PROCESS_INITIATED,
+            "subject": Uuid::new_v4().to_string(),
+            "data": {
+                "pid": 31002,
+                "invoice_ref": "MSG-0001",
+                "sender_mp_id": "9900077000006",
+                "rechnung": serde_json::to_value(Rechnung::default()).expect("a BO4E Rechnung"),
+            },
+        });
+        let status = handle_webhook(
+            axum::extract::State(state),
+            axum::http::HeaderMap::new(),
+            axum::body::Bytes::from(serde_json::to_vec(&event).expect("json")),
+        )
+        .await
+        .into_response()
+        .status();
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "an unchecked invoice is not a finished one — a 204 here drops it"
+        );
+        server.abort();
+    }
+
+    /// A `marktd` that does not answer at all is **not** „no Preisblatt on
+    /// record": no verdict is produced.
+    ///
+    /// The lookups used to end in `.ok().flatten()`, so an outage read as an
+    /// empty price basis and the invoice was checked with less data while still
+    /// reporting a plausibility outcome — an overpriced INVOIC came back `Ok`
+    /// and was answered with a Zahlungsavis nobody could tell from a checked
+    /// one.
+    #[tokio::test]
+    async fn an_unreachable_marktd_is_not_a_missing_preisblatt() {
+        // Port 1 on loopback: the connection is refused, not merely slow.
+        let state = state_with_marktd("http://127.0.0.1:1");
+        for pid in [
+            31002u32, // PreisblattNetznutzung
+            31005,    // …plus the Strom Mehr-/Mindermengenpreise
+            31009,    // PreisblattMessung
+        ] {
+            let route = route_for(pid).expect("routed");
+            let err = run_report(&state, route, &an_invoice())
+                .await
+                .expect_err("an unreachable marktd must not produce a verdict");
+            assert_eq!(err.upstream, "marktd");
+            assert!(
+                !err.what.is_empty(),
+                "the operator is told which reference datum was missing"
+            );
+        }
+    }
+
+    /// The same for the branch-selecting lookup: an outage must not turn an ESA
+    /// invoice into an MSB-toward-LF one, which is checked against a different
+    /// price basis and answered on a different Frist.
+    #[tokio::test]
+    async fn an_unreachable_marktd_does_not_pick_the_branch() {
+        // Only the Angebot lookup fails: the PreisblattMessung answers 404, so
+        // the LF branch would happily produce a verdict on an ESA invoice.
+        let (state, server) = marktd_broken_under("/api/v1/esa/preise").await;
+        let route = route_for(31009).expect("routed");
+        let Err(err) = run_check(&state, route, &an_invoice(), Uuid::nil()).await else {
+            panic!("the ESA-Angebot lookup decides the branch — it cannot be guessed");
+        };
+        assert_eq!(err.upstream, "marktd");
+        assert!(
+            err.what.contains("ESA-Angebot"),
+            "the operator is told which reference datum was missing, got {:?}",
+            err.what
+        );
+        server.abort();
     }
 
     /// `Ok` is accepted and `Dispute` is not, whatever the threshold.

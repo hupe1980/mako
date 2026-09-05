@@ -6,7 +6,5 @@ sort_by = "weight"
 template = "section.html"
 page_template = "page.html"
 +++
-# Release &amp; Compliance
-
 Engineering playbook for the annual BDEW release cycle, profile schema
 versioning policy, and format-version lifecycle management.

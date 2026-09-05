@@ -174,11 +174,14 @@ pub use types::{
     Grundpreis,
     // Presenting a settlement as an invoice: numbers, dates, Prüfidentifikator.
     InvoiceDocument,
+    Jahresanteil,
     KaKundengruppe,
     Konzessionsabgabe,
     KorrekturGrund,
     LegalReference,
     Leistungspreis,
+    // Which of the two §17 StromNEV Leistungspreissysteme a price sheet states.
+    LeistungspreisSystem,
     MengePreis,
     MmmInput,
     MsbEmpfaengerRolle,

@@ -56,6 +56,16 @@ fn total(positions: &[SettlePosition]) -> Option<Decimal> {
     }
 }
 
+/// §51b Satz 2 — whether §§ 51 and 51a are displaced for this settlement.
+///
+/// The displacement rides on § 51b applying at all: § 101 Abs. 2 Satz 1 puts
+/// § 51b under a state-aid Genehmigungsvorbehalt and names no earlier version to
+/// fall back on, so for a supply period before the approval § 51b reduces
+/// nothing and §§ 51 and 51a govern the plant like any other.
+fn sect51b_verdraengt_sect51(input: &SettleInput) -> bool {
+    input.tariff_source.is_biogas_sect51b() && crate::version::sect51b_anwendbar(input.billing_date)
+}
+
 /// Whether §51 actually bites for this plant in this period.
 ///
 /// Two independent gates: something has to have been fed in during a qualifying
@@ -76,11 +86,77 @@ fn sect51_greift(
     erzeugungsart: Option<crate::technology::ErzeugungsArt>,
     has_imesys: bool,
     ist_pilotwindanlage: bool,
+    ist_biogas_sect51b: bool,
 ) -> bool {
+    // §51b Satz 2: „Die §§ 51 und 51a sind auf diese Anlagen nicht anzuwenden."
+    // A biogas Ausschreibungsanlage is reduced by §51b's own 2-ct threshold
+    // instead, so §51 must not also bite.
+    if ist_biogas_sect51b {
+        return false;
+    }
     if kwh_during_negative_epex.is_none_or(|k| k <= Decimal::ZERO) {
         return false;
     }
     !regime.ist_befreit(leistung_kwp, erzeugungsart, has_imesys, ist_pilotwindanlage)
+}
+
+/// §52 Abs. 5 EEG 2023 — the Pflichtzahlung after the per-Kalendermonat cap.
+///
+/// „Wenn in demselben Kalendermonat Zahlungen aufgrund von mehreren
+/// Pflichtverstößen nach Absatz 1 geleistet werden müssen, sind die Zahlungen
+/// nach den Absätzen 2 bis 4 insgesamt auf 10 Euro pro Kilowatt installierter
+/// Leistung der Anlage und Kalendermonat begrenzt."
+///
+/// The cap binds **each** calendar month on its own. Summing first and capping
+/// against ten euros times a month count lets a month that stays under the
+/// ceiling pay for one that runs over it, which the words „und Kalendermonat"
+/// do not allow: a month carrying one 2-€/kW violation has 8 €/kW of unused
+/// ceiling, and that headroom is not transferable.
+///
+/// So each violation is spread over the calendar months it actually runs in,
+/// the months are capped one by one, and the capped months are summed.
+///
+/// A violation with no [`beginn`](crate::Pflichtverstoss::beginn) cannot be
+/// placed in the calendar. It is laid down from the earliest month any dated
+/// violation occupies, which makes it as concurrent with the rest as its
+/// duration allows — the placement that maximises the overlap, and therefore the
+/// capping, is the one that cannot overcharge the operator.
+fn sect52_abs5_gedeckelt(verstoesse: &[&crate::model::Pflichtverstoss]) -> Decimal {
+    use std::collections::BTreeMap;
+
+    // §52 Abs. 5 caps „pro Kilowatt installierter Leistung der Anlage" — one
+    // plant, one capacity. Violations carrying different figures are a caller
+    // error; the largest is the one that cannot cap below the statutory ceiling.
+    let leistung_kw = verstoesse
+        .iter()
+        .map(|v| v.leistung_kw)
+        .fold(Decimal::ZERO, Decimal::max);
+    let monatsdeckel = dec!(10) * leistung_kw;
+
+    let monatsschluessel = |d: time::Date| d.year() * 12 + (d.month() as i32 - 1);
+    let erster_datierter = verstoesse
+        .iter()
+        .filter_map(|v| v.beginn)
+        .map(monatsschluessel)
+        .min()
+        .unwrap_or(0);
+
+    let mut je_monat: BTreeMap<i32, Decimal> = BTreeMap::new();
+    for v in verstoesse {
+        let (satz_eur, monate) = crate::foerderdauer::pflichtzahlung_je_monat(v);
+        if monate == 0 {
+            continue;
+        }
+        let start = v.beginn.map_or(erster_datierter, monatsschluessel);
+        for offset in 0..i32::try_from(monate).unwrap_or(i32::MAX) {
+            *je_monat.entry(start + offset).or_default() += satz_eur;
+        }
+    }
+
+    je_monat
+        .into_values()
+        .map(|monat| monat.min(monatsdeckel))
+        .sum()
 }
 
 /// Apply §51 EEG deduction: subtract kWh during negative-price hours.
@@ -245,6 +321,7 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
             input.erzeugungsart,
             input.has_imesys,
             input.ist_pilotwindanlage,
+            sect51b_verdraengt_sect51(input),
         ) {
             // This block's share of the negative-price hours, split the same
             // way the energy is.
@@ -285,6 +362,7 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
             input.erzeugungsart,
             input.has_imesys,
             input.ist_pilotwindanlage,
+            sect51b_verdraengt_sect51(input),
         ) {
             let neg_share = negative_kwh_split[idx + 1];
             block_kwh = apply_negativpreis(block_kwh, neg_share);
@@ -364,37 +442,9 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
 /// assert_eq!(out.settlement_eur, Some(d("8.11")));
 /// ```
 pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
-    // ── §43 Abs. 1 Nr. 2 EEG 2023 — Biomass substrate cap ────────────────────
-    // Plants with >40 % Energiepflanzen vom Acker in the energy input lose EEG
-    // support for the billing period (substrate_cap_ok = false).
-    if let Some(biomasse) = &input.biomasse
-        && !biomasse.substrate_cap_ok
-    {
-        return SettleOutput {
-            settlement_eur: Some(Decimal::ZERO),
-            eligible_kwh: input.einspeisemenge_kwh,
-            positions: vec![crate::model::SettlePosition {
-                description: "§43 Abs. 1 Nr. 2 EEG 2023: Substratdeckel überschritten — \
-                     Energiepflanzen-Anteil > 40 %"
-                    .to_owned(),
-                legal_basis: "§43 Abs. 1 Nr. 2 EEG 2023".to_owned(),
-                kwh: input.einspeisemenge_kwh.unwrap_or(Decimal::ZERO),
-                rate_ct_kwh: Decimal::ZERO,
-                eur: Decimal::ZERO,
-            }],
-            status: SettlementStatus::Sanctioned,
-            pflichtzahlung_eur: None,
-            pflichtzahlung_faelligkeitsdatum: None,
-            verlaengerungsanspruch_qh: 0,
-            dezentrale_einspeisung_anspruch_verloren: false,
-            billing_days_fraction_applied: None,
-            faelligkeitsdatum: None,
-        };
-    }
-
     // ── §52 EEG 2023 Pflichtzahlungen (multiple violations, §52 Abs. 5 cap) ────
-    // All violations are summed. The §52 Abs. 5 monthly cap (€10/kW/month max) is
-    // applied based on the largest leistung_kw across violations.
+    // Every violation is spread over the calendar months it runs in and each
+    // month is capped on its own at 10 €/kW — see `sect52_abs5_gedeckelt`.
     //
     // Dedup: if the same SanktionsTyp appears more than once, only the entry with
     // the most months is counted (double-reporting the same violation type is a
@@ -414,23 +464,7 @@ pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
     let pflichtzahlung_eur = if deduplicated_pflichtverstoss.is_empty() {
         None
     } else {
-        let raw_sum: rust_decimal::Decimal = deduplicated_pflichtverstoss
-            .iter()
-            .map(|v| crate::foerderdauer::calculate_pflichtzahlung(v))
-            .sum();
-        // §52 Abs. 5 cap: total ≤ €10/kW × monate (using largest leistung_kw + months).
-        // We use the violation with the most months as the cap basis.
-        let cap = deduplicated_pflichtverstoss
-            .iter()
-            .map(|v| {
-                use rust_decimal::dec;
-                v.leistung_kw * dec!(10) * rust_decimal::Decimal::from(v.monate_des_verstosses)
-            })
-            .fold(
-                rust_decimal::Decimal::ZERO,
-                |a, b| if b > a { b } else { a },
-            );
-        Some(raw_sum.min(cap))
+        Some(sect52_abs5_gedeckelt(&deduplicated_pflichtverstoss))
     };
 
     // Delegate to inner function.
@@ -458,7 +492,7 @@ pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
     // ausschreibungspflichtige Anlagen; a statutory-AW plant commissioned in 2024
     // loses the quarter-hours without compensation. §51a never applies to §51b
     // biogas Ausschreibungsanlagen (§51b Satz 2).
-    if !input.tariff_source.is_biogas_sect51b()
+    if !sect51b_verdraengt_sect51(input)
         && let Some(lost_qh) = input.negative_price_quarter_hours.filter(|&q| q > 0)
         && input.scheme.negativpreis_rule_applicable()
         && input
@@ -471,6 +505,7 @@ pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
             input.erzeugungsart,
             input.has_imesys,
             input.ist_pilotwindanlage,
+            sect51b_verdraengt_sect51(input),
         )
     {
         let is_solar = input.erzeugungsart.is_some_and(|a| a.is_solar());
@@ -690,6 +725,42 @@ pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
 fn calculate_settlement_inner(input: &SettleInput) -> SettleOutput {
     use crate::model::SanktionAlt;
 
+    // ── § 39i Abs. 1 EEG 2023 — Getreidekorn und Mais ────────────────────────
+    // „Ein durch einen Zuschlag erworbener Anspruch nach § 19 Absatz 1 für Strom
+    // aus Biogas besteht nur, wenn der … eingesetzte Anteil von Getreidekorn und
+    // Mais … höchstens X Masseprozent beträgt." The condition reaches only a
+    // plant holding a Zuschlag, measures those two feedstocks, and steps down by
+    // Gebotstermin. Failing it leaves no claim to settle — the operator is owed
+    // nothing rather than being penalised, so the Gutschrift states the reason
+    // at a zero rate.
+    if let Some(biomasse) = &input.biomasse
+        && !biomasse.sect39i_eingehalten()
+    {
+        let grenze =
+            (biomasse.sect39i_hoechstanteil().unwrap_or(Decimal::ZERO) * dec!(100)).normalize();
+        return SettleOutput {
+            settlement_eur: Some(Decimal::ZERO),
+            eligible_kwh: input.einspeisemenge_kwh,
+            positions: vec![crate::model::SettlePosition {
+                description: format!(
+                    "§39i Abs. 1 EEG 2023: Anteil von Getreidekorn und Mais über \
+                     {grenze} Masseprozent — kein Anspruch nach §19 Abs. 1"
+                ),
+                legal_basis: "§39i Abs. 1 EEG 2023".to_owned(),
+                kwh: input.einspeisemenge_kwh.unwrap_or(Decimal::ZERO),
+                rate_ct_kwh: Decimal::ZERO,
+                eur: Decimal::ZERO,
+            }],
+            status: SettlementStatus::KeinAnspruch,
+            pflichtzahlung_eur: None,
+            pflichtzahlung_faelligkeitsdatum: None,
+            verlaengerungsanspruch_qh: 0,
+            dezentrale_einspeisung_anspruch_verloren: false,
+            billing_days_fraction_applied: None,
+            faelligkeitsdatum: None,
+        };
+    }
+
     // ── §52 EEG ≤2021 three-tier sanction dispatch ────────────────────────────
     //
     // Abs. 1 → Vergütung = 0   (VerguetungAufNull)
@@ -698,10 +769,17 @@ fn calculate_settlement_inner(input: &SettleInput) -> SettleOutput {
     match input.sanktion {
         Some(SanktionAlt::VerguetungAufNull) => {
             // §52 Abs. 1 EEG ≤2021: anzulegender Wert verringert sich auf null.
+            // The zero is stated as a position so the Gutschrift says why nothing
+            // is paid rather than arriving empty.
             return SettleOutput {
                 settlement_eur: Some(Decimal::ZERO),
                 eligible_kwh: input.einspeisemenge_kwh,
-                positions: vec![],
+                positions: vec![pos(
+                    "Verg\u{00fc}tung auf null verringert \u{2014} \u{00a7}52 Abs. 1 EEG 2021",
+                    "\u{00a7}52 Abs. 1 EEG 2021",
+                    input.einspeisemenge_kwh.unwrap_or(Decimal::ZERO),
+                    Decimal::ZERO,
+                )],
                 status: SettlementStatus::Sanctioned,
                 pflichtzahlung_eur: None,
                 pflichtzahlung_faelligkeitsdatum: None,
@@ -763,15 +841,31 @@ fn calculate_settlement_inner(input: &SettleInput) -> SettleOutput {
             };
         }
         Some(SanktionAlt::VerguetungReduziert20Prozent) => {
-            // §52 Abs. 3 EEG ≤2021: verringert sich um 20 Prozent.
-            // "wobei das Ergebnis auf zwei Stellen nach dem Komma gerundet wird"
-            // Compute normal settlement without sanction, then apply -20% with 2dp rounding.
+            // §52 Abs. 3 EEG ≤2021: verringert sich um 20 Prozent, „wobei das
+            // Ergebnis auf zwei Stellen nach dem Komma gerundet wird".
+            //
+            // The cut is on the Vergütung, so it lands on every position's rate:
+            // carrying the un-reduced positions alongside a reduced total would
+            // put a Gutschrift on the wire whose lines do not add up to what is
+            // paid.
             let base = settle_normal_body(input);
+            let positions: Vec<crate::model::SettlePosition> = base
+                .positions
+                .into_iter()
+                .map(|p| {
+                    let rate = p.rate_ct_kwh * dec!(0.80);
+                    crate::model::SettlePosition {
+                        rate_ct_kwh: rate,
+                        eur: validated_eur(p.kwh * rate / dec!(100)),
+                        ..p
+                    }
+                })
+                .collect();
             let reduced_eur = base.settlement_eur.map(|e| (e * dec!(0.80)).round_kfm(2));
             return SettleOutput {
                 settlement_eur: reduced_eur,
                 eligible_kwh: base.eligible_kwh,
-                positions: base.positions,
+                positions,
                 status: SettlementStatus::Sanctioned,
                 pflichtzahlung_eur: None,
                 pflichtzahlung_faelligkeitsdatum: None,
@@ -932,6 +1026,7 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             input.erzeugungsart,
             input.has_imesys,
             input.ist_pilotwindanlage,
+            sect51b_verdraengt_sect51(input),
         );
     let neg_kwh = if apply_neg {
         input.kwh_during_negative_epex
@@ -1362,6 +1457,7 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             verguetungssatz_ct,
             kwh_paid_gesamt,
             max_kwh,
+            jahres_restkontingent_kwh,
         } => {
             use crate::foerderdauer::kwk_eligible_kwh;
 
@@ -1369,13 +1465,30 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                 (Some(paid), Some(max)) => kwk_eligible_kwh(kwh, paid, max),
                 _ => (kwh, false),
             };
+            // § 8 Abs. 4: „Der Zuschlag wird pro Kalenderjahr gezahlt für bis zu
+            // … Vollbenutzungsstunden." The annual cap bounds the period on its
+            // own; exhausting it ends the year, not the Förderung, so it does
+            // not set `limit_reached` and it reports its own status.
+            let nach_lifetime = eligible;
+            let eligible = match *jahres_restkontingent_kwh {
+                Some(rest) => eligible.min(rest.max(Decimal::ZERO)),
+                None => eligible,
+            };
+            // Which counter ran out decides whether the plant is finished or
+            // merely paused until 1 January.
+            let jahreskontingent_erschoepft =
+                eligible <= Decimal::ZERO && nach_lifetime > Decimal::ZERO;
 
             if eligible <= Decimal::ZERO {
                 return SettleOutput {
                     settlement_eur: Some(Decimal::ZERO),
                     eligible_kwh: Some(Decimal::ZERO),
                     positions: vec![],
-                    status: SettlementStatus::FoerderungBeendet,
+                    status: if jahreskontingent_erschoepft {
+                        SettlementStatus::JahreskontingentErschoepft
+                    } else {
+                        SettlementStatus::FoerderungBeendet
+                    },
                     pflichtzahlung_eur: None,
                     pflichtzahlung_faelligkeitsdatum: None,
                     verlaengerungsanspruch_qh: 0,

@@ -482,8 +482,8 @@ impl TranchenLage {
 ///
 /// A tranchierte Marktlokation is held by several LFA at once, so the question
 /// is not „did *the* LFA agree" but „did enough percentage come free". Four of
-/// the six `E_0623` outcomes live only here — two Ablehnungen (`A53`, `A54`) and
-/// two Zustimmungen that differ in what the NB does next (`A55` triggers
+/// the eight `E_0623` outcomes live only here — two Ablehnungen (`A53`, `A54`)
+/// and two Zustimmungen that differ in what the NB does next (`A55` triggers
 /// „Herstellung einer 100 % LF-Zuordnung", `A56` does not).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(clippy::struct_excessive_bools)]

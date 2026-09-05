@@ -10,16 +10,14 @@
 //! | Repowering (Vollrepowering) | a fresh Inbetriebnahme restarts §25 | §3 Nr. 30 i.V.m. §25 EEG 2023 |
 //! | §24 Zusammenlegung | parent's `foerderendedatum` unchanged | §24 EEG 2023 |
 //!
-//! ## KWKG Förderdauer rules (§8 KWKG 2023)
+//! ## KWKG Förderdauer
 //!
-//! | Plant size | Duration type |
-//! |---|---|
-//! | < 50 kW_el | 20 years |
-//! | 50 kW_el – 2 MW_el | 10 years |
-//! | > 2 MW_el | 30 000 full-load hours (max 15 years) |
-//!
-//! For >2 MW plants the Förderdauer is tracked in kWh:
-//! `kwk_max_kwh = leistung_kW_el × kwk_foerderdauer_h`
+//! § 8 KWKG measures the Förderdauer in **Vollbenutzungsstunden** for every
+//! plant, whatever its capacity, and caps what a single calendar year may be
+//! paid for on top of that. Neither figure is a number of years, and § 8 has no
+//! capacity threshold at all — [`crate::kwkg`] holds both. A KWK plant therefore
+//! has no calendar Förderende: it stops when its kWh counter reaches
+//! `kwk_max_kwh = leistung_kW_el × Vollbenutzungsstunden`.
 
 use crate::rounding::RoundMoney;
 use rust_decimal::Decimal;
@@ -98,9 +96,34 @@ pub fn foerderendedatum_eeg(inbetriebnahme: Date) -> Result<Date, ComponentRange
 ///     foerderendedatum_eeg_ausschreibung(date!(2020-04-01)).unwrap(),
 ///     date!(2040-04-01)
 /// );
+/// // § 188 Abs. 3 BGB: a Frist that starts on 29 February ends on the 28th
+/// // where the target month has no 29th — 2080 is a leap year, 2100 is not.
+/// assert_eq!(
+///     foerderendedatum_eeg_ausschreibung(date!(2080-02-29)).unwrap(),
+///     date!(2100-02-28)
+/// );
 /// ```
 pub fn foerderendedatum_eeg_ausschreibung(inbetriebnahme: Date) -> Result<Date, ComponentRange> {
-    inbetriebnahme.replace_year(inbetriebnahme.year() + 20)
+    jahrestag(inbetriebnahme, 20)
+}
+
+/// The date `jahre` years after `von`, with § 188 Abs. 3 BGB applied.
+///
+/// „Fehlt bei einer nach Monaten bestimmten Frist in dem letzten Monat der für
+/// ihren Ablauf maßgebende Tag, so endigt die Frist mit dem Ablauf des letzten
+/// Tages dieses Monats." A period starting on 29 February therefore ends on
+/// 28 February of a target year that has no 29th. `Date::replace_year` cannot
+/// express that — it answers `Err` for the missing day — so the clamp is applied
+/// here.
+///
+/// # Errors
+/// [`ComponentRange`] when the target year leaves the representable range.
+fn jahrestag(von: Date, jahre: i32) -> Result<Date, ComponentRange> {
+    let zieljahr = von.year() + jahre;
+    let tag = von
+        .day()
+        .min(time::util::days_in_month(von.month(), zieljahr));
+    Date::from_calendar_date(zieljahr, von.month(), tag)
 }
 
 /// Compute the `foerderendedatum` after a repowering event.
@@ -139,25 +162,17 @@ pub fn foerderendedatum_repowering(repowering_datum: Date) -> Result<Date, Compo
     Date::from_calendar_date(repowering_datum.year() + 20, time::Month::December, 31)
 }
 
-/// Compute the `foerderendedatum` for a year-limited KWKG plant (≤2 MW).
+/// The total kWh a KWK plant may be paid the Zuschlag for over its lifetime.
 ///
 /// # Legal basis
-/// §8 KWKG 2023: plants ≤2 MW have a year-based Förderdauer
-/// (typically 10 or 20 years depending on capacity).
-pub fn foerderendedatum_kwkg_years(
-    inbetriebnahme: Date,
-    foerderdauer_years: i16,
-) -> Result<Date, ComponentRange> {
-    inbetriebnahme.replace_year(inbetriebnahme.year() + i32::from(foerderdauer_years))
-}
-
-/// Compute the maximum total eligible kWh for a KWKG plant >2 MW.
+/// § 8 Abs. 1–3 KWKG expresses the Förderdauer of every KWK plant in
+/// Vollbenutzungsstunden — 30 000 for a new plant, and for a modernisierte or
+/// nachgerüstete one a figure keyed on the share of the Neuerrichtungskosten the
+/// work cost. Resolve it with
+/// [`crate::kwkg::foerderdauer_vollbenutzungsstunden`]; the corresponding kWh
+/// limit is
 ///
-/// # Legal basis
-/// §8 KWKG 2023: plants >2 MW have a Förderdauer expressed in full-load hours
-/// (typically 30 000 h).  The corresponding kWh limit is:
-///
-/// `kwk_max_kwh = leistung_kW_el × kwk_foerderdauer_h`
+/// `kwk_max_kwh = leistung_kW_el × Vollbenutzungsstunden`
 ///
 /// # Example
 /// ```rust
@@ -173,7 +188,8 @@ pub fn kwk_max_kwh(leistung_kw_el: Decimal, kwk_foerderdauer_h: i32) -> Decimal 
 }
 
 /// Determine how many kWh are eligible for KWK-Zuschlag this period,
-/// enforcing the §8 KWKG 2023 full-load-hour limit.
+/// enforcing a Vollbenutzungsstunden limit — the § 8 Abs. 1–3 lifetime figure or
+/// the § 8 Abs. 4 cap on the calendar year, whichever the caller is applying.
 ///
 /// Returns `(eligible_kwh, limit_reached)`.
 ///
@@ -205,34 +221,6 @@ pub fn kwk_eligible_kwh(
     } else {
         (produced_kwh, false)
     }
-}
-
-/// Compute the §8 Abs. 4 KWKG 2023 **calendar-year** Förderungsende for large CHP plants.
-///
-/// # Legal basis
-/// §8 Abs. 4 KWKG 2023: even if the full-load-hour limit (e.g. 30 000 h) has not
-/// been reached, the KWK-Zuschlag ends after **15 calendar years** from
-/// commissioning.  The effective `foerderendedatum` is therefore:
-///
-/// `min(kwk_foerderend_hours, inbetriebnahme + 15 years)`
-///
-/// This function computes the calendar-year component.  Combine with
-/// [`foerderendedatum_kwkg_years`] (with `foerderdauer_years = 15`) or use the
-/// helper directly when the plant size class is ≤2 MW.
-///
-/// # Example
-/// ```rust
-/// use eeg_billing::kwk_foerderend_calendar;
-/// use time::macros::date;
-/// // Plant commissioned 2020-01-15: calendar Förderungsende = 2035-01-15
-/// assert_eq!(
-///     kwk_foerderend_calendar(date!(2020-01-15)).unwrap(),
-///     date!(2035-01-15)
-/// );
-/// ```
-pub fn kwk_foerderend_calendar(inbetriebnahme: Date) -> Result<Date, ComponentRange> {
-    // §8 Abs. 4 KWKG: maximum 15 calendar years for large plants
-    inbetriebnahme.replace_year(inbetriebnahme.year() + 15)
 }
 
 /// §51a EEG 2021/2023 — Vergütungszeitraum-Verlängerung (extension for lost periods).
@@ -479,6 +467,7 @@ pub fn effektives_foerderende(
 ///     typ: SanktionsTyp::MastrNichtRegistriert,
 ///     leistung_kw: dec!(500),
 ///     monate_des_verstosses: 3,
+///     beginn: None,
 ///     nachtraeglich_erfuellt: false,
 ///     technischer_defekt: false,
 /// };
@@ -495,12 +484,47 @@ pub fn effektives_foerderende(
 ///     typ: SanktionsTyp::VolleinspeisungspflichtVerletzt,
 ///     leistung_kw: dec!(500),
 ///     monate_des_verstosses: 12,
+///     beginn: None,
 ///     nachtraeglich_erfuellt: false,
 ///     technischer_defekt: false, // has no effect for this type
 /// };
 /// assert_eq!(calculate_pflichtzahlung(&nr10), dec!(12000)); // 500 × €2 × 12
 /// ```
 pub fn calculate_pflichtzahlung(violation: &crate::model::Pflichtverstoss) -> Decimal {
+    let (je_monat, monate) = pflichtzahlung_je_monat(violation);
+    je_monat * Decimal::from(monate)
+}
+
+/// §52 EEG 2023 — what one calendar month of this violation costs, and how many
+/// months it is charged for.
+///
+/// §52 Abs. 5 caps „pro Kilowatt installierter Leistung der Anlage **und
+/// Kalendermonat**", which needs the monthly amount rather than the total, so
+/// the two are computed together and
+/// [`calculate_pflichtzahlung`] multiplies them back out.
+///
+/// The months are the ones actually charged: Abs. 3 Satz 2's technical-defect
+/// grace has already been taken off, and they run from the violation's
+/// [`beginn`](crate::Pflichtverstoss::beginn).
+///
+/// ```rust
+/// use eeg_billing::{Pflichtverstoss, SanktionsTyp};
+/// use eeg_billing::foerderdauer::pflichtzahlung_je_monat;
+/// use rust_decimal::dec;
+///
+/// // §52 Abs. 2: 500 kW × 10 EUR for each of three months.
+/// let violation = Pflichtverstoss {
+///     typ: SanktionsTyp::MastrNichtRegistriert,
+///     leistung_kw: dec!(500),
+///     monate_des_verstosses: 3,
+///     beginn: None,
+///     nachtraeglich_erfuellt: false,
+///     technischer_defekt: false,
+/// };
+/// assert_eq!(pflichtzahlung_je_monat(&violation), (dec!(5000), 3));
+/// ```
+#[must_use]
+pub fn pflichtzahlung_je_monat(violation: &crate::model::Pflichtverstoss) -> (Decimal, u32) {
     use crate::model::SanktionsTyp;
     use rust_decimal::dec;
 
@@ -511,7 +535,10 @@ pub fn calculate_pflichtzahlung(violation: &crate::model::Pflichtverstoss) -> De
         SanktionsTyp::InbetriebnahmeVorgabeVerletzt | SanktionsTyp::VolleinspeisungspflichtVerletzt
     );
     if always_two_eur {
-        return dec!(2) * violation.leistung_kw * Decimal::from(violation.monate_des_verstosses);
+        return (
+            dec!(2) * violation.leistung_kw,
+            violation.monate_des_verstosses,
+        );
     }
 
     // §52 Abs. 3 Satz 2 — technical defect grace: first 2 months waived.
@@ -531,7 +558,7 @@ pub fn calculate_pflichtzahlung(violation: &crate::model::Pflichtverstoss) -> De
         violation.monate_des_verstosses
     };
     if effective_months == 0 {
-        return Decimal::ZERO;
+        return (Decimal::ZERO, 0);
     }
 
     // §52 Abs. 3 Nr. 1 — retroactively reduces to €2/kW when obligation is fulfilled
@@ -549,7 +576,7 @@ pub fn calculate_pflichtzahlung(violation: &crate::model::Pflichtverstoss) -> De
         dec!(10) // §52 Abs. 2: base rate for all other violations
     };
 
-    rate * violation.leistung_kw * Decimal::from(effective_months)
+    (rate * violation.leistung_kw, effective_months)
 }
 
 /// §36h EEG 2023 — Corrected Anzulegender Wert for wind onshore plants.

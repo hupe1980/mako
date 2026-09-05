@@ -114,7 +114,7 @@ struct StructureRow {
 /// When the Nachrichtenstruktur or the Segmentlayout section cannot be found.
 /// `message_type` names the document (`UTILMD`): the `UNH` DE 0065 code
 /// entry is printed at the note column, where a code is otherwise prose.
-pub fn parse(lines: &[String], message_type: &str) -> Result<MigDoc, String> {
+pub fn parse<S: AsRef<str>>(lines: &[S], message_type: &str) -> Result<MigDoc, String> {
     let rows = structure_rows(lines)?;
     let mut layouts = layouts(lines, message_type)?;
     let mut structure = build_tree(&rows, &mut layouts);
@@ -137,7 +137,7 @@ pub fn parse(lines: &[String], message_type: &str) -> Result<MigDoc, String> {
 
 // ── Nachrichtenstruktur ───────────────────────────────────────────────────────
 
-fn structure_rows(lines: &[String]) -> Result<Vec<StructureRow>, String> {
+fn structure_rows<S: AsRef<str>>(lines: &[S]) -> Result<Vec<StructureRow>, String> {
     // Zähler Nr? Bez Sta BDEW MaxStd MaxBdew Ebene Inhalt
     let row =
         Regex::new(r"^\s*(\d{4})\s+(\d{5})?\s*(SG\d+|[A-Z]{3})\s+([MC])\s+([MCRDNO])\s+(\d+)\s+(\d+)\s+(\d+)\s+(.*?)\s*$")
@@ -145,6 +145,7 @@ fn structure_rows(lines: &[String]) -> Result<Vec<StructureRow>, String> {
     let mut out: Vec<StructureRow> = Vec::new();
     let mut in_section = false;
     for line in lines {
+        let line = line.as_ref();
         let collapsed = collapse(line);
         let t = collapsed.as_str();
         if t.contains("....") {
@@ -271,7 +272,10 @@ fn build_tree(rows: &[StructureRow], layouts: &mut BTreeMap<String, SegmentNode>
 // ── Segmentlayout ─────────────────────────────────────────────────────────────
 
 /// Per `Nr`: the segment layout (elements, codes, example).
-fn layouts(lines: &[String], message_type: &str) -> Result<BTreeMap<String, SegmentNode>, String> {
+fn layouts<S: AsRef<str>>(
+    lines: &[S],
+    message_type: &str,
+) -> Result<BTreeMap<String, SegmentNode>, String> {
     // Zähler Nr Bez St MaxWdh St MaxWdh Ebene Name
     // The segment tag of a layout header is typeset slightly above the row and
     // lands on the line before it; the element block repeats it anyway.
@@ -322,7 +326,7 @@ fn layouts(lines: &[String], message_type: &str) -> Result<BTreeMap<String, Segm
 
     let mut idx = 0;
     while idx < lines.len() {
-        let line = &lines[idx];
+        let line = lines[idx].as_ref();
         idx += 1;
         let collapsed = collapse(line);
         let t = collapsed.as_str();

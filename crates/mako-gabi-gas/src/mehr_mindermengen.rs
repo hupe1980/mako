@@ -309,7 +309,9 @@ mod tests {
             marktgebietsverantwortlicher: "9800505300009".into(),
             netzkonto: "THE0NKH712345678".into(),
             zeitraum_von: von,
-            zeitraum_bis: von.replace_month(von.month().next()).unwrap_or(von),
+            // `Month::next()` wraps December to January without carrying the
+            // year, so a December fixture would end *before* it began.
+            zeitraum_bis: mako_fristen::add_months(von, 1),
             verfahren,
             mehrmenge_kwh: Decimal::from(mehr),
             mindermenge_kwh: Decimal::from(minder),

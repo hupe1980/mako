@@ -149,7 +149,7 @@ pub struct IdentityConfig {
     /// Operator primary MP-ID (BDEW-Codenummer starting with `99`, or DVGW `98`).
     ///
     /// Must match `makod.toml` `[[party]] primary = true`.
-    /// Used for `initiator_is_affiliate` §20 EnWG parity reporting.
+    /// Used for `initiator_is_affiliate`, the Gleichbehandlung evidence column.
     pub own_mp_id: String,
     /// Tenant identifier written to every DB row.  Defaults to `own_mp_id`.
     #[serde(default)]
@@ -257,7 +257,7 @@ pub struct NbConfig {
     ///
     /// When `false` (default), decisions are written to `anmeldung_decisions` but
     /// `bestaetigen` is NOT dispatched — operator must approve via
-    /// `PUT /api/v1/queue/{id}/approve`.  Activate only after verifying grid
+    /// `POST /api/v1/queue/{id}/approve`.  Activate only after verifying grid
     /// record and partner coverage (STP target ≥ 95 %).
     #[serde(default)]
     pub auto_accept: bool,

@@ -1,8 +1,25 @@
 <!DOCTYPE html>
+{#- The prose is English throughout; German appears only as domain terms
+    (Marktlokation, Prüfidentifikator, Frist) inside English sentences. Per-term
+    `lang="de"` spans would be hundreds of markup insertions for no assistive
+    gain — a screen reader announcing "Prüfidentifikator" with a German voice
+    inside an English sentence is a regression, not an improvement. So: en. -#}
 <html lang="en" data-theme="auto">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  {#- ── Page identity ───────────────────────────────────────────────────────
+      Three kinds, because the structured data below differs for each:
+        home    — the landing page (content/_index.md, template index.html)
+        section — a docs section index
+        page    — a single documentation page                              -#}
+  {%- set kind = "section" -%}
+  {%- if page is defined -%}
+    {%- set kind = "page" -%}
+  {%- elif section is defined and section.relative_path == "_index.md" -%}
+    {%- set kind = "home" -%}
+  {%- endif -%}
 
   {%- set page_title = title | default(value=config.title) -%}
   {%- if page is defined and page.title -%}{%- set page_title = page.title ~ " · mako" -%}{%- elif section is defined and section.title and section.title != "mako" -%}{%- set page_title = section.title ~ " · mako" -%}{%- endif -%}
@@ -10,39 +27,173 @@
   {%- if page is defined and page.description -%}{%- set page_desc = page.description -%}{%- elif section is defined and section.description -%}{%- set page_desc = section.description -%}{%- endif -%}
   {%- set page_url = config.base_url -%}
   {%- if page is defined and page.permalink -%}{%- set page_url = page.permalink -%}{%- elif section is defined and section.permalink -%}{%- set page_url = section.permalink -%}{%- endif -%}
+  {#- Search engines show roughly 155–160 characters of a description. Several
+      front-matter descriptions run past 400 (they double as the on-page lead),
+      so the meta copy is bounded here rather than shipped at full length. -#}
+  {%- set meta_desc = page_desc | striptags | truncate(length=180, end="…") -%}
+  {%- set og_image = get_url(path=config.extra.og_image) -%}
 
   <title>{{ page_title }}</title>
-  <meta name="description" content="{{ page_desc | striptags | truncate(length=300) }}">
+  <meta name="description" content="{{ meta_desc }}">
   <meta name="author" content="{{ config.extra.author }}">
+  {#- `max-image-preview:large` is what lets the 1200×630 card be used as the
+      result thumbnail rather than a cropped square. -#}
+  <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
   <link rel="canonical" href="{{ page_url | safe }}">
-  <link rel="icon" href="{{ get_url(path='img/mako-logo.svg') | safe }}" type="image/svg+xml">
+  {#- The square mark, not the wordmark: `mako-logo.svg` is a 120×32 lockup and
+      a browser tab renders it as an unreadable 16px smear. -#}
+  <link rel="icon" href="{{ get_url(path='img/mako-mark.svg') | safe }}" type="image/svg+xml">
+  <meta name="theme-color" content="{{ config.extra.theme_color_light }}" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="{{ config.extra.theme_color_dark }}" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="light dark">
 
   <!-- Open Graph / Twitter -->
-  <meta property="og:type" content="website">
+  <meta property="og:type" content="{% if kind == 'page' %}article{% else %}website{% endif %}">
   <meta property="og:site_name" content="mako">
+  <meta property="og:locale" content="{{ config.extra.og_locale }}">
   <meta property="og:title" content="{{ page_title }}">
-  <meta property="og:description" content="{{ page_desc | striptags | truncate(length=300) }}">
+  <meta property="og:description" content="{{ meta_desc }}">
   <meta property="og:url" content="{{ page_url | safe }}">
-  <meta property="og:image" content="{{ get_url(path='img/og-card.png') | safe }}">
-  <meta name="twitter:card" content="summary">
+  <meta property="og:image" content="{{ og_image | safe }}">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="{{ config.extra.og_image_width }}">
+  <meta property="og:image:height" content="{{ config.extra.og_image_height }}">
+  <meta property="og:image:alt" content="{{ config.extra.og_image_alt }}">
+  <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="{{ page_title }}">
-  <meta name="twitter:description" content="{{ page_desc | striptags | truncate(length=200) }}">
+  <meta name="twitter:description" content="{{ meta_desc }}">
+  <meta name="twitter:image" content="{{ og_image | safe }}">
+  <meta name="twitter:image:alt" content="{{ config.extra.og_image_alt }}">
 
-  <!-- Structured data (SEO) -->
+  {#- ── Structured data ──────────────────────────────────────────────────────
+      One block per page kind. A `SoftwareApplication` on every documentation
+      page told Google the same thing 46 times and described none of them; a
+      docs page now describes itself and states where it sits.
+
+      No `SearchAction` on the WebSite node: a sitelinks searchbox has to point
+      at a real results URL, and the search here is an in-page overlay with no
+      addressable query. No `dateModified`: nothing in the content carries a
+      date, and inventing one is worse than omitting it.                    -#}
+  {%- if kind == "home" %}
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
-    "@type": "SoftwareApplication",
-    "name": "mako",
-    "description": {{ config.description | striptags | json_encode | safe }},
-    "applicationCategory": "DeveloperApplication",
-    "operatingSystem": "Linux, macOS",
-    "programmingLanguage": "Rust",
-    "license": "https://spdx.org/licenses/MIT.html",
-    "codeRepository": "{{ config.extra.repo }}",
-    "url": "{{ config.base_url }}"
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "@id": {{ (config.base_url ~ "/#website") | json_encode | safe }},
+        "url": {{ (config.base_url ~ "/") | json_encode | safe }},
+        "name": "mako",
+        "description": {{ config.description | striptags | json_encode | safe }},
+        "inLanguage": "en"
+      },
+      {
+        {#- Both types, because the properties below straddle them:
+            `applicationCategory`/`operatingSystem` belong to SoftwareApplication,
+            `codeRepository`/`programmingLanguage`/`runtimePlatform` to
+            SoftwareSourceCode. Declaring one and using the other's vocabulary is
+            what a validator flags. -#}
+        "@type": ["SoftwareApplication", "SoftwareSourceCode"],
+        "@id": {{ (config.base_url ~ "/#software") | json_encode | safe }},
+        "name": "mako",
+        "description": {{ config.description | striptags | json_encode | safe }},
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Linux, macOS",
+        "programmingLanguage": "Rust",
+        "runtimePlatform": "Rust",
+        "license": "https://spdx.org/licenses/MIT.html",
+        "codeRepository": {{ config.extra.repo | json_encode | safe }},
+        "url": {{ (config.base_url ~ "/") | json_encode | safe }},
+        "image": {{ og_image | json_encode | safe }},
+        "isPartOf": { "@id": {{ (config.base_url ~ "/#website") | json_encode | safe }} },
+        "author": {
+          "@type": "Person",
+          "name": {{ config.extra.author | json_encode | safe }},
+          "url": "https://github.com/hupe1980"
+        }
+      }
+    ]
   }
   </script>
+  {%- else %}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": {% if kind == "page" %}"TechArticle"{% else %}"CollectionPage"{% endif %},
+        "@id": {{ page_url | json_encode | safe }},
+        "url": {{ page_url | json_encode | safe }},
+        "headline": {{ page_title | json_encode | safe }},
+        "name": {{ page_title | json_encode | safe }},
+        "description": {{ meta_desc | json_encode | safe }},
+        "inLanguage": "en",
+        "image": {{ og_image | json_encode | safe }},
+        "isPartOf": { "@id": {{ (config.base_url ~ "/#website") | json_encode | safe }} },
+        "about": { "@id": {{ (config.base_url ~ "/#software") | json_encode | safe }} },
+        "author": {
+          "@type": "Person",
+          "name": {{ config.extra.author | json_encode | safe }},
+          "url": "https://github.com/hupe1980"
+        }
+      },
+      {#- The trail is mako › Documentation › [subsection] › this page. The
+          crumb name is the bare title, not the `<title>`: " · mako" is a
+          browser-tab disambiguator, not part of the page's name. -#}
+      {%- set docs = get_section(path="docs/_index.md", metadata_only=true) -%}
+      {%- set crumb_title = page_title -%}
+      {%- if page is defined and page.title -%}{%- set crumb_title = page.title -%}
+      {%- elif section is defined and section.title -%}{%- set crumb_title = section.title -%}{%- endif -%}
+      {%- set at_docs_root = page_url == docs.permalink -%}
+      {%- set parent_crumb = false -%}
+      {%- if kind == "page" and page.ancestors | length > 1 -%}
+        {%- set parent = get_section(path=page.ancestors | last, metadata_only=true) -%}
+        {%- if parent.permalink != docs.permalink -%}{%- set parent_crumb = true -%}{%- endif -%}
+      {%- endif -%}
+      {
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+          {
+            "@type": "ListItem",
+            "position": 1,
+            "name": "mako",
+            "item": {{ (config.base_url ~ "/") | json_encode | safe }}
+          },
+          {%- if at_docs_root %}
+          {
+            "@type": "ListItem",
+            "position": 2,
+            "name": {{ crumb_title | json_encode | safe }},
+            "item": {{ page_url | json_encode | safe }}
+          }
+          {%- else %}
+          {
+            "@type": "ListItem",
+            "position": 2,
+            "name": {{ docs.title | json_encode | safe }},
+            "item": {{ docs.permalink | json_encode | safe }}
+          },
+          {%- if parent_crumb %}
+          {
+            "@type": "ListItem",
+            "position": 3,
+            "name": {{ parent.title | json_encode | safe }},
+            "item": {{ parent.permalink | json_encode | safe }}
+          },
+          {%- endif %}
+          {
+            "@type": "ListItem",
+            "position": {% if parent_crumb %}4{% else %}3{% endif %},
+            "name": {{ crumb_title | json_encode | safe }},
+            "item": {{ page_url | json_encode | safe }}
+          }
+          {%- endif %}
+        ]
+      }
+    ]
+  }
+  </script>
+  {%- endif %}
 
   <link rel="stylesheet" href="{{ get_url(path='style.css') | safe }}">
   {%- if config.generate_feeds %}
@@ -60,19 +211,35 @@
   <a class="skip-link" href="#main">Skip to content</a>
   <header class="site-header">
     <div class="header-inner">
-      <a class="brand" href="{{ config.base_url }}">
-        <img src="{{ get_url(path='img/mako-logo.svg') | safe }}" alt="" width="28" height="28">
+      <a class="brand" href="{{ config.base_url ~ "/" }}">
+        {#- alt="" is correct: the wordmark beside it already names the site, so
+            a described logo would make a screen reader say "mako" twice. -#}
+        <img src="{{ get_url(path='img/mako-mark.svg') | safe }}" alt="" width="28" height="28">
         <span>mako<span class="brand-spark">⚡</span></span>
       </a>
+      {#- `current_url` is empty on the home page render in some Zola versions;
+          defaulting keeps the containment tests below total. -#}
+      {%- set here = current_url | default(value=page_url) -%}
       <nav class="site-nav" aria-label="Primary">
-        <a href="{{ get_url(path='@/docs/_index.md') | safe }}">Docs</a>
-        <a href="{{ get_url(path='@/docs/guide/getting-started.md') | safe }}">Get started</a>
-        <a href="{{ get_url(path='@/docs/services/_index.md') | safe }}">Services</a>
+        {%- set nav = [
+          ["@/docs/_index.md", "Docs"],
+          ["@/docs/guide/getting-started.md", "Get started"],
+          ["@/docs/services/_index.md", "Services"],
+          ["@/docs/reference/_index.md", "Reference"]
+        ] -%}
+        {%- for item in nav -%}
+          {%- set href = get_url(path=item[0]) -%}
+          {#- Exact match is the page itself; a prefix match means an ancestor
+              section, which `aria-current="true"` is for. -#}
+          <a href="{{ href | safe }}"{% if here == href %} aria-current="page" class="active"{% elif here != "" and href in here %} aria-current="true" class="active"{% endif %}>{{ item[1] }}</a>
+        {%- endfor -%}
         <a href="{{ config.extra.repo }}" rel="noopener">GitHub ↗</a>
       </nav>
       <div class="header-actions">
-        <input type="search" id="search" class="search-box" placeholder="Search docs…" aria-label="Search documentation" autocomplete="off">
-        <div id="search-results" class="search-results" hidden></div>
+        <input type="search" id="search" class="search-box" placeholder="Search docs…"
+               aria-label="Search documentation" autocomplete="off"
+               role="combobox" aria-expanded="false" aria-controls="search-results" aria-autocomplete="list">
+        <div id="search-results" class="search-results" role="listbox" aria-label="Search results" hidden></div>
         <button id="theme-toggle" class="theme-toggle" aria-label="Toggle color theme" title="Toggle theme">◑</button>
       </div>
     </div>
@@ -84,21 +251,37 @@
 
   <footer class="site-footer">
     <div class="footer-inner">
+      <nav class="footer-nav" aria-label="Footer">
+        <a href="{{ get_url(path='@/docs/_index.md') | safe }}">Documentation</a>
+        <a href="{{ get_url(path='@/docs/guide/getting-started.md') | safe }}">Get started</a>
+        <a href="{{ get_url(path='@/docs/regulatory/pid-reference.md') | safe }}">PID reference</a>
+        {%- for crate in config.extra.crates %}
+        <a href="{{ crate.url }}" rel="noopener">{{ crate.name }} on crates.io ↗</a>
+        {%- endfor %}
+        <a href="{{ config.extra.repo }}" rel="noopener">GitHub ↗</a>
+      </nav>
       <p>
         <strong>mako</strong> — German energy-market operations in Rust.
         · <a href="{{ config.extra.repo }}/blob/main/LICENSE-MIT">MIT</a>
         or <a href="{{ config.extra.repo }}/blob/main/LICENSE-APACHE">Apache&nbsp;2.0</a>
         · Conforms to <a href="{{ config.extra.edi_energy_url }}">BDEW EDI@Energy</a> {{ config.extra.format_versions }}
       </p>
+      <p class="footer-note">{{ config.extra.status }} — not affiliated with BDEW, DVGW or the Bundesnetzagentur.</p>
     </div>
   </footer>
 
   <script defer src="{{ get_url(path='js/search.js') | safe }}"></script>
   <script>
     document.getElementById("theme-toggle").addEventListener("click", function () {
-      var cur = document.documentElement.getAttribute("data-theme");
+      var root = document.documentElement;
+      var cur = root.getAttribute("data-theme");
+      // "auto" carries no answer, so read what the OS actually resolved to —
+      // otherwise the first click on a dark-by-preference page is a no-op.
+      if (cur !== "dark" && cur !== "light") {
+        cur = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      }
       var next = cur === "dark" ? "light" : "dark";
-      document.documentElement.setAttribute("data-theme", next);
+      root.setAttribute("data-theme", next);
       localStorage.setItem("theme", next);
     });
   </script>

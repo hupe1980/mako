@@ -1,10 +1,10 @@
 # EEG billing demo — Docker Compose
 #
 # Showcases the complete EEG feed-in settlement flow:
-#   1. Register a solar PV plant in einsd
-#   2. Push 15-min Einspeisemenge readings to edmd (direct iMSys push)
+#   1. Register the Einspeiser, then a solar PV plant behind it, in einsd
+#   2. Push 15-min Einspeisemenge readings to edmd (direct iMSys push, OBIS 1-0:2.8.0)
 #   3. Trigger monthly settlement in einsd
-#   4. einsd auto-fetches Einspeisemenge from edmd, computes EEG Vergütung
+#   4. einsd reads the Einspeisung series back from edmd, computes EEG Vergütung
 #   5. ERP receives de.eeg.verguetung.berechnet CloudEvent
 #
 # Services:
@@ -14,10 +14,8 @@
 #   edmd    :8380 — Energy Data Management (meter readings + billing periods)
 #   einsd   :9180 — EEG/KWKG settlement (plant register + monthly settlement)
 #
-# Build images first:
-#   docker build --target marktd-runtime  -t marktd:dev  .
-#   docker build --target edmd-runtime    -t edmd:dev    .
-#   docker build --target einsd-runtime   -t einsd:dev   .
+# Build images first, from the workspace root:
+#   just build-demo-eeg
 #
 # Run:
 #   cd demos/eeg-billing

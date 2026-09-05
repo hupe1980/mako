@@ -122,7 +122,7 @@ pub trait TimeSeriesRepository: Send + Sync + 'static {
     ///    that owns the (possibly already archived) interval and applies
     ///    latest-version-wins on resolution, so the read path returns the
     ///    corrected value while `meter_reads_versions` keeps both.
-    /// 3. Any open § 60 Abs. 2 MsbG confirmation for the slot is discharged when
+    /// 3. Any open § 60 Abs. 1 MsbG confirmation for the slot is discharged when
     ///    the corrected value is a real one (`MEASURED` / `CORRECTED`).
     /// 4. Cached `meter_billing_periods` aggregates covering the corrected
     ///    intervals are invalidated, so the next billing read recomputes.

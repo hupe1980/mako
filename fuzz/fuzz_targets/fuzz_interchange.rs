@@ -23,10 +23,12 @@
 //! cargo +nightly fuzz run fuzz_interchange
 //! ```
 //!
-//! Seed the corpus from the existing interchange fixture:
+//! Seed the corpus from the tracked EDIFACT fixtures, which sit one directory
+//! per message type:
 //!
 //! ```text
-//! cp crates/edi-energy/tests/fixtures/*.edi fuzz/corpus/fuzz_interchange/
+//! find crates/edi-energy/tests/fixtures -name '*.edi' \
+//!      -exec cp {} fuzz/corpus/fuzz_interchange/ \;
 //! ```
 
 #![no_main]

@@ -68,17 +68,42 @@ pub async fn run(
     }
 }
 
-async fn tick(
+/// One drain pass.
+///
+/// `pub` so the pull-model guard in `tests/delivery_integration.rs` can run the
+/// real loop body against a real database rather than re-implementing it.
+///
+/// # Errors
+///
+/// Propagates database errors from the claim and the status writes.
+pub async fn tick(
     pool: &PgPool,
     tenant: &str,
     cfg: &DeliveryConfig,
     http: &reqwest::Client,
 ) -> anyhow::Result<()> {
-    let due = store::claim_due(pool, tenant, BATCH, backoff(0)).await?;
+    let due = store::claim_due(
+        pool,
+        tenant,
+        BATCH,
+        backoff(0),
+        has_relay(&cfg.postal_relay_url),
+    )
+    .await?;
     for delivery in due {
         let result = deliver(pool, tenant, cfg, http, &delivery).await;
         match result {
-            Ok(outcome) => {
+            // Nothing was pushed and nothing failed. The row keeps the state
+            // `claim_due` left it in — PENDING, so it stays in the spool.
+            Ok(DeliveryAttempt::AwaitingPickup) => {
+                tracing::debug!(
+                    delivery_id = %delivery.delivery_id,
+                    kind = %delivery.kind,
+                    subject = %delivery.subject_ref,
+                    "outputd: POST delivery waits in GET /api/v1/spool for a print service",
+                );
+            }
+            Ok(DeliveryAttempt::Pushed(outcome)) => {
                 store::record_success(
                     pool,
                     tenant,
@@ -137,24 +162,45 @@ async fn tick(
     Ok(())
 }
 
+/// What one attempt did.
+///
+/// The third state the worker used to lack. `Ok`/`Err` alone forced a `POST`
+/// delivery with no relay into the error arm, where the retry budget turned it
+/// into `FAILED` — and `postal_spool` lists `PENDING`, so a deployment that
+/// integrates its Druckdienstleister by pull silently lost every letter about
+/// half a day after issuing it.
+enum DeliveryAttempt {
+    /// The channel pushed (or published) the document.
+    Pushed(DeliveryOutcome),
+    /// There is nothing to push to: the letter waits in the spool for a print
+    /// service to collect. Not a failure, not an attempt, never retried.
+    AwaitingPickup,
+}
+
+impl From<DeliveryOutcome> for DeliveryAttempt {
+    fn from(outcome: DeliveryOutcome) -> Self {
+        Self::Pushed(outcome)
+    }
+}
+
 async fn deliver(
     pool: &PgPool,
     tenant: &str,
     cfg: &DeliveryConfig,
     http: &reqwest::Client,
     delivery: &store::PendingDelivery,
-) -> anyhow::Result<DeliveryOutcome> {
+) -> anyhow::Result<DeliveryAttempt> {
     match delivery.channel {
         // Publishing *is* the delivery: the document is in the store and
         // `portald` serves it from there, which is why this channel can claim
         // arrival by itself.
-        Channel::Portal => Ok(DeliveryOutcome {
+        Channel::Portal => Ok(DeliveryAttempt::Pushed(DeliveryOutcome {
             delivered: true,
             evidence: Some(serde_json::json!({
                 "published": "portal-inbox",
                 "document_id": delivery.document_id,
             })),
-        }),
+        })),
         Channel::Email => {
             let relay = relay(
                 cfg.email_relay_url.as_deref(),
@@ -171,29 +217,32 @@ async fn deliver(
                 .as_deref()
                 .ok_or_else(|| anyhow::anyhow!("EMAIL delivery has no target address"))?;
             let body = relay_body(pool, tenant, cfg, delivery, Some(to)).await?;
-            send_to_relay(http, &relay, &body).await
+            send_to_relay(http, &relay, &body).await.map(Into::into)
         }
         // A print service *pulls* from `GET /api/v1/spool`; the push is for
-        // partners that offer an endpoint. With neither, the row stays PENDING
-        // and shows in the spool — correctly, since the letter is unsent.
+        // partners that offer an endpoint. With neither, the letter waits in
+        // the spool — which is a supported integration and not a failed push,
+        // so `claim_due` never hands one of these rows over in the first place
+        // (a claim leads to a retry, and a retry budget leads to `FAILED`,
+        // which is exactly the state `postal_spool` filters out). Reaching this
+        // arm therefore means the relay was configured when the row was claimed
+        // and unconfigured a moment later; the row stays PENDING and comes back
+        // on the next tick, under whichever model is then configured.
         Channel::Post => {
             let Some(relay) = relay(
                 cfg.postal_relay_url.as_deref(),
                 cfg.postal_relay_api_key.clone(),
             ) else {
-                anyhow::bail!(
-                    "no [delivery] postal_relay_url configured — this document is waiting in \
-                     GET /api/v1/spool for a print service to collect"
-                );
+                return Ok(DeliveryAttempt::AwaitingPickup);
             };
             let body = relay_body(pool, tenant, cfg, delivery, None).await?;
-            send_to_relay(http, &relay, &body).await
+            send_to_relay(http, &relay, &body).await.map(Into::into)
         }
         Channel::Erp => {
             let relay = relay(cfg.erp_webhook_url.as_deref(), cfg.erp_api_key.clone())
                 .ok_or_else(|| anyhow::anyhow!("no [delivery] erp_webhook_url configured"))?;
             let body = relay_body(pool, tenant, cfg, delivery, None).await?;
-            send_to_relay(http, &relay, &body).await
+            send_to_relay(http, &relay, &body).await.map(Into::into)
         }
     }
 }
@@ -203,6 +252,16 @@ fn relay(url: Option<&str>, api_key: Option<secrecy::SecretString>) -> Option<Re
         url: u.to_owned(),
         api_key,
     })
+}
+
+/// Whether a relay URL is configured at all.
+///
+/// The same emptiness rule [`relay`] applies, expressed once: `claim_due` has to
+/// answer "is there a postal push?" *before* a row is claimed, and a second
+/// spelling that disagreed with `relay` would put rows back on the path this
+/// fix takes them off.
+fn has_relay(url: &Option<String>) -> bool {
+    relay(url.as_deref(), None).is_some()
 }
 
 /// The JSON a relay receives.

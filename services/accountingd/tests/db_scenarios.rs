@@ -3805,3 +3805,408 @@ async fn a_period_statement_opens_at_the_prior_balance() {
     let tail_sum: i64 = tail.lines.iter().map(|l| l.signed_ct).sum();
     assert_eq!(tail.opening_ct + tail_sum, 54_000);
 }
+
+/// § 288 BGB interest is charged at the rate **in force**, so a Verzugszeitraum
+/// crossing a § 247 BGB Stichtag is the sum of its segments.
+///
+/// The Basiszinssatz moves on 1 January and 1 July. Charging one rate over a
+/// period that spans a move states a rate that was not in force for most of the
+/// days it bills, which is the first thing a disputing customer recomputes.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn interest_is_charged_per_basiszinssatz_segment() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq_malo();
+    let account_id = pg::upsert_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap();
+
+    // 1 000,00 EUR overdue across 2026-07-01, where the seeded series steps
+    // 1,27 % → 1,52 %. B2C is + 5 pp (§ 288 Abs. 1).
+    let row = pg::create_interest_charge(
+        &ledger,
+        &pool,
+        account_id,
+        TENANT,
+        &malo,
+        "LF1",
+        None,
+        100_000,
+        false,
+        date!(2026 - 06 - 01),
+        date!(2026 - 09 - 01),
+    )
+    .await
+    .unwrap();
+
+    // 30 d at 6,27 % = 515 ct, 62 d at 6,52 % = 1 107 ct.
+    assert_eq!(
+        row.interest_ct, 1622,
+        "the two segments are charged at their own rates and summed"
+    );
+    let segments = row.rate_segments.as_array().expect("segments are an array");
+    assert_eq!(segments.len(), 2, "the period crosses one Stichtag");
+    assert_eq!(segments[0]["rate_pct"], "6.27");
+    assert_eq!(segments[1]["rate_pct"], "6.52");
+    // `.normalize()`: the column is `NUMERIC(6,3)`, so a rate published as
+    // 1,27 % reads back as „1.270". The claim here is about the value, not the
+    // scale the column happens to carry.
+    assert_eq!(
+        row.ecb_base_rate_pct.normalize().to_string(),
+        "1.27",
+        "the audit anchor is the rate in force when the Verzug began"
+    );
+    // Recomputing principal × rate × days / 36500 from the stated rate has to
+    // reach the booked figure, or the invoice contradicts itself.
+    let (recomputed, _) = accountingd::sepa::calculate_interest_ct(
+        100_000,
+        row.rate_pct - rust_decimal::dec!(5),
+        false,
+        92,
+    );
+    assert!(
+        (recomputed - row.interest_ct).abs() <= 1,
+        "the stated effective rate reproduces the charge (got {recomputed}, booked {})",
+        row.interest_ct
+    );
+}
+
+/// Auto-dunning opens and closes a case on the same figure: the open supply
+/// debt.
+///
+/// `verzug_ct` excludes Mahngebühren and Verzugszinsen because they are
+/// Verzugsschaden, not supply debt. A gate that opens on `balance_ct` and closes
+/// on `verzug_ct` disagrees for exactly the customer who has paid — the fee the
+/// last Mahnung charged keeps the balance positive — so the case closes and
+/// reopens on every run and the fee is charged again each time.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_paid_up_customer_is_not_dunned_again_for_the_mahngebuehr() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq_malo();
+    let account_id = pg::upsert_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap();
+
+    let billed = mako_fristen::heute() - time::Duration::days(60);
+    pg::post_entry(
+        &ledger,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        "RECHNUNG",
+        38_317,
+        &uniq("ce"),
+        None,
+        None,
+        billed,
+        billed,
+        Some("Jahresrechnung"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let first = pg::run_auto_dunning(&ledger, &pool, TENANT, 14, 500, 1000, 1500)
+        .await
+        .unwrap();
+    assert_eq!(
+        first.mahnstufe1_created, 1,
+        "an aged, unpaid invoice reaches Mahnstufe 1"
+    );
+
+    // The customer pays the invoice in full. The Mahngebühr stays open.
+    pg::post_entry(
+        &ledger,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        "ZAHLUNG",
+        -38_317,
+        &uniq("ce"),
+        None,
+        None,
+        mako_fristen::heute(),
+        mako_fristen::heute(),
+        Some("Zahlungseingang"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let (balance_ct, verzug_ct): (i64, i64) =
+        sqlx::query_as("SELECT balance_ct, verzug_ct FROM accounts WHERE account_id = $1")
+            .bind(account_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(verzug_ct, 0, "the supply debt is settled");
+    assert_eq!(balance_ct, 500, "…and only the Mahngebühr is still open");
+
+    assert_eq!(
+        pg::settle_paid_dunning_cases(&pool, TENANT).await.unwrap(),
+        1,
+        "the case closes on the settled supply debt"
+    );
+
+    // A second sweep on a later day: the run-date guard is per (tenant, day),
+    // so clear it to model tomorrow rather than a same-day replay.
+    sqlx::query("DELETE FROM auto_dunning_runs WHERE tenant = $1")
+        .bind(TENANT)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let second = pg::run_auto_dunning(&ledger, &pool, TENANT, 14, 500, 1000, 1500)
+        .await
+        .unwrap();
+    assert_eq!(
+        second.mahnstufe1_created, 0,
+        "an open Mahngebühr is not a ground to dun again"
+    );
+
+    let tb = ledger.trial_balance().await.unwrap();
+    let mahn = tb
+        .iter()
+        .find(|l| l.account.contains("Mahnerloese"))
+        .expect("Mahnerloese line");
+    assert_eq!(
+        mahn.credits_ct, 500,
+        "the Mahngebühr is charged once per Mahnstufe, not once per sweep"
+    );
+}
+
+/// Instalments step by calendar month, carrying the year and clamping the day.
+///
+/// The schedule used `Date::replace_month`, which keeps the year: instalment 3
+/// of a November plan landed in February of the *same* year — four months
+/// before instalment 1 — and a 31st that the target month lacks fell back to
+/// `first_due`, duplicating a due date. Both produced a plan that looked
+/// complete and could never be collected in order.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_payment_plan_schedule_carries_the_year_and_clamps_the_day() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+
+    // November + 3 instalments crosses into the next year.
+    let plan_id = pg::create_payment_plan(
+        &pool,
+        TENANT,
+        pg::CreatePaymentPlanRequest {
+            malo_id: uniq_malo(),
+            lf_mp_id: None,
+            total_ct: 30_000,
+            installment_ct: 10_000,
+            billing_day: 15,
+            first_due_date: "2026-11-30".to_owned(),
+            dunning_case_id: None,
+            note: None,
+            operator_sub: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let (plan, mut inst) = pg::get_payment_plan_with_installments(&pool, plan_id, TENANT)
+        .await
+        .unwrap()
+        .expect("the plan we just created");
+    inst.sort_by_key(|i| i.installment_no);
+
+    assert_eq!(plan.installment_count, 3);
+    assert_eq!(
+        inst.len(),
+        3,
+        "the whole schedule is written, not part of it"
+    );
+    assert_eq!(inst[0].due_date, date!(2026 - 11 - 30));
+    assert_eq!(inst[1].due_date, date!(2026 - 12 - 30));
+    assert_eq!(
+        inst[2].due_date,
+        date!(2027 - 01 - 30),
+        "the year carries — `replace_month` would have gone back to 2026-01-30"
+    );
+    assert_eq!(
+        inst.iter().map(|i| i.amount_ct).sum::<i64>(),
+        30_000,
+        "the schedule sums back to the total"
+    );
+
+    // A 31st clamps to the target month's last day (§ 188 Abs. 3 BGB) and stays
+    // distinct — the old fallback repeated 2026-01-31 twice.
+    let plan_id = pg::create_payment_plan(
+        &pool,
+        TENANT,
+        pg::CreatePaymentPlanRequest {
+            malo_id: uniq_malo(),
+            lf_mp_id: None,
+            total_ct: 25_000,
+            installment_ct: 10_000,
+            // Capped at 28 by the schema; the due dates come from
+            // `first_due_date`, which is the point of this half of the test.
+            billing_day: 28,
+            first_due_date: "2026-01-31".to_owned(),
+            dunning_case_id: None,
+            note: None,
+            operator_sub: None,
+        },
+    )
+    .await
+    .unwrap();
+    let (plan, mut inst) = pg::get_payment_plan_with_installments(&pool, plan_id, TENANT)
+        .await
+        .unwrap()
+        .unwrap();
+    inst.sort_by_key(|i| i.installment_no);
+    assert_eq!(plan.installment_count, 3, "ceil(25000/10000)");
+    assert_eq!(inst[0].due_date, date!(2026 - 01 - 31));
+    assert_eq!(
+        inst[1].due_date,
+        date!(2026 - 02 - 28),
+        "February has no 31st"
+    );
+    assert_eq!(inst[2].due_date, date!(2026 - 03 - 31));
+    assert_eq!(
+        inst[2].amount_ct, 5_000,
+        "the last instalment carries the remainder"
+    );
+    let dates: std::collections::BTreeSet<_> = inst.iter().map(|i| i.due_date).collect();
+    assert_eq!(
+        dates.len(),
+        3,
+        "no two instalments fall due on the same day"
+    );
+}
+
+/// A plan that cannot be divided is refused, not panicked on.
+///
+/// `ceil(total / installment)` divided by `installment_ct` before anything
+/// checked it was non-zero.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_payment_plan_with_no_instalment_size_is_refused() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let req = |installment_ct, total_ct| pg::CreatePaymentPlanRequest {
+        malo_id: uniq_malo(),
+        lf_mp_id: None,
+        total_ct,
+        installment_ct,
+        billing_day: 1,
+        first_due_date: "2026-05-01".to_owned(),
+        dunning_case_id: None,
+        note: None,
+        operator_sub: None,
+    };
+    assert!(
+        pg::create_payment_plan(&pool, TENANT, req(0, 10_000))
+            .await
+            .is_err(),
+        "a zero instalment size is a division by zero, not a plan"
+    );
+    assert!(
+        pg::create_payment_plan(&pool, TENANT, req(-500, 10_000))
+            .await
+            .is_err()
+    );
+    assert!(
+        pg::create_payment_plan(&pool, TENANT, req(10_000, 0))
+            .await
+            .is_err(),
+        "there is nothing to pay down"
+    );
+}
+
+/// The R-transactions act on a collection the bank already settled.
+///
+/// `set_collection_entry_status` matched `status = 'SUBMITTED'` for every
+/// target, so `RETURNED` (a camt.054 Rückläufer, by definition after
+/// settlement) and `REVERSED` (a pain.007 against a booked collection) could
+/// never be reached. The update affected nothing and reported it only through a
+/// `bool` every caller dropped.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_settled_collection_can_still_be_returned_or_reversed() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+
+    let (_run, entry, _malo) = seed_collection(&pool, date!(2026 - 04 - 10), 4_400).await;
+    assert!(
+        pg::set_collection_entry_status(&pool, entry.entry_id, "SETTLED", None)
+            .await
+            .unwrap()
+    );
+    assert!(
+        pg::set_collection_entry_status(&pool, entry.entry_id, "RETURNED", Some("MS03"))
+            .await
+            .unwrap(),
+        "a Rückläufer reaches a settled collection"
+    );
+
+    let (_run, entry2, _malo2) = seed_collection(&pool, date!(2026 - 04 - 11), 5_500).await;
+    pg::set_collection_entry_status(&pool, entry2.entry_id, "SETTLED", None)
+        .await
+        .unwrap();
+    assert!(
+        pg::set_collection_entry_status(&pool, entry2.entry_id, "REVERSED", Some("MD06"))
+            .await
+            .unwrap(),
+        "a pain.007 reverses a settled collection"
+    );
+}
+
+/// A replayed or out-of-order bank reply does not walk a terminal state back.
+///
+/// This is the half of the old fixed `SUBMITTED` guard that was right, and the
+/// transition table has to keep it.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_terminal_collection_state_is_not_walked_back() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let (_run, entry, _malo) = seed_collection(&pool, date!(2026 - 05 - 12), 3_300).await;
+
+    assert!(
+        pg::set_collection_entry_status(&pool, entry.entry_id, "REJECTED", Some("AM04"))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !pg::set_collection_entry_status(&pool, entry.entry_id, "SETTLED", None)
+            .await
+            .unwrap(),
+        "a rejected collection never settled — a replayed pain.002 must not say it did"
+    );
+    assert!(
+        !pg::set_collection_entry_status(&pool, entry.entry_id, "REVERSED", Some("MD06"))
+            .await
+            .unwrap(),
+        "there is nothing to send back: it never left the bank"
+    );
+
+    let after = pg::list_collection_entries(&pool, TENANT, Some("REJECTED"), None, 100)
+        .await
+        .unwrap();
+    assert!(
+        after.iter().any(|e| e.entry_id == entry.entry_id),
+        "the entry is still REJECTED"
+    );
+
+    // An unknown target is a programming error, not a silent no-op.
+    assert!(
+        pg::set_collection_entry_status(&pool, entry.entry_id, "SETTLED_MAYBE", None)
+            .await
+            .is_err()
+    );
+}

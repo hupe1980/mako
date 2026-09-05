@@ -1,8 +1,8 @@
 //! Balance-group topology identifiers (MaBiS).
 //!
 //! `BilanzierungsgebietId` and `BilanzkreisId` model the balance-group topology
-//! from BK6-22-024 (MaBiS). MABIS Summenzeitreihen key on them, which is why
-//! they live in `mako-mabis`.
+//! of BK6-24-174 Anlage 3 (MaBiS). MaBiS Summenzeitreihen key on them, which is
+//! why they live in `mako-mabis`.
 
 use serde::{Deserialize, Serialize};
 

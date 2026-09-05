@@ -20,6 +20,25 @@
 //! jitter, and after `max_attempts` set `dead_lettered_at` (the status-column
 //! DLQ — § 147 AO / GoBD: events are never silently dropped).
 //!
+//! # The attempt counter is advanced by the *claim*, not by the outcome
+//!
+//! `attempts` is incremented in the same statement that leases the row, and
+//! that statement is the only writer of the counter. Counting the attempt when
+//! it finishes instead made the whole retry budget conditional on the worker
+//! surviving long enough to record the outcome: a crash between the POST and
+//! the outcome write, or a database error on that write, left the counter where
+//! it was, so the row came back due after the lease with its budget intact and
+//! retried **forever** — and, because an undelivered row that never
+//! dead-letters keeps blocking its `ordering_key`, it took the rest of that
+//! Marktlokation's stream down with it. Leasing and counting together makes the
+//! budget hold whatever happens after the claim; the price is that a delivery
+//! that overruns its lease is counted twice, which is the honest reading of an
+//! at-least-once attempt anyway.
+//!
+//! `Worker::sweep_exhausted` is the matching backstop: a row whose budget ran
+//! out but whose dead-letter write was lost is moved to the DLQ from the claim
+//! path, so nothing depends on a single write succeeding.
+//!
 //! # Ordering
 //!
 //! Deliveries are **ordered per aggregate**, by `event_log.seq`: a delivery is
@@ -248,9 +267,51 @@ where
 
     // ── Phase 2: deliver ──────────────────────────────────────────────────────
 
+    /// Dead-letter every delivery whose attempt budget is spent but which is
+    /// still sitting in the queue.
+    ///
+    /// On the healthy path [`Worker::record_failure`] dead-letters the row
+    /// itself, so this sweeps nothing. It exists for the path where that write
+    /// never landed — the worker was killed between the POST and the outcome
+    /// write, or the outcome write hit a database error. Without it the
+    /// dead-letter decision rests on a single write succeeding, and a lost one
+    /// means an undelivered row that is claimed, POSTed and re-queued forever
+    /// while blocking every later event for its `ordering_key`.
+    ///
+    /// `next_attempt_at <= now()` excludes rows whose lease is still running, so
+    /// this never dead-letters a delivery that is in flight right now.
+    ///
+    /// `last_error` is deliberately left alone: the sweep records the *fact* of
+    /// exhaustion (`dead_lettered_at` plus a spent `attempts`) and does not
+    /// overwrite the diagnostic left by the last attempt that managed to record
+    /// one. The error log below is what tells an operator the DLQ entry arrived
+    /// this way rather than through the normal path.
+    async fn sweep_exhausted(&self) -> Result<(), sqlx::Error> {
+        let swept: Vec<(String, String, String, i16)> = sqlx::query_as(
+            "UPDATE event_delivery
+                SET dead_lettered_at = now()
+              WHERE delivered_at IS NULL AND dead_lettered_at IS NULL
+                AND attempts >= $1
+                AND next_attempt_at <= now()
+              RETURNING event_id, subscriber_id, webhook_url, attempts",
+        )
+        .bind(self.config.max_attempts)
+        .fetch_all(&self.pool)
+        .await?;
+        for (event_id, subscriber_id, webhook_url, attempts) in swept {
+            error!(
+                %event_id, %subscriber_id, %webhook_url, attempts,
+                "fanout: attempt budget spent with no recorded outcome — dead-lettering \
+                 (the outcome write was lost; §147 AO / GoBD)",
+            );
+        }
+        Ok(())
+    }
+
     /// Claim-with-lease due deliveries and POST them. Returns rows processed.
     async fn deliver_phase(&self) -> Result<usize, sqlx::Error> {
         let lease_secs = i64::try_from(self.config.lease.as_secs()).unwrap_or(i64::MAX);
+        self.sweep_exhausted().await?;
         // The claim carries the envelope and the signing secret out with it.
         // Loading them per delivery instead cost two extra round trips each, and
         // the secret lookup was allowed to fail silently — which downgraded a
@@ -276,8 +337,13 @@ where
                   LIMIT $2
                   FOR UPDATE SKIP LOCKED
              ), claimed AS (
+                 -- Lease AND count in one statement: `attempts` is advanced here
+                 -- and nowhere else, so the retry budget survives anything that
+                 -- happens to this delivery after the claim. RETURNING yields the
+                 -- post-increment value, i.e. the number of this attempt.
                  UPDATE event_delivery d
-                    SET next_attempt_at = now() + ($1 * INTERVAL '1 second')
+                    SET attempts        = d.attempts + 1,
+                        next_attempt_at = now() + ($1 * INTERVAL '1 second')
                    FROM due
                   WHERE d.event_id = due.event_id AND d.subscriber_id = due.subscriber_id
                   RETURNING d.event_id, d.subscriber_id, d.webhook_url, d.attempts
@@ -307,8 +373,8 @@ where
         let body = match serde_json::to_vec(&d.envelope) {
             Ok(b) => b,
             Err(e) => {
-                let _ = self
-                    .record_failure(&d, &format!("serialize envelope: {e}"))
+                let err = format!("serialize envelope: {e}");
+                self.persist("record_failure", &d, || self.record_failure(&d, &err))
                     .await;
                 return;
             }
@@ -353,18 +419,72 @@ where
         match req.send().await {
             Ok(resp) if resp.status().is_success() => {
                 debug!(event_id = %d.event_id, subscriber_id = %d.subscriber_id, "fanout: delivered");
-                let _ = self.mark_delivered(&d).await;
+                self.persist("mark_delivered", &d, || self.mark_delivered(&d))
+                    .await;
             }
             Ok(resp) => {
                 let status = resp.status().as_u16();
                 warn!(event_id = %d.event_id, subscriber_id = %d.subscriber_id, status, "fanout: non-2xx");
-                let _ = self.record_failure(&d, &format!("HTTP {status}")).await;
+                let err = format!("HTTP {status}");
+                self.persist("record_failure", &d, || self.record_failure(&d, &err))
+                    .await;
             }
             Err(e) => {
                 warn!(event_id = %d.event_id, subscriber_id = %d.subscriber_id, error = %e, "fanout: transport error");
-                let _ = self.record_failure(&d, &e.to_string()).await;
+                let err = e.to_string();
+                self.persist("record_failure", &d, || self.record_failure(&d, &err))
+                    .await;
             }
         }
+    }
+
+    /// Write a delivery's outcome, retrying briefly, and shout if it is lost.
+    ///
+    /// [`Self::deliver_one`] has no caller that could act on a returned error —
+    /// it is driven by `for_each_concurrent` inside the worker loop, and the row
+    /// is already claimed and leased — so there is nothing to propagate to. What
+    /// the outcome write is worth is worth a retry, though: it is the only thing
+    /// standing between a transient database blip and a **duplicate webhook**
+    /// (a lost `mark_delivered` leaves `delivered_at` NULL, so the row is due
+    /// again the moment its lease expires and the subscriber is POSTed the same
+    /// event twice), and the pool's own connection recovery usually needs no
+    /// more than the second try.
+    ///
+    /// If every try fails the outcome really is lost, and the row's fate is left
+    /// to the claim path: the attempt counter was already advanced by the claim,
+    /// so the delivery still runs down its budget and reaches the DLQ via
+    /// [`Self::sweep_exhausted`] instead of retrying forever. That degradation is
+    /// silent from the outside, which is exactly why it is logged at `error!`
+    /// with the delivery's primary key and endpoint — enough to find the row.
+    async fn persist<'a, F, Fut>(&self, what: &str, d: &ClaimedDelivery, mut op: F)
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = Result<(), sqlx::Error>> + 'a,
+    {
+        const RETRY_DELAYS: [Duration; 2] =
+            [Duration::from_millis(100), Duration::from_millis(400)];
+        let mut last: sqlx::Error;
+        let mut delays = RETRY_DELAYS.into_iter();
+        loop {
+            match op().await {
+                Ok(()) => return,
+                Err(e) => last = e,
+            }
+            match delays.next() {
+                Some(delay) => tokio::time::sleep(delay).await,
+                None => break,
+            }
+        }
+        error!(
+            event_id = %d.event_id,
+            subscriber_id = %d.subscriber_id,
+            webhook_url = %d.webhook_url,
+            attempts = d.attempts,
+            error = %last,
+            "fanout: could not persist the delivery outcome ({what}) — the subscriber may be \
+             delivered this event again; the claim already counted the attempt, so the row \
+             still dead-letters rather than retrying forever",
+        );
     }
 
     async fn mark_delivered(&self, d: &ClaimedDelivery) -> Result<(), sqlx::Error> {
@@ -381,25 +501,28 @@ where
 
     /// Record a failed attempt: back off, or dead-letter once `max_attempts` is
     /// reached (status-column DLQ).
+    ///
+    /// `d.attempts` is the number of *this* attempt — the claim already counted
+    /// it — and this function deliberately does not write the counter: a single
+    /// writer is what makes the budget hold when this write is the one that gets
+    /// lost.
     async fn record_failure(&self, d: &ClaimedDelivery, err: &str) -> Result<(), sqlx::Error> {
-        let new_attempts = d.attempts + 1;
-        if new_attempts >= self.config.max_attempts {
+        if d.attempts >= self.config.max_attempts {
             error!(
                 event_id = %d.event_id,
                 subscriber_id = %d.subscriber_id,
                 webhook_url = %d.webhook_url,
-                attempts = new_attempts,
+                attempts = d.attempts,
                 last_error = %err,
                 "fanout: max attempts exhausted — dead-lettering (§147 AO / GoBD)",
             );
             sqlx::query(
                 "UPDATE event_delivery
-                    SET attempts = $3, dead_lettered_at = now(), last_error = $4
+                    SET dead_lettered_at = now(), last_error = $3
                   WHERE event_id = $1 AND subscriber_id = $2",
             )
             .bind(&d.event_id)
             .bind(&d.subscriber_id)
-            .bind(new_attempts)
             .bind(err)
             .execute(&self.pool)
             .await?;
@@ -407,8 +530,9 @@ where
         }
 
         // The last configured entry repeats; an empty backoff falls back to the
-        // poll interval rather than underflowing the index.
-        let idx = usize::try_from(d.attempts).unwrap_or(0);
+        // poll interval rather than underflowing the index. Attempt 1 takes the
+        // first entry.
+        let idx = usize::try_from(d.attempts.saturating_sub(1)).unwrap_or(0);
         let base = self
             .config
             .backoff
@@ -418,18 +542,15 @@ where
                 || self.config.poll_interval.as_secs(),
                 std::time::Duration::as_secs,
             );
-        let delay =
-            i64::try_from(jittered(base, &d.subscriber_id, new_attempts)).unwrap_or(i64::MAX);
+        let delay = i64::try_from(jittered(base, &d.subscriber_id, d.attempts)).unwrap_or(i64::MAX);
         sqlx::query(
             "UPDATE event_delivery
-                SET attempts = $3,
-                    next_attempt_at = now() + ($4 * INTERVAL '1 second'),
-                    last_error = $5
+                SET next_attempt_at = now() + ($3 * INTERVAL '1 second'),
+                    last_error = $4
               WHERE event_id = $1 AND subscriber_id = $2",
         )
         .bind(&d.event_id)
         .bind(&d.subscriber_id)
-        .bind(new_attempts)
         .bind(delay)
         .bind(err)
         .execute(&self.pool)

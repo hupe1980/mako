@@ -2,16 +2,32 @@
 title = "makod Operator Guide"
 description = "makod operator guide: port layout, CLI flags, config file, persistent and volatile storage, AS4 inbound, HTTP REST API, health checks, and Kubernetes deployment."
 weight = 21
-[extra]
-mermaid = true
 +++
-# `makod` Operator Guide
-
-`makod` is the production daemon for the Mako process engine. It assembles all
-domain modules (GPKE, WiM, GeLi Gas, MABIS), wires them to a durable
+`makod` is the production daemon for the Mako process engine. It assembles the
+seven domain modules `startup::production_modules()` registers — GPKE, WiM,
+GeLi Gas, GaBi Gas, MaBiS, NZR-EMob and Redispatch — wires them to a durable
 [SlateDB](https://github.com/slatedb/slatedb) event store, and exposes three
 independent server ports — AS4 inbound, HTTP REST ingest, and BDEW
 API-Webdienste Strom.
+
+**What it is speaking, in plain terms.** German market communication (MaKo) is
+EDIFACT messages exchanged between four roles: the **LF** (Lieferant, supplier),
+the **NB** (Netzbetreiber, grid operator), the **MSB** (Messstellenbetreiber,
+metering operator) and the **BKV** (Bilanzkreisverantwortlicher, who answers for
+a balancing circle). Every message names its business case with a
+[**Prüfidentifikator (PID)**](@/docs/architecture/domain-model.md#prufidentifikator-pid) — a five-digit code,
+so `55001` *is* „Anmeldung Lieferbeginn" — and the BDEW publishes per message
+type an [**AHB** and a **MIG**](@/docs/architecture/domain-model.md#ahb-and-mig): which segments a given PID must
+carry, and the syntax those segments obey. Answers are owed within a
+[**Frist**](@/docs/architecture/domain-model.md#frist-and-werktag), a regulatory deadline counted in Werktage or
+fixed to a clock time. `makod` parses the message, routes it by PID to a workflow, runs the Frist
+as a durable deadline, and renders the answer back onto the wire.
+
+Every term above is defined once in the [glossary](@/docs/architecture/domain-model.md#glossary), alongside the
+[EDIFACT message types](@/docs/architecture/domain-model.md#edifact-message-types) `makod` speaks. The roles, the
+market objects and the identifier formats are the [domain model](@/docs/architecture/domain-model.md); which PID
+belongs to which business process is the
+[process map](@/docs/reference/processes.md).
 
 ---
 
@@ -33,7 +49,7 @@ All three ports are optional and independently enabled via CLI flags or
 environment variables. A minimal deployment can use a single port; a full
 production deployment uses all three.
 
-Companion daemons complete the production stack:
+The daemons `makod` exchanges commands and events with most directly:
 
 | Daemon | Port | Role |
 |--------|------|------|
@@ -41,9 +57,11 @@ Companion daemons complete the production stack:
 | `invoicd` | `:8280` | INVOIC plausibility, receipt persistence, REMADV auto-dispatch |
 | `edmd` | `:8380` | Meter-data store (MSCONS), time-series API, Mehr-/Mindermengen |
 | `obsd` | `:8480` | Business-process observability, BNetzA KPI reports, alerting |
+| [`processd`](@/docs/services/processd.md) | `:8580` | Decision engine: walks the Entscheidungsbäume and posts the answer command back |
 | `netzbilanzd` | `:8680` | NNE/MMM/MSB INVOIC generation |
 
-See the individual service READMEs for setup details.
+The full platform is larger than this; see the
+[service index](@/docs/services/_index.md) for every daemon and its guide.
 
 ---
 
@@ -162,7 +180,7 @@ format = "json"     # pretty | compact | json
 backend = "s3"      # local | s3 | gcs | azure
 # data_dir       = "/var/lib/makod"   # required for backend = "local"
 # allow_volatile = false              # in-memory store; development only
-# max_stream_events = 100000          # per-stream quota; 0 disables
+# max_stream_events = 10000           # per-stream quota (default); 0 disables
 
 [storage.s3]
 bucket   = "my-makod-events"
@@ -295,6 +313,8 @@ Use `format = "json"` in production for log aggregators (Loki, OpenSearch, Cloud
 | `backend` | `MAKOD_OBJECT_STORE` | `--object-store` | `local` | `local` `s3` `gcs` `azure` |
 | `data_dir` | `MAKOD_DATA_DIR` | `--data-dir` | *(in-memory)* | Local FS path (backend=local only) |
 | `allow_volatile` | `MAKOD_ALLOW_VOLATILE` | `--allow-volatile` | `false` | Must be `true` to run without `data_dir`; **never production** |
+| `max_stream_events` | `MAKOD_MAX_STREAM_EVENTS` | `--max-stream-events` | `10000` | Per-stream event quota; `0` disables the cap |
+| `allow_multi_instance` | `MAKOD_ALLOW_MULTI_INSTANCE` | `--allow-multi-instance` | `false` | Waives the single-writer refusal — only with an external lock, see [Scaling](#scaling) |
 
 When `backend = "local"` and `data_dir` is **omitted**, makod **refuses to start** unless
 `allow_volatile` is also set. This is a hard safety guard; it prevents silent accidental
@@ -336,9 +356,12 @@ Azure credentials: `AZURE_STORAGE_ACCOUNT_KEY`, or service-principal via `AZURE_
 | TOML key | Env var | CLI flag | Default | Description |
 |---|---|---|---|---|
 | `shutdown_timeout_secs` | `MAKOD_SHUTDOWN_TIMEOUT_SECS` | `--shutdown-timeout-secs` | `30` | Shutdown grace period in seconds |
-| `deadline_poll_interval_secs` | `MAKOD_DEADLINE_POLL_INTERVAL_SECS` | `--deadline-poll-interval-secs` | `30` | How often the deadline scheduler polls for due deadlines (minimum 1 s; set ≤30 s for Redispatch 2.0 Activation 5-minute constraint) |
+| `deadline_poll_interval_secs` | `MAKOD_DEADLINE_POLL_INTERVAL_SECS` | `--deadline-poll-interval-secs` | `30` | How often the deadline scheduler polls for due deadlines (minimum 1 s; keep well under the tightest Redispatch 2.0 window — the 3-minute `AcknowledgementDocument` Frist, ahead of the Activation response window) |
+| `snapshot_interval` | `MAKOD_SNAPSHOT_INTERVAL` | `--snapshot-interval` | `100` | Events between durable snapshots; `1` always snapshots, `0` disables them |
+| `projection_checkpoint_interval` | `MAKOD_PROJECTION_CHECKPOINT_INTERVAL` | `--projection-checkpoint-interval` | `60` | Seconds between projection cursor writes; `0` stops the checkpoint workers |
+| `worker_threads` | `MAKOD_WORKER_THREADS` | `--worker-threads` | *(logical CPUs)* | Tokio worker threads |
 | *(CLI/env only)* | `MAKOD_MARKTROLLEN` | `--marktrollen` | *(all `[[party]]` roles)* | Optional override of the Marktrollen this instance accepts commands for (comma-separated) |
-| *(CLI/env only)* | `MAKOD_DEPLOYMENT_ROLES` | `--deployment-roles` | *(all roles)* | Roles that gate PID registration: `NB`, `LF`, `MSB`, `NMSB`, `AMSB`, `BKV`, `UENB`/`FNB`, `BIKO`, `ESA` |
+| *(CLI/env only)* | `MAKOD_DEPLOYMENT_ROLES` | `--deployment-roles` | *(all roles)* | Roles that gate PID registration: `NB`, `LF`, `MSB`, `NMSB`, `AMSB`, `BKV`, `UENB`/`ÜNB`/`UNB`/`FNB`, `BIKO`, `ESA`, plus the sub-qualifiers `GNB`/`ANB`/`VNB` (→ `NB`), `LFG` (→ `LF`), `GMSB` (→ `MSB`). An unrecognised value is dropped with a `WARN` |
 | *(CLI/env only)* | `MAKOD_MARKTD_URL` | `--marktd-url` | *(unset)* | Cluster-internal marktd base URL. Enables the ESA consent gate + M1 Konfigurationsprodukt guard — see below |
 | *(CLI/env only)* | `MAKOD_MARKTD_API_KEY` | `--marktd-api-key` | *(empty)* | Bearer token for machine-to-machine calls to `--marktd-url` |
 
@@ -355,7 +378,7 @@ for NB, LF, and MSB subsidiaries) lists one entry per identity.
 | TOML key | Required | Description |
 |---|---|---|
 | `mp_id` | yes | 13-digit BDEW-Codenummer (`99…`), DVGW-Codenummer (`98…`), GS1 GLN, or 16-char EIC |
-| `roles` | yes | Marktrollen this identity is registered for: `NB`, `LF`, `MSB`, `GNB`, `LFG`, `gMSB`, `MGV`, `BKV`, `UNB`, `ANB`, `VNB`, `NMSB`, `AMSB` |
+| `roles` | yes | Marktrollen this identity is registered for, case-insensitive. Strom: `NB`, `LF`, `MSB`, `ANB`, `VNB`, `NMSB`, `AMSB`, `BKV`, `UNB`, `BIKO`, `ESA`, `DP`, `EIV`. Gas: `GNB`, `LFG`, `GMSB`, `MGV`, `FNB`, `KN`. Sparte-neutral: `RB`. `MGV`, `DP`, `EIV`, `KN` and `RB` are accepted but route no PIDs |
 | `primary` | no | Marks the storage partition key (derives the engine `TenantId` and the default EDIFACT sender MP-ID). When absent, the first entry is primary. |
 
 ```toml
@@ -847,7 +870,7 @@ statements cannot lower: layering policies on top can only *remove* access, via
 | Carve exceptions out of a broadly trusted deployment | Keep the baseline, add `forbid` rules via `--cedar-policy-dir` |
 | Grant nothing that is not written down | `--cedar-no-default-policy` — the baseline is omitted and `--cedar-policy-dir` becomes the only source of access |
 
-The second is required for least privilege and for §9 EnWG role separation; the
+The second is required for least privilege and for § 6a EnWG role separation; the
 shipped `conservative.cedar` is written for it. `makod` refuses to start if the
 flag is set without a policy directory, rather than denying every request.
 
@@ -863,22 +886,27 @@ MaKo namespace
 ├── Command            — attrs: name, marktrolle, pid, tenant
 ├── EdifactIngest      — attrs: tenant
 ├── AdminMaloRecord    — attrs: tenant, malo_id (optional)
-└── AdminPartnerRecord — attrs: tenant, gln (optional)
+├── AdminPartnerRecord — attrs: tenant, gln (optional)
+├── MetricsEndpoint · McpEndpoint · RechnungEndpoint
+├── MigrationEndpoint · WebdiensteEndpoint
+└── ProcessRecord      — attrs: tenant, workflow
 
 Actions
 ├── SubmitCommand
 ├── IngestEdifact
+├── ReadMetrics · UseMcp · ReadRechnung · AdminMigrations · UseWebdienste
+├── ReadProcess        — evaluated per workflow (§ 6a EnWG role separation)
 ├── AdminMalo (group)
-│   ├── AdminMaloRead / AdminMaloWrite / AdminMaloDelete / AdminMaloStats
-├── AdminPartner (group)
-│   └── AdminPartnerRead / AdminPartnerWrite / AdminPartnerDelete / AdminPartnerImport
+│   └── AdminMaloRead / AdminMaloWrite / AdminMaloDelete / AdminMaloStats
+└── AdminPartner (group)
+    └── AdminPartnerRead / AdminPartnerWrite / AdminPartnerDelete / AdminPartnerImport
 ```
 
 ### Action groups
 
 Every mutating or data-bearing endpoint is behind a Cedar action:
 `SubmitCommand`, `IngestEdifact`, the `AdminMalo*`/`AdminPartner*` families,
-`ReadMetrics`, `UseMcp`, `ReadRechnung` (`GET /api/v1/invoic/{id}/rechnung` —
+`ReadMetrics`, `UseMcp`, `ReadRechnung` (`GET /api/v1/invoic/{process_id}/rechnung` —
 BO4E billing data), `AdminMigrations` (`POST /admin/migrations`),
 `UseWebdienste` (every `:8090` route), and `ReadProcess` (MCP `get_process`,
 `list_overdue_deadlines` and `list_dead_letters`).
@@ -886,7 +914,7 @@ The conservative policy grants `AdminMigrations` to **no** standing principal:
 grant it to a break-glass principal for the FV-cutover window, then remove it.
 
 `ReadProcess` carries the process's **workflow name** in the Cedar context, so
-a combined-role (VIU) deployment enforces §9 EnWG Informatorisches Unbundling
+a combined-role (VIU) deployment enforces § 6a EnWG Informatorisches Unbundling
 with policy alone — an NB-scoped principal can be limited to NB-side workflows
 and never sees LF process state. It governs both process-reading MCP tools:
 `get_process` denies as `not_found` to avoid an existence oracle, and
@@ -1183,10 +1211,20 @@ the same values as the message's `NAD+MS`/`NAD+MR` (Allgemeine Festlegungen
 UNZ and in the §2.12 Content-Disposition filename — is derived from the outbox
 message id, so delivery retries reuse the same DAR.
 
+**The webhook transport substitute.** With `[erp] edifact_outbox_webhook_url`
+set, outbound messages leave through `WebhookEdifactSender` instead of AS4: each
+rendered interchange is POSTed as a CloudEvents 1.0 structured-mode JSON body of
+type **`de.mako.edifact.outbound`**, carrying `message_type`, `recipient` and the
+`edifact` bytes, with the outbox message id as both the CloudEvent `id` and the
+`X-Idempotency-Key` header. It is the development and ERP-integration path — the
+production `BdewAs4Sender` emits no such event — and `MaloIdentCallback` messages
+still go to the MaLo-ID sender unchanged.
+
 ### AS4 security test coverage
 
 `makod` ships **12 automated tests** in `services/makod/tests/as4_security.rs` that
-verify BDEW AS4-Profil v1.2 compliance without WIRK certificates:
+verify BDEW AS4-Profil v1.2 compliance without WIRK certificates. Seven of them,
+and what each proves:
 
 ```mermaid
 graph LR
@@ -1388,7 +1426,7 @@ the API directly.
 
 `get_process` and `list_overdue_deadlines` evaluate `ReadProcess` **per
 workflow**, so a combined-role (VIU) deployment can scope an NB principal to
-grid-side workflows and keep supply-side process state out of reach (§9 EnWG
+grid-side workflows and keep supply-side process state out of reach (§ 6a EnWG
 Informatorisches Unbundling). `list_dead_letters` spans every workflow, so a
 workflow-scoped principal is denied it outright rather than shown a filtered
 view that would misrepresent the queue.
@@ -1435,7 +1473,7 @@ context and step-by-step instructions:
 | `geli-lieferbeginn` | `malo_id`, `lieferbeginn_datum` | Guided GeLi Gas Lieferbeginn workflow (gas supplier change) |
 | `wim-geraetewechsel` | `melo_id`, `process_date`, `receiver_mp_id`, `marktrolle` | Guided WiM Gerätewechsel workflow (meter device change) |
 | `msb-preisanfrage` | *(none)* | Step-by-step MSB Preisanfrage (REQOTE/QUOTES, PRICAT 27003 dispatch) |
-| `wim-device-change` | *(none)* | Guided WiM MSB-Wechsel, beide Sparten (approve/reject within 3 / 5 / 7 / 1 WT) |
+| `wim-gas-anmeldung` | *(none)* | Guided WiM Gas MSB-Wechsel — the GNB answers a gMSB Anmeldung (UTILMD G 44042–44053) |
 | `gpke-sperrung` | *(none)* | Guided GPKE Sperrung Strom (LF confirms disconnection to NB) |
 
 Each prompt returns a `User` message that instructs the LLM to call the right tools
@@ -1567,7 +1605,7 @@ UNH+...
     {
       "message_type": "UTILMD",
       "pid": 55001,
-      "workflow": "GpkeSupplierChange",
+      "workflow": "gpke-supplier-change",
       "status": "routed"
     }
   ]
@@ -1863,9 +1901,8 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `mabis.summenzeitreihe.uebermitteln` | `NB` or `ÜNB` | MaBiS | 13003 | File a Summenzeitreihe for one Bilanzierungsgebiet with the BIKO |
 | `gpke.vollzugsmeldung.empfangen` | `NB`/`LFN`/`LFA` | GPKE | 21024–21033 | Vollzugsmeldung received via REST (manual replay) |
 | `wim.iftsta.empfangen` | `NB`/`MSB` | WiM | 21009–21018 | WiM IFTSTA status received via REST (manual replay) |
-| `mabis.iftsta.empfangen` | `BKV`/`NB`/`ÜNB` | MaBiS | 21002 | Abweisung einer Prüfmitteilung (BIKO → NB/ÜNB); requires `abweisungsgrund`. A rejected Prüfmitteilung is never forwarded, so the check has to be redone (§ 9.8.2 Nr. 2) |
-| `mabis.datenstatus.empfangen` | `BKV`/`NB`/`ÜNB` | MaBiS | 21003 · 21004 | Datenstatus received via REST. **Both** PIDs carry one — 21003 addresses the NB/ÜNB, 21004 the BKV — so which one arrives follows from the role. Accepts the `STS+Z04` codes `A01`/`A02`/`A03`/`A04`/`A06` or their snake_case names |
-
+| `mabis.iftsta.empfangen` | `BKV`/`NB`/`ÜNB`/`BIKO` | MaBiS | 21002 | Abweisung einer Prüfmitteilung (BIKO → NB/ÜNB); requires `abweisungsgrund`. A rejected Prüfmitteilung is never forwarded, so the check has to be redone (§ 9.8.2 Nr. 2) |
+| `mabis.datenstatus.empfangen` | `BKV`/`NB`/`BIKO` | MaBiS | 21003 · 21004 | Datenstatus received via REST. **Both** PIDs carry one — 21003 addresses the NB/ÜNB, 21004 the BKV — so which one arrives follows from the role. Accepts the `STS+Z04` codes `A01`/`A02`/`A03`/`A04`/`A06` or their snake_case names |
 | `gpke.lieferbeginn.ablehnen` | `NB` | GPKE | 55003 | DSO rejects supply start (`E_0622`/`E_0623` code) |
 | `gpke.neuanlage.bestaetigen` | `NB` | GPKE | 55602/55603 | NB confirms a Neuanlage (`E_0608`; cluster picks the PID) |
 | `gpke.neuanlage.ablehnen` | `NB` | GPKE | 55604/55605 | NB refuses a Neuanlage — admissible only after the 60-WT Prüflauf |
@@ -1920,6 +1957,7 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `geli.beendigung-zuordnung.bestaetigen` | `LFG` | GeLi Gas | 44011 | LFA confirms the Abmeldungsanfrage |
 | `geli.kuendigung.bestaetigen` | `LFG` | GeLi Gas | 44017 | LFA confirms the Kündigung (`G_0001`) |
 | `geli.eog.bestaetigen` | `LFG` | GeLi Gas | 44014 | E/G confirms the EoG Zuordnung |
+
 Commands with a single Marktrolle never need a `marktrolle` field.
 Commands listing two Marktrollen (`NB`/`MSB`, `BKV`/`ÜNB`) **always** require it.
 
@@ -2015,7 +2053,7 @@ never be the reason a long conversation stalls.
 
 | PID(s) received via loopback | Action | Workflow |
 |---|---|---|
-| 17115, 17117 (ORDERS Strom) | spawn by MaLo | `gpke-sperrung` — `ReceiveSperrauftrag` |
+| 17115, 17117 (ORDERS Strom) | spawn by MaLo | `gpke-sperrung` — `ReceiveSperrung` |
 | 17115, 17117 (ORDERS Gas) | spawn by MaLo | `geli-gas-sperrung-nb` — `ReceiveSperrung` |
 | 19118, 19119 (ORDRSP) | resume by MaLo | `gpke-sperrung` — `ReceiveMsbAntwort` |
 | 19116, 19117 (ORDRSP) | resume by MaLo | `gpke-sperrung-lf` — `ReceiveOrdrsp` |
@@ -2192,7 +2230,7 @@ stating something the sender did not say.
 | 13023 | Redispatch 2.0 Ausfallarbeitssummenzeitreihe | `Z46` | same |
 | 13015 | Arbeit + Leistungsmaximum im Kalenderjahr vor Lieferbeginn | `Z27` | work entry plus one or two monthly maxima |
 | 13016 | Energiemenge und Leistungsmaximum | `Z28` | same |
-| 13019 | Energiemenge (Strom) | `7` |
+| 13019 | Energiemenge (Strom) | `7` | work entry only, no maximum |
 | 13027 | Werte nach Typ 2 (MSB → ESA) | `Z83` | work entry only |
 
 `BGM` DE 1001 names what kind of document the message is and the receiver routes
@@ -2261,8 +2299,8 @@ the GitHub Container Registry:
 # Pull the latest release
 docker pull ghcr.io/hupe1980/mako-makod:latest
 
-# Pin to a specific version
-docker pull ghcr.io/hupe1980/mako-makod:latest
+# Pin a release tag in production — 1.2.3, or 1.2 to follow the patch stream
+docker pull ghcr.io/hupe1980/mako-makod:1.2.3
 
 # Smoke-test the image
 docker run --rm ghcr.io/hupe1980/mako-makod:latest --check
@@ -2572,7 +2610,7 @@ graph LR
 | **OutboxErpWorker** | Continuous (optional, `--erp-webhook-url`) | POSTs BO4E CloudEvents from the outbox to the ERP webhook |
 | **DeadlineScheduler** | Every 30 s (`--deadline-poll-interval-secs`) | Fires overdue process deadlines (APERAK Frist, Zahlungsfrist) |
 | **Projection checkpoint** | `--projection-checkpoint-interval` | Persists projection checkpoints for crash-safe replay |
-| **Inbox purge** | Periodic | Evicts expired AS4 dedup entries from the inbox store |
+| **retention-purge-worker** | Daily | Evicts expired AS4 dedup entries and spent `Idempotency-Key` records |
 
 A JWKS refresh loop also runs when OIDC is enabled (see [OIDC](#oidc-jwt-authentication)).
 
@@ -2619,10 +2657,19 @@ across both sectors — so a Gas NN-Rechnung (31002), MMM (31005) or MSB-Rechnun
 
 When the recipient is a sparte-neutral party or not one of our own MP-IDs, makod
 falls back to a conservative message-level heuristic: an unambiguous Gas-only PID
-(UTILMD G 44xxx, INVOIC 31003/31007/31008/31010/31011) or a Gas UTILMD release
-track. INVOIC **31004** is deliberately absent — the Stornorechnung is the
-Sparte-neutral universal Storno of any INVOIC (INVOIC AHB §3.1.2), so it resolves
-by recipient MP-ID and is never forced to Gas.
+(UTILMD G 44xxx, IFTSTA 21028, INVOIC 31007/31008/31010) or a Gas UTILMD release
+track. A PID qualifies only when **every** row the BDEW *Anwendungsübersicht
+Prüfidentifikatoren* 4.0 carries for it is Gas. INVOIC **31004** is the familiar
+case — the Stornorechnung is the Sparte-neutral universal Storno of any INVOIC
+(INVOIC AHB §3.1.2) — but four more had been listed as Gas-only while the
+overview carries them in both Sparten, and each made this heuristic send a Gas
+CONTRL into a Strom interchange, which expects none: INVOIC **31003**
+(WiM-Rechnung, also WiM Strom Teil 1 MSBA → MSBN), INVOIC **31011** (Rechnung
+sonstige Leistung, also GPKE Teil 2 NB → LF) and INSRPT **23005**/**23009**
+(Informationsmeldung, also WiM Strom Teil 2). All five resolve by recipient
+MP-ID. In the other direction, INVOIC **31009** (MSB-Rechnung) is Strom in all
+seven of its rows — the Gas MSB bills on 31003 — and IFTSTA **21028** is a GeLi
+Gas Informationsmeldung that used to sit inside a Strom-only IFTSTA range.
 
 The CONTRL and its 6 h escalation deadline are written in one transaction
 (`enqueue_outbox_with_deadlines`), so a crash cannot queue the acknowledgement
@@ -2735,7 +2782,7 @@ curl -X PUT http://localhost:8080/admin/partners/9900000000001 \
 
 ```bash
 curl -s http://localhost:8080/health | jq .
-# → {"status":"ok","store":"open"}
+# → {"status":"ok","instance_id":"makod-0-1","version":"0.19.0"}
 ```
 
 ### Submitting a test EDIFACT message
@@ -2772,7 +2819,8 @@ Every significant operation carries a trace context:
 | **Metrics** | `mako.deadline.fired` counter (by workflow, label) |
 | **Metrics** | `mako.process.duration_ms` histogram |
 
-`makod` also exports a Prometheus-format counter endpoint at `GET /metrics`:
+`makod` also exports a Prometheus endpoint at `GET /metrics` (Cedar action
+`ReadMetrics`). The counters:
 
 | Counter | Labels | Alert condition |
 |---|---|---|
@@ -2785,9 +2833,32 @@ Every significant operation carries a trace context:
 | `makod_validation_failed_total` | `message_type`, `release` | A counterparty is sending messages that do not conform to the AHB |
 | **`makod_aperak_missed_total`** | `label` | **Alert when > 0** — an undelivered APERAK is a regulatory violation (APERAK AHB 1.0 §2.4.1 Strom / §2.3.1 Gas) |
 
-`family` is the domain prefix — `gpke`, `wim`, `geli-gas`, `wim-gas`,
-`gabi-gas`, `mabis`, `redispatch` — and carries the same value on the initiated
-and completed counters, so the two join on one label. `result` is `accepted`
+The same scrape carries seven unlabelled gauges, sampled per request:
+
+| Gauge | What it reads | Alert condition |
+|---|---|---|
+| `makod_outbox_pending_total` | Undelivered outbound messages | A level that stops falling |
+| `makod_deadline_pending_total` | Registered, not yet fired | Baseline |
+| `makod_overdue_deadlines_total` | Past `due_at`, not yet dispatched | **> 0 sustained** — scheduler lag, and a Frist is what lags |
+| `makod_registry_total` | Live process instances | Capacity planning |
+| `makod_dead_letter_recent_total` | DLQ records in the last 1000 scanned | Any non-zero warrants a look (§ 147 AO) |
+| `makod_volatile_mode_active` | `1` when storage is in-memory | **Alert on `1`** in production — see the volatile-mode warning above |
+| `makod_build_info` | Constant `1`, labelled `version` | Rollout verification |
+
+`family` is a domain prefix, and all three counters derive it from **one table**
+(`orchestrator::process_family`): `gpke`, `wim`, `esa`, `geli-gas`, `gabi-gas`,
+`mabis`, `emob`, `redispatch`, `netzzugang`, and `other` for anything unclaimed.
+Each row owns the label, the workflow-name prefix that produces it and the
+command-name prefixes that initiate it, so an initiated-vs-completed dashboard
+joins on the label with no hand-matching. It did not always: the initiation
+counter cut the command name and the completion counter cut the workflow name at
+its first hyphen, so `family="geli-gas"` initiations never met `family="geli"`
+completions and both Gas families read as processes that start and never finish.
+An `invoic.*` command is labelled with the family of the workflow it enters
+(`gpke`, `wim` or `geli-gas`) rather than with the message type, because the
+completion side has only the workflow name to label with. `netzzugang` is the one
+family with no workflow: those commands enqueue an outbound message directly, so
+they are counted as initiated and never as completed. `result` is `accepted`
 (terminal success), `rejected` (negative APERAK), `timeout` (a regulatory window
 expired unanswered) or `cancelled` (permanent failure). Completions are counted
 as the ERP outbox drains each terminal event, the one point that sees every
@@ -2851,8 +2922,8 @@ OTEL_SERVICE_NAME=makod \
 makod --config /etc/makod/makod.toml
 ```
 
-With an endpoint configured the subscriber switches to the structured JSON layer
-and `[logging] format` no longer applies. Omit `[otel]` entirely to disable
+With an endpoint configured the subscriber is the structured JSON layer, and
+`[logging] format` does not apply in that mode. Omit `[otel]` entirely to disable
 telemetry with zero overhead.
 
 ---

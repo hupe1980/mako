@@ -469,13 +469,23 @@ where
     // row. Read it in the same transaction so this event carries the same
     // `marktsparte` as its EDIFACT-driven twin in `event_ingest`; a path that
     // omits it bypasses every `sparten` filter.
-    let sparte: Option<String> =
-        sqlx::query_scalar("SELECT sparte FROM malo WHERE malo_id = $1 AND tenant = $2")
-            .bind(&malo_id_str)
-            .bind(&state.tenant)
-            .fetch_optional(&mut *tx)
-            .await
-            .unwrap_or(None);
+    // `malo` is tenant-global — the Marktlokation is the market's object, not a
+    // tenant's — so the lookup keys on the MaLo-ID alone. A failure here is not
+    // "no Sparte": it aborts the surrounding transaction, so it must surface
+    // rather than resolve to `None`.
+    let sparte: Option<String> = match sqlx::query_scalar(
+        "SELECT sparte FROM malo WHERE malo_id = $1",
+    )
+    .bind(&malo_id_str)
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, malo = %malo_id_str, "versorgung: Sparte lookup failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
 
     let evt = MarktEvent::new(
         &state.tenant,

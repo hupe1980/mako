@@ -65,7 +65,7 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(3_600);
 pub async fn stop_deliveries(makod: &MakodClient, grund: &str, rec: &EinwilligungRecord) {
     for location_id in &rec.location_ids {
         let cmd = ForwardCommand {
-            command: "esa.abbestellung.beauftragen".to_owned(),
+            command: mako_markt::commands::ESA_ABBESTELLUNG_BEAUFTRAGEN.to_owned(),
             marktrolle: Some("ESA".to_owned()),
             malo_id: Some(location_id.clone()),
             melo_id: None,

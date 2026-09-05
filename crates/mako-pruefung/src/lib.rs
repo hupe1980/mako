@@ -21,7 +21,9 @@
 //! | [`nb`] | Netzbetreiber | `E_0622` Anmeldung, `E_0607` Abmeldung |
 //! | [`lf`] | Lieferant | `E_0609`, `E_0624`, `E_0614`, `E_0615`, `E_0603`–`E_0606`; Gas `E_3001`, `E_3002`, `E_3020`, `E_3008` |
 //! | [`msb`] | Messstellenbetrieb | `E_0200`–`E_0203` und die WiM-Codelisten |
-//! | [`esa`] | MSB (Bestellung) und ESA (Abrechnung) | `E_0252`–`E_0257` und `E_0264`–`E_0267` |
+//! | [`esa`] | MSB (Bestellung) und ESA (Abrechnung) | `E_0252`, `E_0254`, `E_0256`, `E_0257` und `E_0264`–`E_0267` |
+//! | [`rechnung`] | ESA, LF, NB | one invoice walk, three [`rechnung::FAMILIEN`] |
+//! | [`emob`] | NB (VNB), LF | NZR-EMob / Modell 2: `E_0510`–`E_0513` |
 //! | [`mabis`] | NB, LF, BKV | the 28 MaBiS and Redispatch trees (`E_0004`–`E_0104`, `E_0901`, `E_0902`) |
 //!
 //! The document defines around sixty trees with the LF as prüfende Rolle;
@@ -63,9 +65,13 @@
 //! boolean — decides whether the answer rides the Bestätigungs- or the
 //! Ablehnungs-PID.
 //!
-//! Role separation stays available where it is load-bearing (§ 7 EnWG): the
-//! `role-nb` and `role-lf` Cargo features compile only their own trees, so a
-//! role-gated `processd` binary carries only the decisions it is allowed to make.
+//! Role separation stays available where it is load-bearing: the `role-nb`,
+//! `role-lf`, `role-msb`, `role-esa`, `role-mabis` and `role-emob` Cargo
+//! features compile only their own trees, so a role-gated `processd` binary
+//! cannot form a decision it is not entitled to make — the informatorische
+//! Entflechtung of § 6a EnWG, enforced at compile time. (§ 7 EnWG, the
+//! *rechtliche* Entflechtung, asks for separate legal entities; no Cargo
+//! feature satisfies that.)
 //!
 //! # Antwortcode, not ERC
 //!

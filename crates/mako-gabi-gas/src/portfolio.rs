@@ -25,7 +25,7 @@ use crate::domain::{GasDay, GasImbalanceSaldo, ImbalanceDirection};
 ///
 /// Used to classify which entity is responsible for a message, process,
 /// or domain object. Enables correct responsibility separation per
-/// §9 EnWG Informatorisches Unbundling.
+/// § 6a EnWG Informatorisches Unbundling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum GasMarketRole {

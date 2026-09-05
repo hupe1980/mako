@@ -63,7 +63,7 @@ impl PgMeloMsbRepository {
         .bind(valid_from)
         .execute(&mut *conn)
         .await
-        .map_err(|e| MdmError::Internal(e.to_string()))?;
+        .map_err(super::write_error)?;
 
         // A backdated correction must not leave two open assignments: the new
         // row ends where the next one starts (half-open `[from, to)`), so the
@@ -94,7 +94,7 @@ impl PgMeloMsbRepository {
         .bind(next_start)
         .execute(&mut *conn)
         .await
-        .map_err(|e| MdmError::Internal(e.to_string()))?;
+        .map_err(super::write_error)?;
 
         Ok(())
     }

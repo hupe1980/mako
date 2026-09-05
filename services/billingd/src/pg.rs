@@ -1079,7 +1079,7 @@ pub async fn risk_context(
     .await
     .context("risk prev period")?;
 
-    // § 60 Abs. 2 MsbG: how many of the latest 3 invoices were estimate-based.
+    // How many of the latest 3 invoices rested on a § 40a Abs. 2 EnWG estimate.
     let recent_estimated_count: i64 = sqlx::query_scalar(
         r#"SELECT count(*) FROM (
               SELECT risk_findings FROM billing_records

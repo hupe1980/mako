@@ -72,7 +72,9 @@ TAF_PROFILES = {
 #:
 #: The distinction that decides money: a `MEASURED` value is billable as it
 #: stands, a `SUBSTITUTED` one is an Ersatzwert the Messstellenbetreiber formed
-#: because measurement failed (§ 60 Abs. 2 MsbG), and a `FAULTY` one must not be
+#: because measurement failed (§ 40a Abs. 2 EnWG — a bill may rest on a
+#: Verbrauchsschätzung, stated under an „ausdrücklichem und optisch besonders
+#: hervorgehobenem Hinweis" per Satz 3), and a `FAULTY` one must not be
 #: billed at all and obliges the platform to form one. A gateway that could only
 #: deliver unqualified numbers could not exercise any of that.
 READING_QUALITIES = (

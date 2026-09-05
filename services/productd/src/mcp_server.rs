@@ -405,7 +405,7 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
              Customer: {customer}\n\
              Products: {pos_count} position(s)\n\
              Jahreskosten netto: {netto} EUR\n\
-             Jahreskosten brutto: {brutto} EUR (19% MwSt)\n\
+             Jahreskosten brutto: {brutto} EUR (inkl. USt)\n\
              Variants: {var_count}\n\
              Valid until: {gueltig}\n\
              Lieferbeginn: {lb}\n\
@@ -825,7 +825,8 @@ impl ProductdMcpHandler {
                     { \"prices\": [ct_h0, ct_h1, ..., ct_h23] }  -- 24 values\n\n\
                  3. Put iMSys-eligible MaLos on it via vertragd:\n\
                     POST vertragd /api/v1/vertraege/{id}/tarifwechsel\n\
-                    { \"komp_id\": \"…\", \"new_product_code\": \"STROM-EPEX-01\", \"wirksamkeit\": \"YYYY-MM-DD\" }\n\n\
+                    { \"komp_id\": \"…\", \"new_product_code\": \"STROM-EPEX-01\", \"wirksamkeit\": \"YYYY-MM-DD\",\n\
+                      \"initiator\": \"LIEFERANT\", \"preise\": [{ \"bezeichnung\": \"Arbeitspreis\", … }] }\n\n\
                  4. billingd auto-detects dynamic_epex=true:\n\
                     - Fetches 15-min Lastgang from edmd\n\
                     - Joins each 15-min interval against the EPEX price for that MTU\n\
@@ -848,7 +849,10 @@ impl ProductdMcpHandler {
                  Tarifwechsel under § 41 Abs. 5 EnWG — so it lives in vertragd:\n\n\
                  POST vertragd /api/v1/vertraege/{vertrag_id}/tarifwechsel\n\
                  { \"komp_id\": \"…\", \"new_product_code\": \"STROM-SLP-01\",\n\
-                   \"wirksamkeit\": \"2026-01-01\" }\n\n\
+                   \"wirksamkeit\": \"2026-01-01\", \"initiator\": \"KUNDE\" }\n\n\
+                 `initiator` says who is changing the tariff. LIEFERANT owes the § 41 Abs. 5 \
+                 notice and must carry `preise` (the Umfang of the change); KUNDE is an agreed \
+                 switch and carries no Sonderkündigungsrecht.\n\n\
                  vertragd enforces the Preisgarantie and the § 41 Abs. 5 notice period, and \
                  writes a valid-time slice. A future wirksamkeit is simply a slice that \
                  starts then.\n\n\

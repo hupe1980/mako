@@ -1,11 +1,12 @@
 +++
 title = "Process Catalog"
-description = "Business-level catalog of all German energy market communication processes — GPKE, WiM Strom, MaBiS, GeLi Gas, WiM Gas, GaBi Gas, and PARTIN. For each process: initiating role, message exchange, APERAK deadline, regulatory basis, and implementation status."
+description = "Every German market communication process mako implements — GPKE, WiM, MaBiS, GeLi Gas, GaBi Gas and PARTIN — with its roles, messages and deadlines."
 weight = 15
-[extra]
-mermaid = true
 +++
-# Process Catalog
+New to German market communication? The recurring terms — Prüfidentifikator,
+AHB/MIG, EBD, Marktlokation, Bilanzkreis, Frist/Werktag, and the four market
+roles — are defined in the
+[reference vocabulary](@/docs/reference/_index.md#vocabulary).
 
 This page is the **business-level** companion to the [PID Reference](@/docs/regulatory/pid-reference.md).
 Where the PID Reference lists every individual EDIFACT message type, the Process
@@ -33,12 +34,12 @@ Multiple format versions coexist in the same engine instance simultaneously.
 | Release | Binding | Message types with changed formats |
 |---|---|---|
 | `fv20260401` | since 2026-04-01 | COMDIS, INVOIC, MSCONS, ORDERS, ORDRSP, PARTIN, REMADV, UTILMD Gas |
-| `fv20261001` | from 2026-10-01 | APERAK, IFTSTA, INVOIC, MSCONS, ORDCHG, ORDERS, ORDRSP, PARTIN, PRICAT, QUOTES, REMADV, REQOTE, UTILMD (Strom 2.2 / Gas 1.2), UTILTS |
+| `fv20261001` | from 2026-10-01 | APERAK, IFTSTA, INVOIC, MSCONS, ORDCHG, ORDERS, ORDRSP, PARTIN, PRICAT, QUOTES, REQOTE, UTILMD (Strom 2.2 / Gas 1.2), UTILTS |
 
 The `fv` date is the **Anwendungszeitpunkt**, six months after the document's
 Publikationsdatum (Allgemeine Festlegungen 6.1d §2.5). Message types untouched by
 a release keep their previous profile — CONTRL and INSRPT last changed with
-`fv20260101`.
+`fv20260101`, and COMDIS and REMADV with `fv20260401`.
 
 **Status legend:**
 
@@ -76,7 +77,7 @@ Quick reference across all process families. Each row is a top-level domain.
 > `mako_fristen::antwort` liefert für eine solche PID `None`; `makod` registriert
 > dann eine Betriebskonvention, gekennzeichnet als `is_regulatory: false`. Die
 > **APERAK**-Frist ist eine eigene Uhr (45 Minuten an einem Werktag, APERAK AHB
-> 1.0 §2.4.1) und steht nicht in dieser Spalte.
+> § 2.4.1) und steht nicht in dieser Spalte.
 
 | Domain | Sparte | Crate | Key PIDs | Antwortfrist des Geschäftsprozesses | Basis |
 |---|:---:|---|---|---|---|
@@ -1486,8 +1487,10 @@ coverage, so `makod` neither routes nor answers them.
 
 ### Domain model
 
-`mako-gabi-gas` provides a gas-specific domain vocabulary in `src/domain.rs` and `src/portfolio.rs`.
-All energy quantities use `Decimal` — no float arithmetic.
+`mako-gabi-gas` provides a gas-specific domain vocabulary in `domain.rs` and
+`portfolio.rs`. All energy quantities use `Decimal` — no float arithmetic.
+
+`domain.rs` — the measured quantities:
 
 | Type | Description | Key method |
 |---|---|---|
@@ -1496,9 +1499,15 @@ All energy quantities use `Decimal` — no float arithmetic.
 | `GasQuantity` | Gas energy in kWh_Hs with optional m³ context. | `from_m3(vol, beschaffenheit)`, `from_kwh(kwh)` |
 | `NominationQuantity` | Submitted / accepted / curtailed breakdown. | `accept_partial(kwh, reason)`, `is_curtailed()` |
 | `AllocationVersion` | Initial / Correction(n) / Final per §§ 46/47 KoV XV. | `is_revision()` |
-| `GasMarketRole` | Typed BKV/FNB/VNB/MGV/LF/Händler classification. | `submits_nominations()`, `has_imbalance_obligation()` |
 | `GasImbalanceSaldo` | Nomination − allocation imbalance. | `direction()` → Mehr / Minder / Balanced |
-| `GasPortfolioBalance` | BKV portfolio across all Bilanzkreise. | `net_imbalance_kwh()`, `open_imbalance_count()` |
+
+`portfolio.rs` — the BKV's whole position across its Bilanzkreise:
+
+| Type | Description | Key method |
+|---|---|---|
+| `GasMarketRole` | Which role a party plays, and what that role owes | `submits_nominations()`, `receives_allocations()`, `has_imbalance_obligation()` |
+| `PortfolioPosition` | One Bilanzkreis' nomination against its allocation | `compute_imbalance_saldo(bkv_eic)`, `is_balanced()` |
+| `GasPortfolioBalance` | The positions for one BKV and one gas day, aggregated | `net_imbalance_kwh()`, `portfolio_direction()`, `conservation_check()` → `ConservationViolation` |
 
 **DVGW transport processes** (see [DVGW — Gas Transport](#dvgw-gas-transport) for the full PID/message table):
 

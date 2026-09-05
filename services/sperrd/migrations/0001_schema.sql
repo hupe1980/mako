@@ -157,6 +157,14 @@ CREATE TABLE sperr_orders (
     iftsta_dispatched_at TIMESTAMPTZ,
     iftsta_attempts     INTEGER     NOT NULL DEFAULT 0,
     iftsta_last_error   TEXT,
+    -- The claim lease *and* the retry backoff, in one column. A worker takes an
+    -- order by pushing this forward, so a second replica's `<= now()` no longer
+    -- matches it and cannot dispatch the same 21039 — a disconnection order the
+    -- customer's Lieferant would receive twice. NOT NULL with a `now()` default,
+    -- so a newly terminal order is due at once and the column is never a
+    -- sentinel: `iftsta_attempts >= IFTSTA_MAX_ATTEMPTS` is the only unselectable
+    -- state.
+    iftsta_next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     iftsta_escalated_at TIMESTAMPTZ,
 
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -171,6 +179,11 @@ COMMENT ON TABLE sperr_orders IS
     'Sperr-/Entsperrauftrag execution queue (NB role). Fed by inbound ORDERS '
     '17115/17117 and by operators; drained by the field team. Terminal orders '
     'are reported to the LF with IFTSTA 21039 (AHB 2.1 §7.2).';
+
+COMMENT ON COLUMN sperr_orders.iftsta_next_attempt_at IS
+    'When this order may next be claimed for an IFTSTA dispatch. The claim '
+    'pushes it forward, which is what stops two replicas sending the same '
+    'Sperrauftrag-Status to the Lieferant.';
 
 COMMENT ON COLUMN sperr_orders.iftsta_dispatched_at IS
     'When the IFTSTA 21039 command reached makod. NULL on a terminal order means '
@@ -192,6 +205,6 @@ CREATE INDEX so_vorlauf_verletzt ON sperr_orders (tenant, created_at DESC)
 CREATE INDEX so_pending_frist ON sperr_orders (tenant, ausfuehrung_faellig_am)
     WHERE status = 'pending' AND ausfuehrung_faellig_am IS NOT NULL
       AND ausfuehrung_eskaliert_at IS NULL;
--- The retry worker's queue.
-CREATE INDEX so_iftsta_open   ON sperr_orders (tenant, updated_at)
+-- The retry worker's queue, in the order it is claimed: due first.
+CREATE INDEX so_iftsta_open   ON sperr_orders (tenant, iftsta_next_attempt_at)
     WHERE status IN ('executed', 'failed') AND iftsta_dispatched_at IS NULL;

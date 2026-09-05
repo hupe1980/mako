@@ -2,7 +2,7 @@
 
 **Pure INVOIC plausibility and tariff validation library for German energy market suppliers.**
 
-`invoic-checker` implements the six-check pipeline that `invoicd` runs automatically
+`invoic-checker` implements the eight-stage pipeline that `invoicd` runs automatically
 against every incoming INVOIC — and that `netzbilanzd` runs before dispatching to
 prevent an immediate dispute.
 
@@ -15,7 +15,7 @@ prevent an immediate dispute.
 | **No I/O** | All inputs are passed as arguments. No database calls, no HTTP. |
 | **No async** | Synchronous throughout. |
 | **No float money** | All monetary comparisons use `rust_decimal`. |
-| **Pure functions** | `InvoicCheckEngine::check()` cannot fail — it always returns `CheckResult`. |
+| **Pure functions** | `InvoicCheckEngine::check()` cannot fail — it always returns a `CheckReport`. |
 
 ---
 
@@ -26,7 +26,7 @@ The two answer different questions for different audiences:
 | | `mako-pruefung` | `invoic-checker` |
 |---|---|---|
 | Produces | published BDEW Antwortcodes for the wire | mako's own `Finding`s for the operator queue and the § 147 AO receipt |
-| Runs for | PIDs with an Entscheidungsbaum | **every** INVOIC PID, including those with none |
+| Runs for | Prüfidentifikatoren (PIDs) with an Entscheidungsbaum | **every** INVOIC PID, including those with none |
 | Knows about | nothing but Prüfschritte | BO4E, money, Preisblätter |
 | Dependencies | `mako-fristen`, `serde`, `time`, `uuid` | + `rubo4e`, `billing`, `rust_decimal` |
 | Consumers | every crate that answers a BDEW process | `invoicd`, `netzbilanzd` |
@@ -51,17 +51,23 @@ Zahlungsavis.
 
 ## The checks
 
+The pipeline is eight stages, in this order:
+
 | # | Rule | Outcome on failure |
 |---|---|---|
-| 0 | **Storno reference** — `ist_storno=true` must have `original_rechnungsnummer` | `Dispute` |
-| 1 | **Period validity** — `rechnungsperiode_start < end`, both within plausible range | `Dispute` |
-| 1.5 | **Zahlungsziel** — `faelligkeitsdatum < rechnungsdatum` (invalid) or `> max_zahlungsziel_days` (exceeded; default 30 per §7 Allg. Festlegungen) | `Dispute` or `Warn` |
-| 2 | **Position arithmetic** — every `Rechnungsposition` `menge × preis ≈ betrag` (±1%) | `Dispute` |
-| 3 | **Document total** — sum of all positions ≈ `gesamtnetto` (±1%) | `Warn` |
-| 3.5 | **Umsatzsteuer** — the invoice states a rate and an amount (§14 Abs. 4 Nr. 8 UStG), `gesamtbrutto = gesamtnetto + gesamtsteuer`, and a reverse-charged invoice states **no** tax | `Dispute` |
-| 4 | **Tariff match** — `einzelpreis` within tolerance of PRICAT tariff. **Skipped for Stornorechnungen** (`ist_storno=true`). | `Dispute` |
-| 5 | **Tariff found** — a PRICAT tariff record exists for the sender GLN | `Warn` (auto-accept) |
-| 6 | **MMM settlement price** — for PIDs 31005/31006/31007/31008: Mehr-/Mindermengen prices match MMMA store | `Warn` or `Dispute` |
+| 1 | **Storno reference** — `ist_storno = true` must name an `original_rechnungsnummer` | `Dispute` |
+| 2 | **Period validity** — `rechnungsperiode_start < end`, both within plausible range | `Dispute` |
+| 3 | **Zahlungsziel** — `faelligkeitsdatum < rechnungsdatum` (invalid) or beyond `max_zahlungsziel_days` (exceeded; default 30 per §7 Allg. Festlegungen) | `Dispute` · `Warn` |
+| 4 | **Currency agreement** — the document totals, every position's `gesamtpreis` and every `steuerbetraege` entry agree on one currency. Runs *before* the arithmetic, because every amount is read as EUR and a `CHF` field would otherwise compare silently right | `Dispute` |
+| 5 | **Position arithmetic** — every `Rechnungsposition` satisfies `menge × einzelpreis ≈ gesamtpreis`. An unrepresentable product is itself a finding, not a panic | `Dispute` |
+| 6 | **Document total** — the positions sum to `gesamtnetto` | `Warn` |
+| 7 | **Umsatzsteuer** — the invoice states a rate and an amount (§14 Abs. 4 Nr. 8 UStG); `gesamtbrutto = gesamtnetto + gesamtsteuer`; each breakdown entry's `steuerwert` is the stated rate applied to its stated `basiswert` (to within one cent, the unit the amounts are stated in); and a reverse-charged invoice states **no** tax | `Dispute` |
+| 8 | **Tariff / Angebot** — `einzelpreis` against the published Preisblatt, or against the accepted QUOTES for an ESA invoice. **Skipped for a Stornorechnung**, which carries the original's negated amounts rather than new tariff positions. For PIDs 31005–31008 this is the Mehr-/Mindermengen price from the MMMA store | `Warn` or `Dispute` |
+
+Stage 7's per-entry check is what stops an invoice that sums to its own totals
+perfectly while charging the wrong tax: 19 % stated on a base of 10 000 with a
+Steuerwert of 100 satisfies `netto + steuer = brutto` and agrees with
+`gesamtsteuer`, and 1 800 EUR is then neither charged nor deductible.
 
 ### Why a missing tax block is a dispute
 
@@ -127,11 +133,12 @@ own receipt store).
 
 ### Stornierung handling (`ist_storno = true`)
 
-When `ist_storno = Some(true)`, stage 4 (tariff check) is automatically skipped.
+When `ist_storno = Some(true)`, stage 8 (tariff check) is automatically skipped.
 A Stornierung carries negated amounts from the original invoice, not new tariff positions —
 checking them against PRICAT would always produce false `TariffDeviation` disputes.
+`check_storno` runs stages 1–6; stage 7 (Umsatzsteuer) is skipped with it.
 
-Stage 0 enforces that `original_rechnungsnummer` is present on every Storno.
+Stage 1 enforces that `original_rechnungsnummer` is present on every Storno.
 Use `is_stornierung(&rechnung)` to test the flag before routing to `check_storno()`.
 
 ```rust
@@ -147,29 +154,50 @@ if is_stornierung(&rechnung) {
 }
 ```
 
-### Check 1.5 — Zahlungsziel
+### Stage 3 — Zahlungsziel
 
-`faelligkeitsdatum` (DTM+92) is validated against `rechnungsdatum` and the
+`faelligkeitsdatum` (DTM+265) is validated against `rechnungsdatum` and the
 configured `max_zahlungsziel_days` (default: 30, per §7 Allgemeine Festlegungen V6.1d).
 Set `max_zahlungsziel_days = 0` in `CheckConfig` to disable this check.
 
-### Check 4 — ToU-aware tariff matching
+### Stage 8 — ToU-aware tariff matching
 
-For time-of-use tariffs, the position text (`positionsbezeichnung`) is used to
-classify HT/NT positions against the corresponding `zeitvariablePreisposition`
-band price. Positions containing `"HT"`, `"Hochtarif"`, or `"Haupttarif"` are
-matched against the HT band; `"NT"`, `"Niedertarif"`, `"Nebentarif"` against NT.
+For a time-of-use Preisblatt (§ 14a Modul 3, BK6-22-300), the bands come from
+the `zeitvariablePreispositionen` extension, each entry pairing a
+`zaehlzeitregister` code with its price. There is **no** hard-coded HT/NT
+keyword list: the position's own `positionstext` is lower-cased and matched
+against the register codes the Preisblatt actually publishes, so an operator who
+names a band `ST` or `NT2` needs no code change.
 
-### Check 6 — MMM settlement price
+The band search then degrades in a fixed order — a matching register code wins;
+failing that the flat `preisstaffeln` prices apply; failing those, every ToU band
+price is accepted. Each fallback only widens what passes, so a missing band
+produces no invented deviation — but it does mean a `TariffDeviation` finding is
+evidence and a clean result is not proof.
+
+### Stage 8 — MMM settlement price
 
 `InvoicCheckEngine::check_mmm_settlement()` fetches the monthly Mehr-/Mindermengenpreis
 (Gas or Strom) from `marktd`'s MMMA store and compares it against the invoice's
 `mehr_preis` / `minder_preis` fields.
 
-For PID 31009 (MSB-Rechnung), use `check_msb_rechnung()` which applies
-`PreisblattMessung` pricing (not NNE) for checks 4 and 5.
+### The MSB path — PIDs 31003 and 31009
 
----
+For a WiM/MSB-Rechnung, use `check_msb_rechnung()`. It runs the document stages
+2–7 exactly as `check()` does — period, currency, position arithmetic, document
+total, **Zahlungsziel and Umsatzsteuer** — and reads the tariff for stage 8 from
+`PreisblattMessung.preispositionen` rather than `PreisblattNetznutzung`. With no
+Preisblatt it warns instead of disputing, as the standard engine does.
+`check_msb_rechnung_with_aufabschlaege()` adds one further check: every discount
+or surcharge position is backed by a contracted `AufAbschlag` (WiM PRICAT
+27001–27003).
+
+Stages 3 and 7 used to be skipped here, so an MSB invoice stating no
+Umsatzsteuer at all was accepted. Nothing about metering service warrants that:
+the INVOIC AHB makes the Fälligkeitsdatum (`SG8 DTM+265`) and the tax block
+(`TAX`/`MOA`) **Muss** on 31003 and 31009 just as on 31001/31002, § 14 Abs. 4
+Nr. 8 UStG reaches every invoice, and `check_esa_rechnung()` already ran both
+for the same PID 31009.
 
 ---
 
@@ -184,6 +212,10 @@ For PID 31009 (MSB-Rechnung), use `check_msb_rechnung()` which applies
 | 31007 | Aggreg. MMM-Rechnung Gas | NB → MGV |
 | 31008 | Selbst ausgest. Aggreg. MMM-Rechnung Gas | MGV → MGV |
 | 31009 | MSB-Rechnung | MSB → LF |
+| 31003 | WiM-Rechnung (Dienstleistungen im Messwesen) | NB ↔ MSBN, beide Sparten |
+| 31004 | Stornorechnung — Sparte-neutral, routed to `check_storno` | as the original |
+| 31010 | Kapazitätsrechnung Gas | FNB/VNB → BKV |
+| 31011 | AWH Sperrprozesse Gas | GNB → LFG |
 
 ---
 
@@ -191,32 +223,20 @@ For PID 31009 (MSB-Rechnung), use `check_msb_rechnung()` which applies
 
 | Variant | Stage | Dispute? | Meaning |
 |---|---|---|---|
-| `StorniertWithoutReference` | 0 | ✓ | `ist_storno=true` but `original_rechnungsnummer` missing |
-| `PeriodInvalid` | 1 | ✓ | Billing period start ≥ end |
-| `ZahlungszielInvalid` | 1.5 | ✓ | `faelligkeitsdatum` before `rechnungsdatum` |
-| `ZahlungszielExceeded` | 1.5 | ✗ | Payment term exceeds `max_zahlungsziel_days` |
-| `ArithmeticError` | 2 | ✓ | Line `qty × price ≠ net` |
-| `TotalMismatch` | 3 | ✗ | Σ line nets ≠ `gesamtnetto` |
-| `SteuerMissing` | 3.5 | ✓ | No Umsatzsteuer stated at all — no Vorsteuerabzug for the recipient |
-| `SteuerMismatch` | 3.5 | ✓ | `gesamtbrutto ≠ gesamtnetto + gesamtsteuer` |
-| `ReverseChargeStatesTax` | 3.5 | ✓ | A §13b invoice states tax anyway — owed under §14c Abs. 1 and still not deductible |
-| `TariffDeviation` | 4 | ✓ | Unit price deviates from PRICAT |
-| `TariffNotFound` | 5 | config | No PRICAT tariff for sender GLN |
-
-## ERC codes
-
-| Code | Meaning |
-|---|---|
-| `Z30` | Rechnungsposition arithmetic error |
-| `Z31` | Document total mismatch |
-| `Z32` | Tariff price deviation above tolerance |
-| `Z33` | Tariff not found |
-| `Z34` | Invalid billing period |
-| `Z35` | MMM settlement price mismatch |
-| `Z36` | Stornorechnung missing original reference |
-| `Z37` | Zahlungsziel exceeds maximum payment term |
-
----
+| `StorniertWithoutReference` | 1 | ✓ | `ist_storno=true` but `original_rechnungsnummer` missing |
+| `PeriodInvalid` | 2 | ✓ | Billing period start ≥ end |
+| `ZahlungszielInvalid` | 3 | ✓ | `faelligkeitsdatum` before `rechnungsdatum` |
+| `ZahlungszielExceeded` | 3 | ✗ | Payment term exceeds `max_zahlungsziel_days` |
+| `WaehrungMismatch` | 4 | ✓ | The document, a position or a tax entry names a currency the others do not |
+| `ArithmeticError` | 5 | ✓ | Line `menge × einzelpreis ≠ gesamtpreis` |
+| `TotalMismatch` | 6 | ✗ | Σ line nets ≠ `gesamtnetto` |
+| `SteuerMissing` | 7 | ✓ | No Umsatzsteuer stated at all — no Vorsteuerabzug for the recipient |
+| `SteuerMismatch` | 7 | ✓ | `gesamtbrutto ≠ gesamtnetto + gesamtsteuer`, or a breakdown entry's `steuerwert` is not its rate on its `basiswert` |
+| `ReverseChargeStatesTax` | 7 | ✓ | A §13b invoice states tax anyway — owed under §14c Abs. 1 and still not deductible |
+| `TariffDeviation` | 8 | ✓ | Unit price deviates from the Preisblatt |
+| `TariffNotFound` | 8 | config | No Preisblatt for the sender |
+| `AngebotDeviation` | 8 | ✓ | An ESA invoice prices an Artikel-ID differently from the accepted QUOTES |
+| `AngebotPositionUnknown` | 8 | ✓ | An ESA invoice names an Artikel-ID the accepted QUOTES does not offer |
 
 ## Regulatory basis
 
@@ -229,3 +249,17 @@ For PID 31009 (MSB-Rechnung), use `check_msb_rechnung()` which applies
 - **REMADV AHB 1.0a** — § 3.1.1 (33001/33002) and § 3.1.2 (33003/33004); `SG7 AJT` DE 1082 admits a different list of Entscheidungsbäume on each
 - **Entscheidungsbaum-Diagramme und Codelisten 4.3** Kap. 8.27 — `E_0264`–`E_0267`, the ESA billing round trip; Kap. 9.3/9.4 — `E_0270`–`E_0277`, the Preisblatt-B one
 - **BDEW AWH Prozesse zur Änderung der Technik an Lokationen** V1.1 (31.03.2025)
+
+## Related crates
+
+| Crate | Role |
+|---|---|
+| [`invoic-checker`](https://docs.rs/invoic-checker) ← **this crate** | The eight-stage plausibility and tariff pipeline — mako's own `Finding`s |
+| [`mako-pruefung`](https://docs.rs/mako-pruefung) | The published BDEW Antwortcodes a REMADV must carry |
+| [`mako-fristen`](https://docs.rs/mako-fristen) | *When* an answer is due — Werktage, the MaKo holiday calendar, the per-PID Antwortfristen |
+| [`mako-invoic`](https://docs.rs/mako-invoic) | The settle/dispute workflow whose decision these findings feed |
+| [`grid-billing`](https://docs.rs/grid-billing) | Produces the grid-side invoices this crate checks on the receiving end |
+| [`invoicd`](https://hupe1980.github.io/mako/docs/services/invoicd/) · [`netzbilanzd`](https://hupe1980.github.io/mako/docs/services/netzbilanzd/) | Production daemons — run the pipeline on receipt and before dispatch |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>

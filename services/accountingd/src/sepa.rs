@@ -915,7 +915,7 @@ pub fn build_pain_007(
     })
 }
 
-// ── Flat bank-export import (formerly `sepa::camt054::parse_simple_json`) ─────
+// ── Flat bank-export import ──────────────────────────────────────────────────
 
 /// One row of a flat bank export — a CSV-turned-JSON or an ERP's payment feed.
 ///

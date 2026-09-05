@@ -258,10 +258,14 @@ match dvgw_edi::sniff(bytes) {
   SSQNOT 5.7 —
   <https://www.dvgw-sc.de/leistungen/it-dienstleistungen/datenaustausch-gas>
 
-## Relationship to other crates
+## Related crates
 
-| Crate | Layer |
+| Crate | Role |
 |---|---|
-| `dvgw-edi` | EDIFACT parsing / validation / writing — **this crate** |
-| `mako-gabi-gas` | GaBi Gas process engine (workflows, deadlines) |
-| `edi-energy` | BDEW EDI@Energy formats |
+| [`dvgw-edi`](https://docs.rs/dvgw-edi) ← **this crate** | DVGW EDIFACT — parse · validate · write (ALOCAT, NOMINT, NOMRES, SSQNOT) |
+| [`mako-gabi-gas`](https://docs.rs/mako-gabi-gas) | GaBi Gas process engine — the workflows and deadlines these messages drive |
+| [`edi-energy`](https://docs.rs/edi-energy) | The BDEW EDI@Energy formats, including the CONTRL/APERAK that acknowledge a DVGW interchange |
+| [`makod`](https://hupe1980.github.io/mako/docs/services/makod/) | Production daemon — joins this crate with `mako-gabi-gas` |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>

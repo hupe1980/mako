@@ -24,7 +24,7 @@ is one arm per rule rather than four readings of it.
 |---|---|
 | `WORKFLOW_NAME` | the name registered in the process engine and stored on every stream |
 | `DEADLINE_LABEL` | the settlement response window's label |
-| `INVOIC_PIDS` | the Prüfidentifikatoren this family accepts, inbound and outbound |
+| `INVOIC_PIDS` | the Prüfidentifikatoren (PIDs — the five-digit BDEW codes naming an Anwendungsfall) this family accepts, inbound and outbound |
 | `SENDS_INVOIC` | whether this deployment plays the **issuer** role |
 | `ANSWERS_COMDIS` | whether the family exchanges COMDIS 29001 |
 
@@ -144,6 +144,22 @@ the outcome and, for a dispute, its reason.
 
 `tests/state_machine.rs` covers what the process *does*; what each family
 chooses is tested in that family's own crate.
+
+## Related crates
+
+| Crate | Role |
+|---|---|
+| [`mako-invoic`](https://docs.rs/mako-invoic) ← **this crate** | The shared settle/dispute state machine and the `InvoicFamily` trait |
+| [`mako-engine`](https://docs.rs/mako-engine) | Event-sourced workflow runtime — `Workflow`, `Process`, `EventStore`, deadlines |
+| [`mako-gpke`](https://docs.rs/mako-gpke) | `GpkeAbrechnung` — Netznutzungsabrechnung Strom |
+| [`mako-wim`](https://docs.rs/mako-wim) | `WimInvoic` — Messstellenbetrieb and ESA billing |
+| [`mako-gabi-gas`](https://docs.rs/mako-gabi-gas) | `GaBiGasInvoic` — Kapazitäts- and MMM-Rechnung Gas |
+| [`mako-geli-gas`](https://docs.rs/mako-geli-gas) | `GeliGasSperrprozesseInvoic` — Sperrprozesse Gas |
+| [`invoic-checker`](https://docs.rs/invoic-checker) | The plausibility and tariff checks run on a received invoice |
+| [`invoicd`](https://hupe1980.github.io/mako/docs/services/invoicd/) | Production daemon — runs the checks and files the § 147 AO receipt |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>
 
 ## License
 

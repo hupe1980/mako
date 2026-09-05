@@ -420,7 +420,7 @@ pub(crate) async fn post_direct_reads_inner(
         // Unrecognised flags are rejected in the accept loop, so the fallback
         // only covers an omitted one. A direct push carries a register reading,
         // so it defaults to MEASURED — matching the IoT path, and leaving
-        // substitution to the § 60 Abs. 2 MsbG flow that records who
+        // substitution to the § 60 Abs. 1 MsbG flow that records who
         // substituted and why.
         iv.quality
             .as_deref()

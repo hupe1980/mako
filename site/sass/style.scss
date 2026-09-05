@@ -1,6 +1,7 @@
 /* mako docs & landing — modern, responsive, light/dark. */
 
 :root {
+  color-scheme: light;
   --bg: #ffffff;
   --bg-alt: #f6f8fa;
   --surface: #ffffff;
@@ -11,14 +12,23 @@
   --primary-ink: #ffffff;
   --accent: #d97706;       /* spark amber */
   --link: #0a7d5a;
-  --code-bg: #282c34;      /* OneHalfDark surface, used in both themes */
+  /* Nord, matching [markdown.highlighting] theme = "nord": Zola stamps that
+     background inline on every highlighted <pre>, so hand-written blocks in the
+     templates have to use the same value or the landing page and the docs show
+     two different shades of dark. */
+  --code-bg: #2e3440;
+  --code-ink: #d8dee9;
   --shadow: 0 1px 2px rgba(16,24,40,.06), 0 4px 16px rgba(16,24,40,.06);
   --radius: 12px;
   --maxw: 1200px;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
-:root[data-theme="dark"] {
+
+/* Dark palette, defined once and applied from two selectors: the explicit
+   toggle and the OS preference. */
+@mixin dark-tokens {
+  color-scheme: dark;
   --bg: #0d1117;
   --bg-alt: #12181f;
   --surface: #161b22;
@@ -29,12 +39,9 @@
   --link: #4ecfab;
   --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.35);
 }
+:root[data-theme="dark"] { @include dark-tokens; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0d1117; --bg-alt: #12181f; --surface: #161b22; --border: #232a33;
-    --text: #e6edf3; --text-soft: #9aa7b8; --primary: #2ea88a; --link: #4ecfab;
-    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.35);
-  }
+  :root:not([data-theme="light"]) { @include dark-tokens; }
 }
 
 * { box-sizing: border-box; }
@@ -45,11 +52,17 @@ body {
 }
 a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
+/* One visible focus ring for every interactive element. Keyboard users had
+   nothing but the browser default, which the custom backgrounds swallowed. */
+a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visible {
+  outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px;
+}
 .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 1.25rem; }
 .section-pad { padding: 4rem 0; }
 .section-pad.alt { background: var(--bg-alt); border-block: 1px solid var(--border); }
 .skip-link { position: absolute; left: -999px; }
 .skip-link:focus { left: 1rem; top: .5rem; background: var(--surface); padding: .5rem 1rem; border-radius: 8px; z-index: 100; }
+.section-lead { color: var(--text-soft); max-width: 68ch; }
 
 /* ── Header ─────────────────────────────────────────────────────────────── */
 .site-header {
@@ -60,60 +73,91 @@ a:hover { text-decoration: underline; }
   max-width: var(--maxw); margin: 0 auto; padding: .6rem 1.25rem;
   display: flex; align-items: center; gap: 1.25rem;
 }
-.brand { display: flex; align-items: center; gap: .5rem; font-weight: 800; font-size: 1.15rem; color: var(--text); }
+.brand { display: flex; align-items: center; gap: .5rem; font-weight: 800; font-size: 1.15rem; color: var(--text); flex: none; }
 .brand-spark { color: var(--accent); }
-.site-nav { display: flex; gap: 1.1rem; margin-left: .5rem; }
-.site-nav a { color: var(--text-soft); font-weight: 600; font-size: .93rem; }
+.site-nav { display: flex; gap: 1.1rem; margin-left: .5rem; min-width: 0; }
+.site-nav a { color: var(--text-soft); font-weight: 600; font-size: .93rem; white-space: nowrap; }
 .site-nav a:hover { color: var(--text); text-decoration: none; }
-.header-actions { margin-left: auto; display: flex; align-items: center; gap: .6rem; position: relative; }
+.site-nav a.active { color: var(--text); }
+.site-nav a[aria-current="page"] { box-shadow: inset 0 -2px 0 var(--primary); }
+.header-actions { margin-left: auto; display: flex; align-items: center; gap: .6rem; position: relative; flex: none; }
 .search-box {
   width: 200px; max-width: 40vw; padding: .45rem .7rem; border: 1px solid var(--border);
   border-radius: 8px; background: var(--surface); color: var(--text); font-size: .9rem;
 }
 .search-box:focus { outline: 2px solid var(--primary); border-color: var(--primary); }
-.theme-toggle { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; width: 36px; height: 36px; cursor: pointer; color: var(--text); font-size: 1rem; }
+.theme-toggle { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; width: 36px; height: 36px; cursor: pointer; color: var(--text); font-size: 1rem; flex: none; }
 .search-results {
   position: absolute; top: 110%; right: 0; width: 420px; max-width: 85vw; max-height: 60vh; overflow: auto;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: .4rem;
 }
 .search-results a { display: block; padding: .5rem .6rem; border-radius: 8px; color: var(--text); }
 .search-results a:hover, .search-results a.sel { background: var(--bg-alt); text-decoration: none; }
-.search-results .sr-title { font-weight: 700; font-size: .92rem; }
-.search-results .sr-snip { color: var(--text-soft); font-size: .82rem; }
+.search-results .sr-title { display: block; font-weight: 700; font-size: .92rem; }
+.search-results .sr-snip { display: block; color: var(--text-soft); font-size: .82rem; }
+.search-results .sr-snip mark { background: color-mix(in srgb, var(--accent) 30%, transparent); color: inherit; border-radius: 3px; }
 .search-results .sr-empty { padding: .6rem; color: var(--text-soft); }
 
 /* ── Hero / landing ─────────────────────────────────────────────────────── */
-.hero { padding: 5rem 1.25rem 3rem; text-align: center; background:
+.hero { padding: 4.5rem 1.25rem 3rem; text-align: center; background:
   radial-gradient(1200px 400px at 50% -10%, color-mix(in srgb, var(--primary) 14%, transparent), transparent); }
-.hero-inner { max-width: 900px; margin: 0 auto; }
-.hero-eyebrow { text-transform: uppercase; letter-spacing: .08em; font-size: .78rem; font-weight: 700; color: var(--primary); }
-.hero-title { font-size: clamp(1.9rem, 4.5vw, 3.2rem); line-height: 1.1; margin: .5rem 0 1rem; letter-spacing: -.02em; }
-.hero-sub { font-size: 1.12rem; color: var(--text-soft); max-width: 720px; margin: 0 auto 1.8rem; }
+.hero-inner { max-width: 920px; margin: 0 auto; }
+.hero-eyebrow {
+  display: flex; flex-wrap: wrap; gap: .5rem .75rem; justify-content: center; align-items: center;
+  text-transform: uppercase; letter-spacing: .08em; font-size: .74rem; font-weight: 700; color: var(--text-soft);
+}
+.tag { border: 1px solid var(--border); border-radius: 999px; padding: .15rem .6rem; background: var(--surface); }
+.tag-status { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.hero-title { font-size: clamp(1.9rem, 4.5vw, 3.2rem); line-height: 1.1; margin: .8rem 0 1rem; letter-spacing: -.02em; }
+.hero-sub { font-size: 1.1rem; color: var(--text-soft); max-width: 68ch; margin: 0 auto 1.8rem; text-wrap: pretty; }
+.hero-sub strong { color: var(--text); }
 .hero-cta { display: flex; gap: .75rem; justify-content: center; flex-wrap: wrap; }
+.hero-run {
+  margin: 1.5rem auto 0; color: var(--text-soft); font-size: .88rem;
+  display: flex; flex-wrap: wrap; gap: .4rem .55rem; justify-content: center; align-items: center;
+}
+.hero-run code { max-width: 100%; overflow-wrap: anywhere; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: .25rem .55rem; color: var(--text); }
 .btn { display: inline-block; padding: .7rem 1.3rem; border-radius: 10px; font-weight: 700; border: 1px solid transparent; }
 .btn-primary { background: var(--primary); color: var(--primary-ink); }
 .btn-primary:hover { filter: brightness(1.06); text-decoration: none; }
 .btn-ghost { border-color: var(--border); color: var(--text); background: var(--surface); }
 .btn-ghost:hover { border-color: var(--primary); text-decoration: none; }
 
-.stats { border-block: 1px solid var(--border); background: var(--bg-alt); }
-.stats-inner { max-width: var(--maxw); margin: 0 auto; padding: 1.5rem 1.25rem; display: flex; flex-wrap: wrap; gap: 1rem 2.5rem; justify-content: center; }
+.stats { border-block: 1px solid var(--border); background: var(--bg-alt); padding-bottom: 1.25rem; }
+/* Grid, not wrapped flex: six centred flex items leave a ragged last row on
+   every width that is not a multiple of six. */
+.stats-inner {
+  max-width: var(--maxw); margin: 0 auto; padding: 1.5rem 1.25rem 1rem;
+  display: grid; grid-template-columns: repeat(6, 1fr); gap: 1.25rem 1rem;
+}
 .stats-inner div { text-align: center; }
-.stats-inner strong { display: block; font-size: 1.7rem; color: var(--primary); }
-.stats-inner span { font-size: .82rem; color: var(--text-soft); }
+.stats-inner strong { display: block; font-size: clamp(1.3rem, 2.6vw, 1.7rem); color: var(--primary); line-height: 1.2; }
+.stats-inner span { font-size: .8rem; color: var(--text-soft); }
+.stats-note { color: var(--text-soft); font-size: .88rem; max-width: 78ch; margin: 0 auto; padding-bottom: .5rem; }
+.stats-note strong { color: var(--text); }
 
-.features h2, .why h2 { font-size: 1.7rem; margin-top: 0; }
+.features h2, .why h2, .roles h2 { font-size: 1.7rem; margin-top: 0; }
 .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-top: 1.5rem; }
+.card-grid-4 { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
 .card { display: block; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.2rem; box-shadow: var(--shadow); color: var(--text); transition: transform .12s ease, border-color .12s ease; }
 .card:hover { transform: translateY(-2px); border-color: var(--primary); text-decoration: none; }
-.card h3 { margin: 0 0 .4rem; font-size: 1.08rem; }
+.card h2, .card h3 { margin: 0 0 .4rem; font-size: 1.08rem; }
 .card p { margin: 0; color: var(--text-soft); font-size: .92rem; }
 .card-count { display: inline-block; margin-top: .6rem; font-size: .78rem; color: var(--primary); font-weight: 700; }
+
+.role-abbr {
+  display: inline-block; margin-right: .45rem; padding: .05rem .45rem; border-radius: 6px;
+  background: color-mix(in srgb, var(--primary) 16%, transparent); color: var(--primary);
+  font-family: var(--mono); font-size: .8rem; letter-spacing: .02em;
+}
+.card p.role-gloss { margin: 0 0 .6rem; font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--text-soft); }
 
 .why-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2.5rem; align-items: start; }
 .why ul.check { list-style: none; padding: 0; }
 .why ul.check li { padding-left: 1.6rem; position: relative; margin: .5rem 0; color: var(--text-soft); }
 .why ul.check li::before { content: "✓"; position: absolute; left: 0; color: var(--primary); font-weight: 800; }
+.why ul.check li strong { color: var(--text); }
+.fineprint { font-size: .82rem; color: var(--text-soft); }
 
 /* ── Docs layout ────────────────────────────────────────────────────────── */
 .docs-layout { max-width: var(--maxw); margin: 0 auto; display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 2rem; padding: 1.5rem 1.25rem 3rem; }
@@ -133,45 +177,112 @@ a:hover { text-decoration: underline; }
 .doc { min-width: 0; }
 .doc-breadcrumb { font-size: .85rem; color: var(--text-soft); display: flex; gap: .4rem; margin-bottom: .5rem; }
 .doc h1 { font-size: clamp(1.7rem, 3vw, 2.3rem); letter-spacing: -.02em; margin: .2rem 0 .5rem; }
-.doc-lead { font-size: 1.1rem; color: var(--text-soft); margin-top: 0; }
+.doc-lead { font-size: 1.1rem; color: var(--text-soft); margin-top: 0; max-width: 72ch; }
 .doc-toc { background: var(--bg-alt); border: 1px solid var(--border); border-radius: var(--radius); padding: .5rem 1rem; margin: 1.5rem 0; }
 .doc-toc summary { cursor: pointer; font-weight: 700; }
-.doc-toc ul { columns: 2; margin: .6rem 0 0; }
+.doc-toc-count { font-weight: 400; color: var(--text-soft); font-size: .85rem; margin-left: .4rem; }
+.doc-toc ul { columns: 2; column-gap: 2rem; margin: .6rem 0 0; padding-left: 1.1rem; }
+.doc-toc li { break-inside: avoid; }
 .doc-toc a { color: var(--text-soft); }
 
-.doc-body { font-size: 1rem; }
+/* Nothing on a docs page may push the viewport sideways: long URLs and
+   identifiers break, wide tables and code scroll inside their own box. */
+.doc-body { font-size: 1rem; overflow-wrap: break-word; }
 .doc-body h2 { margin-top: 2.2rem; padding-top: .4rem; border-top: 1px solid var(--border); font-size: 1.5rem; letter-spacing: -.01em; }
 .doc-body h3 { margin-top: 1.6rem; font-size: 1.2rem; }
-.doc-body h2 a.zola-anchor, .doc-body h3 a.zola-anchor { opacity: 0; margin-left: .4rem; color: var(--text-soft); }
-.doc-body h2:hover a.zola-anchor, .doc-body h3:hover a.zola-anchor { opacity: 1; }
-.doc-body table { border-collapse: collapse; width: 100%; margin: 1.2rem 0; font-size: .92rem; display: block; overflow-x: auto; }
+/* Heading permalinks. The anchor element is empty (see templates/anchor-link.html)
+   so its glyph never reaches the clipboard or the search index. */
+a.zola-anchor { opacity: 0; margin-left: .4rem; color: var(--text-soft); font-weight: 400; text-decoration: none; }
+a.zola-anchor::before { content: "#"; }
+:hover > a.zola-anchor, a.zola-anchor:focus-visible { opacity: 1; }
+/* Wide reference tables scroll inside their own box; the page itself never
+   scrolls sideways. `display: block` is what makes overflow apply to a table. */
+.doc-body table { border-collapse: collapse; width: 100%; max-width: 100%; margin: 1.2rem 0; font-size: .92rem; display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .doc-body th, .doc-body td { border: 1px solid var(--border); padding: .5rem .7rem; text-align: left; }
-.doc-body th { background: var(--bg-alt); }
+.doc-body th { background: var(--bg-alt); white-space: nowrap; }
 .doc-body blockquote { border-left: 4px solid var(--primary); margin: 1rem 0; padding: .3rem 1rem; background: var(--bg-alt); border-radius: 0 8px 8px 0; color: var(--text-soft); }
-.doc-body img { max-width: 100%; }
+.doc-body img { max-width: 100%; height: auto; }
+.doc-body ul, .doc-body ol { padding-left: 1.3rem; }
 
-/* Code — always on a dark surface (matches OneHalfDark syntax theme). */
+/* GitHub-style alerts (`> [!NOTE]`), which Zola renders as a class on the
+   blockquote and nothing else — without a label they read as plain quotes. */
+.doc-body blockquote[class^="markdown-alert"] { border-left-color: var(--text-soft); }
+.doc-body blockquote[class^="markdown-alert"]::before {
+  display: block; font-weight: 800; font-size: .78rem; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--text-soft); margin-bottom: .2rem;
+}
+.doc-body .markdown-alert-note::before { content: "Note"; color: #3b82f6; }
+.doc-body .markdown-alert-note { border-left-color: #3b82f6; }
+.doc-body .markdown-alert-tip::before { content: "Tip"; color: var(--primary); }
+.doc-body .markdown-alert-tip { border-left-color: var(--primary); }
+.doc-body .markdown-alert-important::before { content: "Important"; color: #8b5cf6; }
+.doc-body .markdown-alert-important { border-left-color: #8b5cf6; }
+.doc-body .markdown-alert-warning::before { content: "Warning"; color: var(--accent); }
+.doc-body .markdown-alert-warning { border-left-color: var(--accent); }
+.doc-body .markdown-alert-caution::before { content: "Caution"; color: #ef4444; }
+.doc-body .markdown-alert-caution { border-left-color: #ef4444; }
+
+/* Code — always on a dark surface (matches the nord syntax theme). */
 code { font-family: var(--mono); font-size: .88em; }
-:not(pre) > code { background: var(--bg-alt); padding: .12em .4em; border-radius: 6px; border: 1px solid var(--border); }
-pre { background: var(--code-bg); color: #dcdfe4; padding: 1rem 1.1rem; border-radius: var(--radius); overflow-x: auto; font-size: .86rem; line-height: 1.5; }
+:not(pre) > code { background: var(--bg-alt); padding: .12em .4em; border-radius: 6px; border: 1px solid var(--border); word-break: break-word; }
+pre { background: var(--code-bg); color: var(--code-ink); padding: 1rem 1.1rem; border-radius: var(--radius); overflow-x: auto; font-size: .86rem; line-height: 1.5; }
 pre code { background: none; border: 0; padding: 0; }
-pre.mermaid, .mermaid { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; text-align: center; }
+/* Diagrams: mermaid scales its SVG down to the container, so the scroll box is
+   a safety net for the few that declare an intrinsic width. */
+pre.mermaid, .mermaid { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; text-align: center; overflow-x: auto; }
+.mermaid svg { max-width: 100%; height: auto; }
 
 .doc-pager { display: flex; justify-content: space-between; gap: 1rem; margin: 2.5rem 0 1rem; padding-top: 1.5rem; border-top: 1px solid var(--border); }
 .doc-pager a { flex: 1; padding: .8rem 1rem; border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-weight: 600; }
 .doc-pager a:hover { border-color: var(--primary); text-decoration: none; }
+.doc-pager a span { display: block; font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--text-soft); }
 .doc-pager .next { text-align: right; }
 .doc-edit { margin-top: 1.5rem; font-size: .85rem; }
 
 /* ── Footer ─────────────────────────────────────────────────────────────── */
 .site-footer { border-top: 1px solid var(--border); background: var(--bg-alt); }
 .footer-inner { max-width: var(--maxw); margin: 0 auto; padding: 2rem 1.25rem; color: var(--text-soft); font-size: .9rem; text-align: center; }
+.footer-nav { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; justify-content: center; margin-bottom: 1rem; font-weight: 600; }
+.footer-note { font-size: .82rem; opacity: .85; }
 
 /* ── Responsive ─────────────────────────────────────────────────────────── */
+@media (max-width: 1000px) {
+  .stats-inner { grid-template-columns: repeat(3, 1fr); }
+}
 @media (max-width: 900px) {
   .why-grid { grid-template-columns: 1fr; }
   .docs-layout { grid-template-columns: 1fr; }
   .sidebar { position: static; max-height: none; border-bottom: 1px solid var(--border); padding-bottom: 1rem; margin-bottom: 1rem; }
-  .site-nav { display: none; }
   .doc-toc ul { columns: 1; }
+  .section-pad { padding: 2.75rem 0; }
+  .hero { padding: 3rem 1.25rem 2.5rem; }
+  /* The nav used to be `display: none` here, which left a phone with no way to
+     reach Docs, Services or GitHub from the landing page at all. It scrolls
+     instead, on its own line under the brand. */
+  .header-inner { flex-wrap: wrap; gap: .6rem 1rem; }
+  .header-actions { margin-left: auto; }
+  .site-nav {
+    order: 3; width: 100%; margin-left: 0; gap: 1rem;
+    overflow-x: auto; scrollbar-width: none; padding-bottom: .15rem;
+  }
+  .site-nav::-webkit-scrollbar { display: none; }
+  .search-box { width: 150px; }
+}
+@media (max-width: 560px) {
+  .stats-inner { grid-template-columns: repeat(2, 1fr); }
+  .doc-pager { flex-direction: column; }
+  .doc-pager .next { text-align: left; }
+}
+
+/* Motion is decoration here; none of it conveys state. */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  * { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+  .card:hover { transform: none; }
+}
+
+@media print {
+  .site-header, .sidebar, .doc-pager, .doc-edit, .site-footer, .search-results { display: none; }
+  .docs-layout { display: block; }
+  a[href^="http"]::after { content: " (" attr(href) ")"; font-size: .8em; word-break: break-all; }
 }

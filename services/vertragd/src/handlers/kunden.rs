@@ -11,7 +11,7 @@ use mako_service::{ApiError, ApiResult, oidc::Claims};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use super::{Ctx, ok, require_kunde};
+use super::{CedarEnforcer, Ctx, authorize, ok, require_kunde};
 use crate::pg;
 
 // ── Kunde ─────────────────────────────────────────────────────────────────────
@@ -21,10 +21,12 @@ use crate::pg;
 /// Idempotent on `erp_kunde_id`. When `oidc_sub` is supplied the primary portal
 /// identity is created in the same transaction.
 pub async fn create_kunde(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Json(input): Json<pg::CreateKundeInput>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    authorize(&enforcer, &claims, "write-kunde", ctx.tenant())?;
     let id = pg::upsert_kunde(&ctx.pool, ctx.tenant(), &input)
         .await
         .map_err(ApiError::Internal)?;
@@ -36,10 +38,12 @@ pub async fn create_kunde(
 
 /// `GET /api/v1/kunden/{id}` — customer profile, active MaLos and portal users.
 pub async fn get_kunde(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-kunde", ctx.tenant())?;
     let kunde = require_kunde(&ctx, id).await?;
     let (malo_ids, identitaeten) = tokio::try_join!(
         pg::list_aktive_malo_ids(&ctx.pool, id, ctx.tenant()),
@@ -55,11 +59,13 @@ pub async fn get_kunde(
 
 /// `PUT /api/v1/kunden/{id}` — partial update; absent fields keep their value.
 pub async fn update_kunde(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(id): Path<Uuid>,
     Json(input): Json<pg::UpdateKundeInput>,
 ) -> ApiResult<StatusCode> {
+    authorize(&enforcer, &claims, "write-kunde", ctx.tenant())?;
     if pg::update_kunde(&ctx.pool, id, ctx.tenant(), &input)
         .await
         .map_err(ApiError::Internal)?
@@ -78,10 +84,12 @@ pub struct KundenListQuery {
 
 /// `GET /api/v1/kunden` — operator list view.
 pub async fn list_kunden(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Query(q): Query<KundenListQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-kunde", ctx.tenant())?;
     let rows = pg::list_kunden(
         &ctx.pool,
         ctx.tenant(),
@@ -95,14 +103,27 @@ pub async fn list_kunden(
 
 /// `GET /api/v1/kunden/by-sub/{sub}` — resolve an OIDC subject to a customer.
 ///
-/// Used by `portald` for resource-level authorization: the response carries
-/// exactly the MaLos this identity may see, already narrowed by its
-/// `standort_filter`.
+/// The response carries exactly the MaLos this identity may see, already
+/// narrowed by its `standort_filter`.
+///
+/// ## Whose subject is being resolved
+///
+/// A caller asking about **their own** subject is asking what the portal is
+/// entitled to show them, so a customer token reaches it. Any other subject is
+/// a foreign customer's profile, contracts and market locations, so resolving
+/// one is an operator read. The two are different Cedar actions, chosen here by
+/// comparing the path against the verified token — never by trusting the path.
 pub async fn get_kunde_by_sub(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(oidc_sub): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    if oidc_sub == claims.sub() {
+        authorize(&enforcer, &claims, "read-own-portal-identity", ctx.tenant())?;
+    } else {
+        authorize(&enforcer, &claims, "read-kunde", ctx.tenant())?;
+    }
     let kunde = pg::fetch_kunde_by_sub(&ctx.pool, &oidc_sub, ctx.tenant())
         .await
         .map_err(ApiError::Internal)?
@@ -171,9 +192,16 @@ pub struct AuthenticateQuery {
 /// (DSGVO Art. 32). Only a genuine server fault returns 500.
 pub async fn authenticate(
     claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Query(q): Query<AuthenticateQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(
+        &enforcer,
+        &claims,
+        "authenticate-portal-identity",
+        ctx.tenant(),
+    )?;
     let sub = claims.sub().to_owned();
     let kunde = pg::fetch_kunde_by_sub(&ctx.pool, &sub, ctx.tenant())
         .await
@@ -219,11 +247,18 @@ pub async fn authenticate(
 
 /// `POST /api/v1/kunden/{id}/identitaeten` — add or update a portal user.
 pub async fn upsert_identitaet(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(kunden_id): Path<Uuid>,
     Json(input): Json<pg::UpsertIdentitaetInput>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    authorize(
+        &enforcer,
+        &claims,
+        "manage-portal-identitaeten",
+        ctx.tenant(),
+    )?;
     require_kunde(&ctx, kunden_id).await?;
     // Only a genuinely new sub counts against the cap; re-POSTing an existing
     // one is an update, not a new seat.
@@ -257,10 +292,12 @@ pub async fn upsert_identitaet(
 
 /// `GET /api/v1/kunden/{id}/identitaeten` — active portal users.
 pub async fn list_identitaeten(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(kunden_id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-portal-identitaeten", ctx.tenant())?;
     require_kunde(&ctx, kunden_id).await?;
     let rows = pg::list_identitaeten(&ctx.pool, kunden_id, ctx.tenant())
         .await
@@ -270,10 +307,17 @@ pub async fn list_identitaeten(
 
 /// `DELETE /api/v1/kunden/{id}/identitaeten/{sub}` — revoke portal access.
 pub async fn delete_identitaet(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path((kunden_id, oidc_sub)): Path<(Uuid, String)>,
 ) -> ApiResult<StatusCode> {
+    authorize(
+        &enforcer,
+        &claims,
+        "manage-portal-identitaeten",
+        ctx.tenant(),
+    )?;
     require_kunde(&ctx, kunden_id).await?;
     if pg::deactivate_identitaet_by_sub(&ctx.pool, kunden_id, ctx.tenant(), &oidc_sub)
         .await
@@ -294,11 +338,13 @@ pub async fn delete_identitaet(
 /// which is what makes a DSGVO Art. 15 disclosure structured rather than a
 /// free-text blob.
 pub async fn put_person(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<StatusCode> {
+    authorize(&enforcer, &claims, "write-kunde", ctx.tenant())?;
     use rubo4e::current::Person;
     // The BO4E gate. Its strict-enum stage matters because `canonical` — the
     // round-trip, not the request — is what gets stored, and a BO4E enum
@@ -320,10 +366,12 @@ pub async fn put_person(
 
 /// `GET /api/v1/kunden/{id}/person`
 pub async fn get_person(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-kunde", ctx.tenant())?;
     pg::fetch_person(&ctx.pool, id, ctx.tenant())
         .await
         .map_err(ApiError::Internal)?
@@ -345,11 +393,18 @@ pub async fn get_person(
 ///
 /// [`Bic`]: rubo4e::identifiers::Bic
 pub async fn put_zahlungsinformation(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(kunden_id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(
+        &enforcer,
+        &claims,
+        "write-zahlungsinformation",
+        ctx.tenant(),
+    )?;
     use rubo4e::current::Zahlungsinformation;
     require_kunde(&ctx, kunden_id).await?;
     let typed: Zahlungsinformation = mako_markt::bo4e::decode(body)
@@ -378,10 +433,12 @@ pub async fn put_zahlungsinformation(
 
 /// `GET /api/v1/kunden/{id}/zahlungsinformation`
 pub async fn get_zahlungsinformation(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(kunden_id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-zahlungsinformation", ctx.tenant())?;
     pg::fetch_zahlungsinformation(&ctx.pool, kunden_id, ctx.tenant())
         .await
         .map_err(ApiError::Internal)?
@@ -396,10 +453,12 @@ pub async fn get_zahlungsinformation(
 /// The complete record `vertragd` holds about one data subject: Kunde, Person,
 /// Zahlungsinformation, portal identities, contracts and components.
 pub async fn gdpr_export(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(kunden_id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "export-kunde", ctx.tenant())?;
     let export = pg::gdpr_export(&ctx.pool, kunden_id, ctx.tenant())
         .await
         .map_err(ApiError::Internal)?
@@ -438,10 +497,12 @@ pub struct AnonymizeRequest {
 /// subject writes itself.
 pub async fn anonymize(
     claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(id): Path<Uuid>,
     body: Option<Json<AnonymizeRequest>>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "anonymize-kunde", ctx.tenant())?;
     let req = body.map(|Json(b)| b).unwrap_or_default();
     if req.force && req.request_reason.is_none() {
         return Err(ApiError::unprocessable(
@@ -495,10 +556,12 @@ pub async fn anonymize(
 
 /// `GET /api/v1/kunden/{id}/portfolio` — one row per active MaLo/Sparte.
 pub async fn portfolio(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(kunden_id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    authorize(&enforcer, &claims, "read-kunde", ctx.tenant())?;
     require_kunde(&ctx, kunden_id).await?;
     let rows = pg::list_portfolio_by_kunde(&ctx.pool, kunden_id, ctx.tenant())
         .await

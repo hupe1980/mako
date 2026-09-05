@@ -177,7 +177,7 @@ pub(crate) struct EnergyParams {
 ///
 /// **The canonical projected series** — one entry per interval, in one
 /// direction, already through `domain::register`: non-billable qualities
-/// dropped (§ 60 Abs. 2 MsbG), non-kWh registers dropped, the other direction
+/// dropped (§ 40a Abs. 2 EnWG), non-kWh registers dropped, the other direction
 /// dropped, and no total register added to the tariff intervals it covers.
 ///
 /// `GET /api/v1/lastgang` is the BO4E **export** and returns one object per
@@ -199,7 +199,7 @@ pub(crate) struct EnergyParams {
 /// `billable_pct` is the share of the direction's series — **by duration, before
 /// the projection filtered it** — that is billable at all. Without it a caller
 /// cannot tell a complete month from one where a third of the intervals arrived
-/// `FAULTY` and were dropped, which is exactly the § 60 Abs. 2 MsbG gate `einsd`
+/// `FAULTY` and were dropped, which is exactly the § 40a Abs. 2 EnWG gate `einsd`
 /// applies before auto-deriving the § 51 EEG reduction. `None` means the point
 /// reports no register in that direction — a different fact from 0 %.
 pub(crate) async fn get_energy_series(
@@ -319,8 +319,8 @@ pub(crate) async fn get_energy_series(
         "resolution_min": resolution_min,
         "coverage_pct": coverage_pct,
         // `None` when the direction has no energy register at all — 0 % and
-        // "nothing to say" are different answers, and a § 60 Abs. 2 gate must
-        // not read the second as the first.
+        // "nothing to say" are different answers, and a § 40a Abs. 2 EnWG gate
+        // must not read the second as the first.
         "billable_pct": crate::domain::billable_share_pct(&reads, direction),
         "interval_count": count,
         "intervals": intervals,
@@ -1061,7 +1061,7 @@ pub(crate) async fn get_lastgang_resampled(
     // spans every register the measuring point reported, and a bucket total built
     // from all of them adds a prosumer's Einspeisung to its Bezug and counts a
     // dual-tariff meter's consumption twice (`domain::register`). Non-billable
-    // qualities are dropped by the same projection (§ 60 Abs. 2).
+    // qualities are dropped by the same projection (§ 40a Abs. 2 EnWG).
     let intervals = crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Bezug);
 
     let buckets = resample(&intervals, &config);
@@ -1147,7 +1147,7 @@ pub(crate) async fn get_summenzeitreihe(
 
     // The Summenzeitreihe feeds MaBiS and the Mehr-/Mindermengensaldo, so it is
     // the **Bezug**, projected onto one canonical register set: billable
-    // qualities only (§ 60 Abs. 2), no Einspeisung folded in, and no total
+    // qualities only (§ 40a Abs. 2 EnWG), no Einspeisung folded in, and no total
     // register added to its own HT/NT split (`domain::register`).
     let intervals = crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Bezug);
 

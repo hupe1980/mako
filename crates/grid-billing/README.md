@@ -1,7 +1,9 @@
 # grid-billing
 
 > Deterministic, regulation-aware German grid settlement engine —
-> NNE, KA, MMM, MSB, and GeLi Gas AWH Sperrprozesse (PIDs 31001, 31002, 31005, 31006, 31009, 31011).
+> NNE, KA, MMM, MSB, and GeLi Gas AWH Sperrprozesse
+> (Prüfidentifikatoren 31001, 31002, 31005, 31006, 31009, 31011 — the five-digit
+> BDEW codes that name each billing Anwendungsfall).
 
 [![Crates.io](https://img.shields.io/crates/v/grid-billing?label=grid-billing&color=f59e0b&logo=rust)](https://crates.io/crates/grid-billing)
 
@@ -20,6 +22,8 @@ transitional phase-down, which completed long ago.
 
 ### MsbG §30 — Preisobergrenzen für den Messstellenbetrieb
 
+Every figure §30 states is **brutto jährlich**.
+
 | §30 Abs. 1 band | Netzbetreiber | Letztverbraucher | Total |
 |---|---|---|---|
 | > 6 000 – ≤ 10 000 kWh | 80 € | 40 € | 120 € |
@@ -31,9 +35,23 @@ transitional phase-down, which completed long ago.
 §30 Abs. 3 (optionaler Einbau) is 30 € each, 60 € total. §30 Abs. 2 adds up to
 50 € a year per party for a Steuereinrichtung.
 
-The charge is **annualised before comparison** — billing a year in monthly
-instalments does not raise the cap. A charge above the ceiling raises
-`MSB_ABOVE_MSBG_POG`.
+Two conversions before the comparison means anything. The monthly charge is
+**annualised** — billing a year in instalments does not raise the cap — and it is
+**grossed up** at the Umsatzsteuer rate of the delivery period, because the
+ceiling is gross and the settlement's figures are net. Comparing net against
+gross would grant the whole tax rate as headroom: at 19 % a charge could sit
+18.9 % above the statutory maximum unreported. A gross charge above the ceiling
+raises `MSB_ABOVE_MSBG_POG`, and the finding states both figures.
+
+What is measured is the **Grundgebühr together with the Messdienstleistung**.
+§30 caps the „Entgelt für den Messstellenbetrieb", and §3 Abs. 2 Nr. 1 MsbG puts
+the Messung inside it — Messstellenbetrieb umfasst die „Gewährleistung einer
+mess- und eichrechtskonformen Messung […] einschließlich der
+Messwertaufbereitung"; §17 Abs. 7 Satz 1 StromNEV states it from the other side
+(„ein Entgelt für den Messstellenbetrieb, zu dem auch die Messung gehört").
+Testing the Grundgebühr alone would let a settlement clear any ceiling by moving
+part of the charge into the second position. The Messdienstleistung is a flat fee
+for the whole period, so it is spread over `billing_months` before annualising.
 
 The band is **derived, not named**. Each §30 Abs. 1 Nummer is a disjunction over
 facts about the metering point, so `MessstellenKategorie::Pflichteinbau` carries
@@ -58,6 +76,25 @@ anything. Zero peak yields `None`, not zero.
 What *is* enforced is §17 Abs. 6: an Arbeitspreis-only tariff is permitted only
 in Niederspannung up to 100 000 kWh a year. Billing without a Leistungspreis
 outside that raises `ARBEITSPREIS_ONLY_OUTSIDE_SECT17_ABS6`.
+
+`Leistungspreis::system` names which Leistungspreissystem the price sheet states,
+and the two are billed differently.
+
+`LeistungspreisSystem::Jahr` is §17 Abs. 2 Satz 2: „Das Jahresleistungsentgelt
+ist das Produkt aus dem jeweiligen Jahresleistungspreis und der
+Jahreshöchstleistung in Kilowatt der jeweiligen Entnahme im Abrechnungsjahr." Two
+figures multiplied, and §17 states no day-count convention to scale them by — so
+the rate is billed as published. A settlement period that is not the
+Abrechnungsjahr raises `JAHRESLEISTUNGSPREIS_UNTERJAEHRIG` rather than being
+silently pro-rated into a Zwölftelung no price sheet publishes.
+
+`LeistungspreisSystem::Monat` is the Monatsleistungspreissystem §17 Abs. 8
+presupposes when it offers Tagesleistungspreise for Landstrom „neben einem
+Jahres- und Monatsleistungspreissystem". StromNEV does not define it; the
+Netzbetreiber's Preisblatt publishes it as a €/kW·Monat rate against the period's
+Höchstleistung. It is billed for the months stated, and a month count that does
+not match the period raises `MONATSLEISTUNGSPREIS_MONATE_MISMATCH` — a twelvefold
+over-charge multiplies out perfectly, so only the count can catch it.
 
 ### §19 Abs. 2 StromNEV — individuelle Netzentgelte
 
@@ -122,7 +159,7 @@ could forget:
 | Exactly one Arbeitspreis form (einheitlich, Modul 1 pauschal, Modul 2 prozentual, Modul 3 zeitvariabel, or spot-linked) | `ArbeitspreisModell` — one variant at a time; each replaces the flat position, so the same energy is never billed twice |
 | `Modul 1 + Modul 3` is the only combination BK6-22-300 offers | `ArbeitspreisModell` holds one variant at a time, so every pair is unrepresentable — which is right for Modul 1/Modul 2 (alternative base modules) and for Modul 2/Modul 3, and is a limitation for the Modul 1 + Modul 3 pair the Festlegung permits. See `Sect14aModule::combinable_with` |
 | Reduction factors in `(0, 1]` | `Reduktionsfaktor` enforces the range at construction |
-| Leistungspreis needs both peak and rate | `Leistungspreis` — a pair |
+| Leistungspreis needs both peak and rate, and names its Leistungspreissystem | `Leistungspreis` — a pair plus `LeistungspreisSystem` |
 | Grundpreis needs both rate and months | `Grundpreis` — a pair |
 | KAV Höchstbetrag is always checked | `Konzessionsabgabe` pairs the rate with its `KaKundengruppe` |
 | Period ordering | `SettlementPeriod` — constructing it is the check |
@@ -160,9 +197,9 @@ assigns 1-based numbers at rendering time; the engine carries no counter.
 
 `SpotPriceFormula` states the pricing formula behind a §14a Modul 3 rate as a
 typed value — reference, unit, method, steps — never a `serde_json::Value` carrying
-a hand-built BO4E COM. That keeps BO4E *schema knowledge* out of the engine: an
-adapter that needs the COM builds it from the value object, and the crate has no
-`serde_json` dependency at all.
+a hand-built BO4E COM. That keeps BO4E *schema knowledge* out of the engine: the
+`bo4e` bridge builds the COM from the value object, and the default build pulls
+in no `serde_json` at all — it arrives only with that feature.
 
 ## SettlementPeriod
 
@@ -330,7 +367,7 @@ and `KA_CHARGED_WHILE_EXEMPT` when a rate is applied to a §2 Abs. 7 exemption.
 - **MSB-Rechnung** (PID 31009) — Grundgebühr Messstellenbetrieb + optional Messdienstleistung
 - **GeLi Gas AWH Sperrprozesse** (PID 31011) — abrechnungswürdige Handlungen (BK7-24-01-009 §5.4)
 - **§13a EnWG Redispatch-Vergütung** — `redispatch_verguetung()` computes the angemessene Vergütung per activation (entgangene Einnahmen + zusätzliche − ersparte Aufwendungen; `eeg_entgangene_einnahmen()` for the Nr. 5 EEG basis)
-- **Reversal (Stornorechnung)** — `reverse()` negates any prior settlement immutably
+- **Reversal (Stornorechnung)** — `reverse()` negates any prior settlement immutably; the sign goes on the unit price, so each position still multiplies out
 
 - **Umsatzsteuer** — every settlement states its tax (§14 Abs. 4 Nr. 8 UStG). Network services
   are 19 % and never reverse-charged (UStAE 13b.3a excludes them by name); a Mehr-/Mindermenge is
@@ -377,8 +414,8 @@ SettlementResult {
         ▼   (adapter — this is where document identity enters)
 InvoiceDocument { settlement, pid, rechnungsnummer, invoice_date, due_date }
         │
-        ▼   (rubo4e lives in the service; grid-billing has no BO4E dep)
-into_rechnung(&document)  → rubo4e::current::Rechnung {
+        ▼   (feature `bo4e` — off by default)
+grid_billing::bo4e::into_rechnung(&document) → rubo4e::current::Rechnung {
                               rechnungspositionen[].positionsnummer ← assigned here
                               rechnungspositionen[].artikelnummer   ← via kind.artikelnummer()
                               rechnungstyp                          ← Netznutzungsrechnung (NNE + MMM only)
@@ -400,34 +437,41 @@ inspecting positions:
 
 | Field | Set for | Value |
 |---|---|---|
-| `rechnungstyp` | NNE Strom/Gas, MMM Strom/Gas, MMM selbst ausgestellt | `Netznutzungsrechnung` |
-| `netznutzungrechnungsart` | the same five | `Selbstausgestellt` for PID 31006, else `Handelsrechnung` |
-| `netznutzungrechnungstyp` | MMM only | `Mehrmindermengenrechnung` |
+| `rechnungstyp` | Abschlag, NNE Strom/Gas, MMM Strom/Gas, MMM selbst ausgestellt | `Netznutzungsrechnung` |
+| `netznutzungrechnungsart` | the same six | `Selbstausgestellt` for PID 31006, else `Handelsrechnung` |
+| `netznutzungrechnungstyp` | MMM · Abschlag · anything with a stated cadence | `Mehrmindermengenrechnung` · `Abschlagsrechnung` · the cadence |
 
 The other four settlement types this engine produces — MSB-Rechnung (31009),
 Gas-AWH Sperrung (31011), Redispatch Kostenblatt, dezentrale Einspeisung (§18
 StromNEV) — are **left untyped on purpose**. They are not network-use invoices,
 and typing them as one would assert something the AHB does not.
 
-`netznutzungrechnungstyp` stays unset for NNE for the same reason: its remaining
-codes (Turnus-, Monats-, Abschlags-, Abschluss-, Zwischenrechnung) describe the
-billing *cadence*, and the same NNE computation is billed monthly or annually
-depending on contract. That is a document fact like `rechnungsnummer`, not a
-property of the settlement, so it needs a model change rather than a mapping.
+`netznutzungrechnungstyp` is the one field two different things decide. The
+Mehr-/Mindermengen codes follow from the settlement, and so does
+`Abschlagsrechnung`, because PID 31001 *is* that document. The rest —
+Turnus-, Monats-, Abschluss-, Zwischenrechnung — describe the billing
+**cadence**, which the same NNE computation does not carry: it is billed
+monthly or annually depending on contract. So it rides on
+`InvoiceDocument::cadence`, and with neither present the field stays unset
+rather than guessing a rhythm nothing supports.
 
 ### BDEW Artikelnummern architecture
 
-The service layer owns the BDEW Artikelnummer mapping. `grid-billing` stays free
-of `rubo4e`:
+Which article number applies to which position in which settlement is domain
+logic, so it lives here — `BillingPositionKind::artikelnummer(settlement_type)`
+returns the BDEW **codelist name** as a `&'static str`, a plain string that costs
+the core engine no BO4E type. The `bo4e` bridge parses it into the enum
+(`bo4e::kind_to_artikelnummer`); a consumer rendering something else parses it
+its own way.
 
 ```mermaid
 flowchart LR
     calc["grid_billing<br/>settle_*()"]
     pos["SettlementPosition<br/>.kind: BillingPositionKind<br/>.trace: CalculationTrace"]
-    svc["Service layer<br/>kind_to_artikelnummer()"]
+    bridge["feature bo4e<br/>kind_to_artikelnummer()"]
     bo4e["Rechnungsposition<br/>.artikelnummer  ← Gas/MMM/KA<br/>.artikel_id     ← NNE Strom/AWH Gas"]
 
-    calc --> pos --> svc --> bo4e
+    calc --> pos --> bridge --> bo4e
 
     note1["BK6-20-160:<br/>NNE Strom replaced<br/>artikelnummer → artikel_id<br/>from PreisblattNetznutzung"]
     note2["BDEW Codeliste v5.6:<br/>Gas NNE/MMM/KA use<br/>classic 9990001… codes<br/>AWH: 2-01-7-001/002"]
@@ -436,17 +480,28 @@ flowchart LR
     note2 -.->|Gas| bo4e
 ```
 
-### Responsibility split
+`artikelnummer` answers `None` where the position carries an **Artikel-ID**
+instead — every Strom NNE position since BK6-20-160, the AWH Gas `2-01-7-xxx`
+positions, and the Abschlag, which prices nothing. The renderer resolves those
+from the price sheet or the input.
 
-`grid-billing` has **zero dependency on `rubo4e`**. BO4E conversion lives exclusively in the
-service layer, keeping this crate publishable to crates.io without pulling in internal workspace crates.
+### Responsibility split
 
 | Responsibility | Where |
 |---|---|
 | Settlement math + legal refs | `grid-billing` |
-| BO4E `Rechnung` conversion | `netzbilanzd::into_rechnung()` / `invoicd::into_rechnung()` |
-| INVOIC plausibility checks 1–6 | `invoic-checker` |
+| BO4E `Rechnung` conversion | `grid_billing::bo4e` — **feature `bo4e`**, off by default |
+| INVOIC plausibility checks | `invoic-checker` |
 | EDIFACT serialization + AS4 dispatch | `makod` |
+
+The feature is off by default so the settlement engine stays publishable and
+`rubo4e`-free for a consumer that renders something else; `netzbilanzd` and
+`invoicd` both enable it.
+
+| Feature | Pulls in | Enables |
+|---|---|---|
+| *(default)* | `billing`, `rust_decimal`, `serde`, `thiserror`, `time` | the settlement engine |
+| `bo4e` | `rubo4e`, `serde_json` | `bo4e::into_rechnung`, `kind_to_artikelnummer`, `rechnungstyp_for`, `netznutzungrechnungsart_for`, `netznutzungrechnungstyp_for` |
 
 ## Domain types
 
@@ -465,6 +520,7 @@ pub struct SettlementResult {
     pub recipient_mp_id: String,         // LF, NB, MSB, MGV or ESA
     pub positions: Vec<SettlementPosition>,
     pub total_eur: Decimal,              // rounded to 2 dp
+    pub steuer: Steuerausweis,           // §14 Abs. 4 Nr. 8 UStG — rate, amount, reverse-charge note
     pub warnings: Vec<SettlementWarning>,
 }
 ```
@@ -479,6 +535,8 @@ pub struct InvoiceDocument {
     pub correction_of: Option<String>,   // what this supersedes
     pub invoice_date: time::Date,
     pub due_date: time::Date,
+    pub cadence: Option<Rechnungscharakter>,   // IMD+7081 — a document fact
+    pub abschlaege: Vec<Abschlagsverrechnung>, // deducted from what is owed, not from the net
 }
 ```
 
@@ -506,10 +564,10 @@ from the price sheet:
 
 ```rust
 pub struct SettlementPosition {
-    pub text: String,                        // e.g. "Netznutzung Arbeit HT (§14a Modul 2)"
+    pub text: String,                        // e.g. "Netznutzung Arbeit HT (§14a Modul 3)"
     pub kind: BillingPositionKind,           // what was charged
     pub quantity: Decimal,                   // rounded to 3 dp
-    pub unit: QuantityUnit,                  // Kwh | Kw | Kvarh | Kvar | Monat
+    pub unit: QuantityUnit,                  // Kwh | Kw | Kvarh | Kvar | Monat | Jahr
     pub unit_price_eur: Decimal,             // rounded to 6 dp
     pub net_eur: Decimal,                    // quantity × unit_price_eur, rounded to 5 dp
     pub spot_price_formula: Option<SpotPriceFormula>,  // the formula behind the rate
@@ -541,6 +599,7 @@ pub enum LegalReference {
     GasNev   { paragraph: &'static str },       // "§14"
     Kav      { paragraph: &'static str },       // "§2 Abs. 2"
     Kwkg     { paragraph: &'static str },       // "§26" KWKG-Umlage
+    Ustg     { paragraph: &'static str },       // "§14 Abs. 5" Anzahlung, "§13b" reverse charge
     EnFG     { paragraph: &'static str },       // "§§21 ff." Letztverbrauchergruppe
     Sect14aEnwg { module: Sect14aModule },      // Modul1 | Modul2 | Modul3
     MsbG     { paragraph: &'static str },       // "§§6–7"
@@ -561,9 +620,10 @@ pub enum LegalReference {
 
 ```rust
 pub enum Sect14aModule {
-    Modul1, // §14a pauschale Reduzierung — flat % reduction (BK6-22-300 Anlage 2, default 85%)
-    Modul2, // §14a HT/NT time-variable — Zaehlzeitdefinition from UTILTS
-    Modul3, // §14a Spotpreis-Netzentgelt — spot-price linked (iMSys required)
+    Modul1, // pauschale Reduzierung des Netzentgelts — flat, needs no extra metering
+    Modul2, // prozentuale Reduzierung des Arbeitspreises — needs the device's own metering
+    Modul3, // zeitvariable Netzentgelte HT/ST/NT (from 01.04.2025) — Zählzeitdefinition
+            // from UTILTS, requires an iMSys; also the Spotpreis-Netzentgelt variant
 }
 ```
 
@@ -601,6 +661,7 @@ selects the correct legal references and `SettlementType` (from which
 
 ```rust
 pub enum SettlementType {
+    NneAbschlag,       // PID 31001 — Abschlagsrechnung Netznutzung (NB → LF)
     NneStrom,          // PID 31002 — NN-Rechnung Strom (NB → LF)
     NneGas,            // PID 31002 — NN-Rechnung Gas  (GNB → LFG)
     MmmStrom,          // PID 31005 — MMM Strom, GPKE (BK6-24-174) Teil 1 Kap. 8.4
@@ -615,20 +676,24 @@ pub enum SettlementType {
 
 `SettlementType::default_pid()` returns the standard PID for the type; it is `0`
 for `RedispatchKostenblatt` and `DezentraleEinspeisung`, which are not EDIFACT
-market processes. `MmmGas` and `MmmStrom` share PID 31002 but carry different
-legal references.
+market processes. `MmmGas` and `MmmStrom` share PID 31005, and `NneGas` and
+`NneStrom` share 31002, but each pair carries different legal references.
 
 ### `BillingPositionKind` — BDEW Artikelnummern bridge
 
 `BillingPositionKind` is the rubo4e-free type carried by every `SettlementPosition.kind`.
-The service layer maps it to `rubo4e::current::BdewArtikelnummer` in `into_rechnung()`.
+`bo4e::kind_to_artikelnummer` maps it to `rubo4e::current::BdewArtikelnummer`
+under the `bo4e` feature; the core engine only ever holds the codelist name.
 
 ```rust
 pub enum BillingPositionKind {
+    NneAbschlag,         // the single line of an Abschlagsrechnung — no article number
     NneArbeit,           // Wirkarbeit       (9990001 00026 9)
-    NneArbeitHt,         // Wirkarbeit       (9990001 00026 9) — §14a Modul 2 HT
-    NneArbeitNt,         // Wirkarbeit       (9990001 00026 9) — §14a Modul 2 NT
+    NneArbeitHt,         // Wirkarbeit       (9990001 00026 9) — §14a Modul 3 Hochtarif
+    NneArbeitSt,         // Wirkarbeit       (9990001 00026 9) — §14a Modul 3 Standardtarif
+    NneArbeitNt,         // Wirkarbeit       (9990001 00026 9) — §14a Modul 3 Niedertarif
     NneArbeitModul1,     // Wirkarbeit       (9990001 00026 9) — Modul 1 Arbeit + pauschale credit
+    NneArbeitModul2,     // Wirkarbeit       (9990001 00026 9) — Modul 2 reduced Arbeitspreis
     NneArbeitModul3,     // Wirkarbeit — §14a Modul 3 spot, one position per dispatch interval
     NneLeistung,         // Leistung         (9990001 00005 3)
     NneGasGrundpreis,    // Grundpreis       (9990001 00008 7)
@@ -644,13 +709,13 @@ pub enum BillingPositionKind {
     Sect19StromNevUmlage,// §19 StromNEV-Umlage — artikelnummer PARAGRAF_19_STROM_NEV_UMLAGE
     OffshoreNetzumlage,  // §17f EnWG — artikelnummer OFFSHORE_HAFTUNGSUMLAGE (legacy code name)
     KwkgUmlage,          // §26 KWKG — artikelnummer ABGABE_KWKG
-    DezentraleEinspeisung,   // §18 StromNEV payment out (net_eur negative); no article number
+    DezentraleEinspeisung,   // §18 StromNEV payment out (negative rate); no article number
     Sect19IndividuellesEntgelt, // §19 Abs. 2 StromNEV reduction over the Netzentgelt; no article number
     GasKapazitaetsentgelt,   // §15 GasNEV booked capacity — Leistung on Gas
 }
 ```
 
-> **NNE Strom (PIDs 31001/31006):** BK6-20-160 replaced classic `artikelnummer` codes
+> **NNE Strom (PID 31002):** BK6-20-160 replaced classic `artikelnummer` codes
 > with `artikel_id` from the BNetzA Netznutzungspreisblatt. The service layer
 > (`netzbilanzd`, `invoicd`) populates `Rechnungsposition.artikel_id` from the tariff
 > sheet for those positions; `BillingPositionKind::artikelnummer(settlement_type)`
@@ -698,7 +763,7 @@ applied to a §2 Abs. 7 exemption.
 | Consumer | Role | Use case |
 |---|---|---|
 | `netzbilanzd` | **NB** (and **MSB** for 31009) | Generate INVOIC 31001/31002/31005/31011 to LF/LFG, and 31009 from the MSB to NB/LF/ESA |
-| `invoicd` | **LF** | INVOIC AHB Selbstausstellung selbstausstellen PID 31006 — same formula, LF-initiated |
+| `invoicd` | **LF** | INVOIC PID 31006, selbst ausgestellt — same formula, LF-initiated |
 
 ## Quick start
 
@@ -747,6 +812,7 @@ let settlement = settle_nne(&NneInput {
     jahreshoechstleistung_kw: None,
     jahresarbeit_kwh: None,
     sect19: None,            // no §19 Abs. 2 individual charge
+    blindarbeit: None,       // no reactive-energy charge
     gas_kapazitaet: None,
     sect19_umlage_ct_per_kwh: None,   // use the tabled rate for the delivery year/group
     offshore_umlage_ct_per_kwh: None,
@@ -757,7 +823,7 @@ let settlement = settle_nne(&NneInput {
 // the Prüfidentifikator are properties of InvoiceDocument. SettlementType maps to
 // the standard PID:
 assert_eq!(settlement.settlement_type, SettlementType::NneStrom);
-assert_eq!(settlement.settlement_type.default_pid(), 31001);
+assert_eq!(settlement.settlement_type.default_pid(), 31002);
 // recipient_mp_id is auto-populated from lf_mp_id:
 assert_eq!(settlement.recipient_mp_id, "9900012345678");
 
@@ -806,6 +872,7 @@ let settlement = settle_nne(&NneInput {
     // Modul 3 requires all three bands; the enum makes the flat/ToU states exclusive.
     arbeitspreis: ArbeitspreisModell::Modul3ZeitVariabel {
         ht: MengePreis { menge_kwh: d("600"), preis_ct_per_kwh: d("4.20") },
+        st: MengePreis { menge_kwh: d("250"), preis_ct_per_kwh: d("2.80") },
         nt: MengePreis { menge_kwh: d("400"), preis_ct_per_kwh: d("1.50") },
     },
     konzessionsabgabe: Some(Konzessionsabgabe {
@@ -823,8 +890,8 @@ let settlement = settle_nne(&NneInput {
     // … identity + levy-override fields …
 }).unwrap();
 
-// Positions: HT + NT Arbeit, the three netzseitige Umlagen, and Konzessionsabgabe.
-assert!(settlement.all_legal_refs().iter().any(|r| r.contains("§14a EnWG Modul 2")));
+// Positions: HT + ST + NT Arbeit, the three netzseitige Umlagen, and Konzessionsabgabe.
+assert!(settlement.all_legal_refs().iter().any(|r| r.contains("§14a EnWG Modul 3")));
 ```
 
 ### §14a Modul 1 — pauschale Reduzierung (offered since 2024-01-01)
@@ -836,7 +903,7 @@ energy is billed at the full Arbeitspreis and the credit sits beside it as its
 own position, so the invoice shows both.
 
 ```rust,no_run
-use grid_billing::{NneInput, Sparte, settle_nne};
+use grid_billing::{Jahresanteil, NneInput, Sparte, settle_nne};
 use grid_billing::types::{ArbeitspreisModell, MengePreis};
 use rust_decimal::{Decimal, dec};
 
@@ -848,7 +915,7 @@ let settlement = settle_nne(&NneInput {
         // The NB's published annual amount, and the share of a year this
         // period covers.
         pauschale_eur_pro_jahr: dec!(120.00),
-        jahresanteil: Decimal::ONE / Decimal::from(12u32),
+        jahresanteil: Jahresanteil::MONAT,
     },
     sparte: Sparte::Strom,
     leistungspreis: None,
@@ -857,9 +924,10 @@ let settlement = settle_nne(&NneInput {
     // … other fields …
 }).unwrap();
 
-// 1500 × 0.035 × 0.85 = 44.625 → 44.62 EUR (MidpointNearestEven)
+// Two positions: 1500 kWh × 0.035 = 52.50 EUR Arbeit, billed in full, and the
+// credit beside it — 0.083333 of a year × −120.00 EUR/Jahr = −9.99996 EUR.
 assert!(settlement.all_legal_refs().iter().any(|r| r.contains("Modul 1")));
-assert!(settlement.positions[0].trace.regulatory_reduction_factor == Some(dec!(0.85)));
+assert_eq!(settlement.positions[1].unit_price_eur, dec!(-120.000000));
 ```
 
 ### Gas NNE with Grundpreis (GasNEV monthly standing charge)
@@ -959,7 +1027,7 @@ assert!(replacement.lineage_is_consistent());
 
 | `KorrekturGrund` | Meaning | Defect? |
 |---|---|---|
-| `Messwertkorrektur` | replaced or re-read metering (§ 60 Abs. 2 MsbG) | no |
+| `Messwertkorrektur` | replaced or re-read metering (§ 60 Abs. 1 MsbG — the Aufbereitungs- und Übermittlungspflicht the corrected value discharges) | no |
 | `Tarifkorrektur` | wrong tariff or price-sheet version applied | no |
 | `Stammdatenkorrektur` | wrong Netzebene, KA-Klasse or Konzessionsgemeinde | **yes** |
 | `RegulatorischeAenderung` | a regulatory change applies retroactively | no |
@@ -974,13 +1042,14 @@ engineering signal, a rising `RegulatorischeAenderung` count is not.
 none of the questions an audit asks of one.
 
 ```rust,no_run
-use grid_billing::{settle_nne, reverse, SettlementStatus};
+use grid_billing::{settle_nne, reverse, KorrekturGrund, SettlementStatus};
 
 let original = settle_nne(&/* … NneInput … */).unwrap();
 
-// reverse() mirrors every position with the sign flipped; it takes only the
-// original — the storno invoice number and dates belong to the InvoiceDocument.
-let storno = reverse(&original);
+// reverse() mirrors every position with the sign flipped. It takes the reason
+// too — the storno invoice number and dates belong to the InvoiceDocument, but
+// *why* the settlement was withdrawn is a fact about the settlement.
+let storno = reverse(&original, KorrekturGrund::Messwertkorrektur);
 
 assert_eq!(storno.status, SettlementStatus::Reversal);
 assert_eq!(storno.total_eur, -original.total_eur);
@@ -1015,58 +1084,26 @@ of nothing; a Gas-AWH input with no positions produced an empty invoice — both
 sent to a counterparty who then had to dispute them back. `netzbilanzd` and
 `invoicd` now refuse an invalid input before settling, naming the finding.
 
-### Service-layer conversion to BO4E `Rechnung`
+### Conversion to a BO4E `Rechnung` (feature `bo4e`)
 
 ```rust,no_run
-// In netzbilanzd/src/billing.rs — grid-billing itself has no rubo4e dep:
-use grid_billing::{InvoiceDocument, QuantityUnit};
-use rubo4e::current::{Betrag, Menge, Mengeneinheit, Preis, Rechnungsposition, Rechnung, Zeitraum};
+use grid_billing::{InvoiceDocument, bo4e};
 
-fn into_rechnung(doc: &InvoiceDocument) -> Rechnung {
-    let s = &doc.settlement;
-    let lz = Zeitraum {
-        // SettlementPeriod is a validated pair, read via its accessors:
-        startdatum: Some(s.period.from()),
-        enddatum:   Some(s.period.to()),
-        ..Default::default()
-    };
-    // numbered_positions() assigns the 1-based document numbering at render time;
-    // the engine carries no position counter.
-    let positions = doc.numbered_positions().map(|(nr, p)| {
-        let einheit = match p.unit {
-            QuantityUnit::Kwh   => Some(Mengeneinheit::Kwh),
-            QuantityUnit::Kw    => Some(Mengeneinheit::Kw),
-            QuantityUnit::Kvarh => Some(Mengeneinheit::Kwh),   // map kVARh → kWh bucket
-            QuantityUnit::Kvar  => Some(Mengeneinheit::Kw),    // map kVAR  → kW  bucket
-            QuantityUnit::Monat => Some(Mengeneinheit::Monat),
-        };
-        Rechnungsposition {
-            positionsnummer:    Some(i64::from(nr)),
-            positionstext:      Some(p.text.clone()),
-            // BillingPositionKind::artikelnummer() returns the BDEW codelist name
-            // (Gas/MMM/KA…), or None for Strom NNE, which carries an Artikel-ID
-            // the renderer resolves from the tariff sheet instead.
-            artikelnummer:      p.kind.artikelnummer(s.settlement_type)
-                                    .and_then(|name| name.parse().ok()),
-            lieferungszeitraum: Some(lz.clone()),
-            positions_menge: Some(Menge { wert: Some(p.quantity), einheit, ..Default::default() }),
-            einzelpreis:  Some(Preis  { wert: Some(p.unit_price_eur.round_kfm(6)), ..Default::default() }),
-            gesamtpreis:  Some(Betrag { wert: Some(p.net_eur.round_kfm(5)), ..Default::default() }),
-            ..Default::default()
-        }
-    }).collect();
-    Rechnung {
-        // Document identity comes from InvoiceDocument, not the settlement:
-        rechnungsnummer:   Some(doc.rechnungsnummer.clone()),
-        rechnungsdatum:    Some(doc.invoice_date),
-        faelligkeitsdatum: Some(doc.due_date),
-        rechnungsperiode:  Some(lz),
-        gesamtnetto: Some(Betrag { wert: Some(s.total_eur), ..Default::default() }),
-        rechnungspositionen: Some(positions),
-        ..Default::default()
-    }
-}
+let rechnung: rubo4e::current::Rechnung = bo4e::into_rechnung(&document);
 ```
+
+`into_rechnung` takes the **document**, not the settlement: `rechnungsnummer`,
+`rechnungsdatum` and `faelligkeitsdatum` are document facts, and the 1-based
+`positionsnummer` is assigned here rather than carried through the calculation.
+Each position's `artikelnummer` comes from `kind_to_artikelnummer`, which is
+`None` where an Artikel-ID applies instead; `einzelpreis` is rounded to 6 dp and
+`gesamtpreis` to 5, the same figures the settlement states.
+
+The trace travels with the position it explains, as a `mako:calculation_trace`
+ZusatzAttribut, alongside settlement-level `mako:legal_references` and
+`mako:settlement_warnings`. Once the Rechnung is stored the `SettlementResult`
+is dropped, so those attributes are the only surviving record of why an amount
+is what it is — and what a §20 EnWG audit or an LF dispute is answered from.
 
 ## Generated invoice types
 
@@ -1087,10 +1124,10 @@ fn into_rechnung(doc: &InvoiceDocument) -> Rechnung {
 | # | Position text | Unit | `kind` | Condition | Legal basis | Artikelnummer |
 |---|---|---|---|---|---|---|
 | 1 | `Netznutzung Arbeit` | kWh | `NneArbeit` | `arbeitspreis: ArbeitspreisModell::Einheitlich` | StromNEV §21 (Strom) · GasNEV §14 (Gas) | `Wirkarbeit` (Gas); `artikel_id` (Strom) |
-| 1 | `Netznutzung Arbeit §14a Modul 1 (85% Reduzierung)` | kWh | `NneArbeitModul1` | `arbeitspreis: ArbeitspreisModell::Modul1Pauschal` | §14a EnWG Modul 1 · BK6-22-300 | same as NneArbeit |
+| 1–2 | `Netznutzung Arbeit (§14a Modul 1)` + `§14a Modul 1 pauschale Reduzierung` | kWh · Jahr | `NneArbeitModul1` | `arbeitspreis: ArbeitspreisModell::Modul1Pauschal` | §14a EnWG Modul 1 · BK6-22-300 | same as NneArbeit |
 | 1–3 | `Netznutzung Arbeit HT/ST/NT (§14a Modul 3)` | kWh | `NneArbeitHt` / `NneArbeitSt` / `NneArbeitNt` | `arbeitspreis: ArbeitspreisModell::Modul3ZeitVariabel` | §14a EnWG Modul 3 · BK6-22-300 | same as NneArbeit |
 | opt | `Netzentgelt Grundpreis Gas` | Monat | `NneGasGrundpreis` | `grundpreis` set | GasNEV §14 | `Grundpreis` |
-| next | `Netznutzung Leistung` | kW | `NneLeistung` | `leistungspreis` set (RLM) | StromNEV §17 | `Leistung` (Gas); `artikel_id` (Strom) |
+| next | `Netznutzung Leistung` | kW | `NneLeistung` | `leistungspreis` set (RLM) — the Jahresleistungspreis pro-rated by calendar days | StromNEV §17 Abs. 2 | `Leistung` (Gas); `artikel_id` (Strom) |
 | next | `Blindmehrarbeit` | kvarh | `Blindmehrarbeit` | `blindarbeit` set **and** the draw exceeds the free share | StromNEV §17 (Preisblatt) | `Blindmehrarbeit` |
 | last | `Konzessionsabgabe[tier]` | kWh | `Konzessionsabgabe` | `konzessionsabgabe` set | KAV §2 Abs. 2 | `Konzessionsabgabe` |
 
@@ -1125,10 +1162,15 @@ Netznutzung).
 
 ### MMM
 
+Both positions are always emitted; the one that does not apply carries a zero
+quantity. The sign convention is GPKE's, from the network operator's side:
+measured **below** profile is an ungewollte Mehrmenge the NB reimburses, and
+measured above it is an ungewollte Mindermenge the NB invoices.
+
 | # | Position text | `kind` | Artikelnummer | Condition |
 |---|---|---|---|---|
-| 1 | `Mehrmengen` | `Mehrmenge` | `Mehrmenge` | `actual > profil` |
-| 2 | `Mindermengen (Gutschrift)` | `Mindermenge` | `Mindermenge` | `profil > actual` |
+| 1 | `Mehrmengen (Gutschrift)` | `Mehrmenge` | `Mehrmenge` | `actual < profil` — the Mehrmengenpreis is negated, so the position multiplies out |
+| 2 | `Mindermengen` | `Mindermenge` | `Mindermenge` | `actual > profil` |
 
 ### MSB
 
@@ -1155,23 +1197,29 @@ Source: BDEW Codeliste Artikelnummern und Artikel-ID v5.6, Section 3.2 (valid 01
 | Invariant | Detail |
 |---|---|
 | **No floating-point money** | `rust_decimal::Decimal` throughout; `EuroAmount` for overflow guard. No `f64`. |
-| **No rubo4e dependency** | Returns `SettlementResult`; service layer owns `into_rechnung()`. |
+| **rubo4e is opt-in** | The engine returns `SettlementResult` and depends on no BO4E type; `bo4e::into_rechnung()` ships behind the off-by-default `bo4e` feature. |
 | **`recipient_mp_id` auto-populated** | `lf_mp_id` (NNE/MMM) or `empfaenger.mp_id` (PID 31009) copied automatically; `sender_mp_id` is the NB, or the **MSB** for 31009. |
 | **`Sparte` drives settlement type** | `Sparte::Gas` → `SettlementType::NneGas`, `GasNEV §14`. NN-Rechnung is PID 31002 for both Sparten — the Sparte rides on `Rechnung.sparte`, not on the Prüfidentifikator. |
 | **Every position cites regulation** | `trace.legal_refs` is non-empty for every position. Enables BNetzA audit without re-calculation. |
-| **Artikelnummer on every position** | `BillingPositionKind::artikelnummer()` in this crate. Never empty. |
+| **Artikelnummer decided in this crate** | `BillingPositionKind::artikelnummer(settlement_type)` returns the codelist name, or `None` where the position carries an Artikel-ID instead (Strom NNE, AWH Gas, Abschlag). The decision is never left to the renderer. |
 | **`MmmGas` ≠ `MmmStrom`** | Separate `SettlementType` variants ensure correct legal refs (`GaBi Gas 2.1 (BK7-24-01-008)` vs `GPKE (BK6-24-174) Teil 1 Kap. 8.4`) per position. |
 | **Immutable correction chain** | `reverse()` mirrors positions, sets `status = Reversal`, links via `correction_of`. Original never mutated. |
 | **`correct()` pair** | Returns `(reversal, replacement)` — both get status set atomically; caller dispatches both. |
 | **Abschläge reduce `zuZahlen` only** | `gesamtnetto` and `gesamtsteuer` stand; §14 Abs. 5 UStG taxes an Anzahlung on receipt, so the settling invoice does not tax it again. |
-| **Cadence is a document fact** | `IMD+7081` (Turnus-, Monats-, Abschlags-, Abschluss-, Zwischenrechnung) rides on `InvoiceDocument`, not on `SettlementType`: the same settlement is the same arithmetic at any billing rhythm. |
+| **Cadence is a document fact** | `IMD+7081` rides on `InvoiceDocument::cadence`, not on `SettlementType`: the same NNE settlement is the same arithmetic at any billing rhythm. The two exceptions are decided by the settlement — MMM and the Abschlag, whose PID *is* its cadence. |
 | **Pure functions** | All settlement functions are sync with no side effects. |
-| **`recomputed_total` guard** | `debug_assert_eq!(result.total_eur, result.recomputed_total())` inside every settlement function — catches rounding bugs in debug builds. |
+| **`recomputed_total` guard** | `debug_assert_eq!(result.total_eur, result.recomputed_total())` inside `settle_nne` and `settle_gas_awh` — catches rounding bugs in debug builds. `settle_mmm` is asserted in the test suite; `settle_abschlag`, `settle_msb` and `settle_dezentrale_einspeisung` are not yet covered either way. |
 
-## See also
+## Related crates
 
-- [`invoic-checker`](../invoic-checker/README.md) — validates the generated `Rechnung` in the service layer
-- [`netzbilanzd`](../../services/netzbilanzd/README.md) — NB billing service that calls `grid-billing`
-- [`invoicd`](../../services/invoicd/README.md) — LF service using `grid-billing` for selbstausstellen
-- [Operator guide → netzbilanzd](https://hupe1980.github.io/mako/docs/services/netzbilanzd/)
+| Crate | Role |
+|---|---|
+| [`grid-billing`](https://docs.rs/grid-billing) ← **this crate** | Grid-side settlement arithmetic — NNE, KA, MMM, MSB, Sperrprozesse Gas |
+| [`mako-markt`](https://docs.rs/mako-markt) | Marktstammdaten — Marktlokation, Messlokation, Marktpartner, Rollenzuordnung — the model the settlement inputs are keyed on |
+| [`invoic-checker`](https://docs.rs/invoic-checker) | Validates the resulting `Rechnung` in the service layer |
+| [`energy-billing`](https://docs.rs/energy-billing) | The retail (LF) counterpart — the customer's invoice |
+| [`mako-invoic`](https://docs.rs/mako-invoic) | The INVOIC settle/dispute workflow these invoices travel through |
+| [`netzbilanzd`](https://hupe1980.github.io/mako/docs/services/netzbilanzd/) · [`invoicd`](https://hupe1980.github.io/mako/docs/services/invoicd/) | Production daemons — NB billing, and LF selbstausstellen |
 
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>

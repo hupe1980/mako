@@ -215,7 +215,7 @@ pub fn requires_ausschreibung(
         // any size. Gezeitenenergie and KWKG have no EEG-Ausschreibung either.
         ErzeugungsArt::Wasserkraft
         | ErzeugungsArt::Geothermie
-        | ErzeugungsArt::Klaegas
+        | ErzeugungsArt::Klaergas
         | ErzeugungsArt::Grubengas
         | ErzeugungsArt::Deponiegas
         | ErzeugungsArt::Gezeiten
@@ -539,7 +539,7 @@ mod tests {
             ErzeugungsArt::Wasserkraft,
             ErzeugungsArt::Geothermie,
             ErzeugungsArt::Deponiegas,
-            ErzeugungsArt::Klaegas,
+            ErzeugungsArt::Klaergas,
             ErzeugungsArt::Grubengas,
         ] {
             assert!(

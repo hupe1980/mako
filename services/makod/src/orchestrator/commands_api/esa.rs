@@ -445,9 +445,24 @@ pub(super) async fn dispatch_esa_werteanfrage(
         location.as_str(),
         anfrage_key.as_str(),
     ] {
-        let _ = registry
+        // Every answer from the QUOTES onwards is found by one of these keys, so
+        // a lost registration is an ESA process that later messages cannot
+        // reach. The loop continues rather than propagating: two of the three
+        // keys still landing is strictly better than none, and the process is
+        // already spawned, so failing the caller would only produce a second
+        // one.
+        if let Err(e) = registry
             .register_correlated(state.tenant_id, key, process_id, identity.clone())
-            .await;
+            .await
+        {
+            tracing::error!(
+                process_id = %process_id,
+                %key,
+                error = %e,
+                "esa: correlation-key registration failed — messages referencing this key \
+                 cannot be routed to the process",
+            );
+        }
     }
 
     Ok(DispatchOutcome::Spawned { process_id })

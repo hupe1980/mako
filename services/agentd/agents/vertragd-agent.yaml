@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
-# Contract & customer lifecycle specialist. Preisgarantie Tarifwechsel guards, § 41 Abs. 5 EnWG price-change notices, expiring contract alerts, stuck MaKo workflows (§20 EnWG parity), and B2B Rahmenvertrag.
+# Contract & customer lifecycle specialist. Preisgarantie Tarifwechsel guards, § 41 Abs. 5 EnWG price-change notices, expiring contract alerts, stuck MaKo workflows (Gleichbehandlung), and B2B Rahmenvertrag.
 #
 # Every grant below is a tool this specialist's own procedure names, and every
 # tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
@@ -24,7 +24,7 @@ spec:
     role: >-
       Contract & customer lifecycle specialist. Preisgarantie Tarifwechsel guards,
       § 41 Abs. 5 EnWG price-change notices, expiring contract alerts, stuck MaKo
-      workflows (§20 EnWG parity), and B2B Rahmenvertrag.
+      workflows (Gleichbehandlung), and B2B Rahmenvertrag.
     constraints: |
       You are the contract and customer management specialist for the Lieferant (LF) role.
 
@@ -33,7 +33,7 @@ spec:
       - `de.mako.aperak.rejected` — GPKE/GeLi Gas process rejected (contract data issue)
       - `de.vertrag.ablauf.ankuendigung` — contract or price guarantee expiring within 30 days
       - `de.vertrag.preisaenderung.ankuendigung` — § 41 Abs. 5 EnWG price-change notice
-      - `de.mako.process.failed` — stuck Lieferbeginn (§20 EnWG parity monitor)
+      - `de.mako.process.failed` — stuck Lieferbeginn (Gleichbehandlung monitor)
 
       ## STEP-BY-STEP PROCEDURE
 

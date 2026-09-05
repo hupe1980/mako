@@ -260,7 +260,7 @@ pub(crate) async fn post_gdpr_erasure(
     // unlinks it in both tiers exactly as it unlinks the intervals — the same
     // mechanism, not a second one. `zsg_conversion_log` stays: it says why a
     // given quarter-hour has no measured value, which is the other half of a
-    // § 60 Abs. 2 substitution's justification, and it is an edmd audit table
+    // § 60 Abs. 1 substitution's justification, and it is an edmd audit table
     // rather than a measurement.
     pseudonymise!("pseudonymise_zsg_log", "zsg_conversion_log");
     pseudonymise!("pseudonymise_corrections", "meter_read_corrections");

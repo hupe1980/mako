@@ -312,11 +312,27 @@ pub(super) async fn dispatch_wim_geraetewechsel_beauftragen(
         .await?;
 
     let identity = process.identity();
-    let _ = state
+    // The correlation index is how an inbound answer finds this process; it is
+    // append-only and nothing rebuilds it. Discarding a failure here left a live
+    // process that no answer could ever be routed to — the answer is dropped as
+    // `process_not_found` and the Frist expires against a process that was doing
+    // everything right. Not propagated: the process is spawned and its message
+    // already enqueued, so failing the caller now would have it re-issue the
+    // command and start a second one.
+    if let Err(e) = state
         .store
         .as_process_registry()
         .register_correlated(state.tenant_id, melo_id.as_str(), process_id, identity)
-        .await;
+        .await
+    {
+        tracing::error!(
+            process_id = %process_id,
+            melo_id    = %melo_id,
+            error      = %e,
+            "wim: business-key registration failed — the answer to this process cannot be \
+             correlated back to it",
+        );
+    }
 
     Ok(DispatchOutcome::Spawned { process_id })
 }
@@ -1042,11 +1058,27 @@ pub(super) async fn dispatch_wim_rechnungsabwicklung_beenden(
         .await?;
 
     let identity = process.identity();
-    let _ = state
+    // The correlation index is how an inbound answer finds this process; it is
+    // append-only and nothing rebuilds it. Discarding a failure here left a live
+    // process that no answer could ever be routed to — the answer is dropped as
+    // `process_not_found` and the Frist expires against a process that was doing
+    // everything right. Not propagated: the process is spawned and its message
+    // already enqueued, so failing the caller now would have it re-issue the
+    // command and start a second one.
+    if let Err(e) = state
         .store
         .as_process_registry()
         .register_correlated(state.tenant_id, malo_id.as_str(), process_id, identity)
-        .await;
+        .await
+    {
+        tracing::error!(
+            process_id = %process_id,
+            malo_id    = %malo_id,
+            error      = %e,
+            "wim: business-key registration failed — the answer to this process cannot be \
+             correlated back to it",
+        );
+    }
 
     Ok(DispatchOutcome::Spawned { process_id })
 }

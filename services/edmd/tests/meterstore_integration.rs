@@ -22,10 +22,10 @@
 //!   erasing the mapping unlinks it (pseudonymisation).
 //! - **Tenant scoping** — the same MaLo under two tenants stays isolated on read,
 //!   never merged.
-//! - **§ 60 Abs. 2 MsbG Ersatzwertbildung** — a substitute reproduces the same
+//! - **§ 60 Abs. 1 MsbG Ersatzwertbildung** — a substitute reproduces the same
 //!   quarter-hour one week earlier (not a degraded fallback), never overwrites a
 //!   real measurement, and leaves one § 60 Abs. 6 audit row per substituted slot.
-//! - **A FAULTY slot is a gap** — the case § 60 Abs. 2 exists for. The
+//! - **A FAULTY slot is a gap** — the case Ersatzwertbildung exists for. The
 //!   substitute displaces the faulty reading rather than coexisting with it,
 //!   which only holds while the Ersatzwert inherits the reporting operator that
 //!   keys its meterstore version scope.
@@ -371,7 +371,7 @@ async fn ingest_roundtrip_preserves_provenance() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn billable_filter_excludes_faulty_from_aggregates() {
-    // The §60 Abs. 2 billable filter is pushed into the scan (`quality_in`), so a
+    // The § 40a Abs. 2 EnWG billable filter is pushed into the scan (`quality_in`), so a
     // FAULTY interval never reaches the MMM saldo — it is dropped at the storage
     // layer, not re-filtered in memory at each call site.
     let (repo, _pool, _pg, _wh) = setup().await;
@@ -752,7 +752,7 @@ async fn reads_are_scoped_to_their_tenant() {
     assert_eq!(b[0].quantity_kwh, kwh("9.9"));
 }
 
-/// § 60 Abs. 2 MsbG Ersatzwertbildung, end to end against a real database.
+/// § 60 Abs. 1 MsbG Ersatzwertbildung, end to end against a real database.
 ///
 /// The regulated artefact is the *number* a substitute carries, and the method
 /// that has to produce it — Vergleichstag, the same slot one week earlier — is
@@ -802,8 +802,9 @@ async fn a_substitute_reproduces_the_same_slot_one_week_earlier() {
         .await
         .expect("store prior week");
 
-    // One real measurement inside the gap: § 60 Abs. 2 authorises a substitute
-    // only where no measurement exists, so this slot must survive untouched.
+    // One real measurement inside the gap: the § 60 Abs. 1 MsbG Aufbereitung is
+    // discharged by the measurement where one exists, so this slot must survive
+    // untouched.
     let measured_slot = gap_from + Duration::minutes(60);
     repo.store_reads(validated(vec![read(
         malo,
@@ -877,7 +878,7 @@ async fn a_substitute_reproduces_the_same_slot_one_week_earlier() {
         assert_eq!(
             row.quality,
             QualityFlag::Substituted,
-            "every § 60 Abs. 2 Ersatzwert must be flagged Substituted, or it is \
+            "every § 60 Abs. 1 Ersatzwert must be flagged Substituted, or it is \
              indistinguishable from a measurement"
         );
     }
@@ -1153,12 +1154,13 @@ async fn a_periods_quality_is_its_worst_contributor_by_severity_rank() {
     );
 }
 
-/// § 60 Abs. 2 MsbG exists for the meter that reported something wrong, not
-/// only for the one that reported nothing.
+/// Ersatzwertbildung exists for the meter that reported something wrong, not
+/// only for the one that reported nothing (§ 60 Abs. 1 MsbG: the aufbereiteten
+/// Messwerte are owed either way).
 ///
 /// A FAULTY interval is deliberately stored — ingest annotates and never
 /// rejects — so a substitute flow that treats "a row exists" as "a measurement
-/// exists" generates nothing for exactly the case the paragraph is about, and
+/// exists" generates nothing for exactly the case the duty is about, and
 /// answers `generated_count: 0`. The reference series must therefore be
 /// filtered to billable qualities: a FAULTY slot is a gap.
 #[tokio::test]
@@ -1222,8 +1224,8 @@ async fn a_faulty_slot_is_a_gap_a_substitute_may_fill() {
     assert_eq!(
         status.as_u16(),
         201,
-        "a window full of FAULTY readings is exactly what § 60 Abs. 2 authorises \
-         a substitute for — it must not answer `generated_count: 0`"
+        "a window full of FAULTY readings is exactly what a § 60 Abs. 1 substitute \
+         is for — it must not answer `generated_count: 0`"
     );
 
     let stored = repo
@@ -1530,7 +1532,7 @@ async fn a_gas_reading_is_stored_in_its_billing_unit() {
 /// when it comes back.
 ///
 /// This is the failure every other quality mechanism misses. The V-rules run on
-/// an ingest batch, the Hampel scorer grades one, the § 60 Abs. 2 confirmation
+/// an ingest batch, the Hampel scorer grades one, the § 60 Abs. 1 confirmation
 /// loop chases estimates already written — all of them are triggered by a
 /// delivery. Silence triggers nothing, so a broken head-end was invisible until
 /// a settlement run came up short.
@@ -1627,7 +1629,7 @@ async fn a_silent_measuring_point_is_found_reported_once_and_closed_on_return() 
 
     // ── The point delivers again ──────────────────────────────────────────────
     // Backfilling the dark days is what a real recovery looks like — the head-end
-    // reconnects and replays, or § 60 Abs. 2 Ersatzwerte fill the hole. A single
+    // reconnects and replays, or § 60 Abs. 1 Ersatzwerte fill the hole. A single
     // fresh interval would end the *silence* but leave the window uncovered, so
     // the point would move SILENT → UNDER_COVERED and stay open, which is the
     // correct behaviour and not what this test is about.
@@ -1915,7 +1917,7 @@ async fn a_correction_supersedes_a_reading_that_carried_an_mscons_version() {
     );
 }
 
-/// § 60 Abs. 2 MsbG Ersatzwertbildung stands in for an unusable measurement, and
+/// § 60 Abs. 1 MsbG Ersatzwertbildung stands in for an unusable measurement, and
 /// the unusable measurement is exactly the one likely to carry a stated version.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
@@ -2034,7 +2036,7 @@ async fn a_feed_in_reading_does_not_block_substituting_the_consumption_register(
     // measuring point's feed-in register delivers normally throughout it, as a
     // prosumer's does. Scoped per MaLo instead of per register, every slot read
     // as "already carries a billable reading" and the substitution was skipped:
-    // the § 60 Abs. 2 obligation could never be discharged.
+    // the § 60 Abs. 1 obligation could never be discharged.
     let feed_in: Vec<MeterRead> = (0..10)
         .map(|n| {
             read(

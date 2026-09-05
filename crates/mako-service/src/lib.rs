@@ -48,6 +48,9 @@ pub mod shutdown;
 pub mod telemetry;
 pub mod webhook;
 
+/// Single-runner advisory locks for periodic background workers.
+pub mod worker_lock;
+
 /// Unified MCP server authentication (OIDC+Cedar, API-key, dev mode).
 /// Feature-gated: requires both `cedar` and `oidc` features.
 #[cfg(all(feature = "cedar", feature = "oidc"))]

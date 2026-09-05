@@ -371,63 +371,13 @@ async fn bill_one(
         ..Default::default()
     };
     // The product assignments covering this period, from vertragd — the mapping
-    // is a contract fact. A Tarifwechsel inside the period splits it, and each
-    // leg is billed under its own product, its own statutory rates and its own
-    // meter reading; billing the whole period at whichever tariff happens to be
-    // in force on the day the run executes charged the new price for weeks the
-    // customer spent on the old one.
-    let slices = deps
-        .vertragd
-        .get_product_slices(&cand.malo_id, from, to)
+    // is a contract fact — each split further at every statutory rate boundary
+    // inside it. Every endpoint that bills a period resolves its legs this way,
+    // so a price change or a levy Stichtag is billed as the parts it consists of
+    // wherever the run started.
+    let legs = handlers::resolve_legs(&req, deps, &cand.malo_id, from, to)
         .await
-        .unwrap_or_default();
-
-    let legs: Vec<handlers::TariffLeg> = if slices.is_empty() {
-        // No assignment on file — `resolve_tariff` reports it by name, and the
-        // request may still carry an explicit tariff override.
-        vec![handlers::TariffLeg {
-            tariff: handlers::resolve_tariff(&req, deps, &cand.malo_id, to)
-                .await
-                .map_err(|e| anyhow::anyhow!("tariff: {e}"))?,
-            from,
-            to,
-            meter: None,
-        }]
-    } else {
-        // One round trip prices every leg: asking productd per leg is an N+1 on
-        // every invoice, and two calls could disagree if the catalogue changed
-        // between them.
-        let anfragen: Vec<(String, Date)> = slices
-            .iter()
-            .map(|s| (s.product_code.clone(), s.gueltig_von.max(from)))
-            .collect();
-        let produkte = deps
-            .productd
-            .resolve_products(&cand.lf_mp_id, &anfragen)
-            .await
-            .map_err(|e| anyhow::anyhow!("productd resolve: {e}"))?;
-        let mut legs = Vec::with_capacity(slices.len());
-        for (slice, produkt) in slices.iter().zip(produkte) {
-            let tariff = produkt.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "product {} has no version valid on {}",
-                    slice.product_code,
-                    slice.gueltig_von.max(from)
-                )
-            })?;
-            legs.push(handlers::TariffLeg {
-                tariff,
-                from: slice.gueltig_von.max(from),
-                to: slice.last_day(to),
-                meter: None,
-            });
-        }
-        legs
-    };
-
-    // A statutory rate boundary inside the period splits it exactly as a price
-    // change does — same mechanism, same merge.
-    let legs = handlers::split_on_rate_boundaries(cfg, legs);
+        .map_err(|e| anyhow::anyhow!("tariff: {e}"))?;
 
     // § 14 Abs. 4 Nr. 4 UStG: from the tenant's `RE` series, keyed on the
     // billed period's year, so a December period swept in January stays in the
@@ -575,12 +525,28 @@ async fn deliver_abrechnungsinfo(
         return;
     };
 
-    // Only fernauslesbare (iMSys) MaLos get the monthly info.
-    let is_imsys = matches!(
-        deps.edmd.get_billing_period(&cand.malo_id, from, to).await,
-        Ok(Some(ref m)) if m.metering_mode == energy_billing::MeteringMode::Imsys
-    );
-    if !is_imsys {
+    // Only fernauslesbare (iMSys) MaLos get the monthly info — § 40b Abs. 3
+    // attaches the duty to remote read-out, and Abs. 2 covers the rest on a
+    // six-month cadence.
+    //
+    // Said out loud, per MaLo. A silent `return` here is indistinguishable from
+    // a MaLo that has the duty and is not being served: the skip is the whole
+    // decision, and an edmd that never reports `Imsys` — for a broken
+    // classifier, an unreachable service, a period with no reads — makes the
+    // duty vanish for every customer with nothing in any log to say so.
+    let period = deps.edmd.get_billing_period(&cand.malo_id, from, to).await;
+    let reason = match period {
+        Ok(Some(ref m)) if m.metering_mode == energy_billing::MeteringMode::Imsys => None,
+        Ok(Some(ref m)) => Some(format!("Messtyp is {:?}, not iMSys", m.metering_mode)),
+        Ok(None) => Some("edmd holds no billing period for the month".to_owned()),
+        Err(ref e) => Some(format!("edmd is not answering: {e}")),
+    };
+    if let Some(reason) = reason {
+        tracing::info!(
+            malo_id = %cand.malo_id, %from, %to, %reason,
+            "billing-run: no §40b Abs. 3 Abrechnungsinformation — the duty applies only to \
+             fernauslesbare Messstellen"
+        );
         return;
     }
 
@@ -617,21 +583,18 @@ async fn deliver_abrechnungsinfo(
         ..Default::default()
     };
     let preview = async {
-        let tariff = handlers::resolve_tariff(&req, deps, &cand.malo_id, to)
+        // The same legs an invoice for this month would be billed from: the
+        // § 40b Abs. 3 information states what the month cost, so it has to be
+        // priced the way the month will be billed.
+        let legs = handlers::resolve_legs(&req, deps, &cand.malo_id, from, to)
             .await
             .map_err(|e| anyhow::anyhow!("tariff: {e}"))?;
-        let rates = cfg
-            .try_regulatory_rates_for_period(tariff.category_str(), from, to)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-        handlers::dispatch_invoice(
+        handlers::dispatch_invoice_multi(
             deps,
-            &tariff,
+            &legs,
             &req,
             &cand.malo_id,
             &format!("INFO-{}-{from}", cand.malo_id),
-            from,
-            to,
-            &rates,
             RunId::NONE,
         )
         .await

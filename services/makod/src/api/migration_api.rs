@@ -607,7 +607,7 @@ pub async fn dispatch_migrations(
                 report,
                 count,
                 store,
-                mako_gpke::GpkeDatanabrufWorkflow,
+                mako_gpke::GpkeDatenabrufWorkflow,
                 "gpke-datenabruf",
                 from,
                 to
@@ -661,7 +661,7 @@ pub async fn dispatch_migrations(
                 report,
                 count,
                 store,
-                mako_geli_gas::GeliGasDatanabrufWorkflow,
+                mako_geli_gas::GeliGasDatenabrufWorkflow,
                 "geli-gas-datenabruf",
                 from,
                 to

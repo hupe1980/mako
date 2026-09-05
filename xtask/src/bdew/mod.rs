@@ -33,7 +33,7 @@ const CELLS_PER_POINT: f64 = 1.0 / 2.2;
 /// # Errors
 ///
 /// When poppler's `pdftotext` is not installed or the file cannot be read.
-pub fn pdf_lines(pdf: &Path) -> Result<Vec<String>, String> {
+pub fn pdf_lines(pdf: &Path) -> Result<Vec<Line>, String> {
     let out = Command::new("pdftotext")
         .arg("-bbox-layout")
         .arg(pdf)
@@ -51,14 +51,72 @@ pub fn pdf_lines(pdf: &Path) -> Result<Vec<String>, String> {
     Ok(grid_lines(&xml))
 }
 
+/// One rendered line: the character grid, plus what the grid rounds away.
+///
+/// A grid cell is 2.2 pt wide, so a space (about 2 pt) and the gap that
+/// separates two neighbouring Anwendungsfall columns (from 3 pt) both round to
+/// one cell, and a token's width cannot be recovered from its character count
+/// — `(([939][6])` is eleven characters but only as wide as seven of
+/// `Nummer`'s. [`Metric`] keeps both, measured on the PDF's own coordinates.
+#[derive(Debug, Clone, Default)]
+pub struct Line {
+    /// The words laid out on the character grid.
+    pub text: String,
+    /// One entry per word of `text`, in order.
+    pub metrics: Vec<Metric>,
+}
+
+impl std::ops::Deref for Line {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.text
+    }
+}
+
+impl AsRef<str> for Line {
+    fn as_ref(&self) -> &str {
+        &self.text
+    }
+}
+
+impl From<&str> for Line {
+    /// A line with no measurements — what a hand-written fixture is.
+    fn from(text: &str) -> Self {
+        Self {
+            text: text.to_owned(),
+            metrics: Vec::new(),
+        }
+    }
+}
+
+/// What one word of a [`Line`] measures.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Metric {
+    /// The grid column the word starts at — its token's `x`.
+    pub x: usize,
+    /// The grid column its glyphs really end at.
+    pub end: usize,
+    /// The blank between it and the word before it, in PDF points; `None` for
+    /// the first word of the line.
+    pub gap: Option<f64>,
+}
+
+/// The metric of the `i`-th token of a line, when the metrics still line up
+/// with it (they do not for a line the caller rewrote).
+#[must_use]
+pub fn metric_of(metrics: &[Metric], i: usize, x: usize) -> Option<Metric> {
+    metrics.get(i).copied().filter(|m| m.x == x)
+}
+
 /// Lay the words of a `-bbox-layout` document out on the character grid.
 #[must_use]
-pub fn grid_lines(xml: &str) -> Vec<String> {
+pub fn grid_lines(xml: &str) -> Vec<Line> {
     let word = regex::Regex::new(
         r#"<word xMin="([0-9.]+)" yMin="([0-9.]+)" xMax="([0-9.]+)" yMax="([0-9.]+)">(.*?)</word>"#,
     )
     .unwrap();
-    let mut lines: Vec<String> = Vec::new();
+    let mut lines: Vec<Line> = Vec::new();
     for page in xml.split("<page ").skip(1) {
         // (yMin, xMin, xMax, text)
         let mut words: Vec<(f64, f64, f64, String)> = word
@@ -90,23 +148,30 @@ pub fn grid_lines(xml: &str) -> Vec<String> {
         }
         for mut row in rows {
             row.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-            let mut line = String::new();
+            let mut line = Line::default();
             let mut len = 0usize;
-            for (x0, _x1, text) in row {
+            let mut prev_x1: Option<f64> = None;
+            for (x0, x1, text) in row {
                 let mut at = (x0 * CELLS_PER_POINT).round() as usize; // f64 grid cell, not money
                 if at < len + 1 {
                     at = len + 1;
                 }
-                line.extend(std::iter::repeat_n(' ', at - len));
+                line.text.extend(std::iter::repeat_n(' ', at - len));
                 let text = normalise_word(&text);
                 len = at + text.chars().count();
-                line.push_str(&text);
+                line.text.push_str(&text);
+                line.metrics.push(Metric {
+                    x: at,
+                    end: ((x1 * CELLS_PER_POINT).round() as usize).max(len),
+                    gap: prev_x1.map(|p| x0 - p),
+                });
+                prev_x1 = Some(x1);
             }
             lines.push(line);
         }
-        lines.push(String::new());
+        lines.push(Line::default());
     }
-    lines.retain(|l| !is_boilerplate(l));
+    lines.retain(|l| !is_boilerplate(&l.text));
     lines
 }
 
@@ -285,6 +350,35 @@ mod tests {
         }
         assert!(!looks_like_code("Abschlags-"));
         assert!(!looks_like_code("Datum"));
+    }
+
+    #[test]
+    fn a_word_keeps_its_true_width_and_the_blank_before_it() {
+        // Two words of one cell, then the next column's, at the widths and
+        // gaps PARTIN 1.0f prints them: `∨ ([940][7]))` and a second `∨`
+        // three points later.
+        let xml = concat!(
+            r#"<page width="595" height="842">"#,
+            r#"<word xMin="297.53" yMin="183.8" xMax="302.84" yMax="192.8">∨</word>"#,
+            r#"<word xMin="304.85" yMin="184.0" xMax="342.36" yMax="193.0">([940][7]))</word>"#,
+            r#"<word xMin="345.91" yMin="183.8" xMax="351.22" yMax="192.8">∨</word>"#,
+        );
+        let lines = grid_lines(xml);
+        let line = &lines[0];
+        let toks = tokens(line);
+        assert_eq!(toks.len(), 3);
+        // Eleven characters, but only seventeen grid cells wide — the
+        // Bedingung column is set in a narrower face than `rendered_end`
+        // assumes.
+        let m = metric_of(&line.metrics, 1, toks[1].x).expect("measured");
+        assert_eq!(toks[1].x, 139);
+        assert_eq!(m.end, 156);
+        assert!(m.end < rendered_end(toks[1].x, toks[1].text));
+        // The blank inside the cell is a space; the one at the column
+        // boundary is not, and on the grid both are one cell.
+        assert!((metric_of(&line.metrics, 1, toks[1].x).unwrap().gap.unwrap() - 2.01).abs() < 0.01);
+        assert!((metric_of(&line.metrics, 2, toks[2].x).unwrap().gap.unwrap() - 3.55).abs() < 0.01);
+        assert_eq!(toks[2].x - m.end, 1);
     }
 
     #[test]

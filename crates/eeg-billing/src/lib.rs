@@ -1,7 +1,7 @@
 //! Pure EEG/KWKG feed-in settlement calculation for German energy markets.
 //!
-//! Implements all settlement models defined in **EEG** (multiple versions 2000–2024)
-//! and **KWKG 2023**. Zero I/O, zero async — every function is deterministic
+//! Implements all settlement models defined in **EEG** (all versions 2000–2023)
+//! and **KWKG**. Zero I/O, zero async — every function is deterministic
 //! and synchronous. No floating-point money: amounts are computed in
 //! `rust_decimal::Decimal`, and every EUR result is rounded and
 //! range-checked through [`crate::EuroAmount`] (`i64 × 10⁻⁵ EUR`).
@@ -16,13 +16,13 @@
 //! | `MarketPremium` + `TariffSource::Auction` | same formula, AW from BNetzA tender | §§22a,28 EEG 2023 |
 //! | `PostEeg` | `kwh × EPEX / 100` (§23b cap: 10 ct; configurable floor) | §21 EEG (post-Förderung) |
 //! | `Eigenverbrauch` | EUR 0 (no feed-in remuneration) | §21 Abs. 3 EEG |
-//! | `KwkSurcharge` | `eligible_kwh × rate / 100` (hour-limit cap) | §7 KWKG 2023 |
+//! | `KwkSurcharge` | `eligible_kwh × rate / 100` (Vollbenutzungsstunden-Grenze) | §§7, 8 KWKG |
 //! | `FlexibilityPremium` | Vergütung + `kwh × flex_praemie_ct / 100` | §50b EEG 2023 (bestehende Anlagen) |
 //! | `FlexibilitySurcharge` | `kw × rate / 12` (monthly capacity payment) | §50a EEG 2023 (neue Anlagen) |
 //! | `TemporaryFeedInTariff` | `kwh × verguetungssatz_ct / 100` (reduced Ausfallvergütung) | §21 Abs. 1 Satz 1 Nr. 3 EEG 2023 |
 //! | `SonstigeDirektvermarktung` | EUR 0 — revenue on the open market, no NB payment | §21a EEG |
 //!
-//! # One formula — all EEG versions (2000–2024)
+//! # One formula — all EEG versions (2000–2023)
 //!
 //! **No separate tariff per EEG version is needed.** The settlement formula is
 //! identical across all EEG versions. What differs between versions:
@@ -30,8 +30,13 @@
 //! 1. **Vergütungssatz (rate)** — fixed at commissioning for 20 years; caller provides it.
 //!    Use [`rates::solar_pv_ueberschuss_aw_ct`] or `einsd`'s `lookup_verguetungssatz`.
 //!
-//! 2. **§51 Negativpreisregel** — guard applied automatically from `inbetriebnahme`.
-//!    EEG 2023: any negative hour. Pre-2023 EEG 2017–2021: ≥6 consecutive hours.
+//! 2. **§51 Negativpreisregel** — applied automatically, and keyed on the
+//!    **Inbetriebnahmedatum** rather than the law year: the Solarspitzengesetz
+//!    rewrote §51 with effect from 25.02.2025, mid-year and inside the EEG 2023
+//!    range. [`negativpreis::NegativpreisRegime::fuer_inbetriebnahme`] derives it
+//!    — ≥6 h (2016–2020), ≥4 h (2021–2022), the staged 4-3-2-1 h ladder
+//!    (2023–24.02.2025), the first negative quarter-hour from 25.02.2025, and
+//!    never for a plant commissioned before 2016.
 //!
 //! 3. **§100 EEG 2023 Übergangsregelung** — old plants continue under their EEG version's
 //!    rules (§100 Abs. 1). The rate is the only thing that changes per plant.
@@ -51,7 +56,10 @@
 //!
 //! Supply `inbetriebnahme` and `leistung_kwp` in [`SettleInput`] for automatic
 //! version-specific rule enforcement:
-//! - §51 Negativpreisregel guard (≥100 kWp, after 2016-01-01)
+//! - §51 Negativpreisregel guard — the size exemption is per regime
+//!   ([`negativpreis::NegativpreisRegime::kw_grenze`]): Wind < 3 MW / others
+//!   < 500 kW, then < 500 kW, < 400 kW, and < 100 kW until an iMSys is in
+//!   (< 2 kW after)
 //! - Automatic `FoerderungBeendet` when `billing_date > foerderendedatum`
 //!
 //! # §24 EEG Anlagenerweiterung
@@ -91,12 +99,14 @@ pub mod foerderungsende;
 mod formula;
 #[cfg(feature = "bo4e")]
 pub mod gutschrift;
+pub mod kwkg;
 mod model;
 pub mod negativpreis;
 pub mod rates;
 pub mod reductions;
 pub mod rounding;
 pub mod scheme;
+pub mod seed;
 pub mod settlement_state;
 pub mod tariff;
 pub mod technology;
@@ -114,16 +124,22 @@ pub mod zusammenfassung;
 pub type EuroAmount = billing::Amount<5>;
 
 pub use aw_reductions::{AwReductionApplied, AwReductionContext, Sect54SolarReduction};
-pub use biomasse::{bemessungsleistung_stunden, sect44b_jahreskontingent_kwh};
+pub use biomasse::{
+    bemessungsleistung_stunden, sect39i_hoechstanteil, sect44b_jahreskontingent_kwh,
+};
 pub use error::SettlementError;
 pub use foerderdauer::{
     SECT51A_SOLAR_FACTOR_DENOMINATOR, calculate_pflichtzahlung, compute_billing_days_fraction,
-    foerderendedatum_eeg, foerderendedatum_eeg_ausschreibung, foerderendedatum_kwkg_years,
-    foerderendedatum_repowering, kwk_eligible_kwh, kwk_foerderend_calendar, kwk_max_kwh,
-    pflichtzahlung_verjaehrt_am, sect52a_netztrennung_erforderlich,
+    foerderendedatum_eeg, foerderendedatum_eeg_ausschreibung, foerderendedatum_repowering,
+    kwk_eligible_kwh, kwk_max_kwh, pflichtzahlung_verjaehrt_am, sect52a_netztrennung_erforderlich,
     verguetungszeitraum_verlaengerung_qh, wind_onshore_korrekturfaktor_corrected_aw,
 };
 pub use formula::calculate_settlement;
+pub use kwkg::{
+    KwkAnlagenart, KwkFoerderdauerInput, KwkLeistungsanteil, KwkVerwendung, KwkZuschlagInput,
+    foerderdauer_vollbenutzungsstunden, jahreshoechstbetrag_vollbenutzungsstunden,
+    jahreskontingent_kwh, zuschlag_ct_kwh, zuschlag_leistungsanteile,
+};
 pub use model::{
     CapacityBlock, Pflichtverstoss, SanktionAlt, SanktionsTyp, SettleInput, SettleOutput,
     SettlePosition, SettlementStatus,
@@ -137,6 +153,7 @@ pub use scheme::{
     Marktwertserie, Paragraph100Rule, SettlementScheme, SettlementType, TariffSource,
     marktwertserie,
 };
+pub use seed::{VerguetungssatzRow, verguetungssatz_rows};
 pub use technology::{
     ErzeugungsArt, InbetriebnahmeTyp, InvalidErzeugungsArt, InvalidInbetriebnahmeTyp,
     RepoweringScope,
@@ -158,6 +175,8 @@ pub use zusammenfassung::{
 // zusammenfassung: §24 Abs. 1 — sind_eine_anlage, the full Sätze 1–5 decision
 // settlement_state: Monthly lifecycle state machine — SettlementPeriodState, derive_settlement_state
 // wind:  §36h Korrekturfaktor, Standortklasse, reference yield model
-// biomasse: §43/§44 fuel classes, Güllekleinanlage (≤75 kW, ≥80% Gülle)
+// biomasse: §§42–44 fuel classes, Güllekleinanlage (≤75 kW, ≥80 % Gülle), §39i Abs. 1
+// kwkg: §§7–9 KWKG — Zuschlag je Leistungsanteil, Vollbenutzungsstunden, Jahreshöchstbetrag
+// seed: the §§40–49 net Einspeisevergütung series as flat rows, for a service's reference table
 // foerderungsende: FoerderendeGrund enum, SanktionStatus lifecycle
 // scheme: SettlementScheme, TariffSource, Paragraph100Rule, SettlementType

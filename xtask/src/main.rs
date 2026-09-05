@@ -68,6 +68,7 @@ mod check_wire_timestamps;
 mod import_profiles;
 mod pid_overview;
 mod profile_diff;
+mod profile_expressions;
 mod sync_regulatories;
 mod validate_ebd_codes;
 mod validate_profiles;
@@ -120,7 +121,7 @@ fn pdf_grid() {
     match bdew::pdf_lines(std::path::Path::new(&path)) {
         Ok(lines) => {
             for l in lines {
-                println!("{l}");
+                println!("{}", l.text);
             }
         }
         Err(e) => {

@@ -30,7 +30,22 @@ pub fn parse_sparte(raw: &str) -> Option<Sparte> {
     trimmed.parse().ok()
 }
 
-/// MSCONS PIDs that `edmd` consumes from `marktd` webhook fan-out.
+/// The Messwesen MSCONS PIDs `edmd` is the process home for.
+///
+/// **Descriptive, not a filter.** Nothing branches on this set: the ingest
+/// handler routes on [`ALL_MSCONS_PIDS`], and there is no subscription-level PID
+/// filter anywhere — `marktd` narrows a webhook subscription by `roles`,
+/// `event_types` and `sparten` only, so every fan-out edmd is subscribed to
+/// arrives whatever its PID. edmd used to send this set to `marktd` as a
+/// `makopid_filter`, which read as server-side narrowing, was dropped by serde
+/// on arrival, and would have suppressed the Ausfallarbeit deliveries below if
+/// it had ever taken effect.
+///
+/// What the set still states is *ownership*: these are the Messwesen
+/// Anwendungsfälle edmd is the process home for, as against
+/// [`REDISPATCH_MSCONS_PIDS`], whose intervals edmd stores for OLAP and audit
+/// while another family routes the message. That distinction is what the table
+/// below documents, and `pid_table_matches_descriptions` keeps it honest.
 ///
 /// ## Messwesen PIDs
 ///
@@ -65,10 +80,10 @@ pub fn parse_sparte(raw: &str) -> Option<Sparte> {
 /// under it, rather than booking withdrawn values as fresh readings. See
 /// [`STORNO_PIDS`].
 ///
-/// This is the subscription/accept filter, not the set that lands in
-/// `meter_reads`: 13027 is included because `edmd` must **receive** ESA Typ-2
-/// values, but they are routed to a separate, non-billing store — see
-/// [`ESA_TYP2_PIDS`], [`Typ2Read`], and the handler fork.
+/// Not every PID here lands in `meter_reads`: 13027 is listed because ESA Typ-2
+/// values are a Messwesen Anwendungsfall edmd owns, but the ingest handler forks
+/// them into a separate, non-billing store — see [`ESA_TYP2_PIDS`], [`Typ2Read`],
+/// and the handler fork.
 ///
 /// ## Note on PIDs 13002–13028
 ///
@@ -90,8 +105,9 @@ pub const MSCONS_PIDS: &[u32] = &[
 /// These values are **non-authoritative** (Codeliste der Konfigurationen 1.4,
 /// Kap. 4.6; WiM Strom Teil 2 §4): they have *no bearing* on Netznutzungs-,
 /// Bilanzkreis- or Mehr-/Mindermengenabrechnung, and only Kapitel-2 (Typ-1)
-/// values are relevant on divergence. `edmd` receives them (they are in
-/// [`MSCONS_PIDS`]) but the ingest handler forks on this set and stores them in
+/// values are relevant on divergence. `edmd` receives them (a Messwesen
+/// Anwendungsfall it owns, so they are in [`MSCONS_PIDS`]) but the ingest handler
+/// forks on this set and stores them in
 /// a **separate** table ([`Typ2Read`] → `esa_typ2_reads`) that no billing query
 /// can reach — the separation is a schema decision, not a runtime filter.
 pub const ESA_TYP2_PIDS: &[u32] = &[13027];
@@ -197,6 +213,11 @@ pub const GAS_QUALITY_PIDS: &[u32] = &[13007];
 pub use metering::Messtyp;
 
 /// The DB / wire string for a [`Messtyp`] (`SLP` / `RLM` / `IMSYS`).
+///
+/// edmd's own vocabulary, not the upstream `Serialize` derive's: that renders
+/// `IMsys` as `I_MSYS`, a spelling nothing in the market or in this workspace
+/// reads. [`messtyp_serde`] pins the wire to these three strings so a value
+/// edmd writes is a value edmd — and every consumer of its JSON — can read back.
 #[must_use]
 pub fn messtyp_as_str(m: Messtyp) -> &'static str {
     match m {
@@ -206,14 +227,51 @@ pub fn messtyp_as_str(m: Messtyp) -> &'static str {
     }
 }
 
-/// Parse a [`Messtyp`] from its DB / wire string; unknown values fall back to
-/// `Slp` (the conservative Vorlauffrist / aggregation default).
+/// Parse a [`Messtyp`] from its DB / wire string.
+///
+/// `None` for anything that is not one of [`messtyp_as_str`]'s three spellings.
+/// Defaulting an unreadable value to `Slp` would make a MaLo's classification a
+/// property of how well the string decoded: an iMSys MaLo read back as SLP loses
+/// the § 40b Abs. 3 monthly Abrechnungsinformation and fails § 41a billing, with
+/// nothing to say so.
 #[must_use]
-pub fn messtyp_from_str(s: &str) -> Messtyp {
+pub fn messtyp_from_str(s: &str) -> Option<Messtyp> {
     match s.to_ascii_uppercase().as_str() {
-        "RLM" => Messtyp::Rlm,
-        "IMSYS" | "IMS" => Messtyp::IMsys,
-        _ => Messtyp::Slp,
+        "SLP" => Some(Messtyp::Slp),
+        "RLM" => Some(Messtyp::Rlm),
+        "IMSYS" => Some(Messtyp::IMsys),
+        _ => None,
+    }
+}
+
+/// The wire form of a [`Messtyp`] — `SLP` / `RLM` / `IMSYS`, both directions.
+///
+/// Pinned here rather than inherited from `metering`'s `SCREAMING_SNAKE_CASE`
+/// derive, which spells `IMsys` as `I_MSYS`: edmd's DB column, its REST answers
+/// and `billingd`'s reader all speak `IMSYS`, and under the derive the service
+/// cannot parse its own JSON — which makes `IMsys` unreachable end to end.
+pub mod messtyp_serde {
+    use super::{Messtyp, messtyp_as_str, messtyp_from_str};
+    use serde::{Deserialize as _, Deserializer, Serializer, de::Error as _};
+
+    /// Write the Messtyp as edmd's own string.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the serializer reports.
+    pub fn serialize<S: Serializer>(m: &Messtyp, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(messtyp_as_str(*m))
+    }
+
+    /// Read a Messtyp from edmd's own string.
+    ///
+    /// # Errors
+    ///
+    /// A string that is none of the three is refused rather than read as `SLP`.
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Messtyp, D::Error> {
+        let raw = String::deserialize(d)?;
+        messtyp_from_str(&raw)
+            .ok_or_else(|| D::Error::custom(format!("unknown Messtyp {raw:?} (SLP/RLM/IMSYS)")))
     }
 }
 
@@ -260,7 +318,7 @@ pub enum IngestionSource {
     DirectGas,
     /// Bulk import via ERP REST API.
     ApiImport,
-    /// Automatic substitute value generated by `edmd` per § 60 Abs. 2 MsbG.
+    /// Automatic substitute value generated by `edmd` per § 60 Abs. 1 MsbG.
     AutoSubstitute,
     /// Retroactive correction applied by `POST /api/v1/corrections/{malo_id}`.
     Correction,
@@ -303,7 +361,7 @@ impl IngestionSource {
     /// replayed original supersede the correction that fixed it. A value edmd
     /// authored is not a delivery: it is edmd asserting a figure about a slot
     /// whose current content it has just read and judged unusable — a § 60
-    /// Abs. 2 MsbG Ersatzwert for a `FAULTY` reading, or an operator's explicit
+    /// Abs. 1 MsbG Ersatzwert for a `FAULTY` reading, or an operator's explicit
     /// correction — and it has to take effect or be refused, never be silently
     /// outranked. See `store::MeterStoreTimeSeriesRepository::append_superseding`.
     ///
@@ -557,7 +615,7 @@ pub struct MeterReading {
 ///   a configured device width;
 /// - an **anomaly**, where no honest difference could be taken and the interval
 ///   is therefore absent. It surfaces downstream as a V01 gap and is filled by
-///   the § 60 Abs. 2 MsbG substitute path, which writes its own audit row.
+///   the § 60 Abs. 1 MsbG substitute path, which writes its own audit row.
 ///
 /// Together the two logs say "this quarter-hour is an Ersatzwert *because* the
 /// register went backwards here", which neither says alone.
@@ -839,6 +897,9 @@ pub struct MeterBillingPeriod {
     /// End of billing period (German local date, inclusive).
     pub period_to: Date,
     /// Metering classification: SLP / RLM / iMSys.
+    ///
+    /// Serialised through edmd's own vocabulary — see [`messtyp_serde`].
+    #[serde(with = "messtyp_serde")]
     pub messtyp: Messtyp,
     /// Energy commodity.
     pub sparte: Sparte,
@@ -871,6 +932,18 @@ pub struct MeterBillingPeriod {
     ///
     /// `None` for Strom MaLos.
     pub zustandszahl: Option<Decimal>,
+    /// Share of the billing period covered by billable readings, 0–100.
+    ///
+    /// A sum over the readings that arrived says nothing about the ones that did
+    /// not: a month delivered up to the 3rd yields a plausible Arbeitsmenge and
+    /// bills as a complete month. § 60 Abs. 1 MsbG answers a gap with an
+    /// Ersatzwert and § 40a Abs. 2 EnWG lets a bill rest on a labelled Schätzung,
+    /// so a period ready to be invoiced reads 100 — and anything less tells the
+    /// biller the substitute values are still outstanding.
+    ///
+    /// A **duration** ratio (covered seconds over period seconds), so it is
+    /// right at every resolution and across both DST transitions.
+    pub coverage_pct: Decimal,
     /// Meter start reading (Zählerstand Anfang) — optional.
     pub zaehlerstand_anfang: Option<Decimal>,
     /// Meter end reading (Zählerstand Ende) — optional.
@@ -1091,7 +1164,7 @@ mod mscons_pid_tests {
             assert_eq!(
                 table.matches(&format!("| {pid} |")).count(),
                 1,
-                "PID {pid} is subscribed but not documented exactly once"
+                "PID {pid} is owned by edmd but not documented exactly once"
             );
         }
 
@@ -1125,11 +1198,11 @@ mod mscons_pid_tests {
     /// A Storno withdraws values, so it must be received but never treated as a
     /// value delivery.
     #[test]
-    fn storno_pids_are_subscribed_but_are_not_value_deliveries() {
+    fn storno_pids_are_accepted_but_are_not_value_deliveries() {
         for &pid in super::STORNO_PIDS {
             assert!(
                 MSCONS_PIDS.contains(&pid),
-                "a Storno must still be received: {pid}"
+                "a Storno is a Messwesen Anwendungsfall edmd owns: {pid}"
             );
             assert!(
                 ALL_MSCONS_PIDS.contains(&pid),
@@ -1151,5 +1224,83 @@ mod mscons_pid_tests {
                 "Redispatch PID {pid} is not in ALL_MSCONS_PIDS, so it would be ignored"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod messtyp_wire_tests {
+    use super::{
+        Messtyp, MeterBillingPeriod, QualityFlag, Sparte, messtyp_as_str, messtyp_from_str,
+    };
+
+    /// Every Messtyp edmd can hold survives a round trip through its own JSON.
+    ///
+    /// The classification decides three statutory duties — the § 40b Abs. 3
+    /// monthly Abrechnungsinformation, § 41a dynamic billing and § 14a Modul 3 —
+    /// so a variant edmd can write and not read back is a variant that does not
+    /// exist for any of them.
+    #[test]
+    fn every_messtyp_survives_the_wire() {
+        for m in [Messtyp::Slp, Messtyp::Rlm, Messtyp::IMsys] {
+            let json =
+                serde_json::to_value(WireField { messtyp: m }).expect("a Messtyp is serialisable");
+            let raw = json["messtyp"].as_str().expect("a string on the wire");
+            assert_eq!(raw, messtyp_as_str(m));
+            assert_eq!(
+                messtyp_from_str(raw),
+                Some(m),
+                "{raw} must read back as the value that wrote it"
+            );
+            let back: WireField =
+                serde_json::from_value(json).expect("edmd reads its own JSON back");
+            assert_eq!(back.messtyp, m);
+        }
+    }
+
+    /// A spelling edmd does not write is refused, not read as `SLP`: an iMSys
+    /// MaLo silently reclassified loses every duty that hangs off the Messtyp.
+    #[test]
+    fn an_unknown_spelling_is_refused() {
+        assert_eq!(messtyp_from_str("I_MSYS"), None);
+        assert_eq!(messtyp_from_str("Lastgang"), None);
+        assert_eq!(messtyp_from_str(""), None);
+        assert!(
+            serde_json::from_value::<WireField>(serde_json::json!({ "messtyp": "I_MSYS" }))
+                .is_err()
+        );
+    }
+
+    /// The aggregate `billingd` reads carries the pinned form, not the derive's.
+    #[test]
+    fn the_billing_period_aggregate_states_imsys() {
+        let period = MeterBillingPeriod {
+            malo_id: "51238696781".to_owned(),
+            period_from: time::macros::date!(2026 - 01 - 01),
+            period_to: time::macros::date!(2026 - 01 - 31),
+            messtyp: Messtyp::IMsys,
+            sparte: Sparte::Strom,
+            arbeitsmenge_kwh: rust_decimal::Decimal::ZERO,
+            coverage_pct: rust_decimal::Decimal::ONE_HUNDRED,
+            arbeitsmenge_ht_kwh: None,
+            arbeitsmenge_nt_kwh: None,
+            spitzenleistung_kw: None,
+            brennwert_kwh_per_m3: None,
+            zustandszahl: None,
+            zaehlerstand_anfang: None,
+            zaehlerstand_ende: None,
+            quality: QualityFlag::Measured,
+            lastprofil: None,
+            profil_typ: None,
+        };
+        let json = serde_json::to_value(&period).expect("the aggregate serialises");
+        assert_eq!(json["messtyp"], "IMSYS");
+    }
+
+    /// A struct with the one field, so the round trip exercises the same
+    /// `#[serde(with = …)]` the aggregate carries.
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    struct WireField {
+        #[serde(with = "super::messtyp_serde")]
+        messtyp: Messtyp,
     }
 }

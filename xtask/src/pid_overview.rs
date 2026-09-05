@@ -59,6 +59,28 @@ pub struct Overview {
     pub source_document: String,
     /// Prüfidentifikatoren per AHB, exactly as the overview groups them.
     pub ahbs: BTreeMap<String, BTreeSet<String>>,
+    /// Which Sparten each Prüfidentifikator runs in, from the overview's own
+    /// „Sparte Strom" and „Sparte Gas" columns.
+    ///
+    /// A PID appears on several rows — one per Prozessschritt — and the columns
+    /// are per row, so a PID counts as running in a Sparte when **any** of its
+    /// rows marks it. That is the question consumers actually ask: „can this
+    /// Prüfidentifikator arrive in a Gas interchange?"
+    ///
+    /// This exists because the classification was hand-maintained in
+    /// `makod`, where five PIDs were wrong at once — each one silently
+    /// suppressing or misrouting a mandatory CONTRL.
+    #[serde(default)]
+    pub sparten: BTreeMap<String, Sparten>,
+}
+
+/// The Sparten one Prüfidentifikator runs in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Sparten {
+    /// The overview marks at least one of this PID's rows „Sparte Strom".
+    pub strom: bool,
+    /// The overview marks at least one of this PID's rows „Sparte Gas".
+    pub gas: bool,
 }
 
 impl Overview {
@@ -76,6 +98,10 @@ const SHEET: &str = "Prüf-ID Prozessschritt";
 const COL_AHB: &str = "B";
 /// Column holding the Prüfidentifikator.
 const COL_PID: &str = "D";
+/// Column marking the row as running in Sparte Strom (`X`, else `--`).
+const COL_STROM: &str = "R";
+/// Column marking the row as running in Sparte Gas (`X`, else `--`).
+const COL_GAS: &str = "S";
 
 /// Extract the inventory from `xlsx` and write [`OVERVIEW_PATH`].
 ///
@@ -92,6 +118,7 @@ pub fn import(workspace_root: &Path, xlsx: &Path) -> Result<(), String> {
     let sheet_xml = entry(&mut zip, &sheet_part)?;
 
     let mut ahbs: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut sparten: BTreeMap<String, Sparten> = BTreeMap::new();
     for row in rows(&sheet_xml) {
         let cells = cells(row, &shared);
         let (Some(ahb), Some(pid)) = (cells.get(COL_AHB), cells.get(COL_PID)) else {
@@ -105,6 +132,19 @@ pub fn import(workspace_root: &Path, xlsx: &Path) -> Result<(), String> {
         ahbs.entry(ahb.to_owned())
             .or_default()
             .insert(pid.to_owned());
+
+        // `X` marks the Sparte; the overview writes `--` for "not this one".
+        let marked = |col| {
+            cells
+                .get(col)
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case("x"))
+        };
+        let entry = sparten.entry(pid.to_owned()).or_insert(Sparten {
+            strom: false,
+            gas: false,
+        });
+        entry.strom |= marked(COL_STROM);
+        entry.gas |= marked(COL_GAS);
     }
     if ahbs.is_empty() {
         return Err(format!(
@@ -122,6 +162,7 @@ pub fn import(workspace_root: &Path, xlsx: &Path) -> Result<(), String> {
             "BDEW Anwendungsübersicht der Prüfidentifikatoren ({source}), sheet „{SHEET}\""
         ),
         ahbs,
+        sparten,
     };
 
     let out = workspace_root.join(OVERVIEW_PATH);

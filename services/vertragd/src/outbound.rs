@@ -199,6 +199,18 @@ pub fn lieferende(
 /// Lieferende UTILMD reaching the NB, so it is a task of its own rather than a
 /// step of one — a `processd` outage must not suppress the reading the
 /// Schlussrechnung is built from.
+///
+/// **The dedupe key carries `geplant_am`**, as the schema comment on
+/// `outbound_tasks.dedupe_key` has always said it should: a reading order is
+/// keyed by what makes it distinct, and the date it is planned for is that.
+/// Keyed on the component alone, a Kündigung withdrawn and re-issued to a
+/// different Lieferende enqueued a task whose key already existed, so
+/// `ON CONFLICT DO NOTHING` dropped it: `edmd` kept the reading order for the
+/// withdrawn date, the Schlussablesung happened on the wrong day, and nothing
+/// anywhere reported a failure.
+///
+/// A *same-date* re-enqueue still collapses, which is correct — that is a
+/// replay of one order, not a second one.
 #[must_use]
 pub fn ablesung(komp_id: Uuid, malo_id: &str, ende: bool, geplant_am: Date) -> Task {
     let (kind, anlass) = if ende {
@@ -216,7 +228,7 @@ pub fn ablesung(komp_id: Uuid, malo_id: &str, ende: bool, geplant_am: Date) -> T
             "geplant_am": geplant_am.to_string(),
             "auftrag_position_id": komp_id,
         }),
-        dedupe_key: format!("{}:{komp_id}", kind.as_db()),
+        dedupe_key: format!("{}:{komp_id}:{geplant_am}", kind.as_db()),
     }
 }
 
@@ -241,6 +253,52 @@ pub fn abrechnungskonto(komp_id: Uuid, malo_id: &str, lf_mp_id: &str) -> Task {
 ///
 /// Propagates storage errors.
 pub async fn enqueue(
+    executor: impl sqlx::PgExecutor<'_>,
+    tenant: &str,
+    task: &Task,
+) -> Result<bool> {
+    enqueue_inner(executor, tenant, task).await
+}
+
+/// Enqueue a task that **supersedes** any not-yet-performed task of the same
+/// kind for the same component.
+///
+/// For a date-keyed task (the reading orders), varying the key is only half the
+/// fix: a Kündigung re-issued to a new Lieferende would otherwise leave the
+/// order for the withdrawn date sitting in the queue, and `edmd` would receive
+/// both. A task that has not been dispatched has been seen by nobody, so the
+/// obsolete one is deleted rather than delivered and then countermanded.
+///
+/// A task already `completed_at` (the order is with `edmd`) or `dead_lettered_at`
+/// (the operator's queue) is left alone: those are records of something that
+/// happened, and cancelling *those* is `edmd`'s business, not a DELETE here.
+///
+/// # Errors
+///
+/// Propagates storage errors.
+pub async fn enqueue_superseding(
+    conn: &mut sqlx::PgConnection,
+    tenant: &str,
+    task: &Task,
+) -> Result<bool> {
+    let Some(komp_id) = task.komp_id else {
+        return enqueue_inner(&mut *conn, tenant, task).await;
+    };
+    sqlx::query(
+        "DELETE FROM outbound_tasks
+          WHERE tenant = $1 AND kind = $2 AND komp_id = $3 AND dedupe_key <> $4
+            AND completed_at IS NULL AND dead_lettered_at IS NULL",
+    )
+    .bind(tenant)
+    .bind(task.kind.as_db())
+    .bind(komp_id)
+    .bind(&task.dedupe_key)
+    .execute(&mut *conn)
+    .await?;
+    enqueue_inner(&mut *conn, tenant, task).await
+}
+
+async fn enqueue_inner(
     executor: impl sqlx::PgExecutor<'_>,
     tenant: &str,
     task: &Task,

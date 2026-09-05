@@ -89,8 +89,9 @@ handler ─┬─ contract write ───────┐
 ```
 
 - **`outbound_tasks`** — every service-to-service call: `LIEFERBEGINN`,
-  `LIEFERENDE`, `ABLESUNG_BEGINN`, `ABLESUNG_ENDE`, `ABRECHNUNGSKONTO`. Exponential backoff (30 s → 1 h), dead-lettered after 8
-  attempts, claimed with `FOR UPDATE SKIP LOCKED` so replicas share the queue.
+  `LIEFERENDE`, `ABLESUNG_BEGINN`, `ABLESUNG_ENDE`, `ABRECHNUNGSKONTO`.
+  Exponential backoff (30 s → 1 h), dead-lettered after 8 attempts, claimed
+  with `FOR UPDATE SKIP LOCKED` so replicas share the queue.
   A unique `dedupe_key` makes the enqueue exactly-once — an idempotent re-POST
   of the same `erp_contract_id` cannot produce a second UTILMD.
 - **`event_outbox`** (`mako_service::outbox`) — every customer-facing
@@ -100,22 +101,44 @@ A crash therefore costs a retry, never an obligation. What the retries could not
 discharge is visible at `GET /api/v1/outbound/dead` and requeueable at
 `POST /api/v1/outbound/dead/{id}/retry`.
 
-## Authentication
+## Authentication and authorization
 
 Every REST route extracts `Claims`, and the extractor rejects a token whose
 `mako_tenant` is not this deployment's — a validly signed token from another
 operator in the same OIDC realm is otherwise indistinguishable from a local one.
-The check sits in extraction, not in the handlers, so a route added later cannot
-skip it without also dropping authentication.
 
-The two webhook routes carry no operator token and are authenticated by the
-shared Standard Webhooks signature over the raw body. `main` refuses to start
-without **both** `[oidc]` and `inbound_secret` unless
-`allow_insecure_no_auth = true`: a forged event on those routes confirms supply
-or creates a contract.
+Authentication is not enough here, because **not every token that reaches this
+service is an operator's**. `portald` forwards an end customer's own token to
+`GET /api/v1/kunden/authenticate`, deliberately: that route answers whether *the
+token's subject* owns a Marktlokation, and only a proven subject can be asked.
+So every route also runs a Cedar check against `policies/vertragd.cedar`:
 
-Service-to-service readers (`billingd`, `portald`) authenticate with an
-`[[oidc.service_keys]]` entry.
+- **Customer-scoped actions** — `authenticate-portal-identity` and
+  `read-own-portal-identity` (`/kunden/by-sub/{sub}` when the subject asked
+  about is the caller's own) — are open to any authenticated principal of this
+  tenant.
+- **Every other action** requires a market role (`LF`, `MSB`, `ESA`, `ADMIN`):
+  reading a customer's profile, bank details or DSGVO export, granting portal
+  access, creating or terminating supply, changing a tariff, erasing a record.
+  The MCP surface sits behind the same split as the blanket `use-mcp` action.
+
+This rests on one deployment invariant: **the portal IdP realm must not issue
+`mako_roles`.** A market role on a customer token makes that customer an
+operator of this service.
+
+`tests/authorization_guard.rs` pins that every routed handler both extracts
+`Claims` and authorizes, that no Cedar action is checked without a grant or
+granted without a check, and that a role-less principal is refused on every
+operator action.
+
+The two webhook routes carry no token and are authenticated by the shared
+Standard Webhooks signature over the raw body. `main` refuses to start without
+**both** `[oidc]` and `inbound_secret` unless `allow_insecure_no_auth = true`: a
+forged event on those routes confirms supply or creates a contract.
+
+Service-to-service readers (`billingd`, `portald`, `processd`) authenticate with
+an `[[oidc.service_keys]]` entry, which carries the market roles the operator
+actions require.
 
 ## Data model
 
@@ -172,14 +195,14 @@ the component statuses and never returns from a terminal state.
 | `POST` | `/api/v1/vertraege/{id}/stornieren` | Cancel before supply began |
 | `POST` | `/api/v1/vertraege/{id}/tarifwechsel` | Change product |
 | `GET`/`PUT` | `/api/v1/vertraege/{id}/preisgarantie` | BO4E `Preisgarantie`, through the gate — which checks the `Zeitraum` in `zeitlicheGueltigkeit`, the field `preisgarantie_bis` and the Tarifwechsel guard are derived from |
-
-All three store the **canonical round-trip**, not the request body, which is why
-the gate's strict-enum stage matters here: a BO4E enum that decodes to the
-`Unknown` catch-all serialises back as the literal string `"UNKNOWN"`, so
-skipping it did not merely accept an unrecognised value — it replaced what the
-caller sent.
 | `GET` | `/api/v1/vertraege/billing-candidates` | § 40b EnWG cadence feed for billingd |
 | `GET` | `/api/v1/vertraege/expiring` | `?days=` (default 30) |
+
+The three BO4E routes (`person`, `zahlungsinformation`, `preisgarantie`) store
+the **canonical round-trip**, not the request body, which is why the gate's
+strict-enum stage matters here: a BO4E enum that decodes to the `Unknown`
+catch-all serialises back as the literal string `"UNKNOWN"`, so skipping it did
+not merely accept an unrecognised value — it replaced what the caller sent.
 
 ### Rahmenverträge, Stammdaten, Betrieb
 
@@ -190,7 +213,9 @@ caller sent.
 | `GET` | `/api/v1/rahmenvertraege/{id}/malos` | Sammelrechnung sites + the bundle's BG-7 buyer |
 | `POST` | `/api/v1/rahmenvertraege/{id}/kuendigen` | Cascade termination |
 | `GET`/`PUT` | `/api/v1/ggv/{ggv_id}/betreiber` | § 42b EnWG GGV operator as a Kunde |
-| `GET`/`PUT` | `/api/v1/aggregatorvertraege[/{sr_id}]` | § 41e EnWG VPP contracts |
+| `GET` | `/api/v1/aggregatorvertraege` | § 41e EnWG VPP contracts (Art. 17 RL (EU) 2019/944); `?sr_id=`, `?on=` |
+| `PUT` | `/api/v1/aggregatorvertraege/{sr_id}` | Upsert one, keyed on the SR-ID |
+| `GET`/`PUT` | `/api/v1/messstellenvertraege/{melo_id}/{msb_mp_id}` | MSB contract per MeLo; `?on=` and `?haushaltskunde=` date the § 309 Nr. 9 lit. c BGB cap on the next possible end |
 | `GET` | `/api/v1/outbound/dead` | Obligations the retries gave up on |
 | `POST` | `/api/v1/outbound/dead/{id}/retry` | Requeue one |
 | `POST` | `/api/v1/events` | MaKo outcomes from makod/processd (HMAC) |
@@ -237,13 +262,28 @@ entry: an operator keying in last week's letter says so.
 ## Tarifwechsel
 
 A Tarifwechsel changes price, not supply — no UTILMD, no MaKo status change.
-Three things are enforced at the API boundary, so compliance is structural
-rather than a worker's best effort:
+
+`initiator` is required, because the two cases are different legal acts.
+§ 41 Abs. 5 Satz 1 EnWG binds a supplier who *exercises* a reserved right to
+change the contract, and Satz 4 gives the customer a fee-free termination right
+because the supplier exercised it. A tariff the customer asked for
+(`"initiator":"KUNDE"` — what the portal sends) is an agreed change: it is
+confirmed, carries no Sonderkündigungsrecht, and is not held to the supplier's
+notice periods.
+
+For a supplier-initiated future change, the following are enforced at the API
+boundary, so compliance is structural rather than a worker's best effort:
 
 ```bash
 # Blocked by the price guarantee
-curl -X POST …/tarifwechsel -d '{"komp_id":"…","new_product_code":"X","wirksamkeit":"2026-08-01"}'
+curl -X POST …/tarifwechsel -d '{"komp_id":"…","new_product_code":"X",
+                                 "initiator":"LIEFERANT","wirksamkeit":"2026-08-01"}'
 # → 422 {"error":"Tarifwechsel durch Preisgarantie gesperrt","preisgarantie_bis":"2027-06-30"}
+
+# No preise[], with outputd_url configured — the rendered notice would state
+# no Umfang
+# → 422 {"error":"der Umfang der Preisänderung fehlt",
+#        "rechtsgrundlage":"§ 41 Abs. 5 Satz 3 EnWG"}
 
 # Too close for the § 41 Abs. 5 Satz 2 EnWG notice
 # → 422 {"fruehestens":"2026-09-18","frist":"1 Monat","rechtsgrundlage":"§ 41 Abs. 5 Satz 2 EnWG"}
@@ -259,6 +299,22 @@ curl -X POST …/tarifwechsel -d '{…,"override_preisgarantie":true,"grund":"Ku
 A retroactive correction (`wirksamkeit ≤ today`) applies immediately and is
 exempt: it is not an announced price change but the repair of one already
 agreed.
+
+**Who states the Umfang.** § 41 Abs. 5 Satz 3 EnWG governs what the *customer*
+is told, so it binds whoever composes the notice. Where this deployment renders
+it (`outputd_url` set), `preise[]` is the document's content and a change
+without it is refused. Where the CloudEvent is the notice, the ERP composes the
+letter from its own price sheets: `preise[]` is optional, travels on the event
+when given, and `umfang_vollstaendig: false` on
+`de.vertrag.preisaenderung.ankuendigung` says the lines are the composer's to
+supply — a letter that states no Umfang is not a valid notice on any channel.
+
+**A pending notice cannot be relabelled away.** The write is idempotent on
+`(komp_id, wirksamkeit)`, and a replay that changes `initiator` while the notice
+is still owed is refused with `409`: re-sending a `LIEFERANT` price rise as
+`KUNDE` would take it out of the announcement queue, the customer would never be
+told, and the breach report would come back clean because the record — not the
+fact — had changed.
 
 ## DSGVO Art. 17
 
@@ -287,13 +343,27 @@ Buchungsbelege 8 Jahre), and `anonymization_log` records what was overwritten.
 |---|---|
 | **Outbound** | Drains `outbound_tasks` every 5 s, up to 64 per wake-up |
 | **Outbox** | Delivers `de.vertrag.*` to the ERP webhook (`mako_service::outbox`) |
-| **Preisanpassung** | Sends the § 41 Abs. 5 notice with the Sonderkündigungsrecht for every scheduled Tarifwechsel whose notice is still owed; with `outputd_url` and `[absender]` configured it also renders and delivers the letter. A Tarifwechsel scheduled without `preise` gets the CloudEvent and **no letter** — § 41 Abs. 5 Satz 1 wants the *Umfang* of the change |
+| **Preisanpassung** | Sends the § 41 Abs. 5 notice, with the Sonderkündigungsrecht, for every scheduled **supplier-initiated** Tarifwechsel whose notice is still owed |
 | **Auto-renewal** | Announces the extension once per term, then applies it: **unbefristet with ≤ 1 month notice for consumers** (§ 309 Nr. 9 lit. b BGB), a further fixed term only for business customers |
 | **Ablauf** | Ends supply whose Lieferende has passed and closes the contract behind it; announces a term or price guarantee running out — once per date, tracked in `ablauf_notif_fuer` |
+
+With `outputd_url` and `[absender]` set, the Preisanpassung worker renders and
+delivers the letter *before* it records the notice as sent; a notice that could
+not be issued is written back to the slice (`notif_versuche`,
+`notif_letzter_fehler`) and retried, and a change that reached its Wirksamkeit
+unannounced is reported as a breach on every run.
 
 Every notice goes through the outbox rather than a direct webhook call: a notice
 the supplier owes must not depend on the ERP being reachable at the moment the
 worker happens to run.
+
+**One replica runs each of the three daily workers per cycle.** Idempotency
+serialises repeats of the same run; it says nothing about two replicas reading
+the same unmarked slice in the same second, which would send the § 41 Abs. 5
+notice twice. Each takes its own session-level PostgreSQL advisory lock
+(`mako_service::worker_lock`, shared with `accountingd`; the keys are per
+service, `0x_7e64_xxxx` here) and skips the cycle when another instance holds
+it.
 
 ## Configuration
 
@@ -316,6 +386,11 @@ erp_hmac_secret = "env:VERTRAGD_ERP_HMAC_SECRET"
 # The only authentication on POST /api/v1/events and /api/v1/webhooks/angebot.
 inbound_secret  = "env:VERTRAGD_INBOUND_SECRET"
 
+# Renders and delivers the § 41 Abs. 5 EnWG letter. Without it the notice still
+# travels as a CloudEvent and the ERP composes the letter from its own prices.
+outputd_url     = "http://outputd:9880"
+outputd_api_key = "env:VERTRAGD_OUTPUTD_SERVICE_KEY"
+
 max_identitaeten_per_kunde = 50
 
 [database]
@@ -323,6 +398,12 @@ url = "postgresql://vertragd:secret@db:5432/vertragd"
 
 [oidc]
 # required in production; see mako-service oidc docs
+
+# The declarant on that letter — § 126b BGB Textform needs a named sender.
+[absender]
+name      = "Beispiel Energie GmbH"
+post_code = "10115"
+city      = "Berlin"
 ```
 
 ## Tests

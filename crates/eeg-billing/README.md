@@ -2,9 +2,9 @@
 
 **Pure EEG/KWKG feed-in settlement calculation for German energy markets.**
 
-`eeg-billing` is the settlement arithmetic core used by [`einsd`](../../services/einsd/) —
+`eeg-billing` is the settlement arithmetic core used by [`einsd`](https://hupe1980.github.io/mako/docs/services/einsd/) —
 the Einspeiser Registry daemon. It covers the full EEG legal framework from EEG 2000 through
-EEG 2023 (Solarpaket I) and KWKG 2023, with all version-specific rule variants enforced
+EEG 2023 and KWKG, with all version-specific rule variants enforced
 automatically based on the plant's `EegGesetz` year.
 
 zero I/O · zero async · zero `unsafe` · no float money (`rust_decimal`) ·
@@ -52,6 +52,12 @@ The `SettlementScheme + TariffSource` split reflects the EEG structure directly:
 - **`SettlementScheme`** = which formula applies (`FeedInTariff`, `MarketPremium`, …)
 - **`TariffSource`** = where the AW comes from (`Statutory`, `Auction(meta)`, `Transitional(rule)`)
 
+Every scheme is a **struct variant** carrying the figures its own formula needs —
+`FeedInTariff { verguetungssatz_ct }`, `MarketPremium { direktverm_aw_ct,
+wind_korrekturfaktor, wind_standort }` — so a rate cannot be set for a formula
+that does not read it. Only the measurement context (`einspeisemenge_kwh`,
+`marktwert_ct_kwh`, …) lives on `SettleInput` itself.
+
 `Ausschreibung` is **not** a separate scheme. It is:
 `scheme: MarketPremium + tariff_source: Auction(AusschreibungMetadata)`.
 It uses the `MarketPremium` calculation with an **auction-determined anzulegender Wert**.
@@ -65,10 +71,10 @@ receives the already-resolved AW from the caller.
 | `SettlementScheme` | EEG basis | Formula |
 |---|---|---|
 | `FeedInTariff` | §21 EEG | `kwh × verguetungssatz_ct / 100` |
-| `MarketPremium` | §20 EEG | `max(0, (AW + Mgmt) − EPEX) × kwh / 100` (see §20 Abs. 3) |
+| `MarketPremium` | §23a EEG i.V.m. Anlage 1 | `max(0, AW − MW) × kwh / 100` — no additive Managementprämie (see below) |
 | `TenantElectricity` | §21 Abs. 3 EEG 2023 | `kwh × (verguetung + zuschlag) / 100` |
 | `PostEeg` | post-20yr | `kwh × EPEX / 100` (configurable `price_floor` on the variant) |
-| `KwkSurcharge` | §7 KWKG 2023 | `eligible_kwh × rate / 100` (hour-limit cap) |
+| `KwkSurcharge` | §§7, 8 KWKG | `eligible_kwh × Mischsatz / 100`, capped by the §8 Abs. 1–3 Vollbenutzungsstunden (`FoerderungBeendet`) and, separately, by the §8 Abs. 4 annual cap (`JahreskontingentErschoepft` — the year is used up, the Förderung is not) |
 | `TemporaryFeedInTariff` | §21 Abs. 1 Satz 1 Nr. 3 | Ausfallvergütung (temporary feed-in when the Direktvermarkter drops out) |
 | `Eigenverbrauch` | §21 Abs. 3 EEG | No EEG feed-in remuneration is calculated. |
 | `FlexibilityPremium` | §50b EEG 2023 | `kwh × (verguetung + flex_praemie) / 100` |
@@ -91,8 +97,8 @@ and floored at zero by Nr. 3.1.2 Satz 2.
 **There is no additive Managementprämie.** §20 EEG 2023 has no Absätze at all; it
 lists the three conditions under which the Marktprämie is payable. Since EEG 2014
 the marketing cost sits *inside* the anzulegender Wert, and its mirror image is
-the §53 Abs. 1 deduction of 0,4 ct (Solar, Wind) / 0,2 ct (everything else) that
-the **Einspeisevergütung** route takes off the same AW.
+the §53 Nr. 2 / Nr. 1 deduction of 0,4 ct (Solar, Wind) / 0,2 ct (everything else) that
+the **Einspeisevergütung** route takes off the same AW (`rates::sect53_deduction`).
 
 ---
 
@@ -105,7 +111,9 @@ eeg-billing/src/
 ├── scheme.rs            SettlementScheme, TariffSource, Paragraph100Rule
 ├── technology.rs        ErzeugungsArt (18 variants), InbetriebnahmeTyp, RepoweringScope
 ├── version.rs           EegGesetz (8 variants), §51 thresholds and kW-exemption tables
-├── rates.rs             §48 AW tables: solar PV per §49 window, wind, biomasse, KWKG
+├── rates.rs             §§40–48 AW tables, date-keyed via the statutory Absenkungen
+├── kwkg.rs              §§7–9 KWKG: Zuschlag je Leistungsanteil, Vollbenutzungsstunden
+├── seed.rs              the §§40–49 net Einspeisevergütung series as flat rows
 ├── foerderdauer.rs      foerderendedatum_eeg(), §52 Pflichtzahlung, §51a extension
 ├── foerderungsende.rs   FoerderendeGrund enum, SanktionStatus lifecycle
 │
@@ -118,7 +126,10 @@ eeg-billing/src/
 ├── settlement_state.rs  Monthly lifecycle state machine — Active/Reduced/Suspended/PostEeg
 │
 ├── wind.rs              §36h Korrekturfaktor, WindStandort, Gütegrad/Standortklasse
-├── biomasse.rs          §43/§44 fuel classes, Güllekleinanlage (≤75 kW, ≥80% Gülle)
+├── biomasse.rs          §§42–44 fuel classes, Güllekleinanlage, §39i Abs. 1 Getreide/Mais
+│
+├── rounding.rs          kaufmännisches Runden (DIN 1333, half away from zero)
+├── error.rs             SettlementError
 │
 ├── tariff.rs            billing::PricingModel adapter — EegSettleTariff, VAT variants
 ├── bridge.rs            settlement_to_line_items() → billing::LineItem
@@ -151,9 +162,8 @@ use rust_decimal::dec;
 
 // §21 EEG 2023 — 500 kWh × 8.11 ct/kWh = 40.55 EUR
 let out = calculate_settlement(&SettleInput {
-    scheme: SettlementScheme::FeedInTariff,
+    scheme: SettlementScheme::FeedInTariff { verguetungssatz_ct: dec!(8.11) },
     einspeisemenge_kwh: Some(dec!(500)),
-    verguetungssatz_ct: dec!(8.11),
     ..SettleInput::default()
 });
 assert_eq!(out.status, SettlementStatus::Calculated);
@@ -168,10 +178,13 @@ use eeg_billing::{SettleInput, SettlementScheme, calculate_settlement};
 use rust_decimal::dec;
 
 let out = calculate_settlement(&SettleInput {
-    scheme: SettlementScheme::MarketPremium,
+    scheme: SettlementScheme::MarketPremium {
+        direktverm_aw_ct: dec!(6.28),      // statutory or tendered AW
+        wind_korrekturfaktor: None,        // §36h, wind onshore only
+        wind_standort: None,
+    },
     einspeisemenge_kwh: Some(dec!(100_000)),
-    direktverm_aw_ct: Some(dec!(6.28)),    // statutory or tendered AW
-    epex_avg_ct_kwh: Some(dec!(4.50)),
+    marktwert_ct_kwh: Some(dec!(4.50)),    // Anlage 1 Nr. 3 Monatsmarktwert
     ..SettleInput::default()
 });
 // 1,780 EUR
@@ -240,20 +253,27 @@ Two key differences from §51 (source: §51b Satz 2 EEG 2023):
 use eeg_billing::{SettleInput, SettlementScheme, TariffSource, AusschreibungMetadata,
                   calculate_settlement};
 use rust_decimal::dec;
+use time::macros::date;
 
-// Biogas auction plant: EPEX 1.5 ct ≤ 2 ct → AW = 0, EUR 0
+// Biogas auction plant: Marktwert 1.5 ct ≤ 2 ct → AW = 0, EUR 0
 let out = calculate_settlement(&SettleInput {
-    scheme: SettlementScheme::MarketPremium,
+    scheme: SettlementScheme::MarketPremium {
+        direktverm_aw_ct: dec!(8.5),
+        wind_korrekturfaktor: None,
+        wind_standort: None,
+    },
     tariff_source: TariffSource::Auction(AusschreibungMetadata {
         is_biogas_sect51b: true, // explicit biogas §51b flag
         ..AusschreibungMetadata::default()
     }),
     einspeisemenge_kwh: Some(dec!(10_000)),
-    direktverm_aw_ct: Some(dec!(8.5)),
-    epex_avg_ct_kwh: Some(dec!(1.5)), // ≤ 2 ct/kWh → §51b triggers
+    marktwert_ct_kwh: Some(dec!(1.5)), // ≤ 2 ct/kWh → §51b triggers
+    // §101 Abs. 2 keys §51b on the **supply period**: without a billing_date
+    // on or after 18.09.2025 the provision is not applied at all.
+    billing_date: Some(date!(2026 - 01 - 31)),
     ..SettleInput::default()
 });
-assert_eq!(out.settlement_eur, Some(dec!(0)));
+assert_eq!(out.settlement_eur, Some(dec!(0.00000)));
 assert!(out.positions[0].legal_basis.contains("51b"));
 ```
 
@@ -282,13 +302,12 @@ use rust_decimal::dec;
 // Pre-2016 plant — §51 must NEVER apply, regardless of eeg_gesetz setting.
 // TariffSource::Transitional auto-overrides to Eeg2012 → §51 exempt.
 let out = calculate_settlement(&SettleInput {
-    scheme: SettlementScheme::FeedInTariff,
+    scheme: SettlementScheme::FeedInTariff { verguetungssatz_ct: dec!(8.11) },
     tariff_source: TariffSource::Transitional(Paragraph100Rule::Pre2016Bestandsschutz),
     eeg_gesetz: EegGesetz::Eeg2017,      // ← might be set wrong in DB; rule corrects it
     einspeisemenge_kwh: Some(dec!(1000)),
     kwh_during_negative_epex: Some(dec!(500)), // would trigger §51 under Eeg2017
     leistung_kwp: Some(dec!(1000)),             // 1 MW >> 500 kW threshold
-    verguetungssatz_ct: dec!(8.11),
     ..SettleInput::default()
 });
 // Pre2016Bestandsschutz → no §51 deduction → full 1000 kWh × 8.11 ct = 81.10 EUR
@@ -320,7 +339,11 @@ on §71 data submission) is outside the scope of this library.
 ## §52 EEG — Sanctions
 
 **EEG 2023 (commissioned ≥2023)**: `pflichtverstoss: Vec<Pflichtverstoss>` → `pflichtzahlung_eur`.
-Vergütung continues. Multiple violations summed, capped at §52 Abs. 5.
+Vergütung continues. Abs. 5 caps **each calendar month** at 10 €/kW — „insgesamt
+auf 10 Euro pro Kilowatt installierter Leistung der Anlage und Kalendermonat
+begrenzt" — so every violation is spread over the months it runs in, each month
+is capped on its own, and the capped months are summed. A month under the ceiling
+does not release headroom for a month over it.
 
 **EEG ≤2021 (§100 Übergangsregelung)**: `sanktion: Some(SanktionAlt::…)`.
 Three tiers: `VerguetungAufNull` / `VerguetungAufMarktwert` / `VerguetungReduziert20Prozent`.
@@ -402,11 +425,11 @@ already makes a second change within one month impossible.
 | `BiomassHolz` | Feste Biomasse | No separate AW; tendered plants meet the §39i Abs. 2 Höchstbemessungsleistung |
 | `Biogas` | Fermentation biogas | §43 Bioabfälle / §44 Gülle where they qualify |
 | `Biomethan` | Upgraded biomethane | Excluded from the §42 statutory value by Satz 2 |
-| `Klaegas` / `Grubengas` / `Deponiegas` | Special gases | §41 — **one ladder each**, Abs. 1/2/3 |
+| `Klaergas` / `Grubengas` / `Deponiegas` | Special gases | §41 — **one ladder each**, Abs. 1/2/3 |
 | `Wasserkraft` | Hydro | §40 — seven tiers by Bemessungsleistung |
 | `Geothermie` | Geothermal | §45 — flat 25,20 ct |
 | `Gezeiten` | Tidal, wave, salinity gradient, current | §40 — these *are* Wasserkraft (§3 Nr. 21 lit. a); there is no §41a EEG |
-| `Kwk` | CHP/BHKW | KWKG 2023, not EEG |
+| `Kwk` | CHP/BHKW | KWKG, not EEG — priced by [`kwkg`], not by a rate table |
 
 ## The statutory rates
 
@@ -643,3 +666,15 @@ The regulatory showcase (`tests/regulatory_showcase.rs`) is executable documenta
 for every §§ rule, including the Anlage 1 Marktprämie formula,
 §51 version-specific thresholds, §52 Abs. 6 netting, §100 Übergangsregelung,
 and all settlement scheme edge cases.
+
+## Related crates
+
+| Crate | Role |
+|---|---|
+| [`eeg-billing`](https://docs.rs/eeg-billing) ← **this crate** | EEG/KWKG feed-in settlement — schemes, degression, sanctions, repowering |
+| [`mako-markt`](https://docs.rs/mako-markt) | Marktstammdaten — Marktlokation, Messlokation, Marktpartner, Rollenzuordnung — the model the plant and Marktlokation inputs are keyed on |
+| [`energy-billing`](https://docs.rs/energy-billing) | The consumption leg — the customer's retail invoice |
+| [`einsd`](https://hupe1980.github.io/mako/docs/services/einsd/) | Production daemon — the Einspeiser Registry |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>

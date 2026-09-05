@@ -292,7 +292,7 @@ pub struct AuthzConfig {
     /// Directory of additional `*.cedar` policy files, loaded in name order.
     pub cedar_policy_dir: Option<PathBuf>,
     /// Drop the built-in permit-all baseline so only `cedar_policy_dir` grants
-    /// access. Required for a least-privilege deployment and for §9 EnWG role
+    /// access. Required for a least-privilege deployment and for § 6a EnWG role
     /// separation in a combined-role (VIU) deployment.
     #[serde(default)]
     pub no_default_policy: bool,

@@ -128,7 +128,12 @@ Prüfidentifikatoren 4.0* (01.04.2026) — every row whose Prozessbeschreibung i
 | 13022 | MSCONS | Einzelzeitreihe Ausfallarbeit | BTR ↔ NB · anfNB → ANB | — |
 | 17209 | ORDERS | Anforderung der Ausfallarbeit | anfNB → ANB | — |
 | 21037 | IFTSTA | Ansicht NB | NB → BTR | `E_0902` |
-| 21038 | IFTSTA | Ansicht BTR | BTR → NB | `E_0900` |
+| 21038 | IFTSTA | Ansicht BTR | BTR → NB | — |
+
+The two Redispatch Entscheidungsbäume — `E_0902` (Ausfallarbeit unter
+Einbeziehung Fahrplananteil plausibilisieren) and `E_0901` (Gegenvorschlag
+prüfen) — both name the **NB** as prüfende Rolle and live in
+`mako_pruefung::mabis::ausfallarbeit`. The BTR's own view publishes none.
 
 There is **no ORDRSP in this family**: the ANB answers ORDERS 17209 with MSCONS
 13022 (Prozessschritt 2).
@@ -213,8 +218,10 @@ if roles.contains_any(&[Marktrolle::Nb, Marktrolle::Unb, Marktrolle::Anb]) {
 }
 ```
 
-`RedispatchModule::configure()` wires all 8 workflows into a `RedispatchRouter`
-and registers IFTSTA PIDs 21037 / 21038 into the `PidRouter`.
+`RedispatchModule::configure()` wires all 8 workflows into a `RedispatchRouter`.
+Its `register_pids` puts all five EDIFACT PIDs — IFTSTA 21037/21038, MSCONS
+13021/13022 and ORDERS 17209 — into the `PidRouter`, every one of them routed to
+`redispatch-aktivierung` and correlated by conversation ID.
 
 ### AcknowledgementDocument routing
 
@@ -236,7 +243,12 @@ workflows — the standard Werktage-based GPKE/WiM scheduler is insufficient.
 
 | Crate | Role |
 |---|---|
-| `redispatch-xml` | XML format layer — parse · serialize · validate (joined with this crate in `makod`) |
-| `mako-redispatch` ← **this crate** | Event-sourced process engine — 8 workflows, `RedispatchRouter`, `RedispatchModule` |
-| `edi-energy` | IFTSTA status messages (EDIFACT, PIDs 21037/21038) |
-| `mako-engine` | Event-sourced workflow runtime (`Workflow`, `Process`, `EventStore`) |
+| [`mako-redispatch`](https://docs.rs/mako-redispatch) ← **this crate** | Event-sourced process engine — 8 workflows, `RedispatchRouter`, `RedispatchModule` |
+| [`redispatch-xml`](https://docs.rs/redispatch-xml) | The XML format layer — parse · serialize · validate (joined with this crate in `makod`) |
+| [`edi-energy`](https://docs.rs/edi-energy) | IFTSTA status messages (EDIFACT, PIDs 21037/21038) |
+| [`mako-engine`](https://docs.rs/mako-engine) | Event-sourced workflow runtime — `Workflow`, `Process`, `EventStore`, deadlines |
+| [`mako-fristen`](https://docs.rs/mako-fristen) | *When* an answer is due — Werktage, the MaKo holiday calendar, the per-PID Antwortfristen |
+| [`makod`](https://hupe1980.github.io/mako/docs/services/makod/) | Production daemon — routes both the XML and the EDIFACT leg |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>

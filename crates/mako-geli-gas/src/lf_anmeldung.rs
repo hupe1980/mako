@@ -257,6 +257,7 @@ pub enum GeliGasLfAnmeldungCommand {
         /// in this one segment. `None` on 44004, which registers nothing.
         bilanzkreis: Option<String>,
         /// UTC wall-clock time when the ERP command was received.
+        #[serde(with = "time::serde::rfc3339")]
         received_at: OffsetDateTime,
     },
     /// Inbound GNB response (44002/44003, 44005/44006) received via AS4.

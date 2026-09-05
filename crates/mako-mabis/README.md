@@ -6,6 +6,11 @@ The German electricity balance-group settlement, per BNetzA **BK6-24-174
 Anlage 3**. Strom only — gas balances through GaBi Gas, on the Gastag and
 against a Marktgebiet.
 
+A **Prüfidentifikator** (PID) is the five-digit BDEW code every message in these
+processes carries. It names the exact Anwendungsfall, and with it the rules, the
+Frist and the answer tree that apply — so the PID, not the EDIFACT message type,
+is what routes.
+
 ## Three things this crate exists to get right
 
 MaBiS looks like the other MaKo process families and is not shaped like them.
@@ -159,8 +164,10 @@ Three rules that are easy to invert:
   keeps whatever status it had.
 - **Kategorie C carries neither Prüfmitteilung nor Datenstatus**, so a BG-SZR or
   BK-SZR of Kategorie C never enters a settlement stream at all.
-- **The settling version is the highest one with `A01`/`A04`**, which is not
-  necessarily the highest version — a later one sitting at `A02` does not settle.
+- **The settling version is the highest one carrying `A01`/`A04`** — or, once
+  the Abrechnungsstichtag has passed, `A03`/`A06`. That is not necessarily the
+  highest version: a later one sitting at `A02` does not settle
+  (`BillingData::abrechnungsrelevante_version`).
 
 The three EBDs in each Datenstatus triple are the three **occasions** a status is
 assigned, and they line up one-to-one with the rules above:
@@ -205,7 +212,7 @@ The same holds for the other two reply legs:
   the two Temperaturmaßzahl-Prüfschritte — so sending one for a normiertes
   Profil is refused: Prüfschritt 2 splits and the halves never rejoin.
 
-The catalogue is [`mako-pruefung`](../mako-pruefung).
+The catalogue is [`mako-pruefung`](https://docs.rs/mako-pruefung).
 
 ## IFTSTA 21000–21005 are not all inbound
 
@@ -233,20 +240,23 @@ MIG level: `172` the Meldepunkt (MaBiS-Zählpunkt), `107` the Bilanzierungsgebie
 `237` the Bilanzkreis. A message that puts the territory EIC in `LOC+172` parses,
 validates and is **accepted by the BIKO**, which then files the series against
 the wrong Meldepunkt. Nothing downstream can tell that apart from a correct
-submission — which is why `Summenzeitreihe::validate_identifiers` refuses rather
-than substituting a plausible value.
+submission.
 
-`MabisZaehlpunktId` is a validating newtype, so most of that class is
-**unconstructible** rather than merely refused:
+All three are validating newtypes, so the whole class is **unrepresentable**
+rather than checked:
 
-| Defect | Caught where |
-|---|---|
-| Meldepunkt is not 33 characters (e.g. a 16-character territory EIC) | `MabisZaehlpunktId::new` — and `Deserialize`, which runs the same check, since the value usually arrives as JSON |
-| Meldepunkt absent | same — there is no empty `MabisZaehlpunktId` |
-| Meldepunkt **equals** the Bilanzierungsgebiet | `validate_identifiers`, at runtime — `BilanzierungsgebietId` is unvalidated, so a 33-character value there could still collide |
+| `LOC` | Value | Type | Shape enforced |
+|---|---|---|---|
+| `172` | Meldepunkt | `MabisZaehlpunktId` | 33-character Zählpunktbezeichnung, in `new` **and** in `Deserialize` — the value usually arrives as JSON |
+| `107` | Bilanzierungsgebiet | `rubo4e::identifiers::BilanzierungsgebietId` | 16-character EIC, ENTSO-E object type `Y` (Area) |
+| `237` | Bilanzkreis | `rubo4e::identifiers::BilanzkreisId` | 16-character EIC, ENTSO-E object type `X` (Party) |
 
-Passing a `BilanzierungsgebietId` where a Meldepunkt belongs is a compile error:
-both halves of the dangerous pair are typed.
+A territory EIC in a Meldepunkt field fails on length, and the two EIC types are
+told apart by their type letter rather than by the field they happen to sit in.
+There is deliberately **no** `validate_identifiers()` pass over an assembled
+`Summenzeitreihe`: with these three types such a check could never fire, and a
+control that cannot fire reads as protection during review while providing none
+(`src/summenzeitreihe.rs`, `identifier_tests`).
 
 The **inbound** side deliberately keeps a plain `String`
 (`ZpLifecycleCommand::ReceiveAnfrage`). A counterparty's malformed Meldepunkt has
@@ -288,9 +298,17 @@ party, not a distinct PID.
 | LF-AASZR (NB (ANB) → LF) | 55199 / 55200 | — | — | — |
 | monatliche AAÜZ, BKV des LF | 55203 / 55206 | 55204 / 55207 | `E_0071` / `E_0072` | 55205 / 55208 |
 | monatliche AAÜZ, BKV des anfNB | 55209 / 55212 | 55210 / 55213 | `E_0078` / `E_0079` | 55211 / 55214 |
+| Zuordnung ZP der NGZ zur NZR (verantw. NB → benachb. NB) | 55235 / 55236 | 55237 | `E_0102` / `E_0103` | 55235 / 55236 |
 
 > **55218 and 55220 are not MaBiS.** They are GPKE Teil 2 (Abr.-Daten NNA).
 > 55215–55217, 55219, 55221 and 55222 are unassigned. None is routed here.
+
+The last row is the NZR-EMob leg (AHB Kap. 13.16) and it is **MaBiS, not
+Modell 2**, which is why it lives here and not in `mako-emob`. One Antwort code
+serves both directions — 55237 answers the Zuordnung out of `E_0102` and the
+Beendigung out of `E_0103` — which is why the Antwort PID and the EBD are
+separate columns. Its Weiterleitung is the same code re-addressed to the ÜNB,
+and it is sequenced *after* the neighbouring NB has confirmed.
 
 ## The Kapitel-17 series expire
 
@@ -366,9 +384,8 @@ is the same split `SendKorrektur` and `SendGesamtAblehnung` already make
 
 ```rust,ignore
 use mako_mabis::{
-    Abrechnungslauf, Bilanzierungsmonat, BillingCommand, Datenstatus, Familie,
-    Kategorie, MabisBillingWorkflow, MabisZaehlpunktId, Pruefergebnis,
-    SUMMENZEITREIHE_PID, SzrVersion, Zeitreihe,
+    Bilanzierungsmonat, BillingCommand, Familie, Kategorie, MabisBillingWorkflow,
+    MabisZaehlpunktId, SUMMENZEITREIHE_PID, SzrVersion, Zeitreihe,
 };
 
 let zeitreihe = Zeitreihe::new(Familie::BgSzr, Some(Kategorie::B))?;
@@ -391,11 +408,14 @@ process.execute(BillingCommand::ReceiveSummenzeitreihe {
     message_ref: MessageRef::new("MSCONS-BG-2026-01-V1"),
 }).await?;
 
-// The check has no Frist; it is bounded by the clearing window.
+// The check has no Frist; it is bounded by the clearing window. The code is a
+// bare string because the deciding tree follows from `zeitreihe`, which only
+// the workflow holds — here `A02` „Energiemenge falsch" out of `E_0062`.
 process.execute(BillingCommand::SendPruefmitteilung {
     version: SzrVersion::new("20260205081500+00")?,
     pid: Pruefidentifikator::new(21_005)?,
-    ergebnis: Pruefergebnis::Negativ { grund: "Abweichung 12 kWh".into() },
+    antwortcode: "A02".into(),
+    grund: Some("Abweichung 12 kWh".into()),
     message_ref: MessageRef::new("IFTSTA-PM-V1"),
 }).await?;
 ```
@@ -422,3 +442,21 @@ cargo run --example mabis_bilanzkreisabrechnung -p mako-mabis
   Deaktivierung, `SG10 CCI/CAV` Bezeichnung der Summenzeitreihe
 - EDI@Energy **Entscheidungsbaum-Diagramme und Codelisten 4.3** — the Datenstatus
   and Antwort trees
+
+## Related crates
+
+The format layer and the domain packs meet in `makod`: a workflow crate knows the
+`Pruefidentifikator` and its own domain types, never an EDIFACT message type.
+
+| Crate | Role |
+|---|---|
+| [`mako-mabis`](https://docs.rs/mako-mabis) ← **this crate** | MaBiS workflows, the Fristenkalender, PID routing, `MabisModule` |
+| [`edi-energy`](https://docs.rs/edi-energy) | EDI@Energy EDIFACT — parse · validate · build (UTILMD, MSCONS, ORDERS, INVOIC, APERAK, …); joined to these workflows in `makod`, not depended on |
+| [`mako-engine`](https://docs.rs/mako-engine) | Event-sourced workflow runtime — `Workflow`, `Process`, `EventStore`, deadlines |
+| [`mako-fristen`](https://docs.rs/mako-fristen) | *When* an answer is due — Werktage, the MaKo holiday calendar, the per-PID Antwortfristen |
+| [`mako-pruefung`](https://docs.rs/mako-pruefung) | *What* the answer must be — the BDEW Entscheidungsbäume, executable |
+| [`mako-emob`](https://docs.rs/mako-emob) | NZR-EMob — books charge sessions into a supplier's Bilanzkreis, and settles through MaBiS |
+| [`makod`](https://hupe1980.github.io/mako/docs/services/makod/) | Production daemon — routes, adapts and renders these workflows |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>

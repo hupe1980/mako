@@ -115,7 +115,13 @@ pub async fn put_account(
         return forbidden(&e);
     }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant).to_owned();
-    let _ = upsert_account(&pool, &malo_id, &lf_mp_id, &cfg.tenant).await;
+    // Not `let _ =`: the update below keys on the row this creates, so a failed
+    // upsert surfaces as „account not found" — a 404 for what is actually a
+    // database fault, which sends the operator looking for the wrong problem.
+    if let Err(e) = upsert_account(&pool, &malo_id, &lf_mp_id, &cfg.tenant).await {
+        tracing::error!(error = %e, %malo_id, "accountingd: account upsert failed");
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
     match update_account_tenanted(
         &pool,
         &malo_id,
@@ -550,7 +556,24 @@ pub async fn ingest_webhook(
             // owe the period twice — the deduction the document itself states
             // (`gesamtbrutto − zuZahlen`, § 14 Abs. 5 Satz 2 UStG) is booked
             // separately as an `ABSCHLAG_VERRECHNUNG` credit below.
-            let amount_ct: i64 = betrag_ct("gesamtbrutto").unwrap_or(0);
+            //
+            // An unreadable `gesamtbrutto` is not a zero invoice. Treating it as
+            // one acknowledges the event and books no receivable, so the supply
+            // is billed and never collected, with nothing in the log to find.
+            // The payload cannot improve on redelivery, so this is a 422.
+            let Some(amount_ct) = betrag_ct("gesamtbrutto") else {
+                tracing::error!(
+                    ce_id = %ce_id,
+                    malo_id,
+                    "accountingd: invoice event carries no readable gesamtbrutto — refusing \
+                     rather than booking nothing"
+                );
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "invoice event carries no readable gesamtbrutto",
+                )
+                    .into_response();
+            };
             let verrechnete_abschlaege_ct: i64 = betrag_ct("zuZahlen")
                 .map_or(0, |zu_zahlen| amount_ct - zu_zahlen)
                 .max(0);
@@ -1491,7 +1514,7 @@ async fn import_cash_entries(
                         {
                             Ok(Some(collected)) => {
                                 let status = if is_return { "RETURNED" } else { "SETTLED" };
-                                if let Err(e) = crate::pg::set_collection_entry_status(
+                                match crate::pg::set_collection_entry_status(
                                     pool,
                                     collected.entry_id,
                                     status,
@@ -1499,7 +1522,41 @@ async fn import_cash_entries(
                                 )
                                 .await
                                 {
-                                    tracing::warn!(error = %e, "accountingd: collection entry status update failed");
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, "accountingd: collection entry status update failed");
+                                    }
+                                    // Not an error: the entry is already in a
+                                    // state this reply cannot move it out of —
+                                    // a replayed camt, or a Rückläufer for a
+                                    // collection the bank had already rejected.
+                                    // It is still worth seeing, because the
+                                    // booking it describes did happen.
+                                    Ok(false) => {
+                                        tracing::warn!(
+                                            entry_id = %collected.entry_id,
+                                            target = status,
+                                            "accountingd: camt reply does not apply to this collection's current state"
+                                        );
+                                    }
+                                    // The same rule as the pain.002 path: a
+                                    // booked first collection is a successful
+                                    // one, and ends the mandate's FRST life. A
+                                    // Rückläufer must not, so this is gated on
+                                    // settlement rather than on the reply.
+                                    Ok(true) => {
+                                        if !is_return
+                                            && collected.sequence_type == "FRST"
+                                            && let Some(mandate_id) = collected.mandate_id
+                                            && let Err(e) = crate::pg::transition_mandate_to_rcur(
+                                                pool,
+                                                mandate_id,
+                                                &cfg.tenant,
+                                            )
+                                            .await
+                                        {
+                                            tracing::warn!(error = %e, %mandate_id, "accountingd: FRST→RCUR transition failed");
+                                        }
+                                    }
                                 }
                                 if batch_pmt_inf_id.is_some_and(|p| p == collected.payment_info_id)
                                 {
@@ -5377,8 +5434,27 @@ async fn apply_pain002_status(
         tx.rollback().await?;
         return Ok(Pain002Match::Collection);
     };
-    crate::pg::set_collection_entry_status(&mut *tx, collected.entry_id, new_status, reason)
-        .await?;
+    // A replayed or out-of-order pain.002 must not walk a terminal state back.
+    if !crate::pg::set_collection_entry_status(&mut *tx, collected.entry_id, new_status, reason)
+        .await?
+    {
+        tracing::warn!(
+            entry_id = %collected.entry_id,
+            target = new_status,
+            "accountingd: pain.002 does not apply to this collection's current state"
+        );
+        tx.rollback().await?;
+        return Ok(Pain002Match::Collection);
+    }
+
+    // A first collection that the bank accepted is a first collection that
+    // succeeded, which is exactly what ends the mandate's FRST life.
+    if new_status == "SETTLED"
+        && collected.sequence_type == "FRST"
+        && let Some(mandate_id) = collected.mandate_id
+    {
+        crate::pg::transition_mandate_to_rcur(&mut *tx, mandate_id, &cfg.tenant).await?;
+    }
 
     if status.is_rejected()
         && let Some(malo_id) = collected.malo_id.as_deref()
@@ -5654,7 +5730,7 @@ pub async fn post_sepa_reversal(
                 .into_response();
         }
     };
-    if let Err(e) = crate::pg::set_collection_entry_status(
+    match crate::pg::set_collection_entry_status(
         &mut *tx,
         entry.entry_id,
         "REVERSED",
@@ -5662,7 +5738,24 @@ pub async fn post_sepa_reversal(
     )
     .await
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+        // The collection is already REJECTED, RETURNED or REVERSED — there is
+        // nothing left to send back. Dropping `tx` rolls back the reversal row
+        // written just above, so we neither record nor announce a pain.007 for
+        // a collection that cannot carry one.
+        Ok(false) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "collection is not in a reversible state",
+                    "entry_id": entry.entry_id.to_string(),
+                })),
+            )
+                .into_response();
+        }
+        Ok(true) => {}
     }
     if let Some(malo_id) = entry.malo_id.as_deref() {
         let ce = mako_service::CloudEvent::new(

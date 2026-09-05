@@ -161,6 +161,10 @@ pub struct ListExpiringParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListSettlementsParams {
     pub tr_id: String,
+    /// Abrechnungsjahr to filter on, e.g. 2026. Omit for every year.
+    pub year: Option<i16>,
+    /// Abrechnungsmonat to filter on, 1-12. Omit for every month.
+    pub month: Option<i16>,
     /// Max results (default 24, max 200).
     pub limit: Option<u32>,
 }
@@ -374,7 +378,7 @@ impl EinsdMcpHandler {
     }
 
     #[tool(
-        description = "Monthly settlement history for a plant. Returns settlement amount, model, kWh, status, and CloudEvent ID for each settled month.",
+        description = "Monthly settlement history for a plant, optionally narrowed to one Abrechnungsjahr and/or Abrechnungsmonat. Returns settlement amount, model, kWh, status, and CloudEvent ID for each settled month.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_settlements(
@@ -383,8 +387,20 @@ impl EinsdMcpHandler {
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::list_settlement_receipts;
         let limit = i64::from(params.limit.unwrap_or(24).min(200));
-        match list_settlement_receipts(&self.state.pool, &self.state.tenant, &params.tr_id, limit)
-            .await
+        if let Some(month) = params.month
+            && !(1..=12).contains(&month)
+        {
+            return Err(McpError::invalid_params("month must be 1-12", None));
+        }
+        match list_settlement_receipts(
+            &self.state.pool,
+            &self.state.tenant,
+            &params.tr_id,
+            params.year,
+            params.month,
+            limit,
+        )
+        .await
         {
             Ok(r) => ContentBlock::json(serde_json::to_value(r).unwrap_or_default())
                 .map(|b| CallToolResult::success(vec![b]))
@@ -641,6 +657,19 @@ impl EinsdMcpHandler {
                 })?
             };
             table.rate_for(kwp)
+        } else if art == eeg_billing::ErzeugungsArt::Kwk {
+            // § 7 KWKG prices per Leistungsanteil and its ladder depends on
+            // whether the KWK-Strom is fed into a Netz der allgemeinen
+            // Versorgung, so it is not a capacity-keyed table lookup. Answering
+            // one band's rate here would understate every plant above 50 kW.
+            return Err(McpError::invalid_params(
+                "KWKG has no capacity-keyed statutory rate: § 7 pays per \
+                 Leistungsanteil and § 7 Abs. 2 applies a lower ladder where the \
+                 KWK-Strom is not fed into a Netz der allgemeinen Versorgung. \
+                 Register the plant with kwk_anlagenart and kwk_verwendung and \
+                 the settlement derives the Zuschlag from § 7.",
+                None,
+            ));
         } else {
             // Non-solar technologies share the exhaustive enum-keyed router.
             rates::lookup_rate_for(art, kwp, params.eeg_year)
@@ -689,7 +718,9 @@ impl EinsdMcpHandler {
         };
 
         let today = mako_fristen::heute();
-        let foerderung_aktiv = anlage.foerderendedatum >= today;
+        // A plant with no calendar Förderende — a KWK plant, § 8 KWKG — is
+        // never past one: its Zuschlag ends on Vollbenutzungsstunden.
+        let foerderung_aktiv = anlage.foerderendedatum.is_none_or(|ende| ende >= today);
         let heute_monatserster = today.replace_day(1).unwrap_or(today);
 
         // The same detector the settlement uses, so the report and the payment
@@ -915,7 +946,7 @@ impl EinsdMcpHandler {
                 "inbetriebnahme": a.inbetriebnahme.to_string(),
                 "eeg_gesetz": a.eeg_gesetz,
                 "current_settlement_model": a.settlement_model,
-                "foerderendedatum": a.foerderendedatum.to_string(),
+                "foerderendedatum": a.foerderendedatum.map(|d| d.to_string()),
                 "required_action": "Assign a Veräußerungsform that pays: POST /api/v1/anlagen/{tr_id}/switch-veraeusserungsform with DIREKTVERMARKTUNG (§20 Marktprämie) or AUSFALLVERGUETUNG (§21 Abs. 1 Satz 1 Nr. 3), which enforces the §21b/§21c timing.",
             })
         };
@@ -1347,7 +1378,7 @@ impl EinsdMcpHandler {
                  - erzeugungsart — there is no generic SOLAR: the §48 rate depends on the\n\
                    Bauform, so pick SOLAR_AUFDACH | SOLAR_FREIFLAECHE | SOLAR_AGRIPV |\n\
                    SOLAR_MIETERSTROM | SOLAR_STECKER | WIND_ONSHORE | WIND_OFFSHORE |\n\
-                   BIOMASSE | BIOMASSE_HOLZ | BIOGAS | BIOMETHAN | KLAEGAS | GRUBENGAS |\n\
+                   BIOMASSE | BIOMASSE_HOLZ | BIOGAS | BIOMETHAN | KLAERGAS | GRUBENGAS |\n\
                    DEPONIEGAS | WASSERKRAFT | GEOTHERMIE | GEZEITEN | KWKG\n\
                  - verguetungsform: UEBERSCHUSS (default) | VOLLEINSPEISUNG | KWK_ZUSCHLAG.\n\
                    The two solar forms differ by the §48 Abs. 2a bonus, so the rate lookup\n\
@@ -1367,14 +1398,17 @@ impl EinsdMcpHandler {
                  - AUSFALLVERGUETUNG: register the plant's **ordinary** rate. The engine\n\
                    applies the §53 Abs. 3 −20 %; supplying a pre-reduced rate double-counts it\n\
                  - MIETERSTROM: mieter_zuschlag_ct (§21 Abs. 3)\n\
-                 - KWKG_ZUSCHLAG: kwk_foerderdauer_h (>2 MW, e.g. 30000) or\n\
-                   kwk_foerderdauer_years (≤2 MW)\n\
+                 - KWKG_ZUSCHLAG: kwk_anlagenart (NEU | MODERNISIERT | NACHGERUESTET)\n\
+                   plus kwk_verwendung, and kwk_kostenanteil for a modernisierte or\n\
+                   nachgerüstete Anlage — §8 Abs. 1–3 derives the Vollbenutzungsstunden\n\
+                   from those; kwk_foerderdauer_h overrides them\n\
                  - FLEXIBILITAET: flex_leistung_kw + flex_praemie_ct_kwh (§50b)\n\n\
                  ### Derived for you\n\
                  - foerderendedatum: §25 Abs. 1 — 20 years extended to 31 December of the\n\
                    twentieth year for a statutory AW, the exact anniversary for a tender\n\
-                   award, the §8 Abs. 4 KWKG fifteen-year backstop for an hour-capped\n\
-                   KWK plant\n\
+                   award. A KWK plant has no statutory calendar end (§8 measures it in\n\
+                   Vollbenutzungsstunden), so the column holds the latest year in which\n\
+                   those hours could still be running under the §8 Abs. 4 annual caps\n\
                  - the §51 Negativpreisregel version, from the commissioning **date**\n\n\
                  Call lookup_verguetungssatz (erzeugungsart + verguetungsform + kWp + date)\n\
                  for the applicable rate before registering.",

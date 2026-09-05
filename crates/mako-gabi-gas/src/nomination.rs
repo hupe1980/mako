@@ -1015,6 +1015,16 @@ impl Workflow for GaBiGasNominationWorkflow {
                     data
                 };
                 let (event, outbox) = match &acceptance {
+                    // Empty, and that is the gap rather than the design.
+                    // `mako_events::gabi::NOMINATION_CONFIRMED` is declared for
+                    // exactly this arm and nothing emits it, so a BKV watching
+                    // `de.gabi.*` is told about a curtailment, a refusal and a
+                    // missing answer, and never about a confirmation. Filling it
+                    // is a `PendingOutbox` here plus an `ErpEventType` in
+                    // `mako-engine` and a `map_message_type_to_erp_event` arm in
+                    // `makod` — all three, because an unmapped `message_type` is
+                    // skipped by `OutboxErpWorker` without a word. The `gabi`
+                    // module in `mako-events` carries the full record.
                     NomresAcceptance::Accepted => (
                         NominationEvent::Accepted {
                             nomres_ref,

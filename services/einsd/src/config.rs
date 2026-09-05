@@ -25,9 +25,17 @@ pub struct EinsdConfig {
     /// `einspeisemenge_kwh` is not provided in a settlement request.
     ///
     /// When set, `POST /api/v1/anlagen/{tr_id}/settle/{year}/{month}` without
-    /// `einspeisemenge_kwh` will call
-    /// `GET {edmd_url}/api/v1/billing-period/{malo_id}?period_from=&period_to=`
-    /// and use `arbeitsmenge_kwh` from the response.
+    /// `einspeisemenge_kwh` calls
+    /// `GET {edmd_url}/api/v1/energy/{malo_id}?direction=EINSPEISUNG` over the
+    /// billing month and sums the projected intervals.
+    ///
+    /// Deliberately **not** `/api/v1/billing-period/{malo_id}`: its
+    /// `arbeitsmenge_kwh` is the Bezug, projected onto the *consumption*
+    /// registers. An Erzeugungs-MaLo reports only `1-0:2.8.x`, so that
+    /// projection is empty and the field reads `Some(0)` rather than absent —
+    /// a settlement on it pays nothing while a dry-run still counts the plant
+    /// as having data. Only `/energy` lets the direction be stated.
+    /// See `handlers::fetch_einspeisemenge_from_edmd`.
     pub edmd_url: Option<String>,
 
     /// API key used for authenticated requests to `edmd`.

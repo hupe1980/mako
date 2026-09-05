@@ -28,13 +28,13 @@ use mako_engine::{
     version::WorkflowId,
 };
 use mako_geli_gas::{
-    GELI_GAS_DATENABRUF_WORKFLOW_NAME, GeliGasDatanabrufCommand, GeliGasDatanabrufState,
-    GeliGasDatanabrufWorkflow,
+    GELI_GAS_DATENABRUF_WORKFLOW_NAME, GeliGasDatenabrufCommand, GeliGasDatenabrufState,
+    GeliGasDatenabrufWorkflow,
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-fn make_process() -> Process<GeliGasDatanabrufWorkflow, InMemoryEventStore> {
+fn make_process() -> Process<GeliGasDatenabrufWorkflow, InMemoryEventStore> {
     Process::new(
         InMemoryEventStore::new(),
         TenantId::new(),
@@ -58,8 +58,8 @@ fn pid(n: u32) -> Pruefidentifikator {
     Pruefidentifikator::new(n).unwrap_or_else(|_| panic!("PID {n} must be valid"))
 }
 
-fn receive_anfrage(anfrage_pid: u32) -> GeliGasDatanabrufCommand {
-    GeliGasDatanabrufCommand::ReceiveAnfrage {
+fn receive_anfrage(anfrage_pid: u32) -> GeliGasDatenabrufCommand {
+    GeliGasDatenabrufCommand::ReceiveAnfrage {
         pid: pid(anfrage_pid),
         sender: lf_mp_id(),
         receiver: nb_mp_id(),
@@ -80,7 +80,7 @@ async fn receive_brennwert_anfrage_transitions_to_anfrage_gesendet() {
 
     let state = p.state().await.expect("state");
     assert!(
-        matches!(state, GeliGasDatanabrufState::AnfrageGesendet { .. }),
+        matches!(state, GeliGasDatenabrufState::AnfrageGesendet { .. }),
         "expected AnfrageGesendet, got: {state:?}",
     );
 }
@@ -90,7 +90,7 @@ async fn receive_brennwert_anfrage_transitions_to_anfrage_gesendet() {
 async fn receive_msb_gas_anfrage_transitions_to_anfrage_gesendet() {
     let p = make_process();
 
-    p.execute(GeliGasDatanabrufCommand::ReceiveAnfrage {
+    p.execute(GeliGasDatenabrufCommand::ReceiveAnfrage {
         pid: pid(17104),
         sender: MarktpartnerCode::new("8888888000001"), // MSB Gas
         receiver: nb_mp_id(),
@@ -101,7 +101,7 @@ async fn receive_msb_gas_anfrage_transitions_to_anfrage_gesendet() {
 
     let state = p.state().await.expect("state");
     assert!(
-        matches!(state, GeliGasDatanabrufState::AnfrageGesendet { .. }),
+        matches!(state, GeliGasDatenabrufState::AnfrageGesendet { .. }),
         "expected AnfrageGesendet for 17104, got: {state:?}",
     );
 }
@@ -113,7 +113,7 @@ async fn receive_rejection_19103_transitions_to_abgelehnt() {
 
     p.execute(receive_anfrage(17103)).await.expect("anfrage");
 
-    p.execute(GeliGasDatanabrufCommand::ReceiveAblehnung {
+    p.execute(GeliGasDatenabrufCommand::ReceiveAblehnung {
         pid: pid(19103),
         sender: nb_mp_id(),
         message_ref: msg("ORDRSP-19103-001"),
@@ -123,7 +123,7 @@ async fn receive_rejection_19103_transitions_to_abgelehnt() {
 
     let state = p.state().await.expect("state");
     assert!(
-        matches!(state, GeliGasDatanabrufState::Abgelehnt),
+        matches!(state, GeliGasDatenabrufState::Abgelehnt),
         "expected Abgelehnt, got: {state:?}",
     );
 }
@@ -135,7 +135,7 @@ async fn receive_rejection_19104_transitions_to_abgelehnt() {
 
     p.execute(receive_anfrage(17104)).await.expect("anfrage");
 
-    p.execute(GeliGasDatanabrufCommand::ReceiveAblehnung {
+    p.execute(GeliGasDatenabrufCommand::ReceiveAblehnung {
         pid: pid(19104),
         sender: nb_mp_id(),
         message_ref: msg("ORDRSP-19104-001"),
@@ -145,7 +145,7 @@ async fn receive_rejection_19104_transitions_to_abgelehnt() {
 
     let state = p.state().await.expect("state");
     assert!(
-        matches!(state, GeliGasDatanabrufState::Abgelehnt),
+        matches!(state, GeliGasDatenabrufState::Abgelehnt),
         "expected Abgelehnt for 19104, got: {state:?}",
     );
 }
@@ -157,13 +157,13 @@ async fn notify_daten_geliefert_transitions_to_daten_erhalten() {
 
     p.execute(receive_anfrage(17103)).await.expect("anfrage");
 
-    p.execute(GeliGasDatanabrufCommand::NotifyDatenGeliefert)
+    p.execute(GeliGasDatenabrufCommand::NotifyDatenGeliefert)
         .await
         .expect("NotifyDatenGeliefert must succeed from AnfrageGesendet");
 
     let state = p.state().await.expect("state");
     assert!(
-        matches!(state, GeliGasDatanabrufState::DatenErhalten),
+        matches!(state, GeliGasDatenabrufState::DatenErhalten),
         "expected DatenErhalten, got: {state:?}",
     );
 }
@@ -175,7 +175,7 @@ async fn timeout_fires_deadline_expired() {
 
     p.execute(receive_anfrage(17103)).await.expect("anfrage");
 
-    p.execute(GeliGasDatanabrufCommand::TimeoutExpired {
+    p.execute(GeliGasDatenabrufCommand::TimeoutExpired {
         deadline_id: DeadlineId::new(),
         label: Box::from("geli-gas-datenabruf-antwort"),
     })
@@ -184,7 +184,7 @@ async fn timeout_fires_deadline_expired() {
 
     let state = p.state().await.expect("state");
     assert!(
-        matches!(state, GeliGasDatanabrufState::DeadlineExpired),
+        matches!(state, GeliGasDatenabrufState::DeadlineExpired),
         "expected DeadlineExpired, got: {state:?}",
     );
 }
@@ -196,7 +196,7 @@ async fn anfrage_data_preserved_in_anfrage_gesendet() {
 
     let sender = lf_mp_id();
 
-    p.execute(GeliGasDatanabrufCommand::ReceiveAnfrage {
+    p.execute(GeliGasDatenabrufCommand::ReceiveAnfrage {
         pid: pid(17103),
         sender: sender.clone(),
         receiver: nb_mp_id(),
@@ -207,7 +207,7 @@ async fn anfrage_data_preserved_in_anfrage_gesendet() {
 
     let state = p.state().await.expect("state");
     match &state {
-        GeliGasDatanabrufState::AnfrageGesendet {
+        GeliGasDatenabrufState::AnfrageGesendet {
             pid: state_pid,
             sender: state_sender,
         } => {
@@ -225,7 +225,7 @@ async fn timeout_on_already_abgelehnt_is_idempotent() {
 
     p.execute(receive_anfrage(17103)).await.expect("anfrage");
 
-    p.execute(GeliGasDatanabrufCommand::ReceiveAblehnung {
+    p.execute(GeliGasDatenabrufCommand::ReceiveAblehnung {
         pid: pid(19103),
         sender: nb_mp_id(),
         message_ref: msg("ORDRSP-19103-002"),
@@ -234,7 +234,7 @@ async fn timeout_on_already_abgelehnt_is_idempotent() {
     .expect("reject");
 
     // Fire deadline on already-Abgelehnt process
-    p.execute(GeliGasDatanabrufCommand::TimeoutExpired {
+    p.execute(GeliGasDatenabrufCommand::TimeoutExpired {
         deadline_id: DeadlineId::new(),
         label: Box::from("geli-gas-datenabruf-antwort"),
     })
@@ -243,7 +243,7 @@ async fn timeout_on_already_abgelehnt_is_idempotent() {
 
     let state = p.state().await.expect("state");
     assert!(
-        matches!(state, GeliGasDatanabrufState::Abgelehnt),
+        matches!(state, GeliGasDatenabrufState::Abgelehnt),
         "Abgelehnt must be preserved when deadline fires after rejection, got: {state:?}",
     );
 }

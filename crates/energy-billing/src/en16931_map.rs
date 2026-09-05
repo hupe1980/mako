@@ -90,6 +90,12 @@ impl Invoice {
     /// exclusive to its document, so such an invoice has no valid rendering:
     /// producing one anyway hands the recipient a file their schematron
     /// rejects, with the failure surfacing days later at the wrong end.
+    ///
+    /// [`EngineError::Unrepresentable`](crate::EngineError::Unrepresentable)
+    /// when a date or an amount does not fit the semantic model, and
+    /// [`EngineError::ReconciliationFailed`](crate::EngineError::ReconciliationFailed)
+    /// when BG-22/BG-23 cannot be derived. Both are refusals rather than
+    /// substitutions: this document is what the recipient's accounting reads.
     pub fn to_en16931(
         &self,
         spec_id: &str,
@@ -102,9 +108,18 @@ impl Invoice {
             Date::new(d.year(), d.month() as u8, d.day()).ok()
         }
 
+        // A reversal and a Gutschrift are both document type 381, and on a 381
+        // the document kind conveys the sign: BT-131 line amounts are stated
+        // positive. What differs is where the positions start from. The engine
+        // negates every position of a Stornorechnung — that is what makes it the
+        // exact negation of the original — so those are flipped back here; a
+        // `CreditNote` over `PositionCategory::Credit` positions is built
+        // positive already and is left alone. Negating it too would put negative
+        // line amounts beside an `.abs()`-ed BT-146 unit price on a document
+        // whose type already says "credit".
         let is_credit = self.context.invoice_type.is_reversal()
             || matches!(self.context.invoice_type, crate::InvoiceType::CreditNote);
-        let sign = if is_credit {
+        let sign = if self.context.invoice_type.is_reversal() {
             Decimal::NEGATIVE_ONE
         } else {
             Decimal::ONE
@@ -154,15 +169,20 @@ impl Invoice {
         // is the issue date the caller supplied and only falls back to the
         // period end when it has no clock.
         let issue = self.context.ausstellungsdatum();
-        let issue_date = Date::new(issue.year(), issue.month() as u8, issue.day())
-            .unwrap_or_else(|_| Date::new(2000, 1, 1).expect("epoch fallback is valid"));
+        let issue_date =
+            calendar_date(issue).ok_or_else(|| crate::EngineError::Unrepresentable {
+                field: "BT-2 (Ausstellungsdatum, § 14 Abs. 4 Nr. 3 UStG)".to_owned(),
+                value: issue.to_string(),
+            })?;
         // BT-9 — § 40c Abs. 1 EnWG: due at the earliest two weeks after the
         // payment request reaches the customer, so measured from the issue date
         // and not from the period end. A due date also satisfies BR-CO-25 when
         // an amount is owed.
         let due = self.context.faelligkeitsdatum();
-        let due_date = Date::new(due.year(), due.month() as u8, due.day())
-            .unwrap_or_else(|_| Date::new(2000, 1, 15).expect("epoch fallback is valid"));
+        let due_date = calendar_date(due).ok_or_else(|| crate::EngineError::Unrepresentable {
+            field: "BT-9 (Fälligkeit, § 40c Abs. 1 EnWG)".to_owned(),
+            value: due.to_string(),
+        })?;
 
         let mut builder = EnInvoice::builder(
             spec_id,
@@ -253,7 +273,7 @@ impl Invoice {
                 object_identifier: None,
                 quantity: Quantity::from(p.quantity),
                 unit_code: Code::from(unece_unit(&p.unit)),
-                net_amount: amount(net),
+                net_amount: amount("BT-131 (Nettobetrag der Position)", net)?,
                 period: None,
                 allowances: Vec::new(),
                 charges: Vec::new(),
@@ -315,7 +335,7 @@ impl Invoice {
             }
             for ((cat, rate), base) in groups {
                 builder = builder.allowance(en16931::invoice::DocumentAllowanceCharge {
-                    amount: amount(base.round_kfm(2)),
+                    amount: amount("BT-92 (Nachlass auf Dokumentenebene)", base.round_kfm(2))?,
                     base_amount: None,
                     percentage: None,
                     vat: LineVat {
@@ -347,15 +367,30 @@ impl Invoice {
             );
         }
         if !restrechnung && !paid.is_zero() {
-            rec = rec.paid(amount(paid));
+            rec = rec.paid(amount("BT-113 (Vorauszahlung)", paid)?);
         }
-        let _ = rec.apply(&mut inv);
+        rec.apply(&mut inv)
+            .map_err(|e| crate::EngineError::ReconciliationFailed {
+                reason: e.to_string(),
+            })?;
         Ok(inv)
     }
 }
 
-/// Convert a 2-dp `Decimal` to an `InvoiceAmount`, saturating on the (unreachable
-/// for real invoices) out-of-range case rather than panicking in a render path.
-fn amount(d: Decimal) -> InvoiceAmount {
-    InvoiceAmount::try_from(d).unwrap_or_else(|_| InvoiceAmount::from_minor_units(0))
+/// Convert a 2-dp `Decimal` to an `InvoiceAmount`.
+///
+/// Refuses an out-of-range value instead of substituting one. Saturating to
+/// `0.00` turns an amount the model cannot carry into a line that says the
+/// supply was free — a difference no recipient can see and no schematron
+/// catches, on a document § 14 UStG makes binding.
+///
+/// # Errors
+///
+/// [`EngineError::Unrepresentable`](crate::EngineError::Unrepresentable),
+/// naming `field` so the refusal points at the business term.
+fn amount(field: &str, d: Decimal) -> Result<InvoiceAmount, crate::EngineError> {
+    InvoiceAmount::try_from(d).map_err(|_| crate::EngineError::Unrepresentable {
+        field: field.to_owned(),
+        value: d.to_string(),
+    })
 }

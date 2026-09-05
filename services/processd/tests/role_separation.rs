@@ -89,7 +89,7 @@ fn an_nb_only_build_answers_no_lf_or_msb_process() {
         );
     }
     // 55016 „Kündigung" is LFN → LFA — a supplier process. Answering it from an
-    // NB binary is the § 7 EnWG leak these features exist to prevent.
+    // NB binary is the § 6a EnWG leak these features exist to prevent.
     assert!(
         !pids.contains(&55_016),
         "55016 is a supplier obligation (LFN → LFA), not the NB's"

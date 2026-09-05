@@ -221,7 +221,7 @@
           "nr": "00018",
           "operands": [
             {
-              "operand": "X [39]) ∨ ([940]"
+              "operand": "X (([939] [39]) ∨ ([940] [40])) ∧ [514]"
             }
           ]
         },
@@ -731,7 +731,7 @@
           "nr": "00018",
           "operands": [
             {
-              "operand": "X [39]) ∨ ([940]"
+              "operand": "X (([939] [39]) ∨ ([940] [40])) ∧ [514]"
             }
           ]
         },
@@ -1233,7 +1233,7 @@
           "nr": "00018",
           "operands": [
             {
-              "operand": "X [39]) ∨ ([940]"
+              "operand": "X (([939] [39]) ∨ ([940] [40])) ∧ [514]"
             }
           ]
         },
@@ -2072,7 +2072,7 @@
           "nr": "00018",
           "operands": [
             {
-              "operand": "X [39]) ∨ ([940]"
+              "operand": "X (([939] [39]) ∨ ([940] [40])) ∧ [514]"
             }
           ]
         },
@@ -2160,7 +2160,7 @@
           "nr": "00021",
           "operands": [
             {
-              "operand": "X ([950] [502] ∧ ([20] ∨ [510] ∧ ([20] ∨ [21] ∨"
+              "operand": "X ([950] [502] ∧ ([20] ∨ [22])) ⊻ ([951] [503] ∧ ([22] ∨ [23])) ⊻ ([960] [510] ∧ ([20] ∨ [21] ∨ [22])) ⊻ ([961] [511] ∧ ([19] ∨ [20] ∨ [21]))"
             }
           ]
         },
@@ -3214,7 +3214,7 @@
           "nr": "00018",
           "operands": [
             {
-              "operand": "X [39]) ∨ ([940]"
+              "operand": "X (([939] [39]) ∨ ([940] [40])) ∧ [514]"
             }
           ]
         },
@@ -3378,7 +3378,7 @@
           "nr": "00026",
           "operands": [
             {
-              "operand": "X [39]) ∨ ([940]"
+              "operand": "X (([939] [39]) ∨ ([940] [52])) ∧ [514]"
             }
           ]
         },
@@ -3434,7 +3434,7 @@
           "nr": "00046",
           "operands": [
             {
-              "operand": "X [47] ∧ ∧ [49]) ⊻"
+              "operand": "X [47] ∧ (([35] ∧ [49]) ⊻ ([36] ∧ [48]))"
             }
           ]
         },
@@ -3482,7 +3482,7 @@
           "nr": "00048",
           "operands": [
             {
-              "operand": "X [50] ∧ ∧ [49]) ⊻"
+              "operand": "X [50] ∧ (([35] ∧ [49]) ⊻ ([36] ∧ [48]))"
             }
           ]
         },
@@ -3530,7 +3530,7 @@
           "nr": "00050",
           "operands": [
             {
-              "operand": "X [51] ∧ ∧ [49]) ⊻"
+              "operand": "X [51] ∧ (([35] ∧ [49]) ⊻ ([36] ∧ [48]))"
             }
           ]
         },
@@ -3836,9 +3836,9 @@
     "2063": "Pro Nachricht ist die SG27 LIN++Z67 (Erforderliches Messprodukt für Werte nach Typ 2 aus Backend) maximal einmal anzugeben",
     "2064": "Pro Nachricht ist die SG27 LIN++Z68 (Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW) maximal einmal anzugeben",
     "2065": "Diese SG28 ist so oft zu wiederholen, wie zu den unterschiedlichen Messprodukt- Position-Codes zu dem innerhalb derselben SG27 LIN im PIA+5 DE7140 (Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW) angegebenen Produkt ein Produkt angegeben ist, das in der Codeliste der Konfigurationen im Kapitel 4.4 „Messprodukte mit Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW“ in der Spalte \"Auslöser\" mit dem Wert \"Bei Schwellwertunter- / - überschreitung\" gekennzeichnet ist.",
-    "2066": "Diese SG28 ist so oft zu wiederholen, wie zu den unterschiedlichen Messprodukt- Position-Codes zu dem innerhalb derselben SG27 LIN im PIA+5 DE7140 (Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW) angegebenen Produkt ein Produkt angegeben ist, das in der Codeliste der Konfigurationen im Kapitel 4.6.2 „Werte nach Typ 2 aus SMGW“ in der Spalte \"Auslöser\" mit dem Wert \"Bei Schwellwertunter- / - überschreitung\" gekennzeichnet ist.",
-    "2067": "Die SG12 RFF+Z37 Referenz auf ID der Technischen Ressource ist so oft zu wiederholen, bis alle IDs der Technischen Ressourcen angegeben sind, die der Steuerbaren Ressource in LOC+172 DE3225 (Meldepunkt) mit diesem Vorgang zugeordnet werden sollen, genannt sind.",
-    "2068": "Diese SG27 ist so oft zu wiederholen, dass alle Produkte zur Lokation die innerhalb des gewünschten Umsetzungstermins (Zeitintervall aus DTM+469 (Startdatum oder Zeitpunkt) und DTM+472 (Endedatum oder Zeitpunkt)) aus Sicht des Anfragenden gewünscht sind und deren Kombination gemäß Codeliste der Konfigurationen Kapitel 7 \"Produkte zur Bestellung einer Änderung an einer Lokation\"möglich sind, genannt sind.",
+    "2066": "Diese SG28 ist so oft zu wiederholen, wie zu den unterschiedlichen Messprodukt- Position-Codes zu dem innerhalb Position-Codes zu dem innerhalb derselben SG27 LIN im PIA+5 DE7140 (Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW) angegebenen Produkt ein Produkt angegeben ist, das in der Codeliste der Konfigurationen im Kapitel 4.6.2 „Werte nach Typ 2 aus SMGW“ in der Spalte \"Auslöser\" mit dem Wert \"Bei Schwellwertunter- / - überschreitung\" gekennzeichnet ist.",
+    "2067": "Die SG12 RFF+Z37 Referenz auf ID der Technischen Ressource ist so oft zu wiederholen, bis alle IDs der Technischen Ressourcen angegeben sind, die der angegeben sind, die der Steuerbaren Ressource in LOC+172 DE3225 (Meldepunkt) mit diesem Vorgang zugeordnet werden sollen, genannt sind.",
+    "2068": "Diese SG27 ist so oft zu wiederholen, dass alle Produkte zur Lokation die innerhalb des gewünschten Umsetzungstermins (Zeitintervall aus DTM+469 (Zeitintervall aus DTM+469 (Startdatum oder Zeitpunkt) und DTM+472 (Endedatum oder Zeitpunkt)) aus Sicht des Anfragenden gewünscht sind und deren Kombination gemäß Codeliste der Konfigurationen Kapitel 7 \"Produkte zur Bestellung einer Änderung an einer Lokation\"möglich sind, genannt sind.",
     "21": "Wenn SG27 LIN++Z66 (Erforderliches Produkt Ad-hoc- Steuerkanal) vorhanden",
     "22": "Wenn SG27 LIN++Z67 (Erforderliches Messprodukt für Werte nach Typ 2 aus Backend) vorhanden",
     "23": "Wenn SG27 LIN++Z68 (Erforderliches Produkt Konfigurationserlaubnis für Werte nach Typ 2 aus SMGW) vorhanden",
@@ -3847,7 +3847,7 @@
     "26": "Wenn in LOC+172 DE3225 (Meldepunkt) die ID einer Messlokation angegeben ist.",
     "27": "Wenn in LOC+172 DE3225 (Meldepunkt) die ID einer Netzlokation angegeben ist.",
     "28": "Wenn in LOC+172 DE3225 (Meldepunkt) die ID einer Steuerbaren Ressource angegeben ist.",
-    "29": "Es sind nur die Konfigurations-Produkte erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.1 „Konfigurationsprodukte Schaltzeitdefinition“ enthalten sind.",
+    "29": "Es sind nur die Konfigurations-Produkte erlaubt, Konfigurations-Produkte erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.1 „Konfigurationsprodukte Schaltzeitdefinition“ enthalten sind.",
     "30": "Es sind nur die Konfigurations-Produkte erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.2 „Konfigurationsprodukte Leistungskurvendefinition“ enthalten sind.",
     "31": "Es sind nur die Konfigurations-Produkte erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.3 „Konfigurationsprodukte Ad- Hoc-Steuerkanal“ enthalten sind.",
     "32": "Es sind nur die Messprodukte erlaubt, die in der Codeliste der Konfigurationen im Kapitel 4.5 „Messprodukte für Werte nach Typ 2 aus Backend für LF und NB“ enthalten sind.",
@@ -3865,13 +3865,13 @@
     "45": "Wenn in LOC+172 DE3225 (Meldepunkt) die ID einer Steuerbaren Ressource angegeben ist.",
     "47": "Es sind nur die Produkt-Codes erlaubt, die in der Codeliste der Konfigurationen im Kapitel 7 \"Produkte zur Bestellung einer Änderung an einer Lokation\" die in der Spalte \"Ebene\" mit dem Wert \"Messlokation\" vorhanden sind.",
     "48": "Es sind weiterhin nur die Produkt-Codes erlaubt, die in der Codeliste der Konfigurationen im Kapitel 7 \"Produkte zur Bestellung einer Änderung an einer Lokation\" die in der Spalte \"Produkt gegenüber MSB von Marktrolle bestellbar\" mit einem \"X\" in der Spalte \"NB\" gekennzeichnet ist.",
-    "49": "Es sind weiterhin nur die Produkt-Codes erlaubt, die in der Codeliste der Konfigurationen im Kapitel 7 \"Produkte zur Bestellung einer Änderung an einer Lokation\" die in der Spalte \"Produkt gegenüber MSB von Marktrolle bestellbar\" mit einem \"X\" in der Spalte \"LF\" gekennzeichnet ist.",
+    "49": "Es sind weiterhin nur die Produkt-Codes erlaubt, die in der Codeliste der Konfigurationen im Kapitel 7 \"Produkte zur Bestellung einer Änderung an einer Lokation\" die in der Spalte \"Produkt die in der Spalte \"Produkt gegenüber MSB von Marktrolle bestellbar\" mit einem \"X\" in der Spalte \"LF\" gekennzeichnet ist.",
     "494": "Das hier genannte Datum muss der Zeitpunkt sein, zu dem das Dokument erstellt wurde, oder ein Zeitpunkt, der davor liegt.",
-    "50": "Es sind nur die Produkt-Codes erlaubt, die in der Codeliste der Konfigurationen im Kapitel 7 \"Produkte zur Bestellung einer Änderung an einer Lokation\" die in der Spalte \"Ebene\" mit dem Wert \"Netzlokation\" vorhanden sind.",
+    "50": "Es sind nur die Produkt-Codes erlaubt, die in der Codeliste der Konfigurationen im Kapitel 7 \"Produkte zur Bestellung einer Änderung an einer Lokation\" die Änderung an einer Lokation\" die in der Spalte \"Ebene\" mit dem Wert \"Netzlokation\" vorhanden sind.",
     "500": "Hinweis: Angabe eines technischen Ansprechpartners für die Geräteübernahme",
     "501": "Hinweis: Angabe eines Ansprechpartners für die Rechnungsabwicklung",
     "502": "Hinweis: Verwendung der ID der Marktlokation",
-    "503": "Hinweis: Verwendung der ID der Messlokation",
+    "503": "Hinweis: Verwendung der ID der Messlokation der Messlokation",
     "504": "Hinweis: Verwendung der ID der Tranche",
     "507": "Hinweis: Vorgangsnummer aus SG4 IDE+24 DE7402 der UTILMD mit BGM+E01 mit der die Anmeldung des MSB-Wechsels erfolgt ist.",
     "508": "Hinweis: Wert aus BGM+Z73 DE1004 der IFTSTA mit der die Antwort auf die Bestellung der Konfiguration übermittelt wurde",
@@ -3888,7 +3888,7 @@
     "52": "wenn im DE3155 in demselben COM der Code TE / AL vorhanden ist",
     "520": "Hinweis: Angabe des Beginnzeitpunkts des gewünschten Umsetzungstermins aus Sicht des Anfragenden.",
     "521": "Hinweis: Angabe des Endezeitpunkts des gewünschten Umsetzungstermins aus Sicht des Anfragenden.",
-    "53": "wenn der LF der Marktlokation der genannten Lokation im gewünschten Umsetzungszeitraum nicht zugeordnet ist.",
+    "53": "wenn der LF der Marktlokation der genannten Lokation im gewünschten Umsetzungszeitraum nicht Umsetzungszeitraum nicht zugeordnet ist.",
     "903": "Format: Möglicher Wert: 1",
     "906": "Format: max. 3 Nachkommastellen",
     "911": "Format: Mögliche Werte: 1 bis n, je Nachricht oder Segmentgruppe bei 1 beginnend und fortlaufend aufsteigend",
@@ -3897,7 +3897,7 @@
     "939": "Format: Die Zeichenkette muss die Zeichen @ und . enthalten",
     "940": "Format: Die Zeichenkette muss mit dem Zeichen + beginnen und danach dürfen nur noch Ziffern folgen",
     "950": "Format: Marktlokations-ID",
-    "951": "Format: Zählpunktbezeichnung",
+    "951": "Format: Zählpunktbezeichnung Zählpunktbezeichnung",
     "960": "Format: Netzlokations-ID",
     "961": "Format: SR-ID",
     "962": "Format: max. 6 Vorkommastellen",

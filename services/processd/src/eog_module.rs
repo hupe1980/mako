@@ -212,8 +212,8 @@ async fn handle_gap_detected(
     // Command + PID by Sparte: Strom rides gpke.eog.anmelden (55013), Gas rides
     // geli.eog.anmelden (44013). Both spawn a GNB-initiator EoG process in makod.
     let (eog_command, eog_pid) = match sparte {
-        mako_markt::domain::Sparte::Gas => ("geli.eog.anmelden", 44013),
-        mako_markt::domain::Sparte::Strom => ("gpke.eog.anmelden", 55013),
+        mako_markt::domain::Sparte::Gas => (mako_markt::commands::GELI_EOG_ANMELDEN, 44013),
+        mako_markt::domain::Sparte::Strom => (mako_markt::commands::GPKE_EOG_ANMELDEN, 55013),
     };
 
     // Resolve the Grundversorger (§36 Abs. 2 Feststellung).

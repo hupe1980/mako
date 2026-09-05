@@ -39,6 +39,7 @@ Validation runs at startup, so a downgraded profile never serves traffic.
 | **Signing token type** | **`BinarySecurityToken` / X509PKIPathv1** | §2.2.6.2.1 |
 | **Encryption** | **ECDH-ES + ConcatKDF + AES-128-GCM — mandatory** | §2.2.6.2.2 / BSI TR-03116-3 §9.2 |
 | **Key reference** | **X509SKI** | §2.2.6.2.2 |
+| Payload | gzip-compressed, carried as `application/octet-stream` in its own MIME part; the SOAP Body stays empty | §2.2.3.2 |
 | Party ID | 13-digit GLN, ISO 6523 ICD 0088 | §2.2.4 |
 | Retry window | 72 hours, up to 5 attempts | §2.2.7 |
 | Deduplication | Required (persistent dedup store) | §4.2 |
@@ -226,7 +227,11 @@ println!("Encryption key (PEM): {}", pki.encryption.key_pem_str());
 
 | Crate | Role |
 |---|---|
-| `mako-as4` ← **this crate** | BDEW AS4 profile (P-Modes, constants, policy, test helpers) |
-| `asx-rs` 0.13 | AS4/ebMS3 transport engine (ECDSA signing, ECDH-ES encrypt, signed-receipt NRR verification, dedup, testing helpers) |
-| `makod` | Production daemon — assembles AS4 ingest, sender, and all 45+ BDEW workflows |
+| [`mako-as4`](https://docs.rs/mako-as4) ← **this crate** | BDEW AS4 profile — P-Modes, constants, security policy, test PKI |
+| [`asx-rs`](https://docs.rs/asx-rs) | The AS4/ebMS3 transport engine this crate profiles (ECDSA signing, ECDH-ES encryption, signed-receipt NRR, dedup) |
+| [`edi-energy`](https://docs.rs/edi-energy) | The EDIFACT payloads an AS4 interchange carries |
+| [`energy-api`](https://docs.rs/energy-api) | The parallel REST/WebSocket channel |
+| [`makod`](https://hupe1980.github.io/mako/docs/services/makod/) | Production daemon — assembles AS4 ingest, sender, and every BDEW workflow |
 
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>

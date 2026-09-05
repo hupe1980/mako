@@ -370,7 +370,15 @@ pub async fn post_ggv_billing(
                         format!("nutzungsplan: {e}"),
                     )
                 })?;
-            plan.allocate(pv_gen_kwh).into_iter().collect()
+            plan.allocate(pv_gen_kwh)
+                .map_err(|e| {
+                    BillingError::unprocessable(
+                        "NUTZUNGSPLAN_INVALID",
+                        format!("nutzungsplan: {e}"),
+                    )
+                })?
+                .into_iter()
+                .collect()
         } else {
             std::collections::HashMap::new()
         };
@@ -399,18 +407,42 @@ pub async fn post_ggv_billing(
         // The assigned product, when the participant has a contract. A § 42b
         // participant may be billed purely from the request — the community's
         // own terms — so an unassigned MaLo is not an error here.
-        let assigned = resolve_tariff(
+        //
+        // The legs are resolved rather than one product "as of" a day, because a
+        // participant whose product or statutory rates change inside the period
+        // has no single price for it. Their consumption arrives here as one
+        // period total that nothing can apportion across the change, so that is
+        // refused instead of billed at whichever leg's price won.
+        let assigned_legs = resolve_legs(
             &CalculateRequest {
                 lf_mp_id: req.lf_mp_id.clone(),
+                period_from: req.period_from.clone(),
+                period_to: req.period_to.clone(),
                 ..Default::default()
             },
             &deps,
             &tenant.malo_id,
+            period_from,
             period_to,
         )
         .await
         .ok();
-        let tariff = match assigned {
+        if assigned_legs.as_ref().is_some_and(|l| l.len() > 1) {
+            return Err(BillingError::unprocessable(
+                "TARIFWECHSEL_OHNE_TEILMENGEN",
+                format!(
+                    "MaLo {}: the product or the statutory rates change inside \
+                     {period_from}..{period_to}, and the participant's consumption is \
+                     stated as one figure for the whole period — bill the parts as \
+                     separate GGV settlements.",
+                    tenant.malo_id
+                ),
+            ));
+        }
+        let tariff = match assigned_legs
+            .and_then(|l| l.into_iter().next())
+            .map(|l| l.tariff)
+        {
             Some(t) => t,
             // No product in productd — build a minimal Product from the request.
             None => {

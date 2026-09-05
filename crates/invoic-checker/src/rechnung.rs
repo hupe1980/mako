@@ -265,6 +265,10 @@ fn position(
 /// recompute, which is not a Rechenfehler: the ESA Betriebspreis is billed per
 /// Tag and the Einrichtungspreis once per Stück, and either may arrive as a
 /// bare Gesamtpreis.
+///
+/// A position whose figures are too large to multiply out, or whose product is
+/// too large to be a euro amount, *is* one: nothing about it can be checked or
+/// paid, and the alternative is to pass it.
 fn rechenfehler(pos: &Rechnungsposition, config: &CheckConfig) -> bool {
     let (Some(menge), Some(preis), Some(gesamt)) = (
         pos.positions_menge.wert_decimal(),
@@ -273,8 +277,15 @@ fn rechenfehler(pos: &Rechnungsposition, config: &CheckConfig) -> bool {
     ) else {
         return false;
     };
-    let (Some(computed), Some(stated)) = (euro(menge * preis), euro(gesamt)) else {
-        return false;
+    // `Decimal * Decimal` panics on overflow and the quantity arrives off the
+    // wire unchecked, so the product is taken in the checked form: a position
+    // stating an absurd Menge is a Rechenfehler, never a panic in the request
+    // that validates it.
+    let Some(product) = menge.checked_mul(preis) else {
+        return true;
+    };
+    let (Some(computed), Some(stated)) = (euro(product), euro(gesamt)) else {
+        return true;
     };
     !computed.within_tolerance_ppm(stated, config.arithmetic_tolerance_ppm)
 }

@@ -439,7 +439,8 @@ pub async fn dispatch_command(
     };
     let outcome = (desc.dispatch)(state, payload).await;
     if matches!(outcome, Ok(DispatchOutcome::Spawned { .. })) {
-        EngineMetrics::global().process_initiated(command_family(command));
+        EngineMetrics::global()
+            .process_initiated(crate::orchestrator::process_family::from_command(command));
     }
     outcome
 }

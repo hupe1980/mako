@@ -159,7 +159,11 @@ impl PgMaloRepository {
             .bind(valid_tos)
             .execute(&mut *conn)
             .await
-            .map_err(|e| MdmError::Internal(e.to_string()))?;
+            // `rollenzuordnungen_no_overlap` is an `EXCLUDE USING gist`: two
+            // assignments of the same Zuordnungstyp whose windows overlap would
+            // make `GET /api/v1/malos/{id}` answer with two Netzbetreiber for
+            // one MaLo. That is the caller's list to fix, not an outage.
+            .map_err(super::write_error)?;
         }
 
         Ok(new_version)

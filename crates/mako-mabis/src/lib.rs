@@ -42,7 +42,7 @@
 //! | `mabis-profile` | MSCONS 13010–13012; ORDERS 17211 |
 //! | `mabis-clearingliste` | UTILMD 55067 · 55069 · 55070 · 55073 |
 //! | `mabis-listenabgleich` | UTILMD 55065/55066 · 55195/55196 · 55201/55202 · 55223/55224 |
-//! | `mabis-zp-lifecycle` | UTILMD 55062–55064 · 55071/55072 · 55197–55214 |
+//! | `mabis-zp-lifecycle` | UTILMD 55062–55064 · 55071/55072 · 55197–55214 · 55235–55237 |
 //! | `mabis-anforderung` | ORDERS 17201–17208 · 17210; ORDRSP 19204 |
 //!
 //! # The Kapitel-17 series expire on 30.09.2026
@@ -72,7 +72,7 @@
 #![allow(clippy::doc_markdown)] // German MaKo terms and BDEW acronyms produce many false positives
 #![allow(clippy::too_many_lines)] // process handle() functions are necessarily verbose
 #![allow(clippy::match_same_arms)] // sometimes intentional for process-family readability
-#![allow(clippy::manual_let_else)] // existing code style; rewrite in follow-up
+#![allow(clippy::manual_let_else)] // a `match` on a MaBiS wire code reads better than a let-else
 #![allow(clippy::redundant_closure_for_method_calls)]
 #![allow(clippy::unnested_or_patterns)]
 #![allow(clippy::map_unwrap_or)]
@@ -151,9 +151,8 @@ pub use zp_lifecycle::{
 /// | `mabis-profile` | MSCONS 13010–13012; ORDERS 17211 |
 /// | `mabis-clearingliste` | UTILMD 55067 · 55069 · 55070 · 55073 |
 /// | `mabis-listenabgleich` | UTILMD 55065/55066 · 55195/55196 · 55201/55202 · 55223/55224 |
-/// | `mabis-zp-lifecycle` | UTILMD 55062–55064 · 55071/55072 · 55197–55214 |
+/// | `mabis-zp-lifecycle` | UTILMD 55062–55064 · 55071/55072 · 55197–55214 · 55235–55237 |
 /// | `mabis-anforderung` | ORDERS 17201–17208 · 17210; ORDRSP 19204 |
-/// | `mabis-ausgleichsenergiepreis` | PRICAT 27001 |
 ///
 /// Each workflow's module docs carry the use case it answers and the Fristen
 /// the Festlegung attaches to it.

@@ -19,7 +19,25 @@
 //! mapping. This module forwards the customer's token unchanged and relays the
 //! verdict. The service credential rides as `X-Api-Key`: sending it as a second
 //! `Authorization` header makes which identity `vertragd` sees depend on header
-//! ordering, and the identity it must see is the customer's.
+//! ordering, and the identity it must see is the customer's — `authenticate`
+//! answers „does the subject of this token own this MaLo?“, which can only be
+//! asked of a proven subject.
+//!
+//! Forwarding a customer token is safe because `vertragd` *authorizes* it:
+//! `services/vertragd/policies/vertragd.cedar` admits a principal carrying no
+//! `mako_roles` to two customer-scoped actions only, and every other route
+//! demands an operator role. The token portald relays therefore cannot reach
+//! another customer's record. That rests on a deployment invariant stated in
+//! vertragd's policy header: **the portal IdP realm must not issue
+//! `mako_roles`.**
+//!
+//! The `X-Api-Key` this module sends is inert on the `authenticate` route —
+//! `vertragd` reads no API key there. It is sent so the call is
+//! indistinguishable from portald's other `vertragd` calls to a gateway, and
+//! costs nothing if `vertragd` later gates the route on it. Those *other*
+//! calls go through `clients.vertragd` with the service credential, whose
+//! `mako_roles` must include one of `LF`/`MSB`/`ESA`/`ADMIN`; `ServiceKey::new`
+//! defaults to all five, so only a key explicitly narrowed to `NB` would 403.
 
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};

@@ -117,6 +117,16 @@ Cedar is deny-by-default, so an unlisted action is a permanent 403.
 failed, using the receipt's stored INVOIC message reference and the answering
 PID's own command.
 
+`/webhook` answers `204` for every event this service has finished with —
+answered, deliberately unanswered (`E_0267` Prüfschritt 80), or dead-lettered.
+It answers **`503`** in one case: the reference data the invoice is checked
+against — a Preisblatt, the Mehr-/Mindermengenpreise, the accepted ESA-Angebot —
+could not be read from `marktd`. Nothing is recorded and nothing is answered,
+and the sender's outbox redelivers. „No Preisblatt is on record" (a `404`) is a
+finding about the invoice and still produces a verdict; „marktd did not answer"
+is not, and a verdict reached without the price basis reads exactly like one
+reached with it.
+
 ## Self-issued Mehrmengen-Rechnung (PID 31006)
 
 `POST /api/v1/selbstausstellen` settles one Bilanzierungsmonat:

@@ -2,11 +2,7 @@
 title = "obsd Operator Guide"
 description = "obsd operator guide: business-process observability. Process projections, the two deadline clocks, per-PID KPIs, § 7a Abs. 5 EnWG Gleichbehandlung parity evidence, and the de.obs.* producers. PostgreSQL-backed, OIDC-secured."
 weight = 29
-[extra]
-mermaid = true
 +++
-# `obsd` Operator Guide
-
 `obsd` subscribes to every `de.mako.*` CloudEvent from `marktd` and projects it
 into one row per business process. From that row it answers three questions the
 engine's own metrics cannot:
@@ -17,6 +13,22 @@ engine's own metrics cannot:
 
 It never connects to `makod`. It is a read-model with two producers of its own,
 and an MCP surface `agentd`'s specialists read.
+
+**The vocabulary this page runs on.** A
+[**Prüfidentifikator (PID)**](@/docs/architecture/domain-model.md#prufidentifikator-pid) is the five-digit
+BDEW code naming which business case a message carries, and it is the unit obsd
+reports on. A [**Frist**](@/docs/architecture/domain-model.md#frist-and-werktag) is the regulatory deadline
+for answering one, counted in **Werktage** or fixed to a clock time — missing it
+is what „at risk" measures. **STP rate** (Straight-Through Processing) is
+completions over the processes that *ended* in the window — not over all
+processes started. An **APERAK** is the EDIFACT technical
+acknowledgement a partner returns
+([message types](@/docs/architecture/domain-model.md#edifact-message-types)); an **ERC code** is the BDEW error
+code recorded when a process is rejected (`E01`, `Z29`, …). A **Festlegung** is a binding BNetzA determination — the source
+of the rules obsd measures against
+([BNetzA reference](@/docs/regulatory/bnetza.md)). The four market roles and the
+market objects are the [domain model](@/docs/architecture/domain-model.md), and every term above is defined
+once in the [glossary](@/docs/architecture/domain-model.md#glossary).
 
 ```mermaid
 graph TB
@@ -77,6 +89,29 @@ stay in the Antwortfrist sweep — they are the ones most likely to breach it to
 There are **no command-line flags**: `mako_service::run` owns the lifecycle and
 `obsd.toml` owns the settings.
 
+### Cedar ABAC
+
+`obsd` is read-only, so its policy is one rule: **same tenant, any role**. There
+is no write action to gate, and no role distinction to make — a read model of the
+deployment's own processes is not more sensitive to an LF-role service account
+than to an NB-role one. What it *is* sensitive to is another tenant, and that is
+the check.
+
+| Action | Routes |
+|---|---|
+| `read-process` | `GET /obs/processes`, `GET /obs/processes/{id}` |
+| `read-kpi` | `GET /obs/kpis`, `GET /api/v1/audit/gleichbehandlung` |
+| `read-overdue` | `GET /obs/overdue` |
+| `use-mcp` | `POST` / `GET /mcp` |
+
+The resource tenant is the deployment's own `[identity] tenant`, not a
+caller-supplied parameter, so `context.principal_tenant == context.resource_tenant`
+cannot be satisfied by asking for someone else's. The shipped policy is
+`policies/obsd.cedar`.
+
+`POST /webhook` is outside Cedar: it is authenticated by the HMAC in
+`webhook.inbound_secret`, because `marktd` delivers events without a user token.
+
 ---
 
 ## ProcessProjection
@@ -93,12 +128,18 @@ There are **no command-line flags**: `mako_service::run` owns the lifecycle and
 | `mdm_role` | Canonical Marktrolle (`LF`, `NB`, …) |
 | `started_at` | First event seen for this process |
 | `last_event_at` | Most recent event |
-| `completed_at` | Set once when the state first becomes terminal; cycle-time input |
+| `tenant` | Operator MP-ID the row belongs to |
 | `deadline_at` | The **business Antwortfrist**. `null` = no published window for this PID |
 | `deadline_source` | The Festlegung `deadline_at` came from |
 | `deadline_risk` | `unknown` \| `green` \| `amber` (< 24 h) \| `red` (past) |
 | `erc_code` | BDEW ERC code when `state = rejected` |
 | `initiator_is_affiliate` | The Lieferant belongs to this operator's own undertaking |
+
+`process_projections` carries one column that is **not** on the wire:
+`completed_at`, set once when the state first becomes terminal and never
+overwritten. It is the cycle-time input and the breach test's ceiling
+(`deadline_at < COALESCE(completed_at, now())`), so a process that closed late is
+counted as breached rather than as closed.
 
 `failed` is the projection of `de.mako.process.failed`. Not `cancelled`: nothing
 in mako emits a cancellation, and that name puts unrecoverable failures in a
@@ -174,7 +215,16 @@ the message names one, the counterparty otherwise — matches any entry in
 affiliate fared better**, which is the concern. The same convention is used by the
 REST report, the `de.obs.stp.parity.alert` CloudEvent and the MCP tool.
 
-`gap_pp` is `null` when either group has fewer than 10 processes: the gap is
+Two gaps are reported, under that one convention: `gap_pp` over the **completion
+rate**, and `frist_gap_pp` over the share answered **inside the published
+Antwortfrist**. They are kept apart because they answer different questions and
+can point opposite ways — a rejection can be entirely legitimate, so two groups
+can complete at the same rate while one of them is routinely answered late.
+Missing a statutory window is the discrimination the Gleichbehandlungsbericht is
+actually asked about, and the one axis mako can measure exactly, because the
+window comes from `mako-fristen` rather than from a judgement.
+
+Both are `null` when either group has fewer than 10 processes: the gap is
 **unstatable**, not zero — and not a hundred points off a single process.
 
 ### There is no regulatory threshold
@@ -204,11 +254,15 @@ Omitting `own_mp_ids` defaults it to `[tenant]`.
 ```bash
 # JSON, for the current year
 curl -s "http://obsd:8480/api/v1/audit/gleichbehandlung?year=2026" \
-  -H "Authorization: Bearer $TOKEN" | jq '.by_pid[] | {pid, process, gap_pp, favours}'
+  -H "Authorization: Bearer $TOKEN" \
+  | jq '.by_pid[] | {pid, process, gap_pp, frist_gap_pp, favours}'
 
 # CSV, for the filing
 curl -s "http://obsd:8480/api/v1/audit/gleichbehandlung?year=2025&format=csv" \
   -H "Authorization: Bearer $TOKEN" > gleichbehandlung-2025.csv
+# 15 columns: pid, both groups' total/completed/rejected/frist_breached and their
+# two rates, then gap_pp and frist_gap_pp. An unstatable rate is an empty cell,
+# never a 0 that would read as "completed none of them".
 ```
 
 The report year is the year each process **started**, not the year its row was
@@ -227,7 +281,7 @@ endpoint, whose fan-out delivers to `agentd`), and are HMAC-signed when
 | Event | Producer | When | Consumed by |
 |-------|----------|------|-------------|
 | `de.obs.deadline.approaching` | deadline sweep (`deadline_sweep_secs`) | an open process has `deadline_at` within `deadline_warn_hours`, or already past it, and has not been alerted (idempotent per process via `deadline_alerted_at`) | agentd `deadline-alert-agent` |
-| `de.obs.stp.parity.alert` | parity sweep (`parity_sweep_secs`) | the completion-rate gap passes `parity_threshold_pp`, with both groups ≥ 10 processes | agentd `compliance-agent` |
+| `de.obs.stp.parity.alert` | parity sweep (`parity_sweep_secs`) | **either** gap — completion rate or Frist compliance — passes `parity_threshold_pp`, with both groups ≥ 10 processes | agentd `compliance-agent` |
 
 **`de.obs.deadline.approaching`:** `process_id`, `pid`, `family`,
 `workflow_name`, `malo_id`, `partner_mp_id`, `due_at` (RFC 3339),
@@ -235,7 +289,11 @@ endpoint, whose fan-out delivers to `agentd`), and are HMAC-signed when
 
 **`de.obs.stp.parity.alert`:** `tenant`, `window_days`, `threshold_pp`,
 `affiliate` + `third_party` `{total, completed, rejected, frist_breached}`,
-`gap_pp` (signed), `favours`, `min_sample`, `gap_convention`, `basis`.
+`gap_pp` and `frist_gap_pp` (both signed), `favours`, `min_sample`,
+`gap_convention`, `basis`.
+
+Either gap alone crossing the threshold raises the alert: requiring both would
+let a group with too few completions hide a Fristen disparity.
 
 Only a **delivered** alert is stamped, so a downed webhook target cannot silently
 consume a warning. A sweep that returns a full batch reports `saturated`: at least
@@ -395,8 +453,8 @@ repository the REST surface uses, so the two cannot answer differently.
 
 | Prompt | Description |
 |---|---|
-| `process-kpis` | Read a period's KPIs without confusing the two clocks |
-| `investigate-overdue-process` | Root-cause a missed Antwortfrist |
+| `audit-kpi` | Walk a reporting period's KPIs for a BNetzA Qualitätsbericht |
+| `investigate-aperak-violation` | Root-cause a missed APERAK acknowledgement |
 
 ### Example
 

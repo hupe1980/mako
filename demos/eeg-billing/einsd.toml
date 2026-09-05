@@ -14,7 +14,8 @@ allow_insecure_no_auth = true
 port         = 9180
 tenant       = "9900357000004"
 
-# edmd base URL — einsd auto-fetches Einspeisemenge from edmd billing-period API
+# edmd base URL — einsd auto-fetches the Einspeisemenge from
+# GET /api/v1/energy/{malo}?direction=EINSPEISUNG, the projected feed-in series
 edmd_url     = "http://edmd:8380"
 edmd_api_key = ""
 

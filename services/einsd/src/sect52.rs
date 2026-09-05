@@ -149,6 +149,9 @@ pub fn derive_pflichtverstoesse(
             typ,
             leistung_kw,
             monate_des_verstosses: typ.abs4_monate(monate_seit(start, bis)),
+            // §52 Abs. 5 caps concurrent violations per Kalendermonat, so the
+            // months a violation occupies have to be placeable in the calendar.
+            beginn: start,
             // §52 Abs. 3 Satz 1 Nr. 1 — „sobald die entsprechende Pflicht
             // erfüllt wird", and the reduction reaches back to the beginning.
             nachtraeglich_erfuellt: record.is_some_and(|r| r.behoben_am.is_some()),
@@ -248,6 +251,7 @@ pub fn monatliche_exposition(verstoesse: &[Pflichtverstoss], leistung_kw: Decima
         .map(|v| {
             eeg_billing::calculate_pflichtzahlung(&Pflichtverstoss {
                 monate_des_verstosses: 1,
+                beginn: None,
                 ..v.clone()
             })
         })

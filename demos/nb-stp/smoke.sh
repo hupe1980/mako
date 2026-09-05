@@ -503,7 +503,7 @@ Check: curl -s $PROCESSD_URL/api/v1/decisions | jq '.[0]'"
 Check the marktd subscription and processd logs."
                 ;;
             *)
-                fail "processd decision → $DECISION (erc=$(printf '%s' "$MY_DEC" | jq -r '.erc_code // "-"')), expected Accept.
+                fail "processd decision → $DECISION (Antwortcode=$(printf '%s' "$MY_DEC" | jq -r '.antwortcode // "-"')), expected Accept.
       $(printf '%s' "$MY_DEC" | jq -r '.detail // "-"')"
                 ;;
         esac

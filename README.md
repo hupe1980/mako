@@ -23,7 +23,7 @@ The workspace covers the full BDEW MaKo stack across five layers:
 | Layer | What it is |
 |---|---|
 | **Protocol** | `edi-energy` EDIFACT · `dvgw-edi` DVGW gas · `redispatch-xml` Redispatch 2.0 · `mako-engine` event-sourced process runtime · `makod` daemon |
-| **Market data** | `mako-markt` library · `marktd` Market Data Hub (PostgreSQL, CloudEvents, OIDC/JWT, EventBus) |
+| **Market data** | `mako-markt` library · `marktd` Market Data Hub (PostgreSQL, durable CloudEvents fan-out, OIDC/JWT) |
 | **Settlement & billing** | `grid-billing` + `netzbilanzd` NNE/MMM/MSB settlement · `eeg-billing` + `einsd` EEG/KWKG · `energy-billing` + `billingd` retail billing |
 | **Customer management** | `accountingd` FI-CA ledger · `portald` customer portal · `outputd` customer documents · `vertragd` contracts · `productd` tariff catalog · `agentd` advisory automation |
 | **Agent surface** | 15 of the 17 services expose an MCP server — **163 tools** — and `agentd` is the governed consumer: 28 specialists (26 read-only model-backed plus 2 coded) on [agentplane](https://github.com/hupe1980/agentplane), with journaled effects and durable human triage |
@@ -47,7 +47,7 @@ flowchart LR
     end
 
     subgraph Settlement["Settlement & billing"]
-        EDMD["edmd<br/>meter data · § 60 Abs. 2 MsbG"]
+        EDMD["edmd<br/>meter data · § 60 Abs. 1 MsbG"]
         NETZB["netzbilanzd<br/>NNE · MMM"]
         EINSD["einsd<br/>EEG/KWKG"]
         BILLINGD["billingd<br/>retail billing · risk gate"]
@@ -102,7 +102,7 @@ regulatory sources.
 | [`mako-gabi-gas`](crates/mako-gabi-gas/) | GaBi Gas 2.1 — allocation, nomination, MMMA; typed `GasDay` / `GasQuantity` / `GasBeschaffenheit` |
 | [`mako-emob`](crates/mako-emob/) | NZR-EMob / Modell 2 — the virtual Bilanzierungsgebiet, its conservation identity and the three Modellwechsel legs |
 | [`mako-redispatch`](crates/mako-redispatch/) | Redispatch 2.0 workflows — §§ 13/13a/14 EnWG under BilAReM |
-| [`mako-nbw`](crates/mako-nbw/) | Netzbetreiberwechsel (§ 46 EnWG) — name reservation; not implemented |
+| [`mako-nbw`](crates/mako-nbw/) | Netzbetreiberwechsel (§ 46 EnWG) — the bulk handover of a whole Netzgebiet: `PaketId`, `Aenderungszeitpunkt` and the `Fristenkalender` of milestones. Has no PID or AHB of its own; it sequences Use-Cases the other crates own |
 | [`mako-as4`](crates/mako-as4/) | BDEW AS4-Profil v1.2 over `asx-rs` — sign, encrypt, signed receipts, per-partner cert registry |
 | [`dvgw-edi`](crates/dvgw-edi/) | DVGW transport formats — ALOCAT, NOMINT, NOMRES, SSQNOT |
 | [`redispatch-xml`](crates/redispatch-xml/) | Redispatch 2.0 XML/XSD — all 9 document types |
@@ -116,10 +116,24 @@ regulatory sources.
 | [`eeg-billing`](crates/eeg-billing/) | EEG/KWKG feed-in settlement — 10 schemes, § 51 Negativpreisregel, § 52 sanctions, § 24 Anlagenerweiterung |
 | [`energy-billing`](crates/energy-billing/) | Retail billing (LF) — 13 product categories, § 41a dynamic tariffs, EN 16931 mapping |
 | [`invoic-checker`](crates/invoic-checker/) | INVOIC plausibility — the eight-stage pipeline: Storno reference, period, Zahlungsziel, currency, arithmetic, total, Umsatzsteuer, tariff |
-| [`mako-pruefung`](crates/mako-pruefung/) | The BDEW Entscheidungsbäume, executable — NB, LF, MSB, ESA and MaBiS answer rules |
+| [`mako-pruefung`](crates/mako-pruefung/) | The BDEW Entscheidungsbäume, executable — the NB, LF, MSB, ESA, MaBiS and NZR-EMob answer rules, each behind its own role feature |
 | [`mako-invoic`](crates/mako-invoic/) | The INVOIC settle/dispute state machine every billing family registers against |
 
+### Platform crates
+
+Shared by the daemons rather than by the domain. All 17 services link
+`mako-service`; 15 also link `mako-events`; `mako-obs` backs `obsd` alone.
+
+| Crate | Purpose |
+|---|---|
+| [`mako-service`](crates/mako-service/) | The service SDK — `run::<D>()` over the `Daemon` / `ServiceConfig` traits, `ServiceBuilder`, config loading, health, OIDC, Cedar, MCP auth, the shared single-runner `worker_lock` |
+| [`mako-events`](crates/mako-events/) | The CloudEvents type catalogue — every `type` string as a `pub const`, so producer/consumer drift is a compile error. Zero dependencies |
+| [`mako-obs`](crates/mako-obs/) | Observability projections and KPI computation — the domain types behind `obsd`, no I/O |
+
 ### Production services (17 daemons)
+
+One line each; the maintained operator reference — routes, config, deployment —
+is [mako docs · Services](https://hupe1980.github.io/mako/docs/services/).
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
@@ -138,7 +152,7 @@ regulatory sources.
 | [`outputd`](services/outputd/) | `:9880` | — | Customer communications — renders and delivers what other services computed |
 | [`portald`](services/portald/) | `:9480` | LF | Customer portal read-model gateway and the § 41 EnWG self-service writes · 8 MCP tools |
 | [`sperrd`](services/sperrd/) | `:8780` | NB | Sperr-/Entsperrauftrag execution queue · 4 MCP tools |
-| [`obsd`](services/obsd/) | `:8480` | All | Business-process observability — KPIs, Fristen, the § 20 EnWG parity audit |
+| [`obsd`](services/obsd/) | `:8480` | All | Business-process observability — KPIs, Fristen, the § 7a Abs. 5 EnWG Gleichbehandlung report |
 | [`agentd`](services/agentd/) | `:9580` | All | Advisory agent plane — **28 specialist manifests** over the platform's MCP tools, journaled and human-gated |
 
 ## ✨ Features
@@ -150,8 +164,8 @@ regulatory sources.
 | 📦 **17 message types** | UTILMD, MSCONS, APERAK, CONTRL, INVOIC, REMADV, ORDERS, IFTSTA, INSRPT, REQOTE, PARTIN, ORDCHG, ORDRSP, QUOTES, COMDIS, PRICAT, UTILTS |
 | 🔍 **Validation from the documents** | Nachrichtenstruktur, Segmentlayouts, formats and code lists of the MIG; the Prüfschablone of the AHB column with its Bedingungen; semantic cross-field rules — all appended to one `ValidationReport`, every finding naming its place by the MIG's `Nr` |
 | 🔤 **Declared character repertoire** | `UNB+UNOC:3` is ISO 8859-1, not UTF-8 — parsing transcodes by the repertoire the interchange itself declares, and `InterchangeBuilder` encodes back into it |
-| 📅 **Annual release lifecycle** | Multi-version profile registry with 7-day transition grace windows (BDEW-compliant) |
-| 🔒 **Security by default** | DoS limits (max 10 MB, 10 000 segments), log-injection sanitisation, fuzz-tested with 1 373+ corpus entries |
+| 📅 **Annual release lifecycle** | Multi-version profile registry keyed on the *Anwendungszeitpunkt*. There is **no** grace window: Allgemeine Festlegungen 6.1 § 2.5 gives each EDIFACT format one cut-over instant (1 April / 1 October) with no overlap, so `DEFAULT_RECEIVE_TOLERANCE_DAYS` is `0`. `with_receive_tolerance_days` raises it as a local *inbound* policy — never a licence to send late |
+| 🔒 **Security by default** | DoS limits (max 10 MB, 10 000 segments), log-injection sanitisation, eight cargo-fuzz targets over the untrusted-input boundary — compiled on every push, run weekly |
 | 🛠️ **Fluent message builders** | Type-state builder API with compile-time mandatory field enforcement |
 | 🔁 **Round-trip serialisation** | Parse → validate → serialize with byte-exact EDIFACT output |
 | 🧪 **Profiles read from the BDEW PDFs** | 32 profiles across 17 types, imported by `cargo xtask import-profiles` from the MIG and AHB documents — every Anwendungsfall's skeleton validates against its own Prüfschablone |
@@ -176,7 +190,7 @@ regulatory sources.
 | 🔁 **Round-trip serialization** | Parse → serialize with byte-stable XML output |
 | 🔑 **Document correlation** | `Document::mrid()`, `sender_id()`, `receiver_id()` — routing keys for `AcknowledgementDocument` process matching |
 | 🔒 **`#![deny(unsafe_code)]`** | Memory-safe XML processing; no `unsafe` in the parse path |
-| 📜 **Regulatory basis** | BNetzA BK6-20-059 · BK6-20-060 · BK6-20-061 · NABEG §§ 13, 13a, 14 EnWG |
+| 📜 **Regulatory basis** | BNetzA BK6-23-241 · BK6-20-059 TZ 2 · §§ 13, 13a, 14 EnWG |
 
 ### Master data layer (`mako-markt`)
 
@@ -186,7 +200,7 @@ regulatory sources.
 | 🗂️ **30 repository traits** | One trait per aggregate — `MaloRepository`, `MeloRepository`, `NbContractRepository`, `PartnerRepository`, `LokationszuordnungRepository`, `TechnischeRessourceRepository`, `SteuerbareRessourceRepository`, `CorrelationIndex`, … — AFIT, no `dyn Trait` overhead |
 | ⏳ **Temporal role assignments** | `Rollenzuordnung` with `valid_from`/`valid_to` — evaluated against CET/CEST German calendar date at query time |
 | 📨 **CloudEvents 1.0** | Outbound events (`MarktEvent`) with HMAC-SHA256 signing; `InboundMakoEvent` for receiving `makod` lifecycle events |
-| 🧪 **`testing` feature** | `InMemory*` test doubles for every repository trait — no PostgreSQL required in unit tests |
+| 🧪 **`testing` feature** | Two in-memory doubles — `InMemoryVersorgungsStatusRepository` (§§ 36/38 EnWG supply status) and `InMemoryNbEnergiemixRepository` (§ 42 EnWG disclosure). Deliberately only two: a hand-written double is a second implementation of the same contract and the two drift, so every other repository is checked against real PostgreSQL in `marktd`'s testcontainers suites |
 | 🚫 **Zero framework deps** | No axum, sqlx, or async runtime — pure domain library; all I/O lives in `services/marktd` |
 
 ### BO4E typed API (`marktd`)
@@ -203,13 +217,13 @@ regulatory sources.
 | 👤 **`Geschaeftspartner` typed partners** | `PUT /api/v1/partners/{mp_id}` puts the BO4E `Geschaeftspartner` through the gate and stores the canonical round-trip. `GET` returns the typed `geschaeftspartner` field. |
 | 🔢 **`Zaehlwerk` register access** | `GET /api/v1/zaehler/{id}/zaehlwerke` → `Vec<Zaehlwerk>` — OBIS registers for TOU billing and iMSyS demand management |
 | ⏰ **`ZaehlzeitRegister` + `ZaehlzeitSaison`** | `GET/PUT /api/v1/zaehler/{id}/register` + `/zaehler-register/{id}/saisons` — iMSys TOU register definitions (HT/NT/EINZEL); `GET /api/v1/zaehler/{id}/tariff-zone?datetime=ISO` resolves zone in one SQL JOIN (§14a Modul 2) |
-| ⚡ **`Energiemenge` deliveries** | `GET /api/v1/deliveries/{malo_id}` → `Vec<Energiemenge>` — typed ERP-consumable meter readings without EDIFACT parsing |
+| ⚡ **`Energiemenge` deliveries** | `edmd` serves `GET /api/v1/deliveries/{malo_id}` → a BO4E `Energiemenge` array — typed ERP-consumable meter readings without EDIFACT parsing (alongside `Lastgang` and `Zeitreihe` on the same store) |
 | 💰 **MMMA settlement prices** | `GET/PUT /api/v1/mmma-preise/gas/{year}/{month}` — Gas MMM Abrechnungspreise (Trading Hub Europe); `GET/PUT /api/v1/mmm-preise/strom/{year}/{month}` — Strom MMM Ausgleichsenergie per ÜNB. Both auto-fetched by `netzbilanzd` and validated by `invoicd` check 6. |
 | 🗂️ **Fallgruppe + Bilanzierungsmethode auto-extract** | `makod` adapters extract `bilanzierungsmethode` (Z01→SLP, Z02→RLM, Z04→IMS) and `fallgruppe` (GaBi Gas, TM+Z10) from UTILMD `TM+EM` / `TM+Z10` segments. `marktd` `event_ingest` calls `patch_typenmerkmal()` on `de.mako.process.initiated` (PIDs 55001/44001) to keep `malo.fallgruppe` / `malo.bilanzierungsmethode` in sync. |
 | 🏷️ **`Tarifpreisblatt` + `Preisblatt`** | `productd` stores all energy products as `Tarifpreisblatt` JSONB; category drives calculator selection; all prices are user-defined; schema validated on PUT (wrong `_typ` → 422); queried by `billingd` calculator for pricing inputs |
 | 🔒 **One vocabulary per column** | Typed columns are derived from the typed BO, never a string lookup on its JSON, and hold BO4E wire values only. Each enum column's SQL `CHECK` is that enum's `VARIANTS`, compared against the schema by a `mako-markt` test. |
 | 🧭 **UTILMD characteristics read by class** | `makod` reads SG10 `CCI`/`CAV` by DE 7059 Klassentyp *and* DE 7037 Merkmal — the two code spaces overlap (`Z18` = Regelzone or „Kein Haushaltskunde") — and maps them to BO4E enums: `CCI+Z30++Z06/Z07` → `Energierichtung`, `CAV+E03…E09` / `Y01…Y03` → `Netzebene`. Each mapping cites its MIG Strom S2.2 / Gas G1.2 segment number. |
-| 🏷️ **Namespaced BO4E extensions** | What BO4E does not model rides in a `ZusatzAttribut` named `mako:<snake_case>` — 37, each registered with what it carries. BO4E mandates no convention for its extension slot, so `cargo xtask check-bo4e-attributes` enforces the prefix and keeps the registry consumers read. |
+| 🏷️ **Namespaced BO4E extensions** | What BO4E does not model rides in a `ZusatzAttribut` named `mako:<snake_case>` — 41, each registered with what it carries. BO4E mandates no convention for its extension slot, so `cargo xtask check-bo4e-attributes` enforces the prefix and keeps the registry consumers read. |
 | ✅ **Outbound BO4E conformance** | Every emission site crosses the same gate, because an engine test covers the shapes a builder produces but not the values a request supplies. Out-of-schema **fields** are refused alongside values; documents are built typed, never assembled as JSON |
 | 🧾 **`Steuerbetrag` + `Registeranzahl`** | `energy-billing` projects the EN 16931 BG-23 tax breakdown into BO4E `Steuerbetrag` entries on the Rechnung JSON; `Registeranzahl` (Eintarif/Zweitarif) drives HT/NT position branching |
 | 🏦 **`Zahlungsinformation` + `Zahlungsart`** | `accountingd` SEPA mandate registry stores structured payment info; pain.008 XML generated from `SepaMandateRow` (IBAN, BIC, Kontoinhaber, Mandatsreferenz) |
@@ -375,9 +389,11 @@ let mp_id   = "9900357000004".parse::<MarktpartnerId>()?;
 // "99…" → "293" (BDEW Strom), "98…" → "332" (DVGW Gas), other → "9" (GS1)
 assert_eq!(mako_markt::domain::nad_agency_code(&mp_id), "293");
 
-// In tests — use InMemory* doubles; no PostgreSQL required
-use mako_markt::testing::InMemoryMaloRepository;
-let repo = InMemoryMaloRepository::default();
+// In tests — two in-memory doubles, for the traits whose *regulatory* state
+// machine is worth asserting without a database. Every other repository is
+// exercised against real PostgreSQL in marktd's integration suites.
+use mako_markt::testing::InMemoryVersorgungsStatusRepository;
+let repo = InMemoryVersorgungsStatusRepository::default();
 ```
 
 ---
@@ -394,7 +410,7 @@ let repo = InMemoryMaloRepository::default();
 | APERAK | `APERAK` | 2.2 (`fv20261001`) | Application error acknowledgements |
 | CONTRL | `CONTRL` | 2.0b (`fv20260101`) | Interchange control acknowledgements |
 | INVOIC | `INVOIC` | 2.8e (`fv20261001`) | Invoices |
-| REMADV | `REMADV` | 2.9f (`fv20261001`) | Remittance advice |
+| REMADV | `REMADV` | 2.9e (`fv20260401`) | Remittance advice |
 | ORDERS | `ORDERS` | 1.4c (`fv20261001`) | Purchase orders |
 | IFTSTA | `IFTSTA` | 2.1 (`fv20261001`) | Multimodal status reports |
 | INSRPT | `INSRPT` | 1.1a (`fv20260101`) | Inspection reports |
@@ -403,7 +419,7 @@ let repo = InMemoryMaloRepository::default();
 | ORDCHG | `ORDCHG` | 1.2 (`fv20261001`) | Purchase order changes |
 | ORDRSP | `ORDRSP` | 1.4c (`fv20261001`) | Purchase order responses |
 | QUOTES | `QUOTES` | 1.3c (`fv20261001`) | Quotations |
-| COMDIS | `COMDIS` | 1.0h (`fv20260401`) | Commercial dispute (Handelsunstimmigkeit) |
+| COMDIS | `COMDIS` | 1.0g (`fv20260401`) | Commercial dispute (Handelsunstimmigkeit) |
 | PRICAT | `PRICAT` | 2.1 (`fv20261001`) | Price/sales catalogue |
 | UTILTS | `UTILTS` | 1.1e (`fv20261001`) | Technical master data |
 
@@ -526,11 +542,7 @@ for msg_result in parse_interchange(reader) {
 ### Build a UTILMD message
 
 ```rust
-use edi_energy::{
-    builders::UtilmdBuilder,
-    EdiEnergyMessage, ObjectType, Pruefidentifikator,
-    releases,
-};
+use edi_energy::{builders::UtilmdBuilder, Pruefidentifikator, releases};
 
 let bytes = UtilmdBuilder::new(releases::utilmd_fv20261001().clone())
     .pruefidentifikator(Pruefidentifikator::new(55001)?)
@@ -538,11 +550,13 @@ let bytes = UtilmdBuilder::new(releases::utilmd_fv20261001().clone())
     .receiver("9900357000004")
     .document_code("E01")
     .document_date("20261001")
-    .transaction(ObjectType::Marktlokation, "51238696799")
-        .process_date("163", "20261001")
-        .reference("Z13", "55001")
+    // `IDE+24` DE 7402 carries a Vorgangsnummer, never a Lokations-ID.
+    .transaction("VORGANG-0001")
+        // `SG4 DTM+92` — the Lieferbeginn.
+        .date("92", "20261101")
+        // `SG5 LOC+Z16` names the Marktlokation the Vorgang is about.
+        .marktlokation("51238696012")
         .done()
-    .build()?
     .serialize()?;
 ```
 
@@ -561,23 +575,29 @@ mako/
 │   │   └── src/             # Workflow, Process, EngineBuilder, all store traits
 │   │                        # + SlateDB implementations, fristen, dead-letter
 │   │
-│   ├── mako-gpke/           # GPKE domain (55001–55018, 55555 Anfrage, 17115–17117 Sperrung, INVOIC 31001–31002/31005–31006, ORDERS 17134/17135; PARTIN Strom 37000–37006)
-│   ├── mako-wim/            # WiM domain, Strom + Gas (55039/55042/55051/55168 + 44039/44042/44051/44168/44183, INVOIC 31009/31003/31004, INSRPT 23001–23012)
-│   ├── mako-geli-gas/       # GeLi Gas 3.0 domain (44001–44024 incl. Stornierung; PARTIN Gas 37008–37014; INVOIC 31011)
-│   ├── mako-mabis/          # MABIS domain (13003 — Bilanzkreisabrechnung Strom)
+│   ├── mako-gpke/           # GPKE Strom — Lieferantenwechsel, Ersatz-/Grundversorgung,
+│                            # Stammdatenänderung, Sperrung, Meldepflichten, PARTIN, INVOIC
+│   ├── mako-wim/            # WiM Strom + Gas — MSB-Wechsel, Geräteübernahme, Preisanfrage,
+│                            # INSRPT, ESA Wertebestellung and the UC 4.5 billing round trip
+│   ├── mako-geli-gas/       # GeLi Gas 3.0 — Lieferantenwechsel Gas, Stammdatenänderung,
+│                            # AWH Sperrprozesse, PARTIN Gas, INVOIC
+│   ├── mako-mabis/          # MaBiS Strom — six workflows: Bilanzkreisabrechnung, Profile,
+│                            # Clearingliste, MaBiS-ZP lifecycle, Anforderung, Listenabgleich
 │   ├── mako-emob/           # NZR-EMob / Modell 2 — virtual Bilanzierungsgebiet, allocation engine
 │   │                        # (Anlage 6 §IV.1 conservation identity, ¼-h session split, BG lifecycle)
-│   ├── mako-gabi-gas/       # GaBi Gas 2.1 — INVOIC 31007/31008/31010 + MSCONS 13013 + DVGW ALOCAT/NOMINT/NOMRES; typed domain: GasDay/GasQuantity/GasBeschaffenheit/AllocationVersion/GasMarketRole/GasPortfolioBalance
-│   ├── mako-nbw/            # Netzbetreiberwechsel — PARTIN DSO handover (placeholder)
+│   ├── mako-gabi-gas/       # GaBi Gas 2.1 — INVOIC 31007/31008/31010 + MSCONS 13013 + DVGW ALOCAT/NOMINT/NOMRES; typed domain: GasDay/GasQuantity/GasBeschaffenheit/AllocationVersion
 │   ├── mako-as4/            # BDEW AS4-Profil v1.2: BdewAs4Profile, bdew_pmode (ECDSA+ECDH-ES, BrainpoolP256r1)
 │   │                        # bdew_push_policy (require_encrypted_inbound), BdewTestPki, MockAs4Endpoint
-│   ├── dvgw-edi/            # DVGW EDIFACT formats — ALOCAT, NOMINT, NOMRES (GaBi Gas 2.1)
+│   ├── dvgw-edi/            # DVGW EDIFACT formats — ALOCAT, NOMINT, NOMRES, SSQNOT
 │   ├── energy-api/          # BDEW REST/WebSocket API client + Axum server (iMS)
 │   ├── mako-redispatch/     # Redispatch 2.0 process engine — 8 XML-document-driven workflows
+│   ├── mako-nbw/            # Netzbetreiberwechsel (§ 46 EnWG) — Paket-ID, Änderungszeitpunkt,
+│                            # Fristenkalender; sequences other crates' Use-Cases, owns no PID
 │   ├── redispatch-xml/      # Redispatch 2.0 XML/XSD parsing — all 9 document types
 │   ├── invoic-checker/      # INVOIC plausibility-check pipeline (LF side)
 │   ├── mako-invoic/         # The INVOIC settle/dispute state machine, shared by all billing families
-│   ├── mako-pruefung/       # Antwortnachricht decisions (NB + LF + MSB Entscheidungsbäume)
+│   ├── mako-pruefung/       # Antwortnachricht decisions — the NB, LF, MSB, ESA, MaBiS and
+│                            # NZR-EMob Entscheidungsbäume, each behind its own role feature
 │   ├── mako-fristen/        # The German market calendar — Werktage, Fristen, and what "today" means
 │   ├── energy-billing/      # LF consumption billing engine (§§40–41a EnWG)
 │   ├── grid-billing/        # NB grid-fee billing — NNE/KA/MMM, §14a, Entgeltregime
@@ -585,7 +605,8 @@ mako/
 │   ├── mako-events/         # CloudEvents type catalog + matches()
 │   ├── mako-markt/          # Market master-data domain (BO4E via rubo4e)
 │   ├── mako-obs/            # Observability projections
-│   └── mako-service/        # Service SDK — load_config · DatabaseConfig · shutdown · OidcConfig · McpAuth · init_tracing_from_env · ServiceBuilder · CedarEnforcer · EventBus
+│   └── mako-service/        # Service SDK — run::<D>() + Daemon/ServiceConfig · ServiceBuilder · load_config
+│                            # DatabaseConfig · OidcConfig · CedarEnforcer · McpAuth · worker_lock · init_tracing_from_env
 │
 ├── services/                # 17 daemons, one PostgreSQL schema each
 │   ├── makod/               # :8080 · protocol daemon — AS4 ingest, workflow dispatch, EDIFACT render
@@ -608,7 +629,8 @@ mako/
 │
 ├── makotest/                # Python test toolkit (PyO3) — simulators, generators, pytest plugin
 ├── xtask/                   # Dev automation: import-profiles · validate · guards
-└── fuzz/                    # cargo-fuzz targets (1 373+ corpus entries)
+└── fuzz/                    # 8 cargo-fuzz targets — EDIFACT parse/build/validate, AS4
+                             # envelopes, OBIS codes, tariff inputs
 ```
 
 ### Data flow
@@ -645,7 +667,7 @@ Process::execute_and_enqueue  ──  replay state · Workflow::handle · Atomic
                                ▼                ▼              ▼              ▼
                          processd :8580   invoicd :8280   edmd :8380   obsd :8480
                          mako-pruefung    invoic-checker  meter reads  projections
-                         NB STP + LF E0624 § 147 AO / GoBD    billing-period §20 parity
+                         NB STP · E_0624  §147 AO/GoBD    §60 MsbG     §7a parity
                                │                │
                                └────────────────┴──► makod :8080 (bestaetigen / ablehnen)
                                │
@@ -704,15 +726,23 @@ cargo add dvgw-edi --features serde
 | *(default)* | ✅ | All domain types, all repository traits, CloudEvents, `InboundMakoEvent` |
 | `marktd-client` | | HTTP client for marktd's REST surface |
 | `makod-client` | | HTTP client for makod's command API |
-| `testing` | | `InMemory*` test doubles for every repository trait — **never enable in production** |
+| `testing` | | The two in-memory repository doubles (`InMemoryVersorgungsStatusRepository`, `InMemoryNbEnergiemixRepository`) — **never enable in production** |
 
-## ⚙️ Feature Flags — `mako-engine` / `makod`
+## ⚙️ Feature Flags — `mako-engine`
 
-| Flag | Crate | Enables |
+| Flag | Default | Enables |
 |---|---|---|
-| `slatedb` | `mako-engine` | Production `SlateDbStore`; activated in `makod` via its dep on `mako-engine = { features = ["slatedb"] }` — never enable in library `[features]` defaults |
-| `testing` | `mako-engine` | `InMemoryEventStore`, `NoopDeadLetterSink`, `InMemoryInboxStore` — never in production |
-| `tracing` | `mako-engine` | Structured instrumentation spans |
+| `slatedb` | | Production `SlateDbStore`; `makod` turns it on through its own dependency (`mako-engine = { features = ["slatedb"] }`) — never enable it in a library's `[features]` defaults |
+| `testing` | | `InMemoryEventStore`, `NoopDeadLetterSink`, `InMemoryInboxStore` — never in production |
+| `tracing` | | Structured instrumentation spans |
+
+`makod` itself carries no storage flag. Its features are the ten **role gates**
+(`role-{lf,nb,msb}-{strom,gas}`, `role-esa-strom` and the three composites
+`role-lf` / `role-nb` / `role-msb`), which `#[cfg]`-gate `production_modules` so
+an NB-only binary contains no LF answer path. That is least-privilege
+deployment supporting §§ 6a/7a EnWG role separation, not itself the legal
+unbundling § 7 EnWG requires. See [`services/makod/`](services/makod/) for the
+matrix.
 
 ---
 
@@ -794,7 +824,10 @@ cargo xtask sync-regulatories            # report the diff against bdew-mako.de
 cargo xtask sync-regulatories --download # fetch what is in force and missing
 cargo xtask sync-regulatories --offline  # verify the mirror, no network
 
-# Run fuzz target (requires nightly + cargo-fuzz)
+# Compile every fuzz target (the cheap gate, part of `just ci`)
+just check-fuzz
+
+# Run one target (requires nightly + cargo-fuzz)
 cargo +nightly fuzz run fuzz_parse_validate
 ```
 

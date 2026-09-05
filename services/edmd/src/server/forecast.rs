@@ -9,8 +9,10 @@ use super::*;
 /// § 40a Abs. 2 EnWG authorises billing on an estimate — based on the previous
 /// period or on comparable customers — where no reading was transmitted;
 /// § 13 Abs. 1 StromGVV sizes an Abschlag the same way. Both verified against the
-/// consolidated texts. Not § 60 Abs. 2 MsbG, which is Ersatzwertbildung in the
-/// Smart-Meter-Gateway — a different obligation.
+/// consolidated texts. Not § 60 MsbG: Abs. 1 is the Messstellenbetreiber's duty
+/// to deliver aufbereitete Messwerte (the anchor for `server::substitute`), and
+/// Abs. 2 only says that for an intelligentes Messsystem that Aufbereitung
+/// *soll* run im Smart-Meter-Gateway. Neither is about forecasting.
 pub(crate) const FORECAST_LEGAL_BASIS: &str =
     "§ 40a Abs. 2 EnWG (Verbrauchsschätzung) · § 13 Abs. 1 StromGVV (Abschlagshöhe)";
 
@@ -33,10 +35,12 @@ pub(crate) const FORECAST_LEGAL_BASIS: &str =
 /// it *"anteilig entsprechend dem Verbrauch im vorangegangenen
 /// Abrechnungszeitraum"*.
 ///
-/// It is **not** § 60 Abs. 2 MsbG: that provision places *Plausibilisierung und
-/// Ersatzwertbildung* in the Smart-Meter-Gateway (BSI assessment, BNetzA
-/// Festlegung under § 75), which is the anchor for `server::substitute` and says
-/// nothing about forecasting.
+/// It is **not** § 60 MsbG. **Abs. 1** is the Messstellenbetreiber's duty to
+/// deliver aufbereitete Messwerte to the berechtigten Stellen — the anchor for
+/// `server::substitute`. **Abs. 2** is a *Soll* about *where* that Aufbereitung
+/// runs for an intelligentes Messsystem (im Smart-Meter-Gateway, once the BSI
+/// rates it possible and the BNetzA has made the § 75 Satz 1 Nr. 4 Festlegung).
+/// Neither says anything about forecasting, and neither reaches a bill.
 ///
 /// Uses:
 /// - Setting Abschlag (advance payment) amounts

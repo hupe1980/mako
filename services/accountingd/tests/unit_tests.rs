@@ -970,3 +970,49 @@ fn auto_dunning_default_fees_are_reasonable() {
     assert_eq!(format_ct_as_eur(fee2), "5.00", "Mahnstufe 2: €5.00 fee");
     assert_eq!(format_ct_as_eur(fee3), "10.00", "Mahnstufe 3: €10.00 fee");
 }
+
+/// Both bank-reply paths must age a settled mandate FRST → RCUR.
+///
+/// `pg::transition_mandate_to_rcur` existed, was documented and was correct,
+/// and had **no caller anywhere in the workspace**. Every mandate therefore
+/// stayed `FRST` for its whole life, so each month's pain.008 presented a
+/// *first* collection for a debtor the bank had already collected from — wrong
+/// under the SDD Rulebook, and rejectable as a duplicate.
+///
+/// A collection can settle down exactly two routes: an accepted pain.002
+/// (`apply_pain002_status`) and a matching camt booking (`import_cash_entries`).
+/// This checks the call is present in each of those function bodies.
+///
+/// **What it does not check.** It cannot tell that the call sits on the settling
+/// branch rather than somewhere else in the same function, nor that its
+/// condition is right. It catches the defect that actually happened — a
+/// settlement path with no transition at all — and a reviewer still has to read
+/// the branch.
+#[test]
+fn both_settlement_paths_age_the_mandate() {
+    let handlers = include_str!("../src/handlers.rs");
+
+    for func in [
+        "async fn apply_pain002_status(",
+        "async fn import_cash_entries(",
+    ] {
+        let start = handlers
+            .find(func)
+            .unwrap_or_else(|| panic!("{func} is gone — this guard has stopped checking anything"));
+        // To the next top-level `fn`, which is where this one ends.
+        let rest = &handlers[start + func.len()..];
+        let end = rest
+            .find("\nasync fn ")
+            .into_iter()
+            .chain(rest.find("\npub async fn "))
+            .chain(rest.find("\nfn "))
+            .min()
+            .unwrap_or(rest.len());
+        let body = &rest[..end];
+        assert!(
+            body.contains("transition_mandate_to_rcur"),
+            "{func} settles collections but never ages the mandate FRST → RCUR; \
+             next month's pain.008 would present a duplicate first collection"
+        );
+    }
+}

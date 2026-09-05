@@ -258,6 +258,7 @@ proptest! {
             scheme: SettlementScheme::KwkSurcharge {
                 verguetungssatz_ct: rate_ct,
                 max_kwh: Some(max_kwh),
+                jahres_restkontingent_kwh: None,
                 kwh_paid_gesamt: Some(paid_kwh),
             },
             einspeisemenge_kwh: Some(kwh),
@@ -297,6 +298,7 @@ proptest! {
             typ: SanktionsTyp::FernsteuerbarkeitFehlend,
             leistung_kw: leistung,
             monate_des_verstosses: months,
+            beginn: None,
             nachtraeglich_erfuellt: fulfilled,
             technischer_defekt: defect,
         };

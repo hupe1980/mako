@@ -243,7 +243,7 @@ fn extract_tariff_from_product_data(
     let mut arbeitspreis_ct_per_kwh: Option<Decimal> = None;
     let mut arbeitspreis_ht_ct_per_kwh: Option<Decimal> = None;
     let mut arbeitspreis_nt_ct_per_kwh: Option<Decimal> = None;
-    let mut sect14a_modul1_pauschale_eur_per_kw_year: Option<Decimal> = None;
+    let mut sect14a_modul1_pauschale_eur_per_year: Option<Decimal> = None;
     let mut sect14a_steuerungsentschaedigung_eur_per_kw_year: Option<Decimal> = None;
     let mut gas_grundpreis_ct_per_day: Option<Decimal> = None;
     let mut gas_arbeitspreis_ct_per_kwh_hs: Option<Decimal> = None;
@@ -355,7 +355,7 @@ fn extract_tariff_from_product_data(
             ("KWKG_ZUSCHLAG", _) => kwkg_zuschlag_ct_per_kwh = preis,
             ("MARKTWERT", _) => marktwert_ct_per_kwh = preis,
             ("VERMARKTUNGSGEBUEHR", _) => vermarktungsgebuehr_ct_per_kwh = preis,
-            ("STEUERUNGSRABATT_MODUL1", _) => sect14a_modul1_pauschale_eur_per_kw_year = preis,
+            ("STEUERUNGSRABATT_MODUL1", _) => sect14a_modul1_pauschale_eur_per_year = preis,
             ("STEUERUNGSRABATT_MODUL3", _) => {
                 sect14a_steuerungsentschaedigung_eur_per_kw_year = preis
             }
@@ -423,7 +423,7 @@ fn extract_tariff_from_product_data(
         "leistungspreis_strom_ct_per_kw_month": get_decimal("leistungspreis_strom_ct_per_kw_month"),
         "sect14a_modul2_nne_reduktion_ct_per_kwh": get_decimal("sect14a_modul2_nne_reduktion_ct_per_kwh"),
         "sect14a_steuerungsentschaedigung_ct_per_kwh": get_decimal("sect14a_steuerungsentschaedigung_ct_per_kwh"),
-        "sect14a_modul1_pauschale_eur_per_kw_year": sect14a_modul1_pauschale_eur_per_kw_year,
+        "sect14a_modul1_pauschale_eur_per_year": sect14a_modul1_pauschale_eur_per_year,
         "sect14a_steuerungsentschaedigung_eur_per_kw_year": sect14a_steuerungsentschaedigung_eur_per_kw_year,
         "gas_grundpreis_ct_per_day": gas_grundpreis_ct_per_day,
         "gas_arbeitspreis_ct_per_kwh_hs": gas_arbeitspreis_ct_per_kwh_hs,
@@ -657,9 +657,20 @@ impl EdmdClient {
         else {
             return Ok(None);
         };
+        // The billed quantity is the one field the invoice cannot do without:
+        // an unreadable one defaulted to zero bills the Grundpreis and states
+        // no consumption, which reads exactly like a period the customer did
+        // not use. An answer edmd cannot express is an upstream fault, not a
+        // zero-consumption month.
+        let arbeitsmenge_kwh =
+            decimal_from_json(body.get("arbeitsmenge_kwh")).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "edmd billing-period for MaLo {malo_id} in {period_from}..{period_to} \
+                 states no readable arbeitsmenge_kwh"
+                )
+            })?;
         let meter = MeterInput {
-            arbeitsmenge_kwh: decimal_from_json(body.get("arbeitsmenge_kwh"))
-                .unwrap_or(Decimal::ZERO),
+            arbeitsmenge_kwh,
             arbeitsmenge_ht_kwh: decimal_from_json(body.get("arbeitsmenge_ht_kwh")),
             arbeitsmenge_nt_kwh: decimal_from_json(body.get("arbeitsmenge_nt_kwh")),
             spitzenleistung_kw: decimal_from_json(body.get("spitzenleistung_kw")),
@@ -675,6 +686,10 @@ impl EdmdClient {
             // § 40 Abs. 2 Nr. 6 EnWG — the *Art* of the reading, as far as
             // edmd's data actually determines it.
             ablesungsart: ablesungsart_from(&body),
+            // How much of the period the readings actually cover — the fact a
+            // sum over what arrived cannot carry. Below 100 the invoice rests
+            // in part on a § 40a Abs. 2 EnWG estimate.
+            coverage_pct: decimal_from_json(body.get("coverage_pct")),
             ..Default::default()
         };
         Ok(Some(meter))
@@ -794,6 +809,7 @@ impl EdmdClient {
             zaehlerstand_von: decimal_from_json(body.get("zaehlerstand_anfang")),
             zaehlerstand_bis: decimal_from_json(body.get("zaehlerstand_ende")),
             is_estimated: quality_is_estimated(&body),
+            coverage_pct: decimal_from_json(body.get("coverage_pct")),
         }))
     }
 
@@ -869,6 +885,9 @@ pub struct GasBillingPeriod {
     pub zaehlerstand_bis: Option<Decimal>,
     /// The period's worst quality flag was an estimate/Ersatzwert (§40a EnWG).
     pub is_estimated: bool,
+    /// Share of the period covered by billable readings, 0–100. Below 100 the
+    /// invoice rests in part on a § 40a Abs. 2 EnWG Verbrauchsschätzung.
+    pub coverage_pct: Option<Decimal>,
 }
 
 /// `true` when the period's collapsed quality flag means the value was not a
@@ -972,9 +991,9 @@ impl VertragdClient {
     /// The product-assignment slices covering a billing period, in order.
     ///
     /// An invoice covers a period and a Tarifwechsel inside it splits that
-    /// period; asking only for "the current product" billed the whole period at
-    /// whichever tariff happened to be in force on the day the run executed.
-    /// More than one slice means the period contains a price change.
+    /// period, so every billing path asks in this form: more than one slice
+    /// means the period contains a price change, and each part is billed under
+    /// the product that was in force for it.
     ///
     /// The mapping lives in `vertragd` because agreeing it *is* a contract act
     /// (§ 41 Abs. 5 EnWG); `productd` then prices each code.
@@ -1146,12 +1165,51 @@ pub struct VertragFacts {
     pub id: String,
     /// Human-readable contract number, preferred for `contract_id`.
     pub vertrags_nr: Option<String>,
+    /// Which supply regime governs the contract: `GRUNDVERSORGUNG` (§ 36 EnWG),
+    /// `ERSATZVERSORGUNG` (§ 38 EnWG) or `SONDERVERTRAG` (§ 41b EnWG).
+    ///
+    /// A stored fact in `vertragd`, not a guess: the engine's § 38 Abs. 4 EnWG
+    /// three-month guard and the GVV disclosure on the document both branch on
+    /// it, and `BillingContext::vertragsart` defaults to `Sondervertrag` — so a
+    /// field nobody sets makes an Ersatzversorgung indistinguishable from a
+    /// freely negotiated contract and the statutory limit unreachable.
+    ///
+    /// `Option` for the wire only: an older `vertragd` that does not send it
+    /// leaves the engine on its own default. See [`Self::regime`].
+    #[serde(default)]
+    pub vertragsart: Option<String>,
     /// Contract start — enables §41 pro-rata clipping on first invoices.
     pub vertragsbeginn: time::Date,
     /// Contract end when befristet; `None` for unbefristete Verträge.
     pub vertragsende: Option<time::Date>,
     /// Notice period in months.
     pub kuendigungsfrist_monate: i32,
+}
+
+impl VertragFacts {
+    /// The contract's supply regime as the billing engine models it.
+    ///
+    /// An unrecognised or absent value falls back to `Sondervertrag` — the
+    /// regime with the least statutory privilege, the same choice `vertragd`
+    /// makes for an omitted `vertragsart`. Falling back to Grundversorgung or
+    /// Ersatzversorgung would claim a regime on the customer's behalf; falling
+    /// back the other way only forgoes a disclosure, and the mismatch is
+    /// logged where it is read.
+    #[must_use]
+    pub fn regime(&self) -> energy_billing::Vertragsart {
+        match self.vertragsart.as_deref() {
+            Some("GRUNDVERSORGUNG") => energy_billing::Vertragsart::Grundversorgung,
+            Some("ERSATZVERSORGUNG") => energy_billing::Vertragsart::Ersatzversorgung,
+            Some("SONDERVERTRAG") | None => energy_billing::Vertragsart::Sondervertrag,
+            Some(other) => {
+                tracing::warn!(
+                    vertragsart = other,
+                    "billingd: vertragd sent an unknown Vertragsart — billing as SONDERVERTRAG,                      so no § 36 / § 38 EnWG regime is claimed on the customer's behalf"
+                );
+                energy_billing::Vertragsart::Sondervertrag
+            }
+        }
+    }
 }
 
 /// The sites under a Rahmenvertrag plus the holder the bundled invoice addresses.
@@ -1449,5 +1507,61 @@ impl AccountingdClient {
             .json(request)
             .await
             .context("accountingd GET abschlaege")
+    }
+}
+
+#[cfg(test)]
+mod vertragsart_tests {
+    use super::VertragByMalo;
+    use energy_billing::Vertragsart;
+
+    /// The by-malo answer `vertragd` actually serves, trimmed to what this
+    /// client reads. `versorgungsvertraege.vertragsart` is `NOT NULL` under a
+    /// CHECK over exactly these three values, and the handler serialises the
+    /// whole row — so the field is on the wire and was simply never read.
+    fn answer(vertragsart: serde_json::Value) -> VertragByMalo {
+        serde_json::from_value(serde_json::json!({
+            "vertrag": {
+                "id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+                "vertrags_nr": "VV-2026-00000001",
+                "vertragsart": vertragsart,
+                "vertragsbeginn": "2026-01-01",
+                "vertragsende": null,
+                "kuendigungsfrist_monate": 1,
+            },
+            "naechstmoeglicher_kuendigungstermin": null,
+        }))
+        .expect("the by-malo answer must deserialise")
+    }
+
+    #[test]
+    fn the_supply_regime_comes_off_the_wire() {
+        for (wire, expected) in [
+            ("GRUNDVERSORGUNG", Vertragsart::Grundversorgung),
+            ("ERSATZVERSORGUNG", Vertragsart::Ersatzversorgung),
+            ("SONDERVERTRAG", Vertragsart::Sondervertrag),
+        ] {
+            assert_eq!(
+                answer(serde_json::json!(wire)).vertrag.regime(),
+                expected,
+                "{wire} must reach the engine as itself"
+            );
+        }
+    }
+
+    /// An absent or unrecognised value claims no statutory regime.
+    #[test]
+    fn an_unstated_regime_is_a_sondervertrag() {
+        assert_eq!(
+            answer(serde_json::Value::Null).vertrag.regime(),
+            Vertragsart::Sondervertrag
+        );
+        assert_eq!(
+            answer(serde_json::json!("GRUNDVERSORGUNG_NEU"))
+                .vertrag
+                .regime(),
+            Vertragsart::Sondervertrag,
+            "an unknown regime must not be guessed into § 36 or § 38"
+        );
     }
 }

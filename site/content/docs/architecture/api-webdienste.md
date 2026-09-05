@@ -2,11 +2,7 @@
 title = "API-Webdienste Strom"
 description = "BDEW API-Webdienste Strom — REST/JSON iMS channel vs. EDIFACT/AS4 channel. energy-api crate for iMS control measures, MaLo-ID queries, and directory service integration."
 weight = 11
-[extra]
-mermaid = true
 +++
-# BDEW API-Webdienste Strom
-
 The German energy market uses **two distinct communication channels** for
 electricity market processes. This document explains both, clarifies which
 processes use which channel, and shows how to integrate both crates in a
@@ -84,7 +80,8 @@ Use this crate for:
 - Sending and receiving iMS grid control commands (`controlMeasuresV1`).
 - MaLo-ID queries (`maloIdentV1`).
 - Looking up endpoint URLs via the Verzeichnisdienst (directory service).
-- JWS signing and verification of directory records (`crypto` feature).
+- Reading directory records with the `X-BDEW-CERT` / `X-BDEW-SIGNATURE` JWS the
+  Verzeichnisdienst returns over the RFC 8785 canonical record.
 
 ---
 
@@ -96,13 +93,13 @@ Use this crate for:
 | Zählpunktregistrierung (WiM) | EDIFACT/AS4 | `edi-energy` | UTILMD |
 | Fahrplankommunikation | EDIFACT/AS4 | `edi-energy` | MSCONS |
 | Lastgangkommunikation | EDIFACT/AS4 | `edi-energy` | MSCONS |
-| iMS Steuerbefehle (Konfiguration, Abschalten, Zuschalten) | REST/JSON | `energy-api` | `ControlMeasuresClient` |
-| iMS Rückmeldungen | REST/JSON | `energy-api` | `ControlMeasuresClient` |
-| MaLo-ID-Abfrage | REST/JSON | `energy-api` | `MaloIdentClient` |
-| iMS Universalbestellprozess — Anmeldung (PID 11021) | REST/JSON | `energy-api` | `WimOrderHandler::on_anmeldung` |
-| iMS Universalbestellprozess — Bestätigung (PID 11022) | REST/JSON | `energy-api` | `WimOrderHandler::on_bestaetigung` |
-| iMS Universalbestellprozess — Ablehnung (PID 11023) | REST/JSON | `energy-api` | `WimOrderHandler::on_ablehnung` |
-| Endpunkt-Lookup | REST/JSON | `energy-api` | `DirectoryServiceClient` |
+| iMS Steuerbefehl — Konfiguration / initialZustand | REST/JSON | `energy-api` | `ControlMeasuresClient` sends; `ControlMeasuresHandler::on_konfiguration` / `on_initial_zustand` receives |
+| iMS Rückmeldungen — vorläufig und endgültig, je positiv und negativ, plus `information` und `informationAnweisung` | REST/JSON | `energy-api` | the six remaining `ControlMeasuresHandler` methods; eight `POST /[Post]/steuerbefehl/…` routes in total |
+| MaLo-ID-Abfrage | REST/JSON | `energy-api` | `MaloIdentClient` → `POST /maloId/request/v1`; `MaloIdentHandler` receives |
+| iMS Universalbestellprozess — Anmeldung (PID 11021, NB → MSB) | REST/JSON | `energy-api` | `WimOrderHandler::on_anmeldung` — `POST /wimBestellung/v1/anmeldung/` |
+| iMS Universalbestellprozess — Bestätigung (PID 11022, MSB → NB) | REST/JSON | `energy-api` | `WimOrderHandler::on_bestaetigung` — `POST /wimBestellung/v1/bestaetigung/` |
+| iMS Universalbestellprozess — Ablehnung (PID 11023, MSB → NB) | REST/JSON | `energy-api` | `WimOrderHandler::on_ablehnung` — `POST /wimBestellung/v1/ablehnung/` |
+| Endpunkt-Lookup | REST/JSON | `energy-api` | `DirectoryServiceClient::get_record` — `GET /record/{provider}/{api}/{major}/v1` |
 
 ---
 
@@ -127,11 +124,20 @@ sequenceDiagram
     NB_AS4-->>MSB: AS4 Receipt + APERAK
 
     Note over MSB,dir: Channel 2 — REST/JSON (iMS Steuerbefehl)
-    MSB->>dir: GET /v1/organisations/NB-MP-ID<br/>(endpoint lookup)
-    dir-->>MSB: endpoint URL + JWS cert
-    MSB->>NB_WEB: POST /controlMeasures/v1/configure<br/>(iMS Konfigurationsbefehl)
+    MSB->>dir: GET /record/{provider_id}/controlMeasuresV1/1/v1<br/>(endpoint lookup)
+    dir-->>MSB: ApiRecord + X-BDEW-CERT / X-BDEW-SIGNATURE
+    MSB->>NB_WEB: POST /[Post]/steuerbefehl/konfiguration/<br/>(iMS Konfigurationsbefehl)
     NB_WEB-->>MSB: 200 OK (receipt)
 ```
+
+`DirectoryServiceClient::get_record(provider_id, api_id, major_version)` builds
+that path and returns the record together with the certificate and signature
+headers, so the caller can verify the JWS over the RFC 8785 canonical record
+before trusting the endpoint URL it just learned.
+
+The `/[Post]/` prefix on the Steuerbefehl routes is not a typo: the BDEW
+OpenAPI document carries the HTTP method inside the path template, and
+`energy-api` mirrors the specification verbatim rather than normalising it.
 
 
 ```rust
@@ -178,10 +184,10 @@ and REST payloads.
 
 | Feature | What it enables |
 |---------|-----------------|
-| `client` | `ControlMeasuresClient`, `MaloIdentClient`, `DirectoryServiceClient` HTTP clients (reqwest + rustls) |
+| `client` | HTTP clients for every API — `ControlMeasuresClient`, `MaloIdentClient`, `DirectoryServiceClient` (reqwest + rustls) and TR-03116-3 content signing |
 | `server` | Axum router factories for `ControlMeasuresHandler`, `MaloIdentHandler`, and `WimOrderHandler` receive handlers |
-| `websocket` | WebSocket subscription client for real-time directory updates (tokio-tungstenite) |
-| `crypto` | JWS ECDSA-SHA256 sign/verify for directory records (p256) |
+| `websocket` | The Verzeichnisdienst subscription client (tokio-tungstenite) |
+| `crypto` | JWS ECDSA-SHA256 sign/verify for directory records (p256) — `ControlMeasuresClient::with_signing` uses it to attach `DIGEST` + `SIGNATURE` automatically |
 
 ---
 
@@ -222,8 +228,10 @@ zeros.
 Release 2.0.0 was consulted via Mitteilung Nr. 55 for 01.10.2026 and then
 **excluded** by Mitteilung Nr. 56; only **API Guideline 1.0b** binds on that
 date. The 2.0.0 material lives on a consultation branch that is still moving, and
-no `2.0.0` tag exists. `energy-api::spec_version::RELEASE_2_0_0_SCOPE` records
-what it will change when it freezes.
+no `2.0.0` tag exists. `energy_api::spec_version::RELEASE_2_0_0_SCOPE` carries
+what that release would change — the modularised schema library, six new process
+APIs, and the `identificationParameterId` property renames — so a reader can see
+the delta without going to the branch.
 
 Note the specs are split across two repositories: `EDI-Energy/api-electricity`
 (electricity APIs) and `EDI-Energy/api-directory-service` (Verzeichnisdienst).

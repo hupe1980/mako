@@ -16,7 +16,7 @@ use crate::ledger::{PgLedger, PostEntry};
 /// net (never incremented, so it cannot drift by arithmetic).
 ///
 /// Idempotent by `idempotency` — a CloudEvent id, a bank transaction id, or a
-/// deterministic key (`ABSCHLAG-{malo}-{YYYY}-{MM}`, `mahngebuehr:{malo}:{stufe}:{date}`).
+/// deterministic key (`ABSCHLAG-{malo}-{YYYY}-{MM}`, `mahngebuehr:{case_id}:{stufe}`).
 /// A replay is a no-op returning the original entry id. Returns the doubleentry
 /// `EntryId` as a `Uuid` (for linking satellites like interest_charges).
 #[allow(clippy::too_many_arguments)]
@@ -942,25 +942,62 @@ pub async fn list_collection_entries(
     .context("list_collection_entries")
 }
 
-/// Record the outcome the bank reported for a collected entry.
+/// The collection states a given target may be reached from.
 ///
-/// Only advances a `SUBMITTED` entry: a settled collection that is later
-/// returned is a separate R-transaction, and a second pain.002 for an entry that
-/// already moved on must not rewrite its history.
+/// The old implementation hard-coded `status = 'SUBMITTED'` for every target,
+/// which made two of the five documented states unreachable: a camt.054
+/// Rückläufer is by definition an R-transaction *after settlement*, and a
+/// pain.007 reverses a collection the bank has already booked — both act on a
+/// `SETTLED` row, which the fixed guard never matched. The update then affected
+/// nothing and said so only through a `bool` all three callers dropped, so the
+/// reversal was recorded and announced while the collection it reversed stayed
+/// `SETTLED`.
+///
+/// The guard itself is still needed — a late or replayed bank reply must not
+/// walk a terminal state backwards — so it becomes a transition table instead
+/// of a constant.
+fn allowed_sources(target: &str) -> &'static [&'static str] {
+    match target {
+        // The bank refused the file: it never left, so only an in-flight
+        // collection can become one.
+        "REJECTED" => &["SUBMITTED"],
+        // Settlement is the first reply to an in-flight collection.
+        "SETTLED" => &["SUBMITTED"],
+        // R-transactions land either way round: a Rückläufer usually follows a
+        // settlement, but a camt can also arrive before any pain.002 did.
+        "RETURNED" | "REVERSED" => &["SUBMITTED", "SETTLED"],
+        // Unknown target: match nothing rather than move the row somewhere the
+        // CHECK constraint would have to catch.
+        _ => &[],
+    }
+}
+
+/// Move one collection entry to `status`, if that transition is legal.
+///
+/// Returns `false` when the entry is already in a state `status` cannot be
+/// reached from — a replayed pain.002, a Rückläufer for a collection that was
+/// rejected outright, a second reversal. **Callers must act on `false`**: it is
+/// not an error, but it does mean the thing they are about to record or
+/// announce did not happen to this row.
 pub async fn set_collection_entry_status(
     executor: impl sqlx::PgExecutor<'_>,
     entry_id: Uuid,
     status: &str,
     reason: Option<&str>,
 ) -> anyhow::Result<bool> {
+    let sources = allowed_sources(status);
+    if sources.is_empty() {
+        anyhow::bail!("no legal transition to collection status {status:?}");
+    }
     let r = sqlx::query(
         "UPDATE sepa_collection_entries
          SET status = $2, status_reason = $3, status_at = now()
-         WHERE entry_id = $1 AND status = 'SUBMITTED'",
+         WHERE entry_id = $1 AND status = ANY($4)",
     )
     .bind(entry_id)
     .bind(status)
     .bind(reason)
+    .bind(sources)
     .execute(executor)
     .await
     .context("set_collection_entry_status")?;
@@ -1193,23 +1230,6 @@ pub async fn fetch_vorauszahlung(
 }
 
 // ── Ledger entries ────────────────────────────────────────────────────────────
-
-#[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct LedgerEntryRow {
-    pub id: Uuid,
-    pub account_id: Uuid,
-    pub tenant: String,
-    pub entry_type: String,
-    pub amount_ct: i64,
-    pub reference_id: Option<String>,
-    pub ce_type: Option<String>,
-    pub ce_id: Option<String>,
-    pub booking_date: Date,
-    pub value_date: Date,
-    pub description: Option<String>,
-    #[serde(with = "time::serde::rfc3339")]
-    pub created_at: OffsetDateTime,
-}
 
 // Every money movement flows through `post_entry` above → the doubleentry
 // ledger: balanced, immutable, provable and idempotent, with the balance cache
@@ -1473,9 +1493,16 @@ pub async fn create_mandate(
 ///
 /// Per SEPA SDD Core Rulebook: after the first successful direct debit collection
 /// the mandate sequence type must change from FRST to RCUR for subsequent batches.
-/// Call this when a pain.002 ACCP confirmation is received for a FRST mandate entry.
+/// Called wherever a collection reaches `SETTLED` — a pain.002 acceptance or a
+/// matching camt booking — which are the two things that make a first
+/// collection *successful*. A rejection or a Rückläufer must not move it: the
+/// next attempt is still the first one.
+///
+/// The `WHERE` clause carries the idempotency, so a replayed settlement is a
+/// no-op rather than a second transition, and takes an executor so the caller
+/// can keep it in the same transaction as the status change it follows.
 pub async fn transition_mandate_to_rcur(
-    pool: &PgPool,
+    pool: impl sqlx::PgExecutor<'_>,
     mandate_id: Uuid,
     tenant: &str,
 ) -> anyhow::Result<()> {
@@ -1684,13 +1711,15 @@ pub async fn list_accounts_with_mandates(
                  sm.account_id  AS sm_account_id,
                  sm.tenant      AS sm_tenant,
                  sm.iban, sm.bic, sm.kontoinhaber,
-                 sm.mandatsref, sm.sequence_type, sm.signed_at, sm.revoked_at,
+                 sm.mandatsref, sm.sequence_type, sm.scheme,
+                 sm.signed_at, sm.revoked_at, sm.last_presented_at,
                  sm.debtor_town, sm.debtor_country, sm.debtor_street,
                  sm.debtor_building_number, sm.debtor_post_code,
                  sm.debtor_country_subdivision,
                  sm.updated_at  AS sm_updated_at,
                  a.sparte,
                  a.account_id, a.malo_id, a.lf_mp_id, a.tenant,
+                 a.kunden_nr,
                  a.iban         AS a_iban,
                  a.mandatsref   AS a_mandatsref,
                  a.abschlag_ct, a.abschlag_ust_satz, a.billing_day, a.balance_ct,
@@ -1767,9 +1796,11 @@ pub async fn find_accounts_due(
     day_of_month: i16,
 ) -> anyhow::Result<Vec<AccountRow>> {
     sqlx::query_as::<_, AccountRow>(
-        r"SELECT account_id, malo_id, lf_mp_id, tenant, iban, mandatsref,
-                 abschlag_ct, abschlag_ust_satz, billing_day, balance_ct, updated_at
-          FROM accounts
+        // `SELECT *`, like every other `AccountRow` query: the derived `FromRow`
+        // reads every field of the struct, so an enumerated list that omits one
+        // is a `ColumnNotFound` at decode time rather than a compile error —
+        // and this query feeds the monthly Abschlagslauf.
+        r"SELECT * FROM accounts
           WHERE tenant = $1
             AND billing_day = $2
             AND abschlag_ct > 0",
@@ -1797,13 +1828,15 @@ pub async fn find_accounts_due_for_sepa(
                  sm.account_id  AS sm_account_id,
                  sm.tenant      AS sm_tenant,
                  sm.iban, sm.bic, sm.kontoinhaber,
-                 sm.mandatsref, sm.sequence_type, sm.signed_at, sm.revoked_at,
+                 sm.mandatsref, sm.sequence_type, sm.scheme,
+                 sm.signed_at, sm.revoked_at, sm.last_presented_at,
                  sm.debtor_town, sm.debtor_country, sm.debtor_street,
                  sm.debtor_building_number, sm.debtor_post_code,
                  sm.debtor_country_subdivision,
                  sm.updated_at  AS sm_updated_at,
                  a.sparte,
                  a.account_id, a.malo_id, a.lf_mp_id, a.tenant,
+                 a.kunden_nr,
                  a.iban         AS a_iban,
                  a.mandatsref   AS a_mandatsref,
                  a.abschlag_ct, a.abschlag_ust_satz, a.billing_day, a.balance_ct,
@@ -1910,7 +1943,7 @@ pub async fn compute_abgrenzung(
 
     let row = sqlx::query(
         r"SELECT
-            COALESCE(SUM(CASE WHEN abschlag_ct > 0 THEN abschlag_ct ELSE 0 END), 0) AS abschlag_total_ct,
+            COALESCE(SUM(CASE WHEN abschlag_ct > 0 THEN abschlag_ct ELSE 0 END), 0)::bigint AS abschlag_total_ct,
             COUNT(*) FILTER (WHERE abschlag_ct > 0) AS accounts_with_advance
           FROM accounts
           WHERE tenant = $1",
@@ -2235,9 +2268,18 @@ pub struct AutoDunningResult {
 /// |---|---|---|
 /// | 0a | every account with an open case | re-derive `verzug_ct` from the ledger |
 /// | 0b | `verzug_ct <= 0` | close the case and clear its §§41f/41g phase marks |
-/// | 1 | `balance_ct > 0`, oldest RECHNUNG older than `grace_days`, no open case | open Mahnstufe 1 |
-/// | 2 | open Mahnstufe 1, `due_date < today`, `balance_ct > 0` | escalate to Mahnstufe 2 |
-/// | 3 | open Mahnstufe 2, `due_date < today`, `balance_ct > 0` | escalate to Mahnstufe 3 |
+/// | 1 | `verzug_ct > 0`, oldest RECHNUNG older than `grace_days`, no open case | open Mahnstufe 1 |
+/// | 2 | open Mahnstufe 1, `due_date < today`, `verzug_ct > 0` | escalate to Mahnstufe 2 |
+/// | 3 | open Mahnstufe 2, `due_date < today`, `verzug_ct > 0` | escalate to Mahnstufe 3 |
+///
+/// **Opening and closing read the same figure.** `verzug_ct` is the open supply
+/// debt; `balance_ct` is the net of everything, Mahngebühren and Verzugszinsen
+/// included. Gating the opening on `balance_ct` while closing on `verzug_ct`
+/// makes the two disagree for exactly the customer who has paid: the fee the
+/// last Mahnung charged keeps `balance_ct` positive, so a case closes and
+/// reopens on every run. The amount each Mahnung *demands* is still
+/// `balance_ct` — the customer owes the fees — but whether anyone may be
+/// dunned at all is the supply debt's question.
 ///
 /// Reaching Mahnstufe 3 does **not** order a disconnection. The §§41f/41g
 /// sequence runs separately ([`crate::sperr::run_sperr_sequence`]) and applies
@@ -2254,34 +2296,14 @@ pub struct AutoDunningResult {
 /// ## Fees
 ///
 /// A new Mahnstufe posts its `dunning_fee_stufe{1,2,3}_ct` as a `MAHNGEBUEHR`
-/// entry when > 0, keyed per (malo, Stufe, run-date) so a same-day re-run does
-/// not double-charge. Fees are Verzugsschaden and stay out of `verzug_ct`.
-/// Try to acquire a session-level PostgreSQL advisory lock for a worker.
-///
-/// Returns the held connection when the lock is won (a second replica gets
-/// `None` and must skip the cycle) — so only one instance runs a given worker
-/// at a time, on top of the per-run idempotency guards. Call
-/// [`release_worker_lock`] with the same connection when done.
-pub async fn try_worker_lock(
-    pool: &PgPool,
-    key: i64,
-) -> Option<sqlx::pool::PoolConnection<sqlx::Postgres>> {
-    let mut conn = pool.acquire().await.ok()?;
-    let got: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
-        .bind(key)
-        .fetch_one(&mut *conn)
-        .await
-        .ok()?;
-    if got { Some(conn) } else { None }
-}
-
-/// Release a worker advisory lock held on `conn` (same connection that took it).
-pub async fn release_worker_lock(conn: &mut sqlx::PgConnection, key: i64) {
-    let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
-        .bind(key)
-        .execute(conn)
-        .await;
-}
+/// entry when > 0, keyed per **(case, Stufe)**: one fee per Stufe of one
+/// default, whatever a re-run or a later sweep does. Fees are Verzugsschaden
+/// and stay out of `verzug_ct`, which is why they cannot themselves keep the
+/// chain alive.
+// The single-runner advisory lock lives in `mako-service`; `vertragd` needs the
+// same thing, and two copies had already drifted into two key spaces with no
+// shared rule for allocating them.
+pub use mako_service::worker_lock::{release_worker_lock, try_worker_lock};
 
 /// Advisory-lock keys (stable, distinct per worker).
 pub const LOCK_ABSCHLAG: i64 = 0x_acc0_0001;
@@ -3398,18 +3420,20 @@ pub async fn run_auto_dunning(
     // ── Step 1: Create Mahnstufe 1 for newly overdue accounts ─────────────────
     //
     // Qualifying accounts:
-    //   - balance_ct > 0
+    //   - verzug_ct > 0 — open supply debt, the same figure step 0b closes on
     //   - No active (unresolved) Mahnstufe 1 dunning case
     //   - Oldest RECHNUNG debit is older than grace_days (billing date ≤ cutoff)
     //   - Not anonymized
-    // Pre-filter cheaply in SQL on the balance cache + no-open-case; the "debt
+    // Pre-filter cheaply in SQL on the Verzug cache + no-open-case; the "debt
     // aged past grace" signal comes from the ledger (a charge booked on/before
-    // cutoff), checked per candidate below.
+    // cutoff), checked per candidate below. `post_entry` refreshes `verzug_ct`
+    // after every posting, so the cache is current for any account a payment
+    // has touched.
     let prefiltered: Vec<(Uuid, String, String, i64)> = sqlx::query(
         r"SELECT a.account_id, a.malo_id, a.lf_mp_id, a.balance_ct
           FROM accounts a
           WHERE a.tenant = $1
-            AND a.balance_ct > 0
+            AND a.verzug_ct > 0
             AND a.anonymized_at IS NULL
             AND NOT EXISTS (
                 SELECT 1 FROM dunning_cases dc
@@ -3463,7 +3487,9 @@ pub async fn run_auto_dunning(
         // (malo, Mahnstufe, run-date) — a same-day re-run replays as a no-op
         // instead of double-charging the fee.
         if fee_stufe1_ct > 0 {
-            let _ = post_entry(
+            // The Mahnung states the fee, so a posting that does not land
+            // leaves a letter demanding money no receivable carries.
+            if let Err(e) = post_entry(
                 ledger,
                 pool,
                 tenant,
@@ -3471,7 +3497,7 @@ pub async fn run_auto_dunning(
                 lf_mp_id,
                 "MAHNGEBUEHR",
                 fee_stufe1_ct,
-                &format!("mahngebuehr:{malo_id}:1:{today}"),
+                &format!("mahngebuehr:{case_id}:1"),
                 Some(mako_events::accounting::MAHNUNG_ISSUED),
                 Some(&case_id.to_string()),
                 today,
@@ -3479,7 +3505,16 @@ pub async fn run_auto_dunning(
                 Some("Mahngebühr Mahnstufe 1"),
                 None,
             )
-            .await;
+            .await
+            {
+                tracing::error!(
+                    case_id = %case_id,
+                    malo = %malo_id,
+                    fee_ct = fee_stufe1_ct,
+                    error = %e,
+                    "accountingd: Mahngebühr posting failed — the Mahnstufe 1 letter demands a fee that is not booked"
+                );
+            }
         }
 
         mahnstufe1_created += 1;
@@ -3492,9 +3527,8 @@ pub async fn run_auto_dunning(
 
     // ── Step 2: Escalate Mahnstufe 1 → 2 ─────────────────────────────────────
     let overdue_stufe1: Vec<(Uuid, Uuid, String, String, i64)> = sqlx::query(
-        // `a.balance_ct`, not `dc.amount_due_ct`: the next Mahnstufe demands what
-        // is open **now**. Carrying the frozen amount forward dunned a customer
-        // who had paid most of the invoice for the whole of it.
+        // `a.balance_ct`, not `dc.amount_due_ct`: a Mahnung demands what is open
+        // **now**, so a partial payment between two Stufen has to reduce it.
         r"SELECT dc.id, dc.account_id, a.malo_id, a.lf_mp_id, a.balance_ct AS amount_due_ct
           FROM dunning_cases dc
           JOIN accounts a ON a.account_id = dc.account_id
@@ -3502,9 +3536,11 @@ pub async fn run_auto_dunning(
             AND dc.stufe = 1
             AND dc.resolved_at IS NULL
             AND dc.due_date < $2
-            -- Escalate only accounts that still owe. Without this the chain ran
-            -- on `due_date` alone and walked a paid-up customer to Mahnstufe 3.
-            AND a.balance_ct > 0",
+            -- Escalate only accounts that still owe supply debt — the same
+            -- figure step 0b closes a case on. `due_date` alone would walk a
+            -- paid-up customer to Mahnstufe 3, and `balance_ct` would keep the
+            -- chain alive on the Mahngebühr the previous Stufe just charged.
+            AND a.verzug_ct > 0",
     )
     .bind(tenant)
     .bind(today)
@@ -3545,7 +3581,9 @@ pub async fn run_auto_dunning(
         .context("auto_dunning: create Mahnstufe2")?;
 
         if fee_stufe2_ct > 0 {
-            let _ = post_entry(
+            // The Mahnung states the fee, so a posting that does not land
+            // leaves a letter demanding money no receivable carries.
+            if let Err(e) = post_entry(
                 ledger,
                 pool,
                 tenant,
@@ -3553,7 +3591,7 @@ pub async fn run_auto_dunning(
                 lf_mp_id,
                 "MAHNGEBUEHR",
                 fee_stufe2_ct,
-                &format!("mahngebuehr:{malo_id}:2:{today}"),
+                &format!("mahngebuehr:{case_id}:2"),
                 Some(mako_events::accounting::MAHNUNG_ISSUED),
                 Some(&case_id.to_string()),
                 today,
@@ -3561,7 +3599,16 @@ pub async fn run_auto_dunning(
                 Some("Mahngebühr Mahnstufe 2"),
                 None,
             )
-            .await;
+            .await
+            {
+                tracing::error!(
+                    case_id = %case_id,
+                    malo = %malo_id,
+                    fee_ct = fee_stufe2_ct,
+                    error = %e,
+                    "accountingd: Mahngebühr posting failed — the Mahnstufe 2 letter demands a fee that is not booked"
+                );
+            }
         }
 
         escalated += 1;
@@ -3570,9 +3617,8 @@ pub async fn run_auto_dunning(
 
     // ── Step 3: Escalate Mahnstufe 2 → 3 + Sperrauftrag ─────────────────────
     let overdue_stufe2: Vec<(Uuid, Uuid, String, String, i64)> = sqlx::query(
-        // `a.balance_ct`, not `dc.amount_due_ct`: the next Mahnstufe demands what
-        // is open **now**. Carrying the frozen amount forward dunned a customer
-        // who had paid most of the invoice for the whole of it.
+        // `a.balance_ct`, not `dc.amount_due_ct`: a Mahnung demands what is open
+        // **now**, so a partial payment between two Stufen has to reduce it.
         r"SELECT dc.id, dc.account_id, a.malo_id, a.lf_mp_id, a.balance_ct AS amount_due_ct
           FROM dunning_cases dc
           JOIN accounts a ON a.account_id = dc.account_id
@@ -3580,9 +3626,11 @@ pub async fn run_auto_dunning(
             AND dc.stufe = 2
             AND dc.resolved_at IS NULL
             AND dc.due_date < $2
-            -- Escalate only accounts that still owe. Without this the chain ran
-            -- on `due_date` alone and walked a paid-up customer to Mahnstufe 3.
-            AND a.balance_ct > 0",
+            -- Escalate only accounts that still owe supply debt — the same
+            -- figure step 0b closes a case on. `due_date` alone would walk a
+            -- paid-up customer to Mahnstufe 3, and `balance_ct` would keep the
+            -- chain alive on the Mahngebühr the previous Stufe just charged.
+            AND a.verzug_ct > 0",
     )
     .bind(tenant)
     .bind(today)
@@ -3622,7 +3670,9 @@ pub async fn run_auto_dunning(
         .context("auto_dunning: create Mahnstufe3")?;
 
         if fee_stufe3_ct > 0 {
-            let _ = post_entry(
+            // The Mahnung states the fee, so a posting that does not land
+            // leaves a letter demanding money no receivable carries.
+            if let Err(e) = post_entry(
                 ledger,
                 pool,
                 tenant,
@@ -3630,7 +3680,7 @@ pub async fn run_auto_dunning(
                 lf_mp_id,
                 "MAHNGEBUEHR",
                 fee_stufe3_ct,
-                &format!("mahngebuehr:{malo_id}:3:{today}"),
+                &format!("mahngebuehr:{_case_id}:3"),
                 Some(mako_events::accounting::MAHNUNG_ISSUED),
                 Some(&_case_id.to_string()),
                 today,
@@ -3638,7 +3688,16 @@ pub async fn run_auto_dunning(
                 Some("Mahngebühr Mahnstufe 3"),
                 None,
             )
-            .await;
+            .await
+            {
+                tracing::error!(
+                    case_id = %_case_id,
+                    malo = %malo_id,
+                    fee_ct = fee_stufe3_ct,
+                    error = %e,
+                    "accountingd: Mahngebühr posting failed — the Mahnstufe 3 letter demands a fee that is not booked"
+                );
+            }
         }
 
         escalated += 1;
@@ -3704,7 +3763,7 @@ pub async fn list_aging_buckets(pool: &PgPool, tenant: &str) -> anyhow::Result<V
                 ELSE '>90d'
             END AS bucket,
             COUNT(*)                 AS account_count,
-            COALESCE(SUM(balance_ct), 0) AS total_ct
+            COALESCE(SUM(balance_ct), 0)::bigint AS total_ct
           FROM (
               SELECT a.balance_ct,
                      EXTRACT(DAY FROM (now() - COALESCE(
@@ -3773,6 +3832,8 @@ pub struct InterestChargeRow {
     pub period_to: time::Date,
     pub legal_basis: String,
     pub ledger_entry_id: Option<Uuid>,
+    /// One entry per § 247 BGB rate in force during the period.
+    pub rate_segments: serde_json::Value,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
@@ -3811,7 +3872,70 @@ pub async fn fetch_ecb_base_rate(
     }
 }
 
+/// The § 247 BGB Basiszinssatz segments covering the half-open `[from, to)`.
+///
+/// The Basiszinssatz changes on 1 January and 1 July, so a Verzugszeitraum of
+/// any length can span two or more of them. § 288 BGB applies the rate *in
+/// force* to the days it was in force; one rate over the whole period is a
+/// different number, and the `interest_charges` row would state a `rate_pct`
+/// that was not in force for most of the days it charges.
+///
+/// Returns one `(from, to, rate_pct)` per rate in force, in date order, always
+/// covering `[from, to)` exactly.
+///
+/// # Errors
+///
+/// Fails when no announced rate covers the start of the period — the same
+/// refusal as [`fetch_ecb_base_rate`], for the same reason.
+pub async fn fetch_ecb_base_rate_segments(
+    pool: &PgPool,
+    from: time::Date,
+    to: time::Date,
+) -> anyhow::Result<Vec<(time::Date, time::Date, rust_decimal::Decimal)>> {
+    let opening = fetch_ecb_base_rate(pool, Some(from)).await?;
+
+    // Every announcement that takes effect strictly inside the period splits it.
+    let changes: Vec<(time::Date, rust_decimal::Decimal)> = sqlx::query(
+        "SELECT valid_from, rate_pct FROM ecb_base_rates \
+         WHERE valid_from > $1 AND valid_from < $2 ORDER BY valid_from ASC",
+    )
+    .bind(from)
+    .bind(to)
+    .fetch_all(pool)
+    .await
+    .context("fetch_ecb_base_rate_segments")?
+    .into_iter()
+    .map(|r| {
+        (
+            r.try_get::<time::Date, _>("valid_from").unwrap_or(from),
+            r.try_get::<rust_decimal::Decimal, _>("rate_pct")
+                .unwrap_or(opening),
+        )
+    })
+    .collect();
+
+    let mut segments = Vec::with_capacity(changes.len() + 1);
+    let mut cursor = from;
+    let mut rate = opening;
+    for (change_at, next_rate) in changes {
+        if change_at > cursor {
+            segments.push((cursor, change_at, rate));
+        }
+        cursor = change_at;
+        rate = next_rate;
+    }
+    if to > cursor {
+        segments.push((cursor, to, rate));
+    }
+    Ok(segments)
+}
+
 /// Create a Verzugszinsen (§ 288 BGB) charge and its linked ledger entry.
+///
+/// The period is split at every § 247 BGB Stichtag it crosses and each segment
+/// is charged at the rate in force for it; the row's `rate_pct` is the
+/// resulting effective annual rate and `rate_segments` carries the breakdown a
+/// disputing customer would ask for.
 #[allow(clippy::too_many_arguments)]
 pub async fn create_interest_charge(
     ledger: &PgLedger,
@@ -3826,16 +3950,52 @@ pub async fn create_interest_charge(
     period_from: time::Date,
     period_to: time::Date,
 ) -> anyhow::Result<InterestChargeRow> {
-    let ecb_rate = fetch_ecb_base_rate(pool, Some(period_from)).await?;
     let days = (period_to - period_from).whole_days();
     if days <= 0 {
         anyhow::bail!("interest period_to must be after period_from");
     }
-    let (interest_ct, annual_rate) =
-        crate::sepa::calculate_interest_ct(principal_ct, ecb_rate, is_b2b, days);
+
+    let segments = fetch_ecb_base_rate_segments(pool, period_from, period_to).await?;
+    let mut interest_ct: i64 = 0;
+    let mut breakdown = Vec::with_capacity(segments.len());
+    for (seg_from, seg_to, ecb) in &segments {
+        let seg_days = (*seg_to - *seg_from).whole_days();
+        let (seg_ct, seg_rate) =
+            crate::sepa::calculate_interest_ct(principal_ct, *ecb, is_b2b, seg_days);
+        interest_ct += seg_ct;
+        breakdown.push(serde_json::json!({
+            "from": seg_from.to_string(),
+            "to": seg_to.to_string(),
+            "days": seg_days,
+            // `.normalize()`, because `ecb_base_rates.rate_pct` is
+            // `NUMERIC(6,3)` and the column's scale would otherwise leak into
+            // the audit trail as „6.270" for a rate published as 6,27 %.
+            // Normalising strips trailing zeros without changing the value, so
+            // recomputing the interest from the stated rate still agrees —
+            // which rounding here would not guarantee.
+            "ecb_base_rate_pct": ecb.normalize().to_string(),
+            "rate_pct": seg_rate.normalize().to_string(),
+            "interest_ct": seg_ct,
+        }));
+    }
     if interest_ct <= 0 {
         anyhow::bail!("calculated interest is zero — check principal and period");
     }
+    let rate_segments = serde_json::Value::Array(breakdown);
+
+    // The rate the row states is the one the whole charge works out to, so a
+    // customer recomputing `principal × rate × days / 36500` reaches the booked
+    // figure whether or not the period crossed a Stichtag. The per-segment rates
+    // stay in `rate_segments`.
+    let annual_rate = (rust_decimal::Decimal::from(interest_ct)
+        * rust_decimal::Decimal::from(36500)
+        / (rust_decimal::Decimal::from(principal_ct) * rust_decimal::Decimal::from(days)))
+    .round_dp_with_strategy(3, rust_decimal::RoundingStrategy::MidpointAwayFromZero);
+    // The opening rate is the audit anchor: it is the one in force when the
+    // Verzug began.
+    let ecb_rate = segments
+        .first()
+        .map_or(rust_decimal::Decimal::ZERO, |(_, _, r)| *r);
 
     let legal_basis = if is_b2b {
         "\u{00a7}288 Abs. 2 BGB"
@@ -3875,8 +4035,9 @@ pub async fn create_interest_charge(
     let row = sqlx::query_as::<_, InterestChargeRow>(
         r"INSERT INTO interest_charges
               (account_id, tenant, invoice_reference, principal_ct, interest_ct, rate_pct,
-               ecb_base_rate_pct, customer_type, period_from, period_to, legal_basis, ledger_entry_id)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+               ecb_base_rate_pct, customer_type, period_from, period_to, legal_basis,
+               ledger_entry_id, rate_segments)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
           ON CONFLICT (tenant, account_id, period_from, period_to) DO NOTHING
           RETURNING *",
     )
@@ -3892,6 +4053,7 @@ pub async fn create_interest_charge(
     .bind(period_to)
     .bind(legal_basis)
     .bind(ledger_id)
+    .bind(&rate_segments)
     .fetch_optional(&mut *tx)
     .await
     .context("create_interest_charge: insert")?;
@@ -3926,7 +4088,7 @@ pub async fn create_interest_charge(
             "principal_ct":      principal_ct,
             "interest_ct":       interest_ct,
             "interest_eur":      format!("{:.2}", interest_ct as f64 / 100.0),
-            "rate_pct":          annual_rate.to_string(),
+            "rate_pct":          annual_rate.normalize().to_string(),
             "customer_type":     customer_type,
             "period_from":       period_from.to_string(),
             "period_to":         period_to.to_string(),
@@ -4011,9 +4173,18 @@ pub struct CreatePaymentPlanRequest {
 
 /// Create a payment plan and its installment schedule.
 ///
-/// The number of installments is `ceil(total_ct / installment_ct)`.
-/// The final installment is adjusted to cover any remainder.
-/// Installments are due monthly from `first_due_date`, on `billing_day`.
+/// The number of installments is `ceil(total_ct / installment_ct)`, and the
+/// final one carries the remainder so the schedule sums back to `total_ct`
+/// exactly.
+///
+/// Installments fall due in successive calendar months from `first_due_date`,
+/// keeping that date's day of month. `billing_day` is recorded on the plan for
+/// the collection run; it does not move the due dates, because a plan agreed to
+/// start on a stated day must not silently start on a different one.
+///
+/// The plan and its whole schedule are written in **one transaction**: a plan
+/// whose installments are missing is a debt with no way to pay it down, and the
+/// dunning run reads the two together.
 pub async fn create_payment_plan(
     pool: &PgPool,
     tenant: &str,
@@ -4021,13 +4192,30 @@ pub async fn create_payment_plan(
 ) -> anyhow::Result<Uuid> {
     use time::format_description::well_known::Iso8601;
 
+    // Checked before any arithmetic: `total_ct + installment_ct - 1` divides by
+    // `installment_ct`, so a zero here is a panic and a negative one silently
+    // inverts the schedule.
+    if req.installment_ct <= 0 {
+        anyhow::bail!("installment_ct must be > 0, got {}", req.installment_ct);
+    }
+    if req.total_ct <= 0 {
+        anyhow::bail!("total_ct must be > 0, got {}", req.total_ct);
+    }
+
+    let first_due = time::Date::parse(&req.first_due_date, &Iso8601::DEFAULT)
+        .context("parse first_due_date")?;
+
     let lf_mp_id = req.lf_mp_id.as_deref().unwrap_or(tenant);
     let account_id = upsert_account(pool, &req.malo_id, lf_mp_id, tenant).await?;
 
-    let installment_count = (req.total_ct + req.installment_ct - 1) / req.installment_ct;
-    if installment_count <= 0 {
-        anyhow::bail!("installment_count must be >= 1");
-    }
+    // ceil(total/installment) without the `total + installment - 1` form,
+    // which overflows near `i64::MAX`. Both operands are positive here.
+    let installment_count =
+        req.total_ct / req.installment_ct + i64::from(req.total_ct % req.installment_ct != 0);
+    let installment_count = i32::try_from(installment_count)
+        .context("installment_count does not fit in i32 — check total_ct/installment_ct")?;
+
+    let mut tx = pool.begin().await.context("create_payment_plan: begin")?;
 
     let plan_id: Uuid = sqlx::query_scalar(
         r"INSERT INTO payment_plans
@@ -4040,27 +4228,23 @@ pub async fn create_payment_plan(
     .bind(tenant)
     .bind(req.total_ct)
     .bind(req.installment_ct)
-    .bind(installment_count as i32)
+    .bind(installment_count)
     .bind(req.billing_day)
     .bind(req.dunning_case_id)
     .bind(req.operator_sub.as_deref())
     .bind(req.note.as_deref())
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await
     .context("create_payment_plan")?;
 
-    // Generate installment schedule
-    let first_due = time::Date::parse(&req.first_due_date, &Iso8601::DEFAULT)
-        .context("parse first_due_date")?;
-
     let mut remaining = req.total_ct;
     for n in 0..installment_count {
-        let due_date = first_due
-            .replace_month(
-                time::Month::try_from(((first_due.month() as u8 - 1 + n as u8) % 12) + 1)
-                    .unwrap_or(time::Month::January),
-            )
-            .unwrap_or(first_due);
+        // `mako_fristen::add_months`, never `Date::replace_month`: the latter
+        // keeps the year, so instalment 2 of a plan starting in November lands
+        // in February of the *same* year — before the first one — and it fails
+        // outright on a day the target month does not have, which the old
+        // `unwrap_or(first_due)` turned into a duplicate due date.
+        let due_date = mako_fristen::add_months(first_due, n as u32);
 
         let amount = if n == installment_count - 1 {
             remaining // last installment covers any rounding remainder
@@ -4078,13 +4262,15 @@ pub async fn create_payment_plan(
         )
         .bind(plan_id)
         .bind(tenant)
-        .bind((n + 1) as i32)
+        .bind(n + 1)
         .bind(due_date)
         .bind(amount)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .context("create_payment_plan: installment")?;
     }
+
+    tx.commit().await.context("create_payment_plan: commit")?;
 
     Ok(plan_id)
 }

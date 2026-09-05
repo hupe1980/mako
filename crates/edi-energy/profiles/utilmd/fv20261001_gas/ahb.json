@@ -544,6 +544,12 @@
           "operands": [
             {
               "operand": "X"
+            },
+            {
+              "operand": "X"
+            },
+            {
+              "operand": "X"
             }
           ]
         },
@@ -1714,6 +1720,12 @@
           "operands": [
             {
               "operand": "X"
+            },
+            {
+              "operand": "X"
+            },
+            {
+              "operand": "X"
             }
           ]
         },
@@ -2872,6 +2884,12 @@
           "de": "1131",
           "nr": "00059",
           "operands": [
+            {
+              "operand": "X"
+            },
+            {
+              "operand": "X"
+            },
             {
               "operand": "X"
             }
@@ -6478,7 +6496,7 @@
           "nr": "00022",
           "operands": [
             {
-              "operand": "X ([UB2] ∧"
+              "operand": "X ([UB2] ∧ [209]) ⊻ [44]"
             }
           ]
         },
@@ -10437,6 +10455,12 @@
           "operands": [
             {
               "operand": "X"
+            },
+            {
+              "operand": "X"
+            },
+            {
+              "operand": "X"
             }
           ]
         },
@@ -10553,7 +10577,7 @@
           "nr": "00072",
           "operands": [
             {
-              "operand": "Soll [912] ∧ [129]"
+              "operand": "Soll [912] ∧ [902] [128] ∧ [129]"
             }
           ]
         },
@@ -10592,7 +10616,7 @@
           "nr": "00074",
           "operands": [
             {
-              "operand": "X [902] ∧"
+              "operand": "X [902] ∧ [930] ∧ [938]"
             }
           ]
         },
@@ -12261,6 +12285,12 @@
           "operands": [
             {
               "operand": "X"
+            },
+            {
+              "operand": "X"
+            },
+            {
+              "operand": "X"
             }
           ]
         },
@@ -12495,7 +12525,7 @@
           "nr": "00072",
           "operands": [
             {
-              "operand": "Muss [912] [902] [128] ∧ ∧ [902] [128]"
+              "operand": "Muss [912] ∧ [902] [128]"
             }
           ]
         },
@@ -12534,7 +12564,7 @@
           "nr": "00074",
           "operands": [
             {
-              "operand": "X [902] ∧ [930] ∧ [938] [930] ∧ [938]"
+              "operand": "X [902] ∧ [930] ∧ [938]"
             }
           ]
         },
@@ -18870,6 +18900,12 @@
           "operands": [
             {
               "operand": "X"
+            },
+            {
+              "operand": "X"
+            },
+            {
+              "operand": "X"
             }
           ]
         },
@@ -19128,7 +19164,7 @@
           "nr": "00072",
           "operands": [
             {
-              "operand": "Muss [912] ∧"
+              "operand": "Muss [912] ∧ [902] [128]"
             }
           ]
         },
@@ -19167,7 +19203,7 @@
           "nr": "00074",
           "operands": [
             {
-              "operand": "X [902] ∧"
+              "operand": "X [902] ∧ [930] ∧ [938]"
             }
           ]
         },
@@ -22349,6 +22385,12 @@
           "operands": [
             {
               "operand": "X"
+            },
+            {
+              "operand": "X"
+            },
+            {
+              "operand": "X"
             }
           ]
         },
@@ -22583,7 +22625,7 @@
           "nr": "00072",
           "operands": [
             {
-              "operand": "Muss [912] [902] [128] ∧ [902] [128]"
+              "operand": "Muss [912] ∧ [902] [128]"
             }
           ]
         },
@@ -22622,7 +22664,7 @@
           "nr": "00074",
           "operands": [
             {
-              "operand": "X [902] ∧ [930] ∧ [938] [930] ∧ [938]"
+              "operand": "X [902] ∧ [930] ∧ [938]"
             }
           ]
         },
@@ -28749,6 +28791,12 @@
           "de": "1131",
           "nr": "00059",
           "operands": [
+            {
+              "operand": "X"
+            },
+            {
+              "operand": "X"
+            },
             {
               "operand": "X"
             }
@@ -40554,7 +40602,7 @@
           "nr": "00014",
           "operands": [
             {
-              "operand": "X [UB2] ∧"
+              "operand": "X [UB2] ∧ [528]"
             }
           ]
         },
@@ -40583,7 +40631,7 @@
           "nr": "00017",
           "operands": [
             {
-              "operand": "X [UB2] ∧"
+              "operand": "X [UB2] ∧ [528]"
             }
           ]
         },
@@ -42577,6 +42625,12 @@
           "operands": [
             {
               "operand": "X"
+            },
+            {
+              "operand": "X"
+            },
+            {
+              "operand": "X"
             }
           ]
         },
@@ -43381,6 +43435,12 @@
           "de": "1131",
           "nr": "00059",
           "operands": [
+            {
+              "operand": "X"
+            },
+            {
+              "operand": "X"
+            },
             {
               "operand": "X"
             }
@@ -44405,7 +44465,7 @@
           "nr": "00014",
           "operands": [
             {
-              "operand": "X [UB2] ∧"
+              "operand": "X [UB2] ∧ [528]"
             }
           ]
         },
@@ -44434,7 +44494,7 @@
           "nr": "00017",
           "operands": [
             {
-              "operand": "X [UB2] ∧"
+              "operand": "X [UB2] ∧ [528]"
             }
           ]
         },
@@ -47357,7 +47417,7 @@
           "nr": "00014",
           "operands": [
             {
-              "operand": "X [UB2] ∧"
+              "operand": "X [UB2] ∧ [528]"
             }
           ]
         },
@@ -47386,7 +47446,7 @@
           "nr": "00017",
           "operands": [
             {
-              "operand": "X [UB2] ∧"
+              "operand": "X [UB2] ∧ [528]"
             }
           ]
         },
@@ -49738,7 +49798,7 @@
           "nr": "00014",
           "operands": [
             {
-              "operand": "X [UB2] ∧"
+              "operand": "X [UB2] ∧ [528]"
             }
           ]
         },
@@ -49767,7 +49827,7 @@
           "nr": "00017",
           "operands": [
             {
-              "operand": "X [UB2] ∧"
+              "operand": "X [UB2] ∧ [528]"
             }
           ]
         },
@@ -51621,7 +51681,7 @@
           "nr": "00014",
           "operands": [
             {
-              "operand": "X [UB2] ∧"
+              "operand": "X [UB2] ∧ [528]"
             }
           ]
         },
@@ -51650,7 +51710,7 @@
           "nr": "00017",
           "operands": [
             {
-              "operand": "X [UB2] ∧"
+              "operand": "X [UB2] ∧ [528]"
             }
           ]
         },
@@ -54494,7 +54554,7 @@
           "nr": "00014",
           "operands": [
             {
-              "operand": "X [UB2] ∧"
+              "operand": "X [UB2] ∧ [528]"
             }
           ]
         },
@@ -54523,7 +54583,7 @@
           "nr": "00017",
           "operands": [
             {
-              "operand": "X [UB2] ∧"
+              "operand": "X [UB2] ∧ [528]"
             }
           ]
         },
@@ -60130,6 +60190,12 @@
           "de": "1131",
           "nr": "00059",
           "operands": [
+            {
+              "operand": "X"
+            },
+            {
+              "operand": "X"
+            },
             {
               "operand": "X"
             }
@@ -65752,7 +65818,7 @@
           "nr": "00022",
           "operands": [
             {
-              "operand": "X ([UB2] ∧"
+              "operand": "X ([UB2] ∧ [209]) ⊻ [44]"
             }
           ]
         },
@@ -74647,7 +74713,7 @@
           "nr": "00005",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [494]"
             }
           ]
         },
@@ -75110,7 +75176,7 @@
           "nr": "00005",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [494]"
             }
           ]
         },
@@ -75319,6 +75385,15 @@
         },
         {
           "de": "9013",
+          "nr": "00027",
+          "operands": [
+            {
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1131",
           "nr": "00027",
           "operands": [
             {
@@ -75630,7 +75705,7 @@
           "nr": "00005",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [494]"
             }
           ]
         },
@@ -76089,7 +76164,7 @@
           "nr": "00005",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [494]"
             }
           ]
         },
@@ -78045,6 +78120,12 @@
           "operands": [
             {
               "operand": "X"
+            },
+            {
+              "operand": "X"
+            },
+            {
+              "operand": "X"
             }
           ]
         },
@@ -78361,7 +78442,7 @@
           "before": "00049",
           "group": "SG9",
           "status": [
-            "Soll [47] ∧ [108] ∧ [106] [108] ∧",
+            "Soll [47] ∧ [108] ∧ [106]",
             "Muss [46] ∧ [106]"
           ]
         },
@@ -78993,6 +79074,12 @@
           "operands": [
             {
               "operand": "X"
+            },
+            {
+              "operand": "X"
+            },
+            {
+              "operand": "X"
             }
           ]
         },
@@ -79309,7 +79396,7 @@
           "before": "00049",
           "group": "SG9",
           "status": [
-            "Soll [47] ∧ [106]",
+            "Soll [47] ∧ [108] ∧ [106]",
             "Muss [46] ∧ [106]"
           ]
         },

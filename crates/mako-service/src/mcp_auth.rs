@@ -5,10 +5,10 @@
 //!
 //! | Mode | Configuration | Used by |
 //! |---|---|---|
-//! | **OIDC + Cedar** | `oidc` active, `.with_cedar(…)` | `marktd`, `invoicd`, `processd`, `edmd`, `obsd` |
+//! | **OIDC + Cedar** | `oidc` active, `.with_cedar(…)` | `marktd`, `invoicd`, `processd`, `edmd`, `obsd`, `netzbilanzd` |
 //! | **OIDC only** | `oidc` active, no Cedar | `accountingd`, `billingd`, `sperrd` |
 //! | **OIDC + API key fallback** | `oidc` active + `.with_named_key(…)` | any service with LLM agent clients |
-//! | **API key only** | `McpAuth::dev()` + `.with_named_key(…)` | `einsd`, `netzbilanzd`, `productd`, `vertragd` |
+//! | **API key only** | `McpAuth::dev()` + `.with_named_key(…)` | `einsd`, `productd`, `vertragd` |
 //! | **Dev mode** | `McpAuth::dev()`, no keys | local development only |
 //!
 //! ## Security properties
@@ -310,8 +310,8 @@ impl McpAuth {
     /// - `cfg.named_keys` → additional named keys
     /// - both absent → dev mode (allow all; **never use in production**)
     ///
-    /// This is the standard construction for `productd`, `einsd`, `netzbilanzd`,
-    /// `vertragd`, `sperrd`, `billingd`, `accountingd`, `portald`.
+    /// This is the standard construction for `productd`, `einsd`, `vertragd`,
+    /// `sperrd`, `billingd`, `accountingd`, `portald`.
     ///
     /// # Example
     ///

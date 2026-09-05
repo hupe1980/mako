@@ -100,7 +100,7 @@ spec:
     formation:
       subject: "operator-parity-posture"
       purpose: >-
-        Track how this operator's own §20 EnWG parity and STP posture moves between audits, so a slow drift is visible as a trend rather than re-derived from scratch every run.
+        Track how this operator's own Gleichbehandlung and STP posture moves between audits, so a slow drift is visible as a trend rather than re-derived from scratch every run.
       instruction: >-
         Record at most three durable facts about the OPERATOR's own regulatory posture: the parity deviation observed, the process families it appeared in, and any BNetzA-reportable finding. Record nothing about an individual customer, Marktlokation or counterparty.
       max_items: 3

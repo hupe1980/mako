@@ -192,9 +192,8 @@ jobs:
       fail-fast: false
       matrix:
         features:
-          - --features crypto
-          - --features crypto,client,server
-          - --features crypto,client,server,websocket
+          - --features client
+          - --features client,server
           - --no-default-features
     steps:
       - uses: actions/checkout@v4
@@ -238,6 +237,32 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
       - run: just examples
+
+
+  # ── Fuzz targets ────────────────────────────────────────────────────────────
+  #
+  # `fuzz/` is excluded from the workspace, so every other job here walks past
+  # it: nothing in this file compiles it and `cargo check --all-targets` at the
+  # root never reaches it. Its manifest also restates each dependency version by
+  # hand, because an excluded crate cannot inherit `[workspace.dependencies]` —
+  # so a bump on the workspace side is only ever proved compatible here.
+  #
+  # A `cargo check`, not `cargo fuzz build`: the latter needs nightly and links
+  # every target with the sanitiser runtime, which is minutes per run. Actual
+  # fuzzing is the weekly job in `audit.yml`.
+  fuzz:
+    name: Fuzz targets compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # `fuzz/` carries its own lockfile and target directory; naming it here is
+      # what makes the cache key hash `fuzz/Cargo.lock` rather than the root one.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "fuzz"
+      - uses: extractions/setup-just@v2
+      - run: just check-fuzz
 
 
   # ── Documentation ───────────────────────────────────────────────────────────
@@ -347,6 +372,49 @@ jobs:
       # the one that moves with the crate.
       - name: No hardcoded rubo4e version alias
         run: just no-version-alias
+
+  # ── Release image coverage ──────────────────────────────────────────────────
+  # `docker-bake.hcl` decides what is *built*; `release.yml` decides what is
+  # *tagged*. They are two hand-maintained service lists (three, counting the
+  # digest-export loop), and nothing links them — a service added to the bake
+  # group and forgotten in the release workflow is pushed to ghcr.io by digest
+  # and then never given a name anyone can pull. `outputd` shipped that way: in
+  # the bake file, absent from both release lists, no image.
+  #
+  # The failure is silent by construction — the bake succeeds, the manifest job
+  # simply does not exist for that service — so it cannot be caught by anything
+  # downstream. It has to be caught here.
+  release-images:
+    name: Every baked service is released
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bake group, digest loop and manifest matrix agree
+        run: |
+          set -euo pipefail
+          # The `targets = [...]` list of the `default` group in docker-bake.hcl.
+          baked=$(sed -n '/^group "default"/,/^}/p' docker-bake.hcl \
+                  | sed -n '/targets = \[/,/\]/p' \
+                  | grep -o '"[a-z0-9-]*"' | tr -d '"' | sort -u)
+          # The `for service in ... ; do` loop that exports one digest per service.
+          looped=$(sed -n '/for service in /,/; do/p' .github/workflows/release.yml \
+                   | sed -e 's/.*for service in //' -e 's/; do.*//' -e 's/\\//g' \
+                   | tr -s ' \t' '\n\n' | grep -E '^[a-z0-9-]+$' | sort -u)
+          # The docker-manifest matrix.
+          matrix=$(grep -oE '^ *- service: [a-z0-9-]+' .github/workflows/release.yml \
+                   | awk '{print $3}' | sort -u)
+
+          fail=0
+          for name in looped matrix; do
+            eval "actual=\$$name"
+            if [ "$baked" != "$actual" ]; then
+              echo "::error::docker-bake.hcl and the release $name disagree:"
+              diff <(echo "$baked") <(echo "$actual") || true
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ] || exit 1
+          echo "$baked" | wc -l | xargs printf '%s services baked, looped and tagged\n'
 
   # ── Role-scoped builds ──────────────────────────────────────────────────────
   # `--all-features` cannot catch a module whose `#[cfg(feature = …)]` gate is

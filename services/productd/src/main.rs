@@ -41,6 +41,20 @@
 //! { "stromsteuer_ct_per_kwh_override": "0" }
 //! ```
 //!
+//! ## Authentication and authorization
+//!
+//! Every route below takes a verified OIDC bearer and a Cedar decision from
+//! `policies/productd.cedar`, except the two § 41c EnWG comparison-feed routes,
+//! which take no `Claims` at all: the statute obliges the supplier to publish
+//! its tariff data to independent comparison instruments, and an obligation
+//! discharged only behind a bearer token is not discharged. Those two serve
+//! `product_status = 'PUBLISHED'` rows of the `FEED_CATEGORIES` allowlist and
+//! nothing else, which `tests/authorization_guard.rs` pins.
+//!
+//! Reading the catalogue and the market price series needs only a token of the
+//! tenant; writing a Tarifpreisblatt, importing an EPEX day or working an
+//! Angebot needs a market role (LF, MSB, ESA, ADMIN).
+//!
 //! Port: `:9080`
 
 use anyhow::Context as _;
@@ -75,6 +89,8 @@ impl Daemon for Productd {
         cfg: Arc<config::ProductdConfig>,
         ctx: ServiceContext,
     ) -> anyhow::Result<Router> {
+        cfg.check_auth_posture()?;
+
         let pool = ctx.pool().clone();
 
         // ── OIDC/JWT authentication ───────────────────────────────────────────
@@ -87,11 +103,33 @@ impl Daemon for Productd {
         .await
         .context("OIDC setup")?;
 
+        // ── Cedar ABAC ────────────────────────────────────────────────────────
+        // Authentication says who is calling; this says what they may do. The
+        // two are separate decisions, and this service used to make only the
+        // first: every route extracted `Claims` and, at most, compared the
+        // path's `lf_mp_id` with the token's tenant — so any token the verifier
+        // accepted for the tenant could `PUT` a new Arbeitspreis onto a live
+        // tariff, and the next `billingd` run would bill it.
+        let cedar = Arc::new(
+            mako_service::cedar::CedarEnforcer::from_policy_str(include_str!(
+                "../policies/productd.cedar"
+            ))
+            .context("productd.cedar must parse at startup")?,
+        );
+
         // ── MCP server state ──────────────────────────────────────────────────
+        // Gated by the same verifier and the same policy as the REST surface: a
+        // JWT is verified and checked for `use-mcp`, and a configured `[mcp]`
+        // key stays accepted for agent clients that mint no OIDC token.
         let mcp_state = Arc::new(mcp_server::ProductdMcpState {
             pool: pool.clone(),
             tenant: cfg.tenant.clone(),
-            auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
+            auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
+                &cfg.mcp,
+                oidc.clone(),
+                Some(Arc::clone(&cedar)),
+                &cfg.tenant,
+            ),
         });
 
         let app = Router::new()
@@ -188,6 +226,7 @@ impl Daemon for Productd {
                 get(handlers::get_comparison_feed_bo4e),
             )
             .layer(Extension(oidc))
+            .layer(Extension(cedar))
             .layer(Extension(Arc::clone(&cfg)))
             .layer(Extension(pool.clone()));
 

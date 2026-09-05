@@ -11,7 +11,7 @@
 
 use sqlx::PgPool;
 use uuid::Uuid;
-use vertragd::pg;
+use vertragd::pg::{self, Initiator};
 
 const SCHEMA: &str = include_str!("../migrations/0001_schema.sql");
 
@@ -1033,6 +1033,7 @@ async fn a_period_containing_a_tarifwechsel_comes_back_as_two_tiling_slices() {
         "STROM-NEU",
         time::macros::date!(2026 - 11 - 15),
         Some("Tarifwechsel"),
+        Initiator::Lieferant,
         false,
         None,
     )
@@ -1092,6 +1093,7 @@ async fn a_future_tarifwechsel_is_invisible_until_it_starts() {
         "STROM-NEU",
         time::macros::date!(2027 - 01 - 01),
         None,
+        Initiator::Lieferant,
         false,
         None,
     )
@@ -1196,9 +1198,19 @@ async fn a_replay_is_idempotent_and_a_backdated_change_is_refused() {
         wechsel("STROM-NEU", time::macros::date!(2027 - 01 - 01)),
         wechsel("STROM-NEU", time::macros::date!(2027 - 01 - 01)),
     ] {
-        pg::produkte::tarifwechsel(&mut conn, tenant, komp, &code, d, None, false, None)
-            .await
-            .expect("a replay of the same change must succeed");
+        pg::produkte::tarifwechsel(
+            &mut conn,
+            tenant,
+            komp,
+            &code,
+            d,
+            None,
+            Initiator::Lieferant,
+            false,
+            None,
+        )
+        .await
+        .expect("a replay of the same change must succeed");
     }
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM komponenten_produkte WHERE komp_id = $1")
         .bind(komp)
@@ -1214,6 +1226,7 @@ async fn a_replay_is_idempotent_and_a_backdated_change_is_refused() {
         "STROM-ALT",
         time::macros::date!(2026 - 12 - 01),
         None,
+        Initiator::Lieferant,
         true,
         None,
     )
@@ -1221,6 +1234,448 @@ async fn a_replay_is_idempotent_and_a_backdated_change_is_refused() {
     assert!(
         backdated.is_err(),
         "backdating behind a later change would reprice a decided period"
+    );
+}
+
+// ── § 41 Abs. 5 EnWG — the notice, and who owes it ───────────────────────────
+
+/// A deployment that renders the Preisänderungsanzeige itself, so the price
+/// lines are the document's content.
+fn worker_config_rendernd(tenant: &str) -> vertragd::config::VertragdConfig {
+    let mut cfg = worker_config(tenant);
+    cfg.outputd_url = Some("http://outputd.invalid".to_owned());
+    cfg
+}
+
+/// A deployment with no `outputd`, so the CloudEvent is the notice.
+fn worker_config(tenant: &str) -> vertragd::config::VertragdConfig {
+    serde_json::from_value(serde_json::json!({
+        "database": { "url": "postgres://unused-by-the-worker" },
+        "tenant": tenant,
+        "lf_mp_id": tenant,
+        "processd_url": "http://processd.invalid",
+        "accountingd_url": "http://accountingd.invalid",
+        "edmd_url": "http://edmd.invalid",
+        "allow_insecure_no_auth": true,
+    }))
+    .expect("worker config")
+}
+
+/// The announced price lines a valid notice states (§ 41 Abs. 5 Satz 3 EnWG).
+fn umfang() -> serde_json::Value {
+    serde_json::json!([{
+        "bezeichnung": "Arbeitspreis",
+        "einheit": "ct/kWh",
+        "bisher": "31.20",
+        "neu": "34.90",
+    }])
+}
+
+async fn schedule_slice(
+    pool: &PgPool,
+    tenant: &str,
+    komp: Uuid,
+    ab: time::Date,
+    initiator: Initiator,
+    preise: Option<serde_json::Value>,
+) {
+    let mut conn = pool.acquire().await.unwrap();
+    pg::produkte::tarifwechsel(
+        &mut conn,
+        tenant,
+        komp,
+        "STROM-NEU",
+        ab,
+        Some("Anpassung der Beschaffungskosten"),
+        initiator,
+        false,
+        preise.as_ref(),
+    )
+    .await
+    .expect("schedule");
+}
+
+async fn angekuendigt(pool: &PgPool, komp: Uuid) -> Vec<(bool, i32, Option<String>)> {
+    sqlx::query_as::<_, (bool, i32, Option<String>)>(
+        "SELECT preisanpassung_notif_sent, notif_versuche, notif_letzter_fehler
+           FROM komponenten_produkte WHERE komp_id = $1 AND grund <> 'Vertragsschluss'",
+    )
+    .bind(komp)
+    .fetch_all(pool)
+    .await
+    .expect("slice state")
+}
+
+async fn anzeigen(pool: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM event_outbox WHERE ce_type = $1")
+        .bind(mako_events::vertrag::PREISAENDERUNG_ANKUENDIGUNG)
+        .fetch_one(pool)
+        .await
+        .expect("count")
+}
+
+/// A slice whose notice cannot be made valid must not be recorded as notified.
+///
+/// This deployment renders the document, so the price lines are its content and
+/// a slice scheduled without them cannot be announced. The change takes effect
+/// on its Wirksamkeit whatever the worker did, so marking it sent before a
+/// notice exists leaves the customer with a higher price, no
+/// Preisänderungsanzeige, no § 41 Abs. 5 Satz 4 Sonderkündigungsrecht — and
+/// nothing anywhere saying so. The attempt is recorded on the slice and the
+/// sweep keeps owing it.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_notice_that_cannot_be_rendered_is_never_recorded_as_sent() {
+    let Some((pool, _pg)) = test_pool("notice_failure").await else {
+        return;
+    };
+    mako_service::outbox::ensure_schema(&pool)
+        .await
+        .expect("outbox schema");
+    let tenant = "9800000000030";
+    let kunde = make_kunde(&pool, tenant).await;
+    let created =
+        pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("P-41-1"))
+            .await
+            .expect("create");
+    let komp = created.komponenten[0].id;
+    let wirksam = mako_fristen::heute() + time::Duration::days(90);
+
+    // Scheduled without the Umfang the rendered notice has to state.
+    schedule_slice(&pool, tenant, komp, wirksam, Initiator::Lieferant, None).await;
+
+    let cfg = worker_config_rendernd(tenant);
+    vertragd::workers::preisanpassung(&pool, &cfg)
+        .await
+        .expect("the sweep survives a notice it cannot issue");
+
+    let state = angekuendigt(&pool, komp).await;
+    assert_eq!(state.len(), 1);
+    let (sent, versuche, fehler) = &state[0];
+    assert!(
+        !sent,
+        "no notice exists, so the slice must still owe one — this is the flag that decides \
+         whether the customer is ever told"
+    );
+    assert_eq!(*versuche, 1, "the failed attempt is counted");
+    assert!(
+        fehler.as_deref().is_some_and(|f| f.contains("§ 41 Abs. 5")),
+        "the recorded reason names what is missing, got {fehler:?}"
+    );
+    assert_eq!(
+        anzeigen(&pool).await,
+        0,
+        "an announcement that states no Umfang is not a Preisänderungsanzeige and is not sent"
+    );
+
+    // And the sweep keeps owing it: a second run tries again.
+    vertragd::workers::preisanpassung(&pool, &cfg)
+        .await
+        .expect("second sweep");
+    assert_eq!(
+        angekuendigt(&pool, komp).await[0].1,
+        2,
+        "retried, not dropped"
+    );
+}
+
+/// Where the CloudEvent is the notice, the change is announced without price
+/// lines — and the event says the Umfang is missing from it.
+///
+/// § 41 Abs. 5 Satz 3 EnWG is about what the *customer* is told, and the ERP
+/// composing the letter holds the price sheets it is told from. Refusing the
+/// change here would break that integration without any customer learning more.
+/// `umfang_vollstaendig` is what keeps the absence from reading as "nothing
+/// changed": a letter that states no Umfang is not a valid notice on any
+/// channel, and the composer is the one who can still fix that.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_cloudevent_notice_is_issued_without_price_lines() {
+    let Some((pool, _pg)) = test_pool("notice_erp_umfang").await else {
+        return;
+    };
+    mako_service::outbox::ensure_schema(&pool)
+        .await
+        .expect("outbox schema");
+    let tenant = "9800000000038";
+    let kunde = make_kunde(&pool, tenant).await;
+    let created =
+        pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("P-41-8"))
+            .await
+            .expect("create");
+    let komp = created.komponenten[0].id;
+    let wirksam = mako_fristen::heute() + time::Duration::days(90);
+    schedule_slice(&pool, tenant, komp, wirksam, Initiator::Lieferant, None).await;
+
+    vertragd::workers::preisanpassung(&pool, &worker_config(tenant))
+        .await
+        .expect("sweep");
+
+    assert!(
+        angekuendigt(&pool, komp).await[0].0,
+        "the notice went out — the ERP composes the letter"
+    );
+    assert_eq!(anzeigen(&pool).await, 1);
+    let envelope: serde_json::Value =
+        sqlx::query_scalar("SELECT envelope FROM event_outbox WHERE ce_type = $1")
+            .bind(mako_events::vertrag::PREISAENDERUNG_ANKUENDIGUNG)
+            .fetch_one(&pool)
+            .await
+            .expect("envelope");
+    let data = envelope.pointer("/data").expect("data");
+    assert_eq!(
+        data.pointer("/umfang_vollstaendig"),
+        Some(&serde_json::json!(false)),
+        "the event says this service states no Umfang, so the composer must"
+    );
+    assert_eq!(
+        data.pointer("/sonderkuendigungsrecht/besteht"),
+        Some(&serde_json::json!(true)),
+        "the § 41 Abs. 5 Satz 4 termination right is stated either way"
+    );
+}
+
+/// With the Umfang stated, the notice goes out — once — and the slice is then
+/// marked, in the same transaction that enqueued it.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_issuable_notice_is_sent_once_and_then_marked() {
+    let Some((pool, _pg)) = test_pool("notice_sent").await else {
+        return;
+    };
+    mako_service::outbox::ensure_schema(&pool)
+        .await
+        .expect("outbox schema");
+    let tenant = "9800000000031";
+    let kunde = make_kunde(&pool, tenant).await;
+    let created =
+        pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("P-41-2"))
+            .await
+            .expect("create");
+    let komp = created.komponenten[0].id;
+    let wirksam = mako_fristen::heute() + time::Duration::days(90);
+    schedule_slice(
+        &pool,
+        tenant,
+        komp,
+        wirksam,
+        Initiator::Lieferant,
+        Some(umfang()),
+    )
+    .await;
+
+    let cfg = worker_config(tenant);
+    vertragd::workers::preisanpassung(&pool, &cfg)
+        .await
+        .expect("sweep");
+
+    assert!(angekuendigt(&pool, komp).await[0].0, "the notice went out");
+    assert_eq!(anzeigen(&pool).await, 1);
+
+    // The § 41 Abs. 5 Satz 4 termination right is stated in the notice itself.
+    let envelope: serde_json::Value =
+        sqlx::query_scalar("SELECT envelope FROM event_outbox WHERE ce_type = $1")
+            .bind(mako_events::vertrag::PREISAENDERUNG_ANKUENDIGUNG)
+            .fetch_one(&pool)
+            .await
+            .expect("envelope");
+    let data = envelope.pointer("/data").expect("data");
+    assert_eq!(
+        data.pointer("/sonderkuendigungsrecht/besteht"),
+        Some(&serde_json::json!(true))
+    );
+    assert!(
+        data.pointer("/umfang/0/neu").is_some(),
+        "the notice carries the Umfang, so a recipient composing its own letter has it"
+    );
+
+    // A second run announces nothing: the obligation is settled.
+    vertragd::workers::preisanpassung(&pool, &cfg)
+        .await
+        .expect("second sweep");
+    assert_eq!(anzeigen(&pool).await, 1, "one change, one announcement");
+}
+
+/// A tariff the customer asked for is not announced as one the supplier
+/// imposed.
+///
+/// § 41 Abs. 5 Satz 1 EnWG binds a supplier exercising a reserved right to
+/// change the contract, and Satz 4 gives the termination right *because* the
+/// supplier exercised it. Announcing a customer's own switch tells them they
+/// may cancel when the law gives them no such right.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_customer_initiated_switch_is_not_announced() {
+    let Some((pool, _pg)) = test_pool("notice_initiator").await else {
+        return;
+    };
+    mako_service::outbox::ensure_schema(&pool)
+        .await
+        .expect("outbox schema");
+    let tenant = "9800000000032";
+    let kunde = make_kunde(&pool, tenant).await;
+    let created =
+        pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("P-41-3"))
+            .await
+            .expect("create");
+    let komp = created.komponenten[0].id;
+    let wirksam = mako_fristen::heute() + time::Duration::days(90);
+    schedule_slice(&pool, tenant, komp, wirksam, Initiator::Kunde, None).await;
+
+    let heute = mako_fristen::heute();
+    assert!(
+        pg::offene_preisanpassungen(&pool, tenant, heute)
+            .await
+            .expect("query")
+            .is_empty(),
+        "a switch the customer asked for owes no § 41 Abs. 5 notice, whatever the flag says"
+    );
+
+    vertragd::workers::preisanpassung(&pool, &worker_config(tenant))
+        .await
+        .expect("sweep");
+    assert_eq!(
+        anzeigen(&pool).await,
+        0,
+        "no Preisänderungsanzeige, and so no Sonderkündigungsrecht the customer does not have"
+    );
+}
+
+/// A pending § 41 Abs. 5 notice cannot be cancelled by re-POSTing the same
+/// change under a different initiator.
+///
+/// The Tarifwechsel write is idempotent on `(komp_id, gueltig_von)`, so a
+/// replay updates the slice in place. Letting it also rewrite `initiator` and
+/// `preisanpassung_notif_sent` made the obligation disposable: a supplier price
+/// rise with its notice still owed, re-sent as `KUNDE`, left the announcement
+/// queue, the customer was never told, and the breach report came back clean
+/// because the record — not the fact — had changed.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_replay_cannot_cancel_a_pending_price_change_notice() {
+    let Some((pool, _pg)) = test_pool("notice_initiator_flip").await else {
+        return;
+    };
+    let tenant = "9800000000039";
+    let kunde = make_kunde(&pool, tenant).await;
+    let created =
+        pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("P-41-9"))
+            .await
+            .expect("create");
+    let komp = created.komponenten[0].id;
+    let heute = mako_fristen::heute();
+    let wirksam = heute + time::Duration::days(90);
+    schedule_slice(
+        &pool,
+        tenant,
+        komp,
+        wirksam,
+        Initiator::Lieferant,
+        Some(umfang()),
+    )
+    .await;
+    assert_eq!(
+        pg::offene_preisanpassungen(&pool, tenant, heute)
+            .await
+            .expect("query")
+            .len(),
+        1,
+        "the supplier's price rise owes a notice"
+    );
+
+    let mut conn = pool.acquire().await.unwrap();
+    let umgeschrieben = pg::produkte::tarifwechsel(
+        &mut conn,
+        tenant,
+        komp,
+        "STROM-NEU",
+        wirksam,
+        None,
+        Initiator::Kunde,
+        true,
+        None,
+    )
+    .await;
+    assert!(
+        umgeschrieben.is_err(),
+        "a pending Preisänderungsanzeige must not be cancelled by relabelling the change"
+    );
+
+    let offen = pg::offene_preisanpassungen(&pool, tenant, heute)
+        .await
+        .expect("query");
+    assert_eq!(offen.len(), 1, "the notice is still owed");
+    assert!(
+        offen[0].angekuendigte_preise.is_some(),
+        "and it still states the Umfang it was scheduled with"
+    );
+
+    // The ordinary replay — same initiator, a corrected product — still works,
+    // and the obligation stays open.
+    pg::produkte::tarifwechsel(
+        &mut conn,
+        tenant,
+        komp,
+        "STROM-NEU-KORRIGIERT",
+        wirksam,
+        None,
+        Initiator::Lieferant,
+        false,
+        None,
+    )
+    .await
+    .expect("a replay that keeps the initiator is the idempotent case");
+    let offen = pg::offene_preisanpassungen(&pool, tenant, heute)
+        .await
+        .expect("query");
+    assert_eq!(offen.len(), 1);
+    assert_eq!(offen[0].neues_produkt, "STROM-NEU-KORRIGIERT");
+}
+
+/// A supplier-initiated change already in force whose notice never went out is
+/// a breach, and the sweep has to be able to find it — the announcement query
+/// only ever looks forward.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_unannounced_change_already_in_force_is_reported() {
+    let Some((pool, _pg)) = test_pool("notice_breach").await else {
+        return;
+    };
+    let tenant = "9800000000033";
+    let kunde = make_kunde(&pool, tenant).await;
+    let heute = mako_fristen::heute();
+    // Supply that started before today, so a change can already be in force.
+    let mut input = vertrag_input("P-41-4");
+    let start = heute - time::Duration::days(60);
+    input.vertragsbeginn = start;
+    input.komponenten[0].lieferbeginn = start;
+    let created = pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &input)
+        .await
+        .expect("create");
+    let komp = created.komponenten[0].id;
+
+    // Written around the API, which refuses to schedule this.
+    schedule_slice(
+        &pool,
+        tenant,
+        komp,
+        heute - time::Duration::days(1),
+        Initiator::Lieferant,
+        None,
+    )
+    .await;
+
+    let breach = pg::unangekuendigt_wirksame(&pool, tenant, heute)
+        .await
+        .expect("query");
+    assert_eq!(breach.len(), 1, "the price changed and nobody was told");
+    assert_eq!(breach[0].komp_id, komp);
+    assert!(
+        pg::offene_preisanpassungen(&pool, tenant, heute)
+            .await
+            .expect("query")
+            .is_empty(),
+        "it can no longer be announced — its Wirksamkeit has passed"
     );
 }
 
@@ -1642,4 +2097,197 @@ async fn pg_container() -> Option<(String, PgContainer)> {
     let port = container.get_host_port_ipv4(5432).await.ok()?;
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
     Some((url, container))
+}
+
+// ── Leader election for the daily lifecycle workers ──────────────────────────
+
+/// Two replicas must not both run a lifecycle worker in the same cycle.
+///
+/// Before this, `spawn_all` spawned three unguarded loops: every replica ran
+/// every worker every 23 hours. Per-contract idempotency serialises repeats of
+/// the same run, but two instances that read the same unmarked slice in the same
+/// second both build a § 41 Abs. 5 EnWG Preisanpassungsanzeige and both enqueue
+/// it — a doubled statutory notice to the customer, and a doubled outbound task
+/// behind it.
+///
+/// The lock is session-level, so this test needs two *connections*: it takes one
+/// from the pool exactly as a second replica would.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn only_one_replica_runs_a_lifecycle_worker() {
+    let Some((pool, _pg)) = test_pool("worker_lock").await else {
+        return;
+    };
+
+    for worker in vertragd::workers::Worker::all() {
+        let key = worker.lock_key();
+        let mut first = pg::try_worker_lock(&pool, key)
+            .await
+            .unwrap_or_else(|| panic!("{} must win an uncontended lock", worker.name()));
+
+        // The second replica does not get it, and does not block waiting either.
+        assert!(
+            pg::try_worker_lock(&pool, key).await.is_none(),
+            "{}: a second replica must skip the cycle, not run it too",
+            worker.name()
+        );
+
+        // …and once the holder is done the lock is free again, so the next
+        // cycle is not locked out until a pod restarts.
+        pg::release_worker_lock(&mut first, key).await;
+        drop(first);
+        let mut again = pg::try_worker_lock(&pool, key)
+            .await
+            .unwrap_or_else(|| panic!("{}: the lock must be reusable", worker.name()));
+        pg::release_worker_lock(&mut again, key).await;
+    }
+}
+
+/// The three workers hold **three different** locks: a slow Preisanpassung run
+/// must not stop the Ablauf sweep from closing supply that has run out.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_lifecycle_workers_do_not_contend_with_one_another() {
+    let Some((pool, _pg)) = test_pool("worker_lock_distinct").await else {
+        return;
+    };
+
+    let mut held = Vec::new();
+    for worker in vertragd::workers::Worker::all() {
+        let key = worker.lock_key();
+        let guard = pg::try_worker_lock(&pool, key).await.unwrap_or_else(|| {
+            panic!(
+                "{} must not contend with a worker already running",
+                worker.name()
+            )
+        });
+        held.push((key, guard));
+    }
+    for (key, mut guard) in held {
+        pg::release_worker_lock(&mut guard, key).await;
+    }
+}
+
+/// `run_once_locked` reports the skip rather than silently doing the work.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_locked_out_worker_reports_the_skip() {
+    let Some((pool, _pg)) = test_pool("worker_lock_skip").await else {
+        return;
+    };
+    let worker = vertragd::workers::Worker::Preisanpassung;
+    let mut held = pg::try_worker_lock(&pool, worker.lock_key())
+        .await
+        .expect("hold the lock as the other replica");
+
+    let cfg = worker_config("9900000000001");
+    let ran = worker
+        .run_once_locked(&pool, &cfg)
+        .await
+        .expect("a skipped cycle is not an error");
+    assert!(
+        !ran,
+        "the cycle must be skipped while another replica holds it"
+    );
+
+    pg::release_worker_lock(&mut held, worker.lock_key()).await;
+    drop(held);
+
+    let ran = worker
+        .run_once_locked(&pool, &cfg)
+        .await
+        .expect("the cycle runs once the lock is free");
+    assert!(ran, "the lock is released, so this replica runs the cycle");
+}
+
+// ── Reading-order dedupe key carries the reading date ────────────────────────
+
+/// A Kündigung withdrawn and re-issued to a different Lieferende must move the
+/// Schlussablesung with it.
+///
+/// The key was `ABLESUNG_ENDE:{komp}` with no date, so the second enqueue hit
+/// `ON CONFLICT (tenant, dedupe_key) DO NOTHING` and vanished: `edmd` kept the
+/// order for the *withdrawn* date, the reading happened on the wrong day, and
+/// the Schlussrechnung was built from it. Nothing logged a failure — the
+/// enqueue returned "already queued", which is indistinguishable from success.
+///
+/// The schema comment on `outbound_tasks.dedupe_key` documented the intended
+/// shape (`'ABLESUNG_BEGINN:{komp}:{datum}'`) all along; only the code drifted.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_reading_order_is_keyed_by_its_date() {
+    use vertragd::outbound;
+
+    let Some((pool, _pg)) = test_pool("ablesung_key").await else {
+        return;
+    };
+    let tenant = "9900000000001";
+    let kunde = make_kunde(&pool, tenant).await;
+    let vertrag =
+        pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("ERP-ABL-1"))
+            .await
+            .expect("create contract");
+    let komp = vertrag.komponenten.first().expect("one component").id;
+
+    let first = time::macros::date!(2027 - 03 - 31);
+    let second = time::macros::date!(2027 - 06 - 30);
+
+    let mut conn = pool.acquire().await.expect("connection");
+    assert!(
+        outbound::enqueue_superseding(
+            &mut conn,
+            tenant,
+            &outbound::ablesung(komp, "51238696781", true, first),
+        )
+        .await
+        .expect("first order"),
+    );
+
+    // A replay of the *same* date is still one order.
+    assert!(
+        !outbound::enqueue_superseding(
+            &mut conn,
+            tenant,
+            &outbound::ablesung(komp, "51238696781", true, first),
+        )
+        .await
+        .expect("replay"),
+        "a same-date re-enqueue is a replay, not a second reading order"
+    );
+
+    // A different date is a different order, and it must be written.
+    assert!(
+        outbound::enqueue_superseding(
+            &mut conn,
+            tenant,
+            &outbound::ablesung(komp, "51238696781", true, second),
+        )
+        .await
+        .expect("re-issued order"),
+        "a re-issued Kündigung must reach edmd with the new Lieferende"
+    );
+
+    // …and exactly one order is pending: the superseded one is gone rather than
+    // dispatched alongside it.
+    let pending: Vec<(String, serde_json::Value)> = sqlx::query_as(
+        "SELECT dedupe_key, payload FROM outbound_tasks
+          WHERE tenant = $1 AND kind = 'ABLESUNG_ENDE' AND komp_id = $2
+            AND completed_at IS NULL AND dead_lettered_at IS NULL",
+    )
+    .bind(tenant)
+    .bind(komp)
+    .fetch_all(&pool)
+    .await
+    .expect("read queue");
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(
+        pending[0].1["geplant_am"].as_str(),
+        Some("2027-06-30"),
+        "edmd must be told the date that now applies: {pending:?}"
+    );
+    assert!(
+        pending[0].0.ends_with(":2027-06-30"),
+        "the key names the date: {}",
+        pending[0].0
+    );
 }

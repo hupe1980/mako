@@ -3,16 +3,17 @@
 //!
 //! ## Architecture
 //!
-//! `obsd` is an L3 application service that subscribes to **all** `de.mako.*`
-//! events from `marktd` and projects them into a `ProcessProjection` read-model
-//! stored in PostgreSQL. It **never** connects to `makod` directly.
+//! `obsd` is an L3 application service that subscribes to `de.mako.*` events
+//! from `marktd` — the types named in `[subscription].event_types`, six by
+//! default — and projects them into a `ProcessProjection` read-model stored in
+//! PostgreSQL. It **never** connects to `makod` directly.
 //!
 //! It is also a producer of two `de.obs.*` events — the Antwortfrist warning and
 //! the § 7a Abs. 5 EnWG parity alert — emitted by [`worker`] to `marktd`'s
 //! ingest, whose fan-out delivers them to `agentd`.
 //!
 //! ```text
-//! makod ──(CloudEvents)──► marktd ──(webhook fan-out, all events)──► obsd POST /webhook
+//! makod ──(CloudEvents)──► marktd ──(webhook fan-out, subscribed types)──► obsd POST /webhook
 //!                                                                         │
 //!                                                               project ce_type → state
 //!                                                                         │

@@ -225,7 +225,7 @@
           "nr": "00009",
           "operands": [
             {
-              "operand": "X [4]) ∨ [503]"
+              "operand": "X (([939] [4]) ∨ ([940] [5])) ∧ [503]"
             }
           ]
         },
@@ -670,7 +670,7 @@
           "nr": "00009",
           "operands": [
             {
-              "operand": "X [4]) ∨ [503]"
+              "operand": "X (([939] [4]) ∨ ([940] [5])) ∧ [503]"
             }
           ]
         },
@@ -1101,7 +1101,7 @@
           "nr": "00009",
           "operands": [
             {
-              "operand": "[4]) ∨ ([940] ∧ [503]"
+              "operand": "X (([939] [4]) ∨ ([940] [5])) ∧ [503]"
             }
           ]
         },
@@ -1313,7 +1313,7 @@
     "503": "Hinweis: Es darf nur eine Information im DE3148 übermittelt werden",
     "931": "Format: ZZZ = +00",
     "939": "Format: Die Zeichenkette muss die Zeichen @ und . enthalten",
-    "940": "Format: Die Zeichenkette muss mit dem Zeichen + beginnen und danach dürfen nur noch Ziffern folgen"
+    "940": "Format: Die Zeichenkette muss mit dem Zeichen + beginnen und Zeichen + beginnen und danach dürfen nur noch Ziffern folgen"
   },
   "message_type": "ORDCHG",
   "packages": {

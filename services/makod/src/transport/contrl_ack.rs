@@ -387,19 +387,34 @@ fn message_is_gas(msg: &AnyMessage) -> bool {
 /// |--------------|--------|------------------------------------------|
 /// | 44001–44053  | Gas    | UTILMD G (GeLi Gas, WiM Gas)             |
 /// | 44168–44170  | Gas    | UTILMD G (WiM Gas extensions)            |
-/// | 23005, 23009 | Gas    | INSRPT Gas-only variants                 |
-/// | 31003        | Gas    | INVOIC WiM Gas Rechnung                  |
+/// | 21028        | Gas    | IFTSTA Informationsmeldung (GeLi Gas 2.0, MSB → NB) |
 /// | 31007, 31008 | Gas    | INVOIC GaBi Gas Aggreg. MMM-Rechnung (NB → MGV) |
-/// | 31010, 31011 | Gas    | INVOIC GaBi Gas / GeLi Gas AWH           |
+/// | 31010        | Gas    | INVOIC Kapazitätsrechnung (NB → KN)      |
+///
+/// # What this list must not contain
+///
+/// A PID belongs here only when **every** row of the BDEW Anwendungsübersicht
+/// der Prüfidentifikatoren 4.0 (`PID_4_0_info_20260401.xlsx`, sheet „Prüf-ID
+/// Prozessschritt") that carries it has „Sparte Strom" empty. Four did not, and
+/// each one made this heuristic send a Gas CONTRL to a Strom counterparty that
+/// expects none:
+///
+/// * **31003** WiM-Rechnung — Strom under *WiM Strom Teil 1* (MSBA → MSBN)
+///   as well as Gas under *AWH WiM Gas 2.0*.
+/// * **31011** Rechnung sonstige Leistung — Strom under *GPKE Teil 2* as well
+///   as Gas under *AWH Sperrprozesse Gas*, both NB → LF. The overview lists the
+///   PID twice for exactly this reason.
+/// * **23005 / 23009** INSRPT Informationsmeldung — Strom under *WiM Strom
+///   Teil 2* as well as Gas under *AWH WiM Gas 2.0*.
 ///
 /// **Not 31004:** the Stornorechnung is a Sparte-neutral universal Storno (INVOIC
 /// AHB §3.1.2) — the same PID is used for Strom *and* Gas across GPKE/MMM/WiM/
-/// Kapazität/AWH/GeLi. Like the other Sparte-agnostic INVOIC PIDs it is resolved by
+/// Kapazität/AWH/GeLi. Like the other Sparte-agnostic PIDs it is resolved by
 /// recipient MP-ID in [`emit_for_interchange`], never forced to Gas here.
 fn is_unambiguous_gas_pid(pid: u32) -> bool {
     matches!(
         pid,
-        44001..=44053 | 44168..=44170 | 23005 | 23009 | 31003 | 31007 | 31008 | 31010 | 31011
+        44001..=44053 | 44168..=44170 | 21028 | 31007 | 31008 | 31010
     )
 }
 
@@ -408,19 +423,34 @@ fn is_unambiguous_gas_pid(pid: u32) -> bool {
 /// Returning `true` here short-circuits the release-track fallback, preventing a
 /// Strom message with an ambiguous release code from being misclassified as Gas.
 ///
-/// **Not listed here:** the INVOIC PIDs 31001 (Abschlag), 31002 (NN-Rechnung),
-/// 31005/31006 (MMM) and 31009 (MSB-Rechnung). Per the BDEW INVOIC AHB these are
-/// **Sparte-agnostic** — the same Prüfidentifikator is used for Strom *and* Gas,
-/// with the Sparte carried in the message content. Classifying them as Strom-only
-/// would suppress the mandatory CONTRL for a Gas NN/MMM/MSB invoice. Their Sparte
-/// is resolved by the recipient MP-ID in [`emit_for_interchange`].
+/// **Not listed here:** the INVOIC PIDs 31001 (Abschlag), 31002 (NN-Rechnung)
+/// and 31005/31006 (MMM). The Anwendungsübersicht 4.0 carries each of them once
+/// for Strom and once for Gas — the same Prüfidentifikator, with the Sparte in
+/// the message content. Classifying them as Strom-only would suppress the
+/// mandatory CONTRL for a Gas NN/MMM invoice. Their Sparte is resolved by the
+/// recipient MP-ID in [`emit_for_interchange`].
+///
+/// **31009 (MSB-Rechnung) is not one of them.** All seven rows the overview
+/// carries for it — *GPKE Teil 3* (MSB → NB, MSB → LF), *WiM Strom Teil 1*,
+/// *WiM Strom Teil 2* (MSB → ESA, the ESA-Rechnung) and *AWH Prozesse zur
+/// Änderung der Technik an Lokationen* — are Strom, and none is Gas: the Gas
+/// MSB bills on 31003. Four other sites in this workspace already treated it as
+/// Strom-only; only the comment and test here said otherwise.
+///
+/// **21028 is not a Strom PID** either, though it sits inside the range that
+/// used to be written `21024..=21028`: the overview carries it once, as a GeLi
+/// Gas 2.0 Informationsmeldung (MSB → NB). It is in [`is_unambiguous_gas_pid`]
+/// instead. 21024 and 21026 appear nowhere in the 4.0 overview at all; the
+/// range keeps them because a PID that no longer exists cannot arrive.
 fn is_strom_only_pid(pid: u32) -> bool {
     matches!(
         pid,
         // GPKE UTILMD Strom (Lieferbeginn, Lieferende, Kündigung, …)
         55001..=55557
-            // GPKE IFTSTA Strom (Vollzugsmeldung)
-            | 21024..=21028 | 21033 | 21035 | 21045 | 21047
+            // GPKE / WiM Strom IFTSTA (Vollzugsmeldung, Ablehnung der Anfrage)
+            | 21024..=21027 | 21033 | 21035 | 21045 | 21047
+            // INVOIC MSB-Rechnung Strom (GPKE Teil 3 / WiM Strom Teil 1 und 2)
+            | 31009
             // MaBiS MSCONS / IFTSTA
             | 13003 | 21000..=21005
     )
@@ -451,6 +481,77 @@ fn sender_mp_id(msg: &AnyMessage) -> Option<Box<str>> {
 
 #[cfg(test)]
 mod tests {
+    /// The Sparte classification must agree with the published Anwendungsübersicht.
+    ///
+    /// Both predicates below were hand-maintained lists, and **five PIDs were
+    /// wrong at once** — 31011, 31009, 31003, 23005/23009 and 21028. Each error
+    /// is silent and one-directional: a PID wrongly called Gas sends a CONTRL
+    /// into a Strom interchange that expects none, and a PID wrongly called
+    /// Strom-only short-circuits the fallback so a mandatory Gas CONTRL is never
+    /// emitted at all. Nothing downstream complains either way.
+    ///
+    /// The source of truth is BDEW's own „Sparte Strom" / „Sparte Gas" columns,
+    /// carried into `pid-overview.json` by `cargo xtask import-pid-overview`. A
+    /// PID counts as running in a Sparte when **any** of its Prozessschritt rows
+    /// marks it — which is exactly the question here: can this Prüfidentifikator
+    /// arrive in an interchange of that Sparte?
+    ///
+    /// The file is tracked, so this gates without `regulatories/`.
+    #[test]
+    fn the_sparte_lists_match_the_published_overview() {
+        #[derive(serde::Deserialize)]
+        struct Sparten {
+            strom: bool,
+            gas: bool,
+        }
+        #[derive(serde::Deserialize)]
+        struct Overview {
+            sparten: std::collections::BTreeMap<String, Sparten>,
+        }
+
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../crates/edi-energy/profiles/pid-overview.json"
+        );
+        let raw = std::fs::read_to_string(path).expect("pid-overview.json is tracked");
+        let overview: Overview = serde_json::from_str(&raw).expect("pid-overview.json parses");
+        assert!(
+            overview.sparten.len() > 400,
+            "only {} PIDs carry Sparte data — re-run `cargo xtask import-pid-overview`",
+            overview.sparten.len()
+        );
+
+        let mut wrong_gas = Vec::new();
+        let mut wrong_strom = Vec::new();
+        for (pid, sparten) in &overview.sparten {
+            let Ok(pid) = pid.parse::<u32>() else {
+                continue;
+            };
+
+            // Claiming Gas-only for a PID the overview also runs in Strom.
+            if is_unambiguous_gas_pid(pid) && sparten.strom {
+                wrong_gas.push(pid);
+            }
+            // Claiming Strom-only for a PID the overview also runs in Gas.
+            if is_strom_only_pid(pid) && sparten.gas {
+                wrong_strom.push(pid);
+            }
+        }
+
+        assert!(
+            wrong_gas.is_empty(),
+            "is_unambiguous_gas_pid claims these run only in Gas, but the \
+             Anwendungsuebersicht marks them Sparte Strom too, so a CONTRL would \
+             be emitted into a Strom interchange: {wrong_gas:?}"
+        );
+        assert!(
+            wrong_strom.is_empty(),
+            "is_strom_only_pid claims these run only in Strom, but the \
+             Anwendungsuebersicht marks them Sparte Gas too, so the Gas CONTRL \
+             would be short-circuited and never sent: {wrong_strom:?}"
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -461,15 +562,43 @@ mod tests {
         assert!(is_unambiguous_gas_pid(44053));
         assert!(is_unambiguous_gas_pid(44168));
         assert!(is_unambiguous_gas_pid(44170));
-        assert!(is_unambiguous_gas_pid(23005));
-        assert!(is_unambiguous_gas_pid(23009));
-        assert!(is_unambiguous_gas_pid(31003));
-        // 31004 (Stornorechnung) is Sparte-neutral — NOT unambiguously Gas.
-        assert!(!is_unambiguous_gas_pid(31004));
+        // IFTSTA 21028 — the Anwendungsübersicht 4.0 carries it once, as a
+        // GeLi Gas 2.0 Informationsmeldung (MSB → NB).
+        assert!(is_unambiguous_gas_pid(21028));
         assert!(is_unambiguous_gas_pid(31007));
         assert!(is_unambiguous_gas_pid(31008));
         assert!(is_unambiguous_gas_pid(31010));
-        assert!(is_unambiguous_gas_pid(31011));
+        // 31004 (Stornorechnung) is Sparte-neutral — NOT unambiguously Gas.
+        assert!(!is_unambiguous_gas_pid(31004));
+    }
+
+    /// The PIDs this list claimed as Gas-only that the Anwendungsübersicht
+    /// carries for **both** Sparten.
+    ///
+    /// Every one of them made the fallback heuristic answer „Gas" for a Strom
+    /// message and send a CONTRL to a counterparty that expects none — Strom
+    /// has no CONTRL. Each is a Strom row of `PID_4_0_info_20260401.xlsx`
+    /// („Sparte Strom" = X) as well as a Gas one, so the PID alone cannot say
+    /// which; only the recipient MP-ID can.
+    #[test]
+    fn a_pid_used_in_both_sparten_is_not_unambiguously_gas() {
+        for (pid, strom_prozess) in [
+            (31_003_u32, "WiM Strom Teil 1 (MSBA → MSBN)"),
+            (31_011, "GPKE Teil 2 Rechnung sonstige Leistung (NB → LF)"),
+            (23_005, "WiM Strom Teil 2 Informationsmeldung"),
+            (23_009, "WiM Strom Teil 2 Informationsmeldung"),
+        ] {
+            assert!(
+                !is_unambiguous_gas_pid(pid),
+                "PID {pid} also runs in Strom ({strom_prozess}), so forcing it \
+                 to Gas sends a CONTRL into a Strom interchange"
+            );
+            assert!(
+                !is_strom_only_pid(pid),
+                "PID {pid} also runs in Gas, so suppressing its CONTRL breaches \
+                 the 6-hour window"
+            );
+        }
     }
 
     #[test]
@@ -491,20 +620,58 @@ mod tests {
         assert!(is_strom_only_pid(55001));
         assert!(is_strom_only_pid(21024));
         assert!(is_strom_only_pid(13003));
+        // …and the Gas Informationsmeldung that used to sit inside the IFTSTA
+        // range is not one of them.
+        assert!(!is_strom_only_pid(21028));
+    }
+
+    /// 31009 is the MSB-Rechnung, and it is Strom.
+    ///
+    /// This module used to assert the opposite — „used for BOTH Strom and Gas" —
+    /// against four other sites in the workspace that treat it as Strom-only.
+    /// All seven rows the Anwendungsübersicht 4.0 carries for 31009 are Strom
+    /// (GPKE Teil 3 MSB → NB / MSB → LF, WiM Strom Teil 1, WiM Strom Teil 2
+    /// MSB → ESA, AWH Änderung der Technik); the Gas MSB bills on 31003, which
+    /// is why 31003 is the one with rows in both Sparten.
+    #[test]
+    fn the_msb_rechnung_is_strom() {
+        assert!(is_strom_only_pid(31_009));
+        assert!(!is_unambiguous_gas_pid(31_009));
     }
 
     #[test]
-    fn invoic_nne_mmm_msb_pids_are_sparte_agnostic() {
-        // Per the BDEW INVOIC AHB, 31001 (Abschlag), 31002 (NN-Rechnung),
-        // 31005/31006 (MMM) and 31009 (MSB) are used for BOTH Strom and Gas —
-        // the same PID, Sparte in the content. They must be in NEITHER PID list,
-        // so an inbound Gas NN/MMM/MSB invoice is resolved by the recipient MP-ID
-        // (not wrongly suppressed as "Strom-only").
-        for pid in [31001, 31002, 31005, 31006, 31009] {
+    fn invoic_nne_and_mmm_pids_are_sparte_agnostic() {
+        // The Anwendungsübersicht carries 31001 (Abschlag), 31002
+        // (NN-Rechnung) and 31005/31006 (MMM) once for Strom and once for Gas —
+        // the same PID, Sparte in the content. They must be in NEITHER list, so
+        // an inbound Gas NN/MMM invoice is resolved by the recipient MP-ID and
+        // not wrongly suppressed as "Strom-only".
+        for pid in [31001, 31002, 31005, 31006] {
             assert!(!is_strom_only_pid(pid), "PID {pid} must not be Strom-only");
             assert!(
                 !is_unambiguous_gas_pid(pid),
                 "PID {pid} must not be unambiguous-Gas"
+            );
+        }
+    }
+
+    /// No PID is in both lists.
+    ///
+    /// `message_is_gas` asks the Gas list first, so a PID in both would answer
+    /// „Gas" and the Strom membership would be silently unreachable.
+    #[test]
+    fn the_two_lists_are_disjoint() {
+        for pid in (13_000..14_000)
+            .chain(17_000..18_000)
+            .chain(21_000..22_000)
+            .chain(23_000..24_000)
+            .chain(31_000..32_000)
+            .chain(44_000..45_000)
+            .chain(55_000..56_000)
+        {
+            assert!(
+                !(is_unambiguous_gas_pid(pid) && is_strom_only_pid(pid)),
+                "PID {pid} is in both Sparte lists"
             );
         }
     }

@@ -14,7 +14,7 @@
 //! | [`domain`] | The statutory rules — notice periods, price-change notice, term limits — as pure functions |
 //! | [`config`] | Deployment configuration |
 //! | [`events`] | `de.vertrag.*` CloudEvent construction and MaKo outcome parsing |
-//! | [`outbound`] | Durable queue for every call owed to processd / edmd / productd / accountingd |
+//! | [`outbound`] | Durable queue for every call owed to processd / edmd / accountingd |
 //! | [`workers`] | Daily lifecycle workers (Tarifwechsel, Verlängerung, Ablauf) |
 //! | [`pg`] | PostgreSQL data access |
 //! | [`handlers`] | HTTP surface |

@@ -104,10 +104,10 @@ pub use position::{
 };
 pub use provider::{BillingProvider, MTU_MINUTES, mtu_start};
 pub use quantities::{
-    Ablesungsart, Abschlagsplan, AbschlagsplanEntry, Absetzung, AbsetzungsGrund, DynamicInterval,
-    EegMeterInput, EmobilityMeterInput, EnergyShareMeterInput, GasMeterInput, GgvNutzungsplan,
-    GgvNutzungsplanEntry, GgvSolarInput, GridInput, HemsMeterInput, MeterInput, MeteringMode,
-    ProsumerMeterInput, Quantities, Sect14aModul3Verbrauch, Sect41aAnnualComparison,
+    Ablesungsart, Abschlagsplan, AbschlagsplanEntry, Absetzung, AbsetzungsGrund, DayApportionment,
+    DynamicInterval, EegMeterInput, EmobilityMeterInput, EnergyShareMeterInput, GasMeterInput,
+    GgvNutzungsplan, GgvNutzungsplanEntry, GgvSolarInput, GridInput, HemsMeterInput, MeterInput,
+    MeteringMode, ProsumerMeterInput, Quantities, Sect14aModul3Verbrauch, Sect41aAnnualComparison,
     ServiceMeterInput, SolarMeterInput, WaermeMeterInput, WasserMeterInput,
 };
 pub use rates::{

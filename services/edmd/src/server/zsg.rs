@@ -36,7 +36,7 @@
 //! Where a difference cannot be taken honestly — a backwards step no register
 //! width explains, a jump beyond the connection's capacity — `metering::reading`
 //! emits **no interval** and records why. The hole then shows up as a V01 gap in
-//! validation and is filled, with its own audit row, by the § 60 Abs. 2 MsbG
+//! validation and is filled, with its own audit row, by the § 60 Abs. 1 MsbG
 //! substitute path. Guessing here would bury the problem inside a value that
 //! looks measured, and the two audit logs together say "this quarter-hour is an
 //! Ersatzwert *because* the register went backwards", which neither says alone.
@@ -598,7 +598,7 @@ pub async fn post_zaehlerstandsgang(
             "cadence_secs": cadence_secs,
             // n usable readings give n−1 intervals, minus one per refused span.
             // Reported rather than left to be inferred: the difference between
-            // those two numbers is exactly what the § 60 Abs. 2 substitute path
+            // those two numbers is exactly what the § 60 Abs. 1 substitute path
             // will be asked to fill.
             "rollovers": rollovers,
             "anomalies": anomalies,

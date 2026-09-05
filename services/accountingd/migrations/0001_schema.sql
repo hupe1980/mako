@@ -863,9 +863,12 @@ CREATE TABLE interest_charges (
     principal_ct    BIGINT      NOT NULL CHECK (principal_ct > 0),
     -- Calculated interest amount in ct
     interest_ct     BIGINT      NOT NULL CHECK (interest_ct > 0),
-    -- Interest rate applied: e.g. 12.12 (9% + ECB base 3.12%)
+    -- Effective annual rate over the whole period, e.g. 12.12 (9% + ECB base
+    -- 3.12%). Where the period crosses a §247 Stichtag this is what the summed
+    -- segments work out to, so recomputing principal × rate × days / 36500
+    -- reaches the booked figure either way; see `rate_segments`.
     rate_pct        NUMERIC(6,3) NOT NULL,
-    -- ECB base rate used (for audit trail)
+    -- Basiszinssatz in force when the Verzug began (the audit anchor)
     ecb_base_rate_pct NUMERIC(6,3) NOT NULL,
     -- B2C or B2B (+5pp vs +9pp above base rate)
     customer_type   TEXT        NOT NULL CHECK (customer_type IN ('B2C', 'B2B')),
@@ -876,6 +879,12 @@ CREATE TABLE interest_charges (
     legal_basis     TEXT        NOT NULL DEFAULT '§288 Abs. 1 BGB',
     -- doubleentry EntryId of the MAHNGEBUEHR entry (in the ledger schema; no FK).
     ledger_entry_id UUID,
+    -- One object per §247 BGB rate in force during the period:
+    -- {from, to, days, ecb_base_rate_pct, rate_pct, interest_ct}. The
+    -- Basiszinssatz changes on 1 January and 1 July, so a Verzugszeitraum can
+    -- span several; `rate_pct` above is the effective rate the segments add up
+    -- to, and this is the breakdown a disputing customer asks for.
+    rate_segments   JSONB       NOT NULL DEFAULT '[]'::jsonb,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     -- One interest charge per account and period. The MAHNGEBUEHR ledger entry
     -- is already idempotent on `interest:{malo}:{from}:{to}`, so without this

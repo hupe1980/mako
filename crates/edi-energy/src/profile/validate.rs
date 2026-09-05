@@ -18,7 +18,9 @@ use std::collections::HashSet;
 use edifact_rs::{Segment, ValidationIssue, ValidationSeverity};
 
 use super::Profile;
-use super::conditions::{ConditionKind, Scope, Status, Truth, Voraussetzung};
+use super::conditions::{
+    ConditionKind, EvalError, Expr, ExprError, Paket, Scope, Status, Truth, Voraussetzung,
+};
 use super::model::{Anwendungsfall, Element, ElementRule, SegmentNode};
 use super::structure::{InstanceId, Kind, NodeId, Resolution, Structure};
 
@@ -608,27 +610,113 @@ struct Ctx<'a, 'd> {
     res: &'a Resolution,
     segments: &'a [Segment<'d>],
     conditions: &'a std::collections::BTreeMap<String, String>,
+    /// The Paketvoraussetzung of every Paket the AHB's Paketübersicht lists,
+    /// parsed once; `Err` for one the extraction cut in half.
+    packages: std::collections::BTreeMap<&'a str, Result<Option<Expr>, ExprError>>,
+    /// The Pakete currently being expanded, innermost last — a
+    /// Paketvoraussetzung that leads back to its own Paket is refused instead
+    /// of expanded forever.
+    expanding: std::cell::RefCell<Vec<String>>,
 }
 
-impl Ctx<'_, '_> {
+impl<'a, 'd> Ctx<'a, 'd> {
+    fn new(
+        structure: &'a Structure,
+        res: &'a Resolution,
+        segments: &'a [Segment<'d>],
+        ahb: &'a super::model::AhbProfile,
+    ) -> Self {
+        // Allgemeine Festlegungen 6.1d Kap. 6.9.1: „Ein Paket ohne
+        // Paketvoraussetzung ist immer zu nutzen, soweit das Segment, dem das
+        // Paket zugeordnet ist, im einzelnen Anwendungsfall genutzt wird“ —
+        // an empty entry is no gate, not an undecidable one.
+        let packages = ahb
+            .packages
+            .iter()
+            .map(|(id, text)| {
+                let parsed = if text.trim().is_empty() {
+                    Ok(None)
+                } else {
+                    Expr::parse(text).map(Some)
+                };
+                (id.as_str(), parsed)
+            })
+            .collect();
+        Self {
+            structure,
+            res,
+            segments,
+            conditions: &ahb.conditions,
+            packages,
+            expanding: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+
+    /// Evaluate `expr` for a row evaluated inside `instance`.
+    fn eval(&self, expr: &Expr, instance: InstanceId) -> Result<Truth, EvalError> {
+        expr.eval(&mut |id| self.truth(id, instance))
+    }
+
+    /// The truth of a status expression, or `Unknown` when it does not
+    /// evaluate — an expression the Allgemeine Festlegungen do not admit is
+    /// never a ground for rejection.
+    fn truth_of(&self, status: &Status, instance: InstanceId) -> Truth {
+        match status.expr.as_ref().map(|e| self.eval(e, instance)) {
+            None => Truth::True,
+            Some(Ok(t)) => t,
+            Some(Err(_)) => Truth::Unknown,
+        }
+    }
+
+    /// Whether the Paketvoraussetzung of `id` holds — the Paket is to be used
+    /// at all (Kap. 6.9.1).
+    fn paket_applies(&self, id: &str, instance: InstanceId) -> Truth {
+        match self.paket_truth(id, instance) {
+            Ok(t) => t,
+            Err(_) => Truth::Unknown,
+        }
+    }
+
+    /// Expand a Paket citation into its Paketvoraussetzung and evaluate that.
+    fn paket_truth(&self, cited: &str, instance: InstanceId) -> Result<Truth, EvalError> {
+        let Some(paket) = Paket::parse(cited) else {
+            return Ok(Truth::Unknown);
+        };
+        let Some(entry) = self.packages.get(paket.id.as_str()) else {
+            return Ok(Truth::Unknown);
+        };
+        let expr = match entry {
+            Ok(None) => return Ok(Truth::True),
+            Ok(Some(e)) => e,
+            Err(e) => return Err(EvalError::PaketExpression(paket.id, e.clone())),
+        };
+        if self.expanding.borrow().contains(&paket.id) {
+            return Err(EvalError::PaketCycle(paket.id));
+        }
+        self.expanding.borrow_mut().push(paket.id);
+        let out = self.eval(expr, instance);
+        self.expanding.borrow_mut().pop();
+        out
+    }
+
     /// The value of Bedingung `id` for a row evaluated inside `instance`.
-    fn truth(&self, id: &str, instance: InstanceId) -> Truth {
+    fn truth(&self, id: &str, instance: InstanceId) -> Result<Truth, EvalError> {
         match ConditionKind::of(id) {
             ConditionKind::Voraussetzung => {}
-            ConditionKind::Paket => return Truth::Unknown,
-            _ => return Truth::Neutral,
+            ConditionKind::Paket => return self.paket_truth(id, instance),
+            _ => return Ok(Truth::Neutral),
         }
         let Some(text) = self.conditions.get(id) else {
-            return Truth::Unknown;
+            return Ok(Truth::Unknown);
         };
         // A numbered Bedingung that states a constraint rather than a
         // precondition („Innerhalb eines SG4 IDE müssen alle DE1131 … den
         // identischen Wert enthalten") does not gate the place.
         if !super::conditions::is_precondition(text) {
-            return Truth::Neutral;
+            return Ok(Truth::Neutral);
         }
         let Some(v) = Voraussetzung::parse(text) else {
-            return Truth::Unknown;
+            return Ok(Truth::Unknown);
         };
         let range = |scope: &Scope| -> std::ops::Range<usize> {
             match scope {
@@ -639,7 +727,7 @@ impl Ctx<'_, '_> {
                 },
             }
         };
-        match v {
+        Ok(match v {
             Voraussetzung::Present {
                 scope,
                 pattern,
@@ -693,7 +781,7 @@ impl Ctx<'_, '_> {
                 });
                 Truth::from(found != negate)
             }
-        }
+        })
     }
 
     fn requirement(&self, statuses: &[String], instance: InstanceId) -> Requirement {
@@ -710,11 +798,7 @@ impl Ctx<'_, '_> {
                 permitted = true;
                 continue;
             }
-            let truth = status
-                .expr
-                .as_ref()
-                .map_or(Truth::True, |e| e.eval(&mut |id| self.truth(id, instance)));
-            match truth {
+            match self.truth_of(&status, instance) {
                 Truth::True | Truth::Neutral => {
                     required = true;
                     permitted = true;
@@ -749,12 +833,7 @@ fn ahb_checks(
     issues: &mut Vec<ValidationIssue>,
 ) {
     let structure = &profile.structure;
-    let ctx = Ctx {
-        structure,
-        res,
-        segments,
-        conditions: &profile.ahb.conditions,
-    };
+    let ctx = Ctx::new(structure, res, segments, &profile.ahb);
     let pid = column_key(profile, af);
     let tag_issue = |issue: ValidationIssue| issue.with_context_entry("pid", pid.clone());
 
@@ -875,6 +954,139 @@ fn ahb_checks(
         }
         element_rules(&ctx, af, &pid, layout, seg, i, a.instance, issues);
     }
+
+    paket_checks(&ctx, af, &pid, issues);
+}
+
+/// The Paketmerkmale of one column: how often each Qualifier/Code of a Paket
+/// repeats where the segment is used.
+///
+/// Allgemeine Festlegungen 6.1d Kap. 6.9.2: `X [kPn..m]` gives „die minimale
+/// und maximale Wiederholbarkeit des entsprechenden Qualifier / Codes“ inside
+/// Paket `k`, `m` unbounded where the AHB prints `n`, and the count is bounded
+/// by „die maximale Wiederholung für das Segment / die Segmentgruppe“ — so the
+/// repetitions are counted over whichever of the two carries them
+/// ([`paket_scope`]). Kap. 6.9.1 ties the Paket to the place: it applies
+/// „soweit das Segment, dem das Paket zugeordnet ist, im einzelnen
+/// Anwendungsfall genutzt wird“ and its Paketvoraussetzungen are met, so an
+/// unused place carries no minimum.
+fn paket_checks(
+    ctx: &Ctx<'_, '_>,
+    af: &Anwendungsfall,
+    pid: &str,
+    issues: &mut Vec<ValidationIssue>,
+) {
+    // Per place and repetition scope, the first segment sitting there — its
+    // group instance is what the Bedingungen are read against.
+    let mut places: Vec<((InstanceId, NodeId), InstanceId)> = Vec::new();
+    for assigned in ctx.res.assigned.iter().flatten() {
+        let key = (paket_scope(ctx, *assigned), assigned.node);
+        if !places.iter().any(|(k, _)| *k == key) {
+            places.push((key, assigned.instance));
+        }
+    }
+    for ((scope, node), instance) in places {
+        let Some(layout) = ctx.structure.layout(node) else {
+            continue;
+        };
+        if af.segment_status(&layout.nr).is_none() {
+            continue;
+        }
+        let span = ctx.res.instances[scope].first..ctx.res.instances[scope].last;
+        let here: Vec<usize> = span
+            .filter(|&i| ctx.res.assigned[i].is_some_and(|a| a.node == node))
+            .collect();
+        for rule in af.element_rules(&layout.nr) {
+            let Some((ei, ci, el)) = layout.locate(&rule.de, rule.occurrence) else {
+                continue;
+            };
+            for op in &rule.operands {
+                let (Some(code), Some(status)) = (&op.code, Status::parse(&op.operand)) else {
+                    continue;
+                };
+                let Some(expr) = &status.expr else { continue };
+                let truth = ctx.truth_of(&status, instance);
+                let count = here
+                    .iter()
+                    .filter(|&&i| ctx.segments[i].component_str(ei, ci) == Some(code.as_str()))
+                    .count();
+                for paket in expr.pakete() {
+                    if ctx.paket_applies(&paket.id, instance) != Truth::True {
+                        continue;
+                    }
+                    let at = |issue: ValidationIssue| {
+                        issue
+                            .with_context_entry("pid", pid.to_owned())
+                            .with_context_entry("nr", layout.nr.clone())
+                            .with_context_entry("de", el.id.clone())
+                            .with_segment(layout.tag.clone())
+                            .with_element_index(u8::try_from(ei).unwrap_or(u8::MAX))
+                            .with_component_index(u8::try_from(ci).unwrap_or(u8::MAX))
+                    };
+                    let where_ = in_group(ctx.structure, ctx.res.instances[scope].node);
+                    if let Some(max) = paket.max
+                        && count > max
+                    {
+                        issues.push(at(ValidationIssue::new(
+                            ValidationSeverity::Error,
+                            format!(
+                                "{} (Nr {}): DE {} „{}“ carries {code:?} {count} times{where_}; Paket {} of {pid} allows {max}",
+                                layout.tag, layout.nr, el.id, el.name, paket.id,
+                            ),
+                        )
+                        .with_rule_id(format!(
+                            "AHB-{pid}-{}-{}-{}-PAKET-MAX",
+                            layout.nr, layout.tag, el.id
+                        ))));
+                    }
+                    // The minimum binds only where the operand itself does:
+                    // a Soll- or Kann-Operand is the sender's call (Kap. 6.5),
+                    // and one whose Voraussetzung fails states nothing.
+                    if count < paket.min
+                        && status.kind.is_receiver_checkable()
+                        && matches!(truth, Truth::True | Truth::Neutral)
+                    {
+                        issues.push(at(ValidationIssue::new(
+                            ValidationSeverity::Error,
+                            format!(
+                                "{} (Nr {}): DE {} „{}“ carries {code:?} {count} times{where_}; Paket {} of {pid} asks for {} — AHB operand {}",
+                                layout.tag, layout.nr, el.id, el.name, paket.id, paket.min, op.operand,
+                            ),
+                        )
+                        .with_rule_id(format!(
+                            "AHB-{pid}-{}-{}-{}-PAKET-MIN",
+                            layout.nr, layout.tag, el.id
+                        ))));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The group instance a Paketmerkmal counts over: the one holding every
+/// repetition of the place.
+///
+/// A place that repeats itself is counted inside its own group instance (the
+/// `SG10 COM` of Kap. 6.9.3). A place the MIG allows once per group instance
+/// repeats with the group, so it is counted one level further out — as far
+/// out as the first level that repeats at all.
+fn paket_scope(ctx: &Ctx<'_, '_>, assigned: super::structure::Assigned) -> InstanceId {
+    let mut instance = assigned.instance;
+    let mut node = assigned.node;
+    loop {
+        if ctx.structure.nodes[node].max != 1 {
+            return instance;
+        }
+        let (Some(group), Some(parent)) = (
+            ctx.res.instances[instance].node,
+            ctx.res.instances[instance].parent,
+        ) else {
+            return instance;
+        };
+        node = group;
+        instance = parent;
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -990,12 +1202,16 @@ fn operands(
             }
             continue;
         };
-        let truth = status
-            .expr
-            .as_ref()
-            .map_or(Truth::True, |e| e.eval(&mut |id| ctx.truth(id, instance)));
-        let this_required =
-            status.kind.is_receiver_checkable() && matches!(truth, Truth::True | Truth::Neutral);
+        let truth = ctx.truth_of(&status, instance);
+        // A Qualifier/Code in a Paket states how often it is to be repeated in
+        // its Paketmerkmal (Allgemeine Festlegungen 6.1d Kap. 6.9.2), which
+        // `paket_checks` counts; `X [1P0..1]` admits the code without asking
+        // for it.
+        let by_paket =
+            op.code.is_some() && status.expr.as_ref().is_some_and(|e| !e.pakete().is_empty());
+        let this_required = !by_paket
+            && status.kind.is_receiver_checkable()
+            && matches!(truth, Truth::True | Truth::Neutral);
         let this_admitted = !(status.kind.is_receiver_checkable() && truth == Truth::False);
         match &op.code {
             Some(c) => {
@@ -1020,6 +1236,128 @@ fn operands(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A one-segment-group profile: `SG10 CCI`/`CAV`, whose `CAV` DE 7111
+    /// takes the codes `ZA1`, `ZA2` and `ZA3` under the Pakete `packages`
+    /// defines.
+    fn profile(packages: &str, operands: &str) -> Profile {
+        let mig = r#"{
+          "schema_version": 2, "message_type": "UTILMD", "release": "S2.2",
+          "valid_from": "2026-10-01", "ahb_version": "2.2", "source": {"file": "x"},
+          "structure": [
+            {"nr":"00001","tag":"UNH","status":"M","max":1,"elements":[
+              {"id":"0062","status":"M","format":"an..14"},
+              {"id":"S009","status":"M","components":[{"id":"0065","status":"M","codes":[{"code":"UTILMD"}]}]}]},
+            {"nr":"00002","tag":"BGM","status":"M","max":1,"elements":[
+              {"id":"C002","status":"M","components":[{"id":"1001","status":"M","codes":[{"code":"E01"},{"code":"E03"}]}]}]},
+            {"group":"SG10","status":"R","max":9,"children":[
+              {"nr":"00003","tag":"CCI","status":"M","max":1,"elements":[
+                {"id":"7059","status":"N"},{"id":"C502","status":"N"},{"id":"C240","status":"R",
+                 "components":[{"id":"7037","status":"R","codes":[{"code":"ZB4"}]}]}]},
+              {"nr":"00004","tag":"CAV","status":"R","max":3,"elements":[
+                {"id":"C889","status":"M","components":[
+                  {"id":"7111","status":"R","codes":[{"code":"ZA1"},{"code":"ZA2"},{"code":"ZA3"}]}]}]}]},
+            {"nr":"00005","tag":"UNT","status":"M","max":1,"elements":[
+              {"id":"0074","status":"M"},{"id":"0062","status":"M"}]}
+          ]
+        }"#;
+        let ahb = format!(
+            r#"{{
+          "schema_version": 2, "message_type": "UTILMD", "release": "S2.2",
+          "ahb_version": "2.2", "source": {{"file": "x"}},
+          "conditions": {{"1": "Wenn BGM+E03 (Änderungsmeldung) vorhanden"}},
+          "packages": {packages},
+          "anwendungsfaelle": [{{
+            "pid": 11111, "name": "Muster",
+            "rows": [{{"nr":"00001","status":["Muss"]}},{{"nr":"00002","status":["Muss"]}},
+                     {{"group":"SG10","before":"00003","status":["Muss"]}},
+                     {{"nr":"00003","status":["Muss"]}},{{"nr":"00004","status":["Muss"]}},
+                     {{"nr":"00005","status":["Muss"]}}],
+            "elements": [{{"nr":"00004","de":"7111","operands": {operands}}}]
+          }}]
+        }}"#
+        );
+        Profile::from_json(mig, &ahb).expect("the test profile parses")
+    }
+
+    fn message(edi: &str) -> Vec<edifact_rs::OwnedSegment> {
+        edifact_rs::from_bytes(edi.as_bytes())
+            .map(|s| s.map(edifact_rs::Segment::into_owned))
+            .collect::<Result<Vec<_>, _>>()
+            .expect("the test message parses")
+    }
+
+    const ONE_CAV: &str = "UNH+1+UTILMD:D:11A:UN:S2.2'BGM+E01'CCI+++ZB4'CAV+ZA1'UNT+5+1'";
+
+    /// What the column says about the `CAV` place; the rest of the test
+    /// profile is scaffolding for it.
+    fn cav_findings(p: &Profile, edi: &str) -> Vec<String> {
+        validate(p, &message(edi), Some(11111))
+            .iter()
+            .filter_map(|i| i.rule_id().map(str::to_owned))
+            .filter(|r| r.contains("-00004-CAV-"))
+            .collect()
+    }
+
+    #[test]
+    fn a_paketvoraussetzung_decides_which_codes_a_column_admits() {
+        // `2P` asks for an Änderungsmeldung, which `BGM+E01` is not, so its
+        // code is not admitted; the Standardpaket `1P` has no Voraussetzung
+        // and admits its own.
+        let p = profile(
+            r#"{"1P": "", "2P": "[1]"}"#,
+            r#"[{"code":"ZA1","operand":"X [1P0..1]"},{"code":"ZA2","operand":"X [2P0..1]"}]"#,
+        );
+        assert!(cav_findings(&p, ONE_CAV).is_empty());
+        assert_eq!(
+            cav_findings(
+                &p,
+                "UNH+1+UTILMD:D:11A:UN:S2.2'BGM+E01'CCI+++ZB4'CAV+ZA2'UNT+5+1'"
+            ),
+            ["AHB-11111-00004-CAV-7111-CODE"]
+        );
+    }
+
+    #[test]
+    fn a_paketmerkmal_counts_the_repetitions_of_its_code() {
+        let p = profile(
+            r#"{"1P": ""}"#,
+            r#"[{"code":"ZA1","operand":"X [1P0..1]"},{"code":"ZA2","operand":"X [1P1..1]"}]"#,
+        );
+        // `ZA2` is asked for once and missing; `ZA1` is inside its maximum.
+        assert_eq!(
+            cav_findings(&p, ONE_CAV),
+            ["AHB-11111-00004-CAV-7111-PAKET-MIN"]
+        );
+        // Both there, once each.
+        assert!(
+            cav_findings(
+                &p,
+                "UNH+1+UTILMD:D:11A:UN:S2.2'BGM+E01'CCI+++ZB4'CAV+ZA1'CAV+ZA2'UNT+6+1'"
+            )
+            .is_empty()
+        );
+        // `ZA1` twice is past its Paketmerkmal.
+        assert_eq!(
+            cav_findings(
+                &p,
+                "UNH+1+UTILMD:D:11A:UN:S2.2'BGM+E01'CCI+++ZB4'CAV+ZA1'CAV+ZA1'CAV+ZA2'UNT+7+1'"
+            ),
+            ["AHB-11111-00004-CAV-7111-PAKET-MAX"]
+        );
+    }
+
+    #[test]
+    fn a_paketvoraussetzung_that_leads_back_to_its_own_paket_is_refused() {
+        let p = profile(
+            r#"{"1P": "[2P0..1]", "2P": "[1P0..1]"}"#,
+            r#"[{"code":"ZA1","operand":"X [1P1..1]"},{"code":"ZA2","operand":"X [2P0..1]"}]"#,
+        );
+        // The cycle leaves both Pakete undecided, which never rejects: the
+        // code that is there stays admitted and the one that is not is not
+        // demanded.
+        assert!(cav_findings(&p, ONE_CAV).is_empty());
+    }
 
     #[test]
     fn representations() {

@@ -48,33 +48,6 @@ fn internal(e: impl std::fmt::Display) -> MdmError {
     MdmError::Internal(e.to_string())
 }
 
-/// PostgreSQL `check_violation`. The column bounds on `prozent`, the GPKE
-/// Teil 1 Tranchen bound and the conservation trigger — which raises with this
-/// `ERRCODE` on purpose — all arrive as this one code.
-const CHECK_VIOLATION: &str = "23514";
-
-/// Map a failed write to `lf_zuordnung` onto the caller's error.
-///
-/// Every invariant this table carries states something about the *request*: a
-/// share outside „> 0 % und < 100 %", a Marktlokation split beyond the whole,
-/// a Tranche holding all of it. None of them is an outage, so they reach the
-/// caller as `422` naming the constraint rather than as a `500` that reads like
-/// the database is down.
-///
-/// Matched on the SQLSTATE rather than on a constraint name, so a constraint
-/// added to the schema is classified correctly without being listed here — the
-/// failure mode of a name list is that the newest rule is the one it misses.
-fn zuordnung_write(e: sqlx::Error) -> MdmError {
-    if let sqlx::Error::Database(db) = &e
-        && db.code().as_deref() == Some(CHECK_VIOLATION)
-    {
-        return MdmError::Unprocessable {
-            reason: db.message().to_owned(),
-        };
-    }
-    internal(e)
-}
-
 /// The assignment list of the `versorgungsstatus` row aliased `v`, as a JSONB
 /// array shaped like [`LfZuordnung`].
 ///
@@ -413,7 +386,7 @@ impl PgVersorgungsStatusRepository {
         .bind(process_id)
         .execute(&mut *conn)
         .await
-        .map_err(zuordnung_write)?;
+        .map_err(super::write_error)?;
 
         if r.rows_affected() == 0 {
             return Ok(false);
@@ -487,7 +460,7 @@ impl PgVersorgungsStatusRepository {
         .bind(&lf_mp_id)
         .execute(&mut *conn)
         .await
-        .map_err(zuordnung_write)?;
+        .map_err(super::write_error)?;
 
         let promoted = sqlx::query(
             r#"UPDATE lf_zuordnung
@@ -501,7 +474,7 @@ impl PgVersorgungsStatusRepository {
         .bind(process_id)
         .execute(&mut *conn)
         .await
-        .map_err(zuordnung_write)?;
+        .map_err(super::write_error)?;
 
         if promoted.rows_affected() == 0 && displaced.rows_affected() == 0 {
             return Ok(false);
@@ -539,7 +512,7 @@ impl PgVersorgungsStatusRepository {
         .bind(lf_mp_id)
         .execute(&mut *conn)
         .await
-        .map_err(zuordnung_write)?;
+        .map_err(super::write_error)?;
 
         resync_lieferstatus(&mut *conn, malo_id, tenant).await?;
         sqlx::query(
@@ -586,7 +559,7 @@ impl PgVersorgungsStatusRepository {
         }
         // The CHECK constraint requires eog_seit while the fallback runs;
         // default a missing start date to today in German local time — the
-        // §38 Abs. 2 clock runs on the Berlin civil calendar.
+        // §38 Abs. 4 clock runs on the Berlin civil calendar.
         let eog_seit = eog_seit.unwrap_or_else(crate::handlers::malo::today_berlin);
 
         ensure_root(&mut *conn, malo_id, tenant, nb_mp_id).await?;
@@ -597,7 +570,7 @@ impl PgVersorgungsStatusRepository {
         .bind(tenant)
         .execute(&mut *conn)
         .await
-        .map_err(zuordnung_write)?;
+        .map_err(super::write_error)?;
         sqlx::query(
             r#"INSERT INTO lf_zuordnung
                (malo_id, tenant, lf_mp_id, prozent, tranche_id, status,
@@ -611,7 +584,7 @@ impl PgVersorgungsStatusRepository {
         .bind(process_id)
         .execute(&mut *conn)
         .await
-        .map_err(zuordnung_write)?;
+        .map_err(super::write_error)?;
 
         sqlx::query(
             r#"UPDATE versorgungsstatus
@@ -656,7 +629,7 @@ impl PgVersorgungsStatusRepository {
         .bind(lf_mp_id)
         .execute(&mut *conn)
         .await
-        .map_err(zuordnung_write)?;
+        .map_err(super::write_error)?;
 
         if cleared.rows_affected() == 0 {
             return Ok(false);
@@ -679,7 +652,7 @@ async fn replace_zuordnungen(
         .bind(tenant)
         .execute(&mut *conn)
         .await
-        .map_err(zuordnung_write)?;
+        .map_err(super::write_error)?;
     for z in zuordnungen {
         sqlx::query(
             r#"INSERT INTO lf_zuordnung
@@ -698,7 +671,7 @@ async fn replace_zuordnungen(
         .bind(z.process_id)
         .execute(&mut *conn)
         .await
-        .map_err(zuordnung_write)?;
+        .map_err(super::write_error)?;
     }
     Ok(())
 }

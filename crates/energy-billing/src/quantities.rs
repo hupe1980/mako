@@ -59,7 +59,8 @@ pub enum Ablesungsart {
     Abgelesen,
     /// Self-reported by the customer (Selbstablesung).
     Kundenselbstablesung,
-    /// Estimated under § 40a EnWG / § 60 Abs. 2 MsbG (Ersatzwert).
+    /// Estimated under § 40a Abs. 2 EnWG, or an Ersatzwert taken over under
+    /// § 40a Abs. 1 Satz 1 Nr. 1 EnWG.
     Rechnerisch,
 }
 
@@ -136,10 +137,14 @@ pub struct MeterInput {
     #[serde(default)]
     pub ablesungsart: Ablesungsart,
 
-    /// `true` when the consumption figure is an estimate (§ 60 Abs. 2 MsbG Ersatzwert).
+    /// `true` when the consumption figure is an estimate rather than a reading —
+    /// either a § 40a Abs. 2 EnWG Verbrauchsschätzung or an Ersatzwert the
+    /// Messstellenbetreiber formed and passed on under § 40a Abs. 1 Satz 1
+    /// Nr. 1 EnWG.
     ///
-    /// Estimated readings must be labeled on the invoice. The meter operator must
-    /// confirm or replace the estimate within 8 weeks (§ 60 Abs. 2 MsbG).
+    /// § 40a Abs. 2 Satz 3 EnWG has the invoice state the estimate, the ground
+    /// that makes it admissible and the factors behind it „unter ausdrücklichem
+    /// und optisch besonders hervorgehobenem Hinweis".
     #[serde(default)]
     pub is_estimated: bool,
 
@@ -149,6 +154,18 @@ pub struct MeterInput {
     /// meter serial numbers. The invoice must note the meter exchange.
     #[serde(default)]
     pub zaehler_replaced: bool,
+
+    /// Share of the billing period covered by billable readings, 0–100.
+    ///
+    /// A sum over the readings that did arrive says nothing about the ones that
+    /// did not: a month delivered up to the 3rd sums to a plausible Arbeitsmenge
+    /// and bills as a complete month. Below 100 the invoice rests in part on a
+    /// § 40a Abs. 2 EnWG Verbrauchsschätzung, which the document has to say so
+    /// prominently — the `MENGE_UNVOLLSTAENDIG` finding carries that.
+    ///
+    /// `None` when the source states no coverage.
+    #[serde(default)]
+    pub coverage_pct: Option<Decimal>,
 }
 
 impl MeterInput {
@@ -172,6 +189,11 @@ impl MeterInput {
 /// Gas meter data for one billing period.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct GasMeterInput {
+    /// Share of the billing period covered by billable readings, 0–100.
+    ///
+    /// See [`MeterInput::coverage_pct`].
+    #[serde(default)]
+    pub coverage_pct: Option<Decimal>,
     /// Volume at meter conditions (m³).
     pub messung_qm3: Decimal,
     /// Calorific value (Brennwert Ho/Hs) in kWh/m³.
@@ -206,7 +228,7 @@ pub struct GasMeterInput {
     /// § 40 Abs. 2 Nr. 6 EnWG — how the reading was obtained.
     #[serde(default)]
     pub ablesungsart: Ablesungsart,
-    /// Reading is an estimate / Ersatzwert (§40a EnWG, § 60 Abs. 2 MsbG).
+    /// Reading is an estimate / Ersatzwert (§ 40a Abs. 2 EnWG).
     /// Must be prominently labeled on the bill; the customer may demand a
     /// correction once a real reading arrives.
     #[serde(default)]
@@ -437,20 +459,35 @@ impl GgvNutzungsplan {
     /// Uses `billing::proportional_split` (Largest-Remainder / Hamilton method) —
     /// guarantees `Σ(allocated_kwh) == total_kwh` with each tenant within
     /// ±0.001 kWh of their exact share. No single entry absorbs all rounding error.
-    pub fn allocate(&self, total_kwh: Decimal) -> Vec<(String, Decimal)> {
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::EngineError::NutzungsplanSharesInvalid`] when the shares do not sum to
+    /// one closely enough for the split to distribute the whole generation. The
+    /// shares are caller-supplied — a plan entered as percentages sums to 100 —
+    /// so this is a configuration error the caller must see, not an arithmetic
+    /// failure to absorb.
+    pub fn allocate(
+        &self,
+        total_kwh: Decimal,
+    ) -> Result<Vec<(String, Decimal)>, crate::EngineError> {
         if self.0.is_empty() || total_kwh <= Decimal::ZERO {
-            return vec![];
+            return Ok(vec![]);
         }
         let fractions: Vec<Decimal> = self.0.iter().map(|e| e.fraction).collect();
         // billing::proportional_split uses Largest-Remainder (Hamilton) method:
-        // scale=3 → 0.001 kWh resolution; returns Err only for empty fractions.
-        let parts = billing::proportional_split(total_kwh, &fractions, 3)
-            .expect("fractions non-empty — checked above");
-        self.0
+        // scale=3 → 0.001 kWh resolution.
+        let parts = billing::proportional_split(total_kwh, &fractions, 3).map_err(|_| {
+            crate::EngineError::NutzungsplanSharesInvalid {
+                sum: fractions.iter().copied().sum(),
+            }
+        })?;
+        Ok(self
+            .0
             .iter()
             .zip(parts)
             .map(|(e, kwh)| (e.malo_id.clone(), kwh))
-            .collect()
+            .collect())
     }
 }
 
@@ -651,6 +688,258 @@ pub struct EnergyShareMeterInput {
     pub gemeinschaft_id: Option<String>,
 }
 
+// ── Apportioning a period total across the legs of a split period ─────────────
+
+/// How one leg of a split billing period takes its share of a period total.
+///
+/// A period is billed in legs wherever a Tarifwechsel or a statutory rate
+/// boundary falls inside it, and each leg is priced at its own tariff and its
+/// own rates. A quantity the caller states **once for the whole period** then
+/// has to reach them: charged in full on every leg it is billed once per leg,
+/// and charged in full on one it prices the whole period at that leg's tariff.
+///
+/// mako apportions it by **calendar days**. The legs of a period are
+/// consecutive and non-overlapping, so their day counts are the only ratio
+/// available without a second reading, and a standing-charge-plus-consumption
+/// supply is what the day ratio describes. It is an apportionment and not a
+/// measurement: a caller holding real per-leg readings supplies those instead,
+/// and a caller that cannot is told so rather than having a reading invented
+/// for it — [`Quantities`] carries no per-leg register values.
+///
+/// Additive quantities — kWh, m³, months, event counts — are apportioned. A
+/// figure that is not a sum over the period's days is carried whole: a peak
+/// demand is the highest interval of the period and is the highest interval of
+/// whichever leg contains it, a sealed surface is a property of the premises,
+/// and a unit price is a price.
+///
+/// The shares are split with [`billing::proportional_split`]
+/// (Largest-Remainder), so the legs of a period sum back to the caller's total
+/// exactly rather than to it plus a rounding residue.
+#[derive(Debug, Clone)]
+pub struct DayApportionment {
+    /// Days per leg, in order.
+    days: Vec<Decimal>,
+    /// Which leg this apportionment speaks for.
+    index: usize,
+}
+
+/// Decimals kept when apportioning a quantity: 0.001 kWh / m³ / month.
+const QUANTITY_SCALE: u32 = 3;
+
+impl DayApportionment {
+    /// The apportionment for leg `index` of a period whose legs run `days` days.
+    ///
+    /// Falls back to [`Self::whole`] when the shape cannot be apportioned —
+    /// no legs, an out-of-range index, or a period of no days at all — so a
+    /// caller never has to choose between a panic and a silently dropped
+    /// quantity.
+    #[must_use]
+    pub fn new(days: &[u32], index: usize) -> Self {
+        let total: u64 = days.iter().map(|d| u64::from(*d)).sum();
+        if index >= days.len() || total == 0 {
+            return Self::whole();
+        }
+        Self {
+            days: days.iter().map(|d| Decimal::from(*d)).collect(),
+            index,
+        }
+    }
+
+    /// The period is one leg: every total belongs to it unchanged.
+    #[must_use]
+    pub fn whole() -> Self {
+        Self {
+            days: vec![Decimal::ONE],
+            index: 0,
+        }
+    }
+
+    /// Whether this apportionment leaves every total untouched.
+    #[must_use]
+    pub fn is_whole(&self) -> bool {
+        self.days.len() <= 1
+    }
+
+    /// This leg's share of `total`, rounded to `scale` decimals.
+    #[must_use]
+    pub fn share(&self, total: Decimal, scale: u32) -> Decimal {
+        if self.is_whole() || total.is_zero() {
+            return total;
+        }
+        let sum: Decimal = self.days.iter().copied().sum();
+        let last = self.days.len() - 1;
+        // `proportional_split` requires shares that sum to exactly one, and a
+        // day count rarely divides evenly; the last leg absorbs the residue.
+        let mut fractions: Vec<Decimal> = self.days.iter().map(|d| *d / sum).collect();
+        let head: Decimal = fractions[..last].iter().copied().sum();
+        fractions[last] = Decimal::ONE - head;
+        // A quantity is non-negative, but a correction run can carry a negative
+        // one; the sign is lifted out and re-applied, which is exact.
+        let negative = total < Decimal::ZERO;
+        let magnitude = if negative { -total } else { total };
+        let part = billing::proportional_split(magnitude, &fractions, scale)
+            .ok()
+            .and_then(|parts| parts.get(self.index).copied())
+            .unwrap_or_else(|| crate::rates::round_money(magnitude * fractions[self.index], scale));
+        if negative { -part } else { part }
+    }
+
+    /// This leg's share of an additive quantity — kWh, m³ or months.
+    #[must_use]
+    pub fn quantity(&self, total: Decimal) -> Decimal {
+        self.share(total, QUANTITY_SCALE)
+    }
+
+    /// This leg's share of an optional additive quantity.
+    #[must_use]
+    pub fn opt_quantity(&self, total: Option<Decimal>) -> Option<Decimal> {
+        total.map(|t| self.quantity(t))
+    }
+
+    /// This leg's share of a countable number of events.
+    ///
+    /// Split at scale 0: half an optimisation event does not exist, and the
+    /// legs still sum back to the events the caller reported.
+    #[must_use]
+    pub fn count(&self, total: u32) -> u32 {
+        use rust_decimal::prelude::ToPrimitive as _;
+        self.share(Decimal::from(total), 0)
+            .to_u32()
+            .unwrap_or(total)
+    }
+
+    /// This leg's share of an optional countable number of events.
+    #[must_use]
+    pub fn opt_count(&self, total: Option<u32>) -> Option<u32> {
+        total.map(|t| self.count(t))
+    }
+}
+
+impl WaermeMeterInput {
+    /// This leg's share of a Fernwärme period total.
+    ///
+    /// The delivered heat and the month count are sums over the period's days.
+    /// The Spitzenleistung is not: it is the highest interval of the period,
+    /// and the leg that contains it has the same peak the whole period has —
+    /// while the Leistungspreis it feeds is already pro-rated by `months`.
+    #[must_use]
+    pub fn apportioned(&self, a: &DayApportionment) -> Self {
+        Self {
+            kwh_waerme: a.quantity(self.kwh_waerme),
+            spitzenleistung_kw: self.spitzenleistung_kw,
+            months: a.opt_quantity(self.months),
+        }
+    }
+}
+
+impl WasserMeterInput {
+    /// This leg's share of a water period total.
+    ///
+    /// Frischwasser, every Absetzung and the month count are apportioned; the
+    /// same ratio on both keeps an Absetzung from overtaking the Frischwasser
+    /// it is deducted from. The versiegelte Fläche is a property of the
+    /// premises rather than a quantity delivered over the period.
+    #[must_use]
+    pub fn apportioned(&self, a: &DayApportionment) -> Self {
+        Self {
+            frischwasser_m3: a.quantity(self.frischwasser_m3),
+            absetzungen: self
+                .absetzungen
+                .iter()
+                .map(|x| Absetzung {
+                    m3: a.quantity(x.m3),
+                    grund: x.grund,
+                })
+                .collect(),
+            versiegelte_flaeche_m2: self.versiegelte_flaeche_m2,
+            months: a.opt_quantity(self.months),
+        }
+    }
+}
+
+impl SolarMeterInput {
+    /// This leg's share of a self-consumption period total.
+    #[must_use]
+    pub fn apportioned(&self, a: &DayApportionment) -> Self {
+        Self {
+            eigenverbrauch_kwh: a.quantity(self.eigenverbrauch_kwh),
+        }
+    }
+}
+
+impl EegMeterInput {
+    /// This leg's share of a feed-in period total.
+    ///
+    /// The § 51 EEG negative-price hours are apportioned with the feed-in they
+    /// are subtracted from, so the billable kWh of the legs still sum to the
+    /// billable kWh of the period.
+    #[must_use]
+    pub fn apportioned(&self, a: &DayApportionment) -> Self {
+        Self {
+            einspeisung_kwh: a.quantity(self.einspeisung_kwh),
+            kwh_during_negative_epex: a.opt_quantity(self.kwh_during_negative_epex),
+        }
+    }
+}
+
+impl HemsMeterInput {
+    /// This leg's share of a HEMS period total.
+    #[must_use]
+    pub fn apportioned(&self, a: &DayApportionment) -> Self {
+        Self {
+            months: a.opt_quantity(self.months),
+            optimization_events: a.opt_count(self.optimization_events),
+            readout_events: a.opt_count(self.readout_events),
+        }
+    }
+}
+
+impl EmobilityMeterInput {
+    /// This leg's share of an e-mobility period total.
+    #[must_use]
+    pub fn apportioned(&self, a: &DayApportionment) -> Self {
+        Self {
+            months: a.opt_quantity(self.months),
+            kwh_charged: a.opt_quantity(self.kwh_charged),
+            sessions: a.opt_count(self.sessions),
+            roaming_sessions: a.opt_count(self.roaming_sessions),
+        }
+    }
+}
+
+impl ServiceMeterInput {
+    /// This leg's share of an Energiedienstleistung period total.
+    ///
+    /// `event_price_eur` is the agreed price of one event, not a total, so it
+    /// is carried whole.
+    #[must_use]
+    pub fn apportioned(&self, a: &DayApportionment) -> Self {
+        Self {
+            months: a.opt_quantity(self.months),
+            event_count: a.opt_count(self.event_count),
+            event_price_eur: self.event_price_eur,
+        }
+    }
+}
+
+impl EnergyShareMeterInput {
+    /// This leg's share of a § 42c EnWG community allocation.
+    ///
+    /// The allocated energy and the plant generation it was taken from are
+    /// apportioned together, so the informational check the invoice offers the
+    /// participant — fraction × generation ≈ allocation — still holds on each
+    /// leg. The fraction itself is a ratio and the community identifier a name.
+    #[must_use]
+    pub fn apportioned(&self, a: &DayApportionment) -> Self {
+        Self {
+            allocated_kwh: a.quantity(self.allocated_kwh),
+            total_plant_generation_kwh: a.opt_quantity(self.total_plant_generation_kwh),
+            allocation_fraction: self.allocation_fraction,
+            gemeinschaft_id: self.gemeinschaft_id.clone(),
+        }
+    }
+}
+
 // ── Quantities ────────────────────────────────────────────────────────────────
 
 /// All metered quantities for one billing period.
@@ -762,6 +1051,69 @@ pub struct Quantities {
     pub energy_share: Option<EnergyShareMeterInput>,
 }
 
+impl Quantities {
+    /// The metered sources that were supplied and carry no quantity at all.
+    ///
+    /// A supply invoice for a period longer than a day whose every energy
+    /// source reads zero charges the standing charges and nothing for the
+    /// commodity, and reads exactly like an ordinary invoice — the quantity
+    /// twin of the `KEIN_ARBEITSPREIS` family, which refuses a product that
+    /// prices nothing.
+    ///
+    /// Only sources with an energy or volume dimension are considered. HEMS and
+    /// Energiedienstleistung are billed per month and per event, so "zero kWh"
+    /// says nothing about them.
+    ///
+    /// Names the sources rather than answering yes/no, so the finding can say
+    /// which reading is missing. Empty when at least one source carries a
+    /// quantity, or when none of these sources was supplied at all.
+    #[must_use]
+    pub fn empty_energy_sources(&self) -> Vec<&'static str> {
+        let mut supplied: Vec<(&'static str, bool)> = Vec::new();
+        if let Some(m) = &self.electricity {
+            supplied.push(("electricity", m.billable_kwh() > Decimal::ZERO));
+        }
+        if let Some(m) = &self.gas {
+            supplied.push((
+                "gas",
+                m.messung_qm3 > Decimal::ZERO || m.kwh_hs.unwrap_or_default() > Decimal::ZERO,
+            ));
+        }
+        if let Some(m) = &self.heat {
+            supplied.push(("heat", m.kwh_waerme > Decimal::ZERO));
+        }
+        if let Some(m) = &self.wasser {
+            supplied.push(("wasser", m.frischwasser_m3 > Decimal::ZERO));
+        }
+        if let Some(m) = &self.solar {
+            supplied.push(("solar", m.eigenverbrauch_kwh > Decimal::ZERO));
+        }
+        if let Some(m) = &self.eeg {
+            supplied.push(("eeg", m.einspeisung_kwh > Decimal::ZERO));
+        }
+        if let Some(m) = &self.einspeisung {
+            supplied.push(("einspeisung", m.einspeisung_kwh > Decimal::ZERO));
+        }
+        if let Some(m) = &self.emobility {
+            supplied.push((
+                "emobility",
+                m.kwh_charged.unwrap_or_default() > Decimal::ZERO
+                    || m.sessions.unwrap_or_default() > 0,
+            ));
+        }
+        if let Some(g) = &self.ggv_solar {
+            supplied.push((
+                "ggv_solar",
+                g.pv_allocated_kwh > Decimal::ZERO || g.actual_consumption_kwh > Decimal::ZERO,
+            ));
+        }
+        if supplied.is_empty() || supplied.iter().any(|(_, has)| *has) {
+            return Vec::new();
+        }
+        supplied.into_iter().map(|(name, _)| name).collect()
+    }
+}
+
 // ── ProsumerMeterInput ────────────────────────────────────────────────────────
 
 /// Prosumer meter data — combines grid consumption with PV self-consumption.
@@ -859,7 +1211,7 @@ impl ProsumerMeterInput {
 ///     GgvNutzungsplanEntry { malo_id: "B".into(), fraction: dec!(0.40) },
 /// ]);
 /// let plant_kwh = dec!(100);
-/// let allocs = plan.allocate(plant_kwh); // [("A", 60), ("B", 40)]
+/// let allocs = plan.allocate(plant_kwh).unwrap(); // [("A", 60), ("B", 40)]
 ///
 /// let tenant_a = GgvSolarInput {
 ///     pv_allocated_kwh: dec!(60),
@@ -961,7 +1313,9 @@ mod tests {
     fn allocate_sum_equals_total() {
         let p = plan(&[("A", "0.333"), ("B", "0.333"), ("C", "0.334")]);
         let total = dec!(100.000);
-        let allocs = p.allocate(total);
+        let allocs = p
+            .allocate(total)
+            .expect("the shares partition the generation");
         let sum: Decimal = allocs.iter().map(|(_, k)| k).sum();
         assert_eq!(sum, total, "sum must equal total exactly");
     }
@@ -976,7 +1330,9 @@ mod tests {
         // Old naive: last tenant gets all of it
         let p = plan(&[("A", "0.3333"), ("B", "0.3333"), ("C", "0.3334")]);
         let total = dec!(100.000);
-        let allocs = p.allocate(total);
+        let allocs = p
+            .allocate(total)
+            .expect("the shares partition the generation");
 
         // All within ±0.001 of their exact share
         for (id, kwh) in &allocs {
@@ -1011,7 +1367,9 @@ mod tests {
                 .collect(),
         );
         let total = dec!(1000.001);
-        let allocs = p.allocate(total);
+        let allocs = p
+            .allocate(total)
+            .expect("the shares partition the generation");
 
         // With old naive: T9 (last) gets 100.001, others get 100.000
         // With LRM: one tenant gets 100.001, the rest get 100.000 — but it's

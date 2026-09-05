@@ -188,21 +188,21 @@ pub async fn storniert(
 pub async fn iftsta_ausstehend(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     tenant: &str,
-    id: Uuid,
-    malo_id: &str,
-    lf_mp_id: &str,
-    last_error: &str,
+    order: &crate::pg::StuckIftsta,
 ) -> Result<(), sqlx::Error> {
     let ce = mako_service::CloudEvent::new(
         source(tenant),
         mako_events::sperr::IFTSTA_AUSSTEHEND,
-        id.to_string(),
+        order.id.to_string(),
         serde_json::json!({
-            "order_id":   id.to_string(),
-            "malo_id":    malo_id,
-            "lf_mp_id":   lf_mp_id,
-            "attempts":   crate::pg::IFTSTA_MAX_ATTEMPTS,
-            "last_error": last_error,
+            "order_id":   order.id.to_string(),
+            "malo_id":    order.malo_id,
+            "lf_mp_id":   order.lf_mp_id,
+            // The attempts actually made, not the cap: this order may have been
+            // escalated on its deadline while still inside its retry budget.
+            "attempts":   order.attempts,
+            "max_attempts": crate::pg::IFTSTA_MAX_ATTEMPTS,
+            "last_error": order.last_error,
             "impact": "the Lieferant has not received the Auftragsstatus; their \
                        gpke-sperrung-lf process cannot reach a terminal state",
         }),

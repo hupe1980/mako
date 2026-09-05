@@ -1375,16 +1375,23 @@ mod tests {
                 wire.contains(&format!("RFF+{qualifier}:ESA-BE-0001")),
                 "PID {pid} correlates by RFF+{qualifier}: {wire}"
             );
-            // 19011/19012 name the EBD in DE 1082; the 19013/19014 columns
-            // mark DE 4465 alone.
-            let ajt = if matches!(pid, 19011 | 19012) {
-                format!("AJT+{code}+{ebd}'")
-            } else {
-                format!("AJT+{code}'")
-            };
+            // All four name the EBD in DE 1082. Verified against
+            // `ORDRSP_AHB_1.1a — konsolidierte Lesefassung, Stand 27.03.2026`,
+            // the 19011/19012/19013/19014 table:
+            //
+            //   SG2 AJT 1082  E_0254 …    X [22]     X [22]
+            //                 E_0256 …  X [21] ⊻ [23]  X [21] ⊻ [23]
+            //                 E_0257 …                        X          X
+            //
+            // 19011/19012 carry E_0254/E_0256 under a Bedingung; 19013/19014
+            // carry E_0257 unconditionally. This assertion used to expect
+            // `AJT+{code}'` for 19013/19014 — it only passed because the AHB
+            // reader was losing that `X`, which sat past a mis-measured column
+            // boundary, so the profile listed no DE 1082 operand for them at
+            // all and the renderer had nothing to emit.
             assert!(
-                wire.contains(&ajt),
-                "SG2 AJT states the Prüfschritt code as its column does: {wire}"
+                wire.contains(&format!("AJT+{code}+{ebd}'")),
+                "SG2 AJT states the Prüfschritt code and its EBD: {wire}"
             );
             edi_energy::EdiEnergyMessage::validate(
                 &edi_energy::parse(wire.as_bytes()).expect("parse"),

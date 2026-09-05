@@ -214,6 +214,7 @@ async fn erp_angebot_id_lookup_finds_existing_quotation() {
         laufzeit_monate: Some(24),
         positionen: vec![],
         varianten: None,
+        wiederverkaeufer_13b: false,
         erp_angebot_id: Some("ERP-Q-1".to_owned()),
         notizen: None,
     };
@@ -246,6 +247,98 @@ async fn erp_angebot_id_lookup_finds_existing_quotation() {
         .await
         .expect("lookup");
     assert!(cross.is_none(), "erp_angebot_id lookup is tenant-scoped");
+}
+
+/// Two tenants may use the same ERP quote number, and each reads back its own.
+///
+/// `erp_angebot_id` carried a **global** `UNIQUE` while every read of it is
+/// tenant-scoped, so the constraint and the lookup disagreed: tenant B's
+/// `fetch_angebot_id_by_erp_id` found nothing, the handler therefore took the
+/// create path, and the insert was refused on a row tenant B cannot see. An
+/// ERP quote number is the counterparty's own sequence — two suppliers on one
+/// deployment reach `Q-1000` independently.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn two_tenants_may_share_an_erp_angebot_id() {
+    let Some((pool, _pg)) = test_pool("angebot_idem_tenants").await else {
+        return;
+    };
+    let tenant_a = "9900000000001";
+    let tenant_b = "9900000000002";
+    let erp_id = "Q-1000";
+
+    let req = |name: &str| pg::CreateAngebotRequest {
+        lf_mp_id: None,
+        kunden_id: None,
+        interessent_name: Some(name.to_owned()),
+        contact_email: None,
+        contact_phone: None,
+        gueltig_bis: Some("2026-12-31".to_owned()),
+        lieferbeginn: None,
+        laufzeit_monate: Some(24),
+        positionen: vec![],
+        varianten: None,
+        wiederverkaeufer_13b: false,
+        erp_angebot_id: Some(erp_id.to_owned()),
+        notizen: None,
+    };
+
+    let mut ids = Vec::new();
+    for (tenant, name) in [(tenant_a, "Kunde A"), (tenant_b, "Kunde B")] {
+        ids.push(
+            pg::insert_angebot(
+                &pool,
+                tenant,
+                tenant,
+                // The Angebotsnummer is per (tenant, lf_mp_id), so both may be
+                // the first quotation of the year — as they are in production.
+                "ANG-2026-00001",
+                &req(name),
+                &serde_json::json!([]),
+                &serde_json::json!([]),
+                &serde_json::json!({}),
+                None,
+                None,
+                time::macros::date!(2026 - 12 - 31),
+                None,
+            )
+            .await
+            .unwrap_or_else(|e| {
+                panic!("{tenant} must be able to use erp_angebot_id {erp_id}: {e:#}")
+            }),
+        );
+    }
+    assert_ne!(ids[0], ids[1], "two distinct quotations");
+
+    // …and each tenant's idempotent replay resolves to its *own* quotation.
+    for (tenant, expected) in [(tenant_a, ids[0]), (tenant_b, ids[1])] {
+        let found = pg::fetch_angebot_id_by_erp_id(&pool, tenant, erp_id)
+            .await
+            .expect("lookup")
+            .map(|(id, _)| id);
+        assert_eq!(found, Some(expected), "{tenant} reads back its own row");
+    }
+
+    // The guard that stays: one tenant cannot reuse its own ERP id twice.
+    let dup = pg::insert_angebot(
+        &pool,
+        tenant_a,
+        tenant_a,
+        "ANG-2026-00002",
+        &req("Kunde A nochmal"),
+        &serde_json::json!([]),
+        &serde_json::json!([]),
+        &serde_json::json!({}),
+        None,
+        None,
+        time::macros::date!(2026 - 12 - 31),
+        None,
+    )
+    .await;
+    assert!(
+        dup.is_err(),
+        "the same tenant must not mint two quotations for one ERP id"
+    );
 }
 
 // ── nEHS price series — upsert, latest-at-or-before, source discipline ────────

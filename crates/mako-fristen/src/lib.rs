@@ -29,7 +29,7 @@
 //! | **APERAK** | 45 min Strom weekday; Gas: next Werktag 12:00 (Folgeprozess) or 3 Werktage (Initialprozess) | the message was accepted for processing |
 //! | **Antwortfrist** | per PID — 11:00 of the 1. Werktag for a GPKE Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for WiM Strom | the *business* answer is owed |
 //!
-//! **There is no 24-hour GPKE window**, under BK6-22-024 or anything else.
+//! **There is no 24-hour GPKE window**, under BK6-24-174 or anything else.
 //! The technical acknowledgement is 45 minutes
 //! ([`aperak_strom_due_at`]) and the business answer is a wall-clock instant on
 //! the first Werktag after the Übertragungstag (`mako-pruefung`). A flat 24 h is
@@ -733,8 +733,12 @@ pub enum HolidayCalendar {
 
 /// Add `hours` wall-clock hours to `from`.
 ///
-/// Use this for the **GPKE 24h Lieferantenwechsel** window (BK6-22-024).
-/// Weekends and public holidays do **not** extend the window.
+/// Use this for windows the Festlegungen state as wall-clock durations — the
+/// CONTRL 6 h Übertragungsquittung and the 45-minute Strom APERAK. Weekends and
+/// public holidays do **not** extend such a window.
+///
+/// There is **no** 24-hour GPKE Lieferantenwechsel window; see
+/// [`antwort::GPKE_IS_NOT_TWENTY_FOUR_HOURS`].
 ///
 /// # Example
 ///
@@ -743,8 +747,8 @@ pub enum HolidayCalendar {
 /// use time::OffsetDateTime;
 ///
 /// let received = OffsetDateTime::now_utc();
-/// let due = fristen::add_hours(received, 24);
-/// assert_eq!(due - received, time::Duration::hours(24));
+/// let due = fristen::add_hours(received, 6);   // the CONTRL window
+/// assert_eq!(due - received, time::Duration::hours(6));
 /// ```
 #[must_use]
 pub fn add_hours(from: OffsetDateTime, hours: u32) -> OffsetDateTime {
@@ -752,6 +756,52 @@ pub fn add_hours(from: OffsetDateTime, hours: u32) -> OffsetDateTime {
 }
 
 // ── Werktage helpers ──────────────────────────────────────────────────────────
+/// Shift a date `n` calendar months forward, clamping to the month's last day.
+///
+/// Month arithmetic is not day arithmetic and `Date::replace_month` is not
+/// month arithmetic: it keeps the year, so December + 1 lands in January of the
+/// *same* year — earlier than where it started — and it fails outright on a day
+/// the target month does not have. Both show up as silently wrong schedules
+/// rather than errors, so calendar-month steps go through here.
+///
+/// The clamp is § 188 Abs. 3 BGB: where the target month has no such day, the
+/// Frist ends on its last one.
+///
+/// ```
+/// use time::{Date, Month};
+/// use mako_fristen as fristen;
+///
+/// let jan31 = Date::from_calendar_date(2026, Month::January, 31).unwrap();
+/// // February has no 31st — § 188 Abs. 3 BGB clamps to the 28th.
+/// assert_eq!(fristen::add_months(jan31, 1), Date::from_calendar_date(2026, Month::February, 28).unwrap());
+/// // The year carries.
+/// let dec15 = Date::from_calendar_date(2026, Month::December, 15).unwrap();
+/// assert_eq!(fristen::add_months(dec15, 2), Date::from_calendar_date(2027, Month::February, 15).unwrap());
+/// ```
+#[must_use]
+pub fn add_months(date: Date, n: u32) -> Date {
+    shift_months(date, i32::try_from(n).unwrap_or(i32::MAX))
+}
+
+/// Shift a date `n` calendar months back, clamping to the month's last day.
+///
+/// The mirror of [`add_months`]; see it for why `Date::replace_month` is not a
+/// substitute.
+#[must_use]
+pub fn subtract_months(date: Date, n: u32) -> Date {
+    shift_months(date, -i32::try_from(n).unwrap_or(i32::MAX))
+}
+
+/// The shared body of [`add_months`] and [`subtract_months`].
+fn shift_months(date: Date, delta: i32) -> Date {
+    let total = i32::from(u8::from(date.month())) - 1 + delta;
+    let year = date.year() + total.div_euclid(12);
+    let month = time::Month::try_from(u8::try_from(total.rem_euclid(12) + 1).unwrap_or(1))
+        .unwrap_or(time::Month::January);
+    // § 188 Abs. 3 BGB: a day the target month does not have becomes its last.
+    let last = time::util::days_in_month(month, year);
+    Date::from_calendar_date(year, month, date.day().min(last)).unwrap_or(date)
+}
 
 /// Add `n` Werktage (working days) to `from`.
 ///

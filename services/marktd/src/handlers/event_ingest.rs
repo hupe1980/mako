@@ -197,7 +197,7 @@ where
     //   process.completed  + PID 55013/44013 (Anmeldung/Zuordnung EOG)
     //     → begin_eog_supply: the E/G becomes the supplier of record
     //       (lieferstatus = Ersatzversorgung/Grundversorgung per data.eog_art,
-    //        eog_seit = data.process_date — anchors the §38 Abs. 2 3-month clock);
+    //        eog_seit = data.process_date — anchors the §38 Abs. 4 3-month clock);
     //       emits de.markt.versorgung.eog-begonnen
     //
     // The CE subject is always the process UUID — malo_id is extracted from

@@ -406,7 +406,7 @@
           "nr": "00025",
           "operands": [
             {
-              "operand": "X [74]) ∨ ∧ [524]"
+              "operand": "X (([939] [74]) ∨ ([940][75])) ∧ [524]"
             }
           ]
         },
@@ -687,7 +687,7 @@
           "nr": "00033",
           "operands": [
             {
-              "operand": "X [UB1] ∧"
+              "operand": "X [UB1] ∧ (([493] ∧ [20] ∧ [24]) ⊻ ([493] ∧ [21] ∧ [25]) ⊻ [492])"
             }
           ]
         },
@@ -1615,6 +1615,10 @@
             {
               "code": "13R",
               "operand": "X [493] ∨ [57]"
+            },
+            {
+              "code": "SOR",
+              "operand": "X [492] ∧ [56]"
             }
           ]
         },
@@ -1654,7 +1658,7 @@
           "operands": [
             {
               "code": "Z01",
-              "operand": "X [78] ∧"
+              "operand": "X [78] ∧ [83]"
             },
             {
               "code": "Z02",
@@ -1682,11 +1686,15 @@
             },
             {
               "code": "Z08",
-              "operand": "X [80] ∧"
+              "operand": "X [80] ∧ [83]"
             },
             {
               "code": "Z09",
-              "operand": "X [81] ∧"
+              "operand": "X [81] ∧ [82]"
+            },
+            {
+              "code": "Z10",
+              "operand": "X [78] ∧ [80]"
             }
           ]
         },
@@ -1939,7 +1947,7 @@
           "nr": "00025",
           "operands": [
             {
-              "operand": "X [74]) ∨ ∧ [524]"
+              "operand": "X (([939] [74]) ∨ ([940][75])) ∧ [524]"
             }
           ]
         },
@@ -2220,7 +2228,7 @@
           "nr": "00033",
           "operands": [
             {
-              "operand": "X [UB1] ∧"
+              "operand": "X [UB1] ∧ (([493] ∧ [20] ∧ [24]) ⊻ ([493] ∧ [21] ∧ [25]) ⊻ [492])"
             }
           ]
         },
@@ -2248,7 +2256,7 @@
           "nr": "00034",
           "operands": [
             {
-              "operand": "X ([50] ∧ ([67] ⊻ ([41] ∧ ([67] ⊻ [68]"
+              "operand": "X ([50] ∧ ([67] ⊻ [68])) ⊻ ([41] ∧ ([67] ⊻ [68] ⊻ [69]))"
             }
           ]
         },
@@ -2303,7 +2311,7 @@
             },
             {
               "code": "K3",
-              "operand": "X [492] ∧"
+              "operand": "X [492] ∧ [51]"
             },
             {
               "code": "H87",
@@ -2340,7 +2348,11 @@
             },
             {
               "code": "MON",
-              "operand": "X [51] ∨"
+              "operand": "X [51] ∨ [493]"
+            },
+            {
+              "code": "ANN",
+              "operand": "X [51] ∨ [493]"
             }
           ]
         },
@@ -3369,7 +3381,7 @@
           "before": "00054",
           "group": "SG51",
           "status": [
-            "Soll [22] ∧ [42]) ⊻ ([493] ∧ [54]"
+            "Soll [22] ∧ (([492] ∧ [42]) ⊻ ([493] ∧ [88])) ∧ [54]"
           ]
         },
         {
@@ -3920,7 +3932,7 @@
           "nr": "00025",
           "operands": [
             {
-              "operand": "X [74]) ∨ ∧ [524]"
+              "operand": "X (([939] [74]) ∨ ([940][75])) ∧ [524]"
             }
           ]
         },
@@ -4201,7 +4213,7 @@
           "nr": "00033",
           "operands": [
             {
-              "operand": "X [UB1] ∧"
+              "operand": "X [UB1] ∧ (([493] ∧ [20] ∧ [24]) ⊻ ([493] ∧ [21] ∧ [25]) ⊻ [492])"
             }
           ]
         },
@@ -4301,6 +4313,10 @@
             },
             {
               "code": "MON",
+              "operand": "X"
+            },
+            {
+              "code": "ANN",
               "operand": "X"
             }
           ]
@@ -5219,7 +5235,15 @@
           "operands": [
             {
               "code": "MSB",
-              "operand": "X [72] ∨"
+              "operand": "X [72] ∨ [76]"
+            },
+            {
+              "code": "KON",
+              "operand": "X"
+            },
+            {
+              "code": "TEC",
+              "operand": "X"
             }
           ]
         },
@@ -5421,7 +5445,7 @@
           "nr": "00025",
           "operands": [
             {
-              "operand": "X [74]) ∨ ∧ [524]"
+              "operand": "X (([939] [74]) ∨ ([940][75])) ∧ [524]"
             }
           ]
         },
@@ -5802,6 +5826,10 @@
             },
             {
               "code": "MON",
+              "operand": "X [64]"
+            },
+            {
+              "code": "ANN",
               "operand": "X [64]"
             }
           ]
@@ -6781,7 +6809,7 @@
           "nr": "00011",
           "operands": [
             {
-              "operand": "X ⊻ [61]"
+              "operand": "X ([931][60]) ⊻ [61]"
             }
           ]
         },
@@ -6837,6 +6865,38 @@
             },
             {
               "code": "MMM",
+              "operand": "X"
+            },
+            {
+              "code": "MSB",
+              "operand": "X [72] ∨ [76]"
+            },
+            {
+              "code": "NAP",
+              "operand": "X [493]"
+            },
+            {
+              "code": "Z43",
+              "operand": "X"
+            },
+            {
+              "code": "Z44",
+              "operand": "X"
+            },
+            {
+              "code": "Z45",
+              "operand": "X [492]"
+            },
+            {
+              "code": "SOR",
+              "operand": "X [492] ∧ [56]"
+            },
+            {
+              "code": "KON",
+              "operand": "X"
+            },
+            {
+              "code": "TEC",
               "operand": "X"
             }
           ]
@@ -7072,7 +7132,7 @@
           "nr": "00025",
           "operands": [
             {
-              "operand": "X ∨ ([940]"
+              "operand": "X (([939][74]) ∨ ([940] [75])) ∧ [524]"
             }
           ]
         },
@@ -7131,6 +7191,10 @@
             },
             {
               "code": "293",
+              "operand": "X"
+            },
+            {
+              "code": "332",
               "operand": "X"
             }
           ]
@@ -8449,7 +8513,7 @@
           "nr": "00025",
           "operands": [
             {
-              "operand": "X [74]) ∨ ∧ [524]"
+              "operand": "X (([939] [74]) ∨ ([940][75])) ∧ [524]"
             }
           ]
         },
@@ -8730,7 +8794,7 @@
           "nr": "00033",
           "operands": [
             {
-              "operand": "X ⊻ ([UB1] ∧ [21] ∧"
+              "operand": "X (([UB1] ∧ [20] ∧ [24]) ⊻ ([UB1] ∧ [21] ∧ [25]))"
             }
           ]
         },
@@ -8941,7 +9005,7 @@
           "nr": "00044",
           "operands": [
             {
-              "operand": "X [902] ∧"
+              "operand": "X [902] ∧ [930]"
             }
           ]
         },
@@ -9964,7 +10028,7 @@
           "nr": "00025",
           "operands": [
             {
-              "operand": "X [74]) ∨ ∧ [524]"
+              "operand": "X (([939] [74]) ∨ ([940][75])) ∧ [524]"
             }
           ]
         },
@@ -10245,7 +10309,7 @@
           "nr": "00033",
           "operands": [
             {
-              "operand": "∧ X [UB1] ∧"
+              "operand": "X [UB1] ∧ [25]"
             }
           ]
         },
@@ -10437,7 +10501,7 @@
           "nr": "00044",
           "operands": [
             {
-              "operand": "X [902] ∧"
+              "operand": "X [902] ∧ [930]"
             }
           ]
         },
@@ -11377,7 +11441,7 @@
           "nr": "00025",
           "operands": [
             {
-              "operand": "X [74]) ∨ ∧ [524]"
+              "operand": "X (([939] [74]) ∨ ([940][75])) ∧ [524]"
             }
           ]
         },
@@ -11596,7 +11660,7 @@
           "nr": "00033",
           "operands": [
             {
-              "operand": "X [UB1] ∧"
+              "operand": "X [UB1] ∧ [24]"
             }
           ]
         },
@@ -11788,7 +11852,7 @@
           "nr": "00044",
           "operands": [
             {
-              "operand": "X [902] ∧"
+              "operand": "X [902] ∧ [930]"
             }
           ]
         },
@@ -12711,7 +12775,7 @@
           "nr": "00025",
           "operands": [
             {
-              "operand": "X [74]) ∨ ∧ [524]"
+              "operand": "X (([939] [74]) ∨ ([940][75])) ∧ [524]"
             }
           ]
         },
@@ -12930,7 +12994,7 @@
           "nr": "00033",
           "operands": [
             {
-              "operand": "X [UB1] ∧"
+              "operand": "X [UB1] ∧ [25]"
             }
           ]
         },
@@ -13122,7 +13186,7 @@
           "nr": "00044",
           "operands": [
             {
-              "operand": "X [902] ∧"
+              "operand": "X [902] ∧ [930]"
             }
           ]
         },
@@ -14011,7 +14075,7 @@
           "nr": "00025",
           "operands": [
             {
-              "operand": "X ∨ ([940]"
+              "operand": "X (([939][74]) ∨ ([940] [75])) ∧ [524]"
             }
           ]
         },
@@ -15457,7 +15521,7 @@
           "nr": "00025",
           "operands": [
             {
-              "operand": "X ∨ ([940]"
+              "operand": "X (([939][74]) ∨ ([940] [75])) ∧ [524]"
             }
           ]
         },
@@ -15631,6 +15695,9 @@
           "operands": [
             {
               "operand": "S [22]"
+            },
+            {
+              "operand": "M [23]"
             }
           ]
         },
@@ -16507,14 +16574,14 @@
     "11": "Wenn Abschlag anfällt",
     "12": "Wenn SG26 QTY+136 vorhanden",
     "13": "Wenn vorausbezahlter Betrag vorliegt",
-    "14": "Wenn in selben SG26 LIN DE7140 = \"9990001000748\" (Mehrmenge)",
+    "14": "Wenn in selben SG26 LIN DE7140 = \"9990001000748\" \"9990001000748\" (Mehrmenge)",
     "15": "Wenn eine Bilanzierung erfolgt ist",
     "16": "Wenn eine Netznutzung erfolgt ist",
     "17": "Wenn DTM+Z11 vorhanden",
     "18": "Wenn IMD++WIM nicht vorhanden",
     "19": "Wenn IMD++WIM vorhanden",
-    "2": "Wenn es sich um eine Nutzungsüberlassung (Pacht) eines Gerätes handelt",
-    "20": "Wenn fälliger Betrag (SG50 MOA+9) ≥ 0",
+    "2": "Wenn es sich um eine Nutzungsüberlassung (Pacht) eines Gerätes (Pacht) eines Gerätes handelt",
+    "20": "Wenn fälliger Betrag (SG50 MOA+9) ≥ 0 ≥ 0",
     "21": "Wenn fälliger Betrag (SG50 MOA+9) < 0",
     "22": "Wenn vorhanden",
     "23": "Wenn im selben NAD DE3124 nicht vorhanden",
@@ -16551,17 +16618,17 @@
     "507": "Hinweis: Dokumentennummer der SSQNOT",
     "508": "Hinweis: Dokumentennummer der QUOTES",
     "509": "Hinweis: Verwendung der ID der Marktlokation",
-    "51": "Wenn SG26 DTM+156 (Positionsbezogener Abrechnungszeitraum Ende) ≤ 1.1.2023 0:00 gesetzlicher deutscher Zeit",
+    "51": "Wenn SG26 DTM+156 (Positionsbezogener (Positionsbezogener Abrechnungszeitraum Ende) ≤ 1.1.2023 0:00 gesetzlicher deutscher Zeit",
     "510": "Hinweis: Verwendung der ID der Messlokation",
     "512": "Hinweis: Hier ist entweder der Betrag aus MOA+203 oder der um den gültigen Steuerbetrag erhöhte Betrag aus MOA+203 anzugeben.",
     "513": "Hinweis: Hier ist das Ergebnis der Multiplikation von MOA+25 mit PCD+3 anzugeben.",
     "514": "Hinweis: Dokumentennummer der Lieferschein- MSCONS",
     "515": "Hinweis: BGM DE1004 aus INVOIC-Nachricht, die storniert werden soll",
-    "516": "Hinweis: Ein Lieferschein zu einer Rechnung ist für alle Abrechnungszeiträum e, die erstmals nach dem 1.12.2019 abgerechnet werden und für alle Abrechnungszeiträum e, für die sich nach dem 1.12.2019 geänderte Mengen oder Leistungswerte ergeben, nötig.",
+    "516": "Hinweis: Ein Lieferschein zu einer Rechnung ist für alle Rechnung ist für alle Abrechnungszeiträum e, die erstmals nach dem 1.12.2019 abgerechnet werden und für alle Abrechnungszeiträum e, für die sich nach dem 1.12.2019 geänderte Mengen oder Leistungswerte ergeben, nötig.",
     "517": "Hinweis: Dokumentennummer der PDF- Kapazitätsrechnung",
     "518": "Hinweis: Im Fall der Stornierung des Auftrags der Unterbrechung: Der Tag an dem der NB die Stornierung empfangen hat Bei erfolgreicher Sperrung: Tag der durchgeführten Sperrung Bei erfolgloser Sperrung: Letzter Sperrversuchstag",
     "519": "Hinweis: Stornierte Abschlagsrechnungen sind nicht aufzuführen",
-    "520": "Hinweis: Es sind nur die Artikel-IDs aus dem Preisblatt erlaubt",
+    "520": "Hinweis: Es sind nur die Artikel-IDs aus dem Preisblatt Artikel-IDs aus dem Preisblatt erlaubt",
     "521": "Hinweis: BGM DE1004 aus der INVOIC-Nachricht, für die Verzugskosten erhoben werden",
     "522": "Hinweis: Verwendung der ID der Netzlokation",
     "523": "Hinweis: Verwendung der ID der Steuerbaren Ressource",
@@ -16581,7 +16648,7 @@
     "64": "Wenn DTM+156 (Abrechnungszeitraum Ende) ≤ 1. 1.2024 0:00 gesetzlicher deutscher Zeit",
     "65": "Wenn SG26 DTM+155 (Positionsbezogener Abrechnungszeitraum Beginn) ≥ 1.1.2024 0: 00 gesetzlicher deutscher Zeit",
     "66": "Wenn IMD++KON vorhanden",
-    "67": "Es sind nur die Artikelnummern erlaubt, die im Kapitel 2 „Codeliste der Artikelnummer“ in der Codeliste der Artikelnummern und Artikel-ID ein „X“ für den entsprechenden Prüfidentifikator haben.",
+    "67": "Es sind nur die Artikelnummern erlaubt, die im Kapitel 2 „Codeliste der Artikelnummer“ in der Codeliste der Codeliste der Artikelnummern und Artikel-ID ein „X“ für den entsprechenden Prüfidentifikator haben.",
     "68": "Es sind nur die Artikel-ID erlaubt, die im Kapitel 3 „Codeliste der Gruppenartikel-ID und Artikel-ID“ in der Codeliste der Artikelnummern und Artikel-ID ein „X“ in der Spalte „INVOIC Codeverwendung“ haben.",
     "69": "Es sind nur die Artikel-ID erlaubt, die im Kapitel 3 „Codeliste der Gruppenartikel-ID und Artikel-ID“ in der Codeliste der Artikelnummern und Artikel-ID ein „SOR“ in der Spalte „INVOIC Codeverwendung“ haben.",
     "7": "Sofern keine Großkundenpostleitza hl verwendet wird",
@@ -16589,10 +16656,10 @@
     "71": "Wenn DTM+155 (Abrechnungszeitraum Beginn) ≥ 1.1.2024 0:00 gesetzlicher deutscher Zeit",
     "72": "Wenn MP-ID in NAD+MR in der Rolle LF",
     "73": "Wenn IMD++MSB vorhanden",
-    "74": "wenn im DE3155 in demselben COM der Code EM vorhanden ist",
+    "74": "wenn im DE3155 in demselben COM der Code EM vorhanden ist vorhanden ist",
     "75": "wenn im DE3155 in demselben COM der Code TE / FX / AJ / AL vorhanden ist",
     "76": "Wenn MP-ID in NAD+MR in der Rolle NB",
-    "77": "Wenn SG26 DTM+156 (Positionsbezogener Abrechnungszeitraum Ende) ≤ 1.1.2024 0:00 gesetzlicher deutscher Zeit",
+    "77": "Wenn SG26 DTM+156 (Positionsbezogener Abrechnungszeitraum Ende) ≤ 1.1.2024 0:00 gesetzlicher deutscher gesetzlicher deutscher Zeit",
     "78": "Wenn GEI+Z08 nicht vorhanden",
     "79": "Wenn GEI+Z09 nicht vorhanden",
     "8": "Bei zeitabhängigen Preisen",
@@ -16606,7 +16673,7 @@
     "87": "Wenn IMD++TEC vorhanden",
     "88": "Wenn DTM+155 (Abrechnungszeitraum Beginn) ≥ 1.1.2026 0: 00 gesetzlicher deutscher Zeit",
     "9": "Wenn SG26 DTM+203 nicht vorhanden",
-    "902": "Format: Möglicher Wert: ≥ 0",
+    "902": "Format: Möglicher Wert: ≥ 0 Möglicher Wert: ≥ 0",
     "906": "Format: max. 3 Nachkommastellen",
     "908": "Format: Mögliche Werte: 1 bis n",
     "910": "Format: Möglicher Wert: < 0 oder ≥ 0",
@@ -16614,11 +16681,11 @@
     "912": "Format: max. 6 Nachkommastellen",
     "914": "Format: Möglicher Wert: > 0",
     "927": "Format: Möglicher Wert: -1",
-    "930": "Format: max. 2 Nachkommastellen",
+    "930": "Format: max. 2 Nachkommastellen Nachkommastellen",
     "931": "Format: ZZZ = +00",
     "937": "Format: keine Nachkommastelle",
     "939": "Format: Die Zeichenkette muss die Zeichen @ und . enthalten",
-    "940": "Format: Die Zeichenkette muss mit dem Zeichen + beginnen und danach dürfen nur noch Ziffern folgen",
+    "940": "Format: Die Zeichenkette muss mit Zeichenkette muss mit dem Zeichen + beginnen und danach dürfen nur noch Ziffern folgen",
     "946": "Format: max. 11 Nachkommastellen",
     "950": "Format: Marktlokations-ID",
     "951": "Format: Zählpunktbezeichnung",

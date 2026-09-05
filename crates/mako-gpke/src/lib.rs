@@ -16,13 +16,14 @@
 //! |-------|-----------------------------------------------------------|
 //! | 55001 | Anmeldung verb. MaLo — Lieferbeginn (LFN → NB)            |
 //! | 55004 | Abmeldung — Lieferende (LFN → NB)                         |
-//! | 55016 | Kündigung Lieferbeginn (LFN → LFA)                        |
 //! | 55077 | Anmeldung erz. MaLo (LFN → NB, BK6-24-174)                |
 //!
-//! 55557 (Änderung MSB-Abrechnungsdaten der MaLo, GPKE Teil 4) routes to
-//! `gpke-stammdatenaenderung` instead and answers 55559.
+//! That is the whole of `UTILMD_ANFRAGE_PIDS`. Two neighbours route elsewhere:
+//! 55016 (Kündigung Lieferbeginn, LFN → LFA) to `gpke-kuendigung`, because no
+//! NB is party to it; 55557 (Änderung MSB-Abrechnungsdaten der MaLo, GPKE
+//! Teil 4) to `gpke-stammdatenaenderung`, which answers it with 55559.
 //!
-//! #### Outbound ANTWORT — derived by `GpkeSupplierChangeWorkflow`, NOT routed (NB role)
+//! #### Outbound ANTWORT — derived, NOT routed (NB / LFA role)
 //!
 //! Each ANFRAGE has exactly one Bestätigung/Ablehnung pair. The pairs are *not*
 //! `+1/+2`: 55077 rejects with 55080 because 55079 is unassigned.
@@ -33,8 +34,8 @@
 //! | 55003 | Ablehnung Anmeldung verb. MaLo (NB → LFN)       | 55001 rejected |
 //! | 55005 | Bestätigung Abmeldung (NB → LFN)                | 55004 accepted |
 //! | 55006 | Ablehnung Abmeldung (NB → LFN)                  | 55004 rejected |
-//! | 55017 | Bestätigung Kündigung Lieferbeginn (LFA → LFN)  | 55016 accepted |
-//! | 55018 | Ablehnung Kündigung Lieferbeginn (LFA → LFN)    | 55016 rejected |
+//! | 55017 | Bestätigung Kündigung Lieferbeginn (LFA → LFN)  | 55016 accepted — derived by `GpkeKuendigungWorkflow` |
+//! | 55018 | Ablehnung Kündigung Lieferbeginn (LFA → LFN)    | 55016 rejected — derived by `GpkeKuendigungWorkflow` |
 //! | 55078 | Bestätigung Anmeldung erz. MaLo (NB → LFN)      | 55077 accepted |
 //! | 55080 | Ablehnung Anmeldung erz. MaLo (NB → LFN)        | 55077 rejected |
 //!
@@ -47,11 +48,11 @@
 //!
 //! #### Sperrung / Entsperrung — routed to `gpke-sperrung`
 //!
-//! | PID   | Process name (AWH)              |
-//! |-------|-------------------------------|
-//! | 17115 | Sperrauftrag (NB → LFN)        |
-//! | 17116 | Anfrage Sperrung (NB → LFN)    |
-//! | 17117 | Entsperrauftrag (NB → LFN)     |
+//! | PID   | Process name (AWH)              | Direction |
+//! |-------|---------------------------------|-----------|
+//! | 17115 | Sperrauftrag                    | LF → NB   |
+//! | 17116 | Anfrage Sperrung (NB asks MSB)  | NB → MSB  |
+//! | 17117 | Entsperrauftrag                 | LF → NB   |
 //!
 //! #### Stornierung — routed to `gpke-stornierung`
 //!
@@ -113,8 +114,10 @@
 //! [`GpkeSupplierChangeWorkflow`] (workflow name:
 //! `"gpke-supplier-change"`). The `pruefidentifikator` stored in
 //! [`wechselprozesse::InitiatedData`] lets read-models distinguish variants.
-//! The derived ANTWORT PIDs (55002/55003, 55005/55006, 55017, 55018) are recorded in the
-//! `AntwortGesendet` event but are not routed as inbound messages.
+//! The derived ANTWORT PIDs (55002/55003, 55005/55006, 55078/55080) are recorded
+//! in the `AntwortGesendet` event but are not routed as inbound messages — except
+//! in an LF-role deployment, where all eight of `ANTWORT_PIDS_LF` route back to
+//! [`GpkeLfAnmeldungWorkflow`].
 //!
 //! ### INVOIC-based billing processes (GPKE Netznutzungsabrechnung / MMM Strom)
 //!
@@ -255,7 +258,7 @@ pub use beendigung_zuordnung::{
     NB_ANFRAGE_WINDOW_LABEL, WORKFLOW_NAME as BEENDIGUNG_ZUORDNUNG_WORKFLOW_NAME,
 };
 pub use datenabruf::{
-    DatanabrufCommand, DatanabrufEvent, DatanabrufState, GpkeDatanabrufWorkflow,
+    DatenabrufCommand, DatenabrufEvent, DatenabrufState, GpkeDatenabrufWorkflow,
     ORDERS_ANFRAGE_PIDS as DATENABRUF_ORDERS_PIDS, ORDRSP_ABLEHNUNG_PIDS as DATENABRUF_ORDRSP_PIDS,
     WORKFLOW_NAME as DATENABRUF_WORKFLOW_NAME,
 };

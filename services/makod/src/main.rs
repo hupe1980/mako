@@ -306,7 +306,7 @@ struct Cli {
     /// matches and no `forbid` does, so operator-supplied `permit` statements
     /// cannot narrow that baseline — without this flag a least-privilege policy
     /// set has no effect. Required to run `conservative.cedar` as intended, and
-    /// to enforce §9 EnWG role separation in a combined-role (VIU) deployment.
+    /// to enforce § 6a EnWG role separation in a combined-role (VIU) deployment.
     ///
     /// Refuses to start unless `--cedar-policy-dir` supplies the grants.
     ///

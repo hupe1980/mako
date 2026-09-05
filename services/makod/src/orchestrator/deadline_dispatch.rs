@@ -44,18 +44,18 @@ use mako_gabi_gas::{
     GaBiGasAllocationWorkflow, GaBiGasInvoicWorkflow, GaBiGasNominationWorkflow, NominationCommand,
 };
 use mako_geli_gas::{
-    GasSperrungLfCommand, GasSperrungNbCommand, GasSupplierChangeCommand, GeliGasDatanabrufCommand,
-    GeliGasDatanabrufWorkflow, GeliGasLfAnmeldungCommand, GeliGasLfAnmeldungWorkflow,
+    GasSperrungLfCommand, GasSperrungNbCommand, GasSupplierChangeCommand, GeliGasDatenabrufCommand,
+    GeliGasDatenabrufWorkflow, GeliGasLfAnmeldungCommand, GeliGasLfAnmeldungWorkflow,
     GeliGasLfStornierungWorkflow, GeliGasSperrprozesseInvoicWorkflow, GeliGasSperrungLfWorkflow,
     GeliGasSperrungNbWorkflow, GeliGasStornierungCommand, GeliGasStornierungWorkflow,
     GeliGasSupplierChangeWorkflow, LfStornierungCommand,
 };
 use mako_gpke::{
     AbrechnungsdatenCommand as GpkeAbrechnungsdatenCommand, AllokationslisteCommand,
-    AnfrageBestellungCommand, AnkuendigungZuordnungLfCommand, DatanabrufCommand,
+    AnfrageBestellungCommand, AnkuendigungZuordnungLfCommand, DatenabrufCommand,
     GpkeAbrechnungWorkflow, GpkeAbrechnungsdatenWorkflow, GpkeAllokationslisteWorkflow,
     GpkeAnfrageBestellungWorkflow, GpkeAnkuendigungZuordnungLfWorkflow,
-    GpkeBeendigungZuordnungWorkflow, GpkeDatanabrufWorkflow, GpkeKonfigurationAenderungWorkflow,
+    GpkeBeendigungZuordnungWorkflow, GpkeDatenabrufWorkflow, GpkeKonfigurationAenderungWorkflow,
     GpkeKonfigurationWorkflow, GpkeKuendigungWorkflow, GpkeLfAbmeldungWorkflow,
     GpkeLfAnmeldungWorkflow, GpkeNeuanlageWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow,
     GpkeStornierungCommand, GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow,
@@ -210,7 +210,7 @@ deadline_dispatch! {
     // stays `Pending` with its Frist already lapsed.
     mako_geli_gas::LF_ANMELDUNG_WORKFLOW_NAME
         => GeliGasLfAnmeldungWorkflow : GeliGasLfAnmeldungCommand::TimeoutExpired,
-    "geli-gas-datenabruf" => GeliGasDatanabrufWorkflow : GeliGasDatanabrufCommand::TimeoutExpired,
+    "geli-gas-datenabruf" => GeliGasDatenabrufWorkflow : GeliGasDatenabrufCommand::TimeoutExpired,
     "geli-gas-sperrung-lf" => GeliGasSperrungLfWorkflow : GasSperrungLfCommand::TimeoutExpired,
     "geli-gas-sperrung-nb" => GeliGasSperrungNbWorkflow : GasSperrungNbCommand::TimeoutExpired,
     // `mabis-billing` has no timeout arm: BK6-24-174 Anlage 3 defines no
@@ -246,7 +246,7 @@ deadline_dispatch! {
     SPERRUNG_LF_WORKFLOW => GpkeSperrungLfWorkflow : SperrungLfCommand::TimeoutExpired,
     WIM_INSRPT_WORKFLOW => WimInsrptWorkflow : StoerungsmeldungCommand::TimeoutExpired,
     "gpke-konfiguration-aenderung" => GpkeKonfigurationAenderungWorkflow : KonfigurationAenderungCommand::TimeoutExpired,
-    "gpke-datenabruf" => GpkeDatanabrufWorkflow : DatanabrufCommand::TimeoutExpired,
+    "gpke-datenabruf" => GpkeDatenabrufWorkflow : DatenabrufCommand::TimeoutExpired,
     "gpke-allokationsliste" => GpkeAllokationslisteWorkflow : AllokationslisteCommand::TimeoutExpired,
     "wim-technik-aenderung" => WimTechnikAenderungWorkflow : TechnikAenderungCommand::TimeoutExpired,
     "wim-weiterverpflichtung" => WimWeiterverpflichtungWorkflow : WeiterverpflichtungCommand::TimeoutExpired,
@@ -331,9 +331,10 @@ pub async fn dispatch_deadline(
     let deadline_id = deadline.deadline_id();
     let label: Box<str> = deadline.label().into();
 
-    // Derive the process family label from the workflow name prefix for metrics.
-    // "gpke-supplier-change" → "gpke", "wim-device-change" → "wim", etc.
-    let family = wf_name.split('-').next().unwrap_or(wf_name);
+    // The `family` metric label, from the one table that owns it — a local
+    // `split('-')` here reads `geli-gas-…` as `geli` and stops joining the
+    // command counters.
+    let family = crate::orchestrator::process_family::from_workflow(wf_name);
 
     // ── APERAK Strom 45-minute sending-window obligation (APERAK AHB 1.0 §2.4.1) ──
     //

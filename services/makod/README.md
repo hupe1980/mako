@@ -20,9 +20,11 @@ All three ports are optional and independently enabled via CLI flags or environm
 
 ## Domain modules
 
-Seven modules, **71 workflows** over 469 Prüfidentifikatoren. `startup_smoke`
-holds both figures against the registered engine, so a module added or dropped
-without updating this table fails the build.
+Seven modules, **71 workflows** over 469 Prüfidentifikatoren, counted over the
+default feature set. `tests/published_counts.rs` recomputes both figures from
+`startup::production_modules` and holds every document that states them to the
+result; `tests/startup_smoke.rs` separately asserts that each registered workflow
+has a deadline-dispatch entry.
 
 | Module | Domain | Key PIDs |
 |---|---|---|
@@ -319,6 +321,7 @@ it to inspect process state and submit commands without writing integration code
 | `list_overdue_deadlines` | Processes with expired regulatory deadlines (compliance alert) |
 | `list_active_processes` | Count of active (registered) process instances |
 | `get_outbox_status` | AS4 outbox delivery status — pending count and oldest-message age |
+| `get_format_version_coverage` | Per message type, whether today is inside a BDEW format-version transition window — the annual FV cutover check |
 | `list_dead_letters` | 20 most recent permanently dead-lettered messages (§147 AO / GoBD) |
 
 **Resources:** `malo://{malo_id}`, `partner://{mp_id}`
@@ -389,9 +392,27 @@ open http://localhost:8080/api/v1/docs/
 
 ## Feature flags
 
-| Flag | Description |
+`makod`'s own features are the **role gates**: they decide which domain modules
+compile into `startup::production_modules`, so a binary cannot answer as a role it
+was not built for. `default = ["role-lf", "role-nb", "role-msb", "role-esa-strom"]`.
+
+| Flag | Compiles in |
 |---|---|
-| `slatedb` | Enable SlateDB persistence (required for production). Never enable in library crates. |
+| `role-lf-strom` | GPKE LF-side, WiM LF-affected |
+| `role-nb-strom` | GPKE NB-side, Sperrung, Konfiguration, UTILTS, MSCONS, WiM NB-side, PARTIN 37000–37006, INVOIC 31001/31002/31005/31006, MaBiS, Redispatch 2.0 |
+| `role-msb-strom` | WiM on the 55xxx Prüfidentifikatoren |
+| `role-esa-strom` | WiM Wertebestellung, ESA side (WiM Teil 2 Kap. 4) |
+| `role-lf-gas` | GeLi Gas LF-side (LFG) |
+| `role-nb-gas` | GeLi Gas NB-side, Sperrung Gas, PARTIN 37008–37014, INVOIC 31007/31008/31011, GaBi Gas MMMA (13013) |
+| `role-msb-gas` | the same WiM workflows on the 44xxx PIDs (gMSB) |
+| `role-lf` · `role-nb` · `role-msb` | the dual-Sparte composites of the three above |
+
+SlateDB persistence is **not** a `makod` feature: it is `mako-engine/slatedb`, which
+`makod`'s dependency turns on unconditionally, so a production build needs no
+`--features` flag for it.
+
+The workflow and PID figures above are counted over the default feature set — a
+build that drops a role registers fewer.
 
 ---
 
@@ -412,7 +433,7 @@ End-to-end tests covering all process families live in `tests/`:
 | `e2e_anfrage_bestellung.rs` | GPKE Anfrage individuelle Bestellung (PID 55555) |
 | `e2e_loopback.rs` | VIU self-addressed loopback + FV coexistence |
 | `e2e_wim_*.rs` | WiM Strom MSB-Wechsel, Gerätewechsel, Geräteübernahme, Stammdaten, Steuerungsauftrag, Stornierung |
-| `e2e_wim_gas_anmeldung.rs` | WiM Gas Anmeldung (PIDs 44039–44053) |
+| `e2e_dvgw_gas_transport.rs` | DVGW ALOCAT / NOMINT / SSQNOT from the specification's own examples — sniff, parse, correlate, dispatch (no AHB profile layer, so the coverage guard cannot reach these) |
 | `e2e_lieferbeginn_gas.rs` | GeLi Gas bilateral (PIDs 44001/44002/44003) |
 | `e2e_lieferende_gas.rs` | GeLi Gas Lieferende bilateral |
 | `e2e_mabis.rs` | MaBiS Bilanzkreisabrechnung (PID 13003) |

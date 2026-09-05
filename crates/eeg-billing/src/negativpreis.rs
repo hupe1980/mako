@@ -22,7 +22,7 @@
 //! | 2016-01-01 – 2020-12-31 | ≥ 6 consecutive hours | Wind < 3 MW · sonstige < 500 kW | none |
 //! | 2021-01-01 – 2022-12-31 | ≥ 4 consecutive hours | < 500 kW | ausschreibungspflichtige only |
 //! | 2023-01-01 – 2025-02-24 | staged 4-3-2-1 h | < 400 kW | ausschreibungspflichtige only |
-//! | ≥ 2025-02-25 | first negative quarter-hour | < 100 kW until iMSys · < 2 kW until §85 Abs. 2 Nr. 12 | all plants |
+//! | ≥ 2025-02-25 | first negative quarter-hour | < 100 kW bis zum Ablauf des iMSys-Jahres · < 2 kW until §85 Abs. 2 Nr. 12 | all plants |
 //!
 //! Pilotwindenergieanlagen (§3 Nr. 37 EEG 2023) are exempt under every version.
 //!
@@ -73,6 +73,60 @@ pub fn optin_wirksam_ab(erklaert_am: Date, imesys_rollout: Option<Date>) -> Opti
     let nach_erklaerung =
         Date::from_calendar_date(erklaert_am.year() + 1, time::Month::January, 1).ok()?;
     Some(nach_imesys_jahr.max(nach_erklaerung))
+}
+
+/// § 51 Abs. 2 Nr. 1 EEG — the day the sub-100-kW exemption lapses.
+///
+/// The exemption covers „Zeiträume **vor dem Ablauf des Kalenderjahres**, in dem
+/// die Anlage mit einem intelligenten Messsystem ausgestattet wird", so it runs
+/// to the end of the installation year and lapses on 1 January of the year
+/// after. A plant with no iMSys keeps it indefinitely and has no such day.
+///
+/// ```rust
+/// use eeg_billing::negativpreis::imesys_befreiung_entfaellt_ab;
+/// use time::macros::date;
+///
+/// // Fitted in March 2026 — exempt for the whole of 2026.
+/// assert_eq!(
+///     imesys_befreiung_entfaellt_ab(Some(date!(2026 - 03 - 15))),
+///     Some(date!(2027 - 01 - 01))
+/// );
+/// assert_eq!(imesys_befreiung_entfaellt_ab(None), None);
+/// ```
+#[must_use]
+pub fn imesys_befreiung_entfaellt_ab(imesys_rollout: Option<Date>) -> Option<Date> {
+    let imesys = imesys_rollout?;
+    Date::from_calendar_date(imesys.year() + 1, time::Month::January, 1).ok()
+}
+
+/// Whether the § 51 Abs. 2 Nr. 1 sub-100-kW exemption has lapsed for a
+/// settlement period beginning on `periodenbeginn`.
+///
+/// This is what [`NegativpreisRegime::ist_befreit`] takes as `has_imesys`:
+/// having an iMSys is not itself the trigger — the turn of the year after it was
+/// fitted is. Answers `false` while either date is unknown, which keeps the
+/// exemption rather than withholding a payment on a guess.
+///
+/// ```rust
+/// use eeg_billing::negativpreis::imesys_befreiung_entfallen;
+/// use time::macros::date;
+///
+/// let rollout = Some(date!(2026 - 03 - 15));
+/// assert!(!imesys_befreiung_entfallen(rollout, Some(date!(2026 - 12 - 01))));
+/// assert!(imesys_befreiung_entfallen(rollout, Some(date!(2027 - 01 - 01))));
+/// ```
+#[must_use]
+pub fn imesys_befreiung_entfallen(
+    imesys_rollout: Option<Date>,
+    periodenbeginn: Option<Date>,
+) -> bool {
+    match (
+        imesys_befreiung_entfaellt_ab(imesys_rollout),
+        periodenbeginn,
+    ) {
+        (Some(ab), Some(periode)) => periode >= ab,
+        _ => false,
+    }
 }
 
 /// Which version of §51 governs a plant.
@@ -161,9 +215,10 @@ impl NegativpreisRegime {
     /// Installed capacity **below** which §51 does not apply.
     ///
     /// `None` when §51 never applies. Under [`Solarspitzen`](Self::Solarspitzen)
-    /// the 100-kW figure is transitional — it lapses once an iMSys is installed
-    /// — which [`ist_befreit`](Self::ist_befreit) accounts for; the 2-kW floor
-    /// below it does not.
+    /// the 100-kW figure is transitional — it lapses at the end of the calendar
+    /// year in which an iMSys is fitted — which
+    /// [`ist_befreit`](Self::ist_befreit) accounts for; the 2-kW floor below it
+    /// does not.
     #[must_use]
     pub fn kw_grenze(self, art: Option<ErzeugungsArt>) -> Option<Decimal> {
         match self {
@@ -212,8 +267,11 @@ impl NegativpreisRegime {
             if kw < SECT51_KLEINSTANLAGEN_GRENZE_KW {
                 return true;
             }
-            // §51 Abs. 2 Nr. 1: the sub-100-kW exemption runs only "für Zeiträume
-            // vor dem Einbau eines intelligenten Messsystems".
+            // §51 Abs. 2 Nr. 1: the sub-100-kW exemption covers „Zeiträume vor
+            // dem Ablauf des Kalenderjahres, in dem die Anlage mit einem
+            // intelligenten Messsystem ausgestattet wird" — it survives the
+            // installation year and lapses at the turn of the year, which is
+            // what `has_imesys` states (see `imesys_befreiung_entfallen`).
             return kw < grenze && !has_imesys;
         }
         kw < grenze

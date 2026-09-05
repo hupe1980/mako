@@ -105,13 +105,22 @@ pub struct TarifwechselInput {
     pub new_product_code: String,
     /// When the new tariff takes effect.
     pub wirksamkeit: Date,
+    /// Who is changing the tariff — `"LIEFERANT"` or `"KUNDE"`.
+    ///
+    /// Required, with no default: the two are legally different acts. A
+    /// supplier-initiated change is an exercise of a reserved change right and
+    /// owes the § 41 Abs. 5 Satz 1 EnWG notice with the Satz 4
+    /// Sonderkündigungsrecht; a switch the customer asked for is an agreed
+    /// change and is confirmed instead. Guessing either way misstates the
+    /// customer's rights, so the caller says which it is.
+    pub initiator: crate::pg::produkte::Initiator,
     pub grund: Option<String>,
     /// Operator override: bypass the `preisgarantie_bis` contract lock.
     /// Only for operators with a documented price-lock waiver; every use is
     /// logged to `preisgarantie_override_log`.
     #[serde(default)]
     pub override_preisgarantie: bool,
-    /// § 41 Abs. 5 Satz 1 EnWG — the **Umfang** of the change, line by line, as
+    /// § 41 Abs. 5 Satz 3 EnWG — the **Umfang** of the change, line by line, as
     /// the notice will state it.
     ///
     /// Supplied here because the caller chose the new tariff and therefore
@@ -120,10 +129,14 @@ pub struct TarifwechselInput {
     /// *is*, not what the customer was *told*. `vertragd` never asks `productd`
     /// (BILLING.md § 3), and this is why it does not have to.
     ///
-    /// Empty schedules the change and still emits the CloudEvent, but **no
-    /// § 41 Abs. 5 notice document is issued**: a Preisänderungsanzeige that
-    /// states no Umfang is not a valid one, and issuing it would make an
-    /// invalid notice indistinguishable from a sent one.
+    /// **Mandatory for a supplier-initiated future change where this deployment
+    /// renders the Preisänderungsanzeige itself** (`outputd_url` configured):
+    /// the lines are the document's content, so the change is refused without
+    /// them. Where the CloudEvent is the notice, the ERP composing the letter
+    /// states the Umfang from its own price sheets and these lines are
+    /// optional — the event carries them when they are given and marks them
+    /// absent when they are not. A retroactive correction and a switch the
+    /// customer asked for announce nothing and need none.
     #[serde(default)]
     pub preise: Vec<AngekuendigterPreis>,
 }
@@ -1006,7 +1019,10 @@ pub async fn kuendige_vertrag(
                 // task — a processd outage must not cost the customer the
                 // reading their Schlussrechnung is built from.
                 let ablesung = outbound::ablesung(k.id, malo_id, true, input.lieferende);
-                outbound::enqueue(&mut *tx, &vertrag.tenant, &ablesung).await?;
+                // Superseding, not plain enqueue: a Kündigung widerrufen and
+                // re-issued to a different date must replace the reading order
+                // it scheduled, not sit behind it.
+                outbound::enqueue_superseding(&mut *tx, &vertrag.tenant, &ablesung).await?;
                 let task = outbound::lieferende(
                     k.id,
                     &k.sparte,

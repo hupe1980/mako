@@ -632,7 +632,9 @@ mod mwst_period_tests {
 ///   commodity, plus the gas/Fernwärme window (01.10.2022–31.03.2024, 7 %,
 ///   §28 Abs. 5/6 UStG) for `GAS` and `WAERME`.
 /// - **BEHG** — the CO₂ price of §10 BEHG steps at each calendar-year boundary,
-///   so a gas period spanning a year-end has two levy rates.
+///   so a `GAS` period spanning a year-end has two levy rates. A Fernwärme
+///   period does not: its CO₂ cost is the heat product's own CO2KostAufG § 3
+///   figure, which no calendar boundary moves.
 ///
 /// # Example
 ///
@@ -676,18 +678,31 @@ pub fn steuer_stichtage_im_zeitraum(
         }
     }
 
-    // BEHG steps every 1 January. Only gas carries the levy, and only where the
-    // two years actually have different rates — a year pair the table does not
-    // cover cannot be split into two known rates, so it is left to the operator.
-    if gas_or_waerme {
+    // The § 10 BEHG CO₂ price steps every 1 January, and it is the **Gas**
+    // levy: a Fernwärme invoice states the CO₂ cost of the fuel burned to
+    // produce the heat, which CO2KostAufG § 3 measures as the cost the supplier
+    // actually bore, so it is the heat product's own rate and is the same on
+    // both sides of a year boundary. Splitting a heat period there yields two
+    // legs priced identically.
+    //
+    // Both years must be in the § 10 BEHG table. `Some(rate) != None` is not a
+    // rate change: a year pair the table does not cover cannot be split into
+    // two known rates, so it is left to the operator.
+    if category == "GAS" {
         for year in (from.year() + 1)..=to.year() {
             let Ok(jan1) = time::Date::from_calendar_date(year, time::Month::January, 1) else {
                 continue;
             };
-            if jan1 > from
-                && jan1 <= to
-                && behg_ct_per_kwh_for_year(year - 1) != behg_ct_per_kwh_for_year(year)
-            {
+            if jan1 <= from || jan1 > to {
+                continue;
+            }
+            let (Some(before), Some(after)) = (
+                behg_ct_per_kwh_for_year(year - 1),
+                behg_ct_per_kwh_for_year(year),
+            ) else {
+                continue;
+            };
+            if before != after {
                 stichtage.push(jan1);
             }
         }
@@ -779,6 +794,43 @@ mod stichtag_tests {
         assert!(
             steuer_stichtage_im_zeitraum("STROM", date!(2025 - 12 - 01), date!(2026 - 01 - 31))
                 .is_empty()
+        );
+    }
+
+    /// A Fernwärme CO₂ cost is the heat product's own CO2KostAufG § 3 figure,
+    /// not the § 10 BEHG gas price, so a year boundary changes nothing about it
+    /// — and a Fernwärme year, which is what an annual heat invoice covers,
+    /// stays one leg.
+    #[test]
+    fn a_year_crossing_waerme_period_does_not_split() {
+        assert!(
+            steuer_stichtage_im_zeitraum("WAERME", date!(2025 - 12 - 01), date!(2026 - 01 - 31))
+                .is_empty(),
+            "a heat period has one CO₂ rate on both sides of 1 January"
+        );
+        assert!(
+            steuer_stichtage_im_zeitraum("WAERME", date!(2025 - 07 - 01), date!(2026 - 06 - 30))
+                .is_empty(),
+            "the ordinary Fernwärme Jahresabrechnung is billable whole"
+        );
+    }
+
+    /// Both years must carry a § 10 BEHG price. Past the end of the table there
+    /// is no second rate to bill the other leg at, so there is nothing to split.
+    #[test]
+    fn a_year_pair_the_behg_table_does_not_cover_is_no_stichtag() {
+        let last_tabled = BEHG_EUR_PER_T
+            .iter()
+            .map(|(y, _)| *y)
+            .max()
+            .expect("the § 10 BEHG table is not empty");
+        let von = time::Date::from_calendar_date(last_tabled, time::Month::December, 1)
+            .expect("1 December exists");
+        let bis = time::Date::from_calendar_date(last_tabled + 1, time::Month::January, 31)
+            .expect("31 January exists");
+        assert!(
+            steuer_stichtage_im_zeitraum("GAS", von, bis).is_empty(),
+            "an untabled year is left to the operator, not split at a rate that does not exist"
         );
     }
 

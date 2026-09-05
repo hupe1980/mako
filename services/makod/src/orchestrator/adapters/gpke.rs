@@ -1379,13 +1379,13 @@ pub fn gpke_konfiguration_aenderung_registry() -> AdapterRegistry<GpkeKonfigurat
 
 // ── GPKE Datenabruf ORDRSP / Ablehnung (PIDs 17102, 17113) ───────────────────
 
-/// Build an [`AdapterRegistry`] for [`GpkeDatanabrufWorkflow`].
+/// Build an [`AdapterRegistry`] for [`GpkeDatenabrufWorkflow`].
 ///
 /// The Datenabruf process is LF-initiated (outbound ORDERS); the only inbound
 /// message is a rejection ORDRSP from NB/MSB. Produces
-/// [`DatanabrufCommand::ReceiveAblehnung`].
+/// [`DatenabrufCommand::ReceiveAblehnung`].
 #[must_use]
-pub fn gpke_datenabruf_registry() -> AdapterRegistry<GpkeDatanabrufWorkflow> {
+pub fn gpke_datenabruf_registry() -> AdapterRegistry<GpkeDatenabrufWorkflow> {
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
         is_known_fv,
@@ -1416,7 +1416,7 @@ pub fn gpke_datenabruf_registry() -> AdapterRegistry<GpkeDatanabrufWorkflow> {
                 .find(|s| s.tag == "FTX")
                 .and_then(|s| s.component_str(3, 0))
                 .map(|s| s.to_owned());
-            Ok(DatanabrufCommand::ReceiveAblehnung {
+            Ok(DatenabrufCommand::ReceiveAblehnung {
                 ordrsp_pid,
                 reason,
                 message_ref: MessageRef::new(msg.message_ref()),

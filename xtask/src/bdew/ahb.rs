@@ -20,7 +20,10 @@ use regex::Regex;
 use serde::Serialize;
 
 use super::mig::{MigDoc, SegmentNode};
-use super::{char_pos, collapse, looks_like_code, rendered_centre, rendered_end, tokens};
+use super::{
+    Line, Metric, char_pos, collapse, looks_like_code, metric_of, rendered_centre, rendered_end,
+    tokens,
+};
 
 /// One Anwendungsfall — a column of the AHB.
 #[derive(Debug, Clone, Serialize)]
@@ -125,7 +128,7 @@ enum Last {
 /// # Errors
 ///
 /// When no Anwendungsfall table is found.
-pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
+pub fn parse(lines: &[Line], mig: &MigDoc) -> Result<AhbDoc, String> {
     let by_nr: BTreeMap<&str, &SegmentNode> = mig
         .segments()
         .into_iter()
@@ -180,13 +183,16 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
 
     // `X[28]` is printed without the space now and then.
     let glued = Regex::new(r"\b(Muss|Soll|Kann|X|M|S|K)\[").unwrap();
-    for line in lines {
+    for source in lines {
+        // Ungluing shifts every offset right of the insertion, so the line's
+        // measurements no longer describe its tokens; the reader falls back on
+        // the character grid for those lines.
         let unglued;
-        let line: &String = if glued.is_match(line) {
-            unglued = glued.replace_all(line, "$1 [").into_owned();
-            &unglued
+        let (line, metrics): (&str, &[Metric]) = if glued.is_match(&source.text) {
+            unglued = glued.replace_all(&source.text, "$1 [").into_owned();
+            (&unglued, &[])
         } else {
-            line
+            (&source.text, &source.metrics)
         };
         let collapsed = collapse(line);
         let t = collapsed.as_str();
@@ -226,15 +232,23 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
                 // there — the Hinweis under `--`, or a paragraph the table
                 // runs into — is not part of it.
                 if let Some(id) = &cur_package {
-                    let cell = tokens(line)
+                    let mut cell = tokens(line)
                         .into_iter()
                         .filter(|k| {
                             k.x >= pt.pv.saturating_sub(2) && k.x < pt.bed.saturating_sub(2)
                         })
                         .map(|k| k.text)
                         .collect::<Vec<_>>();
-                    if !cell.is_empty() && cell.iter().all(|t| is_expression_token(t)) {
+                    if !cell.is_empty() && cell.iter().all(|t| is_status_token(t)) {
                         let entry = doc.packages.entry(id.clone()).or_default();
+                        // A Paketvoraussetzung is a Bedingung expression and
+                        // nothing else — Allgemeine Festlegungen 6.1d Kap.
+                        // 6.9.1 prints the column as `[4P]  [59] ∧ [321]`. A
+                        // status word in front of one (UTILTS 1.1 `[9P]  X
+                        // [50] ∧ [528]`) is a column operand left in the cell.
+                        if entry.is_empty() && cell.first().is_some_and(|t| is_status_word(t)) {
+                            cell.remove(0);
+                        }
                         for t in cell {
                             if !entry.is_empty() {
                                 entry.push(' ');
@@ -266,7 +280,6 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
 
         // ── A new table ───────────────────────────────────────────────────
         if t.starts_with("EDIFACT Struktur") && t.contains("Beschreibung") {
-            flush_pending(&mut pending_status, &mut doc);
             let desc_x = char_pos(line, "Beschreibung").unwrap_or(30);
             // `Bedingung` is centred over a multi-line column header and can
             // land on a later line; until seen, the boundary is provisional.
@@ -276,9 +289,13 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
             // the entry the previous page left open keeps collecting; a
             // header at a different geometry opens a different table.
             let page_break = table.as_ref().is_some_and(|t| t.desc_x == desc_x);
+            flush_pending(&mut pending_status, &mut doc);
             if !page_break {
                 commit_condition(&mut cur_cond, &mut doc.conditions);
                 cur_cond = None;
+                last_row = Vec::new();
+                last_el = Vec::new();
+                last = Last::None;
             }
             table = Some(Table {
                 columns: Vec::new(),
@@ -287,12 +304,9 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
                 tol: 6,
                 targets: Vec::new(),
                 header_done: false,
-                pending: vec![line.clone()],
+                pending: vec![line.to_owned()],
                 pid_line: None,
             });
-            last_row = Vec::new();
-            last_el = Vec::new();
-            last = Last::None;
             continue;
         }
         if let Some(c) = heading.captures(line)
@@ -343,7 +357,7 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
                     .iter()
                     .any(|k| k.text.len() == 5 && k.text.chars().all(|c| c.is_ascii_digit()))
                 {
-                    tb.pid_line = Some(line.clone());
+                    tb.pid_line = Some(line.to_owned());
                 }
                 continue;
             }
@@ -367,7 +381,15 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
                                 < tb.desc_x
                         })
                         .map(|c| c.get(1).map_or(0, |m| m.end()))
-                });
+                })
+                // The `Prüfidentifikator` line is the last of the header and
+                // names every column, so the next line is already the body,
+                // whatever kind of line it is. A page break repeats the
+                // header in the middle of a segment: the page after it opens
+                // with a code row, or with the second half of a status cell
+                // the break cut in two, and waiting for a segment row would
+                // read both as more header.
+                .or_else(|| tb.pid_line.is_some().then_some(0));
             if let Some(rest) = first_row_end {
                 let base = line[..rest].chars().count();
                 let mut xs: Vec<usize> = tokens(&line[rest..])
@@ -456,14 +478,18 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
                     }
                 }
                 let n = tb.columns.len();
-                last_row = vec![None; n];
-                last_el = vec![None; n];
                 let previous = std::mem::take(&mut prev_targets);
                 finish_header(tb, &chapter, &mut doc, &mut by_key);
                 prev_targets = tb.targets.clone();
                 // A page break inside a table keeps the segment the next DE
-                // rows belong to; a different set of columns is a new table.
-                if previous != tb.targets {
+                // rows belong to and the row its wrapped status cells attach
+                // to; a different set of columns is a new table.
+                if previous == tb.targets {
+                    last_row.resize(n, None);
+                    last_el.resize(n, None);
+                } else {
+                    last_row = vec![None; n];
+                    last_el = vec![None; n];
                     cur_nr = None;
                     cur_group = None;
                     cur_de = None;
@@ -475,7 +501,7 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
                 // the description area is a segment-group caption, not a name.
                 let starts_right = tokens(line).first().is_some_and(|k| k.x >= tb.desc_x + 10);
                 if !t.is_empty() && (starts_right || t.starts_with("Kommunikation von")) {
-                    tb.pending.push(line.clone());
+                    tb.pending.push(line.to_owned());
                 }
                 continue;
             }
@@ -498,7 +524,8 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
             de_occ.clear();
             cur_de = None;
             cur_code = None;
-            let (cells, expr_end) = column_cells(tb, line, c.get(3).map_or(0, |m| m.end()));
+            let (cells, expr_end) =
+                column_cells(tb, line, metrics, c.get(3).map_or(0, |m| m.end()));
             collect_condition(
                 line,
                 tb.bedingung_x.saturating_sub(1).max(expr_end),
@@ -546,7 +573,7 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
             let seg = by_nr.get(nr.as_str()).copied();
             let (code, cell_start) = leading_code(line, rest_start, tb.desc_x, seg, &de, occ);
             cur_code = code.clone();
-            let (cells, expr_end) = column_cells(tb, line, cell_start);
+            let (cells, expr_end) = column_cells(tb, line, metrics, cell_start);
             collect_condition(
                 line,
                 tb.bedingung_x.saturating_sub(1).max(expr_end),
@@ -576,7 +603,8 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
             && c.get(1).map_or(0, |m| line[..m.start()].chars().count()) + 4 < tb.desc_x
         {
             let group = c[1].to_owned();
-            let (cells, expr_end) = column_cells(tb, line, c.get(1).map_or(0, |m| m.end()));
+            let (cells, expr_end) =
+                column_cells(tb, line, metrics, c.get(1).map_or(0, |m| m.end()));
             collect_condition(
                 line,
                 tb.bedingung_x.saturating_sub(1).max(expr_end),
@@ -631,6 +659,7 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
             let (cells, expr_end) = column_cells(
                 tb,
                 line,
+                metrics,
                 byte_end(line, first.x + first.text.chars().count()),
             );
             collect_condition(
@@ -640,6 +669,16 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
                 &mut cur_cond,
                 &mut doc.conditions,
             );
+            // A code row of its own opens a new operand: what is buffered
+            // under another code is the tail of *that* one, whatever this
+            // row's cells look like (ORDRSP 1.1a prints `X [24] ∧` under
+            // `E_0470` with `[492]` on the line before `E_0488`).
+            if pending_status
+                .iter()
+                .any(|p| p.code.as_deref().is_some_and(|c| c != first.text))
+            {
+                flush_pending(&mut pending_status, &mut doc);
+            }
             let cells = take_pending(&mut pending_status, &mut doc, cells);
             for (ci, cell) in cells.into_iter().enumerate() {
                 let target = tb.targets[ci];
@@ -663,9 +702,20 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
         // Wrapped status / operand cells: only status-shaped tokens in the
         // column region. They are buffered: the label of a two-line cell can
         // sit on the line after its first half.
+        //
+        // The region starts where the leftmost column can reach, not at a
+        // fixed offset into the Beschreibung column: a description wraps
+        // inside its own column (`Realer Zählerüberlauf` / `geprüft`), and
+        // counting that word as part of the region makes the whole line fail
+        // the status-token test and drops the tail of every expression on it.
+        let region_x = tb
+            .columns
+            .first()
+            .map_or(0, |c| c.x.saturating_sub(tb.tol + 6))
+            .max(tb.desc_x + 10);
         let region: Vec<_> = toks
             .iter()
-            .filter(|k| k.x + 1 >= tb.desc_x + 10 && k.x + 1 < tb.bedingung_x)
+            .filter(|k| k.x + 1 >= region_x && k.x + 1 < tb.bedingung_x)
             .collect();
         if region.is_empty() || !region.iter().all(|k| is_status_token(k.text)) {
             collect_condition(
@@ -681,7 +731,7 @@ pub fn parse(lines: &[String], mig: &MigDoc) -> Result<AhbDoc, String> {
             }
             continue;
         }
-        let (cells, expr_end) = column_cells(tb, line, 0);
+        let (cells, expr_end) = column_cells(tb, line, metrics, 0);
         collect_condition(
             line,
             tb.bedingung_x.saturating_sub(1).max(expr_end),
@@ -824,13 +874,10 @@ fn take_pending(
     if pending.is_empty() {
         return cells;
     }
-    let fragment = cells.iter().flatten().all(|c| {
-        c.starts_with('[')
-            || c.starts_with('∧')
-            || c.starts_with('∨')
-            || c.starts_with('⊻')
-            || c.starts_with(')')
-    });
+    let fragment = cells
+        .iter()
+        .flatten()
+        .all(|c| c.chars().next().is_some_and(|f| "[∧∨⊻()".contains(f)));
     let all_empty = cells.iter().all(Option::is_none);
     if !(fragment || all_empty) {
         flush_pending(pending, doc);
@@ -871,15 +918,40 @@ fn take_pending(
 /// (`[41]` under `Muss [7] ∧`). A tail continues the last status; a new
 /// status word starts one.
 fn append_status(statuses: &mut Vec<String>, cell: &str) {
-    let starts_new =
-        cell.starts_with("Muss") || cell.starts_with("Soll") || cell.starts_with("Kann");
-    match statuses.last_mut() {
-        Some(last) if !starts_new => {
-            last.push(' ');
-            last.push_str(cell);
+    for part in split_statuses(cell) {
+        let starts_new =
+            part.starts_with("Muss") || part.starts_with("Soll") || part.starts_with("Kann");
+        match statuses.last_mut() {
+            Some(last) if !starts_new => {
+                last.push(' ');
+                last.push_str(part);
+            }
+            _ => statuses.push(part.to_owned()),
         }
-        _ => statuses.push(cell.to_owned()),
     }
+}
+
+/// Cut a cell before every status word after the first.
+///
+/// A wrapped cell can carry the tail of one status and the whole of the next:
+/// IFTSTA 2.0h prints `Muss [56] ∧` on the `SG15` row and `[58]  Soll [71]`
+/// under it. `Muss`, `Soll` and `Kann` are reserved — no Bedingung expression
+/// holds one — so each opens a status of its own.
+fn split_statuses(cell: &str) -> Vec<&str> {
+    let mut cuts = vec![0];
+    let mut at = 0;
+    for word in cell.split_whitespace() {
+        let start = at + cell[at..].find(word).unwrap_or(0);
+        if start > 0 && matches!(word, "Muss" | "Soll" | "Kann") {
+            cuts.push(start);
+        }
+        at = start + word.len();
+    }
+    cuts.push(cell.len());
+    cuts.windows(2)
+        .map(|w| cell[w[0]..w[1]].trim())
+        .filter(|p| !p.is_empty())
+        .collect()
 }
 
 /// A further operand of the same element (`S [165]` under `M [212]`) is its
@@ -905,16 +977,75 @@ fn append_operand(operands: &mut Vec<Operand>, cell: &str) {
     }
 }
 
+/// A token an AHB status cell can hold: the status word, or a piece of the
+/// Bedingung expression that follows it.
 fn is_status_token(t: &str) -> bool {
-    matches!(
-        t,
-        "Muss" | "Soll" | "Kann" | "X" | "x" | "M" | "S" | "K" | "∧" | "∨" | "⊻" | "(" | ")"
-    ) || (t.starts_with('[') && t.ends_with(']'))
-        || (t.starts_with("([") && t.ends_with(']'))
-        || (t.starts_with('[') && t.ends_with("])"))
+    is_status_word(t) || is_expression_fragment(t)
+}
+
+/// The status word or column operand a cell opens with.
+fn is_status_word(t: &str) -> bool {
+    matches!(t, "Muss" | "Soll" | "Kann" | "X" | "x" | "M" | "S" | "K")
         || t.starts_with("Muss")
         || t.starts_with("Soll")
         || t.starts_with("Kann")
+}
+
+/// Whether every character of `t` belongs to a Bedingung expression.
+///
+/// The AHB sets an expression without spaces around its parentheses, so a
+/// word of the Bedingung column is any run of `(`, `)`, the three operators
+/// and `[n]` citations — `X`, `(([939]`, `[322]))`, `[4P0..1]`, `⊻`. Reading
+/// only the shapes with a bracket at either end drops the rest of the
+/// expression on the floor, and the status is then judged unconditioned.
+fn is_expression_fragment(t: &str) -> bool {
+    let mut rest = t;
+    let mut any = false;
+    while let Some(c) = rest.chars().next() {
+        match c {
+            '(' | ')' | '∧' | '∨' | '⊻' => {
+                rest = &rest[c.len_utf8()..];
+                any = true;
+            }
+            '[' => {
+                let Some(close) = rest.find(']') else {
+                    return false;
+                };
+                if !is_condition_ref(&rest[1..close]) {
+                    return false;
+                }
+                rest = &rest[close + 1..];
+                any = true;
+            }
+            _ => return false,
+        }
+    }
+    any
+}
+
+/// What can stand between the brackets of a citation: a Bedingung number
+/// (`10`, `2061`), a Zeitpunktangabe (`UB1`), or a Paket with its optional
+/// Paketmerkmal (`1P`, `4P0..1`, `2P0..n`) — Allgemeine Festlegungen 6.1d
+/// Kap. 6.4 and 6.9.2.
+fn is_condition_ref(id: &str) -> bool {
+    if let Some(n) = id.strip_prefix("UB") {
+        return n.len() == 1 && n.chars().all(|c| c.is_ascii_digit());
+    }
+    let (number, rest) = match id.find('P') {
+        Some(i) => (&id[..i], Some(&id[i + 1..])),
+        None => (id, None),
+    };
+    if number.is_empty() || !number.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    match rest {
+        None | Some("") => true,
+        Some(merkmal) => merkmal.split_once("..").is_some_and(|(low, high)| {
+            !low.is_empty()
+                && low.chars().all(|c| c.is_ascii_digit())
+                && (high == "n" || (!high.is_empty() && high.chars().all(|c| c.is_ascii_digit())))
+        }),
+    }
 }
 
 /// The byte offset of character `char_idx`.
@@ -1037,6 +1168,40 @@ fn finish_header(
         .collect();
 }
 
+/// What one space measures between two words of one cell, in PDF points.
+///
+/// Over the 32 AHBs the mirror holds, the blank between two words of one
+/// Bedingung expression clusters hard at 2.0–2.4 pt. Where two columns meet
+/// it settles nothing on its own — 0.24 pt in UTILMD Strom 2.1, whose cells
+/// touch, 2.2 pt in IFTSTA 2.0h, 3.5 pt in PARTIN 1.0f — so which column a
+/// word belongs to is read off its position; the blank only says whether a
+/// word that reaches past the boundary is still the cell's last word.
+const SPACE_MIN_PT: f64 = 1.5;
+const SPACE_MAX_PT: f64 = 2.6;
+
+/// The widest blank that still joins two words of one cell, in PDF points.
+///
+/// Beyond it the word is not part of the cell at all — the Beschreibung
+/// column's own text.
+const CELL_GAP_MAX_PT: f64 = 12.0;
+
+/// Which column's half of the table a word falls in — the column nearest the
+/// middle of its glyphs, the right-hand one when it sits exactly between two.
+///
+/// The middle, not the left edge: a word of the Bedingung column is set in a
+/// narrower face than the Beschreibung column's, so `([940][147]))` is thirteen
+/// characters wide on the grid but twenty-two cells long, and starts a whole
+/// half-column left of where it belongs.
+fn territory(columns: &[Column], centre: usize) -> usize {
+    let mut best = 0;
+    for (i, c) in columns.iter().enumerate() {
+        if c.x.abs_diff(centre) <= columns[best].x.abs_diff(centre) {
+            best = i;
+        }
+    }
+    best
+}
+
 /// The status text printed under each column on this line, from byte offset
 /// `from` on, and the grid column where the last status glyph ends.
 ///
@@ -1046,21 +1211,36 @@ fn finish_header(
 /// expression's first word can start well left of the column it belongs to.
 /// An expression may run past the Bedingung column's left edge; it ends at
 /// the first `[n]` that is followed by prose rather than by an operator.
-fn column_cells(tb: &mut Table, line: &str, from: usize) -> (Vec<Option<String>>, usize) {
+///
+/// Where one cell ends and the next column's begins is read off two things.
+/// A cell that stays in its own half of the table is one cell; a word that
+/// reaches into the next column's half still belongs to the cell it follows
+/// while it is only a space away from it ([`SPACE_MIN_PT`]…[`SPACE_MAX_PT`]).
+/// Neighbouring
+/// columns' cells can be printed all but touching — in PARTIN 1.0f the three
+/// `Kommunikationsdaten` columns leave 3.5 pt between `([940][7]))` and the
+/// next column's `∨` against 2.0 pt for the space inside each of them — so
+/// neither test carries it alone.
+fn column_cells(
+    tb: &mut Table,
+    line: &str,
+    metrics: &[Metric],
+    from: usize,
+) -> (Vec<Option<String>>, usize) {
     let mut cells: Vec<Option<String>> = vec![None; tb.columns.len()];
-    let rest = &line[from..];
     let base = line[..from].chars().count();
-    let toks = tokens(rest);
-    // (start, end, text)
-    let mut raw: Vec<(usize, usize, String)> = Vec::new();
-    // The rightmost grid column a status glyph occupies. `end` below is a
-    // `rendered_end`, which scales a token's width to place its centre under
-    // the right column and therefore overshoots the grid; the Bedingung
+    let toks = tokens(line);
+    // (start, end, territory of the first word, text)
+    let mut raw: Vec<(usize, usize, usize, String)> = Vec::new();
+    // The rightmost grid column a status glyph occupies: the Bedingung
     // column's own text starts at a real grid position, so the boundary
     // between them has to be measured on the grid.
     let mut grid_end = 0;
     for (i, k) in toks.iter().enumerate() {
-        let x = base + k.x;
+        let x = k.x;
+        if x < base {
+            continue;
+        }
         if !is_status_token(k.text) {
             if x + 1 >= tb.bedingung_x {
                 break;
@@ -1087,27 +1267,48 @@ fn column_cells(tb: &mut Table, line: &str, from: usize) -> (Vec<Option<String>>
                 break;
             }
         }
-        let is_word = matches!(
-            k.text,
-            "Muss" | "Soll" | "Kann" | "X" | "x" | "M" | "S" | "K"
-        ) || k.text.starts_with("Muss")
-            || k.text.starts_with("Soll")
-            || k.text.starts_with("Kann");
+        let is_word = is_status_word(k.text);
         // `x` for `X` is a typo the AHBs carry now and then.
         let word = if k.text == "x" { "X" } else { k.text };
-        let end = rendered_end(x, k.text);
+        let metric = metric_of(metrics, i, x);
+        let end = metric.map_or_else(|| rendered_end(x, k.text), |m| m.end);
+        let here = territory(&tb.columns, (x + end) / 2);
         grid_end = grid_end.max(x + k.text.chars().count());
+        let joins = match raw.last() {
+            None => false,
+            Some((_, last_end, cell, _)) => {
+                if *cell == here {
+                    // Inside one column's half of the table, everything is one
+                    // cell — as long as it is not a whole column away, which
+                    // is what a status-shaped word in the Beschreibung column
+                    // would be.
+                    metric
+                        .and_then(|m| m.gap)
+                        .map_or(x <= *last_end + 2, |gap| gap <= CELL_GAP_MAX_PT)
+                } else {
+                    // A cell is centred, so its last word — nearly always the
+                    // operator an expression breaks after — can reach into the
+                    // next column's half. It still belongs to the cell it
+                    // follows when it is one space behind it and narrow enough
+                    // not to be a cell in its own right. A word as wide as a
+                    // column is: IFTSTA 2.0h prints `([940][147]))` once per
+                    // column, one space apart, each filling its own.
+                    metric.and_then(|m| m.gap).is_some_and(|gap| {
+                        (SPACE_MIN_PT..=SPACE_MAX_PT).contains(&gap) && end - x <= 2 * tb.tol
+                    })
+                }
+            }
+        };
         match raw.last_mut() {
-            // One word space on the grid is a cell or two past the glyphs.
-            Some((_, last_end, text)) if !is_word && x <= *last_end + 2 => {
+            Some((_, last_end, _, text)) if !is_word && joins => {
                 text.push(' ');
                 text.push_str(word);
                 *last_end = end;
             }
-            _ => raw.push((x, end, word.to_owned())),
+            _ => raw.push((x, end, here, word.to_owned())),
         }
     }
-    for (start, end, text) in raw {
+    for (start, end, _, text) in raw {
         let centre = (start + end) / 2;
         // A cell is centred under its column; a `[n]` further off is the
         // Bedingung column's own text.
@@ -1250,16 +1451,6 @@ struct PackageTable {
     bed: usize,
 }
 
-/// Whether a token can be part of a Paketvoraussetzung — a `[n]` reference, one
-/// of the operators the AHBs use, or the status word some of them print in
-/// front of it (`X [50] ∧ [528]`). Everything else in that column is prose.
-fn is_expression_token(t: &str) -> bool {
-    let core = t.trim_start_matches('(').trim_end_matches(')');
-    matches!(t, "∧" | "∨" | "⊻" | "(" | ")")
-        || matches!(t, "Muss" | "Soll" | "Kann" | "X" | "M" | "S" | "K")
-        || (core.starts_with('[') && core.ends_with(']'))
-}
-
 fn append_condition(text: &str, cur: &mut Option<(String, String)>) {
     let Some((_, acc)) = cur else { return };
     if !acc.is_empty() {
@@ -1360,6 +1551,60 @@ mod tests {
 ";
 
     #[test]
+    fn an_expression_is_read_whole_however_the_line_break_cuts_it() {
+        // The AHB sets an expression without spaces around its parentheses,
+        // so a wrapped cell leaves pieces with brackets at neither end.
+        for ok in [
+            "X",
+            "Muss",
+            "∧",
+            "⊻",
+            "(",
+            ")",
+            "[10]",
+            "[UB1]",
+            "[2061]",
+            "[1P]",
+            "[4P0..1]",
+            "[2P0..n]",
+            "(([939]",
+            "[322]))",
+            "([940][147]))",
+            "(([939][6])",
+            "[931][494]",
+        ] {
+            assert!(is_status_token(ok), "{ok:?} is part of a status cell");
+        }
+        // Everything else in the row is prose, a code or a description.
+        for no in [
+            "(Positivwert)",
+            "Nummer",
+            "[abc]",
+            "[]",
+            "[10",
+            "SG4",
+            "DE3155",
+            "[1P0..x]",
+            "[UB12]",
+        ] {
+            assert!(!is_status_token(no), "{no:?} is not part of a status cell");
+        }
+    }
+
+    #[test]
+    fn a_wrapped_cell_can_carry_the_next_status_too() {
+        // IFTSTA 2.0h prints `Muss [56] ∧` on the SG15 row and
+        // `[58]  Soll [71]` under it: one line, two statuses.
+        let mut statuses = vec!["Muss [56] ∧".to_owned()];
+        append_status(&mut statuses, "[58] Soll [71]");
+        assert_eq!(statuses, ["Muss [56] ∧ [58]", "Soll [71]"]);
+        // A tail with no status word in it still continues the last status.
+        let mut one = vec!["X [914] ∧".to_owned()];
+        append_status(&mut one, "[937]");
+        assert_eq!(one, ["X [914] ∧ [937]"]);
+    }
+
+    #[test]
     fn columns_are_read_by_position() {
         let mut m = mig_with(
             "00020",
@@ -1440,7 +1685,7 @@ mod tests {
             ],
             example: None,
         }));
-        let lines: Vec<String> = TABLE.lines().map(str::to_owned).collect();
+        let lines: Vec<Line> = TABLE.lines().map(Line::from).collect();
         let doc = parse(&lines, &m).unwrap();
         assert_eq!(doc.anwendungsfaelle.len(), 3);
         let a = &doc.anwendungsfaelle[0];

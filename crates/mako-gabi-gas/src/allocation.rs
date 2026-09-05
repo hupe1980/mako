@@ -415,6 +415,13 @@ impl Workflow for GaBiGasAllocationWorkflow {
                          (expected one of 70001–70023)"
                         ))
                     })?;
+                // No outbox entry on any version, including the binding final
+                // one — so a settled gas day leaves nothing on the ERP bus while
+                // a missed § 47 deadline does. `de.gabi.allocation.completed`
+                // (this arm with `AllocationVersion::Final`) and
+                // `de.gabi.correction.created` (with `Correction(n)`) are
+                // declared in `mako_events::gabi` for exactly that, and the
+                // module there records what wiring each still needs.
                 Ok(vec![AllocationEvent::AllocationReceived {
                     pruefidentifikator,
                     allocation_type,

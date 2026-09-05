@@ -329,6 +329,21 @@ impl ParityGroup {
     pub fn completion_rate(&self) -> Option<f64> {
         (self.total > 0).then(|| self.completed as f64 / self.total as f64)
     }
+
+    /// Share of the group answered inside its published Antwortfrist, in
+    /// \[0, 1\], or `None` for an empty group.
+    ///
+    /// The completion rate cannot carry the § 7a Abs. 5 question on its own: a
+    /// rejection can be entirely legitimate, so two groups can complete at the
+    /// same rate while one of them is routinely answered late. Missing a
+    /// statutory window is discrimination the Gleichbehandlungsbericht is
+    /// actually asked about, and it is the one axis of it mako can measure
+    /// exactly, because the window comes from `mako-fristen` rather than from a
+    /// judgement.
+    #[must_use]
+    pub fn frist_compliance_rate(&self) -> Option<f64> {
+        (self.total > 0).then(|| 1.0 - (self.frist_breached as f64 / self.total as f64))
+    }
 }
 
 /// The smallest group size at which a parity gap is worth stating.
@@ -354,24 +369,37 @@ pub struct ParityComparison {
     /// one decimal. `None` when either group is below [`PARITY_MIN_SAMPLE`] or
     /// empty — an unstatable gap, not a zero one.
     pub gap_pp: Option<f64>,
+    /// The same comparison on [`ParityGroup::frist_compliance_rate`], under the
+    /// same sign convention and the same minimum sample.
+    ///
+    /// Reported beside `gap_pp` rather than folded into it: they answer
+    /// different questions and can point opposite ways — a group whose
+    /// processes are all completed but half of them late is discriminated
+    /// against in a way a completion rate cannot show.
+    pub frist_gap_pp: Option<f64>,
 }
 
 impl ParityComparison {
     /// Compare two groups under the sign convention above.
     #[must_use]
     pub fn new(affiliate: ParityGroup, third_party: ParityGroup) -> Self {
-        let gap_pp = (affiliate.total >= PARITY_MIN_SAMPLE
-            && third_party.total >= PARITY_MIN_SAMPLE)
-            .then(|| {
-                let a = affiliate.completion_rate()?;
-                let t = third_party.completion_rate()?;
-                Some(((a - t) * 1000.0).round() / 10.0)
-            })
-            .flatten();
+        let statable =
+            affiliate.total >= PARITY_MIN_SAMPLE && third_party.total >= PARITY_MIN_SAMPLE;
+        let gap = |rate: fn(&ParityGroup) -> Option<f64>| -> Option<f64> {
+            if !statable {
+                return None;
+            }
+            let a = rate(&affiliate)?;
+            let t = rate(&third_party)?;
+            Some(((a - t) * 1000.0).round() / 10.0)
+        };
+        let gap_pp = gap(ParityGroup::completion_rate);
+        let frist_gap_pp = gap(ParityGroup::frist_compliance_rate);
         Self {
             affiliate,
             third_party,
             gap_pp,
+            frist_gap_pp,
         }
     }
 
@@ -385,13 +413,22 @@ impl ParityComparison {
         }
     }
 
-    /// Whether the gap exceeds an **operator-configured** escalation threshold.
+    /// Whether **either** gap exceeds an **operator-configured** escalation
+    /// threshold.
     ///
-    /// `None` when the gap is unstatable. The threshold is the operator's own
-    /// number: no BNetzA publication sets one for this figure.
+    /// `None` only when both are unstatable — a statable Frist gap is worth
+    /// escalating on its own, and requiring both to be present would let the
+    /// group with too few completions hide a Fristen disparity.
+    ///
+    /// The threshold is the operator's own number: no BNetzA publication sets
+    /// one for either figure.
     #[must_use]
     pub fn exceeds(&self, threshold_pp: f64) -> Option<bool> {
-        Some(self.gap_pp?.abs() >= threshold_pp)
+        let over = |g: Option<f64>| g.map(|g| g.abs() >= threshold_pp);
+        match (over(self.gap_pp), over(self.frist_gap_pp)) {
+            (None, None) => None,
+            (a, b) => Some(a.unwrap_or(false) || b.unwrap_or(false)),
+        }
     }
 }
 

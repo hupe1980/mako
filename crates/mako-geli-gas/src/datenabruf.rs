@@ -57,7 +57,7 @@ pub const ANTWORT_WINDOW_LABEL: &str = "geli-gas-datenabruf-antwort";
 /// Events emitted by the GeLi Gas Datenabruf workflow.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
-pub enum GeliGasDatanabrufEvent {
+pub enum GeliGasDatenabrufEvent {
     /// ORDERS data request received.
     AnfrageErhalten {
         /// BDEW Prüfidentifikator (17103 or 17104).
@@ -93,13 +93,13 @@ pub enum GeliGasDatanabrufEvent {
     },
 }
 
-impl EventPayload for GeliGasDatanabrufEvent {
+impl EventPayload for GeliGasDatenabrufEvent {
     fn event_type(&self) -> &'static str {
         match self {
-            Self::AnfrageErhalten { .. } => "GeliGasDatanabrufAnfrageErhalten",
-            Self::AbgelehntErhalten { .. } => "GeliGasDatanabrufAbgelehnt",
-            Self::DatenGeliefert => "GeliGasDatanabrufDatenGeliefert",
-            Self::DeadlineExpired { .. } => "GeliGasDatanabrufDeadlineExpired",
+            Self::AnfrageErhalten { .. } => "GeliGasDatenabrufAnfrageErhalten",
+            Self::AbgelehntErhalten { .. } => "GeliGasDatenabrufAbgelehnt",
+            Self::DatenGeliefert => "GeliGasDatenabrufDatenGeliefert",
+            Self::DeadlineExpired { .. } => "GeliGasDatenabrufDeadlineExpired",
         }
     }
 }
@@ -110,7 +110,7 @@ impl EventPayload for GeliGasDatanabrufEvent {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
 #[derive(Default)]
-pub enum GeliGasDatanabrufState {
+pub enum GeliGasDatenabrufState {
     /// No events yet.
     #[default]
     New,
@@ -130,7 +130,7 @@ pub enum GeliGasDatanabrufState {
     DeadlineExpired,
 }
 
-impl GeliGasDatanabrufState {
+impl GeliGasDatenabrufState {
     /// Stable string label for the current variant.
     #[must_use]
     pub fn label(&self) -> &'static str {
@@ -148,10 +148,10 @@ impl GeliGasDatanabrufState {
 
 /// Commands for the GeLi Gas Datenabruf workflow.
 #[derive(Clone)]
-pub enum GeliGasDatanabrufCommand {
+pub enum GeliGasDatenabrufCommand {
     /// ERP instructs the LF to initiate a Gas data request (ORDERS 17103/17104 outbound).
     ///
-    /// Spawns a new `GeliGasDatanabrufWorkflow`, enqueues the outbound ORDERS
+    /// Spawns a new `GeliGasDatenabrufWorkflow`, enqueues the outbound ORDERS
     /// message, and registers the 10-Werktage response deadline.
     ///
     /// Use PID 17103 to request Abrechnungsbrennwert + Zustandszahl.
@@ -196,23 +196,23 @@ pub enum GeliGasDatanabrufCommand {
     },
 }
 
-impl CommandPayload for GeliGasDatanabrufCommand {}
+impl CommandPayload for GeliGasDatenabrufCommand {}
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
 /// GeLi Gas Datenabruf workflow — handles Gas-specific data requests.
-pub struct GeliGasDatanabrufWorkflow;
+pub struct GeliGasDatenabrufWorkflow;
 
-impl Workflow for GeliGasDatanabrufWorkflow {
-    type State = GeliGasDatanabrufState;
-    type Event = GeliGasDatanabrufEvent;
-    type Command = GeliGasDatanabrufCommand;
+impl Workflow for GeliGasDatenabrufWorkflow {
+    type State = GeliGasDatenabrufState;
+    type Event = GeliGasDatenabrufEvent;
+    type Command = GeliGasDatenabrufCommand;
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
         match event {
-            GeliGasDatanabrufEvent::AnfrageErhalten { pid, sender, .. } => {
-                if matches!(state, GeliGasDatanabrufState::New) {
-                    GeliGasDatanabrufState::AnfrageGesendet {
+            GeliGasDatenabrufEvent::AnfrageErhalten { pid, sender, .. } => {
+                if matches!(state, GeliGasDatenabrufState::New) {
+                    GeliGasDatenabrufState::AnfrageGesendet {
                         pid: *pid,
                         sender: sender.clone(),
                     }
@@ -220,16 +220,16 @@ impl Workflow for GeliGasDatanabrufWorkflow {
                     state
                 }
             }
-            GeliGasDatanabrufEvent::AbgelehntErhalten { .. } => GeliGasDatanabrufState::Abgelehnt,
-            GeliGasDatanabrufEvent::DatenGeliefert => GeliGasDatanabrufState::DatenErhalten,
-            GeliGasDatanabrufEvent::DeadlineExpired { .. } => {
+            GeliGasDatenabrufEvent::AbgelehntErhalten { .. } => GeliGasDatenabrufState::Abgelehnt,
+            GeliGasDatenabrufEvent::DatenGeliefert => GeliGasDatenabrufState::DatenErhalten,
+            GeliGasDatenabrufEvent::DeadlineExpired { .. } => {
                 if matches!(
                     state,
-                    GeliGasDatanabrufState::Abgelehnt | GeliGasDatanabrufState::DatenErhalten
+                    GeliGasDatenabrufState::Abgelehnt | GeliGasDatenabrufState::DatenErhalten
                 ) {
                     state
                 } else {
-                    GeliGasDatanabrufState::DeadlineExpired
+                    GeliGasDatenabrufState::DeadlineExpired
                 }
             }
         }
@@ -240,7 +240,7 @@ impl Workflow for GeliGasDatanabrufWorkflow {
         cmd: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
         match cmd {
-            GeliGasDatanabrufCommand::InitiateAnfrage {
+            GeliGasDatenabrufCommand::InitiateAnfrage {
                 pid,
                 sender,
                 receiver,
@@ -251,10 +251,10 @@ impl Workflow for GeliGasDatanabrufWorkflow {
                         "expected a Gas Datenabruf ORDERS PID ({ORDERS_ANFRAGE_PIDS:?}), got {pid}",
                     )));
                 }
-                if !matches!(state, GeliGasDatanabrufState::New) {
+                if !matches!(state, GeliGasDatenabrufState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
                 }
-                let event = GeliGasDatanabrufEvent::AnfrageErhalten {
+                let event = GeliGasDatenabrufEvent::AnfrageErhalten {
                     pid,
                     sender: sender.clone(),
                     receiver: receiver.clone(),
@@ -276,7 +276,7 @@ impl Workflow for GeliGasDatanabrufWorkflow {
                     vec![outbox],
                 ))
             }
-            GeliGasDatanabrufCommand::ReceiveAnfrage {
+            GeliGasDatenabrufCommand::ReceiveAnfrage {
                 pid,
                 sender,
                 receiver,
@@ -287,10 +287,10 @@ impl Workflow for GeliGasDatanabrufWorkflow {
                         "expected a Gas Datenabruf ORDERS PID ({ORDERS_ANFRAGE_PIDS:?}), got {pid}",
                     )));
                 }
-                if !matches!(state, GeliGasDatanabrufState::New) {
+                if !matches!(state, GeliGasDatenabrufState::New) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
-                Ok(vec![GeliGasDatanabrufEvent::AnfrageErhalten {
+                Ok(vec![GeliGasDatenabrufEvent::AnfrageErhalten {
                     pid,
                     sender,
                     receiver,
@@ -298,7 +298,7 @@ impl Workflow for GeliGasDatanabrufWorkflow {
                 }]
                 .into())
             }
-            GeliGasDatanabrufCommand::ReceiveAblehnung {
+            GeliGasDatenabrufCommand::ReceiveAblehnung {
                 pid,
                 sender,
                 message_ref,
@@ -308,33 +308,33 @@ impl Workflow for GeliGasDatanabrufWorkflow {
                         "expected a Gas Datenabruf ORDRSP rejection PID ({ORDRSP_ABLEHNUNG_PIDS:?}), got {pid}",
                     )));
                 }
-                if !matches!(state, GeliGasDatanabrufState::AnfrageGesendet { .. }) {
+                if !matches!(state, GeliGasDatenabrufState::AnfrageGesendet { .. }) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
-                Ok(vec![GeliGasDatanabrufEvent::AbgelehntErhalten {
+                Ok(vec![GeliGasDatenabrufEvent::AbgelehntErhalten {
                     pid,
                     sender,
                     message_ref,
                 }]
                 .into())
             }
-            GeliGasDatanabrufCommand::NotifyDatenGeliefert => {
+            GeliGasDatenabrufCommand::NotifyDatenGeliefert => {
                 // Data was delivered via MSCONS — transition to DatenErhalten.
-                if matches!(state, GeliGasDatanabrufState::AnfrageGesendet { .. }) {
-                    Ok(vec![GeliGasDatanabrufEvent::DatenGeliefert].into())
+                if matches!(state, GeliGasDatenabrufState::AnfrageGesendet { .. }) {
+                    Ok(vec![GeliGasDatenabrufEvent::DatenGeliefert].into())
                 } else {
                     // Already resolved (Abgelehnt, DatenErhalten, DeadlineExpired) — no-op.
                     Ok(WorkflowOutput::events(vec![]))
                 }
             }
-            GeliGasDatanabrufCommand::TimeoutExpired { deadline_id, label } => {
+            GeliGasDatenabrufCommand::TimeoutExpired { deadline_id, label } => {
                 if matches!(
                     state,
-                    GeliGasDatanabrufState::Abgelehnt | GeliGasDatanabrufState::DatenErhalten
+                    GeliGasDatenabrufState::Abgelehnt | GeliGasDatenabrufState::DatenErhalten
                 ) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
-                Ok(vec![GeliGasDatanabrufEvent::DeadlineExpired { deadline_id, label }].into())
+                Ok(vec![GeliGasDatenabrufEvent::DeadlineExpired { deadline_id, label }].into())
             }
         }
     }

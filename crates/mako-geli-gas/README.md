@@ -4,9 +4,14 @@
 
 Process engine workflows for the German gas market supplier-switch processes.
 Implements the BDEW GeLi Gas specification:
-- **GeLi Gas 3.0** — BNetzA **BK7-24-01-009** (Beschluss 12.09.2025, abgeschlossen 24.09.2025)
+- **GeLi Gas 3.0** — BNetzA **BK7-24-01-009** (Beschluss 12.09.2025, Tenor ab 01.01.2026)
 
 This supersedes BK7-19-001 and the original BK7-06-067 (2007).
+
+A **Prüfidentifikator** (PID) is the five-digit BDEW code every message in these
+processes carries. It names the exact Anwendungsfall, and with it the rules, the
+Frist and the answer tree that apply — so the PID, not the EDIFACT message type,
+is what routes.
 
 ## APERAK
 
@@ -38,7 +43,7 @@ UTILMD. What actually differs:
 | Entscheidungsbäume | `E_06xx` | **`E_30xx`** |
 | APERAK | Anerkennungs- *und* Verarbeitbarkeitsfehlermeldung; 45 min für UTILMD/ORDERS | **nur Verarbeitbarkeitsfehlermeldung**; nächster WT 12:00 / 3 WT |
 | CONTRL | nur auf eine syntaktisch defekte APERAK | auf **jede** APERAK |
-| EDIFACT profile | UTILMD Strom S2.x | UTILMD Gas G1.x/G2.x |
+| EDIFACT profile | UTILMD Strom S2.1 / S2.2 | UTILMD Gas G1.1 / G1.2 |
 | Grid operator | Netzbetreiber (NB) | Gasnetzbetreiber (GNB) |
 
 ### „10 Werktage" is the supplier's Vorlauffrist, not an answer window
@@ -144,10 +149,15 @@ quantifies them.
 | 17003   | Beauftragung Änderung Technik (MeLo Gas)            | ORDERS 1.4b   | ✗ Not registered                 |
 | 17101   | Anfrage Übermittlung Stammdaten Gas                 | ORDERS 1.4b   | ✗ Not registered                 |
 
-> **PIDs 44002–44006, 44017–44018** are registered under
-> `geli-gas-supplier-change` and share the same `GeliGasSupplierChangeWorkflow`
-> as PID 44001. The state machine handles all registered PIDs via the same
-> transition logic.
+> **The whole 44001–44021 band** (`lieferbeginn::UTILMD_PIDS`) is registered
+> under `geli-gas-supplier-change` and shares one `GeliGasSupplierChangeWorkflow`.
+> Beyond the rows above that means **44007–44009** (Abmeldung NN vom NB),
+> **44010–44012** (Abmeldungsanfrage des NB) and **44019–44021** (Bestandsliste /
+> Änderungsmeldung and its Antwort) — the eight Anfrage-PIDs of that band are
+> `lieferbeginn::ANFRAGE_PIDS`, the rest are its Antworten.
+>
+> **PIDs 44036/44037/44038** are the Informationsmeldungen of the Meldepflichten
+> section above and route to `geli-gas-zuordnungsmeldung`; nothing answers them.
 >
 > **ORDERS PIDs 17003, 17101** are Gas-specific Stammdaten and
 > Zählpunktverwaltung Gas processes defined in ORDERS AHB 1.4b. None are
@@ -163,28 +173,22 @@ quantifies them.
 > - **GNB-Sicht** (`geli-gas-sperrung-nb`): GNB receives 17115/17117 inbound from LF;
 >   sends 17116 outbound to gMSB; receives ORDRSP 19118/19119 inbound from gMSB.
 >   After gMSB confirms, GNB sends ORDRSP 19116/19117 back to LF via outbox.
-> **ORDERS PIDs 17115, 17116, 17117** serve two deployment roles:
-> - **LF-Sicht** (`geli-gas-sperrung-lf`): PIDs 17115/17117 are **outbound** (LF
->   initiates the Sperrauftrag). The same PID numbers appear in GPKE (NB inbound);
->   routing is determined by market context and deployment role.
-> - **GNB-Sicht** (`geli-gas-sperrung-nb`): PIDs 17115/17117 are **inbound** (GNB
->   receives the Sperrauftrag from LF). PID 17116 is **outbound** (GNB forwards the
->   Anfrage Sperrung to gMSB). This role is only active when the deployment operates
->   as a Gasnetzbetreiber.
->
 > **ORDERS PIDs 17103, 17104** are the Gas Datenabruf processes
 > (Abrechnungsbrennwert / Zustandszahl and MSB Gas → NB Strom). They are fully
-> implemented in `GeliGasDatanabrufWorkflow` with corresponding rejection
+> implemented in `GeliGasDatenabrufWorkflow` with corresponding rejection
 > responses via ORDRSP 19103/19104.
 >
 
 ## EDIFACT Format Versions
 
-| Format version       | Valid from | Valid until | Profile status |
-|----------------------|------------|-------------|----------------|
-| `FV2024-10-01_gas`   | 2024-10-01 | 2025-09-30  | ✓ available    |
-| `FV2025-10-01_gas`   | 2025-10-01 | 2026-09-30  | ✓ available    |
-| `FV2026-10-01_gas`   | 2026-10-01 | —           | ✓ available    |
+| Format version       | Valid from | Valid until | UTILMD Gas profile |
+|----------------------|------------|-------------|--------------------|
+| `FV2026-04-01_gas`   | 2026-04-01 | 2026-09-30  | AHB 1.1, MIG G1.1  |
+| `FV2026-10-01_gas`   | 2026-10-01 | —           | AHB 1.2, MIG G1.2  |
+
+The AHB and the MIG carry different version numbers for every message type
+except UTILMD, where the AHB is `1.2` and the MIG release is `G1.2` — the same
+document generation under two numbering schemes.
 
 ## MSCONS Messdaten Gas — GNB/gMSB to LFG
 
@@ -207,13 +211,15 @@ on the retail gas side; no APERAK response is required unless validation fails.
 
 | Rust module    | Workflow name               | Contents                                                                           |
 |----------------|-----------------------------|------------------------------------------------------------------------------------|
-| `lieferbeginn` | `geli-gas-supplier-change`  | PIDs 44001–44021 Lieferantenwechsel workflow + projections                         |
+| `lieferbeginn` | `geli-gas-supplier-change`  | PIDs 44001–44021 (`UTILMD_PIDS`) Lieferantenwechsel workflow + projections, GNB role |
+| `lf_anmeldung` | `geli-gas-lf-anmeldung`     | LF role: 44001/44004/44016 outbound, 44002/44003 · 44005/44006 · 44017/44018 inbound |
+| `zuordnungsmeldung` | `geli-gas-zuordnungsmeldung` | PIDs 44036/44037/44038 (Informationsmeldungen um den Lieferbeginn); one-way, no Antwortnachricht |
 | `stornierung`  | `geli-gas-stornierung`      | PID 44022 Nb-only (GNB receives Stornierungsanfrage inbound)                       |
 | `lf_stornierung` | `geli-gas-stornierung-lf` | PIDs 44023/44024 Lf-only (LF receives GNB Stornierungsantwort inbound)             |
 | `datenabruf`   | `geli-gas-datenabruf`       | PIDs 17103/17104 Gas Datenabruf (ORDERS) + ORDRSP 19103/19104                      |
 | `sperrung_lf`  | `geli-gas-sperrung-lf`      | PIDs 17115/17117 Gas Sperrung LF-initiated; ORDRSP 19116/19117/19128/19129; ORDCHG 39000 |
 | `sperrung_nb`  | `geli-gas-sperrung-nb`      | PIDs 17115/17116/17117 (GNB receives); ORDERS 17116 → gMSB; ORDRSP 19118/19119; ORDCHG 39000/39001 |
-| `sperrprozesse_invoic` | `geli-gas-sperrprozesse-invoic` | PID 31011 (INVOIC AWH Sperrprozesse Gas). **Both roles:** the GNB issues one (`SendInvoic` → REMADV correlation), the LFG receives one (`ReceiveInvoic` → settle/dispute). The state machine is `mako-invoic`'s, shared with the GPKE, WiM and GaBi Gas billing families; this module declares only the family. |
+| `invoic`       | `geli-gas-sperrprozesse-invoic` | PID 31011 (INVOIC AWH Sperrprozesse Gas). **Both roles:** the GNB issues one (`SendInvoic` → REMADV correlation), the LFG receives one (`ReceiveInvoic` → settle/dispute). The state machine is `mako-invoic`'s, shared with the GPKE, WiM and GaBi Gas billing families; this module declares only the family. |
 | `stammdatenaenderung` | `geli-gas-stammdatenaenderung` | GeLi Gas Stammdatenänderung 44109–44182 — inbound MaLo change → Zustimmung (E15, apply) / Ablehnung (E13/E17); Monatserster rule for bilanzierungsrelevante changes; 10-WT Antwort-Frist |
 | `mscons`       | `geli-gas-mscons`           | PIDs 13002/13007/13008/13009 (MSCONS Messdaten Gas, GNB/gMSB → LF)               |
 | `partin`       | `geli-gas-partin`           | PIDs 37008–37014 Gas Kommunikationsdaten (LF, GNB, gMSB, MGV, ÜNB)               |
@@ -308,7 +314,7 @@ let cmd = GasSperrungNbCommand::ReceiveSperrung {
     validation_errors: vec![],
 };
 let out = process.execute(cmd).await?;
-// out.deadlines[0] registers the 10-WT response window.
+// out.deadlines[0] registers the 1-WT ORDRSP response window.
 
 // gMSB confirms access (ORDRSP 19118):
 let msb = GasSperrungNbCommand::ReceiveMsbAntwort {
@@ -340,10 +346,10 @@ New ──ReceiveSperrung(valid)──► ValidationPassed ──BestaetigueSper
 ### Gas Datenabruf (Brennwert / Zustandszahl)
 
 ```rust
-use mako_geli_gas::{GeliGasDatanabrufWorkflow, DatanabrufCommand};
+use mako_geli_gas::{GeliGasDatenabrufWorkflow, DatenabrufCommand};
 
 // Request billing combustion values (LF → NB/MSB, ORDERS 17103):
-let cmd = DatanabrufCommand::InitiateAnfrage {
+let cmd = DatenabrufCommand::InitiateAnfrage {
     pid: Pruefidentifikator::new(17103).expect("valid PID"),
     // …
 };
@@ -360,7 +366,27 @@ let cmd = DatanabrufCommand::InitiateAnfrage {
   die Sequenzdiagramme, u. a. der Zwei-Zweig-Zuschnitt von Prozessschritt 5
 - BNetzA BK7-19-001 — previous ruling (superseded)
 - BNetzA BK7-06-067 — original GeLi Gas ruling 2007 (superseded)
-- EDI@Energy UTILMD Gas AHB G2.x (`FV2026-10-01`)
-- EDI@Energy ORDERS/ORDRSP/ORDCHG AHB 1.4b (`FV2026-10-01`)
+- EDI@Energy UTILMD Gas **AHB 1.2** (MIG release G1.2, `FV2026-10-01`)
+- EDI@Energy ORDERS/ORDRSP **AHB 1.1b** (MIG release 1.4c) and ORDCHG **AHB 1.1**
+  (MIG release 1.2), `FV2026-10-01`
 - EDI@Energy APERAK AHB 1.1 § 2.3.1 — Gas: nächster Werktag 12:00 (Folgeprozess),
   3 Werktage (Initialprozess)
+
+## Related crates
+
+The format layer and the domain packs meet in `makod`: a workflow crate knows the
+`Pruefidentifikator` and its own domain types, never an EDIFACT message type.
+
+| Crate | Role |
+|---|---|
+| [`mako-geli-gas`](https://docs.rs/mako-geli-gas) ← **this crate** | GeLi Gas workflows, PID routing, `GeliGasModule` |
+| [`edi-energy`](https://docs.rs/edi-energy) | EDI@Energy EDIFACT — parse · validate · build (UTILMD, MSCONS, ORDERS, INVOIC, APERAK, …); joined to these workflows in `makod`, not depended on |
+| [`mako-engine`](https://docs.rs/mako-engine) | Event-sourced workflow runtime — `Workflow`, `Process`, `EventStore`, deadlines |
+| [`mako-fristen`](https://docs.rs/mako-fristen) | *When* an answer is due — Werktage, the MaKo holiday calendar, the per-PID Antwortfristen |
+| [`mako-invoic`](https://docs.rs/mako-invoic) | The INVOIC settle/dispute state machine every billing family shares |
+| [`mako-gpke`](https://docs.rs/mako-gpke) | The Strom counterpart — GPKE |
+| [`mako-gabi-gas`](https://docs.rs/mako-gabi-gas) | The other half of the gas market: balancing, not supplier switching |
+| [`makod`](https://hupe1980.github.io/mako/docs/services/makod/) | Production daemon — routes, adapts and renders these workflows |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>

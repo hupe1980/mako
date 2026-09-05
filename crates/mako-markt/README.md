@@ -4,7 +4,7 @@
 
 `mako-markt` is the domain library for `Marktlokation` (MaLo), `Messlokation` (MeLo),
 `VersorgungsStatus`, NB network contracts, trading-partner, and process-correlation
-management.  It is the foundation for [`marktd`](../../services/marktd), the production
+management.  It is the foundation for [`marktd`](https://hupe1980.github.io/mako/docs/services/marktd/), the production
 Market Data Hub.
 
 Key design choices:
@@ -12,16 +12,20 @@ Key design choices:
   payload crosses in either direction, the rules BO4E states but enforces
   nowhere, and the typed columns a stored document is indexed by. See
   [The BO4E gate](#the-bo4e-gate) below.
-- **Typed `rubo4e::current` records** — `MaloRecord.data` stores and returns
-  `rubo4e::current::Marktlokation`, `MeloRecord.data` stores `Messlokation`, and so on.
-  Writes take the **typed BO**, so an unvalidated payload cannot reach storage
-  and a shadow column cannot disagree with the document it shadows.
+- **Writes take the typed BO, reads return the stored document.**
+  `MaloRepository::upsert` takes `&rubo4e::current::Marktlokation` — never a
+  `serde_json::Value` — so an unvalidated payload cannot reach storage and a
+  shadow column cannot disagree with the document it shadows. The record types
+  (`MaloRecord.data`, `MeloRecord.data`, `ZaehlerRecord.data`, …) hand the
+  JSONB back verbatim, because a stored document must round-trip exactly as the
+  counterparty sent it.
 - **`NbContractRecord` carries full BO4E `Vertrag` JSONB** — `data: serde_json::Value`
   stores the canonical BO4E `Vertrag` payload alongside typed SQL columns
   (`netzebene`, `bilanzierungsmethode`, `billing_schedule`).  `vertragsart` and
   `vertragsstatus` are extracted as indexed columns for fast SQL filtering.
-- **25 active `rubo4e::current` types** — `Marktlokation`, `Messlokation`, `Zaehler`,
-  `Geraet`, `Vertrag`, `Energiemenge`, `Lastgang`, `Rechnung`, and more.
+- **`rubo4e::current` is the BO vocabulary** — `Marktlokation`, `Messlokation`,
+  `Zaehler`, `Geraet`, `Vertrag`, `Energiemenge`, `Lastgang`, `Rechnung` and the
+  COMs and enums beneath them. BO4E schema version `202607.1.0`.
 
 ---
 
@@ -54,7 +58,6 @@ overwrites what the caller sent rather than merely accepting it.
 | Variant | Use |
 |---|---|
 | `decode` | an endpoint. All four stages. |
-| `decode_nested` | a COM from a parent's extension map. `_typ` may be absent; a wrong one is still refused. |
 | `decode_received` | a counterparty's document. Stages 1–3 refuse; a rule violation is returned alongside the value, to be disputed rather than dead-lettered. |
 | `ensure_conformant` | outbound: stages 3 and 4 on a value mako built. |
 
@@ -91,10 +94,15 @@ mako_markt
 │                   GrundversorgerRepository, GrundversorgerRecord (§36 Abs. 2 EnWG)
 │                   PriCatRepository, PriCatVersion, PriCatDispatchState
 ├── error           MdmError — RFC 7807-ready with status_u16, error_code, error_title
-├── cloudevents     InboundMakoEvent, MarktEvent, HMAC-SHA256 signing/verification
+├── bo4e            decode · decode_received · ensure_conformant · conformance rules
+│                   shadow columns (MaloShadowColumns, …)
+├── cloudevents     InboundMakoEvent, MarktEvent, EventExtensions
 │                   Emitted: de.markt.malo.updated, de.markt.nb-contract.updated,
-│                            de.markt.pricat.published, de.markt.versorgung.beliefert
-├── makod_client    HTTP client for the makod admin API
+│                            de.markt.pricat.published, de.markt.versorgung.beliefert,
+│                            and 17 more `de.markt.*` types
+├── commands        typed makod command names/payloads
+├── makod_client    HTTP client for the makod admin API (feature `makod-client`)
+├── marktd_client   HTTP client for the marktd REST API (feature `marktd-client`)
 └── testing         InMemory* test doubles (feature = "testing")
                     includes: InMemoryPriCatRepository
 ```
@@ -200,10 +208,11 @@ pub trait MaloRepository: Send + Sync {
         &self,
         malo_id: &MaloId,
         sparte: Sparte,
-        data: MaloPayload,
+        data: &rubo4e::current::Marktlokation,   // the typed BO, never a Value
         rollenzuordnung: Vec<Rollenzuordnung>,
-        if_match: Option<i64>,          // ETag optimistic-concurrency guard
-    ) -> Result<i64, MdmError>;         // → new version
+        if_match: Option<i64>,                   // ETag optimistic-concurrency guard
+        bo4e_version: &str,
+    ) -> Result<i64, MdmError>;                  // → new version
 
     async fn find(&self, malo_id: &MaloId, at: Date)
         -> Result<Option<MaloRecord>, MdmError>;
@@ -238,8 +247,12 @@ Outbound events emitted by `marktd` conform to **CloudEvents 1.0** structured-mo
 (`application/cloudevents+json`). They carry `markt*` extension attributes and are
 HMAC-SHA256 signed for delivery to ERP subscribers.
 
+HMAC-SHA256 signing and verification are **not** in this crate: they live in
+`mako_service::webhook` (`sign` / `verify_hmac`), the one canonical
+implementation shared by every emitter and verifier.
+
 ```rust
-use mako_markt::cloudevents::{MarktEvent, EventExtensions, compute_signature};
+use mako_markt::cloudevents::{MarktEvent, EventExtensions};
 
 let event = MarktEvent::new(
     "9900357000004",             // tenant GLN
@@ -253,9 +266,9 @@ let event = MarktEvent::new(
     ..Default::default()
 });
 
-let body   = serde_json::to_vec(&event)?;
-let sig    = compute_signature(secret.as_bytes(), &body);
-// send with `X-Markt-Signature: {sig}` header
+let body = serde_json::to_vec(&event)?;
+// sign with mako_service::webhook::sign(secret, &body) and send the result
+// in the `X-Markt-Signature` header
 ```
 
 **Event source:** `urn:mako:marktd:tenant:{tenant}`
@@ -272,11 +285,14 @@ Details responses:
 |---|---|---|
 | `InvalidMaloId` | 422 | `invalid_malo_id` |
 | `InvalidMeloId` | 422 | `invalid_melo_id` |
-| `InvalidGln` | 422 | `invalid_gln` |
+| `InvalidMpId` | 422 | `invalid_gln` |
 | `NotFound` | 404 | `not_found` |
 | `VersionConflict` | 412 | `version_conflict` |
+| `MakodConflict` | 409 | `makod_conflict` |
 | `Forbidden` | 403 | `forbidden` |
 | `Unprocessable` | 422 | `unprocessable` |
+| `MakodSync` | 500 | `makod_sync_failed` |
+| `WebhookDelivery` | 500 | `webhook_delivery_failed` |
 | `Internal` | 500 | `internal_error` |
 
 ---
@@ -401,3 +417,18 @@ operator's NB GLN is automatically re-queued for dispatch to the new partner.
 
 `mako-markt` depends on neither `axum` nor `sqlx`. Both are confined to `services/marktd`.
 This keeps the library independently testable with zero framework overhead.
+
+## Related crates
+
+| Crate | Role |
+|---|---|
+| [`mako-markt`](https://docs.rs/mako-markt) ← **this crate** | Domain types, repository traits, the BO4E gate, CloudEvents emission |
+| [`energy-api`](https://docs.rs/energy-api) | The REST/WebSocket API-Webdienste channel, which addresses partners by the same BDEW Codenummer |
+| [`mako-events`](https://docs.rs/mako-events) | CloudEvents `type` catalog — the shared event vocabulary |
+| [`mako-fristen`](https://docs.rs/mako-fristen) | *When* an answer is due — Werktage, the MaKo holiday calendar, the per-PID Antwortfristen |
+| [`mako-pruefung`](https://docs.rs/mako-pruefung) | Reads Marktlokations- and Vertragsstammdaten to decide an Antwortcode |
+| [`grid-billing`](https://docs.rs/grid-billing) · [`energy-billing`](https://docs.rs/energy-billing) · [`eeg-billing`](https://docs.rs/eeg-billing) | Bill against these stammdaten |
+| [`marktd`](https://hupe1980.github.io/mako/docs/services/marktd/) | Production daemon — the PostgreSQL implementation of the repository traits |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>

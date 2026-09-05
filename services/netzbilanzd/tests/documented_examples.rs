@@ -47,7 +47,23 @@ fn the_documented_nne_examples_parse() {
                 "lf_mp_id": "9900012345678",
                 "sparte": "Strom",
                 "arbeitspreis": { "Einheitlich": { "menge_kwh": "1500", "preis_ct_per_kwh": "3.5" } },
-                "leistungspreis": { "spitzenleistung_kw": "40", "preis_eur_per_kw": "12.50" },
+                // A monthly NN-Rechnung bills the Preisblatt's
+                // **Monatsleistungspreis**: EUR/kW·Monat against the month's
+                // Höchstleistung (§ 17 Abs. 8 StromNEV names the
+                // Monatsleistungspreissystem alongside the annual one).
+                //
+                // Omitting `system` defaults to `JAHR`, which is § 17 Abs. 2
+                // Satz 2's Jahresleistungspreis × Jahreshöchstleistung — the
+                // whole Abrechnungsjahr's demand charge, correct only on a
+                // yearly settlement. The engine bills it and warns
+                // (`JAHRESLEISTUNGSPREIS_UNTERJAEHRIG`) rather than inventing a
+                // pro-rating no Preisblatt publishes, so the documented example
+                // has to say which system it is on.
+                "leistungspreis": {
+                    "spitzenleistung_kw": "40",
+                    "preis_eur_per_kw": "12.50",
+                    "system": { "MONAT": { "monate": "1" } }
+                },
                 "konzessionsabgabe": { "satz_ct_per_kwh": "0.11", "klasse": "Sondervertragskunde" },
                 "netzebene": "Niederspannung",
                 "jahresarbeit_kwh": "18000",
@@ -58,8 +74,89 @@ fn the_documented_nne_examples_parse() {
     let SettlementRequest::Nne(nne) = &guide.positions[0].settlement else {
         panic!("expected an NNE settlement");
     };
-    assert!(nne.leistungspreis.is_some());
+    let lp = nne.leistungspreis.expect("the documented Leistungspreis");
     assert!(nne.netzebene.is_some());
+    // The documented example is a **monthly** settlement, so it states the
+    // Monatsleistungspreissystem rather than inheriting the `JAHR` default.
+    assert_eq!(
+        lp.system,
+        grid_billing::LeistungspreisSystem::Monat {
+            monate: rust_decimal::Decimal::ONE
+        },
+        "the documented January settlement bills one month of Leistungspreis"
+    );
+
+    // …and it settles to the figures the guide prints. A documented response
+    // nobody recomputes drifts silently the moment the engine changes: this
+    // example's demand charge moved from a pro-rated 42.47 € to the full
+    // 500.00 € when `LeistungspreisSystem` arrived, and the printed totals
+    // stayed where they were.
+    let settled = netzbilanzd::billing::settle(&guide.positions[0]).expect("the guide settles");
+    assert_eq!(settled.total_eur.to_string(), "598.34", "netto_eur");
+    assert_eq!(
+        settled.steuer.steuer_eur.to_string(),
+        "113.68",
+        "steuer_eur"
+    );
+    assert_eq!(
+        settled.steuer.brutto_eur().to_string(),
+        "712.02",
+        "brutto_eur"
+    );
+    assert!(
+        settled.warnings.is_empty(),
+        "a monthly Leistungspreis over a monthly period warns about nothing: {:?}",
+        settled.warnings
+    );
+}
+
+/// Both Leistungspreissysteme reach the engine off the wire.
+///
+/// `system` rides in on `grid_billing::Leistungspreis` and has a serde default,
+/// so a body that omits it silently bills § 17 Abs. 2 Satz 2's annual
+/// Jahresleistungsentgelt — the whole Abrechnungsjahr's demand charge — on a
+/// monthly invoice. That default is a real answer, not a placeholder, so the
+/// caller has to be able to say the other one and be believed.
+#[test]
+fn the_leistungspreissystem_is_stateable_on_the_api() {
+    use grid_billing::LeistungspreisSystem;
+    use rust_decimal::Decimal;
+
+    let with = |system: serde_json::Value| -> LeistungspreisSystem {
+        let body = serde_json::json!({
+            "invoice_date": "2026-02-01",
+            "due_date": "2026-03-03",
+            "positions": [{
+                "malo_id": "51238696012",
+                "period_from": "2026-01-01",
+                "period_to": "2026-01-31",
+                "settlement": {
+                    "billing_type": "nne",
+                    "nb_mp_id": "9900357000004",
+                    "lf_mp_id": "9900012345678",
+                    "sparte": "Strom",
+                    "arbeitspreis": { "Einheitlich": { "menge_kwh": "1500", "preis_ct_per_kwh": "3.5" } },
+                    "leistungspreis": {
+                        "spitzenleistung_kw": "40",
+                        "preis_eur_per_kw": "12.50",
+                        "system": system,
+                    },
+                }
+            }]
+        });
+        let SettlementRequest::Nne(nne) = parse(body).positions.remove(0).settlement else {
+            panic!("expected an NNE settlement");
+        };
+        nne.leistungspreis.expect("leistungspreis").system
+    };
+
+    assert_eq!(with(serde_json::json!("JAHR")), LeistungspreisSystem::Jahr);
+    assert_eq!(
+        with(serde_json::json!({ "MONAT": { "monate": "3" } })),
+        LeistungspreisSystem::Monat {
+            monate: Decimal::from(3)
+        }
+    );
 }
 
 /// All three §14a module bodies the docs print.

@@ -182,7 +182,8 @@ clippy-roles:
         echo "==> cargo clippy -p makod --no-default-features --features $f"
         cargo clippy -p makod --no-default-features --features "$f" --all-targets -- -D warnings
     done
-    # processd's role features are § 7 EnWG binary separation: an nb-only build
+    # processd's role features enforce § 6a EnWG informatorische Entflechtung: an
+    # nb-only build
     # must contain no LF or MSB answer path. Each profile is linted and its
     # `role_separation` suite run, because a module gated on the wrong role
     # feature ships one role's obligations inside another role's binary.
@@ -202,7 +203,7 @@ clippy-roles:
     done
     # agentd carries the same role flags: it is the one service that reaches all
     # the others, so a role-scoped build must exclude the other arm's
-    # specialists rather than merely decline to run them (§ 9 EnWG).
+    # specialists rather than merely decline to run them (§ 6a EnWG).
     for f in "role-lf" "role-nb" "role-msb"; do
         echo "==> cargo clippy -p agentd --features $f"
         cargo clippy -p agentd --features "$f" --all-targets -- -D warnings
@@ -274,7 +275,7 @@ examples:
         python3 -c "import json,sys; m=json.load(sys.stdin); [print(p['name'], t['name']) for p in m['packages'] for t in p['targets'] if 'example' in t['kind']]" | sort)
     exit $fail
 
-ci: check test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-wire-timestamps check-business-dates check-rounding check-pid-coverage check-release-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+ci: check check-fuzz test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-wire-timestamps check-business-dates check-rounding check-pid-coverage check-release-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -367,14 +368,26 @@ build-makotest:
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
-# Build the 3 demo Docker images — makod, marktd, processd.
 # Only deps needed for the Lieferbeginn smoke test; no iceberg/LanceDB.
 # Expected cold build: ~8 min (debug) / ~12 min (release).
 # Optional services (invoicd, netzbilanzd, obsd): build with --target <name>-runtime.
+
+# Build the nb-stp demo images (makod, marktd, processd)
 build-demo profile="dev":
     docker build --target runtime             --build-arg PROFILE={{ profile }} -t makod:dev     .
     docker build --target marktd-runtime      --build-arg PROFILE={{ profile }} -t marktd:dev    .
     docker build --target processd-runtime    --build-arg PROFILE={{ profile }} -t processd:dev  .
+
+# `demos/eeg-billing` needs none of makod/processd: the EEG settlement path is
+# marktd (Marktpartner) → edmd (Zählwerte) → einsd (Vergütung), with no MaKo
+# message on it, so the images the Lieferbeginn demo builds are the wrong three.
+# Expected cold build: ~8 min (debug) / ~12 min (release).
+
+# Build the eeg-billing demo images (marktd, edmd, einsd)
+build-demo-eeg profile="dev":
+    docker build --target marktd-runtime      --build-arg PROFILE={{ profile }} -t marktd:dev    .
+    docker build --target edmd-runtime        --build-arg PROFILE={{ profile }} -t edmd:dev      .
+    docker build --target einsd-runtime       --build-arg PROFILE={{ profile }} -t einsd:dev     .
 
 # Build xtask (needed after changing xtask commands)
 build-xtask:
@@ -605,6 +618,19 @@ check-site: check-mermaid check-links
     cd site && zola check
 
 # ── Fuzz ──────────────────────────────────────────────────────────────────────
+
+# Compile every fuzz target against the current dependency graph.
+#
+# `fuzz/` is excluded from the workspace, so `just check` never sees it and its
+# own `Cargo.toml` restates each version from `[workspace.dependencies]` by
+# hand. This gate is what makes those two copies agree: a workspace-wide bump
+# that the fuzz manifest does not follow fails here, at compile time, instead of
+# the next time somebody reaches for the fuzzer.
+#
+# A `cargo check` rather than `cargo fuzz build`: the latter needs nightly and a
+# full sanitiser-instrumented link of every target, which is minutes per run.
+check-fuzz:
+    cd fuzz && cargo check --all-targets
 
 # Run a fuzz target (requires nightly + cargo-fuzz; e.g. `just fuzz fuzz_parse_validate`)
 fuzz target:

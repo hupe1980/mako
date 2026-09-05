@@ -23,10 +23,10 @@ it is also useful standalone for:
 | `aperak` | Application Error and Acknowledgement | APERAK | 2.1i · 2.2 |
 | `contrl` | Interchange Control Response | CONTRL | 2.0b |
 | `invoic` | Invoice | INVOIC | 2.8e |
-| `remadv` | Remittance Advice | REMADV | 2.9f |
+| `remadv` | Remittance Advice | REMADV | 2.9e |
 | `orders` | Purchase Order | ORDERS | 1.4b · 1.4c |
 | `ordrsp` | Purchase Order Response | ORDRSP | 1.4b · 1.4c |
-| `ordchg` | Purchase Order Change | ORDCHG | 1.1 |
+| `ordchg` | Purchase Order Change | ORDCHG | 1.1 · 1.2 |
 | `iftsta` | International Multimodal Status Report | IFTSTA | 2.0g · 2.1 |
 | `insrpt` | Inspection Report | INSRPT | 1.1a |
 | `reqote` | Request for Quotation | REQOTE | 1.3c |
@@ -51,15 +51,17 @@ cargo add edi-energy
 ### Parse and validate
 
 ```rust,no_run
-use edi_energy::{parse, EdiEnergyReport};
+// `detect_*` are methods of the `EdiEnergyMessage` trait — it has to be in scope.
+use edi_energy::{parse, EdiEnergyMessage, EdiEnergyReport};
 
 let bytes = std::fs::read("message.edi")?;
 let msg = parse(&bytes)?;
 
-// Detect what arrived
-let pid = msg.detect_pruefidentifikator().map(|p| p.as_u32());
-let fv  = msg.detect_release().map(|r| r.to_string());
-println!("PID {pid:?}  FV {fv:?}");
+// Detect what arrived. Both return `Result`: a message whose Formatversion or
+// Prüfidentifikator cannot be read is a finding, not a `None`.
+let pid = msg.detect_pruefidentifikator()?.as_u32();
+let fv  = msg.detect_release()?.to_string();
+println!("PID {pid}  FV {fv}");
 
 // Run AHB + MIG rule enforcement
 let report: EdiEnergyReport = msg.validate()?;
@@ -249,6 +251,37 @@ states the business case and the profile states the rest of the Prüfschablone. 
 message.edi` prints where every segment of a message landed and why it is
 rejected.
 
+### The Bedingungen column wraps, and a wrap is not always repairable
+
+The AHB's Bedingungen column is narrow enough to break a word without a hyphen,
+and the PDF reader joins the two halves with a space — the shipped profiles
+carry „Format: Zählpunktbezeichnu ng" verbatim in four AHBs (UTILMD
+`fv20251001` and `fv20261001`, IFTSTA and ORDERS `fv20261001`). Nothing in the
+character grid says whether the break replaced a space, and a rule that guessed
+from the two halves alone would merge „STS+Z21 DE9013" as readily as it repairs
+„CAV+…/SO T/WNT".
+
+So the repair is limited to the case where the evidence is local: where the
+break falls after a separator, `join_wrapped_pattern` rejoins a space that
+follows `+`, `-`, `:` or `/` inside a token that already looks like `TAG+…`
+(`PIA+5+1- 1?:1.9.0` → `PIA+5+1-1?:1.9.0`). `/` matters most — it separates the
+alternatives of one code list (`SEQ+Z04/ ZF7`) and the AHBs set a space after it
+for readability, so left in, everything after the space reads as prose and the
+Voraussetzung matches only the first alternative.
+
+What is left is a residual: a wrap swallowed the *next* Bedingung's number,
+leaving its label stranded on the end of the previous text
+(`"951": "Format: Zählpunktbezeichnu ng Format:"`). It is exactly five
+Bedingungen — `[50]`, `[683]`, `[931]`, `[951]`, `[961]` — each in both shipped
+UTILMD profiles (`fv20251001`, `fv20261001`), so ten entries. None changes a
+verdict: the stranded tail follows a complete clause, so
+`Voraussetzung::parse` reads the first one and stops, and the five are three
+Formatbedingungen, a Hinweis (`[683]`) and one Voraussetzung (`[50]`), none of
+which gate presence on the strength of the swallowed half.
+`cargo xtask validate-profiles` cannot see it either: its citation check asks
+whether every cited `[n]` has a text, and the swallowed number is still cited —
+and still has text — elsewhere.
+
 ## Element positions
 
 An element's position inside a segment is fixed by the UN/EDIFACT directory —
@@ -323,8 +356,6 @@ Run with `cargo run --example <name> --all-features`:
 
 ## Documentation
 
-Full documentation: <https://hupe1980.github.io/mako/>
-
 | Topic | Link |
 |---|---|
 | Getting started (full engine) | [Guide][getting-started] |
@@ -337,14 +368,35 @@ Full documentation: <https://hupe1980.github.io/mako/>
 
 ## Regulatory Standards
 
-- EDI@Energy **UTILMD** Strom AHB S2.2 / Gas AHB G1.2 — BDEW, FV2026-10-01
-- EDI@Energy **MSCONS** AHB 3.2 — BDEW, FV2026-10-01
-- EDI@Energy **APERAK** AHB 2.2 — BDEW, FV2026-10-01
-- EDI@Energy **CONTRL** AHB 1.0 + ausserordentliche Veröffentlichung 2025-12-11
-- All current MIG/AHB releases as of `FV2026-10-01`
+A MIG version and its AHB version are different numbers for every message type
+except UTILMD; `profiles/sources.json` carries both per profile. As of
+`FV2026-10-01`:
+
+- EDI@Energy **UTILMD** — Strom MIG S2.2 / AHB 2.2, Gas MIG G1.2 / AHB 1.2
+- EDI@Energy **MSCONS** — MIG 2.5 / AHB 3.2
+- EDI@Energy **APERAK** — MIG 2.2 / AHB **1.1**
+- EDI@Energy **CONTRL** — MIG 2.0b / AHB 1.0, ausserordentliche
+  Veröffentlichung Stand 11.12.2025
 - BNetzA rulings BK6-24-174, BK6-22-024, BK7-24-01-009 (process scope)
 
-[`makod`]: ../../services/makod
+
+## Related crates
+
+| Crate | Role |
+|---|---|
+| [`edi-energy`](https://docs.rs/edi-energy) ← **this crate** | BDEW EDI@Energy EDIFACT — parse · validate · build · profiles |
+| [`mako-engine`](https://docs.rs/mako-engine) | Event-sourced workflow runtime — `Workflow`, `Process`, `EventStore`, deadlines |
+| [`mako-fristen`](https://docs.rs/mako-fristen) | *When* an answer is due — Werktage, the MaKo holiday calendar, the per-PID Antwortfristen |
+| [`mako-pruefung`](https://docs.rs/mako-pruefung) | *What* the answer must be — the BDEW Entscheidungsbäume, executable |
+| [`mako-gpke`](https://docs.rs/mako-gpke) · [`mako-wim`](https://docs.rs/mako-wim) · [`mako-geli-gas`](https://docs.rs/mako-geli-gas) · [`mako-mabis`](https://docs.rs/mako-mabis) | The domain packs that give these messages a process |
+| [`dvgw-edi`](https://docs.rs/dvgw-edi) | The DVGW gas formats — ALOCAT, NOMINT, NOMRES, SSQNOT |
+| [`mako-as4`](https://docs.rs/mako-as4) | The AS4 transport that carries an interchange |
+| [`makod`](https://hupe1980.github.io/mako/docs/services/makod/) | Production daemon — ingest, routing and rendering |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>
+
+[`makod`]: https://hupe1980.github.io/mako/docs/services/makod/
 [getting-started]: https://hupe1980.github.io/mako/docs/guide/getting-started/
 [parsing]: https://hupe1980.github.io/mako/docs/reference/parsing/
 [validation]: https://hupe1980.github.io/mako/docs/reference/validation/

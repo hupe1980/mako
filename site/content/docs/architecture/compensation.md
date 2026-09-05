@@ -3,8 +3,6 @@ title = "Deadline Compensation"
 description = "Saga pattern for MaKo regulatory deadlines. How mako-engine compensates for failed outbox delivery and enforces APERAK Fristen."
 weight = 12
 +++
-# Deadline Compensation / Saga Pattern
-
 ## Problem
 
 MaKo regulatory processes have hard SLA windows enforced by BNetzA rulings, and
@@ -23,10 +21,19 @@ The business windows are data, not literals — one table keyed by inbound PID, 
 
 | Family | Shape | Examples |
 |---|---|---|
-| GPKE Strom | wall-clock time on the *n*-th Werktag after the ÜT | 11:00 (55001), 06:00 (55004), 05:00 (55007), 09:00 (55010), 15:00 **am ÜT** (55013, 55607) |
-| WiM Strom | Werktage per PID | 3 / 5 / 7 / 1 |
+| GPKE Strom | wall-clock time on the *n*-th Werktag after the ÜT | 11:00 (55001, 55077), 06:00 (55004), 05:00 (55007), 09:00 (55010), 15:00 **am ÜT** (55013, 55607) |
+| WiM Strom | Werktage per PID | 3 (55039) / 5 (55042) / 7 (55051) / 1 (55168) |
+| WiM Gas | the same four windows on the Gas twins | 3 (44039) / 5 (44042) / 7 (44051) / 1 (44168) |
 | GeLi Gas | Ablauf des *n*-ten Werktags | 4 (44001), 3 (44004/44007/44010/44016), 2 (44013) |
-| MaBiS | Werktage | 1 (Prüfmitteilung) |
+| NZR-EMob (Modell 2) | Ablauf des *n*-ten Werktags | 7 (55238), 3 (55240, 55242) |
+
+`Family` names exactly these five — there is no MaBiS variant, because MaBiS
+publishes no answer Frist. The Prüfmitteilung in particular has none: Kap. 9.8.2
+Nr. 1 leaves the cell empty and the receiving party „kann" answer, and what
+bounds it is the clearing window of Kap. 3.10 Tabelle 2. The two genuine
+1-Werktag MaBiS obligations belong to the BIKO — forwarding a Prüfmitteilung
+(Kap. 9.8.2 Nr. 3) and dispatching the Datenstatus (Kap. 9.9.2 Nr. 1) — and live
+in `mako_mabis::fristen`, not in this table.
 
 `mako_fristen::antwort::antwortfrist` resolves them and returns `None` for a PID
 the Festlegungen do not quantify — **unknown**, never *unbounded*. The
@@ -43,7 +50,7 @@ the missed SLA.
 The compensation path flows through three layers:
 
 ```
-Deadline scheduler (makod/src/deadline_dispatch.rs)
+Deadline scheduler (makod/src/orchestrator/deadline_dispatch.rs)
   └─ Process::execute_and_enqueue_with_retry(TimeoutExpired, 3)
        └─ Workflow::handle(TimeoutExpired, state)
             ├─ emit: DeadlineExpired event
@@ -149,7 +156,7 @@ SupplierChangeCommand::TimeoutExpired { deadline_id, label } => {
 
 ## ERP delivery
 
-The `OutboxErpWorker` in `makod/src/erp_adapter.rs` picks up `AperakTimeout`
+The `OutboxErpWorker` in `makod/src/core/erp_adapter.rs` picks up `AperakTimeout`
 messages and maps them to `ErpEventType::AperakTimeout`:
 
 ```rust
@@ -185,7 +192,11 @@ The ERP webhook receives a **CloudEvents 1.0** message with:
    - `AperakTimeout` outbox entry (for ERP notification).
    - Early return `WorkflowOutput::events(vec![])` for terminal states.
 5. Add a `match` arm to `deadline_dispatch::dispatch_deadline` calling
-   `execute_and_enqueue_with_retry(..., 3)`.
+   `execute_and_enqueue_with_retry(..., 3)`. This is not optional:
+   `build_scheduler` panics at startup if any workflow name an `EngineModule`
+   declares through `workflow_names` is absent from that table, which turns the
+   silent regulatory miss — deadline fires, falls into the `unknown` branch,
+   emits a `WARN` nobody reads — into a deployment that will not start.
 
 ## `execute_timeout` / `execute_timeout_with_retry`
 
@@ -193,4 +204,24 @@ The ERP webhook receives a **CloudEvents 1.0** message with:
 convenience wrappers that call `on_deadline` and route the returned command
 through `execute_and_enqueue` / `execute_and_enqueue_with_retry`. Prefer these
 in custom deadline workers over manually calling `on_deadline` + `execute`.
-Note that `deadline_dispatch.rs` calls the command directly for clarity.
+
+`deadline_dispatch.rs` uses both shapes, and which one is right depends on the
+clock. A workflow whose deadline is meant to fire — the counterparty simply did
+not answer — constructs the `TimeoutExpired` command directly, which reads
+plainly. A workflow where the deadline may already be discharged goes through
+`execute_timeout_with_retry`, so `on_deadline` gets to answer `None` for a
+settled process and no event is written at all. At present four arms take the
+direct form and three the `on_deadline` one.
+
+**A `Deadline` whose label no `on_deadline` arm matches is the silent failure
+this whole mechanism guards against.** `Workflow::on_deadline` defaults to
+`None`, so an unmatched label produces a deadline that fires, does nothing, and
+leaves the process in its waiting state — no error, no event, no alert, and the
+deadline store showing it as fired. Nothing ties the string being registered to
+the string being matched, so `makod`'s `tests/deadline_labels.rs` does: every
+`pub const …_LABEL` in a `mako-*` crate must appear inside some `on_deadline`
+body unless it is a delivery window, no label may be written twice (registration
+takes the owning crate's constant, never a literal), and no `on_deadline` may be
+a catch-all — a body that ignores `deadline.label()` also swallows the APERAK and
+CONTRL delivery windows running beside the business Frist, failing the business
+process because a technical acknowledgement was late.

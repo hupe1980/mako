@@ -19,7 +19,9 @@ customer's `Authorization: Bearer` header to
 
 Every handler takes the resulting `PortalAuthCtx` by value, so a route cannot
 serve customer data without having asked. `tests/authorization_guard.rs` drives
-all 15 routes against a refusing `vertragd` and fails if any answers.
+all 17 routes against a refusing `vertragd` and fails if any answers, and a
+further case counts `server::router`'s `.route(` calls so a route added without a
+guard case fails the build.
 
 Starting without `vertragd_url` is refused unless `allow_insecure_no_auth = true`
 is set explicitly.
@@ -75,6 +77,7 @@ billingd_url    = "http://billingd:9280"
 accountingd_url = "http://accountingd:9380"
 einsd_url       = "http://einsd:9180"
 marktd_url      = "http://marktd:8180"
+outputd_url     = "http://outputd:9880"   # the document inbox behind /dokumente
 # …_api_key = "env:…"  — opaque service Bearer tokens
 
 [mcp]

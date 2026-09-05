@@ -202,7 +202,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X ∧ [534]"
+              "operand": "X (([939][146]) ∨ ([940][147])) ∧ [534]"
             }
           ]
         },
@@ -825,7 +825,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X ∧ [534]"
+              "operand": "X (([939][146]) ∨ ([940][147])) ∧ [534]"
             }
           ]
         },
@@ -1432,7 +1432,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X ∨ ([940]"
+              "operand": "X (([939][146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -1903,7 +1903,7 @@
           "nr": "00003",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [494]"
             }
           ]
         },
@@ -2007,7 +2007,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X [146]) ∨ ∧ [534]"
+              "operand": "X (([939] [146]) ∨ ([940][147])) ∧ [534]"
             }
           ]
         },
@@ -2158,7 +2158,7 @@
           "nr": "00013",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [495]"
             }
           ]
         },
@@ -2305,6 +2305,30 @@
             {
               "code": "E_0061",
               "operand": "X [29]"
+            },
+            {
+              "code": "E_0075",
+              "operand": "X [26]"
+            },
+            {
+              "code": "E_0076",
+              "operand": "X [26]"
+            },
+            {
+              "code": "E_0077",
+              "operand": "X [26]"
+            },
+            {
+              "code": "E_0082",
+              "operand": "X [26]"
+            },
+            {
+              "code": "E_0083",
+              "operand": "X [26]"
+            },
+            {
+              "code": "E_0084",
+              "operand": "X [26]"
             }
           ]
         },
@@ -2574,7 +2598,7 @@
           "nr": "00003",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [494]"
             }
           ]
         },
@@ -2678,7 +2702,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X [146]) ∨ ∧ [534]"
+              "operand": "X (([939] [146]) ∨ ([940][147])) ∧ [534]"
             }
           ]
         },
@@ -2829,7 +2853,7 @@
           "nr": "00013",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [495]"
             }
           ]
         },
@@ -2921,6 +2945,30 @@
             {
               "code": "E_0067",
               "operand": "X [26]"
+            },
+            {
+              "code": "E_0075",
+              "operand": "X [16]"
+            },
+            {
+              "code": "E_0076",
+              "operand": "X [16]"
+            },
+            {
+              "code": "E_0077",
+              "operand": "X [16]"
+            },
+            {
+              "code": "E_0082",
+              "operand": "X [16]"
+            },
+            {
+              "code": "E_0083",
+              "operand": "X [16]"
+            },
+            {
+              "code": "E_0084",
+              "operand": "X [16]"
             }
           ]
         },
@@ -3239,7 +3287,7 @@
           "nr": "00003",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [494]"
             }
           ]
         },
@@ -3343,7 +3391,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X [146]) ∨ ∧ [534]"
+              "operand": "X (([939] [146]) ∨ ([940][147])) ∧ [534]"
             }
           ]
         },
@@ -3494,7 +3542,7 @@
           "nr": "00013",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [495]"
             }
           ]
         },
@@ -3998,7 +4046,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X ∨ ([940]"
+              "operand": "X (([939][146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -4448,7 +4496,7 @@
           "nr": "00003",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [494]"
             }
           ]
         },
@@ -4560,7 +4608,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X [146]) ∨ ([940] [534]"
+              "operand": "X (([939] [146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -4886,7 +4934,7 @@
           "nr": "00003",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [494]"
             }
           ]
         },
@@ -4998,7 +5046,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X [146]) ∨ ([940] [534]"
+              "operand": "X (([939] [146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -5111,7 +5159,7 @@
           "nr": "00026",
           "operands": [
             {
-              "operand": "X ([UB3] ([521] ⊻ ([931] [117])"
+              "operand": "X ([UB3] [26] ∧ ([521] ⊻ [522])) ⊻ ([931] [117])"
             }
           ]
         },
@@ -5359,7 +5407,7 @@
           "nr": "00003",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [494]"
             }
           ]
         },
@@ -5471,7 +5519,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X [146]) ∨ ([940] [534]"
+              "operand": "X (([939] [146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -5869,7 +5917,7 @@
           "nr": "00003",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [494]"
             }
           ]
         },
@@ -5981,7 +6029,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X [146]) ∨ ([940] [534]"
+              "operand": "X (([939] [146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -6070,6 +6118,16 @@
           ]
         },
         {
+          "de": "1154",
+          "nr": "00022",
+          "operands": [
+            {
+              "code": "21012",
+              "operand": "X"
+            }
+          ]
+        },
+        {
           "de": "1153",
           "nr": "00023",
           "operands": [
@@ -6122,7 +6180,7 @@
           "nr": "00026",
           "operands": [
             {
-              "operand": "X [UB3] ∧"
+              "operand": "X [UB3] ∧ [521]"
             }
           ]
         },
@@ -6382,7 +6440,7 @@
           "nr": "00003",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [494]"
             }
           ]
         },
@@ -6494,7 +6552,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X [146]) ∨ ([940] [534]"
+              "operand": "X (([939] [146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -6588,6 +6646,16 @@
           "operands": [
             {
               "code": "Z13",
+              "operand": "X"
+            }
+          ]
+        },
+        {
+          "de": "1154",
+          "nr": "00022",
+          "operands": [
+            {
+              "code": "21013",
               "operand": "X"
             }
           ]
@@ -6924,7 +6992,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X ∨ ([940]"
+              "operand": "X (([939][146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -7443,7 +7511,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X ∨ ([940]"
+              "operand": "X (([939][146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -7854,7 +7922,7 @@
           "nr": "00003",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [494]"
             }
           ]
         },
@@ -7958,7 +8026,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X [146]) ∨ ([940] [534]"
+              "operand": "X (([939] [146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -8071,7 +8139,7 @@
           "nr": "00030",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [495]"
             }
           ]
         },
@@ -8319,7 +8387,7 @@
           "nr": "00003",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [494]"
             }
           ]
         },
@@ -8431,7 +8499,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X [146]) ∨ ([940] [534]"
+              "operand": "X (([939] [146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -8485,7 +8553,7 @@
           "nr": "00020",
           "operands": [
             {
-              "operand": "X [505]) ⊻ ⊻ ([961]"
+              "operand": "X (([951] [505]) ⊻ ([960][532]) ⊻ ([961] [533]))"
             }
           ]
         },
@@ -8522,7 +8590,7 @@
             },
             {
               "code": "Z75",
-              "operand": "X [103] ∧"
+              "operand": "X [103] ∧ [537]"
             }
           ]
         },
@@ -8830,7 +8898,7 @@
           "nr": "00003",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [494]"
             }
           ]
         },
@@ -8934,7 +9002,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X [146]) ∨ ([940] [534]"
+              "operand": "X (([939] [146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -9047,7 +9115,7 @@
           "nr": "00030",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [495]"
             }
           ]
         },
@@ -9295,7 +9363,7 @@
           "nr": "00003",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [494]"
             }
           ]
         },
@@ -9407,7 +9475,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X [146]) ∨ ([940] [534]"
+              "operand": "X (([939] [146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -9461,7 +9529,7 @@
           "nr": "00020",
           "operands": [
             {
-              "operand": "X [505]) ⊻ ⊻ ([961]"
+              "operand": "X (([951] [505]) ⊻ ([960][532]) ⊻ ([961] [533]))"
             }
           ]
         },
@@ -9498,7 +9566,7 @@
             },
             {
               "code": "Z75",
-              "operand": "X [103] ∧"
+              "operand": "X [103] ∧ [537]"
             }
           ]
         },
@@ -9910,7 +9978,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X ∨ ([940]"
+              "operand": "X (([939][146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -10375,7 +10443,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X ∨ ([940]"
+              "operand": "X (([939][146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -10755,7 +10823,7 @@
           "nr": "00003",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [494]"
             }
           ]
         },
@@ -10859,7 +10927,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X [146]) ∨ ∧ [534]"
+              "operand": "X (([939] [146]) ∨ ([940][147])) ∧ [534]"
             }
           ]
         },
@@ -11117,7 +11185,7 @@
           "nr": "00047",
           "operands": [
             {
-              "operand": "X [UB1] ∧"
+              "operand": "X [UB1] ∧ [496]"
             }
           ]
         },
@@ -11146,7 +11214,7 @@
           "nr": "00048",
           "operands": [
             {
-              "operand": "X [UB1] ∧"
+              "operand": "X [UB1] ∧ [496]"
             }
           ]
         },
@@ -11449,7 +11517,7 @@
           "nr": "00003",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [494]"
             }
           ]
         },
@@ -11553,7 +11621,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X [146]) ∨ ∧ [534]"
+              "operand": "X (([939] [146]) ∨ ([940][147])) ∧ [534]"
             }
           ]
         },
@@ -11983,7 +12051,7 @@
           "nr": "00003",
           "operands": [
             {
-              "operand": "X [931]"
+              "operand": "X [931] [494]"
             }
           ]
         },
@@ -12087,7 +12155,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X [146]) ∨ ∧ [534]"
+              "operand": "X (([939] [146]) ∨ ([940][147])) ∧ [534]"
             }
           ]
         },
@@ -12586,7 +12654,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X ∧ [534]"
+              "operand": "X (([939][146]) ∨ ([940][147])) ∧ [534]"
             }
           ]
         },
@@ -13064,7 +13132,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X ∧ [534]"
+              "operand": "X (([939][146]) ∨ ([940][147])) ∧ [534]"
             }
           ]
         },
@@ -13118,7 +13186,7 @@
           "nr": "00020",
           "operands": [
             {
-              "operand": "X ([950] [506]) ⊻"
+              "operand": "X ([950] [506]) ⊻ ([951][505]) ⊻ ([960][532]) ⊻ ([961][533])"
             }
           ]
         },
@@ -13640,7 +13708,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X ∨ ([940]"
+              "operand": "X (([939][146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -14105,7 +14173,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X ∨ ([940]"
+              "operand": "X (([939][146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -14392,6 +14460,10 @@
             },
             {
               "code": "K3",
+              "operand": "X"
+            },
+            {
+              "code": "K5",
               "operand": "X"
             }
           ]
@@ -14773,7 +14845,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X ∨ ([940]"
+              "operand": "X (([939][146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -14987,7 +15059,7 @@
             },
             {
               "code": "Z14",
-              "operand": "X [95] ⊻ [137] ⊻ [96] ⊻"
+              "operand": "X [95] ⊻ [137] ⊻ [96] ⊻ [138]"
             }
           ]
         },
@@ -14996,7 +15068,7 @@
           "nr": "00112",
           "operands": [
             {
-              "operand": "[138] ⊻ [98]) ∧ ([95] ⊻"
+              "operand": "X ((([97] ⊻ [98]) ∧ ([95] ⊻ [137])) ⊻ [99] ⊻ [139])"
             }
           ]
         },
@@ -15508,7 +15580,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X ∨ ([940]"
+              "operand": "X (([939][146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -15973,7 +16045,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X ∨ ([940]"
+              "operand": "X (([939][146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -16064,6 +16136,22 @@
             {
               "code": "E_0526",
               "operand": "X [115] ∧ [20]"
+            },
+            {
+              "code": "E_0528",
+              "operand": "X [114] ∧ [117]"
+            },
+            {
+              "code": "E_0529",
+              "operand": "X ([114] ∧ ([26] ⊻ [117])) ⊻ ([115] ∧ [20])"
+            },
+            {
+              "code": "E_0535",
+              "operand": "X [114] ∧ [117]"
+            },
+            {
+              "code": "E_0536",
+              "operand": "X ([114] ∧ ([20] ⊻ [117]))"
             }
           ]
         },
@@ -16520,7 +16608,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X ∨ ([940]"
+              "operand": "X (([939][146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -16985,7 +17073,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X ∨ ([940]"
+              "operand": "X (([939][146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -17087,6 +17175,10 @@
             },
             {
               "code": "ZV2",
+              "operand": "X"
+            },
+            {
+              "code": "ZV3",
               "operand": "X"
             }
           ]
@@ -17192,6 +17284,30 @@
             },
             {
               "code": "ZU7",
+              "operand": "X [143]"
+            },
+            {
+              "code": "ZU8",
+              "operand": "X [143]"
+            },
+            {
+              "code": "ZU9",
+              "operand": "X [143]"
+            },
+            {
+              "code": "ZV0",
+              "operand": "X [143]"
+            },
+            {
+              "code": "ZV1",
+              "operand": "X [143]"
+            },
+            {
+              "code": "ZV2",
+              "operand": "X [143]"
+            },
+            {
+              "code": "ZV3",
               "operand": "X [143]"
             }
           ]
@@ -17847,7 +17963,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X ∨ ([940]"
+              "operand": "X (([939][146]) ∨ ([940] [147])) ∧ [534]"
             }
           ]
         },
@@ -17970,6 +18086,54 @@
             {
               "code": "E_0616",
               "operand": "X [115] ∧ [29]"
+            },
+            {
+              "code": "E_0618",
+              "operand": "X [115] ∧ [29]"
+            },
+            {
+              "code": "E_0619",
+              "operand": "X [115] ∧ [20]"
+            },
+            {
+              "code": "E_0620",
+              "operand": "X [115] ∧ [20]"
+            },
+            {
+              "code": "E_0626",
+              "operand": "X [115] ∧ [20]"
+            },
+            {
+              "code": "E_0627",
+              "operand": "X [115] ∧ [117]"
+            },
+            {
+              "code": "E_0628",
+              "operand": "X [115] ∧ [29]"
+            },
+            {
+              "code": "E_0629",
+              "operand": "X [86] ∧ [26]"
+            },
+            {
+              "code": "E_0630",
+              "operand": "X [86] ∧ [117]"
+            },
+            {
+              "code": "E_0632",
+              "operand": "X [114] ∧ [26]"
+            },
+            {
+              "code": "E_0633",
+              "operand": "X [114] ∧ [20]"
+            },
+            {
+              "code": "E_0634",
+              "operand": "X [114] ∧ [117]"
+            },
+            {
+              "code": "E_0635",
+              "operand": "X [114] ∧ [29]"
             }
           ]
         },
@@ -18391,7 +18555,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X ∧ [534]"
+              "operand": "X (([939][146]) ∨ ([940][147])) ∧ [534]"
             }
           ]
         },
@@ -18446,6 +18610,10 @@
           "operands": [
             {
               "code": "Z30",
+              "operand": "X"
+            },
+            {
+              "code": "Z32",
               "operand": "X"
             }
           ]
@@ -18931,6 +19099,18 @@
             {
               "code": "EM",
               "operand": "X [1P1..1]"
+            },
+            {
+              "code": "TE",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AJ",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AL",
+              "operand": "X [1P0..1]"
             }
           ]
         },
@@ -19511,7 +19691,7 @@
           "nr": "00007",
           "operands": [
             {
-              "operand": "X ∧ [534]"
+              "operand": "X (([939][146]) ∨ ([940][147])) ∧ [534]"
             }
           ]
         },
@@ -19755,6 +19935,18 @@
             {
               "code": "EM",
               "operand": "X [1P1..1]"
+            },
+            {
+              "code": "TE",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AJ",
+              "operand": "X [1P0..1]"
+            },
+            {
+              "code": "AL",
+              "operand": "X [1P0..1]"
             }
           ]
         },
@@ -20083,7 +20275,8 @@
           "before": "00091",
           "group": "SG15",
           "status": [
-            "Muss [56] ∧ [59] Soll [70]"
+            "Muss [56] ∧ [59]",
+            "Soll [70]"
           ]
         },
         {
@@ -20159,7 +20352,8 @@
           "before": "00099",
           "group": "SG15",
           "status": [
-            "Muss [56] ∧ [58] Soll [71]"
+            "Muss [56] ∧ [58]",
+            "Soll [71]"
           ]
         },
         {
@@ -20246,7 +20440,7 @@
     "100": "Wenn STS+Z43+Z47 vorhanden, dann sind nur Codes aus dem EBD-Cluster \"Änderung der Daten\" möglich.",
     "101": "Wenn STS+Z43+Z48 vorhanden, dann sind nur Codes aus dem EBD-Cluster \"keine Änderung der Daten\" möglich.",
     "103": "Wenn in diesem STS DE1131 nicht vorhanden",
-    "107": "Wenn STS+Z37+Z32 vorhanden, dann sind nur Codes aus dem EBD-Cluster \"Ablehnung\" möglich.",
+    "107": "Wenn STS+Z37+Z32 vorhanden, dann sind nur Codes vorhanden, dann sind nur Codes aus dem EBD-Cluster \"Ablehnung\" möglich.",
     "114": "Wenn MP-ID in SG1 NAD+MS in der Rolle MSB",
     "115": "Wenn MP-ID in SG1 NAD+MS in der Rolle NB",
     "117": "Wenn MP-ID in SG1 NAD+MR in der Rolle MSB",
@@ -20269,10 +20463,10 @@
     "141": "Wenn in diesem STS DE9013 = A01",
     "142": "Wenn in diesem STS DE1131 = E_0535",
     "143": "Wenn mehr als ein Grund vorliegt und die voranstehenden DE9013 dieses STS nicht ausreichen",
-    "144": "Wenn RFF+Z45 in dieser SG15 nicht vorhanden",
+    "144": "Wenn RFF+Z45 in dieser SG15 nicht vorhanden vorhanden",
     "145": "Wenn RFF+Z17 in dieser SG15 nicht vorhanden",
-    "146": "Wenn im DE3155 in demselben COM der Code EM vorhanden ist",
-    "147": "Wenn im DE3155 in demselben COM der Code TE / FX / AJ / AL vorhanden ist",
+    "146": "Wenn im DE3155 in demselben COM der Code EM demselben COM der Code EM vorhanden ist",
+    "147": "Wenn im DE3155 in demselben COM der Code TE / FX demselben COM der Code TE / FX / AJ / AL vorhanden ist",
     "148": "Wenn in dieser SG15 STS+Z43+Z48+A99:E_0595 vorhanden",
     "149": "Wenn in dieser SG14 STS DE1131 <> E_0278",
     "150": "Wenn in dieser SG14 STS DE1131 <> E_0281",
@@ -20280,13 +20474,13 @@
     "152": "Wenn STS+Z20+Z32+A99:E_0281 in dieser SG14 vorhanden",
     "153": "Wenn in diesem STS DE1131 = E_0286",
     "154": "Wenn STS+Z15+Z13+A99: E_0286 in dieser SG14 vorhanden",
-    "155": "Wenn dieser Anwendungsfall im Rahmen des Use- Cases \"Messlokationsänderu ng vom NB an MSB\" oder \"Messlokationsänderu ng vom LF an MSB\" der Anwendungshilfe \"Prozesse zur Änderung der Technik an Lokationen\" oder der WiM verwendet wird.",
+    "155": "Wenn dieser Anwendungsfall im Rahmen des Use- Cases \"Messlokationsänderu ng vom NB an MSB\" oder \"Messlokationsänderu \"Messlokationsänderu ng vom LF an MSB\" der Anwendungshilfe \"Prozesse zur Änderung der Technik an Lokationen\" oder der WiM verwendet wird.",
     "16": "Wenn MP-ID in SG1 NAD+MR in der Rolle BKV",
     "17": "Wenn Meldung des BKV auf falscher Aggregationsebene eingeht.",
     "18": "Wenn SG15 STS+Z19 nicht vorhanden.",
     "19": "Wenn SG15 STS+Z24 nicht vorhanden.",
-    "20": "Wenn MP-ID in SG1 NAD+MR in der Rolle LF",
-    "23": "Wenn SG15 STS+Z25+Z31+A06 / A09 / A10 / A11 / A13 / A14 / A15 / A16 vorhanden.",
+    "20": "Wenn MP-ID in SG1 NAD+MR in der Rolle LF in der Rolle LF",
+    "23": "Wenn SG15 STS+Z25+Z31+A06 / A09 / A10 / A11 / A13 / A14 / A15 / A16 vorhanden. vorhanden.",
     "26": "Wenn MP-ID in SG1 NAD+MR in der Rolle NB",
     "27": "Nur MP-ID aus Sparte Strom",
     "28": "Nur MP-ID aus Sparte Gas",
@@ -20308,7 +20502,7 @@
     "493": "wenn MP-ID in NAD+MR aus Sparte",
     "494": "Das hier genannte Datum muss der Zeitpunkt sein, zu dem das Dokument erstellt wurde, oder ein Zeitpunkt, der davor liegt",
     "495": "Der Zeitpunkt muss ≤ dem Wert im DE2380 des DTM+137 sein",
-    "496": "Der Zeitpunkt muss > dem Wert im DE2380 des DTM+137 sein",
+    "496": "Der Zeitpunkt muss > dem Wert im DE2380 > dem Wert im DE2380 des DTM+137 sein",
     "5": "Wenn SG7 STS+Z03 nicht vorhanden.",
     "50": "Wenn STS+Z25+Z31 vorhanden, dann sind nur Codes aus dem EBD-Cluster \"Ablehnung\" möglich.",
     "501": "Hinweis: Aus QUOTES BGM DE1004",
@@ -20342,8 +20536,8 @@
     "56": "Wenn in dieser SG15 STS das SG15 RFF+ACW nicht identisch mit dem SG15 RFF+ACW der SG15 STS+Z27 ist",
     "57": "Wenn in dieser SG15 STS das SG15 RFF+ACW nicht identisch mit dem SG15 RFF+ACW der SG15 STS+Z28 ist",
     "58": "Wenn in dieser SG15 STS das SG15 RFF+ACW nicht identisch mit dem SG15 RFF+ACW der SG15 STS+Z29 ist",
-    "59": "Wenn in dieser SG15 STS das SG15 RFF+ACW nicht identisch mit dem SG15 RFF+ACW der SG15 STS+Z30 ist",
-    "6": "Wenn für das 3-Tupel (MaBiS-ZP, Betrachtungszeitraum, Version der Summenzeitreihe) dem BIKO der Prüfstatus vorliegt, so ist dieser immer zusammen mit dem Datenstatus zu übertragen.",
+    "59": "Wenn in dieser SG15 STS das SG15 RFF+ACW nicht identisch mit dem SG15 identisch mit dem SG15 RFF+ACW der SG15 STS+Z30 ist",
+    "6": "Wenn für das 3-Tupel (MaBiS-ZP, Betrachtungszeitraum, Version der Summenzeitreihe) dem BIKO der Prüfstatus BIKO der Prüfstatus vorliegt, so ist dieser immer zusammen mit dem Datenstatus zu übertragen.",
     "60": "Wenn zusätzlich zum Fahrplananteil auch die Ausfallarbeit zu identischem Wert aus RFF+ACW nicht o.k. ist",
     "61": "Wenn zusätzlich zur Ausfallarbeit auch der Fahrplananteil zu identischem Wert aus RFF+ACW nicht o.k. ist",
     "62": "Wenn STS+Z27+Z30 vorhanden, dann sind nur Codes aus dem EBD-Cluster \"Zustimmung\" möglich.",
@@ -20379,9 +20573,9 @@
     "939": "Format: Die Zeichenkette muss die Zeichen @ und . enthalten",
     "94": "Wenn STS+Z37+Z14 vorhanden, dann sind nur Codes aus dem EBD-Cluster \"erfolgreich\" möglich.",
     "940": "Format: Die Zeichenkette muss mit dem Zeichen + beginnen und danach dürfen nur noch Ziffern folgen",
-    "95": "Wenn in diesem STS DE1131 = E_0499",
+    "95": "Wenn in diesem STS DE1131 = E_0499 = E_0499",
     "950": "Format: Marktlokations-ID",
-    "951": "Format: Zählpunktbezeichnu ng",
+    "951": "Format: Zählpunktbezeichnung Zählpunktbezeichnung",
     "96": "Wenn in diesem STS DE1131 = E_0487",
     "960": "Format: Netzlokations- ID",
     "961": "Format: SR-ID",

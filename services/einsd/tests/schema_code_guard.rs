@@ -728,3 +728,123 @@ fn the_sect44b_quota_uses_the_statutory_hours() {
         "the settlement must take the §44b quota from the engine"
     );
 }
+
+// ── Documented routes exist ──────────────────────────────────────────────────
+
+const ROUTES: &str = include_str!("../src/routes.rs");
+const CONFIG: &str = include_str!("../src/config.rs");
+
+/// Paths that name a **different** service's API, with the service.
+///
+/// einsd calls edmd for feed-in quantities and billingd for the GGV split, and
+/// those calls are documented at the call site by full path. They are not
+/// einsd's routes and must not be checked against einsd's router.
+const FOREIGN_PATHS: &[(&str, &str)] = &[
+    ("/api/v1/energy/{}", "edmd — Einspeisemenge auto-fetch"),
+    (
+        "/api/v1/billing-period/{}",
+        "edmd — deliberately not used; see EinsdConfig::edmd_url",
+    ),
+    ("/api/v1/billing/ggv/{}", "billingd — Mieterstrom/GGV split"),
+];
+
+/// Every `/api/v1/...` path einsd prints or documents must be one it serves.
+///
+/// Two paths in this service pointed at nothing. `POST
+/// /api/v1/settlements/{year}/{month}/correction` appeared in four places —
+/// twice in a `hinweis` field handed to the operator in a 200 response — and
+/// the route is `/api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction`;
+/// following the hint is a 404. `PUT /api/v1/verguetungssaetze`, offered by the
+/// tariff-lookup 404 body as the way to add rates, has never existed at all:
+/// `eeg_verguetungssaetze` is statutory reference data seeded from
+/// `eeg_billing::seed` and guarded against drift, so there is deliberately no
+/// import API and the message sent the operator looking for one.
+///
+/// Neither is reachable by a test that exercises the router — the wrong path is
+/// in a string, not in a call — so this is a text guard: collect every
+/// `/api/v1/...` literal in the sources, normalise the path parameters away, and
+/// require each to be a registered route or a declared foreign one.
+#[test]
+fn every_documented_api_path_is_a_route_einsd_serves() {
+    /// `/api/v1/anlagen/{tr_id}/settle/{year}/{month}` → `/api/v1/anlagen/{}/settle/{}/{}`
+    ///
+    /// The parameter *names* differ freely between the router and the prose
+    /// (`{tr_id}` vs `{child_tr_id}`), and a `format!` template spells them with
+    /// no name at all. Only the shape is the route.
+    fn normalise(path: &str) -> String {
+        let mut out = String::new();
+        let mut depth = 0usize;
+        for c in path.chars() {
+            match c {
+                '{' => {
+                    depth += 1;
+                    if depth == 1 {
+                        out.push_str("{}");
+                    }
+                }
+                '}' => depth = depth.saturating_sub(1),
+                _ if depth == 0 => out.push(c),
+                _ => {}
+            }
+        }
+        // A trailing `/` is the same route; a trailing `?query` is not a path.
+        out.split('?')
+            .next()
+            .unwrap_or(&out)
+            .trim_end_matches('/')
+            .to_owned()
+    }
+
+    /// Every `/api/v1/...` run of path characters in `src`.
+    fn paths(src: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for (i, _) in src.match_indices("/api/v1/") {
+            let rest = &src[i..];
+            let end = rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || "/{}_-?=".contains(c)))
+                .unwrap_or(rest.len());
+            out.push(rest[..end].to_owned());
+        }
+        out
+    }
+
+    let served: std::collections::BTreeSet<String> =
+        paths(ROUTES).into_iter().map(|p| normalise(&p)).collect();
+    assert!(
+        served.len() > 20,
+        "parsed only {} routes from routes.rs — the parser broke, not the router",
+        served.len()
+    );
+    let foreign: std::collections::BTreeSet<&str> = FOREIGN_PATHS.iter().map(|(p, _)| *p).collect();
+
+    let mut dangling: Vec<String> = Vec::new();
+    for (name, src) in [
+        ("handlers.rs", HANDLERS),
+        ("pg.rs", PG),
+        ("mcp_server.rs", MCP),
+        ("config.rs", CONFIG),
+    ] {
+        for raw in paths(src) {
+            let path = normalise(&raw);
+            // A `format!` template truncated mid-parameter, e.g.
+            // `/api/v1/epex-monthly/{}/{:02}` — the shape is still checked, the
+            // fragment is not a claim about a route.
+            if path.ends_with("/{") || path.ends_with('/') {
+                continue;
+            }
+            if served.contains(&path) || foreign.contains(path.as_str()) {
+                continue;
+            }
+            dangling.push(format!("{name}: {raw}"));
+        }
+    }
+    dangling.sort();
+    dangling.dedup();
+
+    assert!(
+        dangling.is_empty(),
+        "these `/api/v1/...` paths are printed or documented by einsd but are neither \
+         registered in `routes.rs` nor declared in `FOREIGN_PATHS`, so a caller \
+         following them gets a 404:\n  {dangling:#?}"
+    );
+}

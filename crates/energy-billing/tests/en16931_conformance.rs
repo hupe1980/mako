@@ -481,3 +481,120 @@ fn the_statutory_disclosures_reach_bt22_notes() {
         report.fatal().map(|f| &f.rule).collect::<Vec<_>>()
     );
 }
+
+/// A document type 381 states its amounts **positive** — the document kind
+/// carries the sign, so `InvoiceType::CreditNote` over category-`Credit`
+/// positions renders the same way a Stornorechnung does.
+#[test]
+fn a_credit_note_states_positive_line_amounts() {
+    use energy_billing::EegMeterInput;
+
+    let tariff: Product =
+        serde_json::from_str(r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":"8.20"}"#)
+            .unwrap();
+    let rates = RegulatoryRates::default();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        lf_mp_id: "9900000000001".to_owned(),
+        rechnungsnummer: "GS-EN-001".to_owned(),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        invoice_type: InvoiceType::CreditNote,
+        regulatory_rates: rates.clone(),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        eeg: Some(EegMeterInput {
+            einspeisung_kwh: dec!(280),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&GridInput::default(), &rates)
+        .bill(ctx, &quantities)
+        .unwrap();
+
+    let en = invoice
+        .to_en16931(
+            XRECHNUNG_SPEC_ID,
+            party("Stadtwerke Musterstadt GmbH", "9900000000001"),
+            party("Anlagenbetreiber", "51238696781"),
+        )
+        .expect("a Gutschrift renders");
+
+    assert_eq!(
+        en.type_code.as_ref().map(Code::as_str),
+        Some("381"),
+        "a Gutschrift is a credit note"
+    );
+    assert!(!en.lines.is_empty(), "the credit note has lines to check");
+    for line in &en.lines {
+        assert!(
+            line.net_amount.into_decimal() >= dec!(0),
+            "BT-131 is stated positive beside the .abs()-ed BT-146 unit price: {:?}",
+            line.net_amount
+        );
+    }
+    let report = validate(&en);
+    assert!(
+        report.is_valid(),
+        "en16931 findings: {:?}",
+        report.fatal().map(|f| &f.rule).collect::<Vec<_>>()
+    );
+}
+
+/// BG-22 and BG-23 are **derived**, never left at whatever the builder held: the
+/// reconciliation that derives them is the thing that makes BR-CO-10..16 hold,
+/// so its failure has to reach the caller rather than ship a document stating
+/// amounts nothing computed.
+#[test]
+fn the_mapped_document_carries_derived_totals() {
+    let elec: Product =
+        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":"30.0"}"#).unwrap();
+    let rates = RegulatoryRates::default();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        lf_mp_id: "9900000000001".to_owned(),
+        rechnungsnummer: "R-TOTALS-001".to_owned(),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: rates.clone(),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(1000),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let invoice = elec
+        .build_engine(&GridInput::default(), &rates)
+        .bill(ctx, &quantities)
+        .unwrap();
+    let netto = invoice.netto_eur;
+    let brutto = invoice.brutto_eur;
+
+    let en = invoice
+        .to_en16931(
+            XRECHNUNG_SPEC_ID,
+            party("Stadtwerke Musterstadt GmbH", "9900000000001"),
+            party("Kunde", "51238696781"),
+        )
+        .expect("the document reconciles");
+
+    assert!(
+        !en.vat_breakdown.is_empty(),
+        "BG-23 is derived from the lines"
+    );
+    assert_eq!(
+        en.totals.taxable_total.into_decimal(),
+        netto.round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero),
+        "BT-109 is the engine's netto"
+    );
+    assert_eq!(
+        en.totals.gross_total.into_decimal(),
+        brutto.round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero),
+        "BT-112 is the engine's brutto"
+    );
+}

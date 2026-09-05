@@ -1,11 +1,15 @@
 # mako-gabi-gas
 
-**GaBi Gas — Gasbilanzierung Gas (Gas Balancing)**
+**GaBi Gas — Gasbilanzierung (Gas Balancing)**
 
 Process engine workflows for the German gas balancing framework under
 GaBi Gas 2.1 (BNetzA BK7-24-01-008). Governs allocation, nomination, and
 billing between balance responsible parties (BKV), network operators
 (FNB/VNB), and market area managers (MGV).
+
+Every message carries a **Prüfidentifikator** (PID) — a five-digit code naming the
+exact Anwendungsfall, and with it the rules and deadlines that apply. DVGW allocates
+70000–79999 for the gas transport formats, which never collides with BDEW's range.
 
 ## Process flow
 
@@ -124,14 +128,15 @@ assert_eq!(quantity.energy_kwh_hs, dec!(1030.102)); // rounded to 3 dp
 
 `validate()` returns `Err(GasBeschaffenheitValidationError)` listing all violated constraints.
 
-### `GasQualityFlag` — measurement quality per § 60 Abs. 2 MsbG / GaBi Gas 2.1 (BK7-24-01-008)
+### `GasQualityFlag` — measurement quality per KoV XV §§ 46–47 / DVGW G 685
 
 ```rust
 // Every gas measurement interval carries a quality flag
 match flag {
     GasQualityFlag::Measured     => /* direct MSCONS Gas reading */,
     GasQualityFlag::Estimated    => /* SLP Gas profile (G0, H0, G1–G6) */,
-    GasQualityFlag::Substituted  => /* § 60 Abs. 2 MsbG replacement value */,
+    GasQualityFlag::Substituted  => /* KoV XV § 46 replacement value — RLM: ANB per G 685;
+                                       SLP: only a missing D-1 allocation, formed by the MGV */,
     GasQualityFlag::Calculated   => /* DVGW G 685 m³ → kWh_Hs conversion result */,
     GasQualityFlag::Corrected    => /* revised value, prior version preserved */,
     GasQualityFlag::Rejected     => /* failed validation — triggers Ersatzwertbildung */,
@@ -236,7 +241,8 @@ assert_eq!(gabi_cloud_events::NOMINATION_CREATED, "de.gabi.nomination.created");
 assert_eq!(gabi_cloud_events::ALLOCATION_COMPLETED, "de.gabi.allocation.completed");
 assert_eq!(gabi_cloud_events::IMBALANCE_CALCULATED, "de.gabi.imbalance.calculated");
 assert_eq!(gabi_cloud_events::INVOIC_MMM_RECEIVED, "de.gabi.invoic.mmm.received");
-// … 11 typed constants total — use glob "de.gabi.*" to trigger gabi-gas-agent
+// … 14 typed constants total (`mako_events::gabi`) — use the glob "de.gabi.*"
+// to trigger gabi-gas-agent
 ```
 
 ### DVGW format versions
@@ -273,7 +279,7 @@ GaBi Gas capacity billing (PID 31010) is in this crate; AWH Sperrprozesse billin
 | Crate | Responsibility |
 |---|---|
 | `dvgw-edi` | EDIFACT parsing, validation and writing — ALOCAT, NOMINT, NOMRES |
-| `mako-gabi-gas` | Process engine — the four workflows (`gabi-gas-allocation`, `-nomination`, `-invoic`, `-mmma`), PID routing, deadline handling, domain model |
+| `mako-gabi-gas` | Process engine — the five workflows (`gabi-gas-allocation`, `-nomination`, `-invoic`, `-mmma`, `-mehr-mindermengen`), PID routing, deadline handling, domain model |
 
 ## INVOIC billing workflows
 
@@ -281,9 +287,9 @@ GaBi Gas capacity billing (PID 31010) is in this crate; AWH Sperrprozesse billin
 
 | PID   | Process name                                          | Direction   |
 |-------|-------------------------------------------------------|-------------|
-| 31010 | Kapazitätsrechnung (NB/VNB → BKV/KN)                 | NB → BKV    |
+| 31010 | Kapazitätsrechnung (FNB/VNB → BKV)                    | NB → BKV    |
 | 31007 | Aggreg. MMM-Rechnung Gas (NB → MGV)                   | NB → MGV    |
-| 31008 | MMM-Rechnung Gas selbst ausgestellt (MGV → NB)        | MGV → NB    |
+| 31008 | Aggreg. MMM-Rechnung Gas, selbst ausgestellt          | NB → MGV    |
 
 > PIDs 31007/31008 are Gas-only (GaBi Gas, BK7-24-01-008, NB → MGV).
 > PID 31010 is capacity billing between NB/VNB and BKV.
@@ -344,6 +350,7 @@ message exchange:
 |---|---|---|---|
 | `gabi-gas-allocation` | 70001–70023 | ALOCAT 5.11a | Gas quantity allocation — supports `Initial`, `Correction(n)`, `Final` versions per §§46/47 KoV XV |
 | `gabi-gas-nomination` | 70030–70034 (NOMINT) · 70035–70039 (NOMRES) | NOMINT 4.6 · NOMRES 4.7 | Transportkunde → NB/MGV nomination + the NB's Bestätigung or Matching-Benachrichtigung; `NominationQuantity` tracks submitted/accepted/curtailed |
+| `gabi-gas-mehr-mindermengen` | 70095 (SLP) · 70096 (RLM) | SSQNOT 5.7 | the Netzbetreiber's Mehr-/Mindermengenmeldung to the MGV — recorded on receipt, or enqueued as this tenant's own (`Melden`) |
 
 The PID is read from `SG1 RFF+Z13`; `dvgw_edi::catalogue()` names each
 Anwendungsfall. The process key is the **published Zuordnungstupel** (ALOCAT
@@ -385,3 +392,18 @@ BDEW EDI@Energy PIDs.
 | **DVGW G 2000** | Gas day definition: starts 06:00 CET (DST-aware) |
 
 DVGW AHBs and MIGs: <https://www.dvgw-sc.de/leistungen/it-dienstleistungen/datenaustausch-gas>
+
+## Related crates
+
+| Crate | Role |
+|---|---|
+| [`mako-gabi-gas`](https://docs.rs/mako-gabi-gas) ← **this crate** | GaBi Gas workflows, PID routing, gas domain model, `GaBiGasModule` |
+| [`dvgw-edi`](https://docs.rs/dvgw-edi) | DVGW EDIFACT — ALOCAT, NOMINT, NOMRES, SSQNOT |
+| [`mako-engine`](https://docs.rs/mako-engine) | Event-sourced workflow runtime — `Workflow`, `Process`, `EventStore`, deadlines |
+| [`mako-fristen`](https://docs.rs/mako-fristen) | *When* an answer is due — Werktage, the MaKo holiday calendar, the per-PID Antwortfristen |
+| [`mako-invoic`](https://docs.rs/mako-invoic) | The INVOIC settle/dispute state machine every billing family shares |
+| [`mako-geli-gas`](https://docs.rs/mako-geli-gas) | The other half of the gas market: supplier switching, not balancing |
+| [`makod`](https://hupe1980.github.io/mako/docs/services/makod/) | Production daemon — routes, adapts and renders these workflows |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>

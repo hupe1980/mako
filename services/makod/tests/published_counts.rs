@@ -27,8 +27,15 @@ const CLAIMANTS: &[&str] = &[
     "../../README.md",
     "../../site/content/docs/services/_index.md",
     "../../site/content/docs/services/makod.md",
+    // makod's own README states both numbers and was not a claimant, so the
+    // service most likely to be read by someone changing the registry was the
+    // one document free to drift.
+    "README.md",
     "../../site/content/docs/architecture/_index.md",
     "../../concepts/AGENTD.md",
+    // States the same two figures plus a per-family breakdown that has to sum
+    // to them, which is how it drifted while every other claimant held.
+    "../../concepts/MARKET_LANDSCAPE.md",
 ];
 
 /// Markup out, one space in its place.
@@ -88,8 +95,18 @@ fn every_published_scope_claim_matches_the_registry() {
 
     for path in CLAIMANTS {
         let full = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
-        let raw = std::fs::read_to_string(&full)
-            .unwrap_or_else(|e| panic!("{} is not readable: {e}", full.display()));
+        let Ok(raw) = std::fs::read_to_string(&full) else {
+            // `concepts/` is not in git, so a checkout without it is normal and
+            // only costs this guard the claims that live there. Every tracked
+            // claimant must still be present.
+            assert!(
+                path.contains("/concepts/"),
+                "{} is a tracked claimant and must be readable",
+                full.display()
+            );
+            eprintln!("skipping: {} is not present", full.display());
+            continue;
+        };
         // The landing page states both numbers as markup
         // (`<strong>469</strong><span>Prüfidentifikatoren routed</span>`), so tags
         // become spaces and runs of whitespace collapse. On a Markdown file this

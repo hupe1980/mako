@@ -402,6 +402,7 @@ mod sanktionstyp_tests {
 ///     typ: SanktionsTyp::FernsteuerbarkeitFehlend,
 ///     leistung_kw: dec!(500),
 ///     monate_des_verstosses: 3,
+///     beginn: None,
 ///     nachtraeglich_erfuellt: false,
 ///     technischer_defekt: false,
 /// };
@@ -423,6 +424,17 @@ pub struct Pflichtverstoss {
     /// (12), which is a replacement rather than an addition. Abs. 4 does **not**
     /// name Nr. 5.
     pub monate_des_verstosses: u32,
+    /// The first calendar month the violation runs in.
+    ///
+    /// §52 Abs. 5 caps concurrent violations „pro Kilowatt installierter
+    /// Leistung der Anlage **und Kalendermonat**", so the cap needs to know
+    /// which months each violation occupies, not only how many. Any day in the
+    /// month will do — only the year and month are read.
+    ///
+    /// `None` leaves a violation unplaced, and the Abs. 5 cap then treats it as
+    /// running concurrently with everything else, which is the reading that
+    /// cannot overcharge the operator.
+    pub beginn: Option<time::Date>,
     /// Whether the obligation has since been fulfilled.
     ///
     /// When `true`, §52 Abs. 3 reduces the penalty retroactively to €2/kW/month
@@ -640,20 +652,22 @@ pub struct SettleInput {
     /// §51 Negativpreisregel does NOT apply to these kWh (§19 Abs. 2 EEG 2023).
     pub einspeisemanagement_kwh: Option<Decimal>,
 
-    /// §§42–44 EEG 2023 — Biomass/biogas fuel composition for settlement enforcement.
+    /// §§ 39i, 42–44 EEG 2023 — Biomass/biogas fuel composition for settlement
+    /// enforcement.
     ///
     /// When set for biomass or biogas plants, the engine enforces:
     ///
-    /// - **§43 Abs. 1 Nr. 2 substrate cap** (max 40 % Energiepflanzen vom Acker):
-    ///   when `substrate_cap_ok = false`, settlement returns `Sanctioned` (EUR 0,
-    ///   legal_basis = "§43 Abs. 1 Nr. 2 EEG 2023").
-    /// - **§44 Güllekleinanlage** eligibility is recorded in the position label for
-    ///   audit transparency — it does **not** change the formula here; the caller
-    ///   must supply the correct Güllekleinanlage `verguetungssatz_ct`
-    ///   (use [`crate::rates::guellekleinanlage_rate`]).
+    /// - **§ 39i Abs. 1** — a plant holding a Zuschlag whose Getreide- und
+    ///   Mais-Anteil exceeds the Höchstanteil for its Gebotstermin has no § 19
+    ///   Abs. 1 claim, and the period settles as `KeinAnspruch` at EUR 0. A plant
+    ///   without a Zuschlag is outside Abs. 1 and is unaffected.
+    /// - **§ 44 Güllekleinanlage** eligibility is recorded in the position label
+    ///   for audit transparency — it does **not** change the formula here; the
+    ///   caller supplies the § 44 Abs. 1 `verguetungssatz_ct`
+    ///   (use [`crate::rates::guelle_lookup`]).
     ///
     /// Use [`crate::biomasse::BiomassSettlementData::new`] to derive from fuel
-    /// composition data.  `None` = plant is not biomass/biogas (cap not enforced).
+    /// composition data. `None` = plant is not biomass/biogas.
     pub biomasse: Option<crate::biomasse::BiomassSettlementData>,
 
     /// **§25 Abs. 1 Satz 3 EEG** — Fraction of the billing month with entitlement.
@@ -819,11 +833,15 @@ pub struct SettleInput {
     /// Legal basis: §44b Abs. 1 EEG 2023 (BGBl. I Nr. 28, 10.01.2023).
     pub biogas_sect44b_eligible_kwh: Option<Decimal>,
 
-    /// §51 Abs. 2 Nr. 1 EEG 2023 — iMSys (intelligent metering system) rolled out.
+    /// §51 Abs. 2 Nr. 1 EEG 2023 — whether the sub-100-kW exemption has lapsed.
     ///
-    /// The sub-100-kW exemption is transitional: §51 Abs. 2 Nr. 1 grants it only
-    /// "für Zeiträume vor dem Einbau eines intelligenten Messsystems". Once the
-    /// iMSys is in, a 30 kWp plant is subject to §51 like any other.
+    /// The exemption is transitional: §51 Abs. 2 Nr. 1 grants it only „für
+    /// Zeiträume vor dem **Ablauf des Kalenderjahres**, in dem die Anlage mit
+    /// einem intelligenten Messsystem ausgestattet wird". It therefore survives
+    /// the whole installation year and lapses on 1 January of the year after,
+    /// from when a 30 kWp plant is subject to §51 like any other. Derive it with
+    /// [`crate::negativpreis::imesys_befreiung_entfallen`] rather than comparing
+    /// the installation date with the settlement period.
     ///
     /// It lifts **only** that exemption. The 2 kW floor of Abs. 2 Nr. 2 stands
     /// until the Bundesnetzagentur's §85 Abs. 2 Nr. 12 Festlegung, and the
@@ -1185,21 +1203,34 @@ pub enum SettlementStatus {
     PriceMissing,
     /// Förderdauer has ended (KWKG hour-limit exhausted or EEG 20-year period expired).
     FoerderungBeendet,
+    /// § 8 Abs. 4 KWKG — this calendar year's Vollbenutzungsstunden are used up.
+    ///
+    /// „Der Zuschlag wird pro Kalenderjahr gezahlt für bis zu […]
+    /// Vollbenutzungsstunden." The year's quota bounds the year and nothing
+    /// else: the plant's § 8 Abs. 1–3 lifetime hours are untouched and the
+    /// Zuschlag resumes on 1 January with a fresh contingent. Reporting
+    /// [`FoerderungBeendet`](Self::FoerderungBeendet) here would retire a plant
+    /// that is still owed most of its Förderung.
+    JahreskontingentErschoepft,
     /// §25 / §47 EEG: MaStR registration missing — payment suspended.
     Sanctioned,
-    /// The Veräußerungsform the plant is assigned to carries no §19 Abs. 1 claim
-    /// for a plant of its size.
+    /// The statute leaves this plant no §19 Abs. 1 claim for this period — not
+    /// penalised, owed nothing.
     ///
-    /// The case that reaches it today is §21 Abs. 1 Satz 1 Nr. 1: the
-    /// Einspeisevergütung mit gesetzlich bestimmtem anzulegenden Wert exists only
-    /// „für Strom aus Anlagen mit einer installierten Leistung von bis zu 100
-    /// Kilowatt", so a larger plant assigned to it is owed nothing — not
-    /// penalised, owed nothing. It is a **terminal** outcome: re-running the
-    /// settlement will not change it, only a Veräußerungsformwechsel will.
+    /// Two provisions reach it:
     ///
-    /// **Reported by the caller, never by [`crate::calculate_settlement`].**
-    /// [`SettlementScheme`](crate::SettlementScheme) names a formula; which
-    /// Veräußerungsform a plant is actually assigned to is register data, and the
-    /// service that holds it (einsd) decides this before calling the engine.
+    /// - **§21 Abs. 1 Satz 1 Nr. 1** — the Einspeisevergütung mit gesetzlich
+    ///   bestimmtem anzulegenden Wert exists only „für Strom aus Anlagen mit
+    ///   einer installierten Leistung von bis zu 100 Kilowatt", so a larger plant
+    ///   assigned to it is owed nothing. Which Veräußerungsform a plant is
+    ///   actually assigned to is register data, so the service that holds it
+    ///   decides this one before calling the engine —
+    ///   [`SettlementScheme`](crate::SettlementScheme) names only a formula.
+    /// - **§39i Abs. 1** — a bezuschlagte Biogasanlage over its Getreide- und
+    ///   Mais-Höchstanteil. That is a property of the fuel composition the engine
+    ///   is handed, so [`crate::calculate_settlement`] reports it itself.
+    ///
+    /// It is a **terminal** outcome for the period: re-running the settlement on
+    /// the same facts will not change it.
     KeinAnspruch,
 }

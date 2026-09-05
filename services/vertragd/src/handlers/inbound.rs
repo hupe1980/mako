@@ -137,14 +137,24 @@ async fn apply_outcome(
         // Lieferbeginn may be answered with a corrected identifier.
         let malo_id = outcome.malo_id.clone().or_else(|| k.malo_id.clone());
         if let Some(malo_id) = malo_id.as_deref() {
-            for task in [
-                outbound::ablesung(k.id, malo_id, false, k.lieferbeginn),
-                outbound::abrechnungskonto(k.id, malo_id, &ctx.cfg.lf_mp_id),
-            ] {
-                outbound::enqueue(&mut *tx, ctx.tenant(), &task)
-                    .await
-                    .map_err(ApiError::Internal)?;
-            }
+            // The Beginnablesung is date-keyed, so a confirmation that moves the
+            // Lieferbeginn (an `A51`/`Z01` Bestätigung mit Terminänderung
+            // re-delivered against the same component) replaces the order it
+            // already scheduled instead of being dropped as a duplicate.
+            outbound::enqueue_superseding(
+                &mut tx,
+                ctx.tenant(),
+                &outbound::ablesung(k.id, malo_id, false, k.lieferbeginn),
+            )
+            .await
+            .map_err(ApiError::Internal)?;
+            outbound::enqueue(
+                &mut *tx,
+                ctx.tenant(),
+                &outbound::abrechnungskonto(k.id, malo_id, &ctx.cfg.lf_mp_id),
+            )
+            .await
+            .map_err(ApiError::Internal)?;
         }
     }
     tx.commit()

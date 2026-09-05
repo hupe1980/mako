@@ -18,8 +18,7 @@
 use eeg_billing::RoundMoney;
 use eeg_billing::{
     CapacityBlock, EegGesetz, SettleInput, SettlementScheme, SettlementStatus, TariffSource,
-    calculate_settlement, foerderendedatum_eeg, foerderendedatum_kwkg_years,
-    foerderendedatum_repowering, kwk_foerderend_calendar, kwk_max_kwh,
+    calculate_settlement, foerderendedatum_eeg, foerderendedatum_repowering, kwk_max_kwh,
 };
 use rust_decimal::Decimal;
 use rust_decimal::dec;
@@ -622,6 +621,7 @@ fn s7_kwkg_small_chp_leq50kw() {
             verguetungssatz_ct: d("8.0"),
             kwh_paid_gesamt: None,
             max_kwh: None,
+            jahres_restkontingent_kwh: None,
         },
         einspeisemenge_kwh: Some(d("7000")),
         ..SettleInput::default()
@@ -640,6 +640,7 @@ fn s7_kwkg_large_chp_limit_reached_prorated() {
             verguetungssatz_ct: d("3.1"),
             kwh_paid_gesamt: Some(d("29900")),
             max_kwh: Some(d("30000")),
+            jahres_restkontingent_kwh: None,
         },
         einspeisemenge_kwh: Some(d("400")),
         ..SettleInput::default()
@@ -657,6 +658,7 @@ fn s7_kwkg_already_exhausted() {
             verguetungssatz_ct: d("3.1"),
             kwh_paid_gesamt: Some(d("30001")),
             max_kwh: Some(d("30000")),
+            jahres_restkontingent_kwh: None,
         },
         einspeisemenge_kwh: Some(d("5000")),
         ..SettleInput::default()
@@ -674,6 +676,7 @@ fn s7_kwkg_year_limited_no_hour_limit() {
             verguetungssatz_ct: d("4.0"),
             kwh_paid_gesamt: None,
             max_kwh: None,
+            jahres_restkontingent_kwh: None,
         },
         einspeisemenge_kwh: Some(d("50000")),
         ..SettleInput::default()
@@ -738,38 +741,56 @@ fn foerderendedatum_repowering_resets_clock() {
     assert!(repowering_end > orig_end);
 }
 
-/// §8 KWKG 2023 — Year-based Förderdauer for ≤2 MW plants.
+/// **§ 8 Abs. 1–3 KWKG** — the Förderdauer is Vollbenutzungsstunden, keyed on
+/// the Anlagenart and, for a modernisierte or nachgerüstete Anlage, on the share
+/// of the Neuerrichtungskosten the work cost. § 8 names no capacity band and no
+/// number of years, so a 30 kW plant and a 50 MW plant get the same 30 000 h.
 #[test]
-fn kwkg_foerderendedatum_year_limited() {
-    // 50 kW CHP: 20 years
+fn kwkg_foerderdauer_is_vollbenutzungsstunden() {
+    use eeg_billing::{KwkAnlagenart, KwkFoerderdauerInput, foerderdauer_vollbenutzungsstunden};
+
+    let neu = KwkFoerderdauerInput {
+        anlagenart: KwkAnlagenart::Neu,
+        kostenanteil: None,
+        jahre_seit_dauerbetrieb: None,
+        ist_dampfsammelschiene_ueber_50_mw: false,
+    };
+    assert_eq!(foerderdauer_vollbenutzungsstunden(&neu), Some(30_000));
+
+    // Abs. 3 Nr. 1: a 10 % Nachrüstung buys 10 000 h, not 15 000 or 30 000.
     assert_eq!(
-        foerderendedatum_kwkg_years(date!(2023 - 06 - 15), 20).unwrap(),
-        date!(2043 - 06 - 15)
+        foerderdauer_vollbenutzungsstunden(&KwkFoerderdauerInput {
+            anlagenart: KwkAnlagenart::Nachgeruestet,
+            kostenanteil: Some(dec!(0.10)),
+            ..neu.clone()
+        }),
+        Some(10_000)
     );
-    // 500 kW CHP: 10 years
+    // Abs. 2 Nr. 3: 50 % of the Neuerrichtungskosten *and* ten years' Karenzzeit.
     assert_eq!(
-        foerderendedatum_kwkg_years(date!(2023 - 06 - 15), 10).unwrap(),
-        date!(2033 - 06 - 15)
+        foerderdauer_vollbenutzungsstunden(&KwkFoerderdauerInput {
+            anlagenart: KwkAnlagenart::Modernisiert,
+            kostenanteil: Some(dec!(0.50)),
+            jahre_seit_dauerbetrieb: Some(10),
+            ist_dampfsammelschiene_ueber_50_mw: false,
+        }),
+        Some(30_000)
     );
 }
 
-/// §8 Abs. 4 KWKG 2023 — Calendar-year maximum for large CHP plants (15 years).
-/// Even if the 30,000 full-load-hour limit is not reached, Förderung ends
-/// after 15 calendar years.
+/// **§ 8 Abs. 4 KWKG** — the annual cap is what limits a calendar year's
+/// payment: 5 000 Vollbenutzungsstunden from 2021, falling to 2 500 from 2030.
 #[test]
-fn kwkg_foerderend_calendar_15yr_cap() {
-    let commissioned = date!(2020 - 01 - 15);
-    let calendar_end = kwk_foerderend_calendar(commissioned).unwrap();
-    assert_eq!(calendar_end, date!(2035 - 01 - 15));
+fn kwkg_abs4_caps_the_calendar_year() {
+    use eeg_billing::{jahreshoechstbetrag_vollbenutzungsstunden, jahreskontingent_kwh};
 
-    // Verify: a plant running at 50% capacity uses only 15yr × 8760h × 50% = 65,700 h
-    // far below the 30,000 h statutory limit, but Förderung still ends at the calendar cap.
-    let half_load_h = 15 * 8760 / 2; // 65,700 hours (> 30,000 h limit!)
-    // This illustrates that kwk_foerderend_calendar catches cases where the plant
-    // would otherwise never hit the hour limit.
-    assert!(
-        half_load_h > 30_000,
-        "at 50% capacity the plant exceeds the hour limit naturally, but calendar cap applies earlier"
+    assert_eq!(jahreshoechstbetrag_vollbenutzungsstunden(2024), Some(4_000));
+    assert_eq!(jahreshoechstbetrag_vollbenutzungsstunden(2030), Some(2_500));
+    // A 500 kW plant may be paid the Zuschlag on 500 × 3 300 kWh in 2026,
+    // whatever its lifetime Vollbenutzungsstunden still allow.
+    assert_eq!(
+        jahreskontingent_kwh(dec!(500), 2026),
+        Some(dec!(1650000.000))
     );
 }
 
@@ -955,23 +976,50 @@ fn bridge_direktvermarktung_two_line_items() {
     assert!(items[0].has_tag("marktpraemie"));
 }
 
-/// §25 Sanctioned produces 1 EUR 0 item tagged §25-sanctioned.
+/// A sanction bills what the sanction leaves, not zero.
+///
+/// Only § 52 Abs. 1 reduces the Anspruch to nothing. `VerguetungAufMarktwert`
+/// (§ 52 Abs. 2) and `VerguetungReduziert20Prozent` (§ 52 Abs. 3) are reduced
+/// claims that still carry money, so a bridge that flattened every sanction to
+/// one € 0 line paid a plant nothing where the statute pays it something.
 #[test]
-fn bridge_sanctioned_zero_item() {
+fn bridge_bills_a_reduced_sanction_and_zeroes_only_a_total_one() {
     use eeg_billing::bridge::settlement_to_line_items;
-    let input = SettleInput {
-        scheme: SettlementScheme::FeedInTariff {
-            verguetungssatz_ct: d("8.11"),
-        },
-        einspeisemenge_kwh: Some(d("500")),
-        sanktion: Some(eeg_billing::SanktionAlt::VerguetungAufNull),
-        ..SettleInput::default()
+    let settle = |sanktion| {
+        calculate_settlement(&SettleInput {
+            scheme: SettlementScheme::FeedInTariff {
+                verguetungssatz_ct: d("8.11"),
+            },
+            einspeisemenge_kwh: Some(d("500")),
+            marktwert_ct_kwh: Some(d("4.8")),
+            sanktion: Some(sanktion),
+            ..SettleInput::default()
+        })
     };
-    let output = calculate_settlement(&input);
-    let items = settlement_to_line_items(&output);
-    assert_eq!(items.len(), 1);
-    assert!(items[0].has_tag("§25-sanctioned"));
-    assert_eq!(items[0].net_amount, eeg_billing::EuroAmount::ZERO);
+
+    let auf_null = settle(eeg_billing::SanktionAlt::VerguetungAufNull);
+    let items = settlement_to_line_items(&auf_null);
+    assert_eq!(
+        items
+            .iter()
+            .map(|i| i.net_amount)
+            .fold(eeg_billing::EuroAmount::ZERO, |a, b| a + b),
+        eeg_billing::EuroAmount::ZERO,
+        "§ 52 Abs. 1 leaves no claim"
+    );
+    assert_eq!(auf_null.status, SettlementStatus::Sanctioned);
+
+    let reduziert = settle(eeg_billing::SanktionAlt::VerguetungReduziert20Prozent);
+    let items = settlement_to_line_items(&reduziert);
+    let total = items
+        .iter()
+        .map(|i| i.net_amount)
+        .fold(eeg_billing::EuroAmount::ZERO, |a, b| a + b);
+    assert!(
+        total > eeg_billing::EuroAmount::ZERO,
+        "§ 52 Abs. 3 reduces the claim by a fifth, it does not extinguish it"
+    );
+    assert_eq!(reduziert.status, SettlementStatus::Sanctioned);
 }
 
 /// NoData → empty line items (nothing to bill yet).
@@ -1160,6 +1208,7 @@ fn positions_kwkg_single_line() {
             verguetungssatz_ct: d("8.0"),
             kwh_paid_gesamt: None,
             max_kwh: None,
+            jahres_restkontingent_kwh: None,
         },
         einspeisemenge_kwh: Some(d("7000")),
         ..SettleInput::default()
@@ -1178,6 +1227,7 @@ fn positions_kwkg_prorated_description_contains_endabrechnung() {
             verguetungssatz_ct: d("3.1"),
             kwh_paid_gesamt: Some(d("29900")),
             max_kwh: Some(d("30000")),
+            jahres_restkontingent_kwh: None,
         },
         einspeisemenge_kwh: Some(d("400")),
         ..SettleInput::default()
@@ -1227,9 +1277,13 @@ fn positions_eigenverbrauch_zero_positions() {
     assert_eq!(out.settlement_eur, Some(d("0")));
 }
 
-/// Sanctioned: zero positions (EUR 0, no charge document, status = Sanctioned).
+/// A § 52 Abs. 1 sanction settles to € 0, and the positions say so.
+///
+/// The amount and the lines have to agree: a settlement of € 0 whose positions
+/// sum to something else is a document that contradicts itself, and one that
+/// carries no positions at all cannot be rendered as a § 14 UStG Gutschrift.
 #[test]
-fn positions_sanctioned_zero_positions() {
+fn positions_of_a_total_sanction_sum_to_the_settled_amount() {
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::FeedInTariff {
             verguetungssatz_ct: d("8.11"),
@@ -1238,12 +1292,14 @@ fn positions_sanctioned_zero_positions() {
         sanktion: Some(eeg_billing::SanktionAlt::VerguetungAufNull),
         ..SettleInput::default()
     });
-    assert!(
-        out.positions.is_empty(),
-        "Sanctioned must produce no billing positions"
-    );
-    assert_eq!(out.settlement_eur, Some(d("0")));
     assert_eq!(out.status, SettlementStatus::Sanctioned);
+    assert_eq!(out.settlement_eur, Some(d("0")));
+    let summe: rust_decimal::Decimal = out.positions.iter().map(|p| p.eur).sum();
+    assert_eq!(
+        summe,
+        d("0"),
+        "the lines have to add up to the amount that is paid"
+    );
 }
 
 /// POST_EEG_SPOT negative: position eur is negative, to_line_item uses Sign::Credit.
@@ -1624,6 +1680,7 @@ fn s52_2023_pflichtzahlung_fernsteuerbarkeit_fehlend() {
         typ: SanktionsTyp::FernsteuerbarkeitFehlend,
         leistung_kw: d("500"),
         monate_des_verstosses: 3,
+        beginn: None,
         nachtraeglich_erfuellt: false,
         technischer_defekt: false,
     };
@@ -1642,6 +1699,7 @@ fn s52_2023_nachtraegliche_erfuellung_reduziert_auf_2eur() {
         typ: SanktionsTyp::MastrNichtRegistriert,
         leistung_kw: d("100"),
         monate_des_verstosses: 6,
+        beginn: None,
         nachtraeglich_erfuellt: false,
         technischer_defekt: false,
     });
@@ -1652,6 +1710,7 @@ fn s52_2023_nachtraegliche_erfuellung_reduziert_auf_2eur() {
         typ: SanktionsTyp::MastrNichtRegistriert,
         leistung_kw: d("100"),
         monate_des_verstosses: 6,
+        beginn: None,
         nachtraeglich_erfuellt: true,
         technischer_defekt: false,
     });
@@ -1673,6 +1732,7 @@ fn s52_2023_speicher_always_10eur_no_reduction() {
         typ: SanktionsTyp::SpeicherAnforderungNichtErfuellt,
         leistung_kw: d("200"),
         monate_des_verstosses: 2,
+        beginn: None,
         nachtraeglich_erfuellt: false,
         technischer_defekt: false,
     });
@@ -1680,6 +1740,7 @@ fn s52_2023_speicher_always_10eur_no_reduction() {
         typ: SanktionsTyp::SpeicherAnforderungNichtErfuellt,
         leistung_kw: d("200"),
         monate_des_verstosses: 2,
+        beginn: None,
         nachtraeglich_erfuellt: true, // Has NO effect for Speicher type
         technischer_defekt: false,
     });
@@ -1698,6 +1759,7 @@ fn s52_2023_volleinspeisung_always_2eur() {
         typ: SanktionsTyp::VolleinspeisungspflichtVerletzt,
         leistung_kw: d("50"),
         monate_des_verstosses: 12, // All 12 months of the calendar year (§52 Abs. 4 Nr. 3)
+        beginn: None,
         nachtraeglich_erfuellt: false,
         technischer_defekt: false,
     });
@@ -1719,6 +1781,7 @@ fn s52_2023_vergütung_plus_pflichtzahlung_independent() {
             typ: SanktionsTyp::MastrNichtRegistriert,
             leistung_kw: d("10"),
             monate_des_verstosses: 1,
+            beginn: None,
             nachtraeglich_erfuellt: false,
             technischer_defekt: false,
         }],
@@ -2086,9 +2149,11 @@ fn rates_sect53_deduction_by_technology() {
 // §52 Abs. 5 EEG 2023 — Multiple simultaneous violations (monthly cap)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// §52 Abs. 5 — Multiple violations sum; cap at €10/kW/month.
-/// Plant has both MaStR violation AND Fernsteuerbarkeit missing.
-/// Without cap: €10/kW × 2 violations = €20/kW. Cap: €10/kW.
+/// **§52 Abs. 5 EEG 2023 caps each calendar month at 10 EUR/kW.**
+///
+/// Two violations running in the same month would be 20 EUR/kW between them;
+/// „insgesamt auf 10 Euro pro Kilowatt installierter Leistung der Anlage und
+/// Kalendermonat begrenzt" halves that.
 #[test]
 fn s52_abs5_multiple_violations_capped_at_10eur_per_kw() {
     use eeg_billing::{Pflichtverstoss, SanktionsTyp};
@@ -2103,6 +2168,7 @@ fn s52_abs5_multiple_violations_capped_at_10eur_per_kw() {
                 typ: SanktionsTyp::MastrNichtRegistriert,
                 leistung_kw: d("100"),
                 monate_des_verstosses: 1,
+                beginn: None,
                 nachtraeglich_erfuellt: false,
                 technischer_defekt: false,
             },
@@ -2110,6 +2176,7 @@ fn s52_abs5_multiple_violations_capped_at_10eur_per_kw() {
                 typ: SanktionsTyp::FernsteuerbarkeitFehlend,
                 leistung_kw: d("100"),
                 monate_des_verstosses: 1,
+                beginn: None,
                 nachtraeglich_erfuellt: false,
                 technischer_defekt: false,
             },
@@ -2124,7 +2191,13 @@ fn s52_abs5_multiple_violations_capped_at_10eur_per_kw() {
     assert_eq!(out.status, SettlementStatus::Calculated);
 }
 
-/// §52 — Multiple violations, some fulfilled: each computed independently.
+/// **§52 Abs. 5 EEG 2023 caps the months, not the total.**
+///
+/// Each violation is priced by its own Absatz — Abs. 3 Nr. 1 puts the fulfilled
+/// MaStR violation on 2 EUR/kW while the Fernsteuerbarkeit stays on Abs. 2's
+/// 10 EUR/kW — and the cap then bites only on the month both of them run in.
+/// The two later MaStR months are billed in full: they are under the ceiling,
+/// and a capped month does not release ceiling for them.
 #[test]
 fn s52_multiple_violations_independent_computation() {
     use eeg_billing::{Pflichtverstoss, SanktionsTyp};
@@ -2139,6 +2212,7 @@ fn s52_multiple_violations_independent_computation() {
                 typ: SanktionsTyp::MastrNichtRegistriert,
                 leistung_kw: d("50"),
                 monate_des_verstosses: 3,
+                beginn: None,
                 nachtraeglich_erfuellt: true, // retroactive reduction
                 technischer_defekt: false,
             },
@@ -2146,17 +2220,74 @@ fn s52_multiple_violations_independent_computation() {
                 typ: SanktionsTyp::FernsteuerbarkeitFehlend,
                 leistung_kw: d("50"),
                 monate_des_verstosses: 1,
+                beginn: None,
                 nachtraeglich_erfuellt: false,
                 technischer_defekt: false,
             },
         ],
         ..SettleInput::default()
     });
-    // MaStR: 50 × €2 × 3 = €300 (retroactively reduced to €2)
-    // Fernsteuerbarkeit: 50 × €10 × 1 = €500
-    // Sum: €800; cap = 50 × €10 × 3 (max months) = €1500
-    // €800 < €1500 cap → not capped
-    assert_eq!(out.pflichtzahlung_eur, Some(d("800")));
+    // Neither violation is dated, so both run from the same month:
+    //   month 1: 50 × €2 + 50 × €10 = €600, capped at 50 × €10 = €500
+    //   months 2 and 3: 50 × €2 = €100 each, under the ceiling
+    assert_eq!(out.pflichtzahlung_eur, Some(d("700")));
+}
+
+/// **§52 Abs. 5 EEG 2023 caps per Kalendermonat, not over their union.**
+///
+/// „Wenn in demselben Kalendermonat Zahlungen aufgrund von mehreren
+/// Pflichtverstößen nach Absatz 1 geleistet werden müssen, sind die Zahlungen
+/// nach den Absätzen 2 bis 4 insgesamt auf 10 Euro pro Kilowatt installierter
+/// Leistung der Anlage und Kalendermonat begrenzt."
+///
+/// A cheap month therefore cannot fund an expensive one. Here January and
+/// February carry one 2-EUR/kW violation each and March carries two 10-EUR/kW
+/// ones: March alone is over the ceiling and is the only month cut.
+#[test]
+fn s52_abs5_caps_each_kalendermonat_separately() {
+    use eeg_billing::{Pflichtverstoss, SanktionsTyp};
+    use time::macros::date;
+
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("8.11"),
+        },
+        einspeisemenge_kwh: Some(d("1000")),
+        pflichtverstoss: vec![
+            // Abs. 3 Nr. 1 — fulfilled, so 2 EUR/kW for January and February.
+            Pflichtverstoss {
+                typ: SanktionsTyp::MastrNichtRegistriert,
+                leistung_kw: d("500"),
+                monate_des_verstosses: 2,
+                beginn: Some(date!(2025 - 01 - 15)),
+                nachtraeglich_erfuellt: true,
+                technischer_defekt: false,
+            },
+            // Abs. 2 — 10 EUR/kW, March only.
+            Pflichtverstoss {
+                typ: SanktionsTyp::DoppelvermarktungsverbotVerletzt,
+                leistung_kw: d("500"),
+                monate_des_verstosses: 1,
+                beginn: Some(date!(2025 - 03 - 01)),
+                nachtraeglich_erfuellt: false,
+                technischer_defekt: false,
+            },
+            // Abs. 2 — 10 EUR/kW, March as well.
+            Pflichtverstoss {
+                typ: SanktionsTyp::FernsteuerbarkeitFehlend,
+                leistung_kw: d("500"),
+                monate_des_verstosses: 1,
+                beginn: Some(date!(2025 - 03 - 31)),
+                nachtraeglich_erfuellt: false,
+                technischer_defekt: false,
+            },
+        ],
+        ..SettleInput::default()
+    });
+    // January 1 000 + February 1 000 + March min(10 000, 5 000) = 7 000 EUR.
+    // Capping the 12 000 EUR raw sum against three months' ceiling would leave
+    // it untouched and charge 5 000 EUR too much.
+    assert_eq!(out.pflichtzahlung_eur, Some(d("7000")));
 }
 
 /// §52 — Empty violations list → no pflichtzahlung.
@@ -3018,6 +3149,7 @@ fn sect52_two_simultaneous_violations_pflichtzahlung() {
                 typ: SanktionsTyp::MastrNichtRegistriert,
                 leistung_kw: d("50"),
                 monate_des_verstosses: 1,
+                beginn: None,
                 nachtraeglich_erfuellt: false,
                 technischer_defekt: false,
             },
@@ -3025,6 +3157,7 @@ fn sect52_two_simultaneous_violations_pflichtzahlung() {
                 typ: SanktionsTyp::FernsteuerbarkeitFehlend,
                 leistung_kw: d("50"),
                 monate_des_verstosses: 1,
+                beginn: None,
                 nachtraeglich_erfuellt: false,
                 technischer_defekt: false,
             },
@@ -3059,6 +3192,7 @@ fn kwkg_hour_limit_caps_eligible_kwh() {
             verguetungssatz_ct: d("8.00"),
             kwh_paid_gesamt: Some(d("5990000")),
             max_kwh: Some(d("6000000")),
+            jahres_restkontingent_kwh: None,
         },
         einspeisemenge_kwh: Some(d("50000")), // 50,000 kWh this month — exceeds remaining
         ..SettleInput::default()
@@ -3556,6 +3690,7 @@ fn sect52_abs6_full_netting_pipeline() {
             typ: SanktionsTyp::MastrNichtRegistriert,
             leistung_kw: d("10"),
             monate_des_verstosses: 1,
+            beginn: None,
             nachtraeglich_erfuellt: false,
             technischer_defekt: false,
         }],
@@ -3953,7 +4088,6 @@ fn foerderungsende_terminal_reasons_do_not_post_eeg() {
     use eeg_billing::foerderungsende::FoerderendeGrund;
     assert!(!FoerderendeGrund::AuctionAwardExpired.transitions_to_post_eeg());
     assert!(!FoerderendeGrund::KwkHourLimitExhausted.transitions_to_post_eeg());
-    assert!(!FoerderendeGrund::KwkYearLimitReached.transitions_to_post_eeg());
     assert!(!FoerderendeGrund::Revoked.transitions_to_post_eeg());
     assert!(!FoerderendeGrund::VoluntaryTermination.transitions_to_post_eeg());
     assert!(!FoerderendeGrund::PermanentLoss.transitions_to_post_eeg());
@@ -4091,6 +4225,7 @@ fn sect52_abs4_doppelvermarktung_6_extra_months() {
         typ: SanktionsTyp::DoppelvermarktungsverbotVerletzt,
         leistung_kw: d("200"),
         monate_des_verstosses: 9, // caller adds 6 extra months per §52 Abs. 4 Nr. 4
+        beginn: None,
         nachtraeglich_erfuellt: false,
         technischer_defekt: false,
     };
@@ -4111,6 +4246,7 @@ fn sect52_ausfallverguetung_has_no_extra_months() {
         typ: SanktionsTyp::AusfallverguetungHoechstdauerUeberschritten,
         leistung_kw: d("100"),
         monate_des_verstosses: 3,
+        beginn: None,
         nachtraeglich_erfuellt: false,
         technischer_defekt: false,
     };
@@ -4220,137 +4356,144 @@ fn eeg2023_sect51_applies_to_all_once_imesys_installed() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// §43 Abs. 1 Nr. 2 EEG 2023 — Biomass substrate cap blocks settlement
+// § 39i Abs. 1 EEG 2023 — Getreidekorn und Mais in bezuschlagten Biogasanlagen
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// §43 Abs. 1 Nr. 2 EEG 2023 — plant with >40% Energiepflanzen vom Acker
-/// loses EEG support for the billing period entirely.
+/// **§ 39i Abs. 1 EEG 2023 reaches only plants that hold a Zuschlag.**
 ///
-/// Legal basis: §43 Abs. 1 Nr. 2 EEG 2023 (BGBl. I 2023 Nr. 1):
-/// "Der Anteil der im Durchschnitt des Kalenderjahres für die Erzeugung von
-/// Strom und Wärme … eingesetzten Energiepflanzen … 40 Prozent nicht übersteigen."
+/// „Ein **durch einen Zuschlag erworbener** Anspruch nach § 19 Absatz 1 für Strom
+/// aus Biogas besteht nur, wenn der zur Erzeugung des Biogases eingesetzte Anteil
+/// von Getreidekorn und Mais … höchstens 40 Masseprozent beträgt." A § 42 plant
+/// whose anzulegender Wert is gesetzlich bestimmt has no such condition, and its
+/// month settles in full however much of either it uses.
 #[test]
-fn sect43_substrate_cap_exceeded_blocks_settlement() {
+fn sect39i_leaves_a_statutory_biogas_plant_alone() {
     use eeg_billing::biomasse::{BiomassBrennstoff, BiomassSettlementData};
 
-    // Plant with 55% Energiepflanzen (exceeds 40% cap)
     let biomasse = BiomassSettlementData::new(
         BiomassBrennstoff::PflanzlicheBiomasse,
-        dec!(0.0),  // no Gülle
-        dec!(0.55), // 55% Energiepflanzen — cap exceeded
-        dec!(200),  // 200 kW plant
+        dec!(0.0),
+        dec!(0.45), // 45 % Getreide und Mais
+        dec!(120),
+        None, // no Zuschlag
     );
-    assert!(!biomasse.substrate_cap_ok);
-
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::FeedInTariff {
-            verguetungssatz_ct: d("14.47"),
+            verguetungssatz_ct: d("12.47"),
         },
-        einspeisemenge_kwh: Some(d("10000")),
+        einspeisemenge_kwh: Some(d("81280")),
         biomasse: Some(biomasse),
         ..SettleInput::default()
     });
-
-    // §43 cap violated → settlement must be blocked
-    assert_eq!(out.status, SettlementStatus::Sanctioned);
-    assert_eq!(out.settlement_eur, Some(Decimal::ZERO));
-    assert!(
-        out.positions.iter().any(|p| p.legal_basis.contains("§43")),
-        "position must cite §43 EEG 2023"
-    );
+    assert_eq!(out.status, SettlementStatus::Calculated);
+    assert_eq!(out.settlement_eur, Some(d("10135.616")));
 }
 
-/// §43 Abs. 1 Nr. 2 EEG 2023 — plant exactly at the 40% cap proceeds normally.
+/// **§ 39i Abs. 1 steps down by Gebotstermin**, and a breach leaves no § 19
+/// Abs. 1 claim for that period.
+///
+/// Nr. 4 caps an award from 2026, 2027 or 2028 at 25 Masseprozent, so 28 % is a
+/// breach there while it clears the 40 % of Nr. 1 and the 35 % of Nr. 2.
 #[test]
-fn sect43_substrate_cap_exactly_at_limit_allows_settlement() {
+fn sect39i_caps_an_auction_plant_at_its_award_years_share() {
     use eeg_billing::biomasse::{BiomassBrennstoff, BiomassSettlementData};
 
-    // Plant exactly at 40% cap — must NOT be blocked
-    let biomasse = BiomassSettlementData::new(
-        BiomassBrennstoff::PflanzlicheBiomasse,
-        dec!(0.0),  // no Gülle
-        dec!(0.40), // exactly 40% — within limit
-        dec!(200),
+    let settle = |gebotstermin| {
+        calculate_settlement(&SettleInput {
+            scheme: SettlementScheme::FeedInTariff {
+                verguetungssatz_ct: d("12.47"),
+            },
+            einspeisemenge_kwh: Some(d("10000")),
+            biomasse: Some(BiomassSettlementData::new(
+                BiomassBrennstoff::PflanzlicheBiomasse,
+                dec!(0.0),
+                dec!(0.28),
+                dec!(500),
+                Some(gebotstermin),
+            )),
+            ..SettleInput::default()
+        })
+    };
+
+    assert_eq!(
+        settle(date!(2023 - 04 - 01)).status,
+        SettlementStatus::Calculated
     );
-    assert!(biomasse.substrate_cap_ok);
+    assert_eq!(
+        settle(date!(2024 - 10 - 01)).status,
+        SettlementStatus::Calculated
+    );
 
-    let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff {
-            verguetungssatz_ct: d("14.47"),
-        },
-        einspeisemenge_kwh: Some(d("5000")),
-        biomasse: Some(biomasse),
-        ..SettleInput::default()
-    });
-
-    assert_eq!(out.status, SettlementStatus::Calculated);
-    // 5000 × 14.47 / 100 = 723.50 EUR
-    assert_eq!(out.settlement_eur, Some(d("723.50")));
+    let out = settle(date!(2026 - 04 - 01));
+    assert_eq!(out.status, SettlementStatus::KeinAnspruch);
+    assert_eq!(out.settlement_eur, Some(Decimal::ZERO));
+    assert!(
+        out.positions.iter().any(|p| p.legal_basis.contains("§39i")),
+        "the position states the provision that leaves nothing owed"
+    );
+    // § 43 sets rate tiers for Bioabfallvergärung and conditions nothing on a
+    // substrate share, so it must never be cited for this.
+    assert!(
+        !out.positions.iter().any(|p| p.legal_basis.contains("§43")),
+        "§ 43 contains no Substratdeckel"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // §44 EEG 2023 — Güllekleinanlage rate table
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// §44 EEG 2023 — Güllekleinanlage: correct gross AW from rate table.
+/// **§ 44 Abs. 1 EEG 2023** — the Güllekleinanlage anzulegender Wert is 22 ct up
+/// to a Bemessungsleistung of 75 kW and 19 ct up to 150 kW.
 ///
-/// Plants ≤75 kW_el with ≥80% Gülle input receive 16.90 ct/kWh gross AW
-/// (net after §53 -0.2 ct deduction = 16.70 ct/kWh).
-///
-/// Legal basis: §44 EEG 2023 (BGBl. I 2023 Nr. 1)
+/// Abs. 2 conditions the claim on generation at the Biogaserzeugungsanlage's
+/// site, at most 150 kW installed there and an average Gülleanteil of at least
+/// 80 Masseprozent, of which up to 10 points may be überjähriges Kleegras.
 #[test]
-fn sect44_guellebonusanlage_rate_table() {
+fn sect44_guellekleinanlage_pays_the_statutory_ladder() {
     use eeg_billing::biomasse::{BiomassBrennstoff, BiomassSettlementData};
     use eeg_billing::rates;
 
-    // Verify rate table lookup
-    let table = rates::guellekleinanlage_rate(2023).expect("EEG 2023 Güllekleinanlage rates known");
-    let gross_aw = table.rate_for(dec!(50)).expect("50 kW in range");
-    // Gross AW = 16.90 ct/kWh → Amount<5> = 0.16900 EUR/kWh
-    // billing::Amount is EUR/kWh; convert to ct for readable assertion
-    let gross_aw_ct = gross_aw.into_decimal() * rust_decimal::Decimal::from(100u32);
-    assert_eq!(
-        gross_aw_ct.round_kfm(2),
-        dec!(16.90),
-        "§44 EEG 2023 gross AW = 16.90 ct/kWh"
-    );
-
-    // Plants > 75 kW must not receive Güllekleinanlage rate
-    // rate_for returns Result<Amount, BillingError>; Err = capacity exceeds table
+    let table = rates::guelle_lookup(2023).expect("EEG 2023 § 44 table");
+    let ct = |kw| {
+        table
+            .rate_for(kw)
+            .expect("in range")
+            .into_decimal()
+            .checked_mul(rust_decimal::Decimal::from(100u32))
+            .expect("in range")
+            .round_kfm(2)
+    };
+    assert_eq!(ct(dec!(75)), dec!(22.00), "§ 44 Abs. 1 Nr. 1");
+    assert_eq!(ct(dec!(150)), dec!(19.00), "§ 44 Abs. 1 Nr. 2");
     assert!(
-        table.rate_for(dec!(80)).is_err(),
-        ">75 kW not eligible for Güllekleinanlage rate"
+        table.rate_for(dec!(200)).is_err(),
+        "§ 44 Abs. 2 Nr. 2 stops the claim at 150 kW installed"
     );
 
-    // Net rate = gross − §53 deduction (0.2 ct for Biomasse)
-    let sect53 = rates::sect53_deduction(eeg_billing::ErzeugungsArt::Biogas);
-    let net_ct: rust_decimal::Decimal = dec!(16.90) - sect53;
-    assert_eq!(
-        net_ct,
-        dec!(16.70),
-        "net Vergütungssatz after §53 deduction = 16.70 ct/kWh"
-    );
+    // Net Einspeisevergütung = AW − § 53 Abs. 1 Nr. 1 (0,2 ct for Biomasse).
+    let net_ct = dec!(22.00) - rates::sect53_deduction(eeg_billing::ErzeugungsArt::Biogas);
+    assert_eq!(net_ct, dec!(21.80));
 
-    // Settlement with the net rate
     let biomasse = BiomassSettlementData::new(
         BiomassBrennstoff::Guelle,
-        dec!(0.85), // 85% Gülle
+        dec!(0.85),
         dec!(0.05),
-        dec!(50), // 50 kW — Güllekleinanlage eligible
+        dec!(50),
+        None,
     );
     assert!(biomasse.ist_guellebonusanlage);
 
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::FeedInTariff {
-            verguetungssatz_ct: net_ct, // 16.70 ct/kWh (after §53 deduction)
+            verguetungssatz_ct: net_ct,
         },
         einspeisemenge_kwh: Some(d("2000")),
         biomasse: Some(biomasse),
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::Calculated);
-    // 2000 × 16.70 / 100 = 334.00 EUR
-    assert_eq!(out.settlement_eur, Some(d("334.00")));
+    assert_eq!(out.settlement_eur, Some(d("436.00")));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4609,11 +4752,11 @@ fn s13a_compensation_survives_the_sect25_proration() {
     assert_eq!(out.settlement_eur, Some(d("300.00")));
 }
 
-/// § 43 Abs. 1 Nr. 2 EEG 2023 — a §13a EnWG compensation does not lift an EEG
-/// sanction: the substrate cap zeroes the EEG claim and the status stays
-/// `Sanctioned` even though a Redispatch position is paid alongside it.
+/// § 39i Abs. 1 EEG 2023 — a §13a EnWG compensation does not revive an EEG
+/// claim the statute has removed: the outcome stays `KeinAnspruch` even though a
+/// Redispatch position is paid alongside it.
 #[test]
-fn a_sanction_survives_an_einspeisemanagement_position() {
+fn a_missing_claim_survives_an_einspeisemanagement_position() {
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::FeedInTariff {
             verguetungssatz_ct: d("14.67"),
@@ -4625,13 +4768,14 @@ fn a_sanction_survives_an_einspeisemanagement_position() {
             d("0"),
             d("0.60"),
             d("500"),
+            Some(date!(2023 - 04 - 01)),
         )),
         ..SettleInput::default()
     });
     assert_eq!(
         out.status,
-        SettlementStatus::Sanctioned,
-        "the §43 substrate-cap sanction must remain visible on the settlement"
+        SettlementStatus::KeinAnspruch,
+        "the § 39i Abs. 1 breach must remain visible on the settlement"
     );
 }
 
@@ -4791,4 +4935,260 @@ fn s24_refuses_a_negative_einspeisemenge() {
     });
     assert_eq!(out.status, SettlementStatus::NoData);
     assert_eq!(out.settlement_eur, None);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// The statutory invariants this file's fixes rest on
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// **§ 51b Satz 2 EEG 2023** — „Die §§ 51 und 51a sind auf diese Anlagen nicht
+/// anzuwenden."
+///
+/// A biogas Ausschreibungsanlage is reduced by § 51b's own 2-ct threshold; § 51
+/// must not deduct its negative-price quarter-hours on top, and § 51a must not
+/// extend its Vergütungszeitraum for them.
+#[test]
+fn sect51b_displaces_sect51_for_biogas_auction_plants() {
+    use eeg_billing::scheme::{AusschreibungMetadata, TariffSource};
+
+    let sect51b_plant = |is_51b| {
+        calculate_settlement(&SettleInput {
+            scheme: SettlementScheme::FeedInTariff {
+                verguetungssatz_ct: d("12.00"),
+            },
+            tariff_source: TariffSource::Auction(AusschreibungMetadata {
+                is_biogas_sect51b: is_51b,
+                ..AusschreibungMetadata::default()
+            }),
+            einspeisemenge_kwh: Some(d("10000")),
+            kwh_during_negative_epex: Some(d("4000")),
+            negative_price_quarter_hours: Some(400),
+            leistung_kwp: Some(d("500")),
+            inbetriebnahme: Some(date!(2025 - 06 - 01)),
+            billing_date: Some(date!(2026 - 03 - 01)),
+            marktwert_ct_kwh: Some(d("5.00")),
+            ..SettleInput::default()
+        })
+    };
+
+    // Without the § 51b flag, § 51 removes the negative-price kWh.
+    let ordinary = sect51b_plant(false);
+    assert_eq!(ordinary.eligible_kwh, Some(d("6000")));
+
+    // With it, the full quantity is paid and no § 51a extension accrues.
+    let biogas = sect51b_plant(true);
+    assert_eq!(
+        biogas.eligible_kwh,
+        Some(d("10000")),
+        "§ 51b Satz 2 keeps § 51 off these plants"
+    );
+    assert_eq!(biogas.verlaengerungsanspruch_qh, 0, "and § 51a with it");
+}
+
+/// **§ 51 Abs. 2 Nr. 1 EEG** exempts periods „vor dem **Ablauf des
+/// Kalenderjahres**, in dem die Anlage mit einem intelligenten Messsystem
+/// ausgestattet wird".
+///
+/// The exemption survives the whole installation year and lapses on 1 January of
+/// the year after — not on the day the meter goes in.
+#[test]
+fn the_imesys_exemption_lapses_at_the_turn_of_the_year() {
+    use eeg_billing::negativpreis::{imesys_befreiung_entfaellt_ab, imesys_befreiung_entfallen};
+
+    let rollout = Some(date!(2026 - 03 - 15));
+    assert_eq!(
+        imesys_befreiung_entfaellt_ab(rollout),
+        Some(date!(2027 - 01 - 01))
+    );
+    // Every month of the installation year is still exempt, including the ones
+    // after the meter went in.
+    for periode in [
+        date!(2026 - 01 - 01),
+        date!(2026 - 03 - 01),
+        date!(2026 - 04 - 01),
+        date!(2026 - 12 - 01),
+    ] {
+        assert!(
+            !imesys_befreiung_entfallen(rollout, Some(periode)),
+            "{periode} is before the Ablauf des Kalenderjahres"
+        );
+    }
+    assert!(imesys_befreiung_entfallen(
+        rollout,
+        Some(date!(2027 - 01 - 01))
+    ));
+    // No iMSys, no lapse.
+    assert!(!imesys_befreiung_entfallen(
+        None,
+        Some(date!(2030 - 01 - 01))
+    ));
+}
+
+/// **§ 52 Abs. 5 EEG 2023** caps „auf 10 Euro pro Kilowatt installierter
+/// Leistung der Anlage **und Kalendermonat**".
+///
+/// The ceiling binds each calendar month separately, so two violations that run
+/// in different months are capped in each of their own months — four months of
+/// exposure, not two. Only violations sharing a month are capped together.
+#[test]
+fn sect52_abs5_caps_each_calendar_month_not_the_longest_violation() {
+    use eeg_billing::{Pflichtverstoss, SanktionsTyp};
+
+    let plant = d("500");
+    let verstoss = |typ, beginn, monate| Pflichtverstoss {
+        typ,
+        leistung_kw: plant,
+        monate_des_verstosses: monate,
+        beginn: Some(beginn),
+        nachtraeglich_erfuellt: false,
+        technischer_defekt: false,
+    };
+
+    // Two disjoint two-month violations: January–February and June–July.
+    let disjoint = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("8.11"),
+        },
+        einspeisemenge_kwh: Some(d("1000")),
+        pflichtverstoss: vec![
+            verstoss(
+                SanktionsTyp::MastrNichtRegistriert,
+                date!(2026 - 01 - 01),
+                2,
+            ),
+            verstoss(
+                SanktionsTyp::DoppelvermarktungsverbotVerletzt,
+                date!(2026 - 06 - 01),
+                2,
+            ),
+        ],
+        ..SettleInput::default()
+    });
+    // 4 months × 500 kW × 10 EUR.
+    assert_eq!(disjoint.pflichtzahlung_eur, Some(d("20000")));
+
+    // The same two violations running in the same two months share one ceiling.
+    let concurrent = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("8.11"),
+        },
+        einspeisemenge_kwh: Some(d("1000")),
+        pflichtverstoss: vec![
+            verstoss(
+                SanktionsTyp::MastrNichtRegistriert,
+                date!(2026 - 01 - 01),
+                2,
+            ),
+            verstoss(
+                SanktionsTyp::DoppelvermarktungsverbotVerletzt,
+                date!(2026 - 01 - 01),
+                2,
+            ),
+        ],
+        ..SettleInput::default()
+    });
+    assert_eq!(concurrent.pflichtzahlung_eur, Some(d("10000")));
+}
+
+/// **Only § 52 Abs. 1 EEG 2021 reduces the Vergütung to zero.**
+///
+/// Abs. 2 pays the Monatsmarktwert and Abs. 3 pays 80 % of the ordinary
+/// Vergütung, so both produce a real claim whose positions have to reach the
+/// Gutschrift and add up to what is paid.
+#[test]
+fn the_three_sanction_tiers_carry_their_own_positions() {
+    use eeg_billing::SanktionAlt;
+    use eeg_billing::bridge::settlement_to_line_items;
+
+    let with = |sanktion| {
+        calculate_settlement(&SettleInput {
+            scheme: SettlementScheme::FeedInTariff {
+                verguetungssatz_ct: d("10.00"),
+            },
+            einspeisemenge_kwh: Some(d("1000")),
+            marktwert_ct_kwh: Some(d("6.00")),
+            sanktion: Some(sanktion),
+            ..SettleInput::default()
+        })
+    };
+
+    // Abs. 1 — nothing is paid, and the line says why.
+    let auf_null = with(SanktionAlt::VerguetungAufNull);
+    assert_eq!(auf_null.settlement_eur, Some(Decimal::ZERO));
+    assert_eq!(settlement_to_line_items(&auf_null).len(), 1);
+
+    // Abs. 2 — the Monatsmarktwert is a real claim: 1 000 × 6,00 ct.
+    let marktwert = with(SanktionAlt::VerguetungAufMarktwert);
+    assert_eq!(marktwert.settlement_eur, Some(d("60.00")));
+    assert_eq!(settlement_to_line_items(&marktwert).len(), 1);
+
+    // Abs. 3 — 80 % of 100,00 EUR, and the positions add up to it.
+    let reduziert = with(SanktionAlt::VerguetungReduziert20Prozent);
+    assert_eq!(reduziert.settlement_eur, Some(d("80.00")));
+    let positionssumme: Decimal = reduziert.positions.iter().map(|p| p.eur).sum();
+    assert_eq!(
+        positionssumme,
+        d("80.00"),
+        "a Gutschrift whose lines do not sum to the amount paid is not a document"
+    );
+    assert!(!settlement_to_line_items(&reduziert).is_empty());
+}
+
+/// **§ 188 Abs. 3 BGB** — „Fehlt bei einer nach Monaten bestimmten Frist in dem
+/// letzten Monat der für ihren Ablauf maßgebende Tag, so endigt die Frist mit dem
+/// Ablauf des letzten Tages dieses Monats."
+///
+/// A tender plant commissioned on 29 February whose twentieth year has no 29th
+/// ends on the 28th, rather than failing to resolve a Förderende at all.
+#[test]
+fn a_leap_day_commissioning_resolves_its_foerderende() {
+    use eeg_billing::foerderendedatum_eeg_ausschreibung;
+
+    // 2044 is a leap year, so the anniversary exists.
+    assert_eq!(
+        foerderendedatum_eeg_ausschreibung(date!(2024 - 02 - 29)).unwrap(),
+        date!(2044 - 02 - 29)
+    );
+    // 2100 is not, and § 188 Abs. 3 moves the Fristende to the 28th.
+    assert_eq!(
+        foerderendedatum_eeg_ausschreibung(date!(2080 - 02 - 29)).unwrap(),
+        date!(2100 - 02 - 28)
+    );
+}
+
+/// **§ 7 Abs. 1 KWKG pays per Leistungsanteil**, so a plant's Zuschlag is the
+/// capacity-weighted mean of the bands it spans — never the top band's rate on
+/// the whole capacity.
+#[test]
+fn the_kwk_zuschlag_is_blended_across_the_leistungsanteile() {
+    use eeg_billing::{KwkAnlagenart, KwkVerwendung, KwkZuschlagInput, zuschlag_ct_kwh};
+
+    let modernisiert = |kw| KwkZuschlagInput {
+        kwk_leistung_kw: kw,
+        anlagenart: KwkAnlagenart::Modernisiert,
+        verwendung: KwkVerwendung::NetzDerAllgemeinenVersorgung,
+        dauerbetrieb: date!(2024 - 03 - 01),
+        bmwk_feststellung_veroeffentlicht: false,
+    };
+
+    // 2 MW: (50×8 + 50×6 + 150×5 + 1 750×4,4) / 2 000.
+    assert_eq!(
+        zuschlag_ct_kwh(&modernisiert(dec!(2000))),
+        Some(dec!(4.575))
+    );
+    // 250 kW: (400 + 300 + 750) / 250.
+    assert_eq!(zuschlag_ct_kwh(&modernisiert(dec!(250))), Some(dec!(5.8)));
+    // The blend is always at least the top band's rate the plant reaches.
+    assert!(
+        zuschlag_ct_kwh(&modernisiert(dec!(2000))).unwrap() > dec!(4.4),
+        "a single rate on the whole capacity underpays every plant above 50 kW"
+    );
+
+    // § 7 Abs. 2 is a different, lower ladder for KWK-Strom that is not fed into
+    // a Netz der allgemeinen Versorgung — never the Abs. 1 rates.
+    let nicht_eingespeist = KwkZuschlagInput {
+        verwendung: KwkVerwendung::NichtEingespeistKundenanlage,
+        ..modernisiert(dec!(2000))
+    };
+    assert_eq!(zuschlag_ct_kwh(&nicht_eingespeist), Some(dec!(1.6375)));
 }

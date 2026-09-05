@@ -30,10 +30,13 @@
 //! cargo +nightly fuzz run fuzz_as4_envelope -- -max_total_time=300
 //! ```
 //!
-//! Seed the corpus from real AS4 fixtures:
+//! Seeds are SOAP envelopes, not EDIFACT payloads. The `asx-rs` interop fixture
+//! catalogue is a ready source — `tests/fixtures/interop/*/*/as4_*/` in that
+//! crate's own source tree holds signed, unsigned and adversarial envelopes:
 //!
 //! ```text
-//! cp demos/nb-stp/fixtures/utilmd-55001.edi fuzz/corpus/fuzz_as4_envelope/
+//! find "$(cargo pkgid asx-rs | sed 's|.*file://||;s|#.*||')/tests/fixtures/interop" \
+//!      -name '*.xml' -exec cp {} fuzz/corpus/fuzz_as4_envelope/ \;
 //! ```
 
 #![no_main]

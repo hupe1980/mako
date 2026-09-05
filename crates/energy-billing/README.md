@@ -2,7 +2,7 @@
 
 **Pure multi-product retail energy billing library for German markets.**
 
-`energy-billing` is the calculation core of [`billingd`](../../services/billingd/) — the
+`energy-billing` is the calculation core of [`billingd`](https://hupe1980.github.io/mako/docs/services/billingd/) — the
 Energy Billing Engine daemon for the Lieferant (LF) role. The library is **zero I/O,
 zero async, zero hardcoded regulatory rates**. It answers one question:
 
@@ -29,7 +29,7 @@ the invoice and shared with the NB-side `grid-billing` engine:
 
 | Modul | What it is | Fields |
 |---|---|---|
-| **1** | *pauschale Reduzierung des Netzentgelts* — a flat reduction needing no extra metering, hence the default where no choice is made | `sect14a_modul1_pauschale_eur_per_kw_year` |
+| **1** | *pauschale Reduzierung des Netzentgelts* — a flat reduction needing no extra metering, hence the default where no choice is made | `sect14a_modul1_pauschale_eur_per_year` |
 | **2** | *prozentuale Reduzierung des Arbeitspreises* — attaches to the device's **separately metered** energy | `sect14a_modul2_nne_reduktion_ct_per_kwh` |
 | **3** | *zeitvariable Netzentgelte* (from 01.04.2025) — **three** Tarifstufen HT/ST/NT, requires an iMSys | `sect14a_modul3_nne_*` + `Sect14aModul3Verbrauch` |
 
@@ -51,7 +51,7 @@ supplier's own HT/NT split.
 ## Warnings that actually fire
 
 `invoice.warnings` carries machine-readable codes beyond the §41a guard:
-`ESTIMATED_READING` (§ 60 Abs. 2 MsbG), `PREISGARANTIE_ENDET` (ends within 30
+`ESTIMATED_READING` (§ 40a Abs. 2 EnWG), `PREISGARANTIE_ENDET` (ends within 30
 days of the period), `VERBRAUCH_ABWEICHUNG_50PCT` (deviation beyond half the
 prior year's consumption). They are `Warning` severity: they inform dispatch,
 they do not block it.
@@ -154,6 +154,9 @@ divisor produces.
 | `InvalidPeriod { from, to }` | What `BillingPeriod::new` returns for `from > to` | `INVALID_PERIOD` |
 | `AllocationMismatch { fractions, contexts }` | `allocate_proportionally` shape mismatch | `ALLOCATION_MISMATCH` |
 | `AllocationWeightsInvalid { sum }` | a negative allocation weight, or weights summing to zero | `ALLOCATION_WEIGHTS_INVALID` |
+| `NutzungsplanSharesInvalid { sum }` | §42b GGV Nutzungsplan shares that do not sum to 1 | `NUTZUNGSPLAN_SHARES_INVALID` |
+| `Unrepresentable { field, value }` | a date or amount the EN 16931 semantic model cannot carry | `UNREPRESENTABLE` |
+| `ReconciliationFailed { reason }` | `to_en16931` could not derive BG-22/BG-23 — refused rather than substituted | `RECONCILIATION_FAILED` |
 | `Arithmetic(billing::BillingError)` | Passthrough from the arithmetic core | `ARITHMETIC` |
 
 `code()` is stable and machine-readable; `blocking_warnings()` exposes the
@@ -264,7 +267,7 @@ billingd (HTTP service)
             └── Invoice                — result with positions + totals + warnings + BO4E JSON
                   ├── warnings: Vec<BillingWarning>    — regulatory compliance notices
                   ├── has_errors()                     — any Error-severity warning?
-                  └── to_rechnung_json()               — BO4E JSONB for accountingd
+                  └── to_rechnung_json()               — BO4E JSONB for accountingd (feature `bo4e`)
 ```
 
 The engine runs in passes:
@@ -321,7 +324,7 @@ let invoice = product
 invoice.assert_valid();
 println!("Brutto: {} EUR", invoice.brutto_eur);
 
-let rechnung_json: serde_json::Value = invoice.to_rechnung_json();
+let rechnung_json: serde_json::Value = invoice.to_rechnung_json();  // feature `bo4e`
 ```
 
 ---
@@ -363,7 +366,7 @@ Each category has its own struct with only the relevant fields — no silent fie
 | Feature | How |
 |---|---|
 | HT/NT Zweitarif | `billing::TimeOfUsePricing` (validated, penny-correct) |
-| Block / graduated tariffs | `billing::TariffSchedule::graduated()` |
+| Block / graduated tariffs | `billing::RateSchedule::graduated()` |
 | Indexed prices (TTF, Phelix, NCG) | `IndexedPriceConfig { base_ct, spread_ct, index_value, factor }` |
 | Gas indexed price | `gas_indexed_price: Option<IndexedPriceConfig>` in `GasProduct` |
 | Fernwärme Preisgleitklausel | `waerme_indexed_price: Option<IndexedPriceConfig>` (AVBFernwärmeV §24 Abs. 4) |
@@ -587,8 +590,11 @@ pub struct MeterInput {
     pub zaehlerstand_von:    Option<Decimal>,  // start reading
     pub zaehlerstand_bis:    Option<Decimal>,  // end reading
     pub metering_mode:       MeteringMode,     // Slp | Rlm | Imsys
-    pub is_estimated:        bool,             // § 60 Abs. 2 MsbG notice on invoice
+    pub ablesungsart:        Ablesungsart,     // § 40 Abs. 2 Nr. 6 EnWG — its own duty
+    pub is_estimated:        bool,             // § 40a Abs. 2 EnWG notice on invoice
     pub zaehler_replaced:    bool,             // Zählerwechsel notice on invoice
+    pub coverage_pct:        Option<Decimal>,  // 0–100; below 100 the invoice rests in
+                                               // part on a § 40a Abs. 2 estimate
 }
 ```
 
@@ -615,7 +621,7 @@ pub struct MeterInput {
 | Field | Law | Effect |
 |---|---|---|
 | `sect14a_modul2_nne_reduktion_ct_per_kwh` | §14a EnWG Modul 2 | Per-kWh Arbeitspreis reduction |
-| `sect14a_modul1_pauschale_eur_per_kw_year` | §14a EnWG Modul 1 | Pauschale Reduzierung (EUR/kW/year) |
+| `sect14a_modul1_pauschale_eur_per_year` | §14a EnWG Modul 1 | Pauschale Reduzierung (EUR/year, flat) |
 | `sect14a_steuerungsentschaedigung_ct_per_kwh` | §14a EnWG | Per-kWh Steuerungsentschädigung (not a module) |
 | `sect14a_steuerungsentschaedigung_eur_per_kw_year` | §14a EnWG | Capacity Steuerungsentschädigung (not a module) |
 
@@ -694,13 +700,16 @@ energy-billing = { path = "…", features = ["eeg"] }   # full eeg-billing accur
 energy-billing = { path = "…", features = ["full"] }  # all optional features
 ```
 
-| Feature | Enables |
-|---|---|
-| `eeg` | `EegProvider` delegates to `eeg_billing::calculate_settlement()` for §51/§52/§36h |
+| Feature | Pulls in | Enables |
+|---|---|---|
+| `eeg` | `eeg-billing` | `EegProvider` delegates to `eeg_billing::calculate_settlement()` for §51/§52/§36h |
+| `bo4e` | `rubo4e` | `Invoice::to_rechnung()` and `to_rechnung_json()`, `TaxSubtotal::to_bo4e()`, `InvoiceType::rechnungstyp()` |
+| `en16931` | `en16931` | `Invoice::to_en16931(spec_id, seller, buyer)` → the semantic model `en16931-formats` renders |
+| `full` | both of the above | everything |
 
-> **Note:** `energy-billing` carries no `bo4e` / `rubo4e` dependency.
-> `Invoice::to_rechnung_json()` produces BO4E-compatible JSON without one.
-> For typed `rubo4e::current::Rechnung` output, convert the JSON in `billingd`'s service layer.
+All three are **off by default**, so the core engine computes and validates a
+complete invoice without either boundary representation compiled in. `billingd`
+runs with `full`.
 
 ---
 
@@ -717,6 +726,7 @@ pub struct PositionTrace {
     pub regulatory_basis: Vec<String>, // ["§3 StromStG", "§41 EnWG"]
     pub tariff_source: Option<String>, // product sheet ID from productd
     pub pro_rata_fraction: Option<Decimal>,
+    pub rounding_note: Option<String>,
 }
 ```
 
@@ -740,13 +750,13 @@ if invoice.has_errors() {
 | §3 StromStG | Stromsteuer 2.05 ct/kWh; `stromsteuer_for_year(year)` for retroactive corrections |
 | § 9 StromStG | All eight Abs. 1 Befreiungen plus the Abs. 2/3 ermäßigte Sätze, typed; § 9a/9b/9c Entlastungen kept out of the amounts |
 | §2 EnergieStG | Erdgassteuer 0.55 ct/kWh; `energiesteuer_gas_for_year(year)` (incl. 2022 0-rate) |
-| §54 EnergieStG | KWK / industrial gas Energiesteuer exemption |
+| §§ 53a, 54 EnergieStG | Steuer**entlastungen** the customer claims at the Hauptzollamt — the supply is invoiced in full, and a `Steuerentlastung` renders the 0-EUR note the application needs |
 | BEHG §10 | CO₂-Preis H-Gas (65 EUR/t 2026) + L-Gas factor; `behg_ct_per_kwh_for_year(year)` |
 | §25 Nr. 4 MessEV | Brennwertkorrektur m³ → kWh_Hs |
 | §12 Abs. 2 Nr. 1 UStG | Reduced 7% MwSt for Anlage-2 goods (Trinkwasser) — NOT district heating |
 | §19 UStG | 0% USt on the feed-in Gutschrift (Kleinunternehmer election) |
 | §14a EnWG | Controllable loads, Modul 1/2/3 (BNetzA BK6-22-300) via `ControllableLoadProvider` |
-| § 60 Abs. 2 MsbG | Estimated reading notice on invoice |
+| § 40a Abs. 2 EnWG | Estimated reading notice on invoice |
 | §40 / §40b EnWG | Mandatory ct/kWh; structured price-comparison data in JSON |
 | §40 EnWG | Invoice content (Netzbetreiber, Energiemix §42) |
 | § 40 Abs. 2 Nr. 6 EnWG | Anfangs-/Endzählerstand, the consumption **and** the `Ablesungsart` — the third is its own duty and was on the page only for estimates |
@@ -768,13 +778,27 @@ if invoice.has_errors() {
 cargo test -p energy-billing --all-features
 ```
 
-Coverage spans six suites:
+Coverage spans these suites:
 
 | Suite | Coverage |
 |---|---|
 | Unit tests (lib) | `RegulatoryRates`, levy lookups, `prorate_days`, `InvoiceType`, `Product` enum roundtrip, `StromsteuerTarif`/`Steuerentlastung`, `billed_months`/`billed_years`, tariff deserialization |
 | `calculator_tests` | All 13 categories (incl. WASSER), §14a/§41a/§41a Abs. 1, GGV, seasonal, indexed, prosumer, block tariffs, RLM demand charge, multi-rate MwSt, cancellation, BO4E JSON, pro-rata, Tarifwechsel, `bill_batch`, `validate` |
-| `golden_scenarios` | Golden master: SLP electricity; gas + levies; EEG Gutschrift; RLM demand charge; §54 KWK exemption; historic rates 2022 (heating gas constant 0.55, 7 % gas-USt window); §41a Abs. 1 rejection; §40 ct/kWh; §40 mandatory fields; §42c sharing; §9 exemption |
+| `golden_scenarios` | Golden master: SLP electricity; gas + levies; EEG Gutschrift; RLM demand charge; §54 EnergieStG billed in full as an Entlastung; historic rates 2022 (heating gas constant 0.55, 7 % gas-USt window); §41a Abs. 1 rejection; §40 ct/kWh; §40 mandatory fields; §42c sharing; §9 exemption |
 | `proptest_invoice` | Property-based: `brutto == netto + mwst`, cancellation sign, 0% MwSt, gas arithmetic, demand charge non-negative, StromStG year table |
 | `en16931_conformance` | `Invoice::to_en16931` passes the real EN 16931 rule engine (per-line VAT + BG-23 reconcile), and the statutory `Info` disclosures reach BT-22 |
+| `priceless_product_is_refused` | A product with every price field `None` refuses the run rather than billing the levies alone |
 | Doc tests | Inline usage examples |
+
+## Related crates
+
+| Crate | Role |
+|---|---|
+| [`energy-billing`](https://docs.rs/energy-billing) ← **this crate** | Retail invoice calculation — Strom, Gas, Wärme, Wasser, §14a, §41a, EEG |
+| [`eeg-billing`](https://docs.rs/eeg-billing) | The feed-in leg — EEG/KWKG Vergütung and the §14 UStG Gutschrift |
+| [`mako-markt`](https://docs.rs/mako-markt) | Marktstammdaten — Marktlokation, Messlokation, Marktpartner, Rollenzuordnung — the model the customer and Marktlokation inputs are keyed on |
+| [`grid-billing`](https://docs.rs/grid-billing) | The grid-side (NB) counterpart — NNE, KA, MMM, MSB |
+| [`billingd`](https://hupe1980.github.io/mako/docs/services/billingd/) | Production daemon — the Energy Billing Engine for the LF role |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>

@@ -7,6 +7,9 @@ publish = false
 
 [dependencies]
 mako-fristen = { workspace = true }
+# The profile gate reads AHB Bedingung expressions with the very parser the
+# validator runs, so a status the gate accepts is one the validator can read.
+edi-energy = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = { workspace = true }
 # The MIG/AHB table readers match fixed-width `pdftotext -layout` rows.

@@ -18,7 +18,7 @@
 //! | `de.mako.aperak.rejected`    | `Rejected` + ERC code    |
 //! | `de.mako.aperak.timeout`     | `AperakTimeout`          |
 //! | `de.mako.process.completed`  | `Completed`              |
-//! | `de.mako.process.failed`     | `Cancelled`              |
+//! | `de.mako.process.failed`     | `Failed`                 |
 //!
 //! ## Deadline risk classification
 //!

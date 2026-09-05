@@ -7,6 +7,11 @@ processes in **both Sparten**: **BK6-22-024 Anlagen 2a/2b** (WiM Strom Teil 1
 and Teil 2) and the **AWH WiM Gas 2.0** (gültig ab 01.10.2026), plus the
 EDI@Energy AHBs that carry them.
 
+A **Prüfidentifikator** (PID) is the five-digit BDEW code every message in these
+processes carries. It names the exact Anwendungsfall, and with it the rules, the
+Frist and the answer tree that apply — so the PID, not the EDIFACT message type,
+is what routes.
+
 ## One engine, two Sparten
 
 AWH WiM Gas 2.0 restates WiM Strom Teil 1 use-case for use-case, Frist for
@@ -167,17 +172,29 @@ the Gastag boundary. This leg is what makes the Wechsel constitutive.
 
 ## EDIFACT Format Versions
 
-| Format version | Valid from | Valid until | Profile status |
-|----------------|------------|-------------|----------------|
-| `FV2024-10-01` | 2024-10-01 | 2025-09-30  | ✓ available    |
-| `FV2025-10-01` | 2025-10-01 | 2026-09-30  | ✓ available    |
-| `FV2026-10-01` | 2026-10-01 | —           | ✓ available    |
+WiM rides eleven message types and they do **not** share a release cadence, so
+there is no single WiM format version. The profiles this crate validates against:
+
+| Message | `FV2025-10-01` | `FV2026-10-01` |
+|---------|----------------|----------------|
+| UTILMD Strom | AHB 2.1 (MIG S2.1) | AHB 2.2 (MIG S2.2) |
+| REQOTE | AHB 1.1 (MIG 1.3c) | AHB 1.2 (MIG 1.3c) |
+| QUOTES | AHB 1.1 (MIG 1.3b) | AHB 1.1a (MIG 1.3c) |
+| PRICAT | AHB 2.0f (MIG 2.0e) | AHB 2.1 (MIG 2.1) |
+| IFTSTA | AHB 2.0h (MIG 2.0g) | AHB 2.1 (MIG 2.1) |
+| ORDERS / ORDRSP | — (`FV2026-04-01`: AHB 1.1a, MIG 1.4b) | AHB 1.1b (MIG 1.4c) |
+
+INSRPT ships only at `FV2026-01-01` (AHB 1.1g, MIG 1.1a), INVOIC and REMADV from
+`FV2026-04-01`, ORDCHG at `FV2025-04-01` and `FV2026-10-01`. The **AHB and the
+MIG carry different version numbers** for every message type except UTILMD — the
+tables above name the MIG release, which is what the „EDIFACT" column of the PID
+inventories cites.
 
 ## Modules
 
 | Rust module        | Contents                                                                  |
 |--------------------|---------------------------------------------------------------------------|
-| `geraetewechsel`   | PIDs 55039/55042/55051/55168 and their Gas twins 44039/44042/44051/44168, plus 44183 and the IFTSTA Gesamtvorgang leg 21009–21013 — MSB-Wechsel workflow + projection. Handles both directions: inbound UTILMD (`ReceiveUtilmd` → APERAK → `DispatchAntwort` → `ReceiveGesamtvorgang` → `DispatchZuordnung`) and ERP-initiated outbound orders (`InitiateDeviceChange` → `ReceiveAntwort` → `MeldeGesamtvorgang` → `ReceiveZuordnungsantwort`). Antwortfrist per process via `antwort_frist_werktage()`; the Realisierungskorridor is enforced on the Gesamtvorgang date. |
+| `geraetewechsel`   | PIDs 55039/55042/55051/55168 and their Gas twins 44039/44042/44051/44168, plus 44183 and IFTSTA 21007/21009–21013/21015/21018/21036, of which 21009–21013 are the Gesamtvorgang leg (`GESAMTVORGANG_PIDS`) — MSB-Wechsel workflow + projection. Handles both directions: inbound UTILMD (`ReceiveUtilmd` → APERAK → `DispatchAntwort` → `ReceiveGesamtvorgang` → `DispatchZuordnung`) and ERP-initiated outbound orders (`InitiateDeviceChange` → `ReceiveAntwort` → `MeldeGesamtvorgang` → `ReceiveZuordnungsantwort`). Antwortfrist per process via `antwort_frist_werktage()`; the Realisierungskorridor is enforced on the Gesamtvorgang date. |
 | `geraeteubernahme` | ORDERS 17001 → ORDRSP 19001/19002 (Bestellbestätigung/Ablehnung) and ORDERS 17009 → 19015/19016 (Eigenausbau ja/nein) — WiM Teil 1 Kap. 3.1/3.2. The 17009 Mindestvorlaufzeit is checked against `mako_fristen::vorlauf` before the answer window opens: a Gerätewechseltermin closer than the 4. Werktag is refused with `E17` naming the earliest date still reachable, rather than accepted with a window that expired before the message arrived |
 | `weiterverpflichtung` | ORDERS 17002 → ORDRSP 19003/19004 — the NB keeping the abgebender MSB on the Messlokation while the gMSB prepares to take over (Kap. 2.4.2 Nr. 5/6, `E_0203`) |
 | `technik_aenderung` | REQOTE 35005 → QUOTES 15005 / IFTSTA 21033, ORDERS 17011/17118 → ORDRSP 19005/19006, IFTSTA 21025/21027 — Messlokationsänderung auf **beiden** Wegen; **10 WT** Antwort, **20 WT** Vorlauffrist nur auf der direkten Beauftragung (Kap. 3.3 / AWH Änd. Technik) |
@@ -187,6 +204,9 @@ the Gastag boundary. This leg is what makes the Wechsel constitutive.
 | `invoic`           | INVOIC 31009 (MSB-Rechnung, Strom) · 31003 (Dienstleistungen, beide Sparten) · 31004 (Stornorechnung, Sparte-neutral); inbound REMADV 33001–33004 and COMDIS 29001 — see below |
 | `preisanfrage`     | PIDs 35001/35002/35004/35005 (REQOTE), 15001/15002/15004/15005 (QUOTES) — Preisanfrage            |
 | `preisliste`       | PIDs 27001–27003 — Preisliste PRICAT                                      |
+| `esa_wertebestellung` | The **ESA side** of the same relationship (`esa-wertebestellung`): it sends 35003/17007/17008/39002 and ingests the MSB's 15003/19011–19014/21042/13027. Disjoint commands from `wertebestellung`, so one deployment may hold both roles |
+| `insrpt`           | INSRPT 23001 → 23003/23004 (Entscheidungen), 23005/23009/23011/23012 (Informationsmeldungen), 23008 (Ergebnisbericht) — Störungsmeldung, both sides |
+| `rechnungsabwicklung` | ORDERS 17005/17006 → ORDRSP 19009/19010 — Rechnungsabwicklung des MSB über den LF, **8 WT** (`E_0205`–`E_0209`) |
 | `steuerungsauftrag`| PIDs 11021–11023 — iMS Steuerungsauftrag (API-Webdienste REST channel)    |
 
 ### The `invoic` family
@@ -404,7 +424,26 @@ one-shot order, and `E_0257` refuses a Stornierung of a started delivery with
 - MsbG — Messstellenbetriebsgesetz
 - BNetzA **BK6-22-024** Anlagen 2a/2b (WiM Strom Teil 1 und Teil 2)
 - BDEW/VKU/GEODE/FNBGas **AWH WiM Gas 2.0** (gültig ab 01.10.2026)
-- EDI@Energy UTILMD Strom AHB S2.2 (`FV2026-10-01`)
+- EDI@Energy UTILMD Strom **AHB 2.2** (MIG release S2.2, `FV2026-10-01`)
 - EDI@Energy **APERAK AHB 1.1** (`FV2026-10-01`) — § 2.4.1 Strom, § 2.3.1 Gas.
   2.2 is the APERAK **MIG** revision; AHB and MIG carry different version numbers
   for every message type except UTILMD
+
+## Related crates
+
+The format layer and the domain packs meet in `makod`: a workflow crate knows the
+`Pruefidentifikator` and its own domain types, never an EDIFACT message type.
+
+| Crate | Role |
+|---|---|
+| [`mako-wim`](https://docs.rs/mako-wim) ← **this crate** | WiM workflows for both Sparten, PID routing, `WimModule` |
+| [`edi-energy`](https://docs.rs/edi-energy) | EDI@Energy EDIFACT — parse · validate · build (UTILMD, MSCONS, ORDERS, INVOIC, APERAK, …); joined to these workflows in `makod`, not depended on |
+| [`mako-engine`](https://docs.rs/mako-engine) | Event-sourced workflow runtime — `Workflow`, `Process`, `EventStore`, deadlines |
+| [`mako-fristen`](https://docs.rs/mako-fristen) | *When* an answer is due — Werktage, the MaKo holiday calendar, the per-PID Antwortfristen |
+| [`mako-pruefung`](https://docs.rs/mako-pruefung) | *What* the answer must be — the BDEW Entscheidungsbäume, executable |
+| [`mako-invoic`](https://docs.rs/mako-invoic) | The INVOIC settle/dispute state machine every billing family shares |
+| [`energy-api`](https://docs.rs/energy-api) | The parallel API-Webdienste channel for iMS values |
+| [`makod`](https://hupe1980.github.io/mako/docs/services/makod/) | Production daemon — routes, adapts and renders these workflows |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>

@@ -96,7 +96,7 @@ impl Profile {
                 seed,
                 out: &mut out,
             };
-            generator.walk(&self.structure.root, seed.map(|_| 0));
+            generator.walk(&self.structure.root, seed.map(|_| 0), 0);
             let count = out.len();
             if let Some(unt) = out.iter_mut().find(|s| s.tag == "UNT")
                 && let Some(e) = unt.elements.get_mut(0)
@@ -202,6 +202,18 @@ impl Fixpoint {
     }
 }
 
+/// How many occurrences a MIG maximum leaves; `0` is „no maximum“.
+fn room_for(max: u32) -> usize {
+    if max == 0 { usize::MAX } else { max as usize }
+}
+
+/// A Qualifier/Code a Paketmerkmal asks for, and where it goes.
+struct Pin {
+    de: String,
+    occurrence: u8,
+    code: String,
+}
+
 /// The caller's segments, resolved against the structure.
 #[derive(Clone, Copy)]
 struct Seed<'a> {
@@ -224,7 +236,11 @@ impl Generator<'_> {
     /// Emit the children of a group instance, in MIG order: the seed's
     /// segments where it has them (`instance` is the seed's instance of the
     /// group), the column's required ones where it has none.
-    fn walk(&mut self, children: &[NodeId], instance: Option<usize>) {
+    ///
+    /// `round` selects, for a place whose Paketmerkmale ask for more
+    /// Qualifier/Codes than one occurrence of it holds, which of them this
+    /// repetition of the enclosing group carries.
+    fn walk(&mut self, children: &[NodeId], instance: Option<usize>, round: usize) {
         let s = &self.profile.structure;
         for &child in children {
             let node = &s.nodes[child];
@@ -237,8 +253,21 @@ impl Generator<'_> {
                             && (self.fix.segments.contains(nr)
                                 || self.required(self.af.segment_status(nr)))
                         {
-                            let seg = self.segment(layout);
-                            self.out.push(seg);
+                            // A Paketmerkmal `n..m` with `n ≥ 1` asks for its
+                            // Qualifier/Code, so the place is repeated once
+                            // per such code — within the MIG's maximum.
+                            let pins = self.paket_pins(layout);
+                            let room = room_for(node.max);
+                            if pins.is_empty() {
+                                let seg = self.segment(layout, None);
+                                self.out.push(seg);
+                            } else {
+                                let from = round.saturating_mul(room).min(pins.len());
+                                for pin in pins[from..].iter().take(room) {
+                                    let seg = self.segment(layout, Some(pin));
+                                    self.out.push(seg);
+                                }
+                            }
                         }
                     } else {
                         for i in seeded {
@@ -263,11 +292,20 @@ impl Generator<'_> {
                         if !self.fix.dropped.contains(trigger_nr)
                             && (self.fix.segments.contains(trigger_nr) || self.required(statuses))
                         {
-                            self.walk(&node.children, None);
+                            let rounds = self.paket_rounds(child).min(room_for(node.max));
+                            if rounds > 1 {
+                                for r in 0..rounds {
+                                    self.walk(&node.children, None, r);
+                                }
+                            } else {
+                                // A group that repeats no further passes the
+                                // round of the group above it down.
+                                self.walk(&node.children, None, round);
+                            }
                         }
                     } else {
                         for inst in seeded {
-                            self.walk(&node.children, Some(inst));
+                            self.walk(&node.children, Some(inst), 0);
                         }
                     }
                 }
@@ -375,14 +413,63 @@ impl Generator<'_> {
         statuses.iter().any(|t| {
             Status::parse(t).is_some_and(|st| {
                 st.kind.is_receiver_checkable()
-                    && st.expr.as_ref().map_or(Truth::True, |e| {
-                        e.eval(&mut |id| neutral_or_unknown(&self.profile.ahb.conditions, id))
-                    }) != Truth::Unknown
+                    && unconditioned(&self.profile.ahb, st.expr.as_ref())
             })
         })
     }
 
-    fn segment(&self, layout: &SegmentNode) -> OwnedSegment {
+    /// How many instances of `group` its places need to carry every
+    /// Qualifier/Code their Paketmerkmale ask for — the codes a nested place
+    /// cannot fit in its own repetitions are carried by repeating the group
+    /// around it.
+    fn paket_rounds(&self, group: NodeId) -> usize {
+        let s = &self.profile.structure;
+        s.nodes[group]
+            .children
+            .iter()
+            .map(|&child| {
+                let room = room_for(s.nodes[child].max);
+                match s.layout(child) {
+                    Some(layout) => self.paket_pins(layout).len().div_ceil(room),
+                    None => self.paket_rounds(child).div_ceil(room),
+                }
+            })
+            .max()
+            .unwrap_or(1)
+            .max(1)
+    }
+
+    /// The Qualifier/Codes of `layout` a Paket asks for, in AHB order.
+    ///
+    /// Allgemeine Festlegungen 6.1d Kap. 6.9.2: a code marked `X [kPn..m]`
+    /// with `n ≥ 1` „muss im Paket k … angegeben werden“. Only a Paket the
+    /// skeleton knows applies — one whose Paketvoraussetzung is empty
+    /// (Kap. 6.9.1) — is filled in.
+    fn paket_pins(&self, layout: &SegmentNode) -> Vec<Pin> {
+        let mut pins = Vec::new();
+        for rule in self.af.element_rules(&layout.nr) {
+            for op in &rule.operands {
+                let (Some(code), Some(status)) = (&op.code, Status::parse(&op.operand)) else {
+                    continue;
+                };
+                let Some(expr) = &status.expr else { continue };
+                if !status.kind.is_receiver_checkable()
+                    || !unconditioned(&self.profile.ahb, Some(expr))
+                    || !expr.pakete().iter().any(|p| p.min >= 1)
+                {
+                    continue;
+                }
+                pins.push(Pin {
+                    de: rule.de.clone(),
+                    occurrence: rule.occurrence,
+                    code: code.clone(),
+                });
+            }
+        }
+        pins
+    }
+
+    fn segment(&self, layout: &SegmentNode, pin: Option<&Pin>) -> OwnedSegment {
         let rules: Vec<&ElementRule> = self.af.element_rules(&layout.nr).collect();
         // The code chosen for each element, needed by dependent elements
         // (`DTM` DE 2380 follows DE 2379; `LOC` DE 3225 follows DE 3227).
@@ -404,7 +491,9 @@ impl Generator<'_> {
                     .copied();
                 let key = (layout.nr.clone(), comp.id.clone());
                 let skip = self.fix.skipped_codes.get(&key).copied().unwrap_or(0);
-                let value = if self.fix.dropped_elements.contains(&key) {
+                let value = if pin.is_some_and(|p| p.de == comp.id && p.occurrence == occurrence) {
+                    pin.map(|p| p.code.clone())
+                } else if self.fix.dropped_elements.contains(&key) {
                     None
                 } else if self.fix.elements.contains(&key) {
                     Some(self.forced(layout, comp, rule, skip, &chosen, &values))
@@ -502,9 +591,7 @@ impl Generator<'_> {
         };
         let used = |op: &str| {
             Status::parse(op).is_some_and(|st| {
-                st.expr.as_ref().map_or(Truth::True, |e| {
-                    e.eval(&mut |id| neutral_or_unknown(&self.profile.ahb.conditions, id))
-                }) != Truth::Unknown
+                unconditioned(&self.profile.ahb, st.expr.as_ref())
                     && st.kind.is_receiver_checkable()
             })
         };
@@ -709,13 +796,32 @@ fn occurrence_of(layout: &SegmentNode, de: &str, ei: usize, ci: usize) -> u8 {
     0
 }
 
+/// Whether a status expression holds whatever the message says — the
+/// receiver-independent part of the column, which is what a skeleton fills.
+///
+/// A status with no expression is unconditioned; one that comes out
+/// `Truth::Unknown`, or that does not evaluate at all, waits on a message the
+/// skeleton is only about to build.
+fn unconditioned(ahb: &super::model::AhbProfile, expr: Option<&super::conditions::Expr>) -> bool {
+    let Some(expr) = expr else { return true };
+    expr.eval(&mut |id| Ok(neutral_or_unknown(ahb, id)))
+        .is_ok_and(|t| t != Truth::Unknown)
+}
+
 /// Bedingungen without a message: a Voraussetzung („Wenn …") is undecidable,
 /// everything else — Hinweise, formats, repetition rules, constraints — is
-/// neutral.
-fn neutral_or_unknown(conditions: &std::collections::BTreeMap<String, String>, id: &str) -> Truth {
+/// neutral. A Paket stands for its Paketvoraussetzung, so an empty one — the
+/// Standardpaket — is no condition at all (Allgemeine Festlegungen 6.1d
+/// Kap. 6.9.1).
+fn neutral_or_unknown(ahb: &super::model::AhbProfile, id: &str) -> Truth {
     match super::conditions::ConditionKind::of(id) {
-        super::conditions::ConditionKind::Paket => Truth::Unknown,
-        super::conditions::ConditionKind::Voraussetzung => match conditions.get(id) {
+        super::conditions::ConditionKind::Paket => {
+            match super::conditions::Paket::parse(id).and_then(|p| ahb.packages.get(&p.id)) {
+                Some(text) if text.trim().is_empty() => Truth::Neutral,
+                _ => Truth::Unknown,
+            }
+        }
+        super::conditions::ConditionKind::Voraussetzung => match ahb.conditions.get(id) {
             Some(text) if !super::conditions::is_precondition(text) => Truth::Neutral,
             _ => Truth::Unknown,
         },

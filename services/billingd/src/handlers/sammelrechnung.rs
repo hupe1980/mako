@@ -21,7 +21,7 @@ struct SitePriced {
     malo_id: String,
     rechnungsnummer: String,
     product_code: String,
-    category: &'static str,
+    category: String,
     invoice: Invoice,
     buyer: Option<crate::clients::Rechnungsempfaenger>,
 }
@@ -55,7 +55,7 @@ pub async fn post_sammelrechnung(
     Json(req): Json<SammelrechnungRequest>,
 ) -> BillingResult<impl IntoResponse> {
     let cfg = Arc::clone(&deps.cfg);
-    let (productd, vertragd) = (&deps.productd, &deps.vertragd);
+    let vertragd = &deps.vertragd;
     authorize(&cedar, &claims, "run-billing", &cfg.tenant)?;
     let (period_from, period_to) = parse_period(&req.period_from, &req.period_to)?;
 
@@ -92,53 +92,41 @@ pub async fn post_sammelrechnung(
             ..Default::default()
         };
 
-        let tariff = match resolve_tariff(&site_req, deps.as_ref(), &entry.malo_id, period_to).await
+        // Each site is billed under **its own** product assignments and, per
+        // leg, its own statutory rates. One product resolved as of the period's
+        // last day charges a site that switched tariff mid-period the new price
+        // for the whole of it, and one STROM rate set for the whole
+        // Rahmenvertrag bills a gas site without its Energiesteuer/BEHG year
+        // table and skips the §28 Abs. 5/6 UStG straddle refusal that only gas
+        // and Fernwärme have.
+        let legs = match resolve_legs(
+            &site_req,
+            deps.as_ref(),
+            &entry.malo_id,
+            period_from,
+            period_to,
+        )
+        .await
         {
-            Ok(t) => t,
+            Ok(l) => l,
             Err(e) => {
                 errors.push(site_error(&entry.malo_id, &e));
                 continue;
             }
         };
-
-        // Each site is billed under the statutory rates of **its own** commodity.
-        // Resolving one STROM rate set for the whole Rahmenvertrag billed a gas
-        // site without its Energiesteuer/BEHG year table, and skipped the
-        // §28 Abs. 5/6 UStG straddle refusal that only gas and Fernwärme have.
-        let mut site_rates = match cfg.try_regulatory_rates_for_period(
-            tariff.category_str(),
-            period_from,
-            period_to,
-        ) {
-            Ok(r) => r,
-            Err(e) => {
-                errors.push(site_error(&entry.malo_id, &e.into()));
-                continue;
-            }
-        };
-        apply_nehs_market_price(
-            &mut site_rates,
-            tariff.category_str(),
-            period_from,
-            &cfg,
-            productd,
-        )
-        .await;
+        let summary = LegSummary::of(&legs);
 
         // Each line of a Sammelrechnung is an invoice in its own right and takes
         // its own number from the `RE` series.
         let malo_nr =
             next_rechnungsnummer(&pool, &cfg.tenant, series::INVOICE, None, period_from).await?;
 
-        let billed = match dispatch_invoice(
+        let billed = match dispatch_invoice_multi(
             &deps,
-            &tariff,
+            &legs,
             &site_req,
             &entry.malo_id,
             &malo_nr,
-            period_from,
-            period_to,
-            &site_rates,
             RunId(Some(&run_id)),
         )
         .await
@@ -157,11 +145,8 @@ pub async fn post_sammelrechnung(
             buyer: billed.buyer,
             malo_id: entry.malo_id.clone(),
             rechnungsnummer: malo_nr,
-            product_code: tariff
-                .product_code()
-                .unwrap_or(tariff.category_str())
-                .to_owned(),
-            category: tariff.category_str(),
+            product_code: summary.product_code,
+            category: summary.category,
             invoice: billed.invoice,
         });
     }
@@ -238,7 +223,7 @@ pub async fn post_sammelrechnung(
                 malo_id: &site.malo_id,
                 lf_mp_id: &req.lf_mp_id,
                 product_code: &site.product_code,
-                category: site.category,
+                category: &site.category,
                 rechnungsnummer: &site.rechnungsnummer,
                 period_from,
                 period_to,

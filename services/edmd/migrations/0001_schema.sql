@@ -78,6 +78,17 @@ CREATE TABLE meter_billing_periods (
     zustandszahl         NUMERIC(8,4),   -- Gas: compressibility factor
     zaehlerstand_anfang  NUMERIC(18,5),  -- §40 Abs. 2 Nr. 6 EnWG register reading
     zaehlerstand_ende    NUMERIC(18,5),
+    -- Share of the period covered by billable readings, 0–100. A sum over what
+    -- arrived says nothing about what did not: a month delivered up to the 3rd
+    -- yields a plausible Arbeitsmenge and bills as a whole month. § 60 Abs. 1
+    -- MsbG fills a gap with an Ersatzwert (and § 40a Abs. 2 EnWG is what a bill
+    -- rests on where none was formed), so an invoiceable period reads 100.
+    --
+    -- Nullable, and a NULL is not a zero: it is a row that states no coverage,
+    -- which the read treats as undecodable and recomputes rather than answering
+    -- with a figure that would refuse every invoice.
+    coverage_pct         NUMERIC(6,2)
+                             CHECK (coverage_pct BETWEEN 0 AND 100),
     -- The full 8-value QualityFlag vocabulary, pinned at the DB layer (not just by
     -- the application `quality_to_str`): a drifting literal is refused by Postgres,
     -- not read back as UNKNOWN. schema_code_guard keeps this list == QualityFlag::CODES.
@@ -103,7 +114,7 @@ CREATE INDEX mbp_tenant_malo_v2
 --
 -- Where a difference could not be taken honestly, `metering::reading` emits no
 -- interval and records why. The hole then surfaces as a V01 gap and is filled,
--- with its own audit trail, by the § 60 Abs. 2 substitute path — so the two logs
+-- with its own audit trail, by the § 60 Abs. 1 substitute path — so the two logs
 -- together say "this quarter-hour is an Ersatzwert *because* the register went
 -- backwards here", which neither says alone.
 --
@@ -445,7 +456,7 @@ CREATE INDEX qa_billing_block  ON quality_assessments (malo_id, billing_blocked)
     WHERE billing_blocked = true;
 CREATE INDEX qa_tenant         ON quality_assessments (tenant);
 
--- ── Substitute value log (§ 60 Abs. 2 MsbG audit trail) ────────────────────────────
+-- ── Substitute value log (§ 60 Abs. 1 MsbG audit trail) ────────────────────────────
 
 CREATE TABLE substitute_value_log (
     id              UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -566,7 +577,7 @@ CREATE INDEX smgw_session_gin    ON smgw_sessions USING GIN (session);
 --   CERT_EXPIRING       — inside the operator's renewal warning window
 --   TLS_CERT_MISSING    — SMGW unreachable over the Admin interface (BSI TR-03109-4)
 --   CLS_NOT_COMPLIANT   — §14a Konfigurationsprodukt not assigned (BK6-22-300)
---   COMMUNICATION_FAULT — gateway silent past the threshold; § 60 Abs. 2 MsbG
+--   COMMUNICATION_FAULT — gateway silent past the threshold; § 60 Abs. 1 MsbG
 --   GATEWAY_REVOKED     — security incident; § 25 MsbG reporting duty
 
 CREATE TABLE cls_compliance_issues (
@@ -607,7 +618,7 @@ CREATE INDEX cci_malo ON cls_compliance_issues (tenant, malo_id, resolved_at);
 -- ── Delivery surveillance — the points that stopped ──────────────────────────
 --
 -- Every other quality mechanism here judges data that **arrived**: the V-rules
--- run on an ingest batch, the Hampel scorer grades one, the § 60 Abs. 2
+-- run on an ingest batch, the Hampel scorer grades one, the § 60 Abs. 1
 -- confirmation loop chases estimates already written. Silence triggers none of
 -- them, so a measuring point that stops delivering was invisible until a
 -- settlement run came up short — by which time the window for re-reading or
@@ -691,7 +702,7 @@ CREATE TABLE smgw_cert_expiry_alerts (
 CREATE INDEX scea_tenant_recent ON smgw_cert_expiry_alerts (tenant, alerted_at DESC);
 CREATE INDEX scea_device        ON smgw_cert_expiry_alerts (tenant, device_id, valid_to);
 
--- ── § 60 Abs. 2 MsbG — Schätz-/Ersatzwert-Bestätigung ────────────────────────
+-- ── § 60 Abs. 1 MsbG — Schätz-/Ersatzwert-Bestätigung ────────────────────────
 -- Every stored ESTIMATED/SUBSTITUTED interval opens a confirmation entry: the
 -- MSB owes a plausibilised real value. The entry resolves automatically when
 -- a MEASURED/CORRECTED value for the same slot arrives (ingest or §-audit
@@ -722,6 +733,6 @@ CREATE INDEX erc_open ON estimated_read_confirmations (tenant, created_at)
     WHERE status IN ('OFFEN','UEBERFAELLIG');
 
 COMMENT ON TABLE estimated_read_confirmations IS
-    '§ 60 Abs. 2 MsbG: open obligations to replace estimated/substituted '
+    '§ 60 Abs. 1 MsbG: open obligations to replace estimated/substituted '
     'intervals with plausibilised real values. Auto-resolved by ingest of a '
     'MEASURED/CORRECTED value for the same (malo, dtm_from, register).';

@@ -7,8 +7,17 @@ edition = "2024"
 [package.metadata]
 cargo-fuzz = true
 
+# This crate is `exclude`d from the workspace (see the root `Cargo.toml`), so it
+# cannot inherit `[workspace.dependencies]`. Every version and feature list below
+# mirrors the root manifest — a fuzz target that compiles against a different
+# release of a dependency than the services do is not testing the shipped code.
 [dependencies]
 libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
+rust_decimal = { version = "1", features = ["db-postgres", "macros", "serde-str"] }
+serde_json = "1"
+time = { version = "0.3", features = ["std", "macros", "serde-well-known", "serde-human-readable", "parsing", "formatting"] }
+metering = { version = "0.22" }
+asx-rs = { version = "0.13", features = ["as4", "interop-strict"] }
 
 [dependencies.edi-energy]
 path = "../crates/edi-energy"
@@ -18,12 +27,9 @@ features = ["utilmd", "mscons", "aperak", "contrl", "invoic", "remadv", "orders"
 path = "../crates/mako-engine"
 default-features = false
 
-[dependencies.mako-as4]
-path = "../crates/mako-as4"
-
-[dependencies.asx-rs]
-version = "0.4"
-features = ["as4"]
+[dependencies.energy-billing]
+path = "../crates/energy-billing"
+features = ["eeg"]
 
 [[bin]]
 name = "fuzz_parse_validate"
@@ -60,19 +66,12 @@ test = false
 doc = false
 bench = false
 
-[dependencies.energy-billing]
-path = "../crates/energy-billing"
-features = ["eeg"]
-
 [[bin]]
 name = "fuzz_tariff_input"
 path = "fuzz_targets/fuzz_tariff_input.rs"
 test = false
 doc = false
 bench = false
-
-[dependencies.metering]
-version = "0.14"
 
 [[bin]]
 name = "fuzz_obis_code"

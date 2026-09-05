@@ -2,6 +2,7 @@
 --
 -- `invoice_drafts`     one settled invoice per MaLo × period × Prüfidentifikator.
 -- `invoice_number_seq` per-tenant, per-Rechnungskreis, per-year running number.
+-- `abschlag_verrechnungen` which invoice settled which Abschlagsrechnung.
 -- `kostenblatt_records` Redispatch 2.0 Kostenblatt per BK6-20-061 §4.2.
 -- `fremdkosten_records` typed BO4E Fremdkosten attached to a draft.
 --
@@ -222,12 +223,54 @@ COMMENT ON INDEX id_one_abschlag_per_invoice_date IS
     'One Abschlagsrechnung per MaLo, period and Rechnungsdatum. The cadence '
     'separates instalments; a replayed billing run does not.';
 
--- One reversal per invoice. A second Stornorechnung credits the counterparty
--- twice, and nothing downstream notices: both are well-formed documents that
--- reference the same original.
+-- One *live* reversal per invoice. A second Stornorechnung credits the
+-- counterparty twice, and nothing downstream notices: both are well-formed
+-- documents that reference the same original.
+--
+-- A **rejected** Storno is excluded, for the same reason a rejected RECHNUNG is
+-- excluded from `id_no_double_billing`: rejecting is how an operator discards a
+-- draft that never left the house. Counting one left the original stranded —
+-- it could not be reversed (this index refused a second attempt) and it could
+-- not be corrected honestly either (`has_storno` said it was already reversed),
+-- so a dispatched invoice had no way forward at all.
 CREATE UNIQUE INDEX id_one_storno_per_original
     ON invoice_drafts (tenant, original_draft_id)
-    WHERE rechnungsart = 'STORNORECHNUNG';
+    WHERE rechnungsart = 'STORNORECHNUNG' AND status <> 'rejected';
+
+-- ── Abschlag consumption ──────────────────────────────────────────────────────
+--
+-- An Abschlagsrechnung is a payment on account and is settled **once**: the
+-- Abschlussrechnung that names it deducts its gross from what is owed
+-- (§14 Abs. 5 UStG — the Anzahlung was taxed on receipt, so only the balance
+-- moves). Nothing tied the two documents together, so two consecutive monthly
+-- NN-Rechnungen could each name the same Abschlag and each deduct it: both
+-- well-formed, both passing INVOIC rule [526] on their own, and the second one
+-- collecting money the Netzbetreiber already had.
+--
+-- This table is that tie. One row per consumed Abschlag, and the primary key is
+-- the guard: a second invoice naming it is refused rather than stored.
+--
+-- Rows are **released**, not kept, when the consuming invoice stops standing —
+-- a Storno cancels its deductions with it, and rejecting a draft reopens the
+-- period — so the Abschlag becomes available to the Korrekturrechnung that
+-- replaces it.
+CREATE TABLE abschlag_verrechnungen (
+    tenant            TEXT        NOT NULL,
+    -- The Abschlagsrechnung (PID 31001) being settled.
+    abschlag_draft_id UUID        NOT NULL REFERENCES invoice_drafts(id) ON DELETE RESTRICT,
+    -- The invoice that deducts it.
+    invoice_draft_id  UUID        NOT NULL REFERENCES invoice_drafts(id) ON DELETE CASCADE,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT av_one_invoice_per_abschlag PRIMARY KEY (tenant, abschlag_draft_id)
+);
+
+COMMENT ON TABLE abschlag_verrechnungen IS
+    'Which invoice settled which Abschlagsrechnung. One row per Abschlag: an '
+    'Anzahlung is deducted once, and the primary key refuses a second deduction. '
+    'Released when the consuming invoice is reversed or rejected.';
+
+-- The release path deletes by consuming invoice.
+CREATE INDEX av_invoice ON abschlag_verrechnungen (tenant, invoice_draft_id);
 
 -- ── Redispatch 2.0 Kostenblatt ────────────────────────────────────────────────
 -- BK6-20-061 §4.2: the VNB submits a monthly Kostenblatt to the ÜNB by the 15th

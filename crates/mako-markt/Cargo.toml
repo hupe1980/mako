@@ -6,6 +6,7 @@ authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace     = true
 rust-version.workspace = true
 keywords         = ["energy", "mako", "bdew", "market-data", "bo4e"]
 categories       = ["data-structures", "web-programming"]

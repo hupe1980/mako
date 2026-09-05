@@ -86,7 +86,7 @@ use crate::cedar_authz::CedarAuthorizer;
 /// Expired deadlines returned by one `list_overdue_deadlines` call.
 const OVERDUE_PAGE: usize = 50;
 
-/// Expired deadlines scanned before §9 EnWG filtering is applied.
+/// Expired deadlines scanned before § 6a EnWG filtering is applied.
 ///
 /// Wider than [`OVERDUE_PAGE`] because the authorization filter runs on the
 /// scan result: in a combined-role deployment a page-sized scan could return
@@ -222,7 +222,7 @@ pub struct GetProcessParams {
 /// Workflow name used when a tool reads across every workflow at once.
 ///
 /// `ReadProcess` carries the workflow in its Cedar context so a VIU deployment
-/// can scope a principal to one arm (§9 EnWG). A cross-workflow listing has no
+/// can scope a principal to one arm (§ 6a EnWG). A cross-workflow listing has no
 /// single workflow to name, so it is evaluated against this wildcard: an
 /// unscoped grant permits it, a `context.workflow like "gpke-*"` grant does not.
 const ANY_WORKFLOW: &str = "*";
@@ -323,7 +323,7 @@ impl MakodMcpHandler {
     /// The listing spans every workflow, so it is evaluated against the
     /// wildcard workflow name. A policy that scopes a principal to one arm of a
     /// VIU deployment (`context.workflow like "gpke-sperrung*"`) therefore
-    /// denies the unfiltered listing outright — which is the intended §9 EnWG
+    /// denies the unfiltered listing outright — which is the intended § 6a EnWG
     /// answer: an NB-scoped principal must not receive a cross-workflow view,
     /// and there is nothing meaningful to filter it down to.
     fn require_any_process_read(&self, parts: &axum::http::request::Parts) -> Result<(), McpError> {
@@ -788,7 +788,7 @@ impl MakodMcpHandler {
                 p.business_key
             ))])),
             Some(id) => {
-                // §9 EnWG Informatorisches Unbundling: process reads are
+                // § 6a EnWG Informatorisches Unbundling: process reads are
                 // scoped per workflow — a VIU deployment can deny an
                 // NB-scoped principal access to LF process state. Deny with
                 // the same shape as not-found to avoid an existence oracle.
@@ -861,7 +861,7 @@ impl MakodMcpHandler {
     ///
     /// Source: APERAK AHB 1.0 §2.3 / §2.4; BK6-22-024 §5; BK7-24-01-009 §5.
     ///
-    /// §9 EnWG informatorisches Unbundling applies here exactly as it does to
+    /// § 6a EnWG informatorisches Unbundling applies here exactly as it does to
     /// [`Self::get_process`]: each entry names a workflow and its timing, so an
     /// unfiltered listing would tell an NB-scoped principal in a combined-role
     /// (VIU) deployment which supply-side processes exist and which are missing

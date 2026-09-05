@@ -2,11 +2,7 @@
 title = "Domain Model"
 description = "BDEW market role model, market objects (MaLo, MeLo, NeLo, NeBe), territory definitions, identifier formats with check-digit rules, and EDIFACT encoding for all identifiers used in German energy market communication."
 weight = 13
-[extra]
-mermaid = true
 +++
-# Domain Model — Market Roles, Objects, and Identifiers
-
 This page is the definitive reference for the BDEW **Rollenmodell für die
 Marktkommunikation im deutschen Energiemarkt** and all identifier types used
 across EDI@Energy messages. It is the shared vocabulary of the whole platform —
@@ -58,10 +54,11 @@ graph LR
 
 ## Table of Contents
 
-1. [Party Roles (Marktrollen)](#party-roles-marktrollen)
-2. [Market Objects (Objekte)](#market-objects-objekte)
-3. [Territories (Gebiete)](#territories-gebiete)
-4. [Identifier Formats](#identifier-formats)
+1. [Glossary](#glossary) — the terms the rest of the docs link to
+2. [Party Roles (Marktrollen)](#party-roles-marktrollen)
+3. [Market Objects (Objekte)](#market-objects-objekte)
+4. [Territories (Gebiete)](#territories-gebiete)
+5. [Identifier Formats](#identifier-formats)
    - [MP-ID — Marktpartner (13 digits)](#mp-id-marktpartner-13-digits)
    - [MaLo-ID — Marktlokation (11 digits)](#malo-id-marktlokation-11-digits)
    - [MeLo-ID — Messlokation (Zählpunktbezeichnung)](#melo-id-messlokation-zahlpunktbezeichnung)
@@ -69,12 +66,133 @@ graph LR
    - [NeBe-ID — Netzbereich (11 chars)](#nebe-id-netzbereich-11-chars)
    - [Ressourcen-ID — TR / SR / SG / CR (11 chars)](#ressourcen-id-tr-sr-sg-cr-11-chars)
    - [Paket-ID — Netzbetreiberwechsel (11 chars)](#paket-id-netzbetreiberwechsel-11-chars)
-5. [Check Digit Algorithms](#check-digit-algorithms)
-6. [EDIFACT Encoding](#edifact-encoding)
-7. [Rust API](#rust-api)
-8. [Quantities and money on the wire](#quantities-and-money-on-the-wire)
+6. [Check Digit Algorithms](#check-digit-algorithms)
+7. [EDIFACT Encoding](#edifact-encoding)
+8. [Rust API](#rust-api)
+   - [`Sparte` across layers](#sparte-across-layers-deliberately-distinct-enums)
+9. [Quantities and money on the wire](#quantities-and-money-on-the-wire)
    - [Rounding is kaufmännisch (DIN 1333)](#rounding-is-kaufmannisch-din-1333)
-9. [Dates and days](#dates-and-days)
+10. [Dates and days](#dates-and-days)
+11. [Gas Domain — GaBi Gas](#gas-domain-gabi-gas)
+12. [The BO4E gate](#the-bo4e-gate)
+13. [BO4E extensions: `ZusatzAttribut`](#bo4e-extensions-zusatzattribut)
+14. [Further Reading](#further-reading)
+
+---
+
+## Glossary
+
+The vocabulary the rest of the documentation links back to. Each term has a
+stable heading anchor.
+
+### Prüfidentifikator (PID)
+
+A five-digit code, `10000..=99999`, naming **one business transaction inside a
+message type** — `55001` is the GPKE Anmeldung in a UTILMD, `31009` the
+MSB-Rechnung in an INVOIC. It is not the message type and not the process: one
+UTILMD carries dozens of PIDs, and one process is a sequence of them (55001
+Anmeldung → 55002 Bestätigung *or* 55003 Ablehnung). On the wire it rides in `BGM` DE 1004 for most
+message types and in `SG1 RFF+Z13` for the rest; `edi_energy`'s `pid_scan` reads
+**both** regardless of which one the profile declares, because reading only the
+declared location makes a conformant partner's message undetectable — and an
+undetectable message is dropped without an APERAK. Both demand a *plausible*
+code, since `BGM` DE 1004 legitimately holds a Dokumentennummer. `edi_energy::Pruefidentifikator` validates the range at parse.
+
+The PID is what everything else is keyed on: `mako_engine::PidRouter` routes it
+to a workflow, `mako_fristen::antwort` resolves its answer Frist, and
+`mako-pruefung` picks the decision tree the answer must come from. `makod`
+currently routes **469** PIDs across **71** workflows — a count
+`services/makod/tests/published_counts.rs` holds this page to.
+
+### AHB and MIG
+
+Two BDEW documents per message type, and they answer different questions:
+
+| | Answers | Governs |
+|---|---|---|
+| **MIG** — Nachrichtenbeschreibung / Message Implementation Guide | „what may this message type contain?" | segment order, groups, cardinalities, which DE codes exist |
+| **AHB** — Anwendungshandbuch | „what must *this PID* contain?" | per-PID `M`/`K`/`X` requirements and the conditional expressions on them |
+
+A message can satisfy the MIG and violate the AHB: the MIG permits a segment the
+AHB makes mandatory for one PID and forbids for another. mako stores them as
+`profiles/<type>/<fv>/mig.json` and `ahb.json`, and validates against both.
+
+**Their version numbers differ** for every message type except UTILMD — an
+INVOIC MIG 2.1 pairs with an INVOIC AHB 1.0b — so citing „the AHB version" of a
+release is only meaningful per message type.
+
+### EBD — Entscheidungsbaumdiagramm
+
+The published decision trees that say **which answer a market participant owes**.
+BDEW prints them as *Entscheidungsbaum-Diagramme und Codelisten für die
+Antwortnachrichten*: each tree names a *prüfende Rolle*, walks numbered
+Prüfschritte, and lands on a code from **its own** Codeliste — so the same
+Antwortcode string means different things in different trees, and a lookup must
+name the tree (`mako_pruefung::codes::lookup`).
+
+`mako-pruefung` is those trees, executable, behind `role-*` features. The answer
+rides in `SG4 STS+E01` of the outbound UTILMD — the code in DE 9013, the EBD id
+in DE 1131 — or, for an invoice, in REMADV `AJT`.
+
+### Bilanzkreis and Bilanzierungsgebiet
+
+Both are 16-character ENTSO-E EIC codes and they look alike, which is the trap.
+They are different objects and ENTSO-E types them differently:
+
+| | EIC object type | What it is | `LOC` |
+|---|---|---|---|
+| **Bilanzkreis** (BK) | `X` — Party | the account energy is balanced in, held by a **BKV** | `237` |
+| **Bilanzierungsgebiet** (BG) | `Y` — Area | the grid region a Marktlokation balances **in** | `107` |
+
+The German codes are issued on that basis by Energie Codes und Services (EIC
+functions *Balance Group* and *Metering Grid Area*). A Bilanzierungsgebiet
+consolidates one or more Netzgebiete for settlement, and the synthetic (SLP) or
+analytical (RLM) method applies uniformly within it. `mako_mabis` keeps them as
+separate newtypes so one cannot be passed where the other belongs.
+
+### Frist and Werktag
+
+A **Frist** is a regulatory deadline stated by a Festlegung, resolved per PID by
+`mako_fristen::antwort` — never a flat duration. Windows come in four shapes: a
+wall-clock time on the *n*-th Werktag after the Übertragungstag (GPKE), the
+Ablauf of the *n*-th Werktag (GeLi Gas), a count of Werktage (WiM, NZR-EMob), and
+a clock time **am ÜT** itself. An unquantified PID returns `None` — *unknown*,
+never *unbounded*.
+
+A **Werktag** is, per GPKE (BK6-24-174) Teil 1 Kap. 7, „alle Tage …, die kein
+Samstag, Sonntag oder gesetzlicher Feiertag sind". **Saturday is not a Werktag.**
+A holiday observed in any single Bundesland counts nationwide, and 24.12. and
+31.12. count as holidays. The count starts on the day of receipt whatever weekday
+that is; only the Werktage *counted* skip weekends. The whole calendar lives in
+`mako-fristen`, including what „today" means — see
+[Dates and days](#dates-and-days).
+
+### EDIFACT message types
+
+Seventeen types, one profile directory each under `crates/edi-energy/profiles/`:
+
+| Type | Carries |
+|---|---|
+| **UTILMD** | Stammdaten und Geschäftsvorfälle — the GPKE, GeLi Gas, WiM and MaBiS process messages |
+| **MSCONS** | Messwerte: Lastgänge, Zählerstände, Summenzeitreihen, Allokationslisten |
+| **INVOIC** | Rechnung — Netznutzung, Mehr-/Mindermengen, Messstellenbetrieb |
+| **REMADV** | Zahlungsavis: the payer's answer to an INVOIC — 33001 confirms, 33002–33004 refuse |
+| **COMDIS** | the invoicer's refusal of a REMADV (29001) |
+| **ORDERS** | Auftrag — Sperren/Entsperren, Geräteübernahme, Wertebestellung |
+| **ORDRSP** | Auftragsantwort to an ORDERS |
+| **ORDCHG** | Auftragsänderung / Stornierung of an ORDERS |
+| **IFTSTA** | Statusmeldung — Auftragsstatus, WiM Umsetzungsstatus, MaBiS Datenstatus |
+| **APERAK** | Anwendungsfehler- und Bestätigungsmeldung — the technical acknowledgement |
+| **CONTRL** | Syntaxprüfung — the syntax-level acknowledgement, one layer below APERAK |
+| **UTILTS** | Berechnungsformel und Zählzeitdefinitionen |
+| **PRICAT** | Preiskatalog — Preisblätter |
+| **QUOTES** | Angebot |
+| **REQOTE** | Anfrage — the request an Angebot answers |
+| **PARTIN** | Marktpartner-Stammdaten (`PartnerStore` bootstrap) |
+| **INSRPT** | Prüfbericht — Störungsmeldung, Ablesesteuerung |
+
+An **interchange** (`UNB`…`UNZ`) may carry several messages (`UNH`…`UNT`) of one
+type; each message declares its own PID.
 
 ---
 
@@ -91,7 +209,7 @@ required for each role per commodity (Strom / Gas).
 | **LF** | Lieferant | Energy Supplier | ✅ | ✅ | Responsible for supplying energy to market locations, settling billing with the DSO, and financially compensating the balance between profiled and metered energy quantities. |
 | **NB** | Netzbetreiber | Distribution System Operator (DSO) | ✅ | ✅ | Responsible for grid operation, grid maintenance, and routing of energy. Creates and manages market locations, metering locations, and technical resources within the grid area. Aggregates energy quantities for settlement. Gas: responsible for forwarding metering values to trading partners. |
 | **ÜNB** | Übertragungsnetzbetreiber | Transmission System Operator (TSO) | ✅ | — | Responsible for transmission grid stability, EEG allocation time-series, and short-term plausibility checks within the control zone. One TSO = one Regelzone. In MABIS: bilateral MSCONS exchange with BKV (PID 13003). |
-| **MSB** | Messstellenbetreiber | Metering Point Operator | ✅ | ✅ | Responsible for installing, operating, and maintaining meters. **gMSB** (grundzuständig) is the incumbent — the NB by default, per §41 MsbG; **nMSB** (nicht-grundzuständig) is the challenger a customer may switch to; **aMSB** (abgebend) is the outgoing operator in a switch. Strom: distributes metered values, substitute values, and preliminary values to authorised partners. Gas: determines and forwards metering values to the DSO. |
+| **MSB** | Messstellenbetreiber | Metering Point Operator | ✅ | ✅ | Installs, operates and maintains meters. Strom: distributes metered, substitute and preliminary values to authorised partners. Gas: determines and forwards them to the DSO. Three prefixes distinguish the parties to a switch — see below. |
 | **BKV** | Bilanzkreisverantwortlicher | Balance Responsible Party (BRP) | ✅ | ✅ | Responsible for the energetic and financial balance within a Bilanzkreis. Counterparty to the BIKO (Strom) or MGV (Gas). |
 | **BIKO** | Bilanzkoordinator | Balance Coordinator | ✅ | — | Responsible for Bilanzkreisabrechnung (balance-circle settlement) and financial settlement between BKVs. See `mako-mabis` (PID 13003). |
 | **MGV** | Marktgebietsverantwortlicher | Market Area Manager | — | ✅ | Responsible for gas balance circle settlement and procurement/dispatch of balancing energy. Operates the virtual trading hub. |
@@ -99,8 +217,25 @@ required for each role per commodity (Strom / Gas).
 | **BTR** | Betreiber einer technischen Ressource | Technical Resource Operator | ✅ | — | Installs, operates, and maintains technical resources (generators, controllable loads). Does not change with DSO ownership transfer. |
 | **EIV** | Einsatzverantwortlicher | Dispatch Responsible Party | ✅ | — | Responsible for deploying controllable resources. Assigns SR-IDs to steuerable resources. Central actor in Redispatch 2.0. |
 | **DP** | Data Provider | Data Provider | ✅ | — | Forwards information to authorised trading partners on behalf of the DSO or MSB. |
-| **ESA** | Energieserviceanbieter des Anschlussnutzers | Consumer-side Energy Service Provider | ✅ | — | Acts on behalf of the end-customer (Anschlussnutzer) to request and process metering data. Has no Zuordnung to a Marktlokation: access rests on the Anschlussnutzer's consent (§49 Abs. 2 Nr. 9 MsbG) plus a bilateral contract with the MSB, which §34 Abs. 2 S. 2 Nr. 10 MsbG makes a mandatory, non-discriminatory Zusatzleistung. Data may be used only in the consumer relationship. See `Marktrolle::Esa`. |
+| **ESA** | Energieserviceanbieter des Anschlussnutzers | Consumer-side Energy Service Provider | ✅ | — | Requests and processes metering data on behalf of the end-customer (Anschlussnutzer). Unlike every other role it holds **no Zuordnung** to a Marktlokation — see below. `Marktrolle::Esa`. |
 | **RB** | Registerbetreiber | Registry Operator | ✅ | ✅ | Operates a database for energy market data (e.g., the national Marktstammdatenregister). |
+
+**The three MSB prefixes name the parties to a Messstellenbetreiberwechsel, not
+three kinds of company.** The **gMSB** (grundzuständig) is the incumbent — the NB
+by default, per §41 MsbG. The **nMSB** (nicht-grundzuständig) is the challenger a
+customer may switch to. The **aMSB** (abgebend) is whoever is being replaced in a
+given switch, which is a role in *that* transaction: today's nMSB is tomorrow's
+aMSB. WiM processes are keyed on the pair, so reading the prefix as a property of
+the company rather than of the switch mis-routes every second Wechsel.
+
+**The ESA is the one role with no Zuordnung**, and that is its defining feature.
+Every other market role reaches a Marktlokation through an assignment the NB
+records. The ESA reaches it through the customer instead: access rests on the
+Anschlussnutzer's consent (§49 Abs. 2 Nr. 9 MsbG) plus a bilateral contract with
+the MSB, which §34 Abs. 2 S. 2 Nr. 10 MsbG makes a mandatory, non-discriminatory
+Zusatzleistung — so the MSB may not refuse the contract, and may not price it
+discriminatorily. Data obtained this way may be used only in the consumer
+relationship it was consented for.
 
 ### Role pairs in key processes
 
@@ -206,9 +341,18 @@ company holds one MP-ID per role per Sparte.
 **Alternative: GLN (GS1, 13 digits).** When the code holder uses a GS1-issued
 Global Location Number, the GS1 check-digit algorithm applies (EAN-13).
 
-**EDIFACT DE3055 qualifier:**
-- `293` — BDEW-Codenummer or DVGW-Codenummer
-- `9` — GS1 GLN
+**EDIFACT DE3055 qualifier** — three code schemes are in active use, and the
+qualifier is what says which:
+
+| Scheme | Shape | DE 3055 | Typical holders |
+|---|---|---|---|
+| BDEW- or DVGW-Codenummer | 13 numeric | `293` | LF, NB/VNB, MSB, BKV — the dominant scheme |
+| GS1 **GLN** | 13 numeric | `9` | the global GS1 scheme; rare in German MaKo |
+| ENTSO-E **EIC** | 16 alphanumeric | `305` | ÜNB, Regelzonen, cross-border |
+
+`MarktpartnerCode` stores the value **without** the agency qualifier;
+`edi_energy::AgencyCode::for_mp_id` derives the right one when rendering an
+outbound NAD segment.
 
 **Segments:** `UNB DE0004` (sender), `UNB DE0010` (recipient), `NAD DE3035 = MS`
 (message sender), `NAD DE3035 = MR` (message recipient).
@@ -308,7 +452,7 @@ format, distinguished by the first character.
 ### Paket-ID — Netzbetreiberwechsel (11 chars)
 
 Identifies a bundle of market locations affected by a DSO ownership transfer
-(Netzbetreiberwechsel). Used in PARTIN messages (`mako-nbw`).
+(Netzbetreiberwechsel). Used in PARTIN messages.
 
 | Position | Length | Content |
 |---|---|---|
@@ -393,23 +537,61 @@ The MP-ID in UNB **must be identical** to the MP-ID in the corresponding NAD+MS
 | `MS` | Message sender (Nachrichtenabsender) — always the same party as UNB DE0004 |
 | `MR` | Message receiver (Nachrichtenempfänger) — always the same party as UNB DE0010 |
 
-Code scheme (DE3055): `293` for BDEW-Code or DVGW-Code; `9` for GS1 GLN.
+Code scheme (DE 3055): `293` BDEW- or DVGW-Code, `9` GS1 GLN, `305` ENTSO-E EIC —
+see [MP-ID](#mp-id-marktpartner-13-digits).
 
-### Market / metering location (IDE segment, DE3129 qualifier)
+### Market / metering location — `SG5 LOC`, not `IDE`
 
-The qualifier in `IDE DE3129` identifies which type of object the `IDE DE3130`
-value refers to. Common qualifiers:
+**`IDE` does not name the object.** Its DE 7495 has exactly two values — `24` for
+a Vorgang and `Z01` for a Liste — and its DE 7402 carries the **Vorgangsnummer**,
+not a location. The object a Vorgang is about is named one segment group down, in
+`SG5 LOC`: DE 3227 is the qualifier and DE 3225 the identifier value.
 
-| Qualifier | Object type | Identifier format |
+| `LOC` DE 3227 | Object | DE 3225 format |
 |---|---|---|
-| `Z01` | Marktlokation (MaLo) | 11-digit MaLo-ID |
-| `Z01` | Messlokation (MeLo) / MaBiS-ZP | 33-char Zählpunktbezeichnung (Strom) or 11-char (Gas) |
-| `Z08` | Netzlokation (NeLo) | 11-char NeLo-ID (prefix `E`) |
+| `Z15` | MaBiS-Zählpunkt | 33-char Zählpunktbezeichnung |
+| `Z16` | Marktlokation (MaLo) | 11-digit MaLo-ID |
+| `Z17` | Messlokation (MeLo) | 33-char Zählpunktbezeichnung |
+| `Z18` | Netzlokation (NeLo) | 11-char NeLo-ID, prefix `E` |
+| `Z19` | Steuerbare Ressource (SR) | SR-ID, prefix `C` |
+| `Z20` | Technische Ressource (TR) | TR-ID, prefix `D` |
+| `Z21` | Tranche | Tranchen-ID |
+| `Z22` | Ruhende Marktlokation | 11-digit MaLo-ID (§ 20 Abs. 1d EnWG / § 10c EEG) |
+| `172` | Meldepunkt — the **Gas** qualifier | see below |
 
-> **Note:** Both MaLo and MeLo use qualifier `Z01` in the IDE segment. The
-> object type is determined by context (message type and segment group), not
-> the qualifier alone. A UTILMD GPKE message references a MaLo-ID; a UTILMD WiM
-> message for Zählerstandsgangmessung references a MeLo-ID.
+The Rust mirror is `edi_energy::Lokationstyp`, whose `qualifier_code()` /
+`from_qualifier_code()` are the only place these strings are written. The codes
+above are the ones the MIG lists for `LOC` DE 3227 (Strom S2.2 Zähler 0330
+Nr. 00046–00053; Gas G1.2 likewise).
+
+> **Gas does not use `Z16`/`Z17`.** UTILMD AHB Gas G1.1/G1.2 uses one qualifier,
+> `LOC+172` Meldepunkt, for every Lokation and distinguishes Marktlokation from
+> Messlokation by the **format of DE 3225** — an 11-digit MaLo against a 33-char
+> Zählpunktbezeichnung — rather than by the qualifier. A parser keying on the
+> qualifier alone reads every Gas Meldepunkt as neither.
+
+#### MSCONS `SG6 LOC` — a different set, and a dangerous pair
+
+MSCONS carries three `LOC` qualifiers whose values the MIG leaves as free text,
+so **length is the only thing separating two of them**:
+
+| `LOC` DE 3227 | Object | DE 3225 format |
+|---|---|---|
+| `172` | Meldepunkt — the point a Summenzeitreihe is filed under | 33-char Zählpunktbezeichnung |
+| `107` | Bilanzierungsgebiet | 16-char EIC, object type `Y` (Area) |
+| `237` | **Bilanzkreis** | 16-char EIC, object type `X` (Party) |
+
+A message that puts the Bilanzierungsgebiet EIC in `LOC+172` parses, validates
+and is **accepted by the BIKO**, which then files the series against the wrong
+Meldepunkt — and nothing downstream can tell that apart from a correct
+submission. `mako_mabis::MabisZaehlpunktId` and
+`mako_mabis::BilanzierungsgebietId` are separate newtypes for exactly that
+reason: the 33-character constructor rejects a 16-character EIC before it
+reaches the wire, and passing one where the other belongs is a compile error.
+
+Inbound commands deliberately keep a plain `String`. A counterparty's malformed
+Meldepunkt has to be *representable* before the workflow can reject it properly;
+parsing into a type belongs on values mako produces.
 
 ### File naming convention
 
@@ -480,35 +662,25 @@ All types:
 
 ### `Sparte` across layers — deliberately distinct enums
 
-Four crates define their own `Sparte` enum. This is **by design**, not
-duplication — each models a different domain with a different legal variant
-set, and two of the serde casings are load-bearing wire formats:
+Six `Sparte` enums coexist — five of mako's own plus the one in the external
+`metering` crate. This is **by design**, not duplication: each models a
+different domain with a different legal variant set, and two of the serde
+casings are load-bearing wire formats:
 
-| Crate | Variants | Why |
+| Enum | Variants | Why |
 |---|---|---|
-| `metering::Sparte` | Strom, Gas, **Waerme, Wasser** | Physical metering commodities — heat/water submetering under HeizkostenV is metered but is *not* market communication |
+| `metering::Sparte` (external) | Strom, Gas, **Waerme, Wasser** | Physical metering commodities — heat/water submetering under HeizkostenV is metered but is *not* market communication |
 | `mako-engine::types::Sparte` | Strom, Gas | MaKo message routing — selects the WiM APERAK Frist (5 vs 10 Werktage); serialized **lowercase** in stored process events |
 | `mako-markt::Sparte` | Strom, Gas | MaKo master data — a Marktlokation exists only for Strom/Gas; serialized **SCREAMING_SNAKE** at the REST boundary |
 | `grid-billing::Sparte` | Strom, Gas | Legal-reference selector (StromNEV vs GasNEV) — regulated grid settlement has no Waerme/Wasser |
+| `mako-pruefung::msb::types::Sparte` | Strom, Gas | Selects the Entscheidungsbaum a WiM answer is read against — the trees differ per Sparte, so this is the discriminator a walk takes |
+| `mako-nbw::Sparte` | Strom, Gas | Selects the Netzbetreiberwechsel Anwendungshilfe — the two publish different Fristenkalender, and Gas has no Paket-ID at all |
 
 Adding Waerme/Wasser to the MaKo-side enums would create invalid states (a
 Wasser MaLo cannot exist), and unifying the serde casings would break stored
 event streams and the public REST contract. The same reasoning applies to the
 SQL CHECKs: `marktd` restricts `sparte` to `STROM`/`GAS`, while `edmd` also
 accepts `WAERME`/`WASSER` for submetering series.
-
----
-
-## Further Reading
-
-| Topic | Document |
-|---|---|
-| Full PID table for all process families | [PID Reference](@/docs/regulatory/pid-reference.md) |
-| BNetzA rulings governing each process | [BNetzA Regulatory Reference](@/docs/regulatory/bnetza.md) |
-| How EDIFACT messages are parsed and validated | [Parsing Guide](@/docs/reference/parsing.md) |
-| How the engine routes messages to workflows | [Process Engine](@/docs/architecture/engine.md) |
-| BO4E objects in ERP integration | [ERP Integration](@/docs/architecture/erp-integration.md) |
-| Gas balancing domain model | [GaBi Gas domain](#gas-domain-gabi-gas) (below) |
 
 ---
 
@@ -653,8 +825,10 @@ season, so a calendar-day window mis-books a quarter of each day.
 ## Gas Domain — GaBi Gas
 
 The `mako-gabi-gas` crate provides a dedicated domain vocabulary for the German
-gas market, all in `src/domain.rs` and `src/portfolio.rs`. All energy quantities
-use `Decimal` — no float arithmetic (**DVGW G 685 requires ≥ 3 decimal places**).
+gas market, in `domain.rs` (the measured quantities) and `portfolio.rs` (the BKV
+portfolio aggregation — `GasMarketRole`, `PortfolioPosition`,
+`GasPortfolioBalance`). All energy quantities use `Decimal` — no float arithmetic
+(**DVGW G 685 requires ≥ 3 decimal places**).
 
 ### GasDay — typed gas market day
 
@@ -714,30 +888,6 @@ ALOCAT messages may be sent as initial, corrected, or final allocations:
 | `Initial` | First ALOCAT for this gas day — preliminary |
 | `Correction(n)` | nth corrected allocation (1-based) |
 | `Final` | Binding for imbalance settlement — no further corrections |
-
-### GasMarketRole
-
-| Role | `GasMarketRole` | Notes |
-|---|---|---|
-| Bilanzkreisverantwortlicher | `Bkv` | Submits NOMINT; receives ALOCAT; subject to IMBNOT |
-| Fernleitungsnetzbetreiber | `Fnb` | Receives NOMINT; answers with NOMRES |
-| Verteilnetzbetreiber | `Vnb` | Sends ALOCAT to the MGV |
-| Marktgebietsverantwortlicher | `Mgv` | Sends ALOCAT to the BKV; imbalance settlement |
-| Lieferant | `Lf` | Supplies end customers; does not submit DVGW nominations directly |
-| Händler | `Haendler` | May submit nominations and delivery orders |
-
-### GasPortfolioBalance
-
-`GasPortfolioBalance` aggregates all BKV positions across Bilanzkreise for a
-gas day, enabling portfolio-level imbalance management:
-
-```rust
-let balance: GasPortfolioBalance = compute_portfolio(bkv_eic, gas_day, positions);
-println!("Net imbalance: {} kWh",  balance.net_imbalance_kwh());
-println!("Direction: {:?}",         balance.portfolio_direction()); // Mehr/Minder/Balanced
-println!("Open positions: {}",      balance.open_imbalance_count());
-println!("Fully settled: {}",       balance.is_fully_settled());
-```
 
 ### Gas identifier formats
 
@@ -944,3 +1094,16 @@ Two rules follow:
   the **whole document**. A document that fails the outbound gate is therefore
   either one a reader silently cannot understand, one they cannot parse at all,
   or one they openly dispute.
+
+---
+
+## Further Reading
+
+| Topic | Document |
+|---|---|
+| Full PID table for all process families | [PID Reference](@/docs/regulatory/pid-reference.md) |
+| BNetzA rulings governing each process | [BNetzA Regulatory Reference](@/docs/regulatory/bnetza.md) |
+| How EDIFACT messages are parsed and validated | [Parsing Guide](@/docs/reference/parsing.md) |
+| How the engine routes messages to workflows | [Process Engine](@/docs/architecture/engine.md) |
+| BO4E objects in ERP integration | [ERP Integration](@/docs/architecture/erp-integration.md) |
+| Gas balancing domain model | [GaBi Gas domain](#gas-domain-gabi-gas) (below) |

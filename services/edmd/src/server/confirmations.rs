@@ -1,9 +1,9 @@
-//! § 60 Abs. 2 MsbG estimated-reading confirmation obligations.
+//! § 60 Abs. 1 MsbG estimated-reading confirmation obligations.
 
 #[allow(unused_imports)]
 use super::*;
 
-// ── § 60 Abs. 2 MsbG confirmations ────────────────────────────────────────────
+// ── § 60 Abs. 1 MsbG confirmations ────────────────────────────────────────────
 
 #[derive(serde::Deserialize)]
 pub(crate) struct ConfirmationListParams {
@@ -15,7 +15,7 @@ pub(crate) struct ConfirmationListParams {
 /// `GET /api/v1/confirmations?status=&limit=`
 ///
 /// Open/overdue obligations to replace estimated or substituted intervals
-/// with plausibilised real values (§ 60 Abs. 2 MsbG). Resolution happens
+/// with plausibilised real values (§ 60 Abs. 1 MsbG). Resolution happens
 /// automatically on ingest of a MEASURED/CORRECTED value for the same slot.
 pub(crate) async fn list_confirmations(
     claims: Claims,
@@ -37,7 +37,7 @@ pub(crate) async fn list_confirmations(
     let limit = params.limit.unwrap_or(200).clamp(1, 2000);
     // An unrecognised status is refused rather than returning an empty list: an
     // operator filtering on a typo would otherwise read "no open obligations"
-    // off a § 60 Abs. 2 queue that is not empty.
+    // off a § 60 Abs. 1 queue that is not empty.
     const STATUSES: [&str; 3] = ["OFFEN", "BESTAETIGT", "UEBERFAELLIG"];
     let status = params.status.as_deref().map(str::trim);
     if let Some(s) = status.filter(|s| !STATUSES.contains(s)) {
@@ -97,7 +97,7 @@ pub(crate) async fn list_confirmations(
             Json(serde_json::json!({
                 "count": items.len(),
                 "confirmations": items,
-                "legal_basis": "§ 60 Abs. 2 MsbG (Plausibilisierung und Ersatzwertbildung)",
+                "legal_basis": "§ 60 Abs. 1 MsbG (Aufbereitung und Übermittlung an die berechtigten Stellen)",
             }))
             .into_response()
         }

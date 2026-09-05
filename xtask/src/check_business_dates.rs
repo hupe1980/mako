@@ -210,7 +210,17 @@ fn reads_component_of(line: &str, receiver: &str) -> bool {
     false
 }
 
-/// The local bound to `OffsetDateTime::now_utc()` on `line`, if any.
+/// The local bound to the UTC clock on `line`, if any.
+///
+/// Any `let x = … now_utc() …;` counts, not only a binding whose whole
+/// right-hand side is the call: `let now = now_utc() - Duration::days(14);`
+/// and `let now = OffsetDateTime::now_utc().replace_time(midnight);` are the
+/// same clock one operator further on, and `now.day()` on either answers the
+/// UTC day.
+///
+/// A right-hand side that names a German-local helper is the *fix*, not the
+/// bug — `berlin_date(now_utc())` is a Berlin date, and reading a component off
+/// it is correct.
 fn binding_of_now_utc(line: &str) -> Option<String> {
     let rest = line.trim_start().strip_prefix("let ")?;
     let rest = rest.strip_prefix("mut ").unwrap_or(rest);
@@ -220,8 +230,10 @@ fn binding_of_now_utc(line: &str) -> Option<String> {
         return None;
     }
     let tail = tail.trim();
-    (tail.ends_with("OffsetDateTime::now_utc();") || tail == "OffsetDateTime::now_utc();")
-        .then(|| name.to_owned())
+    if tail.contains("berlin_") || tail.contains("heute(") {
+        return None;
+    }
+    tail.contains("now_utc()").then(|| name.to_owned())
 }
 
 /// The local rebound on `line` to anything at all.
@@ -234,21 +246,93 @@ fn rebound_name(line: &str) -> Option<String> {
         .then(|| name.to_owned())
 }
 
+/// The one zone a German business date may be read in.
+const BERLIN: &str = "'EUROPE/BERLIN'";
+
 /// Whether `line` derives a calendar date or component from the SQL clock.
 ///
 /// `now()` itself is fine — it is an instant, and `TIMESTAMPTZ DEFAULT now()`
 /// is the right way to stamp one. What is refused is casting or extracting a
-/// *civil* value out of it without naming the time zone.
+/// *civil* value out of it without naming the time zone, in any of the
+/// spellings Postgres offers: `now()::date`, `cast(now() as date)`,
+/// `date(now())`, `date_trunc('day', now())::date` and the cast chain
+/// `now()::timestamp::date` all answer the same wrong question.
+///
+/// And `AT TIME ZONE` is the sharpest of them. Every schema defines `heute()`
+/// as `(now() AT TIME ZONE 'Europe/Berlin')::date`, so the wrong-zone twin is
+/// one word away and reads as deliberate: it names *a* zone, which is exactly
+/// what the correct form does. A civil value taken in any other zone is a
+/// finding.
 fn sql_reads_the_clock(line: &str) -> bool {
     let upper = line.to_ascii_uppercase();
     if upper.contains("CURRENT_DATE") || upper.contains("LOCALTIMESTAMP") {
         return true;
     }
     let squeezed: String = upper.chars().filter(|c| !c.is_whitespace()).collect();
-    squeezed.contains("NOW()::DATE")
-        || squeezed.contains("CURRENT_TIMESTAMP::DATE")
+    squeezed.contains("CURRENT_TIMESTAMP::DATE")
         || squeezed.contains("TO_CHAR(NOW()")
+        || squeezed.contains("CAST(NOW()ASDATE")
+        || squeezed.contains("DATE(NOW())")
         || (squeezed.contains("FROMNOW())") && squeezed.contains("EXTRACT("))
+        || cast_to_date_after_now(&squeezed)
+        || civil_value_in_another_zone(&squeezed)
+}
+
+/// Whether a `now()` is cast to a date, through any chain of casts and parens.
+///
+/// `now()::date`, `now()::timestamp::date` and `date_trunc('day', now())::date`
+/// are one rule: after the call, nothing but `)` and `::<type>` stands between
+/// the clock and the date it is reduced to.
+fn cast_to_date_after_now(squeezed: &str) -> bool {
+    let mut rest = squeezed;
+    while let Some(at) = rest.find("NOW()") {
+        let mut after = &rest[at + "NOW()".len()..];
+        loop {
+            if let Some(tail) = after.strip_prefix(')') {
+                after = tail;
+                continue;
+            }
+            let Some(tail) = after.strip_prefix("::") else {
+                break;
+            };
+            let ident: String = tail
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if ident.is_empty() {
+                break;
+            }
+            if ident == "DATE" {
+                return true;
+            }
+            after = &tail[ident.len()..];
+        }
+        rest = &rest[at + "NOW()".len()..];
+    }
+    false
+}
+
+/// Whether a value is moved to a zone other than Berlin and then read as a
+/// civil date or component.
+fn civil_value_in_another_zone(squeezed: &str) -> bool {
+    let extracted = squeezed.contains("EXTRACT(") || squeezed.contains("TO_CHAR(");
+    let mut rest = squeezed;
+    while let Some(at) = rest.find("ATTIMEZONE") {
+        let after = &rest[at + "ATTIMEZONE".len()..];
+        rest = after;
+        if after.starts_with(BERLIN) {
+            continue;
+        }
+        // Step over the zone literal to see what is done with the result.
+        let tail = after
+            .strip_prefix('\'')
+            .and_then(|t| t.find('\'').map(|i| &after[i + 2..]))
+            .unwrap_or(after);
+        if tail.trim_start_matches(')').starts_with("::DATE") || extracted {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -317,6 +401,67 @@ mod tests {
                    \"... DEFAULT extract(year FROM now())\"\n\
                    \"... DEFAULT 'RV-' || to_char(now(), 'YYYY')\"\n";
         assert_eq!(offending_lines(src).len(), 4);
+    }
+
+    /// The spellings a per-idiom list misses. Postgres offers five ways to
+    /// reduce `now()` to a civil date and they all answer the UTC one.
+    #[test]
+    fn flags_every_spelling_of_a_civil_date_off_the_clock() {
+        let src = "\"SELECT date_trunc('day', now())::date\"\n\
+                   \"SELECT CAST(now() AS date)\"\n\
+                   \"SELECT date(now())\"\n\
+                   \"SELECT now()::timestamp::date\"\n\
+                   \"SELECT now()::date\"\n";
+        assert_eq!(offending_lines(src).len(), 5, "{:?}", offending_lines(src));
+    }
+
+    /// The wrong-zone twin of `heute()`. It names *a* zone, which is what the
+    /// correct form does, so nothing but the zone itself gives it away.
+    #[test]
+    fn flags_a_civil_value_taken_in_another_zone() {
+        let src = "\"SELECT (now() AT TIME ZONE 'UTC')::date\"\n\
+                   \"SELECT extract(year FROM (now() AT TIME ZONE 'UTC'))\"\n";
+        assert_eq!(offending_lines(src).len(), 2, "{:?}", offending_lines(src));
+    }
+
+    /// …and the form every schema defines `heute()` with must pass, or the
+    /// rule above would flag the definition it is measured against.
+    #[test]
+    fn the_berlin_zone_is_the_correct_form() {
+        let src = "\"CREATE FUNCTION heute() RETURNS date AS $$ \
+                   SELECT (now() AT TIME ZONE 'Europe/Berlin')::date $$\"\n\
+                   \"SELECT created_at AT TIME ZONE 'UTC' AS shown\"\n";
+        assert!(
+            offending_lines(src).is_empty(),
+            "{:?}",
+            offending_lines(src)
+        );
+    }
+
+    /// The clock one operator further on is still the clock.
+    #[test]
+    fn a_derived_binding_is_still_the_utc_clock() {
+        let src = "fn history() {\n\
+                   \x20   let since = time::OffsetDateTime::now_utc() - Duration::days(30);\n\
+                   \x20   let label = since.date();\n\
+                   }\n";
+        let hits = offending_lines(src);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(hits[0].0.contains("since.date()"));
+    }
+
+    /// A right-hand side that converts to German local time is the fix.
+    #[test]
+    fn a_berlin_conversion_is_not_a_clock_binding() {
+        let src = "fn a() {\n\
+                   \x20   let today = mako_fristen::berlin_date(OffsetDateTime::now_utc());\n\
+                   \x20   let y = today.year();\n\
+                   }\n";
+        assert!(
+            offending_lines(src).is_empty(),
+            "{:?}",
+            offending_lines(src)
+        );
     }
 
     #[test]

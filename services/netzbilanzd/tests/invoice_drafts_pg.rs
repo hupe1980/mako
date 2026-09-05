@@ -601,6 +601,136 @@ async fn a_deduction_matches_the_stored_abschlag_and_refuses_a_reversed_one() {
     });
 }
 
+/// **Invariant: an Abschlagsrechnung is deducted from exactly one invoice.**
+///
+/// An Abschlag is a payment on account; the Abschlussrechnung that names it
+/// deducts its gross from what is owed. Nothing tied the two documents together,
+/// so two consecutive monthly NN-Rechnungen could each name the same Abschlag
+/// and each deduct it — both well-formed, both passing INVOIC rule [526] on
+/// their own, and the second collecting money the Netzbetreiber already held.
+///
+/// Guarded on both paths: `load_abschlaege` refuses it on the read, and the
+/// primary key refuses it on the write, which is what two concurrent billing
+/// runs need.
+#[tokio::test]
+async fn an_abschlag_is_deducted_from_one_invoice_only() {
+    with_pg!(|pool| {
+        let mut abschlag = Draft::nne("t1", MALO, "ABS-2026-000001");
+        abschlag.pid = 31001;
+        abschlag.settlement_type = "NneAbschlag";
+        abschlag.netto_eur_units = 10_000_000;
+        let paid = abschlag.insert(&pool).await.expect("insert");
+
+        let mut conn = pool.acquire().await.expect("acquire");
+        mark_dispatched(
+            &mut conn,
+            "t1",
+            paid,
+            "process-1",
+            &serde_json::json!({ "_typ": "RECHNUNG" }),
+            CheckOutcome::Ok,
+            &serde_json::json!([]),
+        )
+        .await
+        .expect("dispatch");
+
+        // January's Abschlussrechnung settles it.
+        let january = Draft::nne("t1", MALO, "NNE-2026-000001")
+            .insert(&pool)
+            .await
+            .expect("insert");
+        pg::record_abschlag_verrechnungen(&mut conn, "t1", january, &[paid])
+            .await
+            .expect("the first deduction stands");
+
+        // February's cannot name the same Abschlag — refused on the read…
+        let refused = pg::load_abschlaege(&mut conn, "t1", MALO, &[paid])
+            .await
+            .expect("query");
+        let problems = refused.expect_err("an Abschlag already settled cannot be deducted again");
+        assert!(
+            problems[0].contains("NNE-2026-000001"),
+            "the refusal names the invoice that settled it: {problems:?}"
+        );
+
+        // …and on the write, which is the guard two concurrent runs need.
+        let february = Draft::nne("t1", MALO, "NNE-2026-000002")
+            .period_ending(date!(2026 - 02 - 28))
+            .insert(&pool)
+            .await
+            .expect("insert");
+        assert!(
+            matches!(
+                pg::record_abschlag_verrechnungen(&mut conn, "t1", february, &[paid]).await,
+                Err(InsertDraftError::AbschlagAlreadyDeducted)
+            ),
+            "a second deduction must be refused by the database, not only by the read"
+        );
+
+        // Reversing January releases it, so the Korrekturrechnung can settle it.
+        pg::release_abschlag_verrechnungen(&pool, "t1", january)
+            .await
+            .expect("release");
+        assert_eq!(
+            pg::load_abschlaege(&mut conn, "t1", MALO, &[paid])
+                .await
+                .expect("query")
+                .expect("deductible again")
+                .len(),
+            1
+        );
+    });
+}
+
+/// Rejecting a draft releases the Abschläge it settled along with the period.
+///
+/// Reopening the period without reopening its Anzahlungen strands them: the
+/// re-billed invoice cannot deduct money the customer has already paid.
+#[tokio::test]
+async fn rejecting_a_draft_releases_its_abschlaege() {
+    with_pg!(|pool| {
+        let mut abschlag = Draft::nne("t1", MALO, "ABS-2026-000001");
+        abschlag.pid = 31001;
+        abschlag.settlement_type = "NneAbschlag";
+        let paid = abschlag.insert(&pool).await.expect("insert");
+
+        let mut conn = pool.acquire().await.expect("acquire");
+        mark_dispatched(
+            &mut conn,
+            "t1",
+            paid,
+            "process-1",
+            &serde_json::json!({ "_typ": "RECHNUNG" }),
+            CheckOutcome::Ok,
+            &serde_json::json!([]),
+        )
+        .await
+        .expect("dispatch");
+
+        let first = Draft::nne("t1", MALO, "NNE-2026-000001")
+            .insert(&pool)
+            .await
+            .expect("insert");
+        pg::record_abschlag_verrechnungen(&mut conn, "t1", first, &[paid])
+            .await
+            .expect("deduct");
+
+        assert!(
+            reject_draft(&pool, "t1", first, "Ablesefehler")
+                .await
+                .expect("reject")
+        );
+
+        let second = Draft::nne("t1", MALO, "NNE-2026-000002")
+            .insert(&pool)
+            .await
+            .expect("the period is billable again");
+        pg::record_abschlag_verrechnungen(&mut conn, "t1", second, &[paid])
+            .await
+            .expect("and so is the Abschlag it settles");
+    });
+}
+
 /// Rejecting a draft reopens the period.
 #[tokio::test]
 async fn rejecting_a_draft_reopens_the_period() {
@@ -1531,4 +1661,287 @@ async fn the_stored_settlement_input_round_trips() {
             "a Storno recomputes from this input, so it has to survive the round trip"
         );
     });
+}
+
+// ── A rejected Storno leaves the original standing ───────────────────────────
+
+/// Insert a Stornorechnung against `original`.
+async fn insert_storno(
+    pool: &sqlx::PgPool,
+    tenant: &'static str,
+    nummer: &'static str,
+    original: Uuid,
+) -> Result<Uuid, InsertDraftError> {
+    let mut conn = pool.acquire().await.expect("acquire");
+    insert_draft(
+        &mut conn,
+        &NewDraft {
+            tenant,
+            malo_id: MALO,
+            sender_mp_id: NB,
+            recipient_mp_id: LF,
+            pid: 31002,
+            sparte: "STROM",
+            settlement_type: "NneStrom",
+            period_from: date!(2026 - 01 - 01),
+            period_to: date!(2026 - 01 - 31),
+            rechnungsnummer: nummer,
+            invoice_date: date!(2026 - 02 - 01),
+            due_date: date!(2026 - 03 - 03),
+            settlement_input: settlement_input(Sparte::Strom),
+            rechnung: serde_json::json!({ "_typ": "RECHNUNG", "istStorno": true }),
+            netto_eur_units: -123_456_000,
+            steuer_eur_units: -23_456_640,
+            brutto_eur_units: -146_912_640,
+            zu_zahlen_eur_units: -146_912_640,
+            steuer_kategorie: "S",
+            steuer_satz_prozent: rust_decimal::Decimal::from(19),
+            check_outcome: CheckOutcome::Ok,
+            check_findings: serde_json::json!([]),
+            settlement_warnings: serde_json::json!([]),
+            rechnungsart: "STORNORECHNUNG",
+            original_draft_id: Some(original),
+            korrektur_grund: Some("MESSWERTKORREKTUR"),
+        },
+    )
+    .await
+}
+
+/// A Storno that is itself rejected must leave the original exactly where it was.
+///
+/// The state path that stranded it:
+///
+/// 1. `NNE-…001` is dispatched, deducting Abschlag `ABS-…001`.
+/// 2. `POST /drafts/{id}/storno` writes a STORNORECHNUNG **draft** and — this
+///    was the defect — released the original's `abschlag_verrechnungen` there
+///    and then, while the original was still standing as a dispatched invoice
+///    that deducts them on the wire.
+/// 3. The operator rejects the Storno draft.
+///
+/// What was left: the original still `dispatched`, but `has_storno` said it was
+/// already reversed (so no Korrekturrechnung could name it honestly) and
+/// `id_one_storno_per_original` refused a second attempt (so it could not be
+/// reversed either) — a dispatched invoice with no move available. And the
+/// Anzahlung was free, so a second invoice could deduct money the customer had
+/// already paid, against an invoice that had never been credited.
+///
+/// The terminal state after a rejected Storno is therefore: **the original
+/// stands, whole**. It is dispatched, it still holds its deductions, and a
+/// fresh Storno is the way forward.
+#[tokio::test]
+async fn a_rejected_storno_leaves_the_original_standing_and_its_abschlaege_held() {
+    with_pg!(|pool| {
+        let mut conn = pool.acquire().await.expect("acquire");
+
+        // A dispatched Abschlagsrechnung the customer has paid on account.
+        let abschlag = Draft::abschlag("t1", MALO, "ABS-2026-000001", date!(2026 - 01 - 15))
+            .insert(&pool)
+            .await
+            .expect("insert Abschlag");
+        mark_dispatched(
+            &mut conn,
+            "t1",
+            abschlag,
+            "process-abs",
+            &serde_json::json!({ "_typ": "RECHNUNG" }),
+            CheckOutcome::Ok,
+            &serde_json::json!([]),
+        )
+        .await
+        .expect("dispatch Abschlag");
+
+        // The NN-Rechnung that settles it, dispatched.
+        let original = Draft::nne("t1", MALO, "NNE-2026-000001")
+            .insert(&pool)
+            .await
+            .expect("insert original");
+        pg::record_abschlag_verrechnungen(&mut conn, "t1", original, &[abschlag])
+            .await
+            .expect("deduct the Abschlag");
+        mark_dispatched(
+            &mut conn,
+            "t1",
+            original,
+            "process-1",
+            &serde_json::json!({ "_typ": "RECHNUNG" }),
+            CheckOutcome::Ok,
+            &serde_json::json!([]),
+        )
+        .await
+        .expect("dispatch original");
+
+        // A Storno is drafted — and the deductions stay held while it is only a
+        // draft, because a draft can still be rejected.
+        let storno = insert_storno(&pool, "t1", "NNE-2026-000002", original)
+            .await
+            .expect("draft the reversal");
+        assert_eq!(
+            pg::count_abschlag_verrechnungen(&pool, "t1", original)
+                .await
+                .expect("count"),
+            1,
+            "an undispatched Storno must not free the original's Anzahlungen"
+        );
+
+        // The operator rejects it.
+        assert!(
+            reject_draft(&pool, "t1", storno, "falscher Grund erfasst")
+                .await
+                .expect("reject the Storno")
+        );
+
+        // ── The terminal state ───────────────────────────────────────────────
+        let row = fetch_draft(&pool, "t1", original)
+            .await
+            .expect("fetch")
+            .expect("the original");
+        assert_eq!(row.status, "dispatched", "the original still stands");
+
+        // …it is not reversed, so a Korrekturrechnung may not claim it is…
+        assert!(
+            !has_storno(&mut conn, "t1", original)
+                .await
+                .expect("has_storno"),
+            "a rejected reversal never left the house — the original is not reversed"
+        );
+
+        // …it can be reversed again, which is the only honest way forward…
+        insert_storno(&pool, "t1", "NNE-2026-000003", original)
+            .await
+            .expect("a rejected Storno must not lock the original out of being reversed");
+
+        // …and the Anzahlung was never freed, so nothing else could deduct it.
+        assert_eq!(
+            pg::count_abschlag_verrechnungen(&pool, "t1", original)
+                .await
+                .expect("count"),
+            1,
+            "a rejected Storno must leave the original's deductions in place"
+        );
+        let problems = pg::load_abschlaege(&mut conn, "t1", MALO, &[abschlag])
+            .await
+            .expect("query")
+            .expect_err("the Abschlag is still settled by the original");
+        assert!(
+            problems[0].contains("NNE-2026-000001"),
+            "and the refusal still names the invoice holding it: {problems:?}"
+        );
+    });
+}
+
+/// A *dispatched* Storno is what frees the Anzahlungen.
+///
+/// The release has to happen somewhere: the Korrekturrechnung that replaces the
+/// reversed invoice must be able to deduct money the customer has already paid.
+/// Dispatch is that point — it is where the original stops standing.
+#[tokio::test]
+async fn a_dispatched_storno_releases_the_originals_abschlaege() {
+    with_pg!(|pool| {
+        let mut conn = pool.acquire().await.expect("acquire");
+
+        let abschlag = Draft::abschlag("t1", MALO, "ABS-2026-000001", date!(2026 - 01 - 15))
+            .insert(&pool)
+            .await
+            .expect("insert Abschlag");
+        mark_dispatched(
+            &mut conn,
+            "t1",
+            abschlag,
+            "process-abs",
+            &serde_json::json!({ "_typ": "RECHNUNG" }),
+            CheckOutcome::Ok,
+            &serde_json::json!([]),
+        )
+        .await
+        .expect("dispatch Abschlag");
+
+        let original = Draft::nne("t1", MALO, "NNE-2026-000001")
+            .insert(&pool)
+            .await
+            .expect("insert original");
+        pg::record_abschlag_verrechnungen(&mut conn, "t1", original, &[abschlag])
+            .await
+            .expect("deduct");
+
+        let storno = insert_storno(&pool, "t1", "NNE-2026-000002", original)
+            .await
+            .expect("draft the reversal");
+
+        // `dispatch_one` performs this release after `mark_dispatched`; the
+        // sequence is what the handler runs, in one transaction.
+        mark_dispatched(
+            &mut conn,
+            "t1",
+            storno,
+            "process-storno",
+            &serde_json::json!({ "_typ": "RECHNUNG", "istStorno": true }),
+            CheckOutcome::Ok,
+            &serde_json::json!([]),
+        )
+        .await
+        .expect("dispatch the Storno");
+        let released = pg::release_abschlag_verrechnungen(&pool, "t1", original)
+            .await
+            .expect("release");
+        assert_eq!(released, 1);
+
+        // The Abschlag is deductible again — by the Korrekturrechnung.
+        assert_eq!(
+            pg::load_abschlaege(&mut conn, "t1", MALO, &[abschlag])
+                .await
+                .expect("query")
+                .expect("deductible again")
+                .len(),
+            1
+        );
+    });
+}
+
+/// Where the Abschlag release lives is a guard, not a detail.
+///
+/// It is the one half of the rejected-Storno fix a database test cannot reach:
+/// `post_storno` and `dispatch_one` are handlers, and there is no HTTP harness
+/// here. Releasing on *draft creation* freed the customer's Anzahlungen while
+/// the original was still a standing dispatched invoice deducting them, so a
+/// rejected Storno left them collectible twice. The release belongs at the
+/// point the original stops standing: the Storno's dispatch.
+#[test]
+fn the_abschlag_release_happens_on_storno_dispatch_not_on_drafting() {
+    let handlers = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/handlers.rs"),
+    )
+    .expect("read src/handlers.rs");
+
+    let body_of = |name: &str| -> String {
+        let start = handlers
+            .find(&format!("\nasync fn {name}("))
+            .or_else(|| handlers.find(&format!("\npub async fn {name}(")))
+            .unwrap_or_else(|| panic!("{name} must exist"));
+        // Up to the next top-level `fn`, which is where this one ends.
+        let rest = &handlers[start + 1..];
+        let end = rest[1..]
+            .find("\nasync fn ")
+            .into_iter()
+            .chain(rest[1..].find("\npub async fn "))
+            .chain(rest[1..].find("\nfn "))
+            .min()
+            .unwrap_or(rest.len() - 1);
+        rest[..=end].to_owned()
+    };
+
+    assert!(
+        !body_of("post_storno").contains("release_abschlag_verrechnungen"),
+        "post_storno must not free the original's Abschläge: the Storno it writes is a \
+         draft, and a rejected draft would leave them collectible against an invoice \
+         that was never reversed"
+    );
+    let dispatch = body_of("dispatch_one");
+    assert!(
+        dispatch.contains("release_abschlag_verrechnungen")
+            && dispatch.contains("STORNORECHNUNG")
+            && dispatch.contains("original_draft_id"),
+        "dispatch_one must release the *original's* deductions when a STORNORECHNUNG \
+         is dispatched — otherwise the Korrekturrechnung that replaces it cannot \
+         deduct money the customer has already paid"
+    );
 }

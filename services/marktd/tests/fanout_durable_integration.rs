@@ -446,3 +446,219 @@ async fn a_strom_only_subscriber_is_not_woken_by_a_gas_event() {
 
     shutdown.cancel();
 }
+
+// ── The outcome write is not allowed to fail silently ─────────────────────────
+//
+// Both tests below fault the *database* rather than the worker, with a trigger
+// that rejects one shape of outcome write on `event_delivery`. That is the real
+// shape of the failure these guard: the POST succeeds or fails as it would in
+// production, and it is the row update recording what happened that is lost.
+
+/// A receiver that always refuses, counting the attempts it saw.
+async fn spawn_always_failing_webhook(state: Arc<Captured>) -> String {
+    async fn handler(
+        axum::extract::State(state): axum::extract::State<Arc<Captured>>,
+        _body: axum::body::Bytes,
+    ) -> axum::http::StatusCode {
+        state.hits.fetch_add(1, Ordering::SeqCst);
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    }
+    let app = Router::new()
+        .route("/hook", post(handler))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{addr}/hook")
+}
+
+async fn wait_dead_lettered(pool: &PgPool, event_id: &str) -> bool {
+    for _ in 0..200 {
+        let dead: Option<time::OffsetDateTime> = sqlx::query_scalar(
+            "SELECT dead_lettered_at FROM event_delivery \
+               WHERE event_id = $1 AND subscriber_id = 'erp-1'",
+        )
+        .bind(event_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten();
+        if dead.is_some() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    false
+}
+
+/// The subscriber accepted the event; the `delivered_at` write hit a transient
+/// database fault. Discarding that failure left the row undelivered and still
+/// claimable, so the *same* event was POSTed to the subscriber a second time
+/// once the claim lease expired — an at-least-once hub turning a healthy
+/// delivery into a duplicate because of its own database blip.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_transient_fault_on_the_delivered_write_does_not_duplicate_the_webhook() {
+    let Some((pool, _pg)) = test_pool("dup").await else {
+        eprintln!("skipping: Docker unavailable");
+        return;
+    };
+    let captured = Arc::new(Captured::default());
+    let url = spawn_mock_webhook(Arc::clone(&captured)).await;
+    insert_subscription(&pool, &url).await;
+
+    // Reject the FIRST update that stamps delivered_at, then let them through.
+    // The counter is a sequence because `nextval` survives the rollback that
+    // `RAISE EXCEPTION` forces — an ordinary counter row would be rolled back
+    // with the failed update and every attempt would fail.
+    sqlx::raw_sql(
+        "CREATE SEQUENCE chaos_seq;
+         CREATE FUNCTION fail_first_delivered_write() RETURNS trigger AS $$
+         BEGIN
+             IF NEW.delivered_at IS NOT NULL AND OLD.delivered_at IS NULL
+                AND nextval('chaos_seq') = 1 THEN
+                 RAISE EXCEPTION 'simulated transient fault on mark_delivered';
+             END IF;
+             RETURN NEW;
+         END $$ LANGUAGE plpgsql;
+         CREATE TRIGGER chaos_delivered BEFORE UPDATE ON event_delivery
+             FOR EACH ROW EXECUTE FUNCTION fail_first_delivered_write();",
+    )
+    .execute(&pool)
+    .await
+    .expect("install chaos trigger");
+
+    let notify = Arc::new(tokio::sync::Notify::new());
+    let shutdown = CancellationToken::new();
+    fanout::spawn(
+        pool.clone(),
+        PgSubscriptionRepository::new(pool.clone()),
+        mako_service::http::default_client(),
+        FanoutConfig {
+            // A short lease so a row left un-marked becomes claimable again
+            // within the test rather than in two minutes.
+            lease: Duration::from_secs(1),
+            poll_interval: Duration::from_millis(200),
+            ..FanoutConfig::default()
+        },
+        Arc::clone(&notify),
+        shutdown.clone(),
+    );
+
+    let ev = MarktEvent::new(
+        TENANT,
+        CE_TYPE,
+        "MALO-DUP".to_owned(),
+        serde_json::json!({ "version": 1 }),
+    );
+    marktd::outbox::enqueue(&pool, &ev, &notify)
+        .await
+        .expect("enqueue");
+
+    assert!(
+        wait_delivered(&pool, &ev.id).await,
+        "the delivery must still end up marked delivered"
+    );
+    // Settle past one more lease so a late redelivery would have landed.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(
+        captured.hits.load(Ordering::SeqCst),
+        1,
+        "the subscriber was POSTed the same event twice: the failed delivered_at \
+         write was discarded, so the row stayed claimable and was redelivered",
+    );
+
+    shutdown.cancel();
+}
+
+/// The subscriber refuses every attempt and the failure write cannot land
+/// either. The attempt counter used to be advanced by that same lost write, so
+/// the budget never moved: the row was claimed, POSTed and re-queued forever and
+/// never reached the DLQ — and, holding its `ordering_key`, it blocked every
+/// later event about that Marktlokation for good.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_delivery_whose_failure_write_is_lost_still_dead_letters() {
+    let Some((pool, _pg)) = test_pool("dlq").await else {
+        eprintln!("skipping: Docker unavailable");
+        return;
+    };
+    let captured = Arc::new(Captured::default());
+    let url = spawn_always_failing_webhook(Arc::clone(&captured)).await;
+    insert_subscription(&pool, &url).await;
+
+    // Reject every write that records a failure diagnostic — both the back-off
+    // update and the dead-letter update go through `last_error`.
+    sqlx::raw_sql(
+        "CREATE FUNCTION block_failure_writes() RETURNS trigger AS $$
+         BEGIN
+             IF NEW.last_error IS DISTINCT FROM OLD.last_error THEN
+                 RAISE EXCEPTION 'simulated database fault on record_failure';
+             END IF;
+             RETURN NEW;
+         END $$ LANGUAGE plpgsql;
+         CREATE TRIGGER chaos_failure BEFORE UPDATE ON event_delivery
+             FOR EACH ROW EXECUTE FUNCTION block_failure_writes();",
+    )
+    .execute(&pool)
+    .await
+    .expect("install chaos trigger");
+
+    let max_attempts = 3;
+    let notify = Arc::new(tokio::sync::Notify::new());
+    let shutdown = CancellationToken::new();
+    fanout::spawn(
+        pool.clone(),
+        PgSubscriptionRepository::new(pool.clone()),
+        mako_service::http::default_client(),
+        FanoutConfig {
+            max_attempts,
+            lease: Duration::from_secs(1),
+            poll_interval: Duration::from_millis(200),
+            ..FanoutConfig::default()
+        },
+        Arc::clone(&notify),
+        shutdown.clone(),
+    );
+
+    let ev = MarktEvent::new(
+        TENANT,
+        CE_TYPE,
+        "MALO-DLQ".to_owned(),
+        serde_json::json!({ "version": 1 }),
+    );
+    marktd::outbox::enqueue(&pool, &ev, &notify)
+        .await
+        .expect("enqueue");
+
+    assert!(
+        wait_dead_lettered(&pool, &ev.id).await,
+        "the delivery retried without limit: with the failure write lost the attempt \
+         counter never advanced, so it never reached the DLQ (§147 AO / GoBD)",
+    );
+
+    let attempts: i16 = sqlx::query_scalar(
+        "SELECT attempts FROM event_delivery WHERE event_id = $1 AND subscriber_id = 'erp-1'",
+    )
+    .bind(&ev.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        attempts, max_attempts,
+        "the claim, not the outcome write, must be what advances the attempt counter"
+    );
+
+    // The budget is a real bound on the POSTs the subscriber sees.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(
+        captured.hits.load(Ordering::SeqCst),
+        usize::try_from(max_attempts).unwrap(),
+        "the subscriber was POSTed more times than the attempt budget allows",
+    );
+
+    shutdown.cancel();
+}

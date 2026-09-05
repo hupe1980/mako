@@ -615,6 +615,14 @@
               "operand": "X"
             },
             {
+              "code": "INVOIC",
+              "operand": "X"
+            },
+            {
+              "code": "INVOIC",
+              "operand": "X"
+            },
+            {
               "code": "ORDERS",
               "operand": "X"
             },
@@ -624,6 +632,14 @@
             },
             {
               "code": "PARTIN",
+              "operand": "X"
+            },
+            {
+              "code": "PRICAT",
+              "operand": "X"
+            },
+            {
+              "code": "PRICAT",
               "operand": "X"
             },
             {

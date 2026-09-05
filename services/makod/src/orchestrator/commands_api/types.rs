@@ -217,31 +217,6 @@ pub(crate) type DispatchFn = for<'a> fn(
 ///
 /// All three data points live together so adding a new command requires
 /// filling in all fields — no parallel data structures can silently drift apart.
-/// Process family a command belongs to, for the `family` metric label.
-///
-/// Derived from the command name's first segment, with the two-segment Gas
-/// families joined so the label matches the workflow-name prefix the deadline
-/// and outbox metrics already use (`geli-gas`, `gabi-gas`).
-///
-/// This was hard-coded to `"gpke"` at the single call site, so
-/// `makod_process_initiated_total{family="gpke"}` counted every ERP-initiated
-/// process in every domain and the other six families reported nothing.
-#[must_use]
-pub(crate) fn command_family(command: &str) -> &'static str {
-    match command.split('.').next().unwrap_or_default() {
-        "gpke" => "gpke",
-        "wim" => "wim",
-        "geli" => "geli-gas",
-        "gabi" => "gabi-gas",
-        "mabis" => "mabis",
-        "esa" => "esa",
-        "invoic" => "invoic",
-        "netzzugang" => "netzzugang",
-        "maloid" => "maloid",
-        _ => "other",
-    }
-}
-
 pub(crate) struct CommandDescriptor {
     /// Stable lowercase command name, e.g. `"gpke.lieferbeginn.anmelden"`.
     pub name: &'static str,
@@ -294,7 +269,8 @@ impl std::fmt::Display for CommandError {
 
 #[cfg(test)]
 mod family_tests {
-    use super::{COMMAND_REGISTRY, command_family};
+    use super::COMMAND_REGISTRY;
+    use crate::orchestrator::process_family::{UNKNOWN, from_command as command_family};
 
     /// Every registered command must map to a named family.
     ///
@@ -308,12 +284,14 @@ mod family_tests {
         let unmapped: Vec<&str> = COMMAND_REGISTRY
             .iter()
             .map(|d| d.name)
-            .filter(|name| command_family(name) == "other")
+            .filter(|name| command_family(name) == UNKNOWN)
             .collect();
         assert!(
             unmapped.is_empty(),
             "these commands have no metric family: {unmapped:?}\n\
-             Add the prefix to command_family()."
+             Add the prefix to a row of `orchestrator::process_family::FAMILIES`, \
+             or the full command name to COMMAND_OVERRIDES when it enters a \
+             workflow of another family."
         );
     }
 
@@ -350,6 +328,10 @@ mod family_tests {
     /// The Gas families use the same hyphenated label as the workflow-name
     /// prefix the deadline and outbox metrics carry, so a dashboard can join
     /// initiation and completion on one label value.
+    ///
+    /// That the two *sides* agree is guarded in
+    /// [`crate::orchestrator::process_family`], which owns both derivations;
+    /// this only pins the spelling the registry's commands produce.
     #[test]
     fn gas_families_match_the_workflow_name_prefix() {
         assert_eq!(command_family("geli.lieferbeginn.anmelden"), "geli-gas");

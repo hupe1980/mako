@@ -144,7 +144,7 @@ schema.
 ## Human oversight
 
 The active manifests use triage only. Agentplane also supports approval before a
-mutating call, but agentd currently grants no mutating tool.
+mutating call, but agentd grants no mutating tool.
 
 | | **Approval** — in front of the answer | **Triage** — beside the answer |
 |---|---|---|
@@ -153,14 +153,15 @@ mutating call, but agentd currently grants no mutating tool.
 | Who is asked | `oversight.approvers` | the rule's `audience` |
 | Fires on | reaching a mutating tool | an answer matching a predicate over `output.schema` |
 | When nobody answers | `on_expiry: deny` — fails closed, nothing is sent | `on_expiry: escalate` — widens the audience and keeps waiting |
-| Used by | `gabi-gas-agent` | 14 specialists, on a terminal finding |
+| Used by | — no active manifest grants a mutating tool | 18 specialists, on a terminal finding |
 
-The coded specialist is the third case and reaches the same worklist by a
-different road. `deadline-alert-agent` cannot declare `oversight` at all —
-agentplane refuses the block on a manifest with no `execution` — so a `BREACH`
-opens its row from Rust, through `StepCtx::open_task`: same store, same audience
-rules, same escalation on expiry. The terminal-finding lint exempts coded
-specialists by a named list it asserts against, never by assumption.
+The two coded specialists — `deadline-alert-agent` and `gabi-gas-agent` — are the
+third case and reach the same worklist by a different road. Neither can declare
+`oversight` at all — agentplane refuses the block on a manifest with no
+`execution` — so a terminal finding opens its row from Rust, through
+`StepCtx::open_task`: same store, same audience rules, same escalation on
+expiry. The terminal-finding lint exempts coded specialists by a named list it
+asserts against, never by assumption.
 
 Triage exists because most specialists cannot act, so gating their answer would
 gate nothing while suspending a run per finding. A triage rule changes nothing
@@ -171,8 +172,9 @@ effect is a worklist row.
 message, so a window that closes unanswered must send nothing. A triage row
 gates nothing — it *is* the finding — so expiring it deletes the delivery of
 something the agent correctly detected. Escalation is the only disposition under
-which an unanswered §20 EnWG parity deviation or an out-of-compliance §§41f/41g
-sequence stays findable: the `escalate_to` roles **join** the audience (the
+which an unanswered § 7a Abs. 5 EnWG parity deviation or an out-of-compliance
+§§ 41f/41g sequence stays findable: the `escalate_to` roles **join** the
+audience (the
 original reviewers stay eligible), the stale reservation is cleared, and the row
 keeps waiting. A test pins the two dispositions apart.
 
@@ -251,7 +253,7 @@ is a wrong answer that reads as a right one. Two rules:
 
 mako's MCP servers publish 57 step-by-step prompts across 15 servers for their
 own procedures.
-26 specialists declare `context.prompts` grants against their own service rather
+25 specialists declare `context.prompts` grants against their own service rather
 than carrying a hand-typed paraphrase that drifts the first time either side
 changes. A context grant is not a tool grant — reading a prompt authorises no
 action — but it does cross a trust and data-egress boundary, so it is declared

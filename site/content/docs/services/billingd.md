@@ -1,17 +1,23 @@
 +++
 title = "billingd Operator Guide"
-description = "billingd operator guide: Multi-Product Billing Engine (LF role). Energy billing engine — user-defined product prices from productd; 13 categories (STROM/GAS/WAERME/WASSER/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/SHARING); §41a EPEX dynamic; §25 Nr. 4 MessEV Brennwertkorrektur; §14a Modul 1/2/3; EN 16931 e-invoicing (XRechnung 3.0 CII + PEPPOL UBL; B2G per §4a EGovG/ERechV, B2B per §14 UStG)."
+description = "Operator guide for billingd, the LF multi-product billing engine: 13 product categories, §41a dynamic tariffs, §14a modules and EN 16931 e-invoicing."
 weight = 32
-[extra]
-mermaid = true
 +++
-# `billingd` — Multi-Product Billing Engine
-
 `billingd` is a **pure calculation service**. It has no grid topology knowledge and no
 business policy — all decisions come from the product definition in `productd` and the
 measurement data in `edmd`.
 
 Port: **`:9280`**
+
+## The terms this page assumes
+
+| Term | What it is |
+|---|---|
+| **LF** — Lieferant | the retail supplier, the Marktrolle `billingd` runs as. The counterpart roles are the **NB** (Netzbetreiber, grid operator), the **MSB** (Messstellenbetreiber, metering operator) and the **BKV** (Bilanzkreisverantwortlicher). See [Party Roles](@/docs/architecture/domain-model.md#party-roles-marktrollen) |
+| **Marktlokation (MaLo)** | the delivery point energy is bought and sold at, identified by an 11-digit MaLo-ID. It is *not* the meter — see [MaLo vs MeLo](@/docs/architecture/domain-model.md#malo-vs-melo-the-critical-distinction) |
+| **Netzentgelt (NNE)** | the regulated charge the NB levies for using the grid. The LF collects it from the customer and pays it on: on a retail invoice it is a pass-through, priced from the NB's published Preisblatt |
+| **EN 16931** | the European semantic standard for an electronic invoice. **XRechnung** is the German B2G profile (CIUS) of it and **ZUGFeRD** the hybrid PDF/A-3 carrier that embeds the XML in a readable page; CII and UBL are its two permitted syntaxes |
+| **BO4E** | the German energy industry's business-object model. `billingd` stores every issued document as a BO4E `Rechnung` and checks it against [the BO4E gate](@/docs/architecture/domain-model.md#the-bo4e-gate) |
 
 ---
 
@@ -160,9 +166,10 @@ Arbeitspreis            [from productd]     ct/kWh
 Leistungspreis          [from productd]     ct/kW/month  RLM demand charge on spitzenleistung_kw
 NNE Grundpreis          [from marktd]      pass-through
 NNE Arbeitspreis        [from marktd]      pass-through
-NNE Leistungspreis      [from marktd]      RLM only (EUR/kW/month)
+NNE Leistungspreis      [from marktd]      RLM only — EUR/kW/**year** (§17 Abs. 2 StromNEV
+                                           Jahresleistungspreis), pro-rated to the period
 Konzessionsabgabe       [from marktd]      pass-through
-§14a Modul 1 pauschale  [if product set]   negative EUR/kW/year
+§14a Modul 1 pauschale  [if product set]   negative EUR/year, flat (quantity 1 "Jahr")
 §14a Modul 2 AP-Redukt. [if product set]   negative ct/kWh (device's own metering)
 §14a Modul 3 HT/ST/NT   [if product set]   three Tarifstufen, replace the flat NNE
 §14a Steuerungsentsch.  [if product set]   negative, pro-rated to load-shedding hours
@@ -185,6 +192,31 @@ ignored; the per-MTU price is spot + `auf_abschlag_ct_per_kwh`.
 Supply `spitzenleistung_kw` from `edmd` MeterBillingPeriod. Applies to `metering_mode: RLM`
 or `Imsys` metering points.
 
+The supplier's own Leistungspreis is a **monthly** rate
+(`leistungspreis_strom_ct_per_kw_month`, multiplied by the months the period covers).
+The **Netzentgelt** demand charge passed through from `marktd` is not: it is
+`nne_leistungspreis_eur_per_kw_year`, an annual rate multiplied by the billed fraction of a
+year. The two units are different on purpose and mixing them under-bills by a factor of
+twelve.
+
+#### Which Leistungspreissystem the price sheet states
+
+§ 17 Abs. 2 Satz 1 StromNEV builds the Netzentgelt from „einem Jahresleistungspreis in Euro
+pro Kilowatt und einem Arbeitspreis", and Satz 2 makes the Jahresleistungsentgelt the product
+of that price and the **Jahreshöchstleistung im Abrechnungsjahr** — two figures and no
+day-count convention. Abs. 8 nevertheless offers Tagesleistungspreise for Landstrom „neben
+einem Jahres- und Monatsleistungspreissystem", which presupposes a Monatsleistungspreissystem
+that StromNEV never defines: it is a EUR/kW·Monat price a Netzbetreiber publishes in its own
+Preisblatt against the month's Höchstleistung, usually paired with a higher Arbeitspreis.
+
+The NB-side engine therefore does not guess. `grid_billing::Leistungspreis` carries an
+explicit `system: LeistungspreisSystem` — `JAHR` (the default, and the only system StromNEV
+itself defines) or `MONAT { monate }` — so a settlement bills whichever one the price sheet
+states, and `settle_nne` reports `JAHRESLEISTUNGSPREIS_UNTERJAEHRIG` when an annual price is
+billed over a period shorter than the Abrechnungsjahr rather than inventing a share nobody
+published. `billingd` consumes the resulting NNE figure; the system that produced it belongs
+to [netzbilanzd](@/docs/services/netzbilanzd.md).
+
 ### GAS — Natural Gas
 
 ```
@@ -201,15 +233,14 @@ Energiesteuer Erdgas    [from billingd.toml] § 2 Abs. 3 S. 1 Nr. 4 EnergieStG
                            (§§ 25–28 EnergieStG, Erlaubnis nach § 24 Abs. 2)
 Entlastungshinweis      [informational]    § 53a / § 54 EnergieStG — the levy is
                                            billed in full; the customer files
-CO₂-Abgabe BEHG         [from billingd.toml] ~1.31 ct/kWh_Hs (65 EUR/t CO₂, 2026)
+CO₂-Abgabe BEHG         [from billingd.toml] ~1.18 ct/kWh_Hs (65 EUR/t CO₂, 2026)
 MwSt                    [from billingd.toml] 19%
 ```
 
-Since 2026 the nEHS certificate price is **auction-formed** (§10 Abs. 1 BEHG:
-weekly EEX auctions from 01.07.2026 within the 55–65 EUR/t corridor,
-Verkaufsphase at 68 EUR/t), so on the live bill/preview paths billingd
-overlays the **dated market price** from productd's `nehs_prices` series onto
-the year-table default. Resolution order: explicit `[rates]` override →
+Since 2026 the nEHS certificate price is **auction-formed** (§ 10 Abs. 1 BEHG: weekly EEX
+auctions from 01.07.2026, inside the § 10 Abs. 2 corridor of 55–65 EUR/t, followed by a
+Verkaufsphase at 68 EUR/t), so on the live bill/preview paths billingd overlays the
+**dated market price** from productd's `nehs_prices` series onto the year-table default. Resolution order: explicit `[rates]` override →
 `GET /api/v1/nehs-prices/latest?date={period_from}` (start-of-period basis,
 consistent with `regulatory_rates_for_period`; converted via
 `energy_billing::behg_ct_per_kwh_from_price`) → year-table fallback. The
@@ -394,9 +425,17 @@ on the invoice and shared with the NB-side `grid-billing` engine:
 
 | Modul | What it is | Field |
 |---|---|---|
-| **1** | *pauschale Reduzierung des Netzentgelts* — needs no extra metering, so it is the default where the connection holder makes no choice | `sect14a_modul1_pauschale_eur_per_kw_year` |
+| **1** | *pauschale Reduzierung des Netzentgelts* — a **flat annual amount**, prorated over the billed period | `sect14a_modul1_pauschale_eur_per_year` |
 | **2** | *prozentuale Reduzierung des Arbeitspreises* — attaches to the device's **separately metered** energy | `sect14a_modul2_nne_reduktion_ct_per_kwh` |
 | **3** | *zeitvariable Netzentgelte* (from 01.04.2025) — three Tarifstufen HT/ST/NT, requires an iMSys | `sect14a_modul3_nne_ht/st/nt_ct_per_kwh` + `sect14a_modul3` quantities |
+
+**Modul 1 has no per-kW component.** BK6-22-300 sets it nationwide as
+`80 EUR + 3 750 kWh × Arbeitspreis im Standardtarif × 0,2`, which lands between 110 and
+190 EUR/year depending on the Netzbetreiber. Because nothing in that formula scales with the
+steuerbare Leistung, it needs no Spitzenleistung and no extra metering — which is why it is
+the one module a household heat pump on an SLP meter can have at all, and the default where
+the connection holder makes no choice. The position is billed as quantity 1 „Jahr" at
+`pauschale × billed_years`, so twelve monthly credits sum to the annual amount.
 
 **`Modul 1 + Modul 3` is the only pair.** Modul 1 and Modul 2 are the two forms the
 base module takes and the Anschlussnutzer picks one, so configuring both is refused
@@ -405,6 +444,13 @@ both re-price the Arbeitspreis, so holding both would reduce the same network us
 twice, and configuring both is refused with `MODUL2_AND_MODUL3`. Setting the Modul 3
 bands alongside a flat NNE Arbeitspreis is refused with `MODUL3_AND_FLAT_NNE`, for the
 same double-charging reason.
+
+Two further refusals guard Modul 3 on its own. `MODUL3_OHNE_MODUL1` — BK6-22-300 offers
+Modul 3 only in combination with Modul 1, so bands without the pauschale price a tariff the
+Netzbetreiber does not offer *and* drop the reduction the customer is due. And
+`MODUL3_IMSYS_REQUIRED` — band pricing needs a meter that resolves the bands, so an SLP meter
+would be priced against a profile rather than against measurement, the same guard §41a
+carries.
 
 A **Steuerungsentschädigung** (`sect14a_steuerungsentschaedigung_ct_per_kwh` /
 `_eur_per_kw_year`) compensates a dispatch that actually happened. It carries no
@@ -466,7 +512,7 @@ let invoice = engine.bill(ctx, &quantities)?;
 | `ZWEITARIF_OHNE_HT_NT_AUFTEILUNG` / `HT_NT_SUMME_WEICHT_AB` → refused, not under-billed | § 41 EnWG |
 | `preisgarantie_bis` → disclosure on invoice | §41 Abs. 1 Nr. 4 EnWG |
 | `MeteringMode` (SLP/RLM/iMSys) on MeterInput | §3/§ 12 StromNZV, §31 MsbG |
-| `is_estimated` flag → § 60 Abs. 2 MsbG notice | § 60 Abs. 2 MsbG |
+| `is_estimated` flag → the Verbrauchsschätzung must be stated „unter ausdrücklichem und optisch besonders hervorgehobenem Hinweis" | § 40a Abs. 2 Satz 3 EnWG |
 | `zaehler_replaced` flag → Zählerwechsel notice | §41 EnWG |
 | `Sect41aAnnualComparison` in Quantities | §41a Abs. 6 EnWG |
 | `InvoiceType::PartialInvoice` | §41 EnWG, StromGVV §17 |
@@ -561,7 +607,7 @@ Content-Type: application/json
 ```
 
 `billingd` automatically fetches:
-1. Product from `productd GET /api/v1/customer/51238696012/product`
+1. Product assignment from `vertragd GET /api/v1/malo/51238696012/produkte?from=…&to=…`, priced by `productd POST /api/v1/products/{lf_mp_id}/resolve`
 2. Meter data from `edmd GET /api/v1/billing-period/51238696012?from=...&to=...`
 3. NNE tariff from `marktd GET /api/v1/preisblaetter/{nb_mp_id}`
 4. KA tariff from `marktd GET /api/v1/preisblaetter-ka/{nb_mp_id}`
@@ -888,7 +934,7 @@ sniffing the body to tell a structured refusal from a bare string.
 | `POST` | `/api/v1/billing/sammelrechnung/{rv_id}` | B2B consolidated invoice for a Rahmenvertrag — whole run in one transaction, bundle scored by the risk gate |
 | `POST` | `/api/v1/billing/ggv/{ggv_id}` | § 42b EnWG Gebäudestromnutzung, one transaction per run |
 | `POST` | `/api/v1/billing/vpp/{vpp_id}` | § 41e dispatch settlement (Gutschrift) |
-| `POST` | `/api/v1/webhooks/vpp-dispatch` | `de.vpp.dispatch.confirmed` auto-settlement (HMAC). Settles only when `sender_mp_id` is the contracted `aggregator_mp_id` — a § 14a Steuerung by the Netzbetreiber rides the same PID 55168 and is recorded, not paid |
+| `POST` | `/api/v1/webhooks/vpp-dispatch` | `de.vpp.dispatch.confirmed` auto-settlement (HMAC). Settles only when `sender_mp_id` is the contracted `aggregator_mp_id` — a § 14a Steuerung by the Netzbetreiber rides the same Steuerungsauftrag channel and is recorded, not paid |
 | `GET` | `/api/v1/billing/review-queue` | Analyst work list — REVIEW + HELD, highest risk first |
 | `POST` | `/api/v1/billing/{id}/release` | Release a HELD record for dispatch |
 | `POST` | `/api/v1/billing/{id}/submit-b2g` | XRechnung B2G submission (§ 4a EGovG i.V.m. ERechV) |
@@ -923,13 +969,16 @@ that is, in every real deployment — the mutating and preview tools answered
 | `preview_billing` | Dry-run preview — same pipeline as `/preview`, no side effects |
 | `get_xrechnung` | Fetch XRechnung 3.0 CII XML (from the stored EN 16931 model) |
 | `check_billing_anomaly` | Rolling 3-month deviation check — flags invoices outside threshold |
-| `list_vpp_settlements` | List VPP aggregation settlement records |
-| `list_corrections` | List Korrekturrechnung / Stornorechnung records (§ 147 AO / GoBD) |
+| `list_vpp_settlements` | List § 41e VPP settlement records |
+| `list_corrections` | Storno/Korrektur chains (§ 147 AO / GoBD) |
 | `list_product_categories` | Describe all 13 billing categories and their required product fields |
-| `list_corrections` · `list_vpp_settlements` | Storno/Korrektur chains (§ 147 AO) and § 41e settlements. Both filter **in the query**: filtering a fetched page instead would answer "no corrections" for a MaLo whose latest page is all ordinary invoices, while its Stornos sit one page further down |
 | `get_billing_summary` | Aggregate stats per MaLo or LF — aggregated in the database over the whole history, counting each euro once (Storno rows and the children of a Sammelrechnung excluded) |
 | `validate_tariff_config` | Pre-flight: engine validation (incl. `KEIN_ARBEITSPREIS`) plus the §41a iMSys guard, the legacy Stromsteuer flag and the §42 Energiemix disclosure |
 | `explain_invoice_position` | Full `PositionTrace` audit for a given position (formula, §-refs) |
+
+`list_corrections` and `list_vpp_settlements` both filter **in the query**. Filtering a
+fetched page instead would answer "no corrections" for a MaLo whose latest page is all
+ordinary invoices, while its Stornos sit one page further down.
 
 | Prompt | Description |
 |---|---|
@@ -1025,7 +1074,7 @@ When `tariff.category == "ENERGIEDIENSTLEISTUNG"`, `billingd` deserializes the p
 }
 ```
 
-Generates two positions: `ServiceFee` (monthly Grundgebühr) and `EventFee` (per-readout charge).
+Generates two `PositionCategory::Fee` positions: „Energiedienstleistung Grundgebühr" (per month) and „Energiedienstleistung Ereignisgebühr" (per readout).
 
 ---
 
@@ -1264,7 +1313,7 @@ default).
 
 Every calculated invoice is scored by `billingd::risk` (`[risk]`, default
 on): coded findings — Σ-Steuerbeträge-Abgleich, USt-Satz-Validität,
-Null-Energie/Negativverbrauch, Schätzwert-Ketten (§ 60 Abs. 2 MsbG),
+Null-Energie/Negativverbrauch, Schätzwert-Ketten (§ 40a Abs. 2 EnWG),
 Perioden-Überlappung/-Lücke zur Vorrechnung, rollende Abweichung — summieren
 zu 0–100.
 
@@ -1416,10 +1465,16 @@ Useful for:
 | `period_from`, `period_to` | Billing period |
 | `rechnung_json` | Full BO4E `Rechnung` JSONB (§ 147 AO / GoBD) — the accounting representation |
 | `en16931_json` | EN 16931 semantic invoice model (serde JSONB) — the source every XRechnung/CII/UBL render reads |
+| `en16931_blocked` | Why this record carries no model, when that is a property of the invoice rather than a missing step. Today one reason exists — a category `O` line mixed with any other, which BR-O-11 ff. forbid |
+| `bo4e_version` | The BO4E release `rechnung_json` was written against |
 | `total_netto_eur`, `total_brutto_eur` | Cached totals for fast reporting |
-| `outcome` | `generated` → `dispatched` → `paid`/`disputed`; `cancelled` = fully reversed by a Storno, which releases the period |
+| `outcome` | `generated` → `dispatched` → `paid`/`partial`/`disputed`; `cancelled` = fully reversed by a Storno, which releases the period |
 | `risk_score`, `risk_band`, `risk_findings` | Deterministic release gate; `released_by`/`released_at` stamp an analyst release |
-| `template_hash` | The [outputd](@/docs/services/outputd.md) template hash this invoice's PDF was rendered with — pinned on the first render **after dispatch** and never moved, `NULL` while the record is still a draft. A plain value, not a foreign key: it crosses a service boundary, and outputd's append-only store is what keeps it resolvable |
+| `template_hash` | The [outputd](@/docs/services/outputd.md) template this invoice's PDF was rendered with — pinned on the first render **after dispatch**, never moved, `NULL` while the record is a draft |
+
+`template_hash` is a plain value rather than a foreign key because it crosses a service
+boundary; outputd's append-only template store is what keeps it resolvable for the § 147 AO
+eight years.
 
 ### `invoice_number_series`
 
@@ -1463,6 +1518,12 @@ the sender retries forever.
 `billingd` closes the loop from a confirmed WiM Steuerungsauftrag to a BO4E
 document without operator intervention.
 
+The Steuerungsauftrag itself has **no EDIFACT message and no Prüfidentifikator**: it is
+exchanged as JSON over the BDEW **API-Webdienste Strom** `controlMeasuresV1` REST channel
+(API-Guideline 1.0a), which `makod` runs as the `wim-steuerungsauftrag` workflow. § 14a
+netzorientierte Steuerung and § 41e flexibility dispatch ride that one channel, which is why
+the settlement path has to tell them apart by sender.
+
 ### The document is a Gutschrift
 
 A dispatch settlement **pays** the flexibility provider. The provider delivered
@@ -1488,7 +1549,7 @@ sequenceDiagram
     participant accountingd
     participant agentd as agentd<br/>(vpp-billing-agent)
 
-    NB->>makod: ORDERS 55168 Steuerungsauftrag<br/>(Konfiguration, max_power_kw=11, SR-ID=C001...)
+    NB->>makod: WiM Steuerungsauftrag (controlMeasuresV1)<br/>(Konfiguration, max_power_kw=11, SR-ID=C001...)
     makod->>makod: MSB confirms → EndantwortPositiv
     makod--)billingd: de.vpp.dispatch.confirmed CloudEvent<br/>{tx_id, location_id, max_power_kw,<br/>execution_time_from, execution_time_until}
     billingd->>billingd: HMAC verify + tx_id idempotency check
@@ -1549,8 +1610,9 @@ curl -s -X PUT "http://marktd:8180/api/v1/subscriptions/billingd-vpp" \
 
 `flexibility_kwh = max_power_kw × (execution_time_until − execution_time_from) / 3600`
 
-When `execution_time_until` is absent, `billingd` falls back to **15 minutes**
-(the statutory BNetzA §14a minimum dispatch window).
+When `execution_time_until` is absent, `billingd` falls back to **15 minutes**, the
+standard §14a dispatch window. That is an operating default, not a statutory minimum:
+neither BK6-22-300 nor the API-Webdienste channel states a minimum dispatch duration.
 
 ### Document shape
 
@@ -1670,15 +1732,23 @@ forms — Endrechnung by deduction, or Restrechnung by residual.
 # billingd.toml
 port          = 9280
 tenant        = "9910000000002"
-productd_url   = "http://productd:9080"
+
+# Required upstreams.
+productd_url  = "http://productd:9080"
 edmd_url      = "http://edmd:8380"
 marktd_url    = "http://marktd:8180"
 
-# §3 StromStG: Stromsteuer 2.05 ct/kWh (valid since 01.04.2003)
-stromsteuer_ct_per_kwh = "2.05"
-mwst_rate              = "0.19"
+# Optional upstreams. `vertragd` supplies the product assignment and the BG-7 buyer;
+# `outputd` renders and stores the issued document; `accountingd` supplies the paid
+# Abschläge a Jahresrechnung deducts.
+vertragd_url    = "http://vertragd:9780"
+outputd_url     = "http://outputd:9880"
+accountingd_url = "http://accountingd:9380"
 
-# Seller identity for XRechnung (B2G to the Bund: §4a EGovG i.V.m. ERechV)
+# Seller identity for XRechnung (B2G to the Bund: §4a EGovG i.V.m. ERechV).
+# §14 Abs. 4 Nr. 2 UStG names two identifiers and requires one; billingd refuses to
+# start with neither.
+seller_name       = "Stadtwerke Musterstadt GmbH"
 seller_vat_id     = "DE123456789"        # BT-31 USt-IdNr.
 seller_tax_number = "123/456/78901"      # BT-32 Steuernummer (either suffices)
 seller_iban   = "DE89370400440532013000" # BT-84 — XRechnung BG-16 SEPA credit transfer
@@ -1692,7 +1762,33 @@ erp_webhook_url = "http://erp:8000/webhooks/billing"
 vpp_auto_billing       = false          # flip to true to enable auto-billing
 inbound_webhook_secret = "env:BILLINGD_INBOUND_HMAC_SECRET"  # HMAC for POST /webhooks/vpp-dispatch
 
+# ── Every table follows; TOML binds a bare key to the most recent header ──────
+# BG-5 postal address and BG-6 contact, each EN 16931 term on its own key
+# (BR-DE-2..7). The former free-text `seller_address` / `seller_contact` keys are
+# refused at startup, naming their replacement.
+[seller]
+street    = "Musterweg 1"
+post_code = "12345"
+city      = "Musterstadt"
+country   = "DE"
+phone     = "+49 30 123456"
+email     = "rechnung@example.de"
+
+# Statutory rates belong under [rates], never at the top level.
+[rates]
+stromsteuer_ct_per_kwh = "2.05"   # §3 StromStG, unchanged since 01.04.2003
+mwst_rate              = "0.19"
+# energiesteuer_gas_ct_per_kwh = "0.55"
+# behg_gas_ct_per_kwh          = "1.18"
+# mwst_rate_reduced            = "0.07"
+
 [database]
 url = "postgresql://billingd:secret@db:5432/billingd"
 # pool_size = 10   # optional pool tuning (min_connections, acquire/idle/max_lifetime)
 ```
+
+`RatesConfig` is `deny_unknown_fields`, but the top-level config is not: a
+`stromsteuer_ct_per_kwh` written above a table header is bound to no field and read as
+nothing at all, and every invoice then falls back silently to the year table in
+`energy_billing::rates`. Write the rate keys under `[rates]`, and keep every bare key
+above the first table header.

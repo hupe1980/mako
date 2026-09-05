@@ -1,12 +1,8 @@
 +++
 title = "Getting Started"
-description = "Run the full mako NB STP demo stack — makod, marktd, processd, and a webhook receiver — in under 5 minutes. Submit a UTILMD 55001, watch processd auto-accept via `mako-pruefung`, and receive the UTILMD 55002 confirmation. BDEW FV2026-10-01 compliant."
+description = "Run the mako NB straight-through-processing demo in about five minutes: submit a UTILMD 55001 Anmeldung and receive the 55002 confirmation back."
 weight = 2
-[extra]
-mermaid = true
 +++
-# Getting Started
-
 This guide runs the full NB STP demo stack locally and walks through the
 complete end-to-end flow: UTILMD 55001 → automatic NB decision → UTILMD 55002.
 
@@ -41,7 +37,10 @@ sequenceDiagram
     makod-->>webhook: UTILMD 55002 Bestätigung
 ```
 
-Total time: **~5 minutes**.
+Total time once the images are built: **~5 minutes**. The first build takes
+longer — see [Step 1](#step-1-clone-and-build), and rather longer again for the
+[second demo](#the-second-demo-eeg-feed-in-settlement), whose two services come
+out of the full builder stage.
 
 ---
 
@@ -61,17 +60,28 @@ Total time: **~5 minutes**.
 git clone https://github.com/hupe1980/mako.git
 cd mako
 
-# Build all demo images at once with docker buildx bake (recommended)
-docker buildx bake makod marktd processd
+just build-demo
+```
 
-# Or build individually:
+`just build-demo` is the three builds the compose file needs, tagged the way it
+expects them:
+
+```bash
 docker build --target runtime          -t makod:dev     .
 docker build --target marktd-runtime   -t marktd:dev    .
 docker build --target processd-runtime -t processd:dev  .
 ```
 
+> Not `docker buildx bake` — `docker-bake.hcl` is the CI push path
+> (`push-by-digest`), so it fails on the default docker driver and tags
+> `ghcr.io/hupe1980/mako-*` rather than the `:dev` images the compose file starts.
+
 > The `processd-runtime` stage builds with `--features integrated` (includes
 > both the NB `mako-pruefung` and the LF answer modules).
+
+These three come from a builder stage carrying only their dependencies — no
+Iceberg/DataFusion, no LanceDB — so a cold build is a few minutes and a warm one
+under a minute.
 
 ---
 
@@ -119,14 +129,15 @@ curl -s http://localhost:8580/health/ready
 ## Step 4 — Seed master data
 
 `processd`'s `mako-pruefung` needs three items in `marktd` to reach an `Accept`
-decision.
+decision. Every path below is relative to `demos/nb-stp`, the directory
+[Step 2](#step-2-start-the-demo-stack) changed into.
 
 ### 4a — Price sheet
 
 ```bash
 curl -s -X PUT http://localhost:8180/api/v1/preisblaetter/9900357000004 \
   -H "Content-Type: application/json" \
-  --data-binary @demos/nb-stp/fixtures/preisblatt-nb.json \
+  --data-binary @fixtures/preisblatt-nb.json \
   -w "\nHTTP %{http_code}\n"
 # → HTTP 204
 ```
@@ -139,7 +150,7 @@ MALO_ID=51238696012
 # MaLo (NB=9900357000004, no active LF)
 curl -s -X PUT "http://localhost:8180/api/v1/malos/$MALO_ID" \
   -H "Content-Type: application/json" \
-  --data-binary "$(jq --arg m "$MALO_ID" '.data.marktlokationsId=$m' demos/nb-stp/fixtures/malo-nb.json)" \
+  --data-binary "$(jq --arg m "$MALO_ID" '.data.marktlokationsId=$m' fixtures/malo-nb.json)" \
   -w "\nHTTP %{http_code}\n"
 # → HTTP 201
 
@@ -165,7 +176,7 @@ curl -s -X PUT http://localhost:8180/api/v1/partners/4012345000023 \
 curl -s -X PUT http://localhost:8080/admin/partners/4012345000023 \
   -H "Authorization: Bearer demo-secret-change-me" \
   -H "Content-Type: application/json" \
-  --data-binary @demos/nb-stp/fixtures/partner-lf.json | jq '.'
+  --data-binary @fixtures/partner-lf.json | jq '.'
 ```
 
 ---
@@ -176,7 +187,7 @@ curl -s -X PUT http://localhost:8080/admin/partners/4012345000023 \
 curl -s -X POST http://localhost:8080/edifact \
   -H "Authorization: Bearer demo-secret-change-me" \
   -H "Content-Type: text/plain; charset=utf-8" \
-  --data-binary @demos/nb-stp/fixtures/utilmd-55001.edi | jq .
+  --data-binary @fixtures/utilmd-55001.edi | jq .
 ```
 
 Expected response:
@@ -206,9 +217,9 @@ Within ~200 ms, `processd` receives the `de.mako.process.initiated` event from
 ```bash
 # Check the decision log
 curl -s http://localhost:8580/api/v1/decisions | jq '.[] | {
-  malo_id, decision, erc_code, decided_at
+  malo_id, decision, antwortcode, decided_at
 }'
-# → {"malo_id":"51238696012","decision":"Accept","erc_code":null,"decided_at":"..."}
+# → {"malo_id":"51238696012","decision":"Accept","antwortcode":"A51","decided_at":"..."}
 ```
 
 With `NB_AUTO_ACCEPT=true` (set in the demo compose file), `Accept` automatically
@@ -230,7 +241,6 @@ The demo ships `smoke.sh` which runs all of the above automatically and asserts
 every step passes, including the auto-accept timing:
 
 ```bash
-cd demos/nb-stp
 MARKTD_URL=http://localhost:8180 WEBHOOK_URL=http://localhost:8000 bash smoke.sh
 ```
 
@@ -290,24 +300,29 @@ quarter-hour Einspeisemenge it settles against.
 | `einsd` | `9180` | EEG/KWKG settlement — plant register, monthly Vergütung |
 
 ```bash
+# from the repo root
 docker build --target edmd-runtime  -t edmd:dev  .
 docker build --target einsd-runtime -t einsd:dev .
+
 cd demos/eeg-billing
 docker compose up -d
 bash smoke.sh
 ```
 
-It registers a 9.8 kWp rooftop plant, pushes a month of quarter-hour readings,
-settles the month, and asserts the `de.eeg.verguetung.berechnet` CloudEvent the
-ERP receives. The amount alone is not a legal document: under the
-Gutschriftverfahren (§ 14 Abs. 2 Satz 2 UStG) the Netzbetreiber issues the
-Gutschrift, so `einsd` renders it as a BO4E `Rechnung` whose VAT follows the
-operator's declared `ust_status` — the fixture is a Kleinunternehmer (§ 19
-UStG), so it carries 0 % USt.
+`marktd` comes from the image `just build-demo` already produced. `edmd` and
+`einsd` are built on their own, and they are the expensive half of this page:
+both copy from the full `builder` stage, which compiles every service in the
+workspace in one `cargo build` — Iceberg/DataFusion and LanceDB included. Budget
+**20–45 minutes** cold, a few minutes on a warm BuildKit cache.
 
-`marktd` comes from the same image the NB STP demo builds; `edmd` and `einsd`
-are built on their own because their Iceberg dependencies are not in the
-demo builder stage.
+It registers the Anlagenbetreiber and a 9.8 kWp rooftop plant behind it, pushes a
+month of quarter-hour readings under OBIS `1-0:2.8.0`, settles the month at EUR
+233.57, and asserts the `de.eeg.verguetung.berechnet` CloudEvent the ERP
+receives. The amount alone is not a legal document: under the Gutschriftverfahren
+(§ 14 Abs. 2 Satz 2 UStG) the Netzbetreiber issues the Gutschrift, so `einsd`
+renders it as a BO4E `Rechnung` whose VAT follows the operator's declared
+`ust_status` — the fixture is a Kleinunternehmer (§ 19 UStG), so it carries 0 %
+USt.
 
 ---
 

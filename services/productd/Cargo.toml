@@ -20,7 +20,9 @@ path = "src/main.rs"
 [dependencies]
 mako-fristen = { workspace = true }
 mako-events = { workspace = true }
-mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
+# `oidc` implies `cedar`, which is what `policies/productd.cedar` and the
+# `CedarEnforcer` in `main` are enforced with — naming it again would be noise.
+mako-service = { workspace = true, features = ["oidc", "otel"] }
 rmcp         = { workspace = true }
 schemars     = { workspace = true }
 rubo4e       = { workspace = true }
@@ -44,5 +46,6 @@ reqwest      = { workspace = true }
 tokio-util   = { workspace = true }
 
 [dev-dependencies]
+toml = { version = "0.8", default-features = false, features = ["parse"] }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }

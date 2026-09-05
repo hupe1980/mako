@@ -192,7 +192,7 @@
           "nr": "00009",
           "operands": [
             {
-              "operand": "X ∨ [549]"
+              "operand": "X (([939][89]) ∨ ([940][90])) ∧ [549]"
             }
           ]
         },
@@ -762,7 +762,7 @@
           "nr": "00009",
           "operands": [
             {
-              "operand": "X ∨ [549]"
+              "operand": "X (([939][89]) ∨ ([940][90])) ∧ [549]"
             }
           ]
         },
@@ -1515,7 +1515,7 @@
           "nr": "00009",
           "operands": [
             {
-              "operand": "X ∨ [549]"
+              "operand": "X (([939][89]) ∨ ([940][90])) ∧ [549]"
             }
           ]
         },
@@ -1622,6 +1622,10 @@
             },
             {
               "code": "457",
+              "operand": "X"
+            },
+            {
+              "code": "Z25",
               "operand": "X"
             }
           ]
@@ -1760,6 +1764,42 @@
             },
             {
               "code": "E_0273",
+              "operand": "X"
+            },
+            {
+              "code": "E_0276",
+              "operand": "X"
+            },
+            {
+              "code": "E_0277",
+              "operand": "X"
+            },
+            {
+              "code": "E_0407",
+              "operand": "X"
+            },
+            {
+              "code": "E_0515",
+              "operand": "X"
+            },
+            {
+              "code": "E_0517",
+              "operand": "X"
+            },
+            {
+              "code": "E_0519",
+              "operand": "X"
+            },
+            {
+              "code": "E_0521",
+              "operand": "X"
+            },
+            {
+              "code": "E_0566",
+              "operand": "X"
+            },
+            {
+              "code": "E_0568",
               "operand": "X"
             }
           ]
@@ -2014,7 +2054,7 @@
           "before": "00017",
           "group": "SG7",
           "status": [
-            "Muss [517] ⊻"
+            "Muss [517] ⊻ [518] ⊻ [519] ⊻ [520] ⊻ [521] ⊻ [535] ⊻ [537]"
           ]
         },
         {
@@ -2026,13 +2066,13 @@
         {
           "nr": "00018",
           "status": [
-            "Muss ([36] ∧ ([88] ∧ ([105] ⊻ [106] ⊻ [107] ⊻"
+            "Muss ([36] ∧ ([11] ⊻ [12])) ⊻ ([88] ∧ ([105] ⊻ [106] ⊻ [107] ⊻ [108]))"
           ]
         },
         {
           "nr": "00019",
           "status": [
-            "Muss ⊻ [41]) ∧ [22]) ⊻ [112] ⊻ [113]) ∧ [39]) ⊻ ([49] ∧ [57]) ⊻ ([50] ∧ [82] ⊻ [83] ⊻ [84] ⊻ [85] ⊻ [86] ⊻ [101] ⊻ [102]) ∧ [87]) ⊻ [86]) ∧ ([120] ⊻ ⊻ [111] ⊻ [112] ⊻ [113]) ∧ [109])",
+            "Muss ((([40] ⊻ [41]) ∧ [22]) ⊻ (([41] ⊻ [102] ⊻ [112] ⊻ [113]) ∧ [39]) ⊻ ([49] ∧ [57]) ⊻ ([50] ∧ [58])) ⊻ (([81] ⊻ [82] ⊻ [83] ⊻ [84] ⊻ [85] ⊻ [86] ⊻ [101] ⊻ [102]) ∧ [87]) ⊻ (([84] ⊻ [85] ⊻ [86]) ∧ ([120] ⊻ [88])) ⊻ (([110] ⊻ [111] ⊻ [112] ⊻ [113]) ∧ [109])",
             "Kann"
           ]
         },
@@ -2255,7 +2295,7 @@
           "nr": "00009",
           "operands": [
             {
-              "operand": "X ∨ [549]"
+              "operand": "X (([939][89]) ∨ ([940][90])) ∧ [549]"
             }
           ]
         },
@@ -2362,6 +2402,10 @@
             },
             {
               "code": "457",
+              "operand": "X"
+            },
+            {
+              "code": "Z25",
               "operand": "X"
             }
           ]
@@ -2485,7 +2529,7 @@
           "nr": "00023",
           "operands": [
             {
-              "operand": "X ([15] ∧ ([11] ⊻ [12] ⊻ [47] ⊻ [48] ⊻ [75] ⊻ [76] ⊻ [77] ⊻ [78] ⊻ [79] ⊻ [80] ⊻ [91] ⊻ [92] ⊻ [105] ⊻ [106] ⊻ [107] ⊻ [34]"
+              "operand": "X ([15] ∧ ([11] ⊻ [12] ⊻ [47] ⊻ [48] ⊻ [75] ⊻ [76] ⊻ [77] ⊻ [78] ⊻ [79] ⊻ [80] ⊻ [91] ⊻ [92] ⊻ [105] ⊻ [106] ⊻ [107] ⊻ [108])) ⊻ [33] ⊻ [34]"
             }
           ]
         },
@@ -2573,7 +2617,7 @@
           "operands": [
             {
               "code": "AFL",
-              "operand": "X [26] ⊻ ([70] ∧ ([65] ⊻ [68] ⊻ [66] ⊻ [69] ⊻ [64] ⊻ [67] ⊻ [114] ⊻ [115] ⊻ ([97] ∧ ([51] ⊻"
+              "operand": "X [26] ⊻ ([70] ∧ ([65] ⊻ [68] ⊻ [66] ⊻ [69] ⊻ [64] ⊻ [67] ⊻ [114] ⊻ [115] ⊻ [116] ⊻ [117])) ⊻ ([97] ∧ ([51] ⊻ [52]))"
             },
             {
               "code": "ACW",
@@ -2808,13 +2852,13 @@
         {
           "nr": "00024",
           "status": [
-            "Muss [26] ⊻ [35] ⊻ ([70] ∧ ([65] ⊻ [68] ⊻ [66] ⊻ [69] ⊻ [64] ⊻ [67] ⊻ [114] ⊻ [115] ⊻ [116] ⊻"
+            "Muss [26] ⊻ [35] ⊻ ([70] ∧ ([65] ⊻ [68] ⊻ [66] ⊻ [69] ⊻ [64] ⊻ [67] ⊻ [114] ⊻ [115] ⊻ [116] ⊻ [117])) ⊻ ([97] ∧ ([51] ⊻ [52]))"
           ]
         },
         {
           "nr": "00025",
           "status": [
-            "Muss [43] ⊻ ([28] ∧ ([51] ⊻ ([54] ⊻ [55] ⊻ ([71] ∧ ([64] ⊻ [65] ⊻ [66] ⊻ [67] ⊻ [68] ⊻ [69] ⊻ [114] ⊻ [115] ⊻",
+            "Muss [43] ⊻ ([28] ∧ ([51] ⊻ [52])) ⊻ ([53] ∧ ([54] ⊻ [55] ⊻ [103] ⊻ [104])) ⊻ ([71] ∧ ([64] ⊻ [65] ⊻ [66] ⊻ [67] ⊻ [68] ⊻ [69] ⊻ [114] ⊻ [115] ⊻ [116] ⊻ [117]))",
             "Kann"
           ]
         },
@@ -2856,7 +2900,7 @@
     "112": "Wenn in dieser SG7 AJT DE1082 = E_0276",
     "113": "Wenn in dieser SG7 AJT DE1082 = E_0277",
     "114": "Wenn in dieser SG12 AJT DE1082 = E_0270",
-    "115": "Wenn in dieser SG12 AJT DE1082 = E_0273",
+    "115": "Wenn in dieser SG12 AJT DE1082 = E_0273 DE1082 = E_0273",
     "116": "Wenn in dieser SG12 AJT DE1082 = E_0276",
     "117": "Wenn in dieser SG12 AJT DE1082 = E_0277",
     "118": "Wenn SG7 AJT+A99+E_0272 vorhanden",
@@ -2898,7 +2942,7 @@
     "511": "Hinweis: BGM DE1004 aus der abgelehnten INVOIC- Nachricht",
     "512": "Hinweis: BGM DE1004 aus der abgelehnten COMDIS-Nachricht",
     "515": "Hinweis: BGM DE1004 aus der bestätigten INVOIC- Nachricht",
-    "517": "Hinweis: Wenn in dieser SG5 in AJT DE4465 ein Code aus Cluster Ablehnung auf Summenebene verwendet wird, ist diese SG7 so oft zu wiederholen, bis alle Fehler der Summenebene genannt sind.",
+    "517": "Hinweis: Wenn in dieser SG5 in AJT DE4465 ein Code SG5 in AJT DE4465 ein Code aus Cluster Ablehnung auf Summenebene verwendet wird, ist diese SG7 so oft zu wiederholen, bis alle Fehler der Summenebene genannt sind.",
     "518": "Hinweis: Wenn in dieser SG5 in AJT DE4465 ein Code aus Cluster Ablehnung auf Kopfebene verwendet wird, der von A80 abweicht, ist diese SG7 genau einmal zu nutzen.",
     "519": "Hinweis: Diese SG7 ist so oft mit AJT DE4465 = A74 zu wiederholen, bis alle Rechnungsnummern im RFF- Segment dieser SG7 genannt sind, die in der INVOIC fehlen, die in diesem SG5 DOC DE1004 genannt ist",
     "52": "Wenn in dieser SG12 AJT DE1082 = E_0407",
@@ -2907,14 +2951,14 @@
     "523": "Hinweis: Jede Rechnungsnummer einer Abschlagsrechnung muss in einem separaten DE4440 angegeben werden. Reichen die fünf DE4440 für die Rechnungsnummern aller anzugebenden Abschlagrechnungen nicht aus, ist das FTX+Z14 zu wiederholen.",
     "525": "Hinweis: Diese SG10 ist so oft zu wiederholen, bis alle Fehler der Positionsebene genannt sind.",
     "526": "Hinweis: Wert aus DE1082 der SG26 in der sich der nachfolgende Fehler in der INVOIC befindet, die in diesem SG5 DOC DE1004 genannt ist.",
-    "529": "Hinweis: Wenn in dieser SG7 AJT DE4465 = A75 vorhanden, dann dürfen in den DE4440 dieses FTX- Segments nur Abschlagsrechnungsnummern genannt sein, welche in der Rechnung enthalten sind, deren Nummer in dieser SG7 in SG7 RFF+AFL angegeben ist.",
+    "529": "Hinweis: Wenn in dieser SG7 AJT DE4465 = A75 vorhanden, dann dürfen in den DE4440 dieses FTX- Segments nur Abschlagsrechnungsnummern genannt sein, welche in der Rechnung enthalten sind, deren Nummer in dieser SG7 in SG7 RFF+AFL angegeben ist. in SG7 RFF+AFL angegeben ist.",
     "53": "Wenn in dieser SG12 AJT DE4465 = A25/A31/A99/AF1",
     "533": "Hinweis: Wenn in dieser SG12 AJT DE4465 = AA1/ AA6/AA7/AB8/AD6, ist diese SG12 so oft mit AJT DE4465 = Code zu wiederholen, bis alle Rechnungsnummern im RFF- Segment dieser SG12 genannt sind.",
     "534": "Hinweis: Wenn in dieser SG12 AJT DE4465 = A34/ A39/AA2/AB2, ist diese SG12 ist so oft mit AJT DE4465 = Code zu wiederholen, bis alle Nummern der Reklamationen im RFF-Segment dieser SG12 genannt sind.",
     "535": "Hinweis: Diese SG7 ist so oft mit AJT DE4465 = A80 zu wiederholen, bis die Rechnungsnummern der nicht stornierten Sonderrechnungen mit derselben Sonderrechnungsart wie sie in Sonderrechnung genannt ist die in diesem SG5 DOC DE1004 genannt ist, und sich auf dieselbe Rechnung beziehen, die die in diesem SG5 DOC DE1004 genannt ist.",
     "536": "Hinweis: Dieses DE darf keine Abschlagsrechnungsnummer enthalten",
-    "537": "Hinweis: Diese SG7 ist so oft mit AJT DE4465 = AC5 zu wiederholen, bis alle Rechnungsnummern im RFF Segment dieser SG7 genannt sind, die in der INVOIC berücksichtigt werden sollten, die in diesem SG5 DOC DE1004 genannt ist, aber mindestens eine davon offensichtlich nicht berücksichtigt wurde.",
-    "538": "Hinweis: Jede Positionsnummer eines Angebotes muss in einem separaten DE4440 angegeben werden. Reichen die fünf DE4440 für die Positionsnummern aller anzugebenden Angebote nicht aus, ist das SG7 FTX+Z16 zu wiederholen.",
+    "537": "Hinweis: Diese SG7 ist so oft mit AJT DE4465 = AC5 zu oft mit AJT DE4465 = AC5 zu wiederholen, bis alle Rechnungsnummern im RFF Segment dieser SG7 genannt sind, die in der INVOIC berücksichtigt werden sollten, die in diesem SG5 DOC DE1004 genannt ist, aber mindestens eine davon offensichtlich nicht berücksichtigt wurde.",
+    "538": "Hinweis: Jede Positionsnummer eines Angebotes muss in einem separaten DE4440 angegeben werden. Reichen die fünf werden. Reichen die fünf DE4440 für die Positionsnummern aller anzugebenden Angebote nicht aus, ist das SG7 FTX+Z16 zu wiederholen.",
     "54": "Wenn in dieser SG12 AJT DE1082 = E_0210",
     "544": "Hinweis: Wenn in dieser SG7 AJT DE4465 = A21 vorhanden, dann darf in den DE4440 dieses FTX-Segments jeweils nur eine Positionsnummer genannt sein, welche aus dem bestätigten Angebot nicht in der Rechnung enthalten sind.",
     "548": "Hinweis: Die Befüllung des Datenelements ergibt sich aus dem zugehörigen EBD.",
@@ -2939,7 +2983,7 @@
     "72": "Wenn SG7 AJT+A99+E_0518 vorhanden",
     "73": "Wenn SG7 AJT+A99+E_0522 vorhanden",
     "74": "Wenn SG7 AJT+A99+E_0267 vorhanden",
-    "75": "Wenn in diesem AJT DE1082 = E_0264",
+    "75": "Wenn in diesem AJT DE1082 = E_0264 DE1082 = E_0264",
     "76": "Wenn in diesem AJT DE1082 = E_0266",
     "77": "Wenn in diesem AJT DE1082 = E_0515",
     "78": "Wenn in diesem AJT DE1082 = E_0517",

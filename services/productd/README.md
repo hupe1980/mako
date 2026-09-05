@@ -2,16 +2,52 @@
 
 `productd` is the single source of truth for **everything the LF sells** to end
 customers, and for the market prices its invoices are derived from.
-`billingd` and `portald` query it exclusively — `marktd` is never used for
+`billingd` is its only service-to-service reader — `marktd` is never used for
 retail pricing.
 
 | | |
 |---|---|
 | **HTTP port** | `:9080` |
 | **Database** | PostgreSQL (`products`, `product_history`, `epex_prices`, `nehs_prices`, `angebote`) |
-| **Auth** | OIDC/JWT + Cedar ABAC on every route — except the § 41c EnWG comparison feed, which is public by law |
+| **Auth** | OIDC/JWT + Cedar ABAC (`policies/productd.cedar`) on every route, plus a per-handler `lf_mp_id == claims.tenant()` check and a tenant-scoped SQL read. The two § 41c EnWG comparison feeds take no `Claims` at all and are public by statute |
 | **MCP** | 13 tools + 3 prompts at `/mcp` |
 | **Health** | `GET /health/live`, `GET /health/ready` |
+
+## Authentication is not authorization
+
+A verified token says *who* is calling. `policies/productd.cedar` says what they
+may do, and the two are separate decisions here for a specific reason: the
+Tarifpreisblatt these routes store is what the next `billingd` run bills, and
+nothing downstream re-checks it. `PUT /api/v1/products/{lf_mp_id}/{code}`
+rewrites a live tariff's Arbeitspreis; `PUT /api/v1/epex-prices/{date}` does the
+same for every § 41a dynamic tariff at once. The per-handler tenant check
+answers "is this my tenant's catalogue?", which is not the same question.
+
+| Action | Routes | Who |
+|---|---|---|
+| `read-product` | `GET /products/{lf_mp_id}[/{code}[/history\|/energiemix]]`, `POST /products/{lf_mp_id}/resolve` | any token of the tenant |
+| `read-marktpreise` | `GET /epex-prices/…`, `GET /nehs-prices/latest` | any token of the tenant |
+| `write-product` | `PUT`/`DELETE` of a product and its `/energiemix` | LF, MSB, ESA, ADMIN |
+| `write-marktpreise` | `PUT /epex-prices/{date}`, `PUT /nehs-prices/{date}` | LF, MSB, ESA, ADMIN |
+| `read-angebot` | `GET /angebote[/{id}[/comparison]]` | LF, MSB, ESA, ADMIN |
+| `write-angebot` | `POST /angebote`, `PUT /angebote/{id}` | LF, MSB, ESA, ADMIN |
+| `versenden-angebot` | `POST /angebote/{id}/versenden` | LF, MSB, ESA, ADMIN |
+| `entscheiden-angebot` | `POST /angebote/{id}/annehmen`, `/ablehnen` | LF, MSB, ESA, ADMIN |
+| `expire-angebote` | `POST /angebote/expire` | LF, MSB, ESA, ADMIN |
+| `use-mcp` | the whole `/mcp` surface | LF, MSB, ESA, ADMIN |
+
+Reads of the catalogue and the price series carry no role requirement: the
+published subset of exactly that data already leaves the house unauthenticated
+under § 41c, `billingd` resolves products with a narrow service credential, and
+an auditor reading a price sheet moves no money. Everything that *sets* a price,
+and the whole Angebot lifecycle — which names a prospect and quotes them a
+bespoke price — is held to a market role. MSB and ESA are in that set because
+the `ENERGIEDIENSTLEISTUNG` category is their catalogue too; naming LF alone
+would lock an MSB deployment out of its own price sheet.
+
+`tests/authorization_guard.rs` pins the shape: every routed handler extracts
+`Claims` and calls `authorize`, the code's action set and the policy's match in
+both directions, and the two § 41c routes are the only unauthenticated ones.
 
 ## Two identities, not one
 
@@ -110,16 +146,21 @@ GET /api/v1/nehs-prices/latest?date=2026-08-01
 § 41c EnWG obliges suppliers to let third parties operating independent
 comparison tools use offer-relevant information **free of charge, in open data
 formats**, for Haushaltskunden and Kleinstunternehmen consuming under
-100 000 kWh a year. That is why these two routes — and only these two — carry no
-token:
+100 000 kWh a year. An obligation to publish that is discharged only behind a
+bearer token is not discharged, so these two routes — and only these two — carry
+no token and no Cedar action:
 
 ```bash
 GET /api/v1/comparison-feed        # canonical form, ETag + pagination
 GET /api/v1/comparison-feed/bo4e   # full BO4E Tarifinfo array
 ```
 
-Only `PUBLISHED` products appear; a `DRAFT` is staged and invisible to billing,
-the portal and the feed alike.
+Only `PUBLISHED` products appear, and only from the comparison categories
+(`STROM`, `GAS`, `WAERME`, `SOLAR`, `WAERMEPUMPE`, `WALLBOX`); a `DRAFT` is
+staged and invisible to billing, the portal and the feed alike. That bound is
+what makes the open route safe — there is no second credential to check here, so
+the exemption's justification is *what leaves the house*, and
+`tests/authorization_guard.rs` asserts the query still carries it.
 
 ## B2B Angebote (CPQ)
 
@@ -137,6 +178,35 @@ could ever register.
 
 The term is any positive number of months — a B2B term is negotiated, not chosen
 from a list.
+
+### What a quotation may quote
+
+An Angebot is a binding offer, so pricing is all-or-nothing: a position that
+cannot be priced refuses the whole quotation with 422 and
+`unpreisbare_positionen`, naming the position index and the reason. Quoting the
+sum of the positions that *did* resolve prices a five-site Rahmenvertrag for
+four sites.
+
+A position is refused when its product code does not resolve, when no
+Preisstaffel covers the quantity asked about, when a Zweitarif product is quoted
+without `jahresverbrauch_ht_kwh`/`jahresverbrauch_nt_kwh`, when a product with a
+Leistungspreis is quoted without `leistung_kw`, or when a Gas position has no
+CO₂ certificate price.
+
+| Component | Where the figure comes from |
+|---|---|
+| Arbeitspreis, Grundpreis, Leistungspreis | the Preisstaffel that covers the position's own quantity — HT and NT against their own volumes |
+| Stromsteuer | 2,05 ct/kWh (§ 3 StromStG) unless overridden |
+| Energiesteuer Gas | 0,55 ct/kWh (§ 2 Abs. 3 Satz 1 Nr. 4 EnergieStG) unless overridden |
+| BEHG | the nEHS price for the quotation's Stichtag; certificates are auctioned since 2026 (§ 10 Abs. 1 BEHG), so there is no fixed fallback |
+| Umsatzsteuer | 19 % (§ 12 Abs. 1 UStG) or the product's own `mwst_rate_override`, per position |
+
+`wiederverkaeufer_13b: true` states the offer without Umsatzsteuer: the
+recipient is a Wiederverkäufer i.S.d. § 3g UStG and owes the tax
+(§ 13b Abs. 2 Nr. 5 Buchst. b i.V.m. Abs. 5 UStG). Whether that holds is the
+caller's assessment.
+
+Jahreskosten are quoted on a 365-day year.
 
 ## Configuration
 
@@ -156,10 +226,13 @@ url = "postgresql://productd:secret@db:5432/productd"
 issuer   = "https://auth.example.de/realms/mako"
 audience = "productd"
 
-# billingd and vertragd read and write with a service key:
+# billingd reads the catalogue and the price series with a service key:
 # [[oidc.service_keys]]
 # secret = "env:PRODUCTD_BILLINGD_KEY"
 # sub    = "billingd"
+
+[mcp]
+api_key = "env:PRODUCTD_MCP_API_KEY"
 ```
 
 ## Tests

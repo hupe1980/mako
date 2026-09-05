@@ -1,0 +1,8 @@
+{#- Heading anchor for `insert_anchor_links = "right"`.
+
+    The element is deliberately empty: Zola's default is a 🔗 character, and any
+    text here lands in the copied heading and in the search index (a snippet
+    then reads "Available Builders#"). The glyph comes from
+    `a.zola-anchor::before` in the stylesheet, so it is presentation only, and
+    the `aria-label` is what a screen reader announces. -#}
+<a class="zola-anchor" href="#{{ id }}" aria-label="Permalink to this section"></a>

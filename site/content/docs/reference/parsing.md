@@ -3,9 +3,9 @@ title = "Parsing"
 description = "All entry points for reading EDI@Energy EDIFACT data: parse, parse_interchange, Platform::parse, ParseConfig DoS limits, and error variants."
 weight = 10
 +++
-# Parsing Guide
-
-This guide covers all available entry points for reading EDIFACT data.
+This guide covers all available entry points for reading EDIFACT data. Terms
+such as Prüfidentifikator, MIG and Sparte are defined in the
+[reference vocabulary](@/docs/reference/_index.md#vocabulary).
 
 ---
 
@@ -19,6 +19,7 @@ This guide covers all available entry points for reading EDIFACT data.
 | `Parser::with_config(config).parse_interchange_buffered(reader)` | Buffered interchange with eager UNB header |
 | `Platform::parse(bytes)` | Single message via an explicit platform instance |
 | `Platform::parse_interchange(reader)` | Interchange via explicit platform |
+| `parse_envelope_only(bytes)` | Message type, release, message reference and PID only — typed field extraction deferred to `LightMessage::into_message` |
 
 ---
 
@@ -42,12 +43,23 @@ println!("pid:  {}", msg.detect_pruefidentifikator()?.as_u32());
 
 | Error | Meaning |
 |---|---|
-| `Error::Parse(e)` | EDIFACT syntax error |
-| `Error::EmptyInput` | No segments found |
+| `Error::Parse(e)` | EDIFACT syntax error — this is also where a `ParseConfig` limit breach surfaces, because the limits are enforced by the reader |
+| `Error::MissingSegment(tag)` | A mandatory envelope segment is absent — `"UNB"` or `"UNH"` |
 | `Error::MissingRelease` | UNH S009 association code absent |
-| `Error::MissingPruefidentifikator` | BGM DE 1004 absent |
-| `Error::InvalidPruefidentifikator` | BGM value outside 10000–99999 |
-| `Error::InputTooLarge` | Byte count exceeds `ParseConfig::max_input_bytes` |
+| `Error::MissingPruefidentifikator` | The PID field is absent or empty |
+| `Error::InvalidPruefidentifikatorRange(n)` | Value outside 10000–99999 |
+| `Error::InvalidPruefidentifikatorFormat { .. }` | Value is not a decimal integer |
+| `Error::UnknownMessageType { .. }` | The UNH type code is not one of the 17 |
+| `Error::FeatureNotEnabled { .. }` | The type is known, but its Cargo feature is not compiled in |
+| `Error::InterchangeCountMismatch { .. }` | `UNZ` DE 0036 disagrees with the UNH…UNT windows found |
+| `Error::InterchangeRefMismatch { .. }` | `UNZ` DE 0020 ≠ `UNB` DE 0020 |
+| `Error::InterchangePartyMismatch { .. }` | A message's `NAD+MS`/`NAD+MR` MP-ID disagrees with the envelope — Allgemeine Festlegungen V6.1d §2.13, enforced at parse (`crates/edi-energy/src/parse.rs:256`) |
+| `Error::ProfileNotFound { .. }`, `Error::ProfileNotYetActive { .. }` | No profile covers the message's release, or it is not in force at the reference date |
+
+The Prüfidentifikator does **not** live in the same place in every message type:
+it rides `SG1 RFF+Z13` in fifteen of the seventeen, and `BGM` DE 1004 only in
+APERAK and CONTRL. Each profile records which in its `pid_source`, and
+`detect_pruefidentifikator` follows it (`crates/edi-energy/src/pid_scan.rs:48`).
 
 ---
 
@@ -77,10 +89,13 @@ let msg = Parser::with_config(config).parse(bytes)?;
 
 | Limit | Default |
 |---|---|
-| `max_input_bytes` | 10 MB |
+| `max_input_bytes` | 10 MiB |
 | `max_segments` | 10 000 |
-| `max_segment_bytes` (`DEFAULT_MAX_SEGMENT_BYTES`) | 64 KB |
+| `max_segment_bytes` (`DEFAULT_MAX_SEGMENT_BYTES`) | 64 KiB |
 | `max_messages_per_interchange` | 1 000 |
+| `max_segments_per_message` | 500 — a per-UNH ceiling under the interchange-wide `max_segments` |
+
+Source: `ParseConfig::default`, `crates/edi-energy/src/parse.rs:171`.
 
 ### Validation date override
 
@@ -288,7 +303,13 @@ at build time instead.
 
 - **Input bounds**: All parse functions enforce byte-count, segment-count, and per-segment byte limits before any field parsing begins. Maliciously large inputs are rejected immediately.
 - **Release-code sanitization**: Untrusted release codes from `UNH` are sanitized before being included in any log output (max 16 ASCII alphanum + `.`).
-- **Fuzz tested**: The `fuzz_parse_validate` target has accumulated 1 373+ corpus entries with zero panics or crashes.
+- **Fuzz tested**: `fuzz_parse_validate` drives arbitrary bytes through
+  `parse → validate → serialize → re-parse` and asserts the message type survives
+  the round trip; seven further targets cover the interchange envelope, the
+  builders, format-version detection, AS4 envelopes, OBIS codes, the metering
+  validation engine and tariff input. All eight compile on every push
+  (`just check-fuzz`, part of `just ci`) and run weekly; a crash writes its
+  reproducer to `fuzz/artifacts/`.
 
 ---
 

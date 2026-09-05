@@ -254,6 +254,12 @@ CREATE TABLE angebote (
     varianten           JSONB       NOT NULL DEFAULT '[]',
     jahreskosten_netto_eur  NUMERIC(16, 2),
     jahreskosten_brutto_eur NUMERIC(16, 2),
+    -- § 13b Abs. 2 Nr. 5 Buchst. b i.V.m. Abs. 5 UStG: the recipient is a
+    -- Wiederverkäufer i.S.d. § 3g UStG and owes the tax, so this quotation
+    -- states no Umsatzsteuer. Stored with the quotation rather than derived at
+    -- read time: every re-pricing has to reach the gross figure the customer
+    -- was actually sent.
+    wiederverkaeufer_13b BOOLEAN NOT NULL DEFAULT false,
     -- BO4E `Angebot` business object for the priced quotation.
     --
     -- The CPQ/ERP interchange payload: Angebot → Angebotsvariante (one per
@@ -265,12 +271,22 @@ CREATE TABLE angebote (
     rahmenvertrag_id    UUID,
     accepted_at         TIMESTAMPTZ,
     declined_at         TIMESTAMPTZ,
-    -- ERP-side reference for idempotency
-    erp_angebot_id      TEXT        UNIQUE,
+    -- ERP-side reference for idempotency. Scoped to the tenant, like every
+    -- other identifier in this schema and like the lookup that reads it
+    -- (`fetch_angebot_id_by_erp_id`: WHERE tenant = $1 AND erp_angebot_id = $2).
+    -- A global UNIQUE made one tenant's ERP quote number unusable by every
+    -- other tenant, and the two halves disagreed in the worst direction: the
+    -- tenant-scoped read found nothing, so the handler took the create path,
+    -- and the global constraint then refused the insert — a 409 on an id the
+    -- tenant has never used.
+    erp_angebot_id      TEXT,
     notizen             TEXT,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (tenant, lf_mp_id, angebotsnummer)
+    UNIQUE (tenant, lf_mp_id, angebotsnummer),
+    -- NULLs are distinct under a plain UNIQUE, so quotations without an ERP
+    -- reference do not collide with one another.
+    UNIQUE (tenant, erp_angebot_id)
 );
 
 COMMENT ON TABLE angebote IS

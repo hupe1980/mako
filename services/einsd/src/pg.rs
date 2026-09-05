@@ -75,11 +75,46 @@ pub struct AnlageUpsertRequest {
     // ── Zusammenlegung (§24 EEG 2023) ───────────────────────────────────────
     /// For merged plants: TR-ID of the parent entity.
     pub parent_tr_id: Option<String>,
-    // ── KWKG (Kraft-Wärme-Kopplungsgesetz 2023) ──────────────────────────────
-    /// KWKG Förderdauer in full-load hours (for plants >2 MW — e.g. 30000 h).
+    // ── KWKG §§ 7, 8 ─────────────────────────────────────────────────────────
+    /// § 6 Abs. 1 KWKG — which class the plant belongs to:
+    /// `"NEU" | "MODERNISIERT" | "NACHGERUESTET"`.
+    ///
+    /// It decides the § 7 Abs. 1 Nr. 5 rate above 2 MW and the § 8 Förderdauer.
+    pub kwk_anlagenart: Option<String>,
+    /// § 7 KWKG — what the KWK-Strom is used for:
+    /// `"NETZ_DER_ALLGEMEINEN_VERSORGUNG"` for Abs. 1, or one of
+    /// `"NICHT_EINGESPEIST_BIS100KW" | "NICHT_EINGESPEIST_KUNDENANLAGE" |
+    /// "NICHT_EINGESPEIST_STROMKOSTENINTENSIV" |
+    /// "NICHT_EINGESPEIST_BRANCHE_ANLAGE2"` for the § 7 Abs. 2/3 ladders, which
+    /// pay markedly less.
+    pub kwk_verwendung: Option<String>,
+    /// § 7 Abs. 1 Satz 2 KWKG — whether the Bundesministerium für Wirtschaft und
+    /// Energie published its Angemessenheits-Feststellung in the Bundesanzeiger.
+    ///
+    /// The 0,5 ct uplift on Nr. 5 lit. a is payable „soweit" it did, so this
+    /// defaults to `false` and the uplift is not paid until an operator records
+    /// the publication.
+    pub kwk_bmwk_feststellung: Option<bool>,
+    /// § 8 Abs. 2/3 KWKG — the cost of the Modernisierung or Nachrüstung as a
+    /// share of the cost of building the plant new (`0.25` = 25 %).
+    ///
+    /// It selects the Vollbenutzungsstunden for a modernisierte or nachgerüstete
+    /// plant; a neue Anlage does not need it (§ 8 Abs. 1 is a flat 30 000 h).
+    pub kwk_kostenanteil: Option<rust_decimal::Decimal>,
+    /// § 8 Abs. 2 KWKG — whole years between the plant first taking up
+    /// Dauerbetrieb and this Modernisierung.
+    ///
+    /// Each Nummer of Abs. 2 has its own Karenzzeit (2, 5 and 10 years), so a
+    /// Modernisierung inside it buys no Förderdauer however much it cost.
+    pub kwk_jahre_seit_dauerbetrieb: Option<u32>,
+    /// § 8 Abs. 2 Nr. 1 lit. c KWKG — whether the plant is a
+    /// Dampfsammelschienen-KWK-Anlage with more than 50 MW electrical capacity,
+    /// which is the only kind the 6 000-hour tier is open to.
+    pub kwk_ist_dampfsammelschiene_ueber_50_mw: Option<bool>,
+    /// § 8 Abs. 1–3 KWKG — Förderdauer in Vollbenutzungsstunden.
+    ///
+    /// Derived from `kwk_anlagenart` and `kwk_kostenanteil` when omitted.
     pub kwk_foerderdauer_h: Option<i32>,
-    /// KWKG Förderdauer in years (for plants ≤2 MW).
-    pub kwk_foerderdauer_years: Option<i16>,
     // ── Flexibilitätsprämie (§50 EEG) ───────────────────────────────────────
     /// Registered flex capacity in kW (§50 EEG biomass flex premium).
     pub flex_leistung_kw: Option<Decimal>,
@@ -102,9 +137,12 @@ pub struct AnlageUpsertRequest {
     /// `einspeiser` record, because both belong to the person and not to the
     /// installation — see [`crate::pg_einspeiser`].
     ///
-    /// Optional so a plant can be registered before its operator is, but
-    /// `settle` refuses to issue a Gutschrift without one rather than guessing
-    /// the VAT rate.
+    /// **Mandatory.** § 7 Abs. 1 EEG 2023 puts the payment on the
+    /// Netzbetreiber, and a plant nobody can be paid for is not a plant this
+    /// service can act on — so `eeg_anlagen.einspeiser_id` is `NOT NULL`
+    /// behind `fk_anlage_einspeiser`, and [`upsert_anlage`] refuses an id that
+    /// names no registered Anlagenbetreiber. Register the operator first
+    /// (`PUT /api/v1/einspeiser/{einspeiser_id}`).
     pub einspeiser_id: String,
     pub notes: Option<String>,
     /// §9 EEG — how the plant satisfies the Steuerbarkeit requirement:
@@ -156,31 +194,34 @@ pub struct AnlageUpsertRequest {
     ///
     /// Matches [`eeg_billing::biomasse::BiomassBrennstoff`] DB variants:
     /// `PFLANZLICHE_BIOMASSE | BIOMETHAN_AUS_BIOMASSE | GUELLE | FESTMIST |
-    /// HOLZBIOMASSE | KLAEGAS | DEPONIEGAS | GRUBENGAS | BIOABFALL`
+    /// HOLZBIOMASSE | KLAERGAS | DEPONIEGAS | GRUBENGAS | BIOABFALL`
     ///
     /// `None` for non-biomass plants (solar, wind, KWKG, hydro …).
-    /// When set, the settlement engine enforces §43 substrate cap and §44
-    /// Güllekleinanlage bonus at every billing period.
+    /// When set, the settlement engine enforces the § 39i Abs. 1 Getreide- und
+    /// Mais-Höchstanteil and detects § 44 Güllekleinanlage eligibility at every
+    /// billing period.
     pub biomasse_hauptbrennstoff: Option<String>,
 
     /// §44 EEG 2023 — fraction of energy input from liquid/solid manure (0.0–1.0).
     ///
     /// When `biomasse_guelle_anteil ≥ 0.80` **and** `leistung_kwp ≤ 75 kW`,
     /// the plant qualifies as a **Güllekleinanlage** and receives the higher
-    /// §44 bonus rate. Use [`eeg_billing::rates::guellekleinanlage_rate`] to
+    /// §44 bonus rate. Use [`eeg_billing::rates::guelle_lookup`] to
     /// look up the applicable gross AW; subtract §53 deduction (−0.2 ct/kWh)
     /// before storing in `verguetungssatz_ct`.
     pub biomasse_guelle_anteil: Option<rust_decimal::Decimal>,
 
-    /// §43 Abs. 1 Nr. 2 EEG 2023 — fraction of energy input from Energiepflanzen
-    /// vom Acker (arable energy crops, 0.0–1.0).
+    /// § 39i Abs. 1 EEG 2023 — share of Getreidekorn und Mais in the mass fed to
+    /// the Biogaserzeugung over the calendar year (0.0–1.0).
     ///
-    /// When `> 0.40`, the substrate cap is exceeded and EEG Vergütung is
-    /// **suspended for that billing period** (`Sanctioned`, EUR 0).
+    /// The cap applies only to a plant holding a Zuschlag and steps down by the
+    /// Gebotstermin: 40 % (2023), 35 % (2024 – 24.02.2025), 30 % (26.02.2025 –
+    /// 2025), 25 % (2026–2028). Exceeding it leaves no § 19 Abs. 1 claim, and
+    /// the period settles as `KeinAnspruch` at EUR 0.
     ///
-    /// `None` is treated as 0.00 at settlement time — the cap is not applied
-    /// for plants that have not submitted fuel composition data.
-    pub biomasse_energiepflanzen_anteil: Option<rust_decimal::Decimal>,
+    /// `None` is treated as 0.00 at settlement time — the cap cannot be breached
+    /// by a plant that has not submitted fuel composition data.
+    pub biomasse_getreide_mais_anteil: Option<rust_decimal::Decimal>,
 }
 
 fn default_verguetung() -> String {
@@ -204,7 +245,14 @@ pub struct AnlageRow {
     pub erzeugungsart: String,
     pub verguetungssatz_ct: Decimal,
     pub verguetungsform: String,
-    pub foerderendedatum: Date,
+    /// The EEG Förderende, or `NULL` for a plant that has none.
+    ///
+    /// § 25 Abs. 1 EEG 2023 dates the EEG claim in years. § 8 KWKG does not: it
+    /// measures the Zuschlag in Vollbenutzungsstunden (Abs. 1–3) and caps each
+    /// calendar year separately (Abs. 4), and both are counters against
+    /// generation. A KWK plant therefore has no calendar Förderende and this is
+    /// `NULL` for it — `kwk_max_kwh` is what ends its Zuschlag.
+    pub foerderendedatum: Option<Date>,
     pub settlement_model: String,
     pub direktvermarktung: bool,
     pub direktverm_aw_ct: Option<Decimal>,
@@ -215,9 +263,15 @@ pub struct AnlageRow {
     pub ursprungs_inbetriebnahme: Option<Date>,
     pub repowering_datum: Option<Date>,
     pub parent_tr_id: Option<String>,
+    pub kwk_anlagenart: Option<String>,
+    pub kwk_verwendung: Option<String>,
+    /// § 7 Abs. 1 Satz 2 KWKG — whether the BMWK Feststellung is published.
+    pub kwk_bmwk_feststellung: bool,
+    pub kwk_kostenanteil: Option<Decimal>,
     pub kwk_foerderdauer_h: Option<i32>,
-    pub kwk_foerderdauer_years: Option<i16>,
     pub kwk_strom_kwh_gesamt: Option<Decimal>,
+    pub kwk_kwh_jahr: Option<Decimal>,
+    pub kwk_kwh_jahr_year: Option<i16>,
     pub flex_leistung_kw: Option<Decimal>,
     pub flex_praemie_ct_kwh: Option<Decimal>,
     pub status: String,
@@ -267,7 +321,7 @@ pub struct AnlageRow {
     // §§42–44 EEG 2023 biomass fuel composition
     pub biomasse_hauptbrennstoff: Option<String>,
     pub biomasse_guelle_anteil: Option<Decimal>,
-    pub biomasse_energiepflanzen_anteil: Option<Decimal>,
+    pub biomasse_getreide_mais_anteil: Option<Decimal>,
     // §44b Biogas annual quota tracking
     pub biogas_quota_kwh_ytd: Decimal,
     pub biogas_quota_ytd_year: Option<i16>,
@@ -372,6 +426,29 @@ pub async fn upsert_anlage(
 
     let ist_repowering = req.ist_repowering.unwrap_or(false);
 
+    // ── § 8 Abs. 1–3 KWKG — Vollbenutzungsstunden ───────────────────────────
+    // Stated explicitly or derived from the Anlagenart and the Kostenanteil.
+    let kwk_anlagenart = req
+        .kwk_anlagenart
+        .as_deref()
+        .map(parse_kwk_anlagenart)
+        .transpose()?;
+    let kwk_vollbenutzungsstunden: Option<i32> = req.kwk_foerderdauer_h.or_else(|| {
+        kwk_anlagenart.and_then(|anlagenart| {
+            eeg_billing::kwkg::foerderdauer_vollbenutzungsstunden(
+                &eeg_billing::KwkFoerderdauerInput {
+                    anlagenart,
+                    kostenanteil: req.kwk_kostenanteil,
+                    jahre_seit_dauerbetrieb: req.kwk_jahre_seit_dauerbetrieb,
+                    ist_dampfsammelschiene_ueber_50_mw: req
+                        .kwk_ist_dampfsammelschiene_ueber_50_mw
+                        .unwrap_or(false),
+                },
+            )
+            .and_then(|h| i32::try_from(h).ok())
+        })
+    });
+
     // ── foerderendedatum ────────────────────────────────────────────────────
     //
     // §25 Abs. 1 EEG 2023: 20 years, extended to 31 December of the twentieth
@@ -380,12 +457,13 @@ pub async fn upsert_anlage(
     // anniversary. A Vollrepowering is a fresh Inbetriebnahme (§3 Nr. 30) and
     // restarts the clock.
     //
-    // KWKG is a different statute: §8 KWKG 2023 caps the Zuschlag in *years* for
-    // plants ≤ 2 MW and in *Vollbenutzungsstunden* (30 000 h) above that. An
-    // hour-capped plant has no statutory end date at all — the limit is reached
-    // when the kWh counter reaches `kwk_max_kwh` — so §8 Abs. 4's 15-calendar-year
-    // backstop is what goes in the column. Falling through to the EEG rule gave
-    // those plants a twenty-year Förderende the KWKG does not provide for.
+    // KWKG is a different statute: § 8 caps the Zuschlag of *every* KWK plant in
+    // Vollbenutzungsstunden (Abs. 1–3) and caps each calendar year separately
+    // („pro Kalenderjahr […] für **bis zu**", Abs. 4). Both are counters against
+    // generation, and Abs. 4's is a ceiling on a year rather than a rate the
+    // plant is assumed to draw at — a plant running fewer hours than the cap
+    // simply takes longer. No calendar date follows from either, so a KWK plant
+    // gets none: the column stays NULL and `kwk_max_kwh` ends the Zuschlag.
     let is_ausschreibung = req.ausschreibungs_zuschlag_id.is_some();
     let zuschlag_datum = req
         .zuschlag_datum
@@ -393,22 +471,24 @@ pub async fn upsert_anlage(
         .map(|d| Date::parse(d, &time::format_description::well_known::Iso8601::DATE))
         .transpose()
         .map_err(|e| anyhow::anyhow!("zuschlag_datum: {e}"))?;
-    let foerderendedatum = if ist_repowering {
+    let foerderendedatum: Option<Date> = if kwk_vollbenutzungsstunden.is_some() {
+        None
+    } else if ist_repowering {
         let basis = repowering_datum.unwrap_or(inbetriebnahme);
-        eeg_billing::foerderendedatum_repowering(basis)
-            .context("compute repowering foerderendedatum")?
-    } else if let Some(years) = req.kwk_foerderdauer_years {
-        eeg_billing::foerderendedatum_kwkg_years(inbetriebnahme, years)
-            .context("compute KWKG foerderendedatum")?
-    } else if req.kwk_foerderdauer_h.is_some() {
-        eeg_billing::kwk_foerderend_calendar(inbetriebnahme)
-            .context("compute KWKG calendar backstop")?
+        Some(
+            eeg_billing::foerderendedatum_repowering(basis)
+                .context("compute repowering foerderendedatum")?,
+        )
     } else if is_ausschreibung {
-        eeg_billing::foerderendedatum_eeg_ausschreibung(inbetriebnahme)
-            .context("compute tender foerderendedatum")?
+        Some(
+            eeg_billing::foerderendedatum_eeg_ausschreibung(inbetriebnahme)
+                .context("compute tender foerderendedatum")?,
+        )
     } else {
-        eeg_billing::foerderendedatum_eeg(inbetriebnahme)
-            .context("compute statutory foerderendedatum")?
+        Some(
+            eeg_billing::foerderendedatum_eeg(inbetriebnahme)
+                .context("compute statutory foerderendedatum")?,
+        )
     };
 
     let settlement_model = if req.direktvermarktung.unwrap_or(false) {
@@ -425,12 +505,13 @@ pub async fn upsert_anlage(
                settlement_model, mieter_zuschlag_ct, ausschreibungs_zuschlag_id,
                ist_repowering, ursprungs_inbetriebnahme, repowering_datum,
                parent_tr_id,
-               kwk_foerderdauer_h, kwk_foerderdauer_years,
+               kwk_foerderdauer_h, kwk_anlagenart, kwk_verwendung, kwk_kostenanteil,
+               kwk_bmwk_feststellung,
                flex_leistung_kw, flex_praemie_ct_kwh,
                mastr_registriert, mastr_nummer, mastr_datum,
                einspeiser_id,
                notes, is_biogas_sect51b, zuschlag_erloeschen_datum,
-               biomasse_hauptbrennstoff, biomasse_guelle_anteil, biomasse_energiepflanzen_anteil,
+               biomasse_hauptbrennstoff, biomasse_guelle_anteil, biomasse_getreide_mais_anteil,
                zuschlagswert_ct, zuschlag_datum,
                ist_innovationsausschreibung, ist_buergerenergie, ist_pilotwindanlage,
                sect51_optin_erklaert_am, sect9_erfuellung, fernsteuerbarkeit_datum,
@@ -441,7 +522,8 @@ pub async fn upsert_anlage(
                $11, $12, $13, $14, $15, $16,
                $17, $18, $19,
                $20,
-               $21, $22,
+               $21, $22, $44, $45,
+               $46,
                $23, $24,
                $25, $26, $27,
                $28,
@@ -480,7 +562,10 @@ pub async fn upsert_anlage(
                repowering_datum          = EXCLUDED.repowering_datum,
                parent_tr_id              = EXCLUDED.parent_tr_id,
                kwk_foerderdauer_h        = EXCLUDED.kwk_foerderdauer_h,
-               kwk_foerderdauer_years    = EXCLUDED.kwk_foerderdauer_years,
+               kwk_anlagenart            = EXCLUDED.kwk_anlagenart,
+               kwk_verwendung            = EXCLUDED.kwk_verwendung,
+               kwk_bmwk_feststellung     = EXCLUDED.kwk_bmwk_feststellung,
+               kwk_kostenanteil          = EXCLUDED.kwk_kostenanteil,
                flex_leistung_kw          = EXCLUDED.flex_leistung_kw,
                flex_praemie_ct_kwh       = EXCLUDED.flex_praemie_ct_kwh,
                mastr_registriert         = EXCLUDED.mastr_registriert,
@@ -492,7 +577,7 @@ pub async fn upsert_anlage(
                zuschlag_erloeschen_datum = EXCLUDED.zuschlag_erloeschen_datum,
                biomasse_hauptbrennstoff  = EXCLUDED.biomasse_hauptbrennstoff,
                biomasse_guelle_anteil    = EXCLUDED.biomasse_guelle_anteil,
-               biomasse_energiepflanzen_anteil = EXCLUDED.biomasse_energiepflanzen_anteil,
+               biomasse_getreide_mais_anteil = EXCLUDED.biomasse_getreide_mais_anteil,
                updated_at                = now()",
     )
     .bind(&req.tr_id)
@@ -515,8 +600,8 @@ pub async fn upsert_anlage(
     .bind(ursprungs_inbetriebnahme)
     .bind(repowering_datum)
     .bind(&req.parent_tr_id)
-    .bind(req.kwk_foerderdauer_h)
-    .bind(req.kwk_foerderdauer_years)
+    .bind(kwk_vollbenutzungsstunden)
+    .bind(&req.kwk_anlagenart)
     .bind(req.flex_leistung_kw)
     .bind(req.flex_praemie_ct_kwh)
     .bind(req.mastr_registriert)
@@ -528,7 +613,7 @@ pub async fn upsert_anlage(
     .bind(zuschlag_erloeschen_datum)
     .bind(&req.biomasse_hauptbrennstoff)
     .bind(req.biomasse_guelle_anteil)
-    .bind(req.biomasse_energiepflanzen_anteil)
+    .bind(req.biomasse_getreide_mais_anteil)
     .bind(req.zuschlagswert_ct)
     .bind(zuschlag_datum)
     .bind(req.ist_innovationsausschreibung.unwrap_or(false))
@@ -538,6 +623,9 @@ pub async fn upsert_anlage(
     .bind(sect51_optin_erklaert_am) // $41
     .bind(&req.sect9_erfuellung) // $42
     .bind(fernsteuerbarkeit_datum) // $43
+    .bind(&req.kwk_verwendung) // $44
+    .bind(req.kwk_kostenanteil) // $45
+    .bind(req.kwk_bmwk_feststellung.unwrap_or(false)) // $46
     .execute(pool)
     .await
     .map_err(|e| {
@@ -768,6 +856,16 @@ pub struct SettleInput {
     pub flex_praemie_ct_kwh: Option<Decimal>,
     pub kwk_strom_kwh_gesamt: Option<Decimal>,
     pub kwk_max_kwh: Option<Decimal>,
+    /// § 8 Abs. 4 KWKG — kWh already paid the Zuschlag on in `kwk_kwh_jahr_year`.
+    pub kwk_kwh_jahr: Option<Decimal>,
+    /// The calendar year `kwk_kwh_jahr` tracks.
+    pub kwk_kwh_jahr_year: Option<i16>,
+    /// § 6 Abs. 1 KWKG — the plant's class, as stored.
+    pub kwk_anlagenart: Option<String>,
+    /// § 7 KWKG — what the KWK-Strom is used for, as stored.
+    pub kwk_verwendung: Option<String>,
+    /// § 7 Abs. 1 Satz 2 KWKG — whether the BMWK Feststellung is published.
+    pub kwk_bmwk_feststellung: bool,
     /// Derived from `mastr_registriert` in `run_settlement` — not set by caller.
     pub sanktion: Option<eeg_billing::SanktionAlt>,
     pub kwh_during_negative_epex: Option<Decimal>,
@@ -840,9 +938,14 @@ pub struct SettleInput {
     pub negative_price_quarter_hours: Option<u64>,
     /// § 147 AO / GoBD — set when this run supersedes an earlier receipt.
     ///
-    /// When `Some`, `run_settlement` snapshots the existing receipt into
-    /// `settlement_receipt_history` and writes a new row with
-    /// `is_correction = true` rather than replacing the original.
+    /// When `Some`, `run_settlement` inserts a new row with
+    /// `is_correction = true` *beside* the original, which stays live and
+    /// unchanged in `settlement_receipts`.
+    ///
+    /// It writes **no** `settlement_receipt_history` snapshot: a correction
+    /// misses the partial unique index and overwrites nothing, so there is no
+    /// row about to be lost. Only an *initial* settle snapshots, because its
+    /// upsert replaces the existing row in place.
     pub correction: Option<Korrektur>,
     /// §44b Abs. 1 EEG 2023 — Biogas >100kW: eligible kWh for this billing period.
     /// Caller tracks cumulative annual kWh and passes `min(kwh, remaining_annual_quota)`.
@@ -875,7 +978,8 @@ pub struct SettleInput {
     ///
     /// When `Some`, the settlement engine passes this directly to
     /// [`eeg_billing::calculate_settlement`], which enforces:
-    /// - **§43 Abs. 1 Nr. 2**: substrate cap >40 % Energiepflanzen → `Sanctioned` (EUR 0)
+    /// - **§ 39i Abs. 1**: a bezuschlagte plant over its Getreide-und-Mais
+    ///   Höchstanteil → `KeinAnspruch` (EUR 0)
     /// - **§44 Güllekleinanlage**: `ist_guellebonusanlage` recorded in audit positions
     pub biomasse: Option<eeg_billing::biomasse::BiomassSettlementData>,
 }
@@ -1197,6 +1301,42 @@ async fn update_biogas_quota_ytd(
     Ok(())
 }
 
+// ── KWKG §§ 7, 8 — typed plant attributes ────────────────────────────────────
+
+/// Parse the `kwk_anlagenart` column into the § 6 Abs. 1 KWKG class.
+///
+/// # Errors
+/// A value outside the three the statute knows.
+fn parse_kwk_anlagenart(s: &str) -> anyhow::Result<eeg_billing::KwkAnlagenart> {
+    use eeg_billing::KwkAnlagenart as A;
+    match s {
+        "NEU" => Ok(A::Neu),
+        "MODERNISIERT" => Ok(A::Modernisiert),
+        "NACHGERUESTET" => Ok(A::Nachgeruestet),
+        other => Err(anyhow::anyhow!(
+            "kwk_anlagenart {other:?} is not one of NEU, MODERNISIERT, NACHGERUESTET"
+        )),
+    }
+}
+
+/// Parse the `kwk_verwendung` column into the § 7 Absatz that prices the plant.
+///
+/// The column has no default. § 7 Abs. 1 and Abs. 2 price different claims —
+/// 8 down to 3,4 ct for KWK-Strom fed into a Netz der allgemeinen Versorgung,
+/// 5,41 down to 1 ct for KWK-Strom that is not — and which one a plant is on is
+/// a fact about the plant. A NULL column computes no § 7 rate.
+fn parse_kwk_verwendung(s: &str) -> anyhow::Result<eeg_billing::KwkVerwendung> {
+    use eeg_billing::KwkVerwendung as V;
+    match s {
+        "NETZ_DER_ALLGEMEINEN_VERSORGUNG" => Ok(V::NetzDerAllgemeinenVersorgung),
+        "NICHT_EINGESPEIST_BIS100KW" => Ok(V::NichtEingespeistBis100Kw),
+        "NICHT_EINGESPEIST_KUNDENANLAGE" => Ok(V::NichtEingespeistKundenanlage),
+        "NICHT_EINGESPEIST_STROMKOSTENINTENSIV" => Ok(V::NichtEingespeistStromkostenintensiv),
+        "NICHT_EINGESPEIST_BRANCHE_ANLAGE2" => Ok(V::NichtEingespeistBrancheAnlage2),
+        other => Err(anyhow::anyhow!("kwk_verwendung {other:?} is unknown")),
+    }
+}
+
 // ── §§42–44 EEG 2023 Biomass fuel composition ────────────────────────────────
 
 /// Derive [`eeg_billing::biomasse::BiomassSettlementData`] from the typed columns
@@ -1208,34 +1348,36 @@ async fn update_biogas_quota_ytd(
 ///
 /// ## Settlement-engine rules driven by the returned struct
 ///
-/// - **§43 Abs. 1 Nr. 2 EEG 2023**: `substrate_cap_ok = false`
-///   (energiepflanzen_anteil > 40 %) → settlement returns `Sanctioned` (EUR 0).
-/// - **§44 EEG 2023 Güllekleinanlage**: `ist_guellebonusanlage = true` is
-///   recorded in the audit position label. The correct Güllekleinanlage
-///   `verguetungssatz_ct` must be stored at registration time (use
-///   [`eeg_billing::rates::guellekleinanlage_rate`]).
+/// - **§ 39i Abs. 1 EEG 2023**: a plant holding a Zuschlag whose Getreide- und
+///   Mais-Anteil exceeds the Höchstanteil for its Gebotstermin has no § 19
+///   Abs. 1 claim, and the settlement returns `KeinAnspruch` (EUR 0).
+/// - **§ 44 EEG 2023 Güllekleinanlage**: `ist_guellebonusanlage = true` is
+///   recorded in the audit position label. The Güllekleinanlage
+///   `verguetungssatz_ct` must be stored at registration time (§ 44 Abs. 1:
+///   22 ct up to 75 kW, 19 ct up to 150 kW, less the § 53 Abs. 1 Nr. 1
+///   deduction).
 ///
 /// ## NULL fraction semantics
 ///
 /// NULL fractions in the DB are treated as `0.0`:
 /// - `biomasse_guelle_anteil IS NULL` → 0.0 Gülle share → no bonus
-/// - `biomasse_energiepflanzen_anteil IS NULL` → 0.0 energy-crop share → cap not applied
+/// - `biomasse_getreide_mais_anteil IS NULL` → 0.0 share → § 39i is satisfied
 ///
 /// This is the conservative/safe direction: operators who have not yet
-/// submitted fuel composition data are neither penalised nor granted the
-/// Güllekleinanlage bonus until they do.
+/// submitted fuel composition data are neither denied their claim nor granted
+/// the Güllekleinanlage bonus until they do.
 fn derive_biomasse(anlage: &AnlageRow) -> Option<eeg_billing::biomasse::BiomassSettlementData> {
     use eeg_billing::biomasse::BiomassBrennstoff;
 
     let hauptbrennstoff_str = anlage.biomasse_hauptbrennstoff.as_deref()?;
 
     // Parse DB string → typed enum; any unrecognised value → conservatively
-    // treat as PflanzlicheBiomasse (subject to §43 substrate cap, no §44 bonus).
+    // treat as PflanzlicheBiomasse (no § 44 bonus).
     let hauptbrennstoff = match hauptbrennstoff_str {
         "GUELLE" => BiomassBrennstoff::Guelle,
         "FESTMIST" => BiomassBrennstoff::Festmist,
         "HOLZBIOMASSE" => BiomassBrennstoff::Holzbiomasse,
-        "KLAEGAS" => BiomassBrennstoff::Klaegas,
+        "KLAERGAS" => BiomassBrennstoff::Klaergas,
         "DEPONIEGAS" => BiomassBrennstoff::Deponiegas,
         "GRUBENGAS" => BiomassBrennstoff::Grubengas,
         "BIOMETHAN_AUS_BIOMASSE" => BiomassBrennstoff::BiomethanAusBiomasse,
@@ -1243,19 +1385,23 @@ fn derive_biomasse(anlage: &AnlageRow) -> Option<eeg_billing::biomasse::BiomassS
         _ => BiomassBrennstoff::PflanzlicheBiomasse,
     };
 
-    // NULL fractions → 0.0 (conservative: neither substrate cap nor bonus applies)
+    // NULL fractions → 0.0 (conservative: no bonus, and § 39i is satisfied)
     let guelle_anteil = anlage
         .biomasse_guelle_anteil
         .unwrap_or(rust_decimal::Decimal::ZERO);
-    let energiepflanzen_anteil = anlage
-        .biomasse_energiepflanzen_anteil
+    let getreide_mais_anteil = anlage
+        .biomasse_getreide_mais_anteil
         .unwrap_or(rust_decimal::Decimal::ZERO);
 
     Some(eeg_billing::biomasse::BiomassSettlementData::new(
         hauptbrennstoff,
         guelle_anteil,
-        energiepflanzen_anteil,
+        getreide_mais_anteil,
         anlage.leistung_kwp,
+        // § 39i Abs. 1 conditions only a claim „durch einen Zuschlag erworben",
+        // and the Höchstanteil steps down by the Gebotstermin the plant was
+        // awarded at.
+        anlage.zuschlag_datum,
     ))
 }
 
@@ -1412,12 +1558,14 @@ pub fn build_settle_input(
     let is_solar = eeg_billing::ErzeugungsArt::from_db_str(&anlage.erzeugungsart)
         .map(eeg_billing::ErzeugungsArt::is_solar)
         .unwrap_or(false);
-    let effektives_foerderende = eeg_billing::foerderdauer::effektives_foerderende(
-        anlage.foerderendedatum,
-        u64::try_from(anlage.negative_price_qh_gesamt).unwrap_or(0),
-        is_solar,
-    )
-    .unwrap_or(anlage.foerderendedatum);
+    let effektives_foerderende = anlage.foerderendedatum.map(|ende| {
+        eeg_billing::foerderdauer::effektives_foerderende(
+            ende,
+            u64::try_from(anlage.negative_price_qh_gesamt).unwrap_or(0),
+            is_solar,
+        )
+        .unwrap_or(ende)
+    });
 
     // §36h Abs. 2 EEG 2023: the Korrekturfaktor in effect for this billing period.
     // A Standortgüte re-evaluation at year 6/11/16 supersedes the initial factor.
@@ -1473,12 +1621,17 @@ pub fn build_settle_input(
         kwk_max_kwh: anlage
             .kwk_foerderdauer_h
             .map(|h| Decimal::from(h) * anlage.leistung_kwp),
+        kwk_kwh_jahr: anlage.kwk_kwh_jahr,
+        kwk_kwh_jahr_year: anlage.kwk_kwh_jahr_year,
+        kwk_anlagenart: anlage.kwk_anlagenart.clone(),
+        kwk_verwendung: anlage.kwk_verwendung.clone(),
+        kwk_bmwk_feststellung: anlage.kwk_bmwk_feststellung,
         sanktion: None, // derived from mastr_registriert in run_settlement
         mastr_registriert: anlage.mastr_registriert,
         kwh_during_negative_epex: overrides.kwh_during_negative_epex,
         inbetriebnahme: Some(anlage.inbetriebnahme),
         leistung_kwp: Some(anlage.leistung_kwp),
-        foerderendedatum: Some(effektives_foerderende),
+        foerderendedatum: effektives_foerderende,
         billing_date,
         eeg_gesetz: anlage.eeg_gesetz,
         erzeugungsart: anlage.erzeugungsart.clone(),
@@ -1533,8 +1686,12 @@ pub fn build_settle_input(
 /// The running totals [`refresh_cumulative_counters`] re-reads under the lock.
 #[derive(Debug, sqlx::FromRow)]
 struct LockedCounters {
-    /// §8 KWKG 2023 — kWh already paid the Zuschlag on.
+    /// § 8 Abs. 1–3 KWKG — kWh already paid the Zuschlag on over the plant's life.
     kwk_strom_kwh_gesamt: Option<Decimal>,
+    /// § 8 Abs. 4 KWKG — kWh already paid the Zuschlag on in `kwk_kwh_jahr_year`.
+    kwk_kwh_jahr: Option<Decimal>,
+    /// The calendar year `kwk_kwh_jahr` tracks.
+    kwk_kwh_jahr_year: Option<i16>,
     /// §44b Abs. 1 EEG 2023 — kWh charged against this year's Biogas cap.
     biogas_quota_kwh_ytd: Decimal,
     /// The calendar year `biogas_quota_kwh_ytd` tracks.
@@ -1542,7 +1699,8 @@ struct LockedCounters {
     /// §51a EEG 2023 — raw negative-price quarter-hours over the Förderdauer.
     negative_price_qh_gesamt: i64,
     /// The statutory Förderende, before the §51a extension is applied to it.
-    foerderendedatum: Date,
+    /// `None` for a plant that has none — a KWK plant, § 8 KWKG.
+    foerderendedatum: Option<Date>,
 }
 
 /// Re-read the plant's cumulative counters under a row lock.
@@ -1566,7 +1724,8 @@ async fn refresh_cumulative_counters(
     input: &mut SettleInput,
 ) -> anyhow::Result<()> {
     let row: Option<LockedCounters> = sqlx::query_as(
-        "SELECT kwk_strom_kwh_gesamt, biogas_quota_kwh_ytd, biogas_quota_ytd_year,
+        "SELECT kwk_strom_kwh_gesamt, kwk_kwh_jahr, kwk_kwh_jahr_year,
+                biogas_quota_kwh_ytd, biogas_quota_ytd_year,
                 negative_price_qh_gesamt, foerderendedatum
            FROM eeg_anlagen
           WHERE tr_id = $1 AND tenant = $2
@@ -1584,6 +1743,8 @@ async fn refresh_cumulative_counters(
 
     if input.settlement_model == KWKG_ZUSCHLAG {
         input.kwk_strom_kwh_gesamt = fresh.kwk_strom_kwh_gesamt;
+        input.kwk_kwh_jahr = fresh.kwk_kwh_jahr;
+        input.kwk_kwh_jahr_year = fresh.kwk_kwh_jahr_year;
     }
     input.biogas_quota_kwh_ytd = fresh.biogas_quota_kwh_ytd;
     input.biogas_quota_ytd_year = fresh.biogas_quota_ytd_year;
@@ -1593,14 +1754,14 @@ async fn refresh_cumulative_counters(
     let is_solar = eeg_billing::ErzeugungsArt::from_db_str(&input.erzeugungsart)
         .map(eeg_billing::ErzeugungsArt::is_solar)
         .unwrap_or(false);
-    input.foerderendedatum = Some(
+    input.foerderendedatum = fresh.foerderendedatum.map(|ende| {
         eeg_billing::foerderdauer::effektives_foerderende(
-            fresh.foerderendedatum,
+            ende,
             u64::try_from(fresh.negative_price_qh_gesamt).unwrap_or(0),
             is_solar,
         )
-        .unwrap_or(fresh.foerderendedatum),
-    );
+        .unwrap_or(ende)
+    });
 
     Ok(())
 }
@@ -1879,6 +2040,92 @@ pub async fn run_settlement(
     // The engine receives the raw awarded AW; §54 is applied there.
     let direktverm_aw_ct_effective = input.direktverm_aw_ct;
 
+    // ── §§ 7, 8 KWKG — Zuschlagssatz und Jahreshöchstbetrag ─────────────────
+    // § 7 prices per Leistungsanteil, so a KWK plant's rate is the blended
+    // Mischsatz across the bands its capacity spans, and § 7 Abs. 2 pays a
+    // different, lower ladder where the KWK-Strom is not fed into a Netz der
+    // allgemeinen Versorgung. § 8 Abs. 4 then caps what one calendar year may be
+    // paid for, independently of the lifetime Vollbenutzungsstunden.
+    let (kwk_zuschlag_ct, kwk_jahres_rest) = if input.settlement_model == KWKG_ZUSCHLAG {
+        let leistung_kw = input.leistung_kwp.unwrap_or(Decimal::ZERO);
+        let anlagenart = input
+            .kwk_anlagenart
+            .as_deref()
+            .map(parse_kwk_anlagenart)
+            .transpose()?
+            .unwrap_or(eeg_billing::KwkAnlagenart::Neu);
+        // § 7 Abs. 1 and Abs. 2 are different claims resting on different facts:
+        // Abs. 1 prices KWK-Strom „der in ein Netz der allgemeinen Versorgung
+        // eingespeist wird" at 8 down to 3,4 ct, Abs. 2 prices KWK-Strom that is
+        // not at 5,41 down to 1 ct. Which one a plant is on is a fact about the
+        // plant, not a default, so an unrecorded Verwendung computes no rate —
+        // guessing Abs. 1 would pay up to eight times the Abs. 2 figure to a
+        // plant that may have no Abs. 1 claim at all.
+        let verwendung = input
+            .kwk_verwendung
+            .as_deref()
+            .map(parse_kwk_verwendung)
+            .transpose()?;
+        let statutory =
+            verwendung
+                .zip(input.inbetriebnahme)
+                .and_then(|(verwendung, dauerbetrieb)| {
+                    eeg_billing::kwkg::zuschlag_ct_kwh(&eeg_billing::KwkZuschlagInput {
+                        kwk_leistung_kw: leistung_kw,
+                        anlagenart,
+                        verwendung,
+                        dauerbetrieb,
+                        // § 7 Abs. 1 Satz 2 pays the 0,5 ct uplift on Nr. 5 lit. a
+                        // only „soweit das Bundesministerium für Wirtschaft und
+                        // Energie […] dies im Bundesanzeiger veröffentlicht hat".
+                        // The register records whether it did.
+                        bmwk_feststellung_veroeffentlicht: input.kwk_bmwk_feststellung,
+                    })
+                });
+        // A KWKAusV award is a figure the plant won, not a § 7 ladder value, so
+        // it wins over the computation. Everything else is priced by § 7: a rate
+        // seeded on the plant row is a fallback, not an award, and taking it
+        // first would leave the Leistungsanteil computation unreachable for
+        // every plant that carries one.
+        let satz = if let Some(award) = input
+            .zuschlagswert_ct
+            .filter(|_| input.ausschreibungs_zuschlag_id.is_some())
+        {
+            award
+        } else if let Some(ct) = statutory {
+            ct
+        } else if input.verguetungssatz_ct > Decimal::ZERO {
+            tracing::warn!(
+                tr_id = %input.tr_id,
+                kwk_verwendung = ?input.kwk_verwendung,
+                "einsd: §7 KWKG prices no rate for this plant (kwk_verwendung unrecorded, \
+                 §7 Abs. 3 left to a Verordnung, or §35 Abs. 20 Satz 1 keeping it out of \
+                 Nr. 5) — settling on the rate stored on the plant row"
+            );
+            input.verguetungssatz_ct
+        } else {
+            anyhow::bail!(
+                "KWKG plant {}: §7 prices no Zuschlag without a kwk_verwendung, and the plant \
+                 carries neither a KWKAusV Zuschlagswert nor a stored verguetungssatz_ct — \
+                 settling it would pay 0 ct/kWh silently",
+                input.tr_id
+            );
+        };
+        // § 8 Abs. 4: the year's contingent less what the year has already been
+        // paid for. A counter from an earlier year has no bearing on this one.
+        let bereits = if input.kwk_kwh_jahr_year == Some(input.billing_year) {
+            input.kwk_kwh_jahr.unwrap_or(Decimal::ZERO)
+        } else {
+            Decimal::ZERO
+        };
+        let rest =
+            eeg_billing::kwkg::jahreskontingent_kwh(leistung_kw, i32::from(input.billing_year))
+                .map(|kontingent| (kontingent - bereits).max(Decimal::ZERO));
+        (satz, rest)
+    } else {
+        (input.verguetungssatz_ct, None)
+    };
+
     // Build data-bearing SettlementScheme variant now that direktverm_aw_ct_effective is ready.
     // One token per model — the schema CHECK is the same list, so an unknown
     // value here means the schema and this match have drifted apart.
@@ -1933,9 +2180,15 @@ pub async fn run_settlement(
         "EIGENVERBRAUCH" => (SettlementScheme::Eigenverbrauch, TariffSource::Statutory),
         "KWKG_ZUSCHLAG" => (
             SettlementScheme::KwkSurcharge {
-                verguetungssatz_ct: input.verguetungssatz_ct,
+                // § 7 prices per Leistungsanteil, so the plant's rate is the
+                // blended Mischsatz across the bands its capacity spans — and it
+                // depends on whether the KWK-Strom is fed into a Netz der
+                // allgemeinen Versorgung. A stored rate is honoured, and the
+                // statutory computation fills in where none is stored.
+                verguetungssatz_ct: kwk_zuschlag_ct,
                 kwh_paid_gesamt: input.kwk_strom_kwh_gesamt,
                 max_kwh: input.kwk_max_kwh,
+                jahres_restkontingent_kwh: kwk_jahres_rest,
             },
             TariffSource::Statutory,
         ),
@@ -2027,11 +2280,14 @@ pub async fn run_settlement(
         input.epex_avg_ct_kwh
     };
 
-    // ── §51 Abs. 2 Nr. 1 — iMSys rollout: lift <100 kW exemption if installed ─
-    let has_imesys = input
-        .imesys_rollout_datum
-        .zip(input.billing_date)
-        .is_some_and(|(rollout, billing)| rollout <= billing);
+    // ── §51 Abs. 2 Nr. 1 — the <100 kW exemption lapses at the turn of the year ─
+    // The exemption covers „Zeiträume vor dem Ablauf des Kalenderjahres, in dem
+    // die Anlage mit einem intelligenten Messsystem ausgestattet wird", so it
+    // runs to the end of the installation year, not to the installation day.
+    let has_imesys = eeg_billing::negativpreis::imesys_befreiung_entfallen(
+        input.imesys_rollout_datum,
+        input.billing_date,
+    );
 
     let output = calculate_settlement(&EegInput {
         scheme,
@@ -2062,7 +2318,8 @@ pub async fn run_settlement(
         negative_price_quarter_hours: input.negative_price_quarter_hours,
         // §44b Abs. 1 EEG 2023: computed above from annual quota tracking
         biogas_sect44b_eligible_kwh,
-        // §51 Abs. 2 Nr. 1 EEG 2023: iMSys rollout lifts the <100 kW exemption
+        // §51 Abs. 2 Nr. 1 EEG 2023: the <100 kW exemption lapses at the end of
+        // the calendar year the iMSys was fitted in.
         has_imesys,
         // §3 Nr. 37 EEG 2023: Pilotwindenergieanlagen are carved out of §51.
         ist_pilotwindanlage: input.ist_pilotwindanlage,
@@ -2087,9 +2344,10 @@ pub async fn run_settlement(
             .as_deref()
             .and_then(|s| eeg_billing::InbetriebnahmeTyp::from_db_str(s).ok())
             .unwrap_or_default(),
-        // §§42–44 EEG 2023: biomass fuel composition from the plant record.
-        // `None` for non-biomass plants; `Some` enforces §43 substrate cap and
-        // §44 Güllekleinanlage bonus detection at every billing period.
+        // §§ 39i, 42–44 EEG 2023: biomass fuel composition from the plant record.
+        // `None` for non-biomass plants; `Some` enforces the § 39i Abs. 1
+        // Getreide- und Mais-Höchstanteil and detects § 44 Güllekleinanlage
+        // eligibility at every billing period.
         biomasse: input.biomasse.clone(),
     });
 
@@ -2130,6 +2388,10 @@ pub async fn run_settlement(
         SettlementStatus::NoData => "no_data",
         SettlementStatus::PriceMissing => "price_missing",
         SettlementStatus::FoerderungBeendet => "foerderung_beendet",
+        // § 8 Abs. 4 KWKG — this year's Vollbenutzungsstunden are used up and
+        // the plant resumes in January. Storing it as `foerderung_beendet` would
+        // retire a plant that is still owed most of its Förderung.
+        SettlementStatus::JahreskontingentErschoepft => "jahreskontingent_erschoepft",
         SettlementStatus::Sanctioned => "sanctioned",
         SettlementStatus::KeinAnspruch => "kein_anspruch",
         // Forward-compatible: any future status variant stores as "unknown" and does not block
@@ -2167,9 +2429,15 @@ pub async fn run_settlement(
     // Anlagenbetreiber. The amount alone is not a legal document — VAT law requires
     // a Gutschrift with the per-rate breakdown. We build it here so the ledger and
     // the SEPA payout downstream reference an actual document, and persist it in
-    // `rechnung_json`. Non-billable statuses (NoData / PriceMissing / …) issue none.
+    // `rechnung_json`.
+    //
+    // The gate is whether there is a payment to document, not the status: a §52
+    // Abs. 2 EEG 2021 plant is paid the Monatsmarktwert and a §52 Abs. 3 one 80 %
+    // of its ordinary Vergütung, both under `Sanctioned`, and both are turnover
+    // that needs its §14 UStG document. `NoData` and `PriceMissing` have no
+    // amount at all and issue none.
     let (rechnung_json, gutschrift_nummer, gutschrift_steuer_eur, gutschrift_brutto_eur) =
-        if output.status == SettlementStatus::Calculated {
+        if output.settlement_eur.is_some_and(|e| e > Decimal::ZERO) {
             build_gutschrift(&input, &output)
         } else {
             (None, None, None, None)
@@ -2368,7 +2636,7 @@ pub async fn run_settlement(
     // ── KWKG: update accumulated kWh + auto-expire when limit reached ────────
     // Guarded on the **delta**, exactly like §44b and §51a above — not on this
     // period's new contribution, which would drop the negative delta of a month
-    // corrected down to zero and go on burning the §8 KWKG 2023
+    // corrected down to zero and go on burning the § 8 KWKG
     // Vollbenutzungsstunden against kWh the plant was never paid for.
     //
     // The status follows this settlement's outcome on the same condition, so a
@@ -2380,10 +2648,19 @@ pub async fn run_settlement(
         } else {
             "aktiv"
         };
+        // The § 8 Abs. 4 year counter is reset whenever the row still tracks an
+        // earlier year: the Jahreshöchstbetrag is per Kalenderjahr, so nothing
+        // carries over.
         sqlx::query(
             r"UPDATE eeg_anlagen
               SET kwk_strom_kwh_gesamt =
                       GREATEST(COALESCE(kwk_strom_kwh_gesamt, 0) + $3, 0),
+                  kwk_kwh_jahr =
+                      GREATEST(
+                          CASE WHEN kwk_kwh_jahr_year = $5
+                               THEN COALESCE(kwk_kwh_jahr, 0) ELSE 0 END + $3,
+                          0),
+                  kwk_kwh_jahr_year = $5,
                   status = $4,
                   updated_at = now()
               WHERE tr_id = $1 AND tenant = $2",
@@ -2392,6 +2669,7 @@ pub async fn run_settlement(
         .bind(&input.tenant)
         .bind(delta.kwk_kwh)
         .bind(new_status)
+        .bind(input.billing_year)
         .execute(&mut *conn)
         .await
         .context("update kwk_strom_kwh_gesamt")?;
@@ -2481,7 +2759,7 @@ pub async fn run_settlement(
 /// found nothing to settle with. Treating them as settled meant a plant settled
 /// too early — before the ÜNB Marktwert or the complete edmd data existed —
 /// was never picked up again and simply went unpaid.
-const SETTLED_STATUSES: [&str; 4] = [
+const SETTLED_STATUSES: [&str; 5] = [
     "calculated",
     "foerderung_beendet",
     "sanctioned",
@@ -2489,6 +2767,14 @@ const SETTLED_STATUSES: [&str; 4] = [
     // reach the same answer. Only a Veräußerungsformwechsel changes it, and that
     // rewrites the plant rather than the receipt.
     "kein_anspruch",
+    // § 8 Abs. 4 KWKG — the calendar year's Jahreskontingent is exhausted, so
+    // this month draws no Zuschlag and re-running it reaches the same answer
+    // until January refills the contingent. Omitting it did not make the month
+    // payable; it made every batch run and the monthly worker pick the plant up
+    // again, month after month, to reach the same "nothing" — the retry-forever
+    // shape, not a missed payment. A correction that frees the contingent
+    // re-settles the month explicitly and does not come through this sweep.
+    "jahreskontingent_erschoepft",
 ];
 
 /// List all active plants that have NOT been settled for `(year, month)` yet.
@@ -2730,19 +3016,29 @@ pub async fn list_settlement_receipts(
     pool: &PgPool,
     tenant: &str,
     tr_id: &str,
+    year: Option<i16>,
+    month: Option<i16>,
     limit: i64,
 ) -> anyhow::Result<Vec<serde_json::Value>> {
+    // `$3 IS NULL OR billing_year = $3` rather than a built-up WHERE clause:
+    // the two columns are the leading pair of the receipts index and both
+    // filters are optional, so one prepared statement serves all four
+    // combinations without concatenating SQL.
     let rows = sqlx::query(
         r"SELECT id, tr_id, billing_year, billing_month, settlement_model,
                  einspeisemenge_kwh, settlement_eur, status, settled_at, gutschrift_nummer,
                  is_correction, correction_of, correction_reason
           FROM settlement_receipts
           WHERE tr_id = $1 AND tenant = $2
+            AND ($3::smallint IS NULL OR billing_year  = $3)
+            AND ($4::smallint IS NULL OR billing_month = $4)
           ORDER BY billing_year DESC, billing_month DESC, settled_at DESC
-          LIMIT $3",
+          LIMIT $5",
     )
     .bind(tr_id)
     .bind(tenant)
+    .bind(year)
+    .bind(month)
     .bind(limit)
     .fetch_all(pool)
     .await
@@ -2775,13 +3071,18 @@ pub async fn list_settlement_receipts(
 
 // ── EPEX monthly prices ───────────────────────────────────────────────────────
 
-/// Look up the statutory rate for a technology, size band, Vergütungsform and
-/// commissioning date.
+/// Look up the statutory net Vergütungssatz for a technology, size band,
+/// Vergütungsform and **Inbetriebnahmedatum**.
 ///
 /// `verguetungsform` is **not** optional. Überschuss- and Volleinspeisung rates
-/// for the same band and start date differ by the §48 Abs. 2a bonus — 8,11 vs.
-/// 12,91 ct/kWh for a ≤ 10 kWp roof plant — so omitting it would leave the choice
-/// to row order.
+/// for the same band and window differ by the § 48 Abs. 2a uplift — 8,11 vs.
+/// 12,86 ct/kWh for a ≤ 10 kWp roof plant commissioned in the 1 February 2024
+/// window — so omitting it would leave the choice to row order.
+///
+/// Band bounds are **inclusive at the top**: every Staffel in the EEG reads „bis
+/// einschließlich einer Leistung von X", so a plant of exactly 10 kWp is a
+/// § 48 Abs. 2 Nr. 1 plant and not a Nr. 2 one. The lowest band that still
+/// covers the capacity therefore wins.
 pub async fn lookup_verguetungssatz(
     pool: &PgPool,
     erzeugungsart: &str,
@@ -2799,10 +3100,10 @@ pub async fn lookup_verguetungssatz(
           WHERE erzeugungsart   = $1
             AND verguetungsform = $2
             AND leistung_min_kwp <= $3
-            AND (leistung_max_kwp IS NULL OR leistung_max_kwp > $3)
+            AND (leistung_max_kwp IS NULL OR leistung_max_kwp >= $3)
             AND billing_start <= $4
             AND (billing_end IS NULL OR billing_end >= $4)
-          ORDER BY billing_start DESC, leistung_min_kwp DESC
+          ORDER BY billing_start DESC, leistung_min_kwp ASC
           LIMIT 1",
     )
     .bind(erzeugungsart)
@@ -2916,7 +3217,8 @@ pub async fn fetch_marktwert_single(
 /// the Jahresmarktwert, and the binding figure exists only once the year is
 /// over. A month settled before that is correct as far as it could be and wrong
 /// as soon as the ÜNB publish — this is the list of what to recompute, which
-/// `POST /api/v1/settlements/{year}/{month}/correction` then does.
+/// `POST /api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction` then
+/// does, one plant at a time.
 ///
 /// # Errors
 ///
@@ -3309,12 +3611,12 @@ pub async fn run_jahresabrechnung(
     } else {
         1
     };
-    let letzter = if anlage.foerderendedatum.year() == i32::from(year) {
-        anlage.foerderendedatum.month() as i16
-    } else if anlage.foerderendedatum.year() < i32::from(year) {
-        0
-    } else {
-        12
+    // A plant with no calendar Förderende — a KWK plant, § 8 KWKG — is owed
+    // every month of the year that follows its Inbetriebnahme.
+    let letzter = match anlage.foerderendedatum {
+        Some(ende) if ende.year() == i32::from(year) => ende.month() as i16,
+        Some(ende) if ende.year() < i32::from(year) => 0,
+        _ => 12,
     };
     let missing_months: Vec<i16> = (erster..=letzter)
         .filter(|m| !settled_months.contains(m))

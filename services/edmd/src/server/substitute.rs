@@ -1,9 +1,29 @@
-//! § 60 Abs. 2 MsbG auto-substitute (Ersatzwertbildung).
+//! § 60 Abs. 1 MsbG auto-substitute (Ersatzwertbildung).
+//!
+//! The authority is **§ 60 Abs. 1 MsbG**: the Messstellenbetreiber owes the
+//! berechtigten Stellen the *aufbereiteten* Messwerte at the times they set, and
+//! Plausibilisierung und Ersatzwertbildung is that Aufbereitung — a slot with no
+//! usable measurement still has to be delivered as something.
+//!
+//! **Not § 60 Abs. 2 MsbG.** That is a *Soll*-rule about *where* the Aufbereitung
+//! runs — „im Smart-Meter-Gateway", for intelligente Messsysteme, once the BSI
+//! rates it technically possible and the BNetzA has made the § 75 Satz 1 Nr. 4
+//! Festlegung. It obliges nobody to form an Ersatzwert. Its Satz 2 is what lets
+//! this endpoint exist at all: until that Festlegung the Aufbereitung may run
+//! outside the gateway at the Messstellenbetreiber, and for gas permanently, at
+//! the berechtigten Stellen nach § 49 Abs. 2.
+//!
+//! On the billing side the same gap is **§ 40a Abs. 2 EnWG**: consumption that
+//! cannot be determined may be billed on a Schätzung „unter angemessener
+//! Berücksichtigung der tatsächlichen Verhältnisse", and Satz 3 requires the
+//! estimate, its grounds and its factors to be stated on the bill „unter
+//! ausdrücklichem und optisch besonders hervorgehobenem Hinweis" — which is why
+//! every value written here keeps the `SUBSTITUTED` quality flag.
 
 #[allow(unused_imports)]
 use super::*;
 
-// ── § 60 Abs. 2 MsbG Auto-Substitute (post_substitute_values) ───────────────────────
+// ── § 60 Abs. 1 MsbG Auto-Substitute (post_substitute_values) ───────────────────────
 
 /// Request body for `POST /api/v1/meter-reads/{malo_id}/substitute`.
 #[derive(Debug, serde::Deserialize)]
@@ -61,13 +81,14 @@ pub struct SubstituteRequest {
 /// One-to-one since `metering` 0.17. It was not: the crate used to expose a
 /// `ForecastMethod` describing *how* a value was derived — prior-period,
 /// weighted rolling average, profile-based, annual projection — while this
-/// column records the § 60 Abs. 2 MsbG substitution *categories*, and three of
-/// those methods had no category to map onto. They were folded into
+/// column records the `substitute_value_log` substitution *categories*, and
+/// three of those methods had no category to map onto. They were folded into
 /// `LinearInterpolation` as the closest admissible description, which recorded
 /// something that had not happened.
 ///
-/// `SubstituteMethod` is now exactly the § 60 Abs. 2 vocabulary, so the audit
-/// trail records the method that actually ran.
+/// `SubstituteMethod` is now exactly that vocabulary, so the audit trail records
+/// the method that actually ran. The four categories are `metering`'s and this
+/// service's — no MsbG provision enumerates Ersatzwertbildungsverfahren.
 pub(crate) fn substitute_method_to_db(method: metering::SubstituteMethod) -> &'static str {
     use metering::SubstituteMethod as M;
     match method {
@@ -80,7 +101,7 @@ pub(crate) fn substitute_method_to_db(method: metering::SubstituteMethod) -> &'s
 
 /// `POST /api/v1/meter-reads/{malo_id}/substitute`
 ///
-/// Generate and store § 60 Abs. 2 MsbG substitute values for a gap interval.
+/// Generate and store § 60 Abs. 1 MsbG substitute values for a gap interval.
 ///
 /// This endpoint:
 /// 1. Validates the requested gap window.
@@ -110,13 +131,13 @@ pub async fn post_substitute_values(
     run_substitute_values(&state.repo, &state.tenant, &malo_id, &req).await
 }
 
-/// Core of the § 60 Abs. 2 MsbG substitute flow.
+/// Core of the § 60 Abs. 1 MsbG substitute flow.
 ///
 /// Shared by the HTTP handler (above) and the `trigger_substitution` MCP tool,
 /// so both write substitutes under identical guards: never over a billable
 /// reading, always with a `substitute_value_log` audit row, atomically.
 ///
-/// Public so the § 60 Abs. 2 MsbG obligation can be pinned against a real
+/// Public so the § 60 Abs. 1 MsbG obligation can be pinned against a real
 /// database rather than only through an authenticated HTTP round trip — the
 /// numbers it produces are the regulated artefact, and they are what the
 /// integration suite asserts.
@@ -189,7 +210,7 @@ pub async fn run_substitute_values(
     // window through the repository. `query` is version-resolved and
     // tenant-scoped but does NOT filter quality, so the billable filter is
     // applied here: a Faulty/Unknown slot must read as a gap — exactly what a
-    // § 60 Abs. 2 Ersatzwert may fill — and must never serve as reference data
+    // § 60 Abs. 1 Ersatzwert may fill — and must never serve as reference data
     // or bracket an interpolation.
     let prior_from = gap_from - time::Duration::days(prior_days);
     let resolved = match repo
@@ -215,7 +236,7 @@ pub async fn run_substitute_values(
     // - `billable_slots` decides which slots already carry a real measurement.
     //   Across registers, a prosumer's Einspeisung reading at 12:00 marked the
     //   12:00 slot occupied and blocked the gap in its *consumption* register
-    //   from ever being filled — the § 60 Abs. 2 obligation stayed open forever.
+    //   from ever being filled — the § 60 Abs. 1 obligation stayed open forever.
     // - `fill_gaps` walks the series to find each gap and the readings bracketing
     //   it. Handed two registers it sees two values at every timestamp, so a gap
     //   in one is hidden by the other's presence and an interpolation is
@@ -306,7 +327,7 @@ pub async fn run_substitute_values(
         .collect();
 
     // Slots inside the gap window that already carry a billable reading: a
-    // substitute must never overwrite a real measurement (§ 60 Abs. 2 MsbG).
+    // substitute must never overwrite a real measurement (§ 60 Abs. 1 MsbG).
     let billable_slots: std::collections::HashSet<OffsetDateTime> = existing
         .iter()
         .filter(|r| r.dtm_from >= gap_from && r.dtm_from < gap_to)
@@ -379,7 +400,7 @@ pub async fn run_substitute_values(
                 Some(metering::Sparte::Gas) => metering::calendar::DayBoundary::Gastag,
                 _ => metering::calendar::DayBoundary::Midnight,
             },
-            // § 60 Abs. 2 MsbG: this endpoint fills a gap, which is what
+            // § 60 Abs. 1 MsbG: this endpoint fills a gap, which is what
             // `NoMeasurementAvailable` records. A caller that knows better —
             // a meter fault, a gateway outage — is a richer request than this
             // endpoint currently accepts, and inventing a reason it was not
@@ -443,7 +464,7 @@ pub async fn run_substitute_values(
     // stuck meter.
     for entry in &substitute_entries {
         let iv = &entry.interval;
-        // A § 60 Abs. 2 MsbG Ersatzwert fills a gap; it never overwrites a real
+        // A § 60 Abs. 1 MsbG Ersatzwert fills a gap; it never overwrites a real
         // measurement. A slot already carrying a billable reading is left untouched
         // and reported as skipped.
         if billable_slots.contains(&iv.from) {
@@ -510,7 +531,7 @@ pub async fn run_substitute_values(
     }
 
     // Persist through the repository. meterstore's `append` routes each interval to
-    // the tier that owns it, opens the § 60 Abs. 2 MsbG confirmation obligation
+    // the tier that owns it, opens the § 60 Abs. 1 MsbG confirmation obligation
     // (so an operator is later nudged to replace the estimate with a real value),
     // and writes the § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) displacement audit — none of which the old
     // raw upsert did.
@@ -584,7 +605,7 @@ pub async fn run_substitute_values(
     tracing::info!(
         malo_id, stored, operator_id,
         gap_from = %gap_from, gap_to = %gap_to,
-        "edmd: § 60 Abs. 2 MsbG substitute values generated"
+        "edmd: § 60 Abs. 1 MsbG substitute values generated"
     );
 
     (
@@ -605,10 +626,11 @@ pub async fn run_substitute_values(
                 .iter()
                 .filter_map(|e| e["method"].as_str())
                 .collect::<std::collections::BTreeSet<_>>(),
-            // Intervals already covered by a billable reading; § 60 Abs. 2 MsbG
-            // authorises a substitute only where no measurement exists.
+            // Intervals already covered by a billable reading. The § 60 Abs. 1
+            // MsbG Aufbereitungspflicht is discharged by the measurement where
+            // one exists; a substitute stands only in its absence.
             "skipped_measured": skipped,
-            "legal_basis": "§ 60 Abs. 2 MsbG Ersatzwertbildung",
+            "legal_basis": "§ 60 Abs. 1 MsbG Ersatzwertbildung · § 40a Abs. 2 EnWG (Verbrauchsschätzung, Satz 3 Hinweispflicht)",
             "intervals": log_entries,
         })),
     )

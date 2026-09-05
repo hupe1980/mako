@@ -766,13 +766,29 @@ impl EdifactIngestDispatcher {
                     if pid == 13027 {
                         let key = esa_korrelation_key(msg, pid);
                         if !key.is_empty() {
-                            let _ = self
+                            // A *miss* is legitimate and `resume_by_key` already
+                            // reports it as `Skipped` — this deployment may hold
+                            // no ESA process for the delivery. An `Err` is a
+                            // different thing: the process was found and the
+                            // command could not be applied, so an ESA order
+                            // stays open with its Lieferung unmarked. Both
+                            // looked like nothing happened.
+                            if let Err(e) = self
                                 .resume_by_key::<mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow>(
                                     &key,
                                     mako_wim::esa_wertebestellung::WORKFLOW_NAME,
                                     mako_wim::esa_wertebestellung::EsaWertebestellungCommand::MarkLieferungBegonnen,
                                 )
-                                .await;
+                                .await
+                            {
+                                tracing::warn!(
+                                    %key,
+                                    error = %e,
+                                    "ingest dispatcher: ESA Wertebestellung not marked as begun \
+                                     — the values are stored, but the ESA process still shows \
+                                     the Lieferung outstanding",
+                                );
+                            }
                         }
                     }
                     // No deadline for pure data delivery.
@@ -819,7 +835,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::gpke_datenabruf_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     // Resume existing process; no spawn — LF initiates.
-                    self.resume_by_key::<GpkeDatanabrufWorkflow>(
+                    self.resume_by_key::<GpkeDatenabrufWorkflow>(
                         malo_id.as_str(),
                         "gpke-datenabruf",
                         cmd,

@@ -6,9 +6,11 @@
 //! Lieferant has not been told the outcome — their `gpke-sperrung-lf` process
 //! cannot close, and GPKE gives them no way to find out but to ask.
 //!
-//! So it is a queue, not a one-shot: [`claim_iftsta_retry`] hands the worker one
-//! such order at a time under `FOR UPDATE SKIP LOCKED`, a successful dispatch
-//! closes it, and orders past [`IFTSTA_MAX_ATTEMPTS`] are announced once as
+//! So it is a queue, not a one-shot: [`claim_iftsta_retry`] leases the worker one
+//! such order at a time with an `UPDATE … RETURNING` — a pooled `SELECT … FOR
+//! UPDATE SKIP LOCKED` holds no lock past the statement, and two replicas sent
+//! the same Sperrauftrag-Status to the Lieferant — a successful dispatch closes
+//! it, and orders past [`IFTSTA_MAX_ATTEMPTS`] are announced once as
 //! `de.sperr.iftsta.ausstehend` and left for a human.
 
 use anyhow::Context as _;
@@ -166,6 +168,27 @@ pub fn iftsta_faellig_am(abschluss: Date) -> Date {
 /// makod process is in the wrong state, or was never spawned. Retrying that
 /// forever hides it behind a growing attempt count.
 pub const IFTSTA_MAX_ATTEMPTS: i32 = 8;
+
+/// When an order may be dispatched again after the attempt being made now — the
+/// claim lease and the retry backoff in one expression, read against the row's
+/// **pre-update** `iftsta_attempts`.
+///
+/// `30 s → 2 min → 8 min → 32 min → 2 h` and then flat, so the eight attempts of
+/// [`IFTSTA_MAX_ATTEMPTS`] are spent over roughly nine hours. That is the point
+/// of it: the sweep re-claimed a failing order every 250 ms, so a `makod` that
+/// was down for three seconds burned the whole budget and escalated an order
+/// that a minute's patience would have delivered. Nine hours still leaves the
+/// escalation well inside the „1. WT nach dem Abschluss" the Lieferant is owed
+/// the Auftragsstatus by, and [`list_stuck_iftsta`] raises the alarm on that
+/// deadline regardless of the counter.
+///
+/// It is a SQL fragment rather than a Rust duration because it must be applied
+/// **in the claiming statement**: computing it in Rust would need the attempt
+/// count first, and reading it before the update is exactly the race the claim
+/// exists to close.
+const IFTSTA_BACKOFF: &str = "now() + LEAST(\
+     INTERVAL '30 seconds' * POWER(4, iftsta_attempts), \
+     INTERVAL '2 hours')";
 
 // ── Requests ──────────────────────────────────────────────────────────────────
 
@@ -620,7 +643,10 @@ pub async fn report_outcome(
         reason: reason.map(str::to_owned),
         pruefschritt_code: code.map(str::to_owned),
     };
-    let dispatched = dispatch_iftsta(pool, makod, tenant, &order).await;
+    // Not claimed — this is the first attempt, made the moment the report
+    // lands — so the failure write is what counts it and backs it off.
+    let dispatched =
+        dispatch_iftsta(pool, makod, tenant, &order, AttemptAccounting::CountHere).await;
     Ok(Reported::Recorded {
         iftsta_dispatched: dispatched,
     })
@@ -641,6 +667,23 @@ pub struct DispatchTarget {
     pub pruefschritt_code: Option<String>,
 }
 
+/// Who spent the attempt this dispatch is making.
+///
+/// The retry budget must be spent by the attempt being *made*, and there are two
+/// ways an order reaches [`dispatch_iftsta`]: the worker claims it — and
+/// [`claim_iftsta_retry`] counts the attempt in the claiming statement — or
+/// [`report_outcome`] dispatches inline the moment the field team reports, with
+/// nothing having claimed it. Passing this rather than letting the failure write
+/// always count is what keeps the two from counting the same attempt twice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttemptAccounting {
+    /// The claim already advanced `iftsta_attempts` and set the backoff.
+    CountedByClaim,
+    /// Nothing claimed this order: the failure write counts the attempt and sets
+    /// the backoff, so the worker does not pick it up 250 ms later.
+    CountHere,
+}
+
 /// Hand the IFTSTA 21039 to `makod`, recording success or the reason it failed.
 ///
 /// Returns whether the dispatch succeeded. Never returns an error: a failure is
@@ -651,18 +694,35 @@ pub async fn dispatch_iftsta(
     makod: &Arc<MakodClient>,
     tenant: &str,
     order: &DispatchTarget,
+    accounting: AttemptAccounting,
 ) -> bool {
     // An operator-created order has no inbound ORDERS behind it, so there is no
     // Lieferant waiting and no process to report into. Marking it dispatched is
     // honest: nothing is outstanding.
     let Some(process_id) = order.process_id.as_deref() else {
-        let _ = record_iftsta(pool, order.id, tenant, "local").await;
+        if let Err(e) = record_iftsta(pool, order.id, tenant, "local").await {
+            // Returning `true` here told `report_execution`'s caller — an
+            // operator watching an HTTP response about a *disconnection* — that
+            // the report was closed out, while the row still read
+            // `iftsta_dispatched_at IS NULL`. The retry worker then claimed that
+            // row on every sweep and took this same branch again, and because
+            // nothing on this path counts an attempt it never ran out of budget
+            // and never reached `list_stuck_iftsta`: a permanent 250 ms busy
+            // loop that no alarm could see. Reporting the failure is what makes
+            // the retry meaningful instead of endless.
+            tracing::error!(
+                order_id = %order.id, %tenant, error = %e,
+                "sperrd: local IFTSTA closure not recorded — the order stays on the retry \
+                 queue and the operator is told the dispatch did not complete"
+            );
+            return false;
+        }
         return true;
     };
 
     let command = match order.status {
-        OrderStatus::Executed => "gpke.sperrung.bestaetigen",
-        OrderStatus::Failed => "gpke.sperrung.fehlgeschlagen",
+        OrderStatus::Executed => mako_markt::commands::GPKE_SPERRUNG_BESTAETIGEN,
+        OrderStatus::Failed => mako_markt::commands::GPKE_SPERRUNG_FEHLGESCHLAGEN,
         // Unreachable: only terminal outcomes are dispatched.
         OrderStatus::Pending | OrderStatus::Cancelled => return false,
     };
@@ -712,7 +772,26 @@ pub async fn dispatch_iftsta(
             true
         }
         Err(e) => {
-            let _ = record_iftsta_failure(pool, order.id, tenant, &e.to_string()).await;
+            if let Err(db) =
+                record_iftsta_failure(pool, order.id, tenant, &e.to_string(), accounting).await
+            {
+                // Two things are lost with this write, and neither is a log
+                // line. `iftsta_last_error` is what the operator runbook and the
+                // MCP guidance tell a human to read, and `iftsta_attempts` is
+                // the budget whose exhaustion emits `de.sperr.iftsta.ausstehend`
+                // — the event that says a Lieferant was never told a customer
+                // was disconnected. Uncounted, the order retries without ever
+                // raising that event. The Frist backstop in
+                // [`list_stuck_iftsta`] catches it at `iftsta_faellig_am`
+                // regardless, which is why this is an `error!` and not a stalled
+                // dispatch, but the row must still be findable now.
+                tracing::error!(
+                    order_id = %order.id, %tenant, error = %db, dispatch_error = %e,
+                    "sperrd: IFTSTA 21039 dispatch failure was not recorded — the attempt is \
+                     uncounted and iftsta_last_error is stale; escalation now depends on the \
+                     iftsta_faellig_am deadline"
+                );
+            }
             tracing::warn!(
                 order_id = %order.id, error = %e,
                 "sperrd: IFTSTA 21039 dispatch failed — queued for retry"
@@ -744,35 +823,77 @@ async fn record_iftsta(
     Ok(())
 }
 
-/// Record a failed IFTSTA dispatch and count the attempt.
+/// Record a failed IFTSTA dispatch, counting the attempt only when nothing else
+/// did.
+///
+/// A claimed order was already counted and leased by [`claim_iftsta_retry`], so
+/// this write says *why* it failed and nothing more — losing it costs the
+/// operator the reason, not the budget. An unclaimed one (the inline first
+/// dispatch) is counted and backed off here, which is the only place that can.
 async fn record_iftsta_failure(
     pool: &PgPool,
     id: Uuid,
     tenant: &str,
     error: &str,
+    accounting: AttemptAccounting,
 ) -> anyhow::Result<()> {
-    sqlx::query(
-        r"UPDATE sperr_orders
+    let sql = match accounting {
+        AttemptAccounting::CountedByClaim => r"UPDATE sperr_orders
+          SET iftsta_last_error = $3, updated_at = now()
+          WHERE id = $1 AND tenant = $2"
+            .to_owned(),
+        AttemptAccounting::CountHere => format!(
+            r"UPDATE sperr_orders
           SET iftsta_attempts = iftsta_attempts + 1,
+              iftsta_next_attempt_at = {IFTSTA_BACKOFF},
               iftsta_last_error = $3, updated_at = now()
-          WHERE id = $1 AND tenant = $2",
-    )
-    .bind(id)
-    .bind(tenant)
-    // Bounded: a provider error can be arbitrarily long and this column is read
-    // in list responses.
-    .bind(error.chars().take(500).collect::<String>())
-    .execute(pool)
-    .await
-    .context("record IFTSTA failure")?;
+          WHERE id = $1 AND tenant = $2"
+        ),
+    };
+    sqlx::query(&sql)
+        .bind(id)
+        .bind(tenant)
+        // Bounded: a provider error can be arbitrarily long and this column is read
+        // in list responses.
+        .bind(error.chars().take(500).collect::<String>())
+        .execute(pool)
+        .await
+        .context("record IFTSTA failure")?;
     Ok(())
 }
 
-/// Take one order off the IFTSTA retry queue, or `None` when it is empty.
+/// Take one order off the IFTSTA retry queue, or `None` when nothing is due.
 ///
-/// `FOR UPDATE SKIP LOCKED` so replicas drain it in parallel without one
-/// blocking on another's row. Only orders inside the retry budget are handed
-/// out; the rest are [`list_stuck_iftsta`]'s problem.
+/// # Why this is an `UPDATE … RETURNING`
+///
+/// It was a pooled `SELECT … FOR UPDATE SKIP LOCKED`, which holds nothing:
+/// sqlx runs a pooled statement in its own implicit transaction, and that
+/// transaction commits as the query returns — so the row locks are gone before
+/// the caller has the row, let alone before it dispatches. Two replicas sweeping
+/// at the same moment both got the same order and both sent the Lieferant an
+/// IFTSTA 21039 for one Sperrauftrag. `makod` does not deduplicate on the
+/// idempotency key, so that is a second disconnection status on the wire, not a
+/// suppressed duplicate.
+///
+/// Pushing `iftsta_next_attempt_at` forward *as part of the claim* makes
+/// the claim atomic without holding a transaction across the makod call: a
+/// concurrent worker's `iftsta_next_attempt_at <= now()` no longer matches. The
+/// push doubles as the retry backoff (see `IFTSTA_BACKOFF`), so a worker that
+/// dies mid-dispatch releases the order when the backoff elapses rather than
+/// stranding it. `FOR UPDATE SKIP LOCKED` stays, inside the subquery, so two
+/// concurrent claims pick different rows instead of one waiting on the other.
+///
+/// # The claim is also what counts the attempt
+///
+/// `iftsta_attempts` is advanced here, not by the outcome write, because
+/// `iftsta_attempts >= IFTSTA_MAX_ATTEMPTS` *is* the give-up state. Counting it
+/// in `record_iftsta_failure` instead made the budget hostage to a write made
+/// on the failure path — the path most likely to be running while the database
+/// is unwell — so a dispatch that could never succeed was retried without limit
+/// and the „der Lieferant wurde nie informiert" alarm never fired. Spending the
+/// budget by the attempt being *made* means the order reaches the escalation
+/// state on its own even when every outcome write is lost. The inline first
+/// dispatch in [`report_outcome`] is not claimed, so it counts its own attempt.
 ///
 /// # Errors
 ///
@@ -781,18 +902,24 @@ pub async fn claim_iftsta_retry(
     pool: &PgPool,
     tenant: &str,
 ) -> anyhow::Result<Option<DispatchTarget>> {
-    let row = sqlx::query(
-        r"SELECT id, malo_id, lf_mp_id, order_type, process_id, status,
-                 executed_at, execution_note, fail_reason, pruefschritt_code
-          FROM sperr_orders
-          WHERE tenant = $1
-            AND status IN ('executed', 'failed')
-            AND iftsta_dispatched_at IS NULL
-            AND iftsta_attempts < $2
-          ORDER BY updated_at
-          LIMIT 1
-          FOR UPDATE SKIP LOCKED",
-    )
+    let row = sqlx::query(&format!(
+        r"UPDATE sperr_orders
+             SET iftsta_attempts        = iftsta_attempts + 1,
+                 iftsta_next_attempt_at = {IFTSTA_BACKOFF}
+           WHERE id = (
+               SELECT id FROM sperr_orders
+                WHERE tenant = $1
+                  AND status IN ('executed', 'failed')
+                  AND iftsta_dispatched_at IS NULL
+                  AND iftsta_attempts < $2
+                  AND iftsta_next_attempt_at <= now()
+                ORDER BY iftsta_next_attempt_at
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+           )
+           RETURNING id, malo_id, lf_mp_id, order_type, process_id, status,
+                     executed_at, execution_note, fail_reason, pruefschritt_code"
+    ))
     .bind(tenant)
     .bind(IFTSTA_MAX_ATTEMPTS)
     .fetch_optional(pool)
@@ -814,22 +941,45 @@ pub async fn claim_iftsta_retry(
     }))
 }
 
-/// Orders that exhausted the retry budget and have not been escalated yet.
+/// Orders whose IFTSTA 21039 is not going to arrive by itself, and that have
+/// not been escalated yet.
+///
+/// Two triggers, deliberately:
+///
+/// * the retry budget is spent (`iftsta_attempts >= IFTSTA_MAX_ATTEMPTS`) **and
+///   the last attempt is no longer in flight**, and
+/// * the order is past `iftsta_faellig_am` — the 1. Werktag nach Abschluss the
+///   Lieferant is entitled to the Auftragsstatus by (GPKE Teil 2 § 3.5.1.2
+///   Nr. 5).
+///
+/// The lease is part of the counter arm because the claim spends the budget
+/// *before* the dispatch: without it, the last attempt would be announced as
+/// „never told the Lieferant" while its own IFTSTA was still on its way to
+/// makod. The deadline arm carries no such condition — the Frist is not a
+/// function of what this service is currently doing.
+///
+/// The deadline arm is not redundant. The counter is only as reliable as the
+/// write that advances it, and that write is made on the failure path — the
+/// path most likely to be running while the database is unwell. An order whose
+/// failures went unrecorded keeps its budget for ever and would never reach the
+/// counter arm, so the one alarm saying "a customer was disconnected and their
+/// Lieferant was never told" would never fire. The Frist is the thing the
+/// regulation actually cares about, and it is stamped once when the order goes
+/// terminal, so it holds whatever happens to the counter afterwards.
 ///
 /// # Errors
 ///
 /// Propagates database errors.
-pub async fn list_stuck_iftsta(
-    pool: &PgPool,
-    tenant: &str,
-) -> anyhow::Result<Vec<(Uuid, String, String, String)>> {
+pub async fn list_stuck_iftsta(pool: &PgPool, tenant: &str) -> anyhow::Result<Vec<StuckIftsta>> {
     let rows = sqlx::query(
-        r"SELECT id, malo_id, lf_mp_id, COALESCE(iftsta_last_error, '') AS err
+        r"SELECT id, malo_id, lf_mp_id, COALESCE(iftsta_last_error, '') AS err,
+                 iftsta_attempts
           FROM sperr_orders
           WHERE tenant = $1
             AND status IN ('executed', 'failed')
             AND iftsta_dispatched_at IS NULL
-            AND iftsta_attempts >= $2
+            AND ((iftsta_attempts >= $2 AND iftsta_next_attempt_at <= now())
+                 OR (iftsta_faellig_am IS NOT NULL AND iftsta_faellig_am < heute()))
             AND iftsta_escalated_at IS NULL",
     )
     .bind(tenant)
@@ -839,17 +989,38 @@ pub async fn list_stuck_iftsta(
     .context("list_stuck_iftsta")?;
     rows.into_iter()
         .map(|r| {
-            Ok((
-                r.try_get("id")?,
-                r.try_get("malo_id")?,
-                r.try_get("lf_mp_id")?,
-                r.try_get("err")?,
-            ))
+            Ok(StuckIftsta {
+                id: r.try_get("id")?,
+                malo_id: r.try_get("malo_id")?,
+                lf_mp_id: r.try_get("lf_mp_id")?,
+                last_error: r.try_get("err")?,
+                attempts: r.try_get("iftsta_attempts")?,
+            })
         })
         .collect()
 }
 
-/// Mark a stuck order as escalated so it is announced once, not every cycle.
+/// An order [`list_stuck_iftsta`] wants announced.
+///
+/// `attempts` is carried rather than assumed to be the cap: an order escalated
+/// on its `iftsta_faellig_am` deadline can still be well inside its retry
+/// budget, and an announcement that states the cap regardless sends an operator
+/// looking for eight failures that never happened.
+#[derive(Debug)]
+pub struct StuckIftsta {
+    pub id: Uuid,
+    pub malo_id: String,
+    pub lf_mp_id: String,
+    pub last_error: String,
+    pub attempts: i32,
+}
+
+/// Claim the escalation of a stuck order, so it is announced once and by one
+/// replica.
+///
+/// Returns `true` when this caller took it. `false` means somebody else already
+/// escalated it and this caller must **not** emit the announcement — which is
+/// why the caller runs this *before* writing the event, in the same transaction.
 ///
 /// # Errors
 ///
@@ -858,8 +1029,8 @@ pub async fn mark_iftsta_escalated(
     exec: impl sqlx::PgExecutor<'_>,
     id: Uuid,
     tenant: &str,
-) -> anyhow::Result<()> {
-    sqlx::query(
+) -> anyhow::Result<bool> {
+    let res = sqlx::query(
         "UPDATE sperr_orders SET iftsta_escalated_at = now() \
          WHERE id = $1 AND tenant = $2 AND iftsta_escalated_at IS NULL",
     )
@@ -868,7 +1039,7 @@ pub async fn mark_iftsta_escalated(
     .execute(exec)
     .await
     .context("mark_iftsta_escalated")?;
-    Ok(())
+    Ok(res.rows_affected() == 1)
 }
 
 // ── Cancel ────────────────────────────────────────────────────────────────────
@@ -933,10 +1104,15 @@ pub async fn stats_pg(pool: &PgPool, tenant: &str) -> anyhow::Result<SperrStats>
                   WHERE status IN ('executed', 'failed')
                     AND iftsta_dispatched_at IS NULL
               )                                                AS iftsta_outstanding,
+              -- Same test as `list_stuck_iftsta`'s counter arm, lease and all:
+              -- the claim spends the attempt before the dispatch, so without it
+              -- the gauge counts an order whose last IFTSTA is still on its way
+              -- to makod as one nobody is trying any more.
               COUNT(*) FILTER (
                   WHERE status IN ('executed', 'failed')
                     AND iftsta_dispatched_at IS NULL
                     AND iftsta_attempts >= $2
+                    AND iftsta_next_attempt_at <= now()
               )                                                AS iftsta_stuck
           FROM sperr_orders
           WHERE tenant = $1",

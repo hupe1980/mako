@@ -2,15 +2,23 @@
 title = "sperrd Operator Guide"
 description = "Operator guide for sperrd — the Netzbetreiber's Sperr-/Entsperrauftrag execution queue: ORDERS 17115/17117 in, field dispatch, IFTSTA 21039 out, with a retry queue for the outcomes that do not reach the Lieferant."
 weight = 26
-[extra]
-mermaid = true
 +++
-# `sperrd` Operator Guide
-
 `sperrd` is the Netzbetreiber's work queue for the physical acts GPKE orders it
 to perform. An **ORDERS 17115 Sperrauftrag** or **17117 Entsperrauftrag** from a
 Lieferant becomes a job for the field team; the outcome goes back as **IFTSTA
 21039** (Auftragsstatus Sperren/Entsperren).
+
+Three terms carry the page. A **Sperrung** is the physical interruption of a
+supply point and an **Entsperrung** its restoration. **ORDERS** and **IFTSTA**
+are [EDIFACT message types](@/docs/architecture/domain-model.md#edifact-message-types) — the order and the status
+report — and the five-digit number after each is its
+[**Prüfidentifikator (PID)**](@/docs/architecture/domain-model.md#prufidentifikator-pid), the BDEW code that says
+which business case a message carries (the platform-wide list is the
+[PID reference](@/docs/regulatory/pid-reference.md)). **Lieferant (LF)** and
+**Netzbetreiber (NB)** are two of the four market roles the platform models; see
+[Party Roles](@/docs/architecture/domain-model.md#party-roles-marktrollen). The
+supply point itself is a **Marktlokation (MaLo)** —
+[MaLo vs MeLo](@/docs/architecture/domain-model.md#malo-vs-melo-the-critical-distinction).
 
 Without that outcome message the Lieferant's `gpke-sperrung-lf` process never
 reaches a terminal state, and GPKE gives them no way to find out what happened
@@ -73,7 +81,11 @@ a passed earliest-start only means the job became schedulable.
 ## Timing — three clocks, all published
 
 BK6-24-174 GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2 state every deadline on a
-Sperr-/Entsperrauftrag, and they are three different ones:
+Sperr-/Entsperrauftrag, and they are three different ones. A **Frist** is a
+regulated deadline and **WT** is *Werktag*, the market's business day — never a
+calendar day, so every window here is counted on the BDEW-MaKo calendar
+([business dates](@/docs/architecture/domain-model.md#dates-and-days)). **ÜT**
+is the *Übertragungszeitpunkt*, the moment a message must be on the wire.
 
 | Clock | Frist | Tracked by |
 |---|---|---|
@@ -143,7 +155,7 @@ What the IFTSTA carries, per AHB 2.1 §7.2:
 |---|---|
 | `SG15 STS DE9015` | `Z37` Auftragsstatus Sperren / `Z38` Entsperren — derived from `order_type` |
 | `SG15 STS DE4405` | `Z14 erfolgreich` (execute) / `Z13 gescheitert` (fail) |
-| `SG15 STS DE9013` | The EBD Prüfschritt code — a **Muss**, so `pruefschritt_code` is what makes the message valid |
+| `SG15 STS DE9013` | The Prüfschritt code from the EBD (*Entscheidungsbaumdiagramm* — BDEW's published decision tree for this answer). A **Muss**, so `pruefschritt_code` is what makes the message valid |
 | `DTM+293` | Fertigstellungsdatum — **Muss** on `Z14`, and condition [495] requires it ≤ the document date, so a future `executed_at` is refused at the API |
 | `SG25 FTX+ACB` | The `note` or `reason` free text |
 
@@ -162,10 +174,21 @@ does not know the outcome.
 
 A background worker drains it, re-sending under the same idempotency key
 `makod` deduplicates on, so a re-send after a lost response is the same command
-rather than a second IFTSTA. After `IFTSTA_MAX_ATTEMPTS` it announces
-`de.sperr.iftsta.ausstehend` once and stops — a dispatch that has failed eight
-times is not a transport problem but a `makod` process in the wrong state, and
-retrying that forever only hides it behind a rising attempt count.
+rather than a second IFTSTA. Replicas are safe because the claim and the backoff
+are one column: taking an order pushes `iftsta_next_attempt_at` forward, so no
+second worker's `<= now()` still matches it. It announces `de.sperr.iftsta.ausstehend` once and
+stops on **either** of two triggers:
+
+| Trigger | Why it is there |
+|---|---|
+| `iftsta_attempts` reaches `IFTSTA_MAX_ATTEMPTS` | A dispatch that has failed eight times is not a transport problem but a `makod` process in the wrong state, and retrying that forever only hides it behind a rising attempt count |
+| `iftsta_faellig_am` has passed | The Frist — 1. Werktag nach Abschluss (GPKE Teil 2 § 3.5.1.2 Nr. 5) — is stamped once when the order goes terminal, so it escalates even if the attempt counter never advanced |
+
+The second trigger exists because the counter is not trustworthy on its own: a
+failure whose *own* write is lost never increments it, so an order could retry
+indefinitely without ever reaching the cap. The Frist holds whatever happens to
+the count, and the event reports the real attempt total rather than assuming the
+cap was the reason.
 
 `/stats` reports the three apart:
 
@@ -193,10 +216,11 @@ All through the transactional outbox.
 |---|---|
 | `de.sperr.auftrag.eingegangen` | An order entered the queue, from ORDERS or an operator |
 | `de.sperr.ausgefuehrt` | Carried out — IFTSTA `Z14` |
+| `de.sperr.versuch.gescheitert` | The **first** Sperrversuch failed and the order stayed `pending`. Deliberately not `fehlgeschlagen`: nothing has been reported to the LF yet, because Nr. 5 still owes a second visit |
 | `de.sperr.fehlgeschlagen` | Not carried out — IFTSTA `Z13`, with the Prüfschritt code |
 | `de.sperr.storniert` | A pending order was withdrawn; no IFTSTA |
 | `de.sperr.ausfuehrung.ueberfaellig` | The 6-WT execution window closed with the order still open |
-| `de.sperr.iftsta.ausstehend` | The retry budget is spent and the LF is still uninformed |
+| `de.sperr.iftsta.ausstehend` | The retry budget is spent **or** the § 3.5.1.2 Nr. 5 Frist has passed, and the LF is still uninformed |
 
 `agentd`'s `sperrd-agent` subscribes to the `de.sperr.*` glob.
 
@@ -238,9 +262,12 @@ CREATE TABLE sperr_orders (
     CHECK (ausfuehrung_am IS NULL OR fruehestens_am IS NULL),
     ausfuehrung_faellig_am   DATE,          -- 6 WT, GPKE Teil 2 § 3.5.1.2 Nr. 1
     ausfuehrung_eskaliert_at TIMESTAMPTZ,
-    sperrversuche            INTEGER NOT NULL DEFAULT 0,   -- max. 2, Nr. 5
-    letzter_versuch_am       DATE,
+    sperrversuche            INTEGER NOT NULL DEFAULT 0
+                             CHECK (sperrversuche BETWEEN 0 AND 2),   -- Nr. 5
+    letzter_versuch_am       TIMESTAMPTZ,
     letzter_versuch_grund    TEXT,
+    vorlauffrist_eingehalten   BOOLEAN,     -- recorded, never enforced
+    vorlauffrist_spaetester_ut DATE,        -- the latest ÜT the order could have carried
     iftsta_faellig_am        DATE,          -- 1. WT nach Abschluss, Nr. 5
     arbeitszeit          TEXT CHECK (arbeitszeit IN ('innerhalb','auch_ausserhalb')),
     treffpunkt_hinweis   TEXT,
@@ -261,6 +288,10 @@ CREATE TABLE sperr_orders (
     iftsta_dispatched_at TIMESTAMPTZ,
     iftsta_attempts      INTEGER NOT NULL DEFAULT 0,
     iftsta_last_error    TEXT,
+    -- The claim lease *and* the retry backoff in one column: a worker takes an
+    -- order by pushing this forward, so a second replica's `<= now()` no longer
+    -- matches and cannot dispatch the same 21039 twice.
+    iftsta_next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     iftsta_escalated_at  TIMESTAMPTZ,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -299,6 +330,11 @@ pool_size = 10
 [oidc]
 issuer   = "https://keycloak:8080/realms/mako"
 audience = "sperrd"
+
+# Optional: MCP authentication (API key or OIDC). Omitted, the MCP surface
+# follows the same dev-mode rules as the REST API.
+# [mcp]
+# api_key = "env:SPERRD_MCP_API_KEY"
 ```
 
 Omitting `[oidc]` is a startup failure unless `allow_insecure_no_auth = true` is
@@ -307,6 +343,9 @@ written down explicitly: these routes create and confirm physical disconnections
 ## Tests
 
 `cargo test -p sperrd` runs the unit and guard tests. `just test-sperrd-db` runs
-13 scenarios against real PostgreSQL: the redelivery guard, the claim guard, a
-failed dispatch keeping the report and queueing a retry, budget exhaustion
-escalating once, tenant isolation, and the mutually-exclusive ORDERS dates.
+16 scenarios against real PostgreSQL: the redelivery guard, two replicas unable
+to claim the same IFTSTA, a failed dispatch keeping the report and queueing a
+retry, budget exhaustion escalating once, an overdue IFTSTA escalating even when
+no attempt was ever counted, exactly one terminal outcome per order, the first
+Sperrversuch leaving the order open, tenant isolation, and the
+mutually-exclusive ORDERS dates.

@@ -99,7 +99,7 @@ pub struct CheckConfig {
     pub require_tariff: bool,
 
     /// Maximum allowed payment term (Zahlungsziel) in days from the invoice date
-    /// (`rechnungsdatum`) to the due date (`faelligkeitsdatum`, DTM+92).
+    /// (`rechnungsdatum`) to the due date (`faelligkeitsdatum`, DTM+265).
     ///
     /// Per §7 Allgemeine Festlegungen V6.1d: standard GPKE and WiM payment term
     /// is **30 days**. Set to `0` to disable this check.
@@ -158,12 +158,12 @@ pub enum FindingKind {
     /// Per BK6-24-174 §5: a Stornorechnung must reference the original invoice
     /// number so the LF can reconcile it against the original receipt.
     StorniertWithoutReference,
-    /// `faelligkeitsdatum` (DTM+92) exceeds the maximum allowed payment term.
+    /// `faelligkeitsdatum` (DTM+265) exceeds the maximum allowed payment term.
     ///
     /// Basis: §7 Allgemeine Festlegungen V6.1d — standard GPKE/WiM payment
     /// term is 30 days from invoice date.
     ZahlungszielExceeded,
-    /// `faelligkeitsdatum` (DTM+92) is in the past or before `rechnungsdatum`.
+    /// `faelligkeitsdatum` (DTM+265) is in the past or before `rechnungsdatum`.
     ZahlungszielInvalid,
     /// The invoice states no Umsatzsteuer at all.
     ///
@@ -272,10 +272,19 @@ impl Finding {
     }
 }
 
+/// The signed deviation of `actual` from `expected`, in percent.
+///
+/// A diagnostic figure for the finding message, never an input to a comparison —
+/// which is why `f64` is admissible here and nowhere else in this crate.
+///
+/// The difference is taken in `i128`: two independently valid `Amount<5>` values
+/// can sit at opposite ends of the `i64` range, and their difference does not
+/// fit in one.
 fn deviation(expected: Option<EuroAmount>, actual: Option<EuroAmount>) -> Option<f64> {
     match (expected, actual) {
         (Some(exp), Some(act)) if exp.to_raw() != 0 => {
-            Some((act.to_raw() - exp.to_raw()) as f64 / exp.to_raw().unsigned_abs() as f64 * 100.0)
+            let diff = i128::from(act.to_raw()) - i128::from(exp.to_raw());
+            Some(diff as f64 / i128::from(exp.to_raw()).unsigned_abs() as f64 * 100.0)
         }
         _ => None,
     }
@@ -361,7 +370,7 @@ impl CheckReport {
 /// Return `true` when `rechnung` is a Stornorechnung (cancellation invoice).
 ///
 /// A Stornorechnung is identified by `ist_storno = Some(true)`.
-/// When true, the tariff check (stage 4) must be skipped — cancellations
+/// When true, the tariff check (stage 8) must be skipped — cancellations
 /// do not carry original tariff positions, they carry negated amounts.
 ///
 /// The presence of `original_rechnungsnummer` is checked separately by
@@ -435,7 +444,7 @@ impl InvoicCheckEngine {
         Self::check_periods(rechnung, &mut findings);
 
         // ── Stage 3: Zahlungsziel check ───────────────────────────────────────
-        // DTM+92 (faelligkeitsdatum) must not exceed max_zahlungsziel_days.
+        // DTM+265 (faelligkeitsdatum) must not exceed max_zahlungsziel_days.
         // Source: §7 Allgemeine Festlegungen V6.1d; BK6-22-024 §5.
         if config.max_zahlungsziel_days > 0 {
             Self::check_zahlungsziel(rechnung, config, &mut findings);
@@ -473,7 +482,7 @@ impl InvoicCheckEngine {
 
     // ── Stage implementations ──────────────────────────────────────────────────
 
-    /// Stage 3: Validate `faelligkeitsdatum` (Zahlungsziel / DTM+92).
+    /// Stage 3: Validate `faelligkeitsdatum` (Zahlungsziel / DTM+265).
     ///
     /// Checks:
     /// - If `faelligkeitsdatum < rechnungsdatum`: invalid (past due before issued).
@@ -486,8 +495,7 @@ impl InvoicCheckEngine {
     ///
     /// # Compared as calendar dates, not timestamps
     ///
-    /// BO4E types both fields `format: date-time`, but BDEW INVOIC transmits
-    /// them as DTM qualifier 102 — a bare `YYYYMMDD` — and a Zahlungsziel is a
+    /// BO4E types both fields `format: date-time`, but a Zahlungsziel is a
     /// term in *days*. Senders pin the timestamp to midnight in their own
     /// offset, so subtracting two `OffsetDateTime`s measures the offsets as well
     /// as the days: an invoice issued `2026-07-01T00:00+02:00` and due
@@ -497,7 +505,7 @@ impl InvoicCheckEngine {
     /// carries, which is the comparison the rule is about.
     fn check_zahlungsziel(rechnung: &Rechnung, config: &CheckConfig, findings: &mut Vec<Finding>) {
         let Some(faellig) = rechnung.faelligkeitsdatum_date() else {
-            return; // DTM+92 absent — not required on all PID types
+            return; // DTM+265 absent — not required on all PID types
         };
         let Some(rechnungs_datum) = rechnung.rechnungsdatum_date() else {
             return; // Cannot compute term without invoice date
@@ -508,7 +516,7 @@ impl InvoicCheckEngine {
                 FindingKind::ZahlungszielInvalid,
                 format!(
                     "Zahlungsziel {faellig} is before invoice date {rechnungs_datum}. \
-                     DTM+92 must not precede rechnungsdatum. \
+                     DTM+265 must not precede rechnungsdatum. \
                      Source: §7 Allgemeine Festlegungen V6.1d.",
                 ),
                 None,
@@ -600,8 +608,11 @@ impl InvoicCheckEngine {
     /// [`EuroAmount`], so a mixed-currency document does not fail any later
     /// comparison. It passes them, wrongly.
     fn check_waehrung(rechnung: &Rechnung, findings: &mut Vec<Finding>) {
-        let mut first: Option<(&str, rubo4e::current::Waehrungscode)> = None;
-        for (field, code) in [
+        // Every field that names a currency, not only the document-level totals.
+        // A position denominated differently from the header is read as EUR by
+        // every later stage exactly as a header field would be, and it is the
+        // positions that carry the arithmetic.
+        let mut fields: Vec<(String, rubo4e::current::Waehrungscode)> = [
             ("gesamtnetto", &rechnung.gesamtnetto),
             ("gesamtsteuer", &rechnung.gesamtsteuer),
             ("gesamtbrutto", &rechnung.gesamtbrutto),
@@ -609,11 +620,29 @@ impl InvoicCheckEngine {
             ("zuZahlen", &rechnung.zu_zahlen),
         ]
         .into_iter()
-        .filter_map(|(f, b)| b.as_ref().and_then(|b| b.waehrung).map(|c| (f, c)))
-        {
-            match first {
-                None => first = Some((field, code)),
-                Some((first_field, first_code)) if first_code != code => {
+        .filter_map(|(f, b)| {
+            b.as_ref()
+                .and_then(|b| b.waehrung)
+                .map(|c| (f.to_owned(), c))
+        })
+        .collect();
+        for pos in rechnung.rechnungspositionen.iter().flatten() {
+            let (line_no, _) = pos_ident(pos);
+            if let Some(code) = pos.gesamtpreis.as_ref().and_then(|b| b.waehrung) {
+                fields.push((format!("Line {line_no} gesamtpreis"), code));
+            }
+        }
+        for (i, b) in rechnung.steuerbetraege.iter().flatten().enumerate() {
+            if let Some(code) = b.waehrungscode {
+                fields.push((format!("Steuerbetrag {i}"), code));
+            }
+        }
+
+        let mut first: Option<(String, rubo4e::current::Waehrungscode)> = None;
+        for (field, code) in fields {
+            match &first {
+                None => {}
+                Some((first_field, first_code)) if *first_code != code => {
                     findings.push(Finding::dispute(
                         FindingKind::WaehrungMismatch,
                         format!(
@@ -631,6 +660,9 @@ impl InvoicCheckEngine {
                 }
                 Some(_) => {}
             }
+            if first.is_none() {
+                first = Some((field, code));
+            }
         }
     }
 
@@ -641,9 +673,31 @@ impl InvoicCheckEngine {
             let stated_net = pos.gesamtpreis.wert_decimal().and_then(euro_from_decimal);
 
             if let (Some(qty), Some(price), Some(stated_net)) = (qty, price, stated_net) {
-                let computed = price.mul_qty(qty);
+                let (line_no, malo) = pos_ident(pos);
+                // The quantity comes off the wire and nothing has range-checked
+                // it — the price has been through `euro_from_decimal`, the
+                // quantity has not. `mul_qty` panics on a product outside the
+                // representable range, so a counterparty document stating
+                // `menge = 1e15` would take down the request that validates it.
+                // An unrepresentable product is a finding about the document,
+                // not a fault in the checker.
+                let Ok(computed) = price.checked_mul_qty(qty) else {
+                    findings.push(Finding {
+                        kind: FindingKind::ArithmeticError,
+                        is_dispute: true,
+                        message: format!(
+                            "Line {line_no} ({malo}): {qty} × {price} EUR is not a \
+                             representable amount — the stated quantity or unit price is \
+                             out of range, so the position cannot be checked or paid",
+                        ),
+                        line_number: Some(line_no),
+                        expected: None,
+                        actual: Some(stated_net),
+                        deviation_pct: None,
+                    });
+                    continue;
+                };
                 if !stated_net.within_tolerance_ppm(computed, config.arithmetic_tolerance_ppm) {
-                    let (line_no, malo) = pos_ident(pos);
                     findings.push(Finding {
                         kind: FindingKind::ArithmeticError,
                         is_dispute: true,
@@ -696,10 +750,36 @@ impl InvoicCheckEngine {
             .iter()
             .any(|b| b.steuerart == Some(rubo4e::current::Steuerart::Rcv));
 
+        // Stating `0` is not the same as stating nothing — but with no breakdown
+        // and no reverse-charge entry it carries no *ground* either, and
+        // §14 Abs. 4 Nr. 8 UStG wants the rate and amount **or** the note that
+        // the recipient owes the tax. A Kleinunternehmer invoice (§19 UStG) may
+        // legitimately show zero and carry its ground in free text, which is why
+        // this is a Warning rather than a Dispute: refusing it would reject a
+        // lawful invoice, while staying silent — as this did — hides the one
+        // remaining shape of "states no Umsatzsteuer" that reached acceptance.
+        if steuer == Some(EuroAmount::ZERO) && breakdown.is_empty() {
+            findings.push(Finding::warn(
+                FindingKind::SteuerMissing,
+                "The invoice states 0,00 EUR Umsatzsteuer with no Steuerbetrag \
+                 breakdown and no reverse-charge entry, so it names no ground for \
+                 the exemption. §14 Abs. 4 Nr. 8 UStG requires the rate and amount \
+                 or a note that the recipient owes the tax; if the ground is stated \
+                 only in free text, the document is complete but this check cannot \
+                 see it.",
+                None,
+                None,
+                None,
+            ));
+        }
+
         if steuer.is_none() && breakdown.is_empty() {
             findings.push(Finding::dispute(
                 FindingKind::SteuerMissing,
-                "The invoice states no Umsatzsteuer and no Steuerbetrag breakdown.                  §14 Abs. 4 Nr. 8 UStG requires the rate and the amount, or a note                  that the recipient owes the tax — without either there is no                  Vorsteuerabzug.",
+                "The invoice states no Umsatzsteuer and no Steuerbetrag breakdown. \
+                 §14 Abs. 4 Nr. 8 UStG requires the rate and the amount, or a note \
+                 that the recipient owes the tax — without either there is no \
+                 Vorsteuerabzug.",
                 None,
                 None,
                 None,
@@ -714,7 +794,9 @@ impl InvoicCheckEngine {
             findings.push(Finding::dispute(
                 FindingKind::ReverseChargeStatesTax,
                 format!(
-                    "The invoice is reverse-charged (§13b UStG) and states {steuer} EUR of                      Umsatzsteuer anyway. That tax is owed under §14c Abs. 1 UStG and is                      still not deductible, because the recipient owes it too."
+                    "The invoice is reverse-charged (§13b UStG) and states {steuer} EUR of \
+                     Umsatzsteuer anyway. That tax is owed under §14c Abs. 1 UStG and is \
+                     still not deductible, because the recipient owes it too."
                 ),
                 None,
                 Some(EuroAmount::ZERO),
@@ -774,6 +856,77 @@ impl InvoicCheckEngine {
                     None,
                     Some(summed),
                     Some(steuer),
+                ));
+            }
+        }
+
+        // **The rate must produce the amount it is stated beside.**
+        //
+        // §14 Abs. 4 Nr. 8 UStG makes „der anzuwendende Steuersatz sowie der
+        // auf das Entgelt entfallende Steuerbetrag" mandatory content, and the
+        // recipient's Vorsteuerabzug is the second figure while the tax office
+        // reads the first. Checking that the breakdown sums to `gesamtsteuer`
+        // does not reach this: an invoice stating 19 % on a base of 10 000 with
+        // a Steuerwert of 100 sums to its own total perfectly, so
+        // `netto + steuer = brutto` holds, the breakdown agrees with
+        // `gesamtsteuer`, and 1 800 EUR of tax is neither charged nor
+        // deductible.
+        //
+        // A **dispute**: paying it books a Vorsteuer the invoice does not
+        // support, and the difference is recoverable from nobody.
+        for (i, b) in breakdown.iter().enumerate() {
+            if b.steuerart == Some(rubo4e::current::Steuerart::Rcv) {
+                continue;
+            }
+            let (Some(basis), Some(satz), Some(stated)) = (
+                b.basiswert.and_then(euro_from_decimal),
+                b.steuersatz,
+                b.steuerwert.and_then(euro_from_decimal),
+            ) else {
+                continue;
+            };
+            // The rate arrives off the wire unchecked, so the product is taken
+            // in the checked form rather than panicking the request.
+            let Ok(computed) = basis
+                .checked_mul_qty(satz)
+                .and_then(|x| x.checked_div(rust_decimal::Decimal::ONE_HUNDRED))
+            else {
+                findings.push(Finding::dispute(
+                    FindingKind::SteuerMismatch,
+                    format!(
+                        "Steuerbetrag {i}: {satz} % of {basis} EUR is not a representable \
+                         amount — the stated rate or base is out of range."
+                    ),
+                    None,
+                    None,
+                    Some(stated),
+                ));
+                continue;
+            };
+            // § 14 UStG amounts are stated in whole cents, so the lawful figure
+            // is the rounded one and a deviation below the rounding unit is not
+            // a defect. A relative tolerance alone cannot express that: 19 % of
+            // one cent is 0,19 cent, which rounds to 0,00 — correct, and 100 %
+            // away from the unrounded product. One cent is therefore the floor,
+            // and it is negligible against the base a real breakdown carries.
+            // Taken in `i128`: both operands are independently valid amounts,
+            // so their difference can leave `i64`.
+            const ONE_CENT_RAW: i128 = 1_000;
+            let within_a_cent =
+                (i128::from(stated.to_raw()) - i128::from(computed.to_raw())).abs() <= ONE_CENT_RAW;
+            if !within_a_cent && !stated.within_tolerance_ppm(computed, config.total_tolerance_ppm)
+            {
+                findings.push(Finding::dispute(
+                    FindingKind::SteuerMismatch,
+                    format!(
+                        "Steuerbetrag {i}: {satz} % of a basiswert of {basis} EUR is \
+                         {computed} EUR, but the entry states {stated} EUR. §14 Abs. 4 Nr. 8 \
+                         UStG makes the rate and the amount it produces both mandatory, and \
+                         the recipient deducts the amount."
+                    ),
+                    None,
+                    Some(computed),
+                    Some(stated),
                 ));
             }
         }
@@ -1007,9 +1160,13 @@ impl InvoicCheckEngine {
                 .any(|p| invoic_price.within_tolerance_ppm(*p, tol))
             {
                 // Report the closest published rate for diagnostics.
+                // The distance is taken in i128: two valid `Amount<5>` values
+                // can sit at opposite ends of the i64 range.
                 let closest = *published
                     .iter()
-                    .min_by_key(|p| (invoic_price.to_raw() - p.to_raw()).unsigned_abs())
+                    .min_by_key(|p| {
+                        (i128::from(invoic_price.to_raw()) - i128::from(p.to_raw())).unsigned_abs()
+                    })
                     .unwrap_or(&EuroAmount::ZERO);
                 findings.push(Finding::dispute(
                     FindingKind::TariffDeviation,
@@ -1169,32 +1326,33 @@ impl InvoicCheckEngine {
         }
     }
 
-    // ── MMM settlement price check (its own entry point, not part of the eight) ──
+    // ── The MSB price basis is `PreisblattMessung` ──────────────────────────
 
-    /// Check 6 (MMM settlement): validate that `mehr_preis` / `minder_preis`
-    /// positions in an MMM INVOIC (PIDs 31005, 31006, 31007, 31008) match the
-    /// reference prices from the `marktd` MMMA store within tolerance.
+    /// Check a WiM MSB-Rechnung (PID 31003 / 31009) against `PreisblattMessung`.
     ///
-    /// Check a WiM MSB-Rechnung (PID 31009) against `PreisblattMessung`.
-    ///
-    /// Replaces the standard `check()` call for PID 31009.  The key difference:
-    /// - Checks 1–3 (period, arithmetic, totals) run identically.
-    /// - Checks 4–5 (tariff deviation / not found) use `PreisblattMessung.preispositionen`
-    ///   instead of `PreisblattNetznutzung.preispositionen`.
+    /// Replaces the standard [`check`](Self::check) call for those PIDs. The
+    /// only difference is the price basis: the document stages — period,
+    /// currency, position arithmetic, document total, Zahlungsziel and
+    /// Umsatzsteuer — run identically, and the tariff comparison reads
+    /// `PreisblattMessung.preispositionen` instead of
+    /// `PreisblattNetznutzung.preispositionen`.
     ///
     /// `PreisblattMessung` has `preispositionen: Option<Vec<Preisposition>>` — the same type
     /// as `PreisblattNetznutzung` — so the price extraction logic is identical.
     ///
-    /// When `preisblatt_messung` is `None`, tariff checks (4–5) emit warnings
-    /// (never hard disputes) to match the standard engine's missing-tariff behaviour.
+    /// When `preisblatt_messung` is `None`, the tariff comparison emits a
+    /// warning (never a hard dispute) to match the standard engine's
+    /// missing-tariff behaviour.
     #[must_use]
     pub fn check_msb_rechnung(
+        pid: u32,
         sender_mp_id: &str,
         rechnung: &Rechnung,
         preisblatt_messung: Option<&rubo4e::current::PreisblattMessung>,
         config: &CheckConfig,
     ) -> CheckReport {
         Self::check_msb_rechnung_with_aufabschlaege(
+            pid,
             sender_mp_id,
             rechnung,
             preisblatt_messung,
@@ -1203,18 +1361,23 @@ impl InvoicCheckEngine {
         )
     }
 
-    /// MSB-Rechnung (INVOIC 31009) plausibility check with `AufAbschlag` validation.
+    /// MSB-Rechnung (INVOIC 31003 / 31009) plausibility check with
+    /// `AufAbschlag` validation.
     ///
-    /// Extends `check_msb_rechnung` with check 6:
+    /// Runs the document stages of [`check`](Self::check) — period, currency,
+    /// position arithmetic, document total, Zahlungsziel and Umsatzsteuer —
+    /// prices against `PreisblattMessung` instead of `PreisblattNetznutzung`,
+    /// and adds one check of its own:
     ///
     /// | # | Check | Source |
     /// |---|---|---|
-    /// | 6 | Discount/surcharge positions are backed by a contracted `AufAbschlag` | WiM PRICAT 27001–27003 |
+    /// | — | Discount/surcharge positions are backed by a contracted `AufAbschlag` | WiM PRICAT 27001–27003 |
     ///
     /// `contracted_names` is the list of contracted AufAbschlag names from
     /// `PreisblattMessungRecord.auf_abschlaege` (pre-extracted by the caller).
     /// Pass `&[]` when absent (check 6 is then skipped, not disputed).
     pub fn check_msb_rechnung_with_aufabschlaege(
+        pid: u32,
         sender_mp_id: &str,
         rechnung: &Rechnung,
         preisblatt_messung: Option<&rubo4e::current::PreisblattMessung>,
@@ -1223,13 +1386,45 @@ impl InvoicCheckEngine {
     ) -> CheckReport {
         let mut findings = Vec::new();
 
-        // Checks 1–3 are identical to the standard pipeline.
+        // The document-level stages are identical to the standard pipeline:
+        // period, currency, position arithmetic and document total.
         Self::check_periods(rechnung, &mut findings);
         Self::check_waehrung(rechnung, &mut findings);
         Self::check_arithmetic(rechnung, config, &mut findings);
         let computed_total = Self::check_total(rechnung, config, &mut findings);
 
-        // Checks 4–5 against PreisblattMessung.preispositionen.
+        // **The Zahlungsziel and the Umsatzsteuer block are checked here too.**
+        //
+        // They were not, and the omission was accidental rather than a
+        // judgement about MSB invoices: this entry point was written when the
+        // pipeline had five stages, and the two were added to `check()`
+        // afterwards without being wired in here. Nothing about a
+        // Messstellenbetriebs-Rechnung exempts it from either —
+        //
+        // - `SG8 DTM+265` (Fälligkeitsdatum, MIG Nr. 00033) is **Muss** on
+        //   PIDs 31003 and 31009 in the INVOIC AHB, exactly as it is on the
+        //   31001/31002 invoices the standard pipeline checks; and
+        // - `TAX` Nr. 00058 with `MOA` Nr. 00061/00062 is **Muss** on those
+        //   same PIDs, because §14 Abs. 4 Nr. 8 UStG makes the rate and the
+        //   tax amount (or the ground for stating neither) mandatory content
+        //   of *every* invoice. Messstellenbetrieb is a taxable service at the
+        //   regular rate — §13b UStG does not reach it — so an MSB invoice
+        //   carrying only a net figure leaves its recipient without the
+        //   Vorsteuerabzug that is the recipient's own money.
+        //
+        // The same PID 31009 already ran both through
+        // [`check_esa_rechnung`](Self::check_esa_rechnung), so which door the
+        // invoice came through decided whether its tax block was looked at.
+        //
+        // `check_steuer` distinguishes an absent tax block from a zero one
+        // carrying a `RCV` ground, so a §13b invoice is not disputed for
+        // stating 0,00 EUR.
+        if config.max_zahlungsziel_days > 0 {
+            Self::check_zahlungsziel(rechnung, config, &mut findings);
+        }
+        Self::check_steuer(rechnung, config, &mut findings);
+
+        // Stage 8, against `PreisblattMessung.preispositionen`.
         let billing_date: time::Date = rechnung
             .billing_period()
             .map(|p| *p.start())
@@ -1251,7 +1446,7 @@ impl InvoicCheckEngine {
                 is_dispute: config.require_tariff,
                 message: format!(
                     "No PreisblattMessung found for MSB GLN {sender_mp_id} on {billing_date}. \
-                     Tariff check 4/5 skipped — upload via \
+                     Tariff check skipped — upload via \
                      PUT /api/v1/preisblaetter-messung/{{msb_mp_id}}.",
                 ),
                 line_number: None,
@@ -1288,7 +1483,10 @@ impl InvoicCheckEngine {
                 {
                     let closest = *published_prices
                         .iter()
-                        .min_by_key(|p| (invoic_price.to_raw() - p.to_raw()).unsigned_abs())
+                        .min_by_key(|p| {
+                            (i128::from(invoic_price.to_raw()) - i128::from(p.to_raw()))
+                                .unsigned_abs()
+                        })
                         .unwrap_or(&EuroAmount::ZERO);
                     findings.push(Finding::dispute(
                         FindingKind::TariffDeviation,
@@ -1306,13 +1504,21 @@ impl InvoicCheckEngine {
             }
         }
 
-        // Check 6 — AufAbschlag: verify discount/surcharge positions are contracted.
-        // `contracted_names` contains the lowercase names of all authorised AufAbschlag
-        // entries from the MSB's PRICAT 27001–27003.  When empty, check 6 is skipped.
-        if !contracted_names.is_empty() {
-            let name_set: std::collections::HashSet<String> =
-                contracted_names.iter().map(|s| s.to_lowercase()).collect();
-
+        // Check 6 — AufAbschlag: verify discount/surcharge positions are
+        // contracted. `contracted_names` holds the names of the authorised
+        // AufAbschlag entries from the MSB's PRICAT 27001–27003; with none of
+        // them, check 6 is skipped.
+        //
+        // An empty entry is a substring of every description, so leaving one in
+        // the set would pass every discount position — the opposite of what this
+        // check does. Blank entries are dropped, and a set holding nothing else
+        // skips the check as though none had been supplied.
+        let name_set: std::collections::HashSet<String> = contracted_names
+            .iter()
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !name_set.is_empty() {
             for pos in rechnung.rechnungspositionen.iter().flatten() {
                 let net = pos.einzelpreis.wert_decimal().unwrap_or_default();
                 if net >= rust_decimal::Decimal::ZERO {
@@ -1342,14 +1548,15 @@ impl InvoicCheckEngine {
             }
         }
 
-        CheckReport::from_findings(31009, rechnung, findings, computed_total)
+        CheckReport::from_findings(pid, rechnung, findings, computed_total)
     }
 
     /// Arithmetic-only check for Stornorechnungen (cancellation invoices).
     ///
-    /// Runs stages 0–3 (Storno reference, period, arithmetic, totals) only.
-    /// Stage 8 (tariff check) is skipped because a Stornierung carries negated
-    /// amounts from the original invoice, not new tariff positions.
+    /// Runs stages 1–6 — Storno reference, period, Zahlungsziel, currency,
+    /// position arithmetic and document total. Stages 7 and 8 are skipped: a
+    /// Stornierung carries the original invoice's negated amounts rather than
+    /// new tariff positions, so there is no Preisblatt to compare against.
     ///
     /// Returns a `CheckReport` with outcome `AcceptedPartial` when all checks
     /// pass (represented as `Ok` in `CheckOutcome` — the `AcceptedPartial` label
@@ -1368,6 +1575,19 @@ impl InvoicCheckEngine {
     /// r.ist_storno = Some(true);
     /// r.original_rechnungsnummer = Some("31001-2026-001".to_owned());
     /// assert!(is_stornierung(&r));
+    ///
+    /// // A Storno still states its own Umsatzsteuer: `TAX` and the header `MOA`
+    /// // are Muss for 31004, so a reversal of a 19 % invoice reverses the tax
+    /// // with it. Without this block the report disputes with `SteuerMissing`.
+    /// r.gesamtsteuer = Some(rubo4e::current::Betrag {
+    ///     wert: Some("-19.00".parse().unwrap()),
+    ///     ..Default::default()
+    /// });
+    /// r.steuerbetraege = Some(vec![rubo4e::current::Steuerbetrag {
+    ///     steuersatz: Some("19".parse().unwrap()),
+    ///     steuerwert: Some("-19.00".parse().unwrap()),
+    ///     ..Default::default()
+    /// }]);
     ///
     /// let report = InvoicCheckEngine::check_storno(31004, &r, &CheckConfig::default());
     /// assert_eq!(report.outcome, CheckOutcome::Ok);
@@ -1406,12 +1626,28 @@ impl InvoicCheckEngine {
         Self::check_arithmetic(rechnung, config, &mut findings);
         let computed_total = Self::check_total(rechnung, config, &mut findings);
 
-        // Stage 8: SKIPPED — Storno carries negated original amounts.
+        // Stage 7: the Storno states its own tax. Verified against the imported
+        // AHB: for 31004 the header `TAX` (Nr 00058) and `MOA` (00061/00062) are
+        // **Muss** in both fv20260401 and fv20261001 — only the *position*-level
+        // `TAX` (00044) is absent, which is why stage 8 below stays skipped and
+        // this one does not. A Storno stating no Umsatzsteuer at all was
+        // accepted, and it reverses an invoice that had to state one.
+        //
+        // The negated amounts are not an obstacle: `check_steuer` is entirely
+        // sign-agnostic — it asserts `netto + steuer == brutto` and that the
+        // breakdown sums to `gesamtsteuer`, both of which hold under negation.
+        Self::check_steuer(rechnung, config, &mut findings);
+
+        // Stage 8: SKIPPED — position-level `TAX` is not published for 31004.
 
         CheckReport::from_findings(pid, rechnung, findings, computed_total)
     }
 
-    /// Called by `invoicd` handler **after** the standard 5-check pipeline when
+    /// MMM settlement price check: validate that the Mehrmengen / Mindermengen
+    /// positions of an MMM INVOIC (PIDs 31005, 31006, 31007, 31008) match the
+    /// reference prices from the `marktd` MMMA store within tolerance.
+    ///
+    /// Called by the `invoicd` handler **after** the standard pipeline, when
     /// `mehr_ct_kwh` / `minder_ct_kwh` are available from `marktd`.
     ///
     /// Returns additional `Finding` objects to be merged into an existing
@@ -1462,7 +1698,9 @@ impl InvoicCheckEngine {
                     kind: FindingKind::TariffDeviation,
                     is_dispute: config.require_tariff,
                     message: format!(
-                        "Line {line_no} ({malo}): MMM {kind_str} price {invoic_price} EUR/kWh                          deviates {pct:.1}% from MMMA reference {ref_p} EUR/kWh                          (tolerance {t:.1}%)",
+                        "Line {line_no} ({malo}): MMM {kind_str} price {invoic_price} EUR/kWh \
+                         deviates {pct:.1}% from MMMA reference {ref_p} EUR/kWh \
+                         (tolerance {t:.1}%)",
                         t = tol as f64 / 10_000.0,
                     ),
                     line_number: Some(line_no),
@@ -2143,6 +2381,282 @@ mod tests {
         );
     }
 
+    /// **Invariant: the tax equals the rate applied to the base.**
+    ///
+    /// §14 Abs. 4 Nr. 8 UStG makes both the rate and the amount it produces
+    /// mandatory content, and the recipient deducts the amount. The three checks
+    /// around this one — presence, `netto + steuer = brutto`, and Σ breakdown =
+    /// `gesamtsteuer` — are all satisfied by an invoice stating 19 % on a base of
+    /// 10 000 with a Steuerwert of 100: it returns `Ok`, triggers an auto-REMADV
+    /// 33001 and an auto-payment, and books 100 EUR of Vorsteuer where 1 900 is
+    /// owed.
+    #[test]
+    fn a_tax_amount_that_is_not_the_rate_times_the_base_is_a_dispute() {
+        use rust_decimal::Decimal;
+        // netto 10 000, steuer 100, brutto 10 100 — internally consistent.
+        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw_units(1_000_000_000)));
+        r.gesamtsteuer = Some(betrag(EuroAmount::from_raw_units(10_000_000)));
+        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw_units(1_010_000_000)));
+        r.steuerbetraege = Some(vec![rubo4e::current::Steuerbetrag {
+            steuerart: Some(rubo4e::current::Steuerart::Ust),
+            steuersatz: Some(Decimal::from(19)),
+            basiswert: Some(Decimal::from(10_000)),
+            steuerwert: Some(Decimal::from(100)),
+            ..Default::default()
+        }]);
+
+        let report =
+            InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), &CheckConfig::default());
+        assert_eq!(
+            report.outcome,
+            CheckOutcome::Dispute,
+            "19 % of 10 000 is 1 900, not 100: {:#?}",
+            report.findings
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::SteuerMismatch && f.is_dispute),
+            "{:#?}",
+            report.findings
+        );
+    }
+
+    /// The same entry, stated correctly, is silent — including a rate of zero.
+    #[test]
+    fn a_tax_amount_that_is_the_rate_times_the_base_is_silent() {
+        use rust_decimal::Decimal;
+        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw_units(1_000_000_000)));
+        r.gesamtsteuer = Some(betrag(EuroAmount::from_raw_units(190_000_000)));
+        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw_units(1_190_000_000)));
+        r.steuerbetraege = Some(vec![rubo4e::current::Steuerbetrag {
+            steuerart: Some(rubo4e::current::Steuerart::Ust),
+            steuersatz: Some(Decimal::from(19)),
+            basiswert: Some(Decimal::from(10_000)),
+            steuerwert: Some(Decimal::from(1_900)),
+            ..Default::default()
+        }]);
+        let report =
+            InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), &CheckConfig::default());
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::SteuerMismatch),
+            "{:#?}",
+            report.findings
+        );
+    }
+
+    /// **Invariant: an oversized quantity is a finding, not a panic.**
+    ///
+    /// The unit price is range-checked on the way in and the quantity is not, so
+    /// an absurd Menge reaches the multiplication unbounded. Aborting the
+    /// request that validates it would make a counterparty document a remote
+    /// denial of service on a message-processing path. It is a fact about the
+    /// document, so it is reported as one.
+    #[test]
+    fn an_unrepresentable_line_product_is_reported_rather_than_panicking() {
+        let pos = make_pos(
+            1,
+            "DE001",
+            // 10^15 kWh at 1.00 EUR/kWh overflows the 5-dp fixed-point range.
+            Some("1000000000000000"),
+            Some(EuroAmount::from_raw_units(100_000)),
+            Some(EuroAmount::from_raw_units(100_000)),
+        );
+        let r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(100_000)));
+        let report =
+            InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), &CheckConfig::default());
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::ArithmeticError && f.is_dispute),
+            "{:#?}",
+            report.findings
+        );
+    }
+
+    /// **Invariant: a blank contracted name authorises nothing.**
+    ///
+    /// `""` is a substring of every description, so a single blank entry in the
+    /// PRICAT-derived set passed every discount position — the opposite of what
+    /// check 6 is for. It is dropped, and the names beside it still decide.
+    #[test]
+    fn a_blank_contracted_name_does_not_authorise_every_discount() {
+        let discount = |text: &str| {
+            make_pos(
+                1,
+                text,
+                Some("1.0"),
+                Some(EuroAmount::from_raw_units(-500_000)),
+                Some(EuroAmount::from_raw_units(-500_000)),
+            )
+        };
+        let contracted = ["".to_owned(), "   ".to_owned(), "winterrabatt".to_owned()];
+        let disputed = |text: &str| {
+            let r = make_rechnung(
+                vec![discount(text)],
+                Some(EuroAmount::from_raw_units(-500_000)),
+            );
+            InvoicCheckEngine::check_msb_rechnung_with_aufabschlaege(
+                31_009,
+                SENDER,
+                &r,
+                None,
+                &contracted,
+                &CheckConfig::default(),
+            )
+            .findings
+            .iter()
+            .any(|f| f.kind == FindingKind::TariffNotFound && f.is_dispute)
+        };
+
+        assert!(
+            disputed("Nachlass Sondervereinbarung"),
+            "the blank entry must not back a discount nothing else names"
+        );
+        assert!(
+            !disputed("Winterrabatt Netznutzung"),
+            "a contracted name still authorises its discount"
+        );
+    }
+
+    // ── The MSB/WiM path runs the same document checks as every other ────────
+
+    /// A WiM/MSB invoice (PIDs 31003 and 31009) that states **no Umsatzsteuer
+    /// at all** is disputed, exactly as a Netznutzungsrechnung is.
+    ///
+    /// §14 Abs. 4 Nr. 8 UStG makes the rate and the amount mandatory content of
+    /// every invoice, and the INVOIC AHB agrees: `TAX` Nr. 00058 and `MOA`
+    /// Nr. 00061/00062 are **Muss** on 31003 and 31009 just as on 31001/31002.
+    #[test]
+    fn an_msb_invoice_without_a_tax_block_is_disputed() {
+        let pos = make_pos(
+            1,
+            "Messstellenbetrieb",
+            None,
+            None,
+            Some(EuroAmount::from_raw_units(100_000)),
+        );
+        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(100_000)));
+        r.gesamtsteuer = None;
+        r.gesamtbrutto = None;
+        r.steuerbetraege = None;
+
+        let report = InvoicCheckEngine::check_msb_rechnung(
+            31_009,
+            SENDER,
+            &r,
+            None,
+            &CheckConfig::default(),
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::SteuerMissing && f.is_dispute),
+            "an MSB invoice stating no Umsatzsteuer gives its recipient no \
+             Vorsteuerabzug and must be disputed: {:#?}",
+            report.findings
+        );
+        assert_eq!(report.outcome, CheckOutcome::Dispute);
+    }
+
+    /// **A zero tax with a stated ground is not a missing tax.** A §13b
+    /// reverse-charged MSB invoice states 0,00 EUR by design, and naming the
+    /// ground is what distinguishes it from an invoice that simply omits the
+    /// tax — so wiring the Umsatzsteuer stage into this path must not dispute
+    /// it.
+    #[test]
+    fn a_reverse_charged_msb_invoice_is_not_a_missing_tax_block() {
+        let pos = make_pos(
+            1,
+            "Messstellenbetrieb",
+            None,
+            None,
+            Some(EuroAmount::from_raw_units(100_000)),
+        );
+        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(100_000)));
+        r.gesamtsteuer = Some(betrag(EuroAmount::ZERO));
+        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw_units(100_000)));
+        r.steuerbetraege = Some(vec![rubo4e::current::Steuerbetrag {
+            steuerart: Some(rubo4e::current::Steuerart::Rcv),
+            steuersatz: Some(Decimal::ZERO),
+            steuerwert: Some(Decimal::ZERO),
+            ..Default::default()
+        }]);
+
+        let report = InvoicCheckEngine::check_msb_rechnung(
+            31_009,
+            SENDER,
+            &r,
+            None,
+            &CheckConfig::default(),
+        );
+        assert!(
+            !report.findings.iter().any(|f| matches!(
+                f.kind,
+                FindingKind::SteuerMissing | FindingKind::ReverseChargeStatesTax
+            )),
+            "a §13b invoice states no tax by design: {:#?}",
+            report.findings
+        );
+    }
+
+    /// A Fälligkeitsdatum before the invoice date is a dispute on the MSB path
+    /// too. `SG8 DTM+265` is **Muss** on 31003 and 31009, so the date is there
+    /// to be checked.
+    #[test]
+    fn an_msb_invoice_due_before_it_was_issued_is_disputed() {
+        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw_units(100_000)));
+        r.rechnungsdatum = Some(parse_dt("2026-07-15"));
+        r.faelligkeitsdatum = Some(parse_dt("2026-07-01"));
+
+        let report = InvoicCheckEngine::check_msb_rechnung(
+            31_009,
+            SENDER,
+            &r,
+            None,
+            &CheckConfig::default(),
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::ZahlungszielInvalid && f.is_dispute),
+            "a due date before the invoice date must be disputed: {:#?}",
+            report.findings
+        );
+        assert_eq!(report.outcome, CheckOutcome::Dispute);
+    }
+
+    /// A payment term beyond the 30 days of §7 Allgemeine Festlegungen V6.1d
+    /// warns on the MSB path, as it does on the standard one — a warning, so
+    /// the MSB can correct it.
+    #[test]
+    fn an_msb_invoice_with_an_overlong_zahlungsziel_warns() {
+        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw_units(100_000)));
+        r.rechnungsdatum = Some(parse_dt("2026-07-01"));
+        r.faelligkeitsdatum = Some(parse_dt("2026-09-01")); // 62 days
+
+        let report = InvoicCheckEngine::check_msb_rechnung(
+            31_009,
+            SENDER,
+            &r,
+            None,
+            &CheckConfig::default(),
+        );
+        let finding = report
+            .findings
+            .iter()
+            .find(|f| f.kind == FindingKind::ZahlungszielExceeded)
+            .unwrap_or_else(|| panic!("no ZahlungszielExceeded in {:#?}", report.findings));
+        assert!(!finding.is_dispute, "ZahlungszielExceeded is a warning");
+    }
+
     /// A breakdown that does add up passes — including one split across rates.
     #[test]
     fn a_tax_breakdown_split_across_rates_that_sums_is_clean() {
@@ -2293,6 +2807,90 @@ mod tests {
         let report = InvoicCheckEngine::check_storno(31004, &r, &CheckConfig::default());
         assert_eq!(report.outcome, CheckOutcome::Ok);
         assert!(report.findings.is_empty());
+    }
+
+    /// A Storno reverses an invoice that had to state Umsatzsteuer, so it states
+    /// its own — and 31004 publishes the header `TAX` (Nr 00058) and `MOA`
+    /// (00061/00062) as **Muss** in both imported Formatversionen. The Storno
+    /// path skipped the Steuer stage entirely, so a reversal with no tax block
+    /// at all was accepted.
+    #[test]
+    fn a_storno_without_a_tax_block_is_disputed() {
+        let r = Rechnung {
+            ist_storno: Some(true),
+            original_rechnungsnummer: Some("31001-2026-001".to_owned()),
+            ..Default::default()
+        };
+
+        let report = InvoicCheckEngine::check_storno(31_004, &r, &CheckConfig::default());
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::SteuerMissing),
+            "a Storno stating no Umsatzsteuer must be disputed, got {:?}",
+            report.findings
+        );
+    }
+
+    /// The negated amounts are not an obstacle: `check_steuer` asserts
+    /// `netto + steuer == brutto` and that the breakdown sums to `gesamtsteuer`,
+    /// both of which hold under negation. A correctly-reversed Storno passes.
+    #[test]
+    fn a_storno_that_reverses_its_tax_is_accepted() {
+        let r = Rechnung {
+            ist_storno: Some(true),
+            original_rechnungsnummer: Some("31001-2026-001".to_owned()),
+            gesamtnetto: Some(betrag(EuroAmount::from_raw_units(-100_000))),
+            gesamtsteuer: Some(betrag(EuroAmount::from_raw_units(-19_000))),
+            gesamtbrutto: Some(betrag(EuroAmount::from_raw_units(-119_000))),
+            steuerbetraege: Some(vec![rubo4e::current::Steuerbetrag {
+                steuersatz: Some(Decimal::from(19)),
+                steuerwert: Some(Decimal::from(-190)),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+
+        let report = InvoicCheckEngine::check_storno(31_004, &r, &CheckConfig::default());
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::SteuerMissing),
+            "a Storno that reverses its tax states one, got {:?}",
+            report.findings
+        );
+    }
+
+    /// Stating `0` is not the same as stating nothing, but with no breakdown and
+    /// no reverse-charge entry it names no ground either — and that shape passed
+    /// silently on every check path. It warns rather than disputes, because a
+    /// §19 UStG Kleinunternehmer invoice may carry its ground in free text.
+    #[test]
+    fn zero_tax_with_no_stated_ground_is_reported() {
+        let pos = make_pos(
+            1,
+            "DE001",
+            None,
+            None,
+            Some(EuroAmount::from_raw_units(100_000)),
+        );
+        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(100_000)));
+        r.gesamtsteuer = Some(betrag(EuroAmount::ZERO));
+        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw_units(100_000)));
+        r.steuerbetraege = None;
+
+        let mut findings = Vec::new();
+        InvoicCheckEngine::check_steuer(&r, &CheckConfig::default(), &mut findings);
+        let f = findings
+            .iter()
+            .find(|f| f.kind == FindingKind::SteuerMissing)
+            .expect("zero tax with no ground is reported");
+        assert!(
+            !f.is_dispute,
+            "a lawful §19 UStG invoice must not be refused outright"
+        );
     }
 
     #[test]
@@ -2594,6 +3192,43 @@ mod waehrung_tests {
         };
         InvoicCheckEngine::check_waehrung(&r, &mut findings);
         assert!(findings.is_empty());
+    }
+
+    /// **Invariant: the check reaches every field that names a currency.**
+    ///
+    /// A position or a Steuerbetrag denominated differently from the header is
+    /// read as EUR by every later stage exactly as a header field would be — and
+    /// it is the positions that carry the arithmetic the recipient pays from.
+    #[test]
+    fn a_position_or_tax_entry_in_another_currency_is_disputed() {
+        use rubo4e::current::{Rechnungsposition, Steuerbetrag};
+
+        let mut findings = Vec::new();
+        let r = Rechnung {
+            gesamtnetto: betrag(dec!(300.00), Waehrungscode::Eur),
+            rechnungspositionen: Some(vec![Rechnungsposition {
+                positionsnummer: Some(1),
+                gesamtpreis: betrag(dec!(300.00), Waehrungscode::Chf),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        InvoicCheckEngine::check_waehrung(&r, &mut findings);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].kind, FindingKind::WaehrungMismatch);
+
+        let mut findings = Vec::new();
+        let r = Rechnung {
+            gesamtnetto: betrag(dec!(300.00), Waehrungscode::Eur),
+            steuerbetraege: Some(vec![Steuerbetrag {
+                waehrungscode: Some(Waehrungscode::Chf),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        InvoicCheckEngine::check_waehrung(&r, &mut findings);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].kind, FindingKind::WaehrungMismatch);
     }
 
     /// A document that states no currency at all is not this check's business —

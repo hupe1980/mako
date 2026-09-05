@@ -78,6 +78,44 @@ pub enum EngineError {
         sum: Decimal,
     },
 
+    /// A §42b EEG Nutzungsplan whose shares do not describe an allocation.
+    ///
+    /// The plan's fractions are caller-supplied and must partition the plant's
+    /// generation exactly once — a plan entered as percentages allocates a
+    /// hundred times the generation, and one summing short leaves kWh
+    /// unallocated. Refused before the split rather than distributed.
+    #[error("GGV Nutzungsplan shares must sum to 1, got {sum}")]
+    NutzungsplanSharesInvalid {
+        /// The sum of the supplied shares.
+        sum: Decimal,
+    },
+
+    /// A value the EN 16931 semantic model cannot represent.
+    ///
+    /// A rendered e-invoice is a legally binding document: a line amount
+    /// saturated to `0.00`, or a BT-2 Ausstellungsdatum taken from a fallback
+    /// constant, states as fact something § 14 Abs. 4 UStG requires the document
+    /// to get right. Both are refused rather than emitted.
+    #[error("{field} cannot be represented in the EN 16931 model: {value}")]
+    Unrepresentable {
+        /// The business term that could not be represented (e.g. `"BT-131"`).
+        field: String,
+        /// The value that could not be represented.
+        value: String,
+    },
+
+    /// EN 16931 reconciliation (BG-22/BG-23, BR-CO-10..16) failed.
+    ///
+    /// The breakdown and the totals of an e-invoice are *derived*, and a
+    /// derivation that fails leaves the document carrying whichever totals the
+    /// builder happened to hold — a document that states amounts nothing
+    /// computed. Refused rather than emitted.
+    #[error("EN 16931 reconciliation failed: {reason}")]
+    ReconciliationFailed {
+        /// What the reconciler reported.
+        reason: String,
+    },
+
     /// An arithmetic or document error from the `billing` core —
     /// monetary overflow, invalid schedule, tax-layer failure.
     #[error(transparent)]
@@ -94,6 +132,9 @@ impl EngineError {
             Self::InvalidPeriod { .. } => "INVALID_PERIOD",
             Self::AllocationMismatch { .. } => "ALLOCATION_MISMATCH",
             Self::AllocationWeightsInvalid { .. } => "ALLOCATION_WEIGHTS_INVALID",
+            Self::NutzungsplanSharesInvalid { .. } => "NUTZUNGSPLAN_SHARES_INVALID",
+            Self::Unrepresentable { .. } => "UNREPRESENTABLE",
+            Self::ReconciliationFailed { .. } => "RECONCILIATION_FAILED",
             Self::Arithmetic(_) => "ARITHMETIC",
         }
     }

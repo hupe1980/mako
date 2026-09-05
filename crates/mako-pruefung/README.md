@@ -19,7 +19,8 @@ from its own Codeliste. This crate is those rules, executable.
 | `msb` | Messstellenbetreiber **und** Netzbetreiber | Anmeldung MSB (`E_0201`), Ende MSB (`E_0202`), Kündigung MSB (`E_0200`), Weiterverpflichtung (`E_0203`), Ersteinbau iMS (`E_0233`), Änderung der Technik (`E_0278`·`E_0281`, `E_0279`·`E_0283`, `E_0286`), Rechnungsabwicklung über den LF (`E_0205`–`E_0209`), Preisblatt-B-Abrechnung (`E_0270`–`E_0277`) |
 | `esa` | MSB (Bestellung) **und** Energieserviceanbieter (Abrechnung) | Wertebestellung (`E_0252`, `E_0256`, `E_0257`, `E_0254`); the Kap. 4.5 Abrechnung (`E_0264`–`E_0267`) is `rechnung::ESA` bound |
 | `rechnung` (ungated) | ESA, LF **und** NB | One invoice walk, three families: `E_0264`–`E_0267` (ESA), `E_0270`–`E_0272`/`E_0276` (Preisblatt B ↔ LF), `E_0273`–`E_0275`/`E_0277` (↔ NB) |
-| `mabis` | NB, LF **und** BKV | Summenzeitreihen (`E_0007`, `E_0040`–`E_0041`, `E_0062`–`E_0065`, `E_0093`, `E_0098`/`E_0099`), Listenabgleich (`E_0004`, `E_0014`, `E_0017`, `E_0047`, `E_0049`, `E_0052`, `E_0070`, `E_0096`, `E_0097`), MaBiS-ZP (`E_0010`, `E_0020`, `E_0102`, `E_0103`), Profile (`E_0100`), Redispatch-Ausfallarbeit (`E_0901`, `E_0902`) |
+| `emob` | NB (VNB) **und** LF | NZR-EMob / Modell 2 (`E_0510`–`E_0513`): Anmeldung, Beendigung der Zuordnung, Abmeldung |
+| `mabis` | NB, LF **und** BKV | Summenzeitreihen (`E_0007`, `E_0040`–`E_0041`, `E_0062`–`E_0065`, `E_0093`, `E_0098`/`E_0099`), Listenabgleich (`E_0004`, `E_0014`, `E_0017`, `E_0047`, `E_0049`, `E_0052`, `E_0070`, `E_0096`, `E_0097`), MaBiS-ZP (`E_0010`, `E_0020`, `E_0102`, `E_0103`), Profile (`E_0100`), Einzelanforderung/Listeninhalt (`E_0068`, `E_0104`), Redispatch-Ausfallarbeit (`E_0901`, `E_0902`) — 28 trees in `mabis::codes::MABIS_TREES` |
 
 The `msb` module is named for the process family, not one Marktrolle: WiM Teil 1
 has the NB answer the Anmeldung and the Abmeldung, while the abgebender MSB
@@ -50,19 +51,26 @@ The document defines around sixty trees with the LF as prüfende Rolle. The ones
 here are the **process** answers — the messages that move a Marktlokation
 between suppliers. Of the Rechnungsprüfung family only the ESA's is executable
 (`E_0264`–`E_0267`); `E_0406`'s codes are catalogued in part and the rest
-(`E_0210`, `E_0259`, `E_0566`, `E_0519`, Stammdatenänderung `E_0408`, …) are
-named by [`codes::rechnungspruefung`] so an answer can state the right tree,
-without claiming codes this crate does not carry.
+(`E_0210`/`E_0211`/`E_0243`, `E_0259`–`E_0261`, `E_0566`–`E_0569`, …) are named
+by [`codes::rechnungspruefung`] — keyed on (PID, Empfänger, Gegenstand), because
+PID 31009 alone carries five Use-Cases — so an answer can state the right tree
+without claiming codes this crate does not carry. Stammdatenänderung (`E_0408`)
+is a separate obligation and is not walked here at all.
 
 Each role module is split **by process**, with the Strom tree and its Gas
 counterpart together — they are the same business decision expressed in two
 documents.
 
-The `role-nb`, `role-lf`, `role-msb`, `role-esa` and `role-mabis` Cargo features
-compile only their own rules, so a role-gated binary carries only the decisions
-it is licensed to make (§ 7 EnWG). `role-msb` implies `role-esa` (the MSB
-answers ESA orders); `role-esa` stands alone, because a pure ESA deployment has
-no Messstellenbetrieb and needs none of `role-msb`.
+The `role-nb`, `role-lf`, `role-msb`, `role-esa`, `role-mabis` and `role-emob`
+Cargo features compile only their own rules, so a role-gated binary cannot even
+form a decision it is not entitled to make — the informatorische Entflechtung of
+§ 6a EnWG, enforced at compile time rather than by a runtime check. (§ 7 EnWG,
+the *rechtliche* Entflechtung, asks for separate legal entities and no Cargo
+feature satisfies it.) `role-msb` implies `role-esa` (the MSB answers ESA
+orders); `role-esa` stands alone, because a pure ESA deployment has no
+Messstellenbetrieb and needs none of `role-msb`. `role-emob` carries both sides
+of Modell 2, because the VNB's `E_0510` Prüfschritt 1 reads the LF's `E_0511`
+answer.
 
 ## Eight clusters, not two
 
@@ -232,3 +240,17 @@ match entscheidung.as_antwort() {
     None => println!("operator decision required"),
 }
 ```
+
+## Related crates
+
+| Crate | Role |
+|---|---|
+| [`mako-pruefung`](https://docs.rs/mako-pruefung) ← **this crate** | The Entscheidungsbäume — *which* Antwortcode is owed, and under which tree |
+| [`mako-fristen`](https://docs.rs/mako-fristen) | *When* an answer is due — Werktage, the MaKo holiday calendar, the per-PID Antwortfristen |
+| [`edi-energy`](https://docs.rs/edi-energy) | EDI@Energy EDIFACT — parse · validate · build (UTILMD, MSCONS, ORDERS, INVOIC, APERAK, …) |
+| [`mako-markt`](https://docs.rs/mako-markt) | Marktstammdaten — Marktlokation, Messlokation, Marktpartner, Rollenzuordnung |
+| [`invoic-checker`](https://docs.rs/invoic-checker) | The operator-facing invoice checks; this crate holds the market-facing codes |
+| [`mako-gpke`](https://docs.rs/mako-gpke) · [`mako-wim`](https://docs.rs/mako-wim) · [`mako-mabis`](https://docs.rs/mako-mabis) | The domain packs that call these decisions |
+
+Part of **mako**, an open-source Rust platform for German energy market
+communication (Marktkommunikation). Full documentation: <https://hupe1980.github.io/mako/>

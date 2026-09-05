@@ -95,10 +95,11 @@ pub enum EsaWertebestellungEvent {
         message_ref: MessageRef,
         /// End of the MSB's Bindungsfrist, resolved from the `DTM+273`
         /// duration against the day the Angebot arrived.
+        #[serde(with = "time::serde::rfc3339")]
         bindungsfrist: OffsetDateTime,
         /// `DTM+469` — the earliest start the MSB offers, which may be later
         /// than the ESA's Wunschtermin. **Muss** on the 15003.
-        #[serde(default)]
+        #[serde(default, with = "time::serde::rfc3339::option")]
         fruehester_start: Option<OffsetDateTime>,
         /// The commercial substance: currency, per-Artikel-ID prices, the OBIS
         /// registers the subscription will deliver, and the Einrichtungsdauer.
@@ -178,6 +179,7 @@ pub enum EsaWertebestellungEvent {
         /// Reference of the outbound ORDERS.
         message_ref: MessageRef,
         /// Date delivery is to stop.
+        #[serde(with = "time::serde::rfc3339")]
         beendigung_zum: OffsetDateTime,
         /// Trigger — typically `einwilligung_widerrufen`.
         grund: String,
@@ -212,6 +214,7 @@ pub enum EsaWertebestellungEvent {
         /// Reference of the inbound IFTSTA.
         message_ref: MessageRef,
         /// Date the MSB stops delivering.
+        #[serde(with = "time::serde::rfc3339")]
         beendigung_zum: OffsetDateTime,
         /// Reason communicated by the MSB, when present.
         reason: Option<String>,
@@ -349,6 +352,7 @@ pub enum EsaWertebestellungState {
         /// Process data.
         data: Box<EsaWertebestellungData>,
         /// End of the MSB's Bindungsfrist.
+        #[serde(with = "time::serde::rfc3339")]
         bindungsfrist: OffsetDateTime,
     },
     /// Bestellung sent; the ESA awaits an ORDRSP within 2 WT.

@@ -6,6 +6,15 @@
 //! installed generating capacity, whichever puts the metering point in the
 //! higher band.
 //!
+//! ## Every ceiling here is brutto
+//!
+//! §30 states each figure as a gross amount — „nicht mehr als 80 Euro **brutto**
+//! jährlich" (Abs. 1), „jeweils nicht mehr als 50 Euro **brutto** jährlich"
+//! (Abs. 2), „**brutto** jährlich nicht mehr als 60 Euro" (Abs. 3). A charge
+//! measured against them has to carry its Umsatzsteuer first: comparing a net
+//! charge against a gross ceiling grants the whole tax rate as headroom, so a
+//! settlement 18.9 % above the statutory maximum passes at 19 %.
+//!
 //! ## The band is derived, never asserted
 //!
 //! §30 Abs. 1 states five Nummern, each a disjunction of criteria over facts the
@@ -127,11 +136,15 @@ pub enum Entgeltschuldner {
     Letztverbraucher,
 }
 
-/// The §30 MsbG ceiling in EUR per year, or `None` where the statute sets none.
+/// The §30 MsbG ceiling in EUR **brutto** per year, or `None` where the statute
+/// sets none.
 ///
 /// `None` means "no fixed ceiling" — the >100 000 kWh band, where §30 Abs. 1
 /// allows an angemessenes Entgelt for the Letztverbraucher's share. It does not
 /// mean "unchecked": the Netzbetreiber's share is capped in every band.
+///
+/// The figure is gross, as §30 states it. A net charge is grossed up at the
+/// Umsatzsteuer rate of its delivery period before the comparison.
 #[must_use]
 pub fn preisobergrenze_eur_per_jahr(
     kategorie: MessstellenKategorie,
@@ -165,8 +178,8 @@ pub fn gesamtobergrenze_eur_per_jahr(kategorie: MessstellenKategorie) -> Option<
     Some(nb + lv)
 }
 
-/// **§30 Abs. 2** — the additional yearly ceiling per party for installing and
-/// operating a Steuereinrichtung at the Netzanschlusspunkt.
+/// **§30 Abs. 2** — the additional yearly ceiling per party, brutto, for
+/// installing and operating a Steuereinrichtung at the Netzanschlusspunkt.
 pub const STEUEREINRICHTUNG_OBERGRENZE_EUR_PER_JAHR: Decimal = dec!(50);
 
 #[cfg(test)]
@@ -192,7 +205,7 @@ mod tests {
         }
     }
 
-    /// The §30 Abs. 1 schedule, as published.
+    /// The §30 Abs. 1 schedule, as published — every figure brutto.
     #[test]
     fn the_pflichteinbau_schedule() {
         for (kwh, lv, total) in [

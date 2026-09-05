@@ -72,7 +72,7 @@ impl PgPreisblattRepository {
         .bind(source.to_string())
         .execute(conn)
         .await
-        .map_err(|e| MdmError::Internal(e.to_string()))?;
+        .map_err(super::write_error)?;
 
         Ok(())
     }
@@ -190,7 +190,7 @@ impl PreisblattMessungRepository for PgPreisblattMessungRepository {
         .bind(source.to_string())
         .execute(&self.pool)
         .await
-        .map_err(|e| MdmError::Internal(e.to_string()))?;
+        .map_err(super::write_error)?;
 
         Ok(())
     }
@@ -290,7 +290,7 @@ impl PreisblattKaRepository for PgPreisblattKaRepository {
         .bind(source.to_string())
         .execute(&self.pool)
         .await
-        .map_err(|e| MdmError::Internal(e.to_string()))?;
+        .map_err(super::write_error)?;
         Ok(())
     }
 
@@ -372,7 +372,7 @@ impl PreisblattDienstleistungRepository for PgPreisblattDienstleistungRepository
                WHERE preisblaetter_dienstleistung.source<>'api' OR EXCLUDED.source='api'"#,
         )
         .bind(msb_mp_id).bind(&data).bind(bo4e_version).bind(source.to_string())
-        .execute(&self.pool).await.map_err(|e| MdmError::Internal(e.to_string()))?;
+        .execute(&self.pool).await.map_err(super::write_error)?;
         Ok(())
     }
 
@@ -444,7 +444,7 @@ impl PreisblattHardwareRepository for PgPreisblattHardwareRepository {
                WHERE preisblaetter_hardware.source<>'api' OR EXCLUDED.source='api'"#,
         )
         .bind(msb_mp_id).bind(&data).bind(bo4e_version).bind(source.to_string())
-        .execute(&self.pool).await.map_err(|e| MdmError::Internal(e.to_string()))?;
+        .execute(&self.pool).await.map_err(super::write_error)?;
         Ok(())
     }
 

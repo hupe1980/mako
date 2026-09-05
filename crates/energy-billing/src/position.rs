@@ -158,7 +158,7 @@ impl PositionTrace {
 ///
 /// Warnings do not prevent invoice generation — they flag conditions that
 /// the operator should review before dispatch. Examples:
-/// - Estimated meter reading (§ 60 Abs. 2 MsbG) — labeled on invoice
+/// - Estimated meter reading (§ 40a Abs. 2 EnWG) — labeled on invoice
 /// - Preisgarantie expiring in ≤ 30 days — §41 Abs. 1 Nr. 4 EnWG notice
 /// - §41a dynamic tariff offered but meter is not iMSys — §41a Abs. 1 EnWG risk
 /// - Consumption deviates > 50% from Vorjahresverbrauch — review reading

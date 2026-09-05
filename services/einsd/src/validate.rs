@@ -97,11 +97,21 @@ pub fn check(req: &AnlageUpsertRequest) -> Result<(), String> {
             }
         }
         models::KWKG_ZUSCHLAG => {
-            if req.kwk_foerderdauer_h.is_none() && req.kwk_foerderdauer_years.is_none() {
+            if req.kwk_foerderdauer_h.is_none() && req.kwk_anlagenart.is_none() {
+                return Err("KWKG_ZUSCHLAG needs kwk_foerderdauer_h (§8 Abs. 1–3 \
+                     Vollbenutzungsstunden) or kwk_anlagenart to derive them from — \
+                     §8 limits the Zuschlag in Vollbenutzungsstunden, and a plant \
+                     with neither is never exhausted"
+                    .to_owned());
+            }
+            if req.kwk_anlagenart.as_deref() != Some("NEU")
+                && req.kwk_foerderdauer_h.is_none()
+                && req.kwk_kostenanteil.is_none()
+            {
                 return Err(
-                    "KWKG_ZUSCHLAG needs kwk_foerderdauer_h (>2 MW, Vollbenutzungsstunden) \
-                     or kwk_foerderdauer_years (≤2 MW) — §8 KWKG 2023 limits the Zuschlag \
-                     by one or the other, and a plant with neither is never exhausted"
+                    "a modernisierte or nachgerüstete KWK-Anlage needs kwk_kostenanteil — \
+                     §8 Abs. 2 and Abs. 3 key the Vollbenutzungsstunden on the share of \
+                     the Neuerrichtungskosten the work cost"
                         .to_owned(),
                 );
             }
@@ -240,7 +250,7 @@ mod tests {
         // A solar plant on the KWKG model.
         let req = AnlageUpsertRequest {
             settlement_model: models::KWKG_ZUSCHLAG.to_owned(),
-            kwk_foerderdauer_years: Some(10),
+            kwk_anlagenart: Some("NEU".to_owned()),
             ..solar()
         };
         assert!(check(&req).is_err());
@@ -250,7 +260,7 @@ mod tests {
             erzeugungsart: "KWKG".to_owned(),
             settlement_model: models::KWKG_ZUSCHLAG.to_owned(),
             verguetungsform: "KWK_ZUSCHLAG".to_owned(),
-            kwk_foerderdauer_years: Some(10),
+            kwk_anlagenart: Some("NEU".to_owned()),
             eeg_gesetz: 2023,
             ..solar()
         };
@@ -261,7 +271,7 @@ mod tests {
             erzeugungsart: "KWKG".to_owned(),
             settlement_model: models::KWKG_ZUSCHLAG.to_owned(),
             verguetungsform: "KWK_ZUSCHLAG".to_owned(),
-            kwk_foerderdauer_years: Some(10),
+            kwk_anlagenart: Some("NEU".to_owned()),
             eeg_gesetz: 0,
             ..solar()
         };

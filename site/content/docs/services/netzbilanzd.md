@@ -1,12 +1,8 @@
 +++
 title = "netzbilanzd Operator Guide"
-description = "Operator guide for netzbilanzd — the NB-role billing daemon that settles Netznutzungsentgelt, Konzessionsabgabe, Mehr-/Mindermengen, Messstellenbetrieb and GeLi Gas Sperrprozess fees into INVOIC 31002/31005/31009/31011, checks them before they leave, dispatches via makod, and closes the payment lifecycle on REMADV."
+description = "Operator guide for netzbilanzd, the NB billing daemon: Netznutzungsentgelt, Konzessionsabgabe and Mehr-/Mindermengen settlement into INVOIC drafts."
 weight = 25
-[extra]
-mermaid = true
 +++
-# `netzbilanzd` Operator Guide
-
 `netzbilanzd` settles, checks and dispatches every invoice a German network operator owes
 its counterparties, and carries the Redispatch 2.0 cost sheets. It is the outbound half of
 the NB role: what the operator bills, under which paragraph, and what happened to the money.
@@ -93,6 +89,11 @@ graph LR
 | 31005 | Mehr-/Mindermengensaldo | NB → LF | `mmm` | GPKE (BK6-24-174) Teil 1 Kap. 8.4 · GaBi Gas 2.1 (BK7-24-01-008) |
 | 31009 | MSB-Rechnung (Messstellenbetrieb) | **MSB → NB / LF / ESA** | `msb` | §30 MsbG |
 | 31011 | Rechnung sonstige Leistung (AWH Sperrprozesse) | GNB → LFG | `gas_awh` | GeLi Gas 3.0 (BK7-24-01-009) §5.4 |
+
+A **Prüfidentifikator** (PID) is the four- or five-digit code the BDEW rulebooks use to name
+one business message in one direction — it is what tells a receiver which Anwendungsfall of
+an EDIFACT message type it is holding. Every invoice here is an **INVOIC**, and the PID says
+which kind.
 
 Two properties of this table are easy to get wrong, and both cost money.
 
@@ -263,7 +264,11 @@ curl -X POST http://localhost:8680/api/v1/billing/run \
         "lf_mp_id": "9900012345678",
         "sparte": "Strom",
         "arbeitspreis": { "Einheitlich": { "menge_kwh": "1500", "preis_ct_per_kwh": "3.5" } },
-        "leistungspreis": { "spitzenleistung_kw": "40", "preis_eur_per_kw": "12.50" },
+        "leistungspreis": {
+          "spitzenleistung_kw": "40",
+          "preis_eur_per_kw": "12.50",
+          "system": { "MONAT": { "monate": "1" } }
+        },
         "konzessionsabgabe": { "satz_ct_per_kwh": "0.11", "klasse": "Sondervertragskunde" },
         "netzebene": "Niederspannung",
         "jahresarbeit_kwh": "18000",
@@ -285,16 +290,44 @@ curl -X POST http://localhost:8680/api/v1/billing/run \
     "check_outcome": "Ok",
     "check_findings": [],
     "settlement_warnings": [],
-    "netto_eur":     "127.68000",
-    "steuer_eur":     "24.25920",
-    "brutto_eur":    "151.93920",
+    "netto_eur":     "598.34",
+    "steuer_eur":    "113.68",
+    "brutto_eur":    "712.02",
     // What is left to collect once the Abschläge this invoice settles are
     // deducted. Equal to the gross when there are none, and the figure the
     // payment run collects — see "Abschläge" below.
-    "zu_zahlen_eur": "151.93920"
+    "zu_zahlen_eur": "712.02"
   }]
 }
 ```
+
+### `leistungspreis.system` — which Leistungspreissystem the Preisblatt states
+
+§ 17 Abs. 2 Satz 1 StromNEV builds the Netzentgelt „aus einem **Jahresleistungspreis** in Euro
+pro Kilowatt und einem Arbeitspreis in Cent pro Kilowattstunde", and Satz 2 states the
+Entgelt: „Das Jahresleistungsentgelt ist das Produkt aus dem jeweiligen Jahresleistungspreis
+und der Jahreshöchstleistung in Kilowatt der jeweiligen Entnahme im Abrechnungsjahr." Two
+figures multiplied — the ordinance sets no day-count convention, so there is nothing to
+pro-rate by. Abs. 8 nevertheless lets a Netzbetreiber offer Tagesleistungspreise for Landstrom
+„neben einem Jahres- und **Monatsleistungspreissystem**", which presupposes the monthly one;
+StromNEV does not define it, and it is published in the Netzbetreiber's own Preisblatt as a
+EUR/kW·Monat price against the month's Höchstleistung.
+
+`system` is where the settlement says which of the two it is:
+
+| Value | Billed as | Use on |
+|---|---|---|
+| `"JAHR"` (**default**) | Jahresleistungspreis × Jahreshöchstleistung (§ 17 Abs. 2 Satz 2) | a yearly settlement |
+| `{ "MONAT": { "monate": "1" } }` | Höchstleistung × Monate × Monatsleistungspreis (§ 17 Abs. 8) | a monthly or quarterly settlement |
+
+**The default is a real answer, not a placeholder.** A monthly invoice that omits `system`
+bills the whole Abrechnungsjahr's demand charge in January — the engine bills what § 17 Abs. 2
+Satz 2 says rather than inventing a share no Preisblatt publishes, and raises
+`JAHRESLEISTUNGSPREIS_UNTERJAEHRIG` in `settlement_warnings` to say the period is not the
+Abrechnungsjahr. A monthly settlement over a monthly period, as above, warns about nothing.
+
+The mirror-image check exists too: `MONATSLEISTUNGSPREIS_MONATE_MISMATCH` when `monate` and the
+period's own length disagree by more than a month.
 
 A run is **one transaction** and carries at most **1 000 positions**. Either every position is
 billed or none is; a portfolio job belongs in several runs rather than one that holds the
@@ -329,6 +362,10 @@ the ceiling depends on the customer group:
 | `Tarifkunde`, ≤ 100 000 | 1.59 | 0.27 (0.61) |
 | `Tarifkunde`, ≤ 500 000 | 1.99 | 0.33 (0.77) |
 | `Tarifkunde`, > 500 000 | 2.39 | 0.40 (0.93) |
+| `Exempt` (§2 Abs. 7) | — | — |
+
+`Exempt` states that no Konzessionsabgabe is due, which is a different fact from a rate of
+zero: the position is not billed at all and the ceiling check has nothing to compare.
 
 The rate and the group travel together in one value, so the ceiling check can never be
 skipped. Sending 1.32 ct/kWh on a `Sondervertragskunde` — twelve times its lawful maximum —
@@ -364,6 +401,40 @@ is refused, so a request body carrying `5` cannot multiply the Arbeitspreis by f
 **Data sources.** Band quantities come from `edmd GET /api/v1/billing-period/{malo_id}`
 (HT/NT OBIS registers); band prices from the `PreisblattNetznutzung`
 (`zeitvariable_preispositionen`) in `marktd`.
+
+### A fifth Arbeitspreis shape that is not a §14a module
+
+`ArbeitspreisModell` has one more variant beside `Einheitlich` and the three modules:
+
+```jsonc
+"arbeitspreis": { "SpotpreisNetzentgelt": { "intervalle": [
+  { "period_from": "2026-01-15T11:00:00Z", "period_to": "2026-01-15T11:15:00Z",
+    "menge_kwh": "1.25", "nne_rate_ct_per_kwh": "2.00",
+    "epex_spot_ct_per_kwh": "1.10" }
+] } }
+```
+
+`SpotpreisNetzentgelt` bills a Netzentgelt whose rate follows the spot price under the
+Netzbetreiber's own `PreisblattNetznutzung` formula, one rate per dispatch interval.
+BK6-22-300 defines exactly three modules and none of them is spot-linked, so this is
+deliberately outside the §14a table — and `grid-billing` never queries a spot market: the
+rates arrive already derived.
+
+### §19 Abs. 2 StromNEV — individuelle Netzentgelte
+
+Distinct from the §19 StromNEV-**Umlage** above, which compensates the network for exactly
+this. An agreed individual charge replaces the Netzentgelt — Arbeits- and Leistungspreis —
+and touches neither the Konzessionsabgabe nor the levies. Supply it as `sect19`:
+
+| Form | Qualification | Floor, as a share of the published charge |
+|---|---|---|
+| `AtypischeNetznutzung` (Satz 1) | annual peak predictably in the low-load window | 20 % |
+| `IntensiveNetznutzung` (Satz 2) | Benutzungsstundenzahl **≥** 7 000 h **and** consumption **>** 10 GWh | 20 % from 7 000 h · 15 % from 7 500 h · 10 % from 8 000 h |
+
+The hours are inclusive („erreicht mindestens") and the energy is not („übersteigt"), so an
+Abnahmestelle at exactly 10 GWh does not qualify. The agreed percentage arrives as an input
+— BK4-22-089's physikalischer Pfad is not derived here — and the engine refuses to let it
+fall below the statutory floor.
 
 ### Positions by settlement type
 
@@ -500,22 +571,19 @@ Dispatch does four things in order, inside one transaction:
 
    | Field | Value |
    |---|---|
-   | `command` | `invoic.nne-abschlag.stellen` · `invoic.nne.stellen` · `invoic.nne.stellen` · `invoic.mmm.stellen` · `wim.msb-rechnung.stellen` · `invoic.sonstige-leistung.stellen` |
+   | `command` | one per PID: `invoic.nne-abschlag.stellen` (31001) · `invoic.nne.stellen` (31002) · `invoic.mmm.stellen` (31005) · `wim.msb-rechnung.stellen` (31009) · `invoic.sonstige-leistung.stellen` (31011) |
    | `marktrolle` | `MSB` for PID 31009, `GNB` for a gas invoice, `NB` otherwise |
    | `invoice_ref` | the **invoice number** — the business key the inbound REMADV correlates on |
    | `sender_mp_id` / `recipient_mp_id` | as the settlement resolved them |
    | `pid`, `sparte`, `rechnung` | the document and what identifies it |
 
-   NN-Rechnung Strom and Gas share PID 31002 but not the command: the Gas one is
-   permitted for the `GNB` role, so a gas operator's deployment would be refused the
-   Strom command on role grounds alone.
-
-   **The asserted role follows the Sparte too.** For a command permitted to more than one role,
-   `makod` checks the assertion against the deployment's licensed roles. Three of the six here are
-   permitted to `NB` **and** `GNB` (Abschlag, NN-Rechnung Gas, GeLi Gas AWH), so a gas invoice
-   asserts `GNB` — a `--marktrollen GNB` deployment is the only kind that issues those three, and
-   asserting `NB` fails its licence check. PID 31009 is the mirror image: the Messstellenbetreiber
-   issues it, so the assertion is `MSB`.
+   **The command is Sparte-neutral; the asserted role is not.** The Prüfidentifikatoren are
+   the same in Strom and Gas, and so are the commands — `makod_command` reads the PID alone.
+   What the Sparte decides is the `marktrolle` the dispatch asserts, which `makod` checks
+   against the deployment's licensed roles: `MSB` for PID 31009 whatever the Sparte (the
+   Messstellenbetreiber issues it), `GNB` for PID 31011 and for **any** gas invoice, `NB`
+   otherwise. A `--marktrollen GNB` deployment is the only kind that issues the gas ones, and
+   asserting `NB` there fails its licence check.
 
 Every PID this service issues has an issuer-side process in `makod`. PID 31011 included: the
 GeLi Gas INVOIC workflow models both ends of the conversation — `SendInvoic` for the GNB and
@@ -621,6 +689,17 @@ refuse a Storno or a Korrektur.
 once. A replay that matches the state the invoice is already in answers `204`, not `404`: a sender
 told the event failed never stops retrying it.
 
+The two closing transitions are also reachable directly, for a REMADV that reached the
+operator by another route:
+
+| Method | Path | Body | Effect |
+|---|---|---|---|
+| `PUT` | `/api/v1/billing/drafts/{id}/mark-paid` | `remadv_ref` | `dispatched` or `disputed` → `paid` |
+| `PUT` | `/api/v1/billing/drafts/{id}/mark-disputed` | `erc_code`, `reason` | `dispatched` → `disputed` |
+
+Both sit behind the Cedar action `record-payment`, so falsifying a receivable is not
+something a read token can do.
+
 ---
 
 ## Mehr-/Mindermengen
@@ -637,10 +716,15 @@ measured half. Supplying the measured total for both halves makes every saldo st
 zero.
 
 `sparte` does two jobs here. It selects the price series — Trading Hub Europe per Marktgebiet
-for Gas, the nationwide BDEW series for Strom (§ 13 Abs. 3 StromNZV makes the
-Mehr-/Mindermengenpreise *einheitlich*, so the application month is the whole key and there
-is nothing per-operator to configure) — and it is passed through to `edmd` as the
-aggregation basis. **Gas balances on the 06:00 Gastag**, so a Gas saldo aggregated over
+for Gas, the nationwide BDEW series for Strom, so the application month is the whole key and
+there is nothing per-operator to configure — and it is passed through to `edmd` as the
+aggregation basis.
+
+Which paragraph the settlement **cites** follows the delivery period, because StromNZV and
+GasNZV both lapsed with the end of 31.12.2025: to that date `StromNZV §13 Abs. 3` and
+`GasNZV §25`, from 01.01.2026 `§20 Abs. 3 EnWG` with `BK6-24-174` for Strom and
+`GaBi Gas 2.1 (BK7-24-01-008)` for Gas. `grid_billing::regulatory::RegulatoryRegime`
+resolves it once per settlement, and a period straddling the turnover warns. **Gas balances on the 06:00 Gastag**, so a Gas saldo aggregated over
 calendar days misplaces six hours of every day's energy.
 
 Prices are auto-fetched only when the request leaves them open, and the fetched values are
@@ -715,8 +799,10 @@ figure: one object per register, both directions, every quality, non-kWh
 registers included. Folding it back into one number *is* the register
 projection, and doing it here would sum the grid **draw** into a figure that
 means feed-in, count a total register (`1-0:1.8.0`) on top of the tariff
-registers that already cover the same energy, and keep qualities § 60 Abs. 2
-MsbG excludes from settlement.
+registers that already cover the same energy, and keep qualities that are not
+billable — a Schätzwert or an unvalidated reading is an estimate, and § 40a
+Abs. 2 EnWG lets one carry a settlement only where Satz 3's conspicuous
+disclosure is made.
 
 `coverage_pct` arrives with the projection, so a window `edmd` covers only in
 part is a fact the caller can act on rather than a smaller number indistinguishable
@@ -823,8 +909,8 @@ Source: BDEW Codeliste Artikelnummern und Artikel-ID v5.6 (valid 01.09.2025).
 
 | Position | `BdewArtikelnummer` | Code |
 |---|---|---|
-| NNE Arbeit (all variants) | `Wirkarbeit` | `9990001 00026 9` |
-| NNE Leistung | `Leistung` | `9990001 00005 3` |
+| NNE Arbeit **(Gas only, all variants)** | `Wirkarbeit` | `9990001 00026 9` |
+| NNE Leistung **(Gas only)** · Gas Kapazitätsentgelt | `Leistung` | `9990001 00005 3` |
 | Gas Grundpreis | `Grundpreis` | `9990001 00008 7` |
 | Konzessionsabgabe | `Konzessionsabgabe` | `9990001 00041 7` |
 | Mehrmengen | `Mehrmenge` | `9990001 00074 8` |
@@ -832,6 +918,14 @@ Source: BDEW Codeliste Artikelnummern und Artikel-ID v5.6 (valid 01.09.2025).
 | MSB Grundgebühr | `EntgeltEinbauBetriebWartungMesstechnik` | `9990001 00061 5` |
 | Messdienstleistung | `EntgeltMessungAblesung` | `9990001 00062 3` |
 | Blindmehrarbeit | `Blindmehrarbeit` | `9990001 00047 5` |
+| §19 StromNEV-Umlage | `Paragraf19StromNevUmlage` | — |
+| Offshore-Netzumlage | `OffshoreHaftungsumlage` *(the levy was renamed, the article number was not)* | — |
+| KWKG-Umlage | `AbgabeKwkg` | — |
+
+Four position kinds carry **no** Artikelnummer at all: an Abschlag (it prices nothing), the
+Gas AWH positions (they carry a `2-01-7-xxx` Artikel-ID instead), a §19 Abs. 2 individuelles
+Entgelt, and a dezentrale Einspeisung, which is a bilateral payment outside the INVOIC
+market processes.
 
 > **NNE Strom.** BK6-20-160 replaced the classic `artikelnummer` with an `artikel_id` from
 > the Netznutzungspreisblatt. Supply it through the price sheet; the settlement states what
@@ -951,8 +1045,11 @@ told the event failed retries indefinitely.
 
 ## MCP server
 
-At `/mcp` (Streamable HTTP). Authenticate with `Authorization: Bearer <mcp api_key>`; when
-none is configured, everything is allowed (dev mode only).
+At `/mcp` (Streamable HTTP). The tools read the whole invoice register, so the surface is
+gated by the same verifier and the same policy as REST: a JWT is verified and checked for
+`use-mcp`, and a configured `[mcp] api_key` stays accepted for agent clients that mint no
+OIDC token. Without either, `/mcp` refuses to start — see [Authentication and
+authorization](#authentication-and-authorization).
 
 **The surface is read-only.** Eight tools:
 
@@ -974,6 +1071,52 @@ operator. Read on MCP, act on REST.
 
 Six prompts walk the common workflows: `nb-invoic-overview`, `run-nne-billing`,
 `mmm-monthly-run`, `investigate-dispute`, `ggv-nne-billing`, `redispatch-monthly-submit`.
+
+---
+
+## Authentication and authorization
+
+A route here dispatches an INVOIC to a counterparty over AS4, reverses one it already
+holds, marks a receivable paid, exports the § 147 AO / § 14b UStG record of a whole period,
+or files the month's Redispatch cost sheet. None of that is served to whoever can reach the
+port.
+
+Three doors, checked together at startup — `netzbilanzd` **refuses to boot** with any of
+them open, unless the deployment asks for that by name with `allow_insecure_no_auth = true`:
+
+| Door | Guard | What it protects |
+|---|---|---|
+| REST | `[oidc]` — every route extracts `Claims` | dispatch, Storno, mark-paid, the § 147 AO export, Kostenblatt submission |
+| MCP | `[oidc]` or `[mcp] api_key` | the tenant's whole invoice register and its Redispatch cost sheets |
+| `POST /api/v1/webhooks/remadv` | `inbound_secret` HMAC over the raw body | a forged REMADV marking an invoice paid, or disputing one that was not |
+
+Authentication says who is calling; **Cedar** says what they may do, and the two are
+separate decisions — an auditor reads the § 147 AO export with the same token shape an
+operator dispatches invoices with. `services/netzbilanzd/policies/netzbilanzd.cedar` states
+13 actions in four grants:
+
+| Grant | Actions | Requires |
+|---|---|---|
+| Reads and the stateless calculators | `read-settlement`, `export-audit`, `read-kostenblatt`, `compute-ausfallarbeit` | a matching tenant only — so an auditor's role-less token reads the export and can change nothing |
+| Invoicing | `run-settlement`, `amend-settlement`, `dispatch-settlement`, `correct-settlement`, `record-payment` | `NB` or `MSB` — the NB bills Netznutzung, the MMM-Saldo and the GeLi-Gas Handlungen; the MSB bills the Messstellenbetrieb (PID 31009) |
+| Redispatch 2.0 | `compute-kostenblatt`, `submit-kostenblatt`, `compute-verguetung` | `NB` or `UENB` — the money moves between the NB that steered the resource and the ÜNB that asked for it |
+| MCP | `use-mcp` | a matching tenant; the tools are read-only by construction |
+
+The BilAReM calculators sit with the reads deliberately: they touch no stored data, take
+their whole input from the request body and persist nothing, so they disclose nothing about
+the tenant.
+
+`tests/authorization_guard.rs` pins the surface against three failure classes the compiler
+cannot see — a handler with no `Claims` extractor is unauthenticated; a handler that takes
+`Claims` and never authorizes is reachable by any accepted token; and a Cedar action checked
+in code but named in no policy is a permanent 403, while one named in the policy and checked
+nowhere is a dead grant. The REMADV webhook is the single documented exception, authenticated
+by HMAC rather than by a bearer token.
+
+> **Four-eyes is not implemented.** Separating "may settle a period" from "may dispatch the
+> invoice it produced" needs a job-function axis, and `mako_roles` carries **market** roles
+> only — a policy naming a BUCHHALTUNG role would deny every caller. Denials are logged with
+> the caller's `sub` and the action, so who tried what stays visible.
 
 ---
 
@@ -1001,6 +1144,10 @@ kostenblatt_alert_interval_secs = 86400
 
 [database]
 url = "postgres://nb:secret@db:5432/netzbilanzd"
+
+[oidc]
+issuer    = "https://idp.example.com/realms/mako"
+audience  = "netzbilanzd"
 
 [mcp]
 api_key = "env:NETZBILANZD_MCP_API_KEY"
@@ -1157,8 +1304,10 @@ complete the schema.
 `netzbilanzd` is an **NB-only service**. The LF billing services (`billingd`, `accountingd`,
 `invoicd`) run independently:
 
-- Cedar ABAC policies restrict the REST API to `NB` role principals.
+- Cedar ABAC gates every write on a market role — `NB` or `MSB` for invoicing, `NB` or
+  `UENB` for Redispatch (see [Authentication and
+  authorization](#authentication-and-authorization)).
 - `netzbilanzd` does not appear in the LF `agentd` MCP server list.
 - `billingd` and `invoicd` do not receive `de.netzbilanz.*` CloudEvents.
 
-See [§9 EnWG Informatorisches Unbundling](@/docs/services/portald.md#informatorisches-unbundling-ss9-enwg).
+See [§ 6a EnWG Informatorisches Unbundling](@/docs/services/portald.md#informatorisches-unbundling-ss-6a-enwg).

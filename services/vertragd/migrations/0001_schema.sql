@@ -430,8 +430,7 @@ CREATE INDEX komp_prozess  ON vertragskomponenten (mako_process_id)
 --
 -- There is no "pending" state and nothing to apply on the Wirksamkeit date. The
 -- slice already says when it starts; a reader asking for a date before it
--- simply does not see it. That removed three columns, a CHECK constraint and a
--- daily worker phase whose only job was to copy one column into another.
+-- simply does not see it.
 
 CREATE TABLE komponenten_produkte (
     id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -440,10 +439,33 @@ CREATE TABLE komponenten_produkte (
     product_code  TEXT        NOT NULL,
     gueltig_von   DATE        NOT NULL,
     gueltig_bis   DATE,       -- exclusive; NULL = open-ended
-    -- § 41 Abs. 5 EnWG: TRUE once the price-change notice announcing this slice
-    -- went out. The first slice of a contract announces nothing — the customer
-    -- agreed to it — so it is created already marked.
+    -- Who brought this slice about.
+    --
+    -- § 41 Abs. 5 Satz 1 EnWG obliges the supplier to give notice of the
+    -- *beabsichtigte Ausübung eines Rechts auf Änderung der Preise*, and Satz 4
+    -- attaches the Sonderkündigungsrecht to the supplier exercising that right.
+    -- A tariff the customer asked for is neither: announcing it as a change the
+    -- supplier imposes tells the customer they may cancel when the law gives
+    -- them no such right, and misstates who changed the contract.
+    --
+    -- The default is the stricter case, so a row written around the API owes
+    -- the notice rather than escaping it. 'KUNDE' also covers the first slice
+    -- of a contract: the customer chose that product when they signed.
+    initiator TEXT NOT NULL DEFAULT 'LIEFERANT'
+              CHECK (initiator IN ('LIEFERANT', 'KUNDE')),
+    -- § 41 Abs. 5 EnWG: TRUE once the obligation for this slice is settled —
+    -- the notice went out, or none was owed at all (a retroactive correction, a
+    -- switch the customer asked for, the first slice of a contract). FALSE with
+    -- initiator = 'LIEFERANT' and a Wirksamkeit already reached is therefore a
+    -- breach: the price changed and the customer was never told.
     preisanpassung_notif_sent BOOLEAN NOT NULL DEFAULT false,
+    -- Why the last attempt to issue the notice did not produce one, and when.
+    -- A notice that cannot be issued is a failure the daily sweep retries and
+    -- an operator can query, not a log line: the customer is owed a
+    -- Preisänderungsanzeige and nothing else records that they did not get one.
+    notif_versuche      INTEGER NOT NULL DEFAULT 0,
+    notif_letzter_fehler TEXT,
+    notif_letzter_versuch TIMESTAMPTZ,
     -- § 41 Abs. 5 Satz 1 EnWG — the **Umfang** of the announced change, as the
     -- notice states it: `[{bezeichnung, einheit, bisher, neu}, …]`.
     --
@@ -456,12 +478,13 @@ CREATE TABLE komponenten_produkte (
     -- lookup years later cannot answer, because the catalogue has moved on.
     --
     -- Supplied by whoever schedules the Tarifwechsel: they chose the tariff, so
-    -- they hold both price sheets. NULL means the change was scheduled without
-    -- them, and the § 41 Abs. 5 notice document is then **not** issued — a
-    -- notice that states no Umfang is not a valid Preisänderungsanzeige, and
-    -- issuing one would make an invalid notice indistinguishable from a sent
-    -- one. The CloudEvent still goes out, so an ERP that composes the letter
-    -- itself is unaffected.
+    -- they hold both price sheets. Mandatory for a supplier-initiated future
+    -- change, which is refused without it: § 41 Abs. 5 Satz 3 EnWG wants the
+    -- Umfang of the change, a notice stating none is not a valid
+    -- Preisänderungsanzeige, and a price change the customer was never validly
+    -- told about must not take effect. NULL therefore occurs only where no
+    -- notice is owed — a retroactive correction, or a switch the customer asked
+    -- for.
     angekuendigte_preise JSONB,
     -- The `outputd` document that communicated the change, and when. A plain
     -- value, not a foreign key: outputd owns the document and keeps it
@@ -491,9 +514,11 @@ ALTER TABLE komponenten_produkte
 
 CREATE INDEX kp_komp    ON komponenten_produkte (komp_id, gueltig_von DESC);
 CREATE INDEX kp_aktuell ON komponenten_produkte (komp_id) WHERE gueltig_bis IS NULL;
--- The § 41 Abs. 5 notice worker: future slices whose notice is still owed.
+-- The § 41 Abs. 5 notice worker: supplier-initiated slices whose notice is
+-- still owed — the ones ahead of their Wirksamkeit to announce, and the ones
+-- already in force to report as a breach.
 CREATE INDEX kp_notif   ON komponenten_produkte (tenant, gueltig_von)
-    WHERE preisanpassung_notif_sent = false;
+    WHERE preisanpassung_notif_sent = false AND initiator = 'LIEFERANT';
 
 -- ── Outbound task queue (persist-before-dispatch) ─────────────────────────────
 --
@@ -524,8 +549,8 @@ CREATE TABLE outbound_tasks (
     -- unrelated state.
     payload          JSONB       NOT NULL,
     -- Exactly-once enqueue. A repeatable action varies the key by what makes it
-    -- distinct ('PRODUKTZUORDNUNG:{komp}:{wirksamkeit}:{code}'); a one-shot one
-    -- does not ('LIEFERBEGINN:{komp}'), so an idempotent re-POST of the same
+    -- distinct ('ABLESUNG_BEGINN:{komp}:{datum}'); a one-shot one does not
+    -- ('LIEFERBEGINN:{komp}'), so an idempotent re-POST of the same
     -- erp_contract_id cannot enqueue a second UTILMD.
     dedupe_key       TEXT        NOT NULL,
     attempts         INTEGER     NOT NULL DEFAULT 0,

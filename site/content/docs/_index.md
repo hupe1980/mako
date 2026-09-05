@@ -3,8 +3,6 @@ title = "Documentation"
 description = "Complete documentation for mako — the open-source German energy-market platform in Rust. Guides, service operator manuals, EDIFACT reference, regulatory mapping and the annual BDEW release workflow."
 sort_by = "weight"
 template = "section.html"
-[extra]
-mermaid = true
 +++
 
 Everything needed to build, run and extend mako — grouped by what you are trying
@@ -24,7 +22,7 @@ to do.
 ## Find it by market role
 
 A deployment is scoped to the roles it plays — a role build contains no other
-arm's code (§ 9 EnWG). `makod`, `marktd`, `edmd`, `obsd` and `agentd` are
+arm's code (§ 6a EnWG). `makod`, `marktd`, `edmd`, `obsd` and `agentd` are
 role-neutral and run everywhere; the rest are role-specific.
 
 | Role | Also runs | Starts at |

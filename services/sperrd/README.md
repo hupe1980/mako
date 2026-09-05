@@ -15,7 +15,7 @@ way to find out what happened but to ask.
 | **Market ingest** | `POST /webhook` — `de.mako.process.initiated` for PIDs 17115/17117 becomes a work order, deduplicated per market process |
 | **Status machine** | `pending` → `executed` / `failed` / `cancelled` |
 | **IFTSTA 21039** | Dispatched via `makod` on a terminal outcome; **retried** by a background worker and escalated once the budget is spent |
-| **Events** | `de.sperr.{auftrag.eingegangen,ausgefuehrt,fehlgeschlagen,storniert,ausfuehrung.ueberfaellig,iftsta.ausstehend}` via the transactional outbox |
+| **Events** | `de.sperr.{auftrag.eingegangen,ausgefuehrt,versuch.gescheitert,fehlgeschlagen,storniert,ausfuehrung.ueberfaellig,iftsta.ausstehend}` via the transactional outbox |
 | **Health** | `GET /health/live`, `GET /health/ready` |
 
 ## What the queue carries
@@ -57,8 +57,9 @@ window. A pending order past its window is announced once as
 the first failed visit and leaves the order queued; the second closes it, as does
 `endgueltig: true` for a legal or factual impossibility.
 
-A guard test rejects the two claims that contradict § 3.5.1.2 Nr. 1: a
-„2 Werktage" window, and the assertion that GPKE fixes none.
+`tests/authorization_guard.rs` rejects the three claims that contradict
+§ 3.5.1.2 Nr. 1: a „2 Werktage" window, a citation of BK6-22-024 §3.4 or §9
+(neither exists), and the assertion that GPKE fixes no window at all.
 
 ## Endpoints
 
@@ -74,6 +75,13 @@ A guard test rejects the two claims that contradict § 3.5.1.2 Nr. 1: a
 | `PUT` | `/api/v1/sperr-orders/{id}/cancel` | `cancel-sperr-order` |
 | `GET\|POST` | `/mcp` | *(McpAuth; read-only)* |
 
+The same `tests/authorization_guard.rs` pins the authorization surface at source
+level, because both defects it catches are silent until a request arrives: every
+`pub async fn` handler must take `Claims` *and* call `cedar.check(...)` unless it
+is listed as unauthenticated by design (`/webhook`, HMAC), the Cedar actions the
+code checks and the ones the policy permits must be the same set, and the MCP
+surface must stay read-only.
+
 `?status=` accepts `pending`/`executed`/`failed`/`cancelled` — an unknown value is
 a 400, not a filter that silently matches nothing. `?due=true` is the
 field-dispatch list.
@@ -87,12 +95,19 @@ means the Lieferant has been told.
 
 A terminal order whose `iftsta_dispatched_at` is NULL is an order whose Lieferant
 does not know the outcome, so it is a queue rather than a one-shot. A worker
-re-sends under the same idempotency key `makod` deduplicates on, up to
-`IFTSTA_MAX_ATTEMPTS`, then announces `de.sperr.iftsta.ausstehend` once and
-leaves the order alone — a dispatch that fails eight times is not a transport
-problem but a `makod` process in the wrong state, and retrying forever only hides
-it. `/stats` reports `iftsta_outstanding` (in flight) apart from `iftsta_stuck`
-(needs someone).
+**leases** one order at a time — an `UPDATE … RETURNING` that pushes
+`iftsta_next_attempt_at` forward, which is also the backoff (30 s → 2 min →
+8 min → 32 min → 2 h) — and re-sends it. The lease is what keeps two replicas
+from sending the same Sperrauftrag-Status: the idempotency key is logged by
+`makod`, not compared. The claim also spends the attempt, so an order runs out of
+budget even when no outcome is ever recorded.
+
+After `IFTSTA_MAX_ATTEMPTS` — about nine hours of retrying, and inside the „1. WT
+nach dem Abschluss" the Lieferant is owed the status by — it announces
+`de.sperr.iftsta.ausstehend` once and leaves the order alone: a dispatch that
+fails eight times over nine hours is not a transport problem but a `makod`
+process in the wrong state, and retrying forever only hides it. `/stats` reports
+`iftsta_outstanding` (in flight) apart from `iftsta_stuck` (needs someone).
 
 ## MCP tools
 
@@ -140,5 +155,6 @@ migrations, graceful shutdown, and a real `/health/ready`. Start it with `sperrd
 ## Tests
 
 `cargo test -p sperrd` runs the unit and guard tests; `just test-sperrd-db` runs
-13 scenarios against real PostgreSQL — redelivery, the claim guard, the retry
-queue, tenant isolation, the mutually-exclusive ORDERS dates.
+16 scenarios against real PostgreSQL — redelivery, the claim guard, two replicas
+racing for one IFTSTA, the retry queue and its backoff, tenant isolation, the
+mutually-exclusive ORDERS dates.

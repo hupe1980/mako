@@ -353,10 +353,14 @@ pub async fn sweep_parity(rt: &WorkerRuntime) -> Result<bool, sqlx::Error> {
             "affiliate":     comparison.affiliate,
             "third_party":   comparison.third_party,
             "gap_pp":        comparison.gap_pp,
+            "frist_gap_pp":  comparison.frist_gap_pp,
             "favours":       comparison.favours(),
             "min_sample":    mako_obs::domain::PARITY_MIN_SAMPLE,
             "gap_convention": "gap_pp = (affiliate completion rate − third-party completion \
-                               rate) × 100. Positive means the affiliate fared better.",
+                               rate) × 100, and frist_gap_pp the same over the share answered \
+                               inside the published Antwortfrist. Positive means the affiliate \
+                               fared better; either alone crossing the threshold raises this \
+                               alert.",
             "basis": "§ 7a Abs. 5 EnWG Gleichbehandlung, over the Lieferanten processes the \
                       network arm answers. The threshold is the operator's own escalation \
                       policy; no BNetzA publication sets a numeric parity limit.",
@@ -423,6 +427,53 @@ mod tests {
         let c = ParityComparison::new(g(100, 70), g(100, 90));
         assert_eq!(c.gap_pp, Some(-20.0));
         assert_eq!(c.favours(), Some("third_party"));
+    }
+
+    /// Equal completion rates do not mean equal treatment.
+    ///
+    /// § 7a Abs. 5 asks whether the network arm treats its affiliate's
+    /// Lieferanten processes differently. A rejection can be entirely
+    /// legitimate, so two groups can complete identically while one of them is
+    /// routinely answered outside its published Antwortfrist — which is the
+    /// disparity the filing is actually about, and the one mako can measure
+    /// exactly because the window comes from `mako-fristen`.
+    #[test]
+    fn a_fristen_disparity_is_visible_where_the_completion_rate_is_not() {
+        let breached = |total: i64, completed: i64, frist_breached: i64| ParityGroup {
+            total,
+            completed,
+            frist_breached,
+            ..ParityGroup::default()
+        };
+        // Both arms complete everything; the third party is answered late four
+        // times in ten.
+        let c = ParityComparison::new(breached(100, 100, 0), breached(100, 100, 40));
+        assert_eq!(c.gap_pp, Some(0.0), "completion rates are identical");
+        assert_eq!(
+            c.frist_gap_pp,
+            Some(40.0),
+            "…and the affiliate is 40 pp better on the statutory window"
+        );
+        assert_eq!(
+            c.exceeds(5.0),
+            Some(true),
+            "a Fristen disparity alone raises the alert"
+        );
+    }
+
+    /// The Frist gap is held to the same minimum sample as the completion gap.
+    #[test]
+    fn a_small_sample_states_no_fristen_gap_either() {
+        let c = ParityComparison::new(
+            ParityGroup {
+                total: PARITY_MIN_SAMPLE - 1,
+                frist_breached: PARITY_MIN_SAMPLE - 1,
+                ..ParityGroup::default()
+            },
+            g(100, 100),
+        );
+        assert_eq!(c.frist_gap_pp, None);
+        assert_eq!(c.exceeds(5.0), None, "neither gap is statable");
     }
 
     /// The comparison covers exactly the processes the network arm answers for

@@ -4,15 +4,17 @@ description = "Python test & simulation toolkit for MaKo platforms: BDEW identif
 weight = 18
 +++
 
-# makotest — Python test & simulation toolkit
-
 `makotest` builds regulator-conformant EDIFACT, simulates the counterparties a
 MaKo platform talks to — in EDIFACT, so a test can feed the answer back — and
 asserts on the result.
 
 It is **not mako-specific**. Everything it drives is a public wire contract
 (EDIFACT over AS4, REST, CloudEvents), so it can exercise any MaKo
-implementation.
+implementation. The terms it uses throughout — Prüfidentifikator, AHB, EBD,
+Marktlokation, Frist/Werktag — are defined in the
+[reference vocabulary](@/docs/reference/_index.md#vocabulary), and the
+[PID reference](@/docs/regulatory/pid-reference.md) maps each Prüfidentifikator
+to the workflow that owns it.
 
 ```python
 from makotest import antwort_obligation, malo_from_base, validate_edifact
@@ -47,6 +49,8 @@ test ergonomics is Python.**
 | Werktag calendar and acknowledgement clocks | Rust — `mako-fristen` |
 | Answer Fristen per Prüfidentifikator | Rust — `mako-fristen::antwort` |
 | Antwortcodes per Entscheidungsbaum | Rust — `mako-pruefung::codes` |
+| CloudEvents type catalogue and glob matcher | Rust — `mako-events` |
+| BO4E schema version | Rust — `rubo4e::current` |
 | Counterparty behaviour, EPEX curves, fixtures | Python |
 
 ```mermaid
@@ -96,7 +100,7 @@ from a shell by whoever is holding a real message rather than writing a test:
 
 ```console
 $ makotest validate inbound.edi --on 2026-04-01
-UNB 4012345000023:14 → 9900357000003:500  ref=REF1
+4012345000023:14 → 9900357000003:500  ref=REF1
 #0 UTILMD S2.1 pid=55001 INVALID
     error    [SEM-UTILMD-LOKATIONS-ID] SG4/LOC[1].0: not a Messlokations-ID
 
@@ -155,7 +159,7 @@ BIKO cannot tell from a correct submission.
 
 ---
 
-## Fristen: four shapes, one table
+## Fristen: five shapes, one table
 
 Regulated processes are deadline-driven, so time is an input, never ambient. The
 calendar is BDEW's **conservative-inclusive** one: a day observed as a holiday in
@@ -169,14 +173,19 @@ some participant.
 from makotest import add_werktage, is_werktag, next_werktag
 
 is_werktag("2026-01-06")       # False — Heilige Drei Könige (BY, BW, ST only)
-add_werktage("2026-12-24", 2)  # '2026-12-29' — 25/26 holidays, 27/28 weekend
+add_werktage("2026-12-24", 2)  # '2026-12-29' — 25. Fr and 26. Sa are holidays,
+                               #   27. So closes the weekend, so 28. Mo and 29. Di
+                               #   are the two Werktage
 next_werktag("2026-11-07")     # '2026-11-09' — Saturday rolls to Monday
 ```
 
 ### Which moment — and there is no single formula
 
-"A Werktage Frist expires at 17:00 Europe/Berlin" is true of the WiM MSB-Wechsel
-windows and of nothing else:
+"A Werktage Frist expires at 17:00 Europe/Berlin" is true of 42 of the 61
+published obligations and false of the other 19 — and the 42 are not one family:
+19 are WiM, 4 WiM Gas, and **19 are GPKE** (the Sperr-/Entsperraufträge,
+Bearbeitungsstände and Stammdatenänderungen of Teil 2 §3.5/§3.1 and Teil 4).
+Guessing the shape from the family is the mistake this table exists to prevent:
 
 | `shape` | Window | Example |
 |---|---|---|
@@ -184,8 +193,10 @@ windows and of nothing else:
 | `same_day_at` | that clock time **on the ÜT itself**, rolling to the next Werktag when it would already be behind the message | 55013 → 15:00 am ÜT |
 | `end_of_werktag` | the **end** of the *n*-th Werktag | 44001 → Ablauf 4. WT |
 | `werktage_at_cutoff` | 17:00 Europe/Berlin on the *n*-th Werktag | 55039 → 3 WT |
+| `same_day` | the ÜT itself, no clock time | defined, but no published obligation uses it |
 
-GPKE alone uses the first two, and they share a clock time: „15:00 Uhr am ÜT" and
+GPKE alone uses the first two — all 7 `werktag_at` and both `same_day_at`
+obligations are GPKE — and they share a clock time: „15:00 Uhr am ÜT" and
 „15:00 Uhr des 1. WT nach dem ÜT" are a full day apart, so `werktage` is what
 separates them and `o.window` renders the pair. Sizing any of these the same is
 wrong in both directions, and the loose direction is silent: it reports a lapsed
@@ -223,17 +234,23 @@ versus days for Strom UTILMD. Conflating them is the classic WiM error.
 
 | Function | Window |
 |---|---|
-| `antwort_deadline(pid, received)` | the published window for that process |
-| `deadline_at_werktage(received, n)` | *n* Werktage → 17:00 Berlin (WiM shape) |
-| `end_of_werktag_after(received, n)` | end of the *n*-th Werktag (GeLi Gas shape) |
-| `next_werktag_at(received, "11:00")` | clock time on the 1. WT (GPKE shape) |
+| `antwort_deadline(trigger_pid, received)` | the published window for that process |
+| `deadline_at_werktage(received, werktage)` | *n* Werktage → 17:00 Berlin (`werktage_at_cutoff`) |
+| `end_of_werktag_after(received, werktage)` | end of the *n*-th Werktag (`end_of_werktag`) |
+| `next_werktag_at(received, "11:00")` | clock time on the 1. WT (`werktag_at`) |
 | `berlin_instant(date, "09:00")` | that wall clock, with that date's own offset |
-| `berlin_mtu_count(date, 15)` | market time units the day has — 92, 96 or 100 |
+| `berlin_day_bounds(date)` | the date's own Berlin midnight-to-midnight span |
+| `berlin_mtu_count(date, mtu_minutes)` | market time units the day has — 92, 96 or 100 |
+| `format_303(instant)` | the instant as EDIFACT `CCYYMMDDHHMMZZZ` |
 | `contrl_due_at(received)` | 6 hours — CONTRL |
 | `aperak_strom_due_at(received)` | 45 minutes on a weekday |
 | `aperak_gas_folgeprozess_due_at(received)` | next Werktag 12:00 |
 | `aperak_gas_initialprozess_due_at(received)` | 3 Werktage |
-| `add_hours(received, h)` | wall-clock hours — runs through weekends |
+| `add_hours(received, hours)` | wall-clock hours — runs through weekends |
+
+The parameter names are keyword-callable and are the ones listed here — the
+second argument of `deadline_at_werktage` and `end_of_werktag_after` is
+`werktage`, not `n`.
 
 The offset follows the CET/CEST transition; rendering a deadline in UTC hides the
 hour that makes it correct, and a *fixed* offset is wrong for half the year —
@@ -267,7 +284,7 @@ msg = build_utilmd(
     55001,
     sender="4012345000023",
     receiver="9900357000003",
-    on="2026-04-01",                     # → release S2.1, DTM+137:202604010000+00
+    on="2026-04-01",                     # → release S2.1, DTM+137:202604010000?+00:303
     transactions=[
         UtilmdTransaction(
             "VORGANG-1",                  # IDE+24 — never a location ID
@@ -296,15 +313,20 @@ The Produkt-Code and the `ZV4` qualifier are fixed by the AHB, so a test writing
 them out would be transcribing constants it cannot check. The EIC is a **Party**
 code — draw one with `bilanzkreise()`.
 
-The group is **Muss** on 55001, 55077, 55600, 55601, 55014 and 55608 (UTILMD AHB
-Strom 2.1 §5.3): without a Bilanzkreis the NB cannot assign the Marktlokation to
-the LF, so an Anmeldung that omits it is refused rather than sent.
+The group is **Muss** on 55001, 55077, 55600, 55601, 55014 and 55608
+(`crates/edi-energy/src/builders/utilmd.rs:453`): without a Bilanzkreis the NB
+cannot assign the Marktlokation to the LF. The builder does **not** enforce it —
+omitting `bilanzkreis=` emits the `SEQ+Z79` group without its `CAV+ZV4` and the
+message still validates, because no AHB row makes the value itself Muss. Assert
+it in the test that cares.
 
 An Ablehnung that reports a *third* party's refusal carries a second status:
 `antwort_dritter="A32"` writes `SG4 STS+Z35++A32:E_0624`, the Altlieferant's own
 ground from its own tree. The AHB makes it Muss on `A50` and `A57`, so a call
 naming none gets the column's placeholder. The Codeliste in DE 1131 follows the
-column too: a Strom answer names its EBD, a Gas answer its `G_…` list.
+column too: a Strom answer names its EBD, a **WiM Gas** answer its `G_…`
+Codeliste, and a **GeLi Gas** answer neither — its codes carry no
+`wire_codeliste` at all.
 
 `build_utilmd` and `build_mscons` return a **message** (`UNH`…`UNT`); the wire
 unit a market partner receives over AS4 is an interchange. The UNB qualifier
@@ -469,7 +491,7 @@ nb_sim.on(55001).bei_offenem_vorgang().ablehnung(
 
 nb_sim.receive(anmeldung).pid          # 55002 — confirmed, Vorgang opened
 nb_sim.receive(anmeldung).pid          # 55003 — A06, the repeat meets it
-nb_sim.vorgaenge.schliessen(melo)      # Storno; the next request is a first one
+nb_sim.vorgaenge.schliessen(malo)      # Storno; the next request is a first one
 ```
 
 Only a **Bestätigung** opens a Vorgang: an Ablehnung leaves the Lokation free,
@@ -502,11 +524,12 @@ names.
 
 ### Misbehaving on purpose
 
-Three ways for a partner to misbehave, because a platform that only ever sees a
-punctual conformant one has never had its Fristüberwachung exercised: `.timeout()`
-says nothing at all, `.antwort(pid=…)` answers with a PID the AHB does not
-assign, and `delay_werktage=` sends a *conformant* answer after the window has
-closed.
+Four ways for a partner to misbehave, because a platform that only ever sees a
+punctual conformant one has never had its Fristüberwachung exercised:
+`.timeout()` says nothing at all, `.antwort(pid=…)` answers with a PID the AHB
+does not assign, `delay_werktage=` sends a *conformant* answer after the window
+has closed, and `strict=False` on the constructor answers a request the partner
+should have refused.
 
 An interchange carries several messages, each a separate Vorgang. The reply
 answers **all** of them, in one interchange, and every accessor that could only
@@ -573,7 +596,8 @@ REMADV, `SG2 AJT` on an ORDRSP. One `antwort_code(tree, code)` for all of them.
 Which matters because an obligation whose answer message type cannot be built is
 one no test can answer. All **61** published obligations are answerable — UTILMD
 36, ORDRSP 11, IFTSTA 7, QUOTES 5, ORDERS 2 — and
-`test_most_published_obligations_are_now_answerable` holds it there.
+`TestCoverage::test_every_published_obligation_is_answerable`
+(`makotest/tests/test_wim_esa.py:187`) holds it there.
 
 **A code has no meaning without its tree.** `A02` is „Vorlauffrist nicht
 eingehalten" in `E_0607` and „Marktlokation nimmt nicht an der Marktkommunikation
@@ -655,7 +679,7 @@ one value per market time unit that day really has. A 96-value series on the
 **one `QTY` per interval, each carrying its own measurement period**:
 
 ```python
-gang = smgw.deliver("2026-10-25", werte=lastgang.day("2026-10-25"))
+gang = imsys_sim.deliver("2026-10-25", werte=lastgang.day("2026-10-25"))
 msg = gang.as_mscons(pruefidentifikator=13025, sender_mp_id=MSB,
                      receiver_mp_id=LF, on="2026-04-01", malo_id=malo)
 assert_edifact_valid(build_interchange(..., messages=[msg], ...), on="2026-04-01")
@@ -673,7 +697,7 @@ Three states, three obligations, and a platform has to tell them apart:
 | | On the wire | What the platform owes |
 |---|---|---|
 | a **Lücke** | the interval is absent | form an Ersatzwert; a zero would be settled against |
-| `quality="SUBSTITUTED"` | present, stamped | bill it — it *is* the Ersatzwert (§ 60 Abs. 2 MsbG) |
+| `quality="SUBSTITUTED"` | present, stamped | bill it — it *is* the Ersatzwert. § 40a Abs. 2 EnWG lets a bill rest on a Verbrauchsschätzung, stated under an „ausdrücklichem und optisch besonders hervorgehobenem Hinweis" (Satz 3) |
 | `quality="FAULTY"` | present, stamped | do not bill it, and substitute |
 
 Values are decimal strings: energy is a decimal quantity, and a JSON float
@@ -720,9 +744,11 @@ and `derandomize=True`. A strategy here draws through the Rust core, and
 Hypothesis' 200 ms per-example deadline is written for pure functions: it reports
 a loaded machine as a defect in the system under test.
 
-Only `makotest.plugin` imports pytest. The generators and simulators are plain
-objects usable from a script or notebook, so a demo and a CI test drive the same
-code path.
+pytest is an **optional** dependency: `pyproject.toml` declares no runtime
+dependencies at all, and the one import outside `makotest.plugin` — the
+`register_assert_rewrite` call in `__init__.py` — is guarded by `try/except
+ImportError`. The generators and simulators are plain objects usable from a
+script or notebook, so a demo and a CI test drive the same code path.
 
 ---
 
@@ -747,7 +773,7 @@ Rust core, which is the point: a drawn value is one the platform **accepts**.
 | `marktpartner_ids(kind=…)` | BDEW (`99…`), DVGW (`98…`) or GLN codes, each with its own check digit |
 | `bilanzkreise()` | EIC **Party** codes (`11X…`) with a real check character |
 | `bilanzierungsgebiete()` | EIC **Area** codes (`11Y…`) |
-| `resource_ids(kind=…)` | NeLo, NeBe and the Redispatch resources (BDEW §8.2) |
+| `resource_ids(kind=…)` | the seven BDEW §8.2 families: `nelo`, `nebe`, `cr`, `sg`, `sr`, `tr`, `paket` |
 | `pruefidentifikatoren(message_type=…, sparte=…, on=…)` | PIDs with real AHB rules |
 | `antwort_pids()` | inbound PIDs with a published answer Frist |
 | `antwort_codes(ebd=…, accepted=…)` | Antwortcodes that Entscheidungsbaum publishes |
@@ -807,7 +833,7 @@ from makotest.generators import LastgangGenerator
 gen = LastgangGenerator(seed=42)
 werte = gen.day("2026-10-25", profile="haushalt", jahresmenge_kwh=3500)
 len(werte)                                    # 100 — a 25-hour local day
-smgw.deliver("2026-10-25", werte=werte)       # feeds the gateway unchanged
+imsys_sim.deliver("2026-10-25", werte=werte)  # feeds the gateway unchanged
 ```
 
 | Profile | Shape | Season |

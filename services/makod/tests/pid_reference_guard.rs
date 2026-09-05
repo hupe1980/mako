@@ -71,6 +71,13 @@ const NOT_ROUTED_BY_DESIGN: &[(u32, &str)] = &[
     (55_225, "outside STAMMDATEN_PAIRS"),
     (55_227, "outside STAMMDATEN_PAIRS"),
     (55_553, "individuelle Bestellung; outside STAMMDATEN_PAIRS"),
+    // The one PID the Anwendungsübersicht credits to *AWH NBW* alone. It is
+    // imported, profiled and validates — and `makod` registers no NBW module
+    // at all (it has no dependency on `mako-nbw`, which is a domain crate
+    // with no PID family of its own). Note this is NOT the 55691/55692 case:
+    // those ride `gpke-stammdatenaenderung` and minting an NBW family would
+    // double-register them. Nothing else claims 55690.
+    (55_690, "AWH NBW; makod registers no NBW module"),
 ];
 
 /// Every PID the reference table credits to a crate/workflow.
@@ -261,5 +268,91 @@ fn the_reference_names_the_workflow_that_actually_routes_each_pid() {
         "these pid-reference rows credit a workflow that does not route the PID:\n{}\n\
          Correct the last column to the workflow the router resolves.",
         wrong.join("\n"),
+    );
+}
+
+/// Rows the reference names no workflow for **and** that do not yet say why.
+///
+/// The workflow column of an unrouted PID should carry its reason inline, the
+/// way `19301` does — `— (Herkunftsnachweisregister, not implemented)` — so a
+/// reader meets an explanation rather than a silence they have to read as
+/// either "deliberate" or "someone forgot".
+///
+/// [`NOT_ROUTED_BY_DESIGN`] cannot cover these: it is checked against the PIDs
+/// the reference *credits* to a workflow, and a row naming none is never in
+/// that set. So an unrouted PID could be added to the table with a bare `—` and
+/// no guard would see it.
+///
+/// This list is that blind spot, made explicit. It is a **backlog, not a
+/// blessing** — every entry wants a one-line reason in the table, after which
+/// it is deleted from here. The guard below refuses a *new* bare `—` row, so
+/// the list can only shrink.
+const UNCLAIMED_WITHOUT_A_REASON: &[u32] = &[
+    55_008, 55_009, 55_074, 55_075, 55_076, 55_126, 55_218, 55_602, 55_603, 55_604, 55_605, 55_608,
+    55_609, 55_613, 55_614, 55_672, 55_674, 55_675, 44_035, 44_060, 44_101, 44_102, 44_103, 44_104,
+    44_105, 44_183, 17_101, 17_126, 17_301, 19_007, 21_040, 13_028, 29_002,
+];
+
+/// A row that names no workflow must say why — or be a known one that does not.
+///
+/// Adding an unrouted PID to the reference with a bare `—` fails here. Writing
+/// its reason into the table fails here too, until the entry is removed from
+/// [`UNCLAIMED_WITHOUT_A_REASON`] — which is the point: the list is meant to
+/// empty out.
+#[test]
+fn an_unclaimed_row_states_its_reason() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../site/content/docs/regulatory/pid-reference.md"
+    );
+    let src = std::fs::read_to_string(path).expect("pid-reference.md is readable");
+
+    let mut bare = BTreeSet::new();
+    for line in src.lines() {
+        if !line.starts_with("| ") {
+            continue;
+        }
+        let cells: Vec<&str> = line
+            .trim()
+            .trim_matches('|')
+            .split('|')
+            .map(str::trim)
+            .collect();
+        if cells.len() < 10 {
+            continue;
+        }
+        let Ok(pid) = cells[0].parse::<u32>() else {
+            continue;
+        };
+        let workflow = cells[cells.len() - 1];
+        // A backtick means a workflow is named; that row is the other guard's.
+        if workflow.contains('`') {
+            continue;
+        }
+        if workflow == "—" {
+            bare.insert(pid);
+        }
+    }
+
+    assert!(
+        !bare.is_empty(),
+        "no unclaimed rows found at all — this guard has stopped parsing the table"
+    );
+
+    let known: BTreeSet<u32> = UNCLAIMED_WITHOUT_A_REASON.iter().copied().collect();
+
+    let undocumented: Vec<u32> = bare.difference(&known).copied().collect();
+    assert!(
+        undocumented.is_empty(),
+        "these PIDs name no workflow and give no reason: {undocumented:?} — \
+         either state why in the table's last column (e.g. \"— (not implemented)\") \
+         or add them to UNCLAIMED_WITHOUT_A_REASON"
+    );
+
+    let now_explained: Vec<u32> = known.difference(&bare).copied().collect();
+    assert!(
+        now_explained.is_empty(),
+        "UNCLAIMED_WITHOUT_A_REASON lists {now_explained:?}, but the table now \
+         explains or routes them — delete the entries"
     );
 }

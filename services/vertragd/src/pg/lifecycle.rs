@@ -13,6 +13,38 @@ use uuid::Uuid;
 
 use crate::domain::Verlaengerung;
 
+// ── Single-flight across replicas ────────────────────────────────────────────
+//
+// The three lifecycle workers are idempotent *per contract and per date* — a
+// notice is not resent once its slice is marked — but idempotency is a
+// serialisation guarantee, not a concurrency one: two replicas that read the
+// same unmarked slice in the same second both build a CloudEvent and both write
+// one, and the customer receives the § 41 Abs. 5 EnWG Preisanpassungsanzeige
+// twice. Nothing downstream de-duplicates it; the outbox delivers what it is
+// given.
+//
+// A PostgreSQL **session-level advisory lock** is the smallest thing that
+// prevents that: one instance runs a given worker, the others skip the cycle and
+// come back on the next tick. No lease table, no clock skew, and the lock is
+// released by the server if the holder dies.
+//
+// The mechanism, the key constants and the `Option<PoolConnection>` shape are
+// deliberately identical to `accountingd::pg::try_worker_lock` — see the
+// coordinator note about hoisting both copies into `mako-service`. The keys
+// differ so the two services never contend with one another on one database.
+
+// The single-runner advisory lock lives in `mako-service` — this used to be a
+// verbatim copy of `accountingd`'s, and a third copy was one worker away.
+pub use mako_service::worker_lock::{release_worker_lock, try_worker_lock};
+
+/// Advisory-lock keys — stable, and distinct per worker so a slow
+/// Preisanpassung run does not block the unrelated Ablauf sweep.
+pub const LOCK_PREISANPASSUNG: i64 = 0x_7e64_0001;
+/// See [`LOCK_PREISANPASSUNG`].
+pub const LOCK_AUTO_RENEWAL: i64 = 0x_7e64_0002;
+/// See [`LOCK_PREISANPASSUNG`].
+pub const LOCK_ABLAUF: i64 = 0x_7e64_0003;
+
 // ── Auto-renewal (§ 309 Nr. 9 lit. b BGB) ────────────────────────────────────
 
 /// A contract whose term is running out and that renews automatically.

@@ -6,9 +6,11 @@
 //! crashed between claiming the order and dispatching, or because `makod` was
 //! unreachable.
 //!
-//! Retries use the same idempotency key `makod` deduplicates on, so a re-send
-//! after a lost response is the same command rather than a second IFTSTA on the
-//! wire. Orders past the budget are announced once as
+//! Retries carry a stable idempotency key, but `makod` logs that key rather than
+//! comparing it — the deduplication that does exist is its per-family business
+//! guard. So the thing that keeps one IFTSTA on the wire is the **claim**: only
+//! one worker can lease an order at a time, and it holds the lease for the
+//! backoff. Orders past the budget are announced once as
 //! `de.sperr.iftsta.ausstehend` and left for a human.
 
 use std::sync::Arc;
@@ -66,9 +68,20 @@ pub async fn sweep(pool: &PgPool, makod: &Arc<MakodClient>, tenant: &str) -> any
     let mut did_work = escalate_stuck(pool, tenant).await?;
     did_work |= announce_overdue_executions(pool, tenant).await?;
 
+    // The claim leases the order and spends the attempt, so a second replica
+    // sweeping at the same moment finds nothing due and cannot send the same
+    // IFTSTA 21039 a second time.
     if let Some(order) = pg::claim_iftsta_retry(pool, tenant).await? {
         let id = order.id;
-        if pg::dispatch_iftsta(pool, makod, tenant, &order).await {
+        if pg::dispatch_iftsta(
+            pool,
+            makod,
+            tenant,
+            &order,
+            pg::AttemptAccounting::CountedByClaim,
+        )
+        .await
+        {
             tracing::info!(order_id = %id, "sperrd: IFTSTA 21039 re-sent successfully");
         }
         did_work = true;
@@ -77,21 +90,33 @@ pub async fn sweep(pool: &PgPool, makod: &Arc<MakodClient>, tenant: &str) -> any
 }
 
 /// Announce every order that exhausted the retry budget, once.
+///
+/// The escalation is **claimed before it is announced**: `mark_iftsta_escalated`
+/// only matches an order that has not been escalated yet, and it runs first
+/// inside the transaction that also writes the event. Announcing first and
+/// stamping afterwards let two replicas — which both read the same stuck list —
+/// each emit `de.sperr.iftsta.ausstehend` for one order, and only then have one
+/// of them lose the stamp.
 async fn escalate_stuck(pool: &PgPool, tenant: &str) -> anyhow::Result<bool> {
     let stuck = pg::list_stuck_iftsta(pool, tenant).await?;
     if stuck.is_empty() {
         return Ok(false);
     }
-    for (id, malo_id, lf_mp_id, last_error) in stuck {
+    for order in stuck {
         let mut tx = pool.begin().await?;
-        events::iftsta_ausstehend(&mut tx, tenant, id, &malo_id, &lf_mp_id, &last_error).await?;
-        pg::mark_iftsta_escalated(&mut *tx, id, tenant).await?;
+        if !pg::mark_iftsta_escalated(&mut *tx, order.id, tenant).await? {
+            // Another replica announced this one between the list and here.
+            tx.rollback().await?;
+            continue;
+        }
+        events::iftsta_ausstehend(&mut tx, tenant, &order).await?;
         tx.commit().await?;
         tracing::error!(
-            order_id = %id, %malo_id, %last_error,
-            "sperrd: IFTSTA 21039 could not be dispatched after {} attempts — the \
-             Lieferant has not been told the outcome and their process cannot close",
-            pg::IFTSTA_MAX_ATTEMPTS,
+            order_id = %order.id, malo_id = %order.malo_id,
+            last_error = %order.last_error, attempts = order.attempts,
+            "sperrd: IFTSTA 21039 has not been dispatched (retry budget spent, or past the \
+             1. WT nach Abschluss it was due) — the Lieferant has not been told the outcome \
+             and their process cannot close",
         );
     }
     Ok(true)

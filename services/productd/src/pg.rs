@@ -737,6 +737,11 @@ pub struct AngebotRow {
     pub bo4e: serde_json::Value,
     pub jahreskosten_netto_eur: Option<Decimal>,
     pub jahreskosten_brutto_eur: Option<Decimal>,
+    /// § 13b Abs. 2 Nr. 5 Buchst. b i.V.m. Abs. 5 UStG — the recipient is a
+    /// Wiederverkäufer and owes the tax, so this quotation states none. Stored
+    /// with the quotation because every re-pricing of it has to reach the same
+    /// gross figure the customer was sent.
+    pub wiederverkaeufer_13b: bool,
     pub gewaehlte_variante: Option<i16>,
     pub rahmenvertrag_id: Option<Uuid>,
     #[serde(with = "time::serde::rfc3339::option")]
@@ -768,6 +773,14 @@ pub struct CreateAngebotRequest {
     pub positionen: Vec<AngebotPositionInput>,
     /// Alternative scenarios (Varianten).  Optional — empty means single scenario.
     pub varianten: Option<Vec<AngebotVariante>>,
+    /// The recipient is a Wiederverkäufer i.S.d. § 3g UStG.
+    ///
+    /// § 13b Abs. 2 Nr. 5 Buchst. b i.V.m. Abs. 5 UStG then moves the tax to
+    /// them and the quotation states no Umsatzsteuer — for electricity only
+    /// where the supplier is a Wiederverkäufer too, which is the caller's
+    /// assessment to make, not this service's.
+    #[serde(default)]
+    pub wiederverkaeufer_13b: bool,
     pub erp_angebot_id: Option<String>,
     pub notizen: Option<String>,
 }
@@ -790,6 +803,13 @@ pub struct AngebotPositionInput {
     pub standort_bezeichnung: Option<String>,
     /// Estimated annual consumption (kWh).  Required for price calculation.
     pub jahresverbrauch_kwh: Decimal,
+    /// The Zweitarif split of `jahresverbrauch_kwh` across the HT and NT bands.
+    ///
+    /// Both are required for a product that prices an `ARBEITSPREIS_NT`, and
+    /// they must add up to `jahresverbrauch_kwh`: without them the whole year
+    /// would be quoted at the HT rate, which is the more expensive band.
+    pub jahresverbrauch_ht_kwh: Option<Decimal>,
+    pub jahresverbrauch_nt_kwh: Option<Decimal>,
     /// Peak power for RLM/C&I customers (kW) — required for capacity price.
     pub leistung_kw: Option<Decimal>,
     /// Tag for scenario display (e.g. "Eintarif", "Zweitarif HT/NT").
@@ -908,8 +928,8 @@ pub async fn insert_angebot(
                angebotsnummer, gueltig_bis, lieferbeginn, laufzeit_monate,
                positionen, varianten, bo4e,
                jahreskosten_netto_eur, jahreskosten_brutto_eur,
-               erp_angebot_id, notizen)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+               wiederverkaeufer_13b, erp_angebot_id, notizen)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
           RETURNING id",
     )
     .bind(tenant)
@@ -927,6 +947,7 @@ pub async fn insert_angebot(
     .bind(bo4e_json)
     .bind(netto)
     .bind(brutto)
+    .bind(req.wiederverkaeufer_13b)
     .bind(&req.erp_angebot_id)
     .bind(&req.notizen)
     .fetch_one(pool)
@@ -1246,12 +1267,15 @@ pub struct ComparisonFeedEntry {
     /// DSO/PLZ and must be added by the comparison portal integrator.
     /// `null` if no standard Grundpreis or Arbeitspreis is defined.
     pub jahreskosten_supply_netto_eur: Option<rust_decimal::Decimal>,
-    /// Estimated annual supply cost **brutto** (incl. 19 % MwSt).
-    /// Derived from `jahreskosten_supply_netto_eur × 1.19`.
-    /// `null` if `jahreskosten_supply_netto_eur` is `null`.
+    /// Estimated annual supply cost **brutto**.
+    /// Derived from `jahreskosten_supply_netto_eur × (1 + mwst_satz)`.
+    /// `null` if `jahreskosten_supply_netto_eur` or `mwst_satz` is `null`.
     pub jahreskosten_supply_brutto_eur: Option<rust_decimal::Decimal>,
-    /// MwSt rate applied to compute the brutto estimate.
-    pub mwst_pct: &'static str,
+    /// The Umsatzsteuersatz the brutto estimate was derived with, as a fraction
+    /// of the net: 0.19 under § 12 Abs. 1 UStG unless the product carries its
+    /// own `mwst_rate_override`. `null` where that override is not a rate — the
+    /// feed then states no brutto rather than a rate the invoice will not use.
+    pub mwst_satz: Option<rust_decimal::Decimal>,
     /// Contract term extracted from `vertragskonditionen.laufzeit` in months.
     pub laufzeit_monate: Option<i32>,
     /// Notice period from `vertragskonditionen.kuendigungsfrist` in weeks.

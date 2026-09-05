@@ -48,12 +48,12 @@ pub struct OrdersQuery {
     pub limit: Option<i64>,
     /// Only orders whose requested execution date has arrived.
     ///
-    /// This is the field-dispatch list. The date is the Lieferant's
-    /// (`DTM+203 Ausführungsdatum` or `DTM+469 frühestes Startdatum`) — GPKE
-    /// fixes no Werktage window for the physical act, so there is nothing else
-    /// to measure "due" against — in particular not a Werktage age against a
-    /// two-Werktage execution deadline, which appears in no BNetzA or BDEW
-    /// document.
+    /// This is the field-dispatch list, and it measures the **Lieferant's** date
+    /// (`DTM+203 Ausführungsdatum` or `DTM+469 frühestes Startdatum`): when the
+    /// LF wanted the work done. The regulatory window — 6 WT after the
+    /// frühestmöglicher Sperrtermin (GPKE Teil 2 § 3.5.1.2 Nr. 1,
+    /// [`crate::pg::AUSFUEHRUNG_WERKTAGE`]) — is a different question and is
+    /// reported separately as `frist_ueberschritten` on `/stats`.
     #[serde(default)]
     pub due: bool,
 }

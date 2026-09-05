@@ -129,20 +129,12 @@ pub async fn post_calculate(
     let cfg = Arc::clone(&deps.cfg);
     authorize(&cedar, &claims, "run-billing", &cfg.tenant)?;
     let (period_from, period_to) = parse_period(&req.period_from, &req.period_to)?;
-    let tariff = resolve_tariff(&req, &deps, &malo_id, period_to).await?;
-
-    // A period straddling a statutory boundary has no correct single rate; the
-    // 422 names the Stichtage so the caller can split and retry.
-    let mut rates =
-        cfg.try_regulatory_rates_for_period(tariff.category_str(), period_from, period_to)?;
-    apply_nehs_market_price(
-        &mut rates,
-        tariff.category_str(),
-        period_from,
-        &cfg,
-        &deps.productd,
-    )
-    .await;
+    // The product assignments covering the period, each split further at every
+    // statutory rate boundary inside it. A price change mid-period is billed as
+    // the parts it consists of; priced at the product in force on the period's
+    // last day, a 25→35 ct switch on 15 March bills all of March at 35 ct.
+    let legs = resolve_legs(&req, &deps, &malo_id, period_from, period_to).await?;
+    let summary = LegSummary::of(&legs);
 
     // § 14 Abs. 4 Nr. 4 UStG: a fortlaufende Nummer from the tenant's series,
     // unless the caller stated one. Allocated before the engine runs because it
@@ -157,25 +149,41 @@ pub async fn post_calculate(
     .await?;
 
     // The BG-7 buyer travels with the priced invoice: both come from the one
-    // vertragd answer `dispatch_invoice` already needs for the §40 Abs. 1
+    // vertragd answer the billing pipeline already needs for the §40 Abs. 1
     // contract facts. billingd holds no customer master, and a model built
     // without it carries a synthesised buyer that fails XRechnung on BR-DE-8/9.
     let Billed {
         invoice: result,
         buyer,
-    } = dispatch_invoice(
+    } = dispatch_invoice_multi(
         &deps,
-        &tariff,
+        &legs,
         &req,
         &malo_id,
         &rechnungsnummer,
-        period_from,
-        period_to,
-        &rates,
         // A single on-demand calculation belongs to no run.
         RunId::NONE,
     )
     .await?;
+
+    // The rates the risk gate scores the document against. Each leg was billed
+    // under its own; a split period is scored against its **last** leg's, which
+    // are the ones in force when the document is issued and the ones an anomaly
+    // in the total would be measured against.
+    let last_leg = legs.last().expect("resolve_legs yields at least one leg");
+    let mut rates = cfg.try_regulatory_rates_for_period(
+        last_leg.tariff.category_str(),
+        last_leg.from,
+        last_leg.to,
+    )?;
+    apply_nehs_market_price(
+        &mut rates,
+        last_leg.tariff.category_str(),
+        last_leg.from,
+        &cfg,
+        &deps.productd,
+    )
+    .await;
 
     // Deterministic risk gate: scored read-only *before* the outbox tx, because
     // a HELD band withholds the dispatch enqueue. The record it scores does not
@@ -207,8 +215,8 @@ pub async fn post_calculate(
             tenant: &cfg.tenant,
             malo_id: &malo_id,
             lf_mp_id: &req.lf_mp_id,
-            product_code: tariff.product_code().unwrap_or(tariff.category_str()),
-            category: tariff.category_str(),
+            product_code: &summary.product_code,
+            category: &summary.category,
             rechnungsnummer: &rechnungsnummer,
             period_from,
             period_to,
@@ -440,10 +448,10 @@ pub struct Preview {
 
 /// Run the calculation pipeline without persisting anything.
 ///
-/// The read-only half of `/calculate`: parse the period, resolve the product,
-/// resolve the period's statutory rates (refusing a straddle), overlay the nEHS
-/// market price, and bill. Shared by `POST …/preview` and the `preview_billing`
-/// MCP tool so the two can never answer differently.
+/// The read-only half of `/calculate`: parse the period, resolve the product
+/// legs covering it — each under its own statutory rates, refusing a straddle —
+/// and bill them as one document. Shared by `POST …/preview` and the
+/// `preview_billing` MCP tool so the two can never answer differently.
 ///
 /// # Errors
 ///
@@ -455,19 +463,10 @@ pub async fn compute_preview(
     malo_id: &str,
     req: &CalculateRequest,
 ) -> BillingResult<Preview> {
-    let cfg = deps.cfg.as_ref();
     let (period_from, period_to) = parse_period(&req.period_from, &req.period_to)?;
-    let tariff = resolve_tariff(req, deps, malo_id, period_to).await?;
-    let mut rates =
-        cfg.try_regulatory_rates_for_period(tariff.category_str(), period_from, period_to)?;
-    apply_nehs_market_price(
-        &mut rates,
-        tariff.category_str(),
-        period_from,
-        cfg,
-        &deps.productd,
-    )
-    .await;
+    // The same legs `/calculate` bills, so a preview can never price a period
+    // differently from the invoice it previews.
+    let legs = resolve_legs(req, deps, malo_id, period_from, period_to).await?;
 
     // A dry run issues nothing, so it must not consume a number from the
     // § 14 UStG series — the placeholder makes that visible in the output.
@@ -475,18 +474,8 @@ pub async fn compute_preview(
         .rechnungsnummer
         .clone()
         .unwrap_or_else(|| format!("PREVIEW-{malo_id}-{period_from}"));
-    let billed = dispatch_invoice(
-        deps,
-        &tariff,
-        req,
-        malo_id,
-        &rechnungsnummer,
-        period_from,
-        period_to,
-        &rates,
-        RunId::NONE,
-    )
-    .await?;
+    let billed =
+        dispatch_invoice_multi(deps, &legs, req, malo_id, &rechnungsnummer, RunId::NONE).await?;
     Ok(Preview {
         invoice: billed.invoice,
         period_from,

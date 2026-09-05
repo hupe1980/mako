@@ -212,7 +212,11 @@ fn mastr_not_registered_forces_zero_settlement() {
     });
     assert_eq!(out.status, SettlementStatus::Sanctioned);
     assert_eq!(out.settlement_eur, Some(Decimal::ZERO));
-    assert!(out.positions.is_empty());
+    // A § 52 Abs. 1 sanction extinguishes the claim, and the positions have to
+    // add up to the amount that is paid — an unregistered plant is settled at
+    // zero, not left without a document.
+    let summe: Decimal = out.positions.iter().map(|p| p.eur).sum();
+    assert_eq!(summe, Decimal::ZERO);
 }
 
 #[test]
@@ -392,6 +396,7 @@ fn kwkg_full_period_no_hour_limit() {
             verguetungssatz_ct: dec!(6.0),
             kwh_paid_gesamt: None,
             max_kwh: None,
+            jahres_restkontingent_kwh: None,
         },
         einspeisemenge_kwh: Some(dec!(5000)),
         ..SettleInput::default()
@@ -407,6 +412,7 @@ fn kwkg_hour_limit_prorated_last_period() {
             verguetungssatz_ct: dec!(3.1),
             kwh_paid_gesamt: Some(dec!(29_900)),
             max_kwh: Some(dec!(30_000)),
+            jahres_restkontingent_kwh: None,
         },
         einspeisemenge_kwh: Some(dec!(400)),
         ..SettleInput::default()
@@ -424,6 +430,7 @@ fn kwkg_limit_exhausted_returns_zero() {
             verguetungssatz_ct: dec!(6.0),
             kwh_paid_gesamt: Some(dec!(30_000)),
             max_kwh: Some(dec!(30_000)),
+            jahres_restkontingent_kwh: None,
         },
         einspeisemenge_kwh: Some(dec!(1000)),
         ..SettleInput::default()
@@ -527,29 +534,35 @@ fn anlagenerweiterung_all_expired_foerderung_beendet() {
 
 // ── Statutory EEG rate tables ─────────────────────────────────────────────────
 
+/// **§ 7 Abs. 1 KWKG pays per Leistungsanteil.**
+///
+/// Every Nummer reads „für den KWK-Leistungsanteil von …", so a plant's rate is
+/// the capacity-weighted mean of the bands it spans: 8 ct on the first 50 kW,
+/// 6 on the next 50, 5 on the next 150, 4,4 up to 2 MW, then 3,4 or 3,1 by
+/// Anlagenart. Nr. 4 is 4,4 ct, not 4,00.
 #[test]
-fn kwkg_2023_rate_all_tiers() {
-    let table = rates::kwkg_zuschlag_lookup().expect("KWKG rates known");
-    assert_eq!(
-        table.rate_for(dec!(20)).unwrap(),
-        billing::Amount::parse("0.08").unwrap()
-    );
-    assert_eq!(
-        table.rate_for(dec!(75)).unwrap(),
-        billing::Amount::parse("0.06").unwrap()
-    );
-    assert_eq!(
-        table.rate_for(dec!(200)).unwrap(),
-        billing::Amount::parse("0.05").unwrap()
-    );
-    assert_eq!(
-        table.rate_for(dec!(2000)).unwrap(),
-        billing::Amount::parse("0.04").unwrap()
-    );
-    assert_eq!(
-        table.rate_for(dec!(5000)).unwrap(),
-        billing::Amount::parse("0.03").unwrap()
-    );
+fn kwkg_zuschlag_is_blended_across_the_leistungsanteile() {
+    use eeg_billing::{KwkAnlagenart, KwkVerwendung, KwkZuschlagInput, zuschlag_ct_kwh};
+
+    let plant = |kw| KwkZuschlagInput {
+        kwk_leistung_kw: kw,
+        // § 7 Abs. 3a gives a *neue* Anlage up to 50 kW a flat 16 ct instead, so
+        // the Abs. 1 ladder is exercised on a modernisierte one.
+        anlagenart: KwkAnlagenart::Modernisiert,
+        verwendung: KwkVerwendung::NetzDerAllgemeinenVersorgung,
+        dauerbetrieb: date!(2024 - 03 - 01),
+        bmwk_feststellung_veroeffentlicht: false,
+    };
+
+    assert_eq!(zuschlag_ct_kwh(&plant(dec!(20))), Some(dec!(8)));
+    // 50 × 8 + 50 × 6, over 100 kW.
+    assert_eq!(zuschlag_ct_kwh(&plant(dec!(100))), Some(dec!(7)));
+    // (400 + 300 + 500) / 200.
+    assert_eq!(zuschlag_ct_kwh(&plant(dec!(200))), Some(dec!(6)));
+    // (400 + 300 + 750 + 1 750 × 4,4) / 2 000.
+    assert_eq!(zuschlag_ct_kwh(&plant(dec!(2000))), Some(dec!(4.575)));
+    // Above 2 MW the rate falls to 3,4 ct on the excess only (Nr. 5 lit. b).
+    assert_eq!(zuschlag_ct_kwh(&plant(dec!(5000))), Some(dec!(3.87)));
 }
 
 #[test]
@@ -665,12 +678,48 @@ fn kwk_eligible_kwh_prorated() {
     assert!(done);
 }
 
+/// **§ 8 KWKG ends a KWK plant on kWh, and § 8 Abs. 4 pauses it on kWh.**
+///
+/// Abs. 1–3 measure the Förderdauer in Vollbenutzungsstunden and Abs. 4 caps
+/// „pro Kalenderjahr […] für **bis zu**" a falling number of them. Abs. 4 is a
+/// ceiling on a year, not a rate the plant is assumed to draw at, so exhausting
+/// it pauses the Zuschlag until January — only the Abs. 1–3 counter ends it.
 #[test]
-fn kwk_foerderend_calendar_15_years() {
-    use eeg_billing::kwk_foerderend_calendar;
+fn the_kwkg_counters_end_and_pause_the_zuschlag_separately() {
+    use eeg_billing::{SettleInput, SettlementScheme, SettlementStatus, calculate_settlement};
+
+    let settle = |paid, jahresrest| {
+        calculate_settlement(&SettleInput {
+            scheme: SettlementScheme::KwkSurcharge {
+                verguetungssatz_ct: dec!(4),
+                kwh_paid_gesamt: Some(paid),
+                max_kwh: Some(dec!(30_000)),
+                jahres_restkontingent_kwh: Some(jahresrest),
+            },
+            einspeisemenge_kwh: Some(dec!(1_000)),
+            ..SettleInput::default()
+        })
+    };
+
+    // Room in both counters: the month settles.
     assert_eq!(
-        kwk_foerderend_calendar(date!(2020 - 01 - 15)).unwrap(),
-        date!(2035 - 01 - 15)
+        settle(dec!(0), dec!(4_000)).status,
+        SettlementStatus::Calculated
+    );
+
+    // § 8 Abs. 4: the year is used up, the lifetime hours are not. The plant
+    // resumes on 1 January, so this is not the end of its Förderung.
+    let jahresende = settle(dec!(1_000), dec!(0));
+    assert_eq!(
+        jahresende.status,
+        SettlementStatus::JahreskontingentErschoepft
+    );
+    assert_eq!(jahresende.settlement_eur, Some(dec!(0)));
+
+    // § 8 Abs. 1: the lifetime Vollbenutzungsstunden are drawn. That one ends it.
+    assert_eq!(
+        settle(dec!(30_000), dec!(4_000)).status,
+        SettlementStatus::FoerderungBeendet
     );
 }
 
@@ -1114,6 +1163,7 @@ fn pflichtzahlung_mastr_not_registered_eeg_2023_plant_still_receives_verguetung(
             typ: SanktionsTyp::MastrNichtRegistriert,
             leistung_kw: dec!(50),
             monate_des_verstosses: 2,
+            beginn: None,
             nachtraeglich_erfuellt: false,
             technischer_defekt: false,
         }],
@@ -1141,6 +1191,7 @@ fn pflichtzahlung_fernsteuerbarkeit_10_eur_per_kw_per_month() {
             typ: SanktionsTyp::FernsteuerbarkeitFehlend,
             leistung_kw: dec!(200),   // 200 kW plant
             monate_des_verstosses: 3, // 3 months of violation
+            beginn: None,
             nachtraeglich_erfuellt: false,
             technischer_defekt: false,
         }],
@@ -1165,6 +1216,7 @@ fn pflichtzahlung_retroactively_reduced_to_2_eur_when_fulfilled() {
             typ: SanktionsTyp::FernsteuerbarkeitFehlend,
             leistung_kw: dec!(100),
             monate_des_verstosses: 4,
+            beginn: None,
             nachtraeglich_erfuellt: true,
             technischer_defekt: false, // obligation since fulfilled
         }],
@@ -1217,6 +1269,7 @@ fn pflichtzahlung_via_calculate_pflichtzahlung_function() {
         typ: SanktionsTyp::MastrNichtRegistriert,
         leistung_kw: dec!(500),
         monate_des_verstosses: 3,
+        beginn: None,
         nachtraeglich_erfuellt: false,
         technischer_defekt: false,
     };
@@ -1584,6 +1637,7 @@ fn pflichtzahlung_nr9a_always_two_eur_not_ten() {
         typ: SanktionsTyp::InbetriebnahmeVorgabeVerletzt,
         leistung_kw: dec!(500),
         monate_des_verstosses: 3,
+        beginn: None,
         nachtraeglich_erfuellt: false,
         technischer_defekt: false,
     };
@@ -1598,6 +1652,7 @@ fn pflichtzahlung_nr9a_nachtraeglich_erfuellt_has_no_effect() {
         typ: SanktionsTyp::InbetriebnahmeVorgabeVerletzt,
         leistung_kw: dec!(500),
         monate_des_verstosses: 3,
+        beginn: None,
         nachtraeglich_erfuellt: true,
         technischer_defekt: false, // has NO effect for Nr. 9a
     };
@@ -1613,6 +1668,7 @@ fn pflichtzahlung_nr10_volleinspeisung_always_two_eur() {
         typ: SanktionsTyp::VolleinspeisungspflichtVerletzt,
         leistung_kw: dec!(300),
         monate_des_verstosses: 12, // full calendar year per §52 Abs. 4 Nr. 3
+        beginn: None,
         nachtraeglich_erfuellt: false,
         technischer_defekt: false,
     };
@@ -1627,6 +1683,7 @@ fn pflichtzahlung_nr11_mastr_retroactive_reduction_still_works() {
         typ: SanktionsTyp::MastrNichtRegistriert,
         leistung_kw: dec!(200),
         monate_des_verstosses: 2,
+        beginn: None,
         nachtraeglich_erfuellt: false,
         technischer_defekt: false,
     };
@@ -1648,6 +1705,7 @@ fn pflichtzahlung_nr2_speicher_not_reducible() {
         typ: SanktionsTyp::SpeicherAnforderungNichtErfuellt,
         leistung_kw: dec!(100),
         monate_des_verstosses: 1,
+        beginn: None,
         nachtraeglich_erfuellt: true,
         technischer_defekt: false, // has no effect for Nr. 2
     };

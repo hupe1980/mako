@@ -22,11 +22,14 @@
 //!   `.updated` and `.geaendert` are interchangeable: in `de.markt.*` they name
 //!   different facts (any master-data write vs. a regulated GPKE
 //!   Stammdatenänderung carrying its patch).
-//! - Statuses worth grepping for are flagged in doc comments:
-//!   - `⚠ phantom:` — subscribed (usually by `agentd`), but no emitter
-//!     exists yet.
-//!   - `orphan emit:` — emitted, but the workspace audit found no
-//!     subscriber.
+//! - `⚠ phantom:` in a doc comment means **no service in this workspace emits
+//!   this type**. That is the whole claim, and it is the one
+//!   `unreferenced_constants_are_marked_phantom` checks. It says nothing about
+//!   whether anything *subscribes*: some phantoms are subscriptions placed ahead
+//!   of their emitter, others are neither emitted nor consumed, and each
+//!   constant's own doc comment says which and why. A phantom is a recorded gap,
+//!   not a promise — an external consumer may match on it, but this platform
+//!   will not make it fire.
 //!
 //! Glob subscription patterns (e.g. `de.mako.*` in `agentd` trigger
 //! configs) are not part of this catalog — only concrete types are. The
@@ -126,7 +129,25 @@ pub mod markt {
     pub const EINWILLIGUNG_WIDERRUFEN: &str = "de.markt.einwilligung.widerrufen";
     /// Versorgung state changed (generic transition).
     pub const VERSORGUNG_CHANGED: &str = "de.markt.versorgung.changed";
-    /// Versorgung entered `BELIEFERT` (supply active).
+    /// ⚠ phantom: no emitter. Versorgung entered `BELIEFERT` (supply active).
+    ///
+    /// Superseded before it was ever wired. `marktd` announces **every**
+    /// Versorgung transition — the EDIFACT-driven one in `event_ingest` and the
+    /// REST one in `handlers::versorgung` alike — as [`VERSORGUNG_CHANGED`]
+    /// carrying `data.lieferstatus`, so reaching `Beliefert` is already on the
+    /// bus and a second type for one particular value of that field would put
+    /// the same fact on two types. The family keeps exactly two status-specific
+    /// types beside the generic one, and both earn it by carrying a payload the
+    /// generic event does not: [`VERSORGUNG_GAP_DETECTED`] (no announced
+    /// successor) and [`VERSORGUNG_EOG_BEGONNEN`] (`eog_art`, `eog_seit`).
+    /// `Beliefert` carries nothing extra.
+    ///
+    /// Kept rather than deleted: it is *redundant*, not *wrong*. It names a fact
+    /// the bus already carries, so its presence misleads nobody, and the
+    /// catalogue is a published contract where withdrawing a declared type
+    /// breaks a consumer matching on it for no gain. A phantom whose emission
+    /// would itself be a defect gets deleted instead — that is why there is no
+    /// generic `de.eeg.settlement.berechnet` (see the [`crate::eeg`] module).
     pub const VERSORGUNG_BELIEFERT: &str = "de.markt.versorgung.beliefert";
     /// Supply gap detected: a MaLo became `Unbeliefert` with no announced
     /// successor — the NB must activate Ersatz-/Grundversorgung (§38 EnWG).
@@ -135,7 +156,7 @@ pub mod markt {
     /// Statutory fallback supply began (Ersatz- or Grundversorgung);
     /// `data.eog_art` carries the regime, `data.eog_seit` the start date.
     pub const VERSORGUNG_EOG_BEGONNEN: &str = "de.markt.versorgung.eog-begonnen";
-    /// §38 Abs. 2 EnWG: a running Ersatzversorgung approaches its 3-month
+    /// §38 Abs. 4 EnWG: a running Ersatzversorgung approaches its 3-month
     /// maximum. Emitted by the `processd` EoG timer.
     pub const VERSORGUNG_ERSATZ_AUSLAUFEND: &str = "de.markt.versorgung.ersatz-auslaufend";
     /// PRICAT price catalog published.
@@ -179,14 +200,21 @@ pub mod invoic {
 /// `agentd` additionally subscribes to the globs `de.eeg.*`,
 /// `de.eeg.anlage.*`, `de.eeg.verguetung.*`, `de.eeg.marktpraemie.*` and
 /// `de.eeg.compliance.*` (no concrete `de.eeg.compliance.*` type exists
-/// yet).
+/// yet). There is deliberately no `de.eeg.*` catch-all subscription.
+///
+/// There is also deliberately **no generic `de.eeg.settlement.berechnet`**. A
+/// settlement announces itself as exactly one of [`eeg::VERGUETUNG_BERECHNET`] or
+/// [`eeg::MARKTPRAEMIE_BERECHNET`], chosen in `einsd::handlers::enqueue_settlement_ce`
+/// from the plant's Vergütungsmodell — and that choice *is* the payout gate:
+/// `accountingd` credits the Massenkontokorrent and issues the pain.001 on those
+/// two types and no other. Every entry point (REST, batch, the monthly worker
+/// and the MCP `trigger_settle` tool) goes through that one function, so a third
+/// type could only ever be a second announcement of a payout already announced.
 pub mod eeg {
     /// Einspeisevergütung settlement computed (feed-in tariff schemes).
     pub const VERGUETUNG_BERECHNET: &str = "de.eeg.verguetung.berechnet";
     /// Marktprämie settlement computed (Direktvermarktung schemes).
     pub const MARKTPRAEMIE_BERECHNET: &str = "de.eeg.marktpraemie.berechnet";
-    /// Generic settlement computed (MCP `trigger_settle`).
-    pub const SETTLEMENT_BERECHNET: &str = "de.eeg.settlement.berechnet";
     /// Monthly auto-settle batch trigger. Emitted by einsd's auto-settle worker
     /// (`emit_batch_due_ce`); subscribed by agentd's `einsd-batch-agent`.
     pub const SETTLEMENT_BATCH_DUE: &str = "de.eeg.settlement.batch-due";
@@ -314,7 +342,9 @@ pub mod messwert {
     /// validation, so without this a head-end that simply stops is invisible
     /// until a settlement run comes up short — by which point the window in
     /// which the values could still have been re-read has closed
-    /// (§ 60 Abs. 2 MsbG).
+    /// (§ 60 Abs. 1 MsbG — the duty is to transmit „zu den Zeitpunkten …,
+    /// die diese … vorgeben", which is what a stalled head-end breaches;
+    /// Abs. 2 is a Soll-rule about processing inside the Smart-Meter-Gateway).
     pub const READING_DELIVERY_OVERDUE: &str = "de.messwert.reading.delivery.overdue";
     /// A measuring point that was overdue is delivering again.
     pub const READING_DELIVERY_RESUMED: &str = "de.messwert.reading.delivery.resumed";
@@ -355,11 +385,13 @@ pub mod tarif {
     pub const PRODUCT_UPDATED: &str = "de.tarif.product.updated";
     /// B2B Angebot accepted — vertragd auto-creates the Rahmenvertrag.
     pub const ANGEBOT_ANGENOMMEN: &str = "de.tarif.angebot.angenommen";
-    /// ⚠ phantom: subscribed by agentd (`productd-agent`), no emitter yet
-    ///. B2B quote expired.
+    /// ⚠ phantom: B2B quote expired. Subscribed by agentd (`productd-agent`),
+    /// emitted by nothing — `productd` expires an Angebot in place without
+    /// announcing it.
     pub const ANGEBOT_ABGELAUFEN: &str = "de.tarif.angebot.abgelaufen";
-    /// ⚠ phantom: subscribed by agentd (`productd-agent`), no emitter yet
-    ///. EPEX D-1 prices not imported by 18:00 CET.
+    /// ⚠ phantom: EPEX D-1 prices not imported by 18:00 CET. Subscribed by
+    /// agentd (`productd-agent`), emitted by nothing — no worker watches the
+    /// import window.
     pub const EPEX_MISSING: &str = "de.tarif.epex.missing";
 }
 
@@ -429,17 +461,50 @@ pub mod agent {
 
 /// GaBi Gas balancing events (`de.gabi.*`), defined in `mako-gabi-gas`.
 ///
-/// [`gabi::ALOCAT_MISSING`] is emitted by `makod`: the `gabi-gas-allocation` workflow
-/// enqueues a `GabiFinalAllocationOverdue` outbox entry when the § 47 Ziffer 1 KoV XV
-/// final-allocation window closes unsettled, and `OutboxErpWorker` delivers it
-/// as a CloudEvent like every other ERP notification.
+/// # What is emitted
 ///
-/// The three nomination outcomes a BKV has to act on — a curtailment, a
-/// refusal, and an answer that never came — are emitted the same way, from
-/// `gabi-gas-nomination`.
+/// Four types, all through the same path: a `mako-gabi-gas` workflow enqueues a
+/// `PendingOutbox` entry whose `message_type` string
+/// `makod::core::erp_adapter::map_message_type_to_erp_event` maps to an
+/// `ErpEventType`, and `OutboxErpWorker` delivers that as a CloudEvent.
+/// [`gabi::ALOCAT_MISSING`] comes from `gabi-gas-allocation`; [`gabi::NOMINATION_CURTAILED`],
+/// [`gabi::NOMINATION_REJECTED`] and [`gabi::NOMRES_MISSING`] from `gabi-gas-nomination`.
 ///
-/// ⚠ The remaining ten are phantom: subscribed by agentd (`gabi-gas-agent`
-/// globs `de.gabi.imbalance.*`), but no service emits them.
+/// # What is not: the success path is silent
+///
+/// All four are failures. GaBi Gas announces **nothing** when a gas day goes
+/// right — and unlike every other domain here, it has no generic fallback
+/// either: `mako-gabi-gas` never enqueues a `ProcessInitiated` or
+/// `ProcessCompleted` entry, so its ALOCAT and NOMINT/NOMRES streams put no
+/// `de.mako.process.*` event on the bus for a subscriber to fall back on. A BKV
+/// watching `de.gabi.*` sees a curtailment and never sees a confirmation.
+///
+/// That is a feature gap, not dead vocabulary, and the ten phantom constants
+/// below are the shape it would take. What each still needs:
+///
+/// | Constant | Where it would come from | What is missing |
+/// |---|---|---|
+/// | [`gabi::NOMINATION_CONFIRMED`] | `nomination::ReceiveNomres`, the `NomresAcceptance::Accepted` arm — the one arm of four that builds an empty outbox while its three siblings enqueue | only the wiring: the state and the payload are already in hand |
+/// | [`gabi::ALLOCATION_COMPLETED`] | `allocation::ReceiveAlocat` with `AllocationVersion::Final`, the moment `AllocationState::is_settled` turns true and the gas day's imbalance becomes settleable | only the wiring |
+/// | [`gabi::CORRECTION_CREATED`] | the same arm with `AllocationVersion::Correction(n)` (§ 46 KoV XV) | only the wiring |
+/// | [`gabi::NOMINATION_CREATED`] | `nomination::SendNomint`, beside the NOMINT it already puts on the wire | only the wiring |
+/// | [`gabi::IMBALANCE_CALCULATED`] | `GasImbalanceSaldo::calculate` exists and is tested, but nothing calls it | a process. Nomination and allocation are separate streams keyed differently, so no single workflow holds both sides of one gas day |
+/// | [`gabi::GAS_QUALITY_VIOLATION`] | `GasBeschaffenheit::validate` (DVGW G 260 ranges) exists and is tested, but nothing calls it | an inbound source. Gasbeschaffenheitsdaten arrive on MSCONS 13007, which is a `mako-geli-gas` PID — no GaBi Gas message carries a Brennwert to check |
+/// | [`gabi::MEASUREMENT_RECEIVED`] | MSCONS 13013, the Gas Allokationsliste | nothing, and it should stay unemitted: `gabi-gas-mmma` is a PID registration with no workflow of its own, and `makod` delegates 13013 to `GpkeAllokationslisteWorkflow`. The fact is already announced under `gpke-allokationsliste` |
+/// | [`gabi::INVOIC_MMM_RECEIVED`] (31007/31008), [`gabi::INVOIC_KAPAZITAET_RECEIVED`] (31010) | the shared `mako_invoic::InvoicWorkflow` | nothing, and these should stay unemitted: that machine already enqueues `ProcessInitiated` carrying `data.workflow = "gabi-gas-invoic"` and `data.pid`, so both facts are on the bus. A `de.gabi.*` twin would name them a second time and would require the family-generic machine to grow a per-family hook |
+/// | [`gabi::FINAL_ALOCAT_DEADLINE`] | — | nothing: it duplicates [`gabi::ALOCAT_MISSING`], which is what the § 47 Ziffer 1 window closing unsettled already means |
+///
+/// Wiring the first four is a three-file change and none of the files is this
+/// one: a `PendingOutbox` in `mako-gabi-gas`, an `ErpEventType` variant plus its
+/// `cloud_event_type()` arm in `mako-engine`, and a `map_message_type_to_erp_event`
+/// arm in `makod`. Nothing fires until all three land — an unmapped
+/// `message_type` is skipped by `OutboxErpWorker`, silently.
+///
+/// # Nothing subscribes either
+///
+/// `gabi-gas-agent` triggers only on [`gabi::ALOCAT_MISSING`], and agentd pins the
+/// absence of an imbalance pattern. So an emitter for any of the ten has to
+/// arrive with a subscriber, or it swaps one silence for another.
 pub mod gabi {
     /// ⚠ phantom: no emitter yet.
     pub const MEASUREMENT_RECEIVED: &str = "de.gabi.measurement.received";
@@ -483,8 +548,9 @@ pub mod gabi {
     /// Emitted by `makod` from the `gabi-gas-allocation` deadline via
     /// `ErpEventType::GabiFinalAllocationOverdue`. The `data` payload carries
     /// `gas_day`, `deadline_label`, `sender_eic`, `receiver_eic` and
-    /// `synthetic_pid`. The operator's action is to open a Clearingfall with
-    /// the FNB/MGV.
+    /// `pruefidentifikator` — the key the emitter actually writes
+    /// (`mako_gabi_gas::allocation`). The operator's action is to open a
+    /// Clearingfall with the FNB/MGV.
     pub const ALOCAT_MISSING: &str = "de.gabi.alocat.missing";
     /// ⚠ phantom: no emitter yet.
     pub const GAS_QUALITY_VIOLATION: &str = "de.gabi.quality.violation";
@@ -612,7 +678,6 @@ pub fn all() -> &'static [&'static str] {
         // de.eeg.*
         eeg::VERGUETUNG_BERECHNET,
         eeg::MARKTPRAEMIE_BERECHNET,
-        eeg::SETTLEMENT_BERECHNET,
         eeg::SETTLEMENT_BATCH_DUE,
         eeg::ANLAGE_FOERDERUNG_AUSLAUFEND,
         eeg::ANLAGE_MASTR_REGISTRIERT,
@@ -848,9 +913,15 @@ mod tests {
     /// are rots faster than the constants do.
     ///
     /// So the annotation is checked rather than trusted: any constant not named
-    /// anywhere outside this crate must carry the marker. The reverse does not
-    /// hold — `ALOCAT_MISSING` is referenced by a *subscriber* and is still
-    /// phantom, because subscribing is not emitting.
+    /// anywhere outside this crate must carry the marker.
+    ///
+    /// The reverse does not hold, and must not: being *named* outside this crate
+    /// is not being emitted. `de.eeg.compliance.*` is subscribed by two agentd
+    /// specialists with no emitter behind it, and several `de.gabi.*` phantoms
+    /// are named only by their own crate's unit tests. A constant may therefore
+    /// carry the marker while this test would not have demanded it — the
+    /// marker's claim is about emission, the test only catches the loudest way
+    /// to violate it.
     /// **Every declared type is in the catalogue.**
     ///
     /// `all()` is what a subscriber is checked against, what an inventory
@@ -899,14 +970,27 @@ mod tests {
         let src = include_str!("lib.rs");
         let catalog = src.split("#[cfg(test)]").next().expect("catalog section");
 
-        // Every `pub const NAME: &str = "value";` with the doc block above it.
+        // Every `pub const NAME: &str = "value";` with its module and the doc
+        // block above it.
         let lines: Vec<&str> = catalog.lines().collect();
-        let mut entries: Vec<(String, bool)> = Vec::new();
+        let mut entries: Vec<Entry> = Vec::new();
+        let mut module = String::new();
         for (i, line) in lines.iter().enumerate() {
-            let Some(rest) = line.trim().strip_prefix("pub const ") else {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("pub mod ") {
+                module = rest.trim_end_matches(" {").trim().to_owned();
+                continue;
+            }
+            let Some(rest) = trimmed.strip_prefix("pub const ") else {
                 continue;
             };
             let Some(name) = rest.split(':').next() else {
+                continue;
+            };
+            let Some(value) = rest
+                .split_once("= \"")
+                .and_then(|(_, v)| v.split('"').next())
+            else {
                 continue;
             };
             // Walk back over *this* constant's own doc block only. A fixed
@@ -924,7 +1008,12 @@ mod tests {
                     break;
                 }
             }
-            entries.push((name.trim().to_owned(), phantom));
+            entries.push(Entry {
+                module: module.clone(),
+                name: name.trim().to_owned(),
+                value: value.to_owned(),
+                phantom,
+            });
         }
         assert!(
             entries.len() > 80,
@@ -944,8 +1033,8 @@ mod tests {
 
         let unmarked: Vec<&str> = entries
             .iter()
-            .filter(|(name, phantom)| !*phantom && !blob.contains(name.as_str()))
-            .map(|(name, _)| name.as_str())
+            .filter(|e| !e.phantom && !e.is_referenced(&blob, &entries))
+            .map(|e| e.name.as_str())
             .collect();
 
         assert!(
@@ -955,6 +1044,41 @@ mod tests {
              Either wire an emitter, or document the gap with `⚠ phantom:` so the \
              catalog does not imply the event exists."
         );
+    }
+
+    /// One catalogue constant as the phantom guard parses it.
+    struct Entry {
+        module: String,
+        name: String,
+        value: String,
+        phantom: bool,
+    }
+
+    impl Entry {
+        /// Is this constant named anywhere outside `mako-events`?
+        ///
+        /// The bare constant name is **not** enough on its own when two modules
+        /// declare the same one. `vpp::SETTLEMENT_BERECHNET` is emitted by
+        /// `billingd`; a search for the string `SETTLEMENT_BERECHNET` therefore
+        /// hit, and reported the long-dead `eeg::SETTLEMENT_BERECHNET` — which
+        /// no service emitted and no glob matched — as live. The marker it
+        /// should have carried was never demanded, so the catalog declared a
+        /// settlement type that could not fire, with a doc comment naming an
+        /// emitter that emits something else.
+        ///
+        /// So a name shared by two modules must be found *qualified*
+        /// (`eeg::SETTLEMENT_BERECHNET`) or by its wire value. A unique name
+        /// still matches bare, because that is how most call sites spell it
+        /// after a grouped `use`.
+        fn is_referenced(&self, blob: &str, all: &[Entry]) -> bool {
+            if blob.contains(&self.value)
+                || blob.contains(&format!("{}::{}", self.module, self.name))
+            {
+                return true;
+            }
+            let unique = all.iter().filter(|e| e.name == self.name).count() == 1;
+            unique && blob.contains(&self.name)
+        }
     }
 
     /// Append every `.rs` file under `dir` (skipping this crate) to `out`.

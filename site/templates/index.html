@@ -1,34 +1,109 @@
 {% extends "base.html" %}
 
+{#- ⚠ Guarded numbers. `services/makod/tests/published_counts.rs` reads this file
+    and requires the phrases "469 Prüfidentifikatoren" and "71 workflows" to
+    survive tag-stripping, so a number must stay immediately before its unit with
+    only markup between them. `e2e_ahb_rule_coverage_guard.rs` reads the AHB-rule
+    count out of the last <strong> element preceding the words it greps for in
+    the paragraph under the stats band — so neither that phrase nor a stand-in
+    number may appear anywhere earlier in this file, this comment included.
+    Restyle and rearrange freely; do not edit the values. -#}
+
 {% block content %}
 <section class="hero">
   <div class="hero-inner">
-    <p class="hero-eyebrow">Open source · Rust · BDEW EDI@Energy {{ config.extra.format_versions }}</p>
+    <p class="hero-eyebrow">
+      <span class="tag tag-status">{{ config.extra.status }}</span>
+      <span>Rust · MIT or Apache-2.0 · BDEW EDI@Energy {{ config.extra.format_versions }}</span>
+    </p>
     <h1 class="hero-title">German energy-market operations,<br>from raw EDIFACT to production — in Rust.</h1>
-    <p class="hero-sub">{{ config.description | striptags }}</p>
+    <p class="hero-sub">Every German electricity and gas market participant is required to
+      exchange regulated messages with its counterparties — <em>Marktkommunikation</em>, MaKo.
+      That is a few hundred prescribed processes carried over EDIFACT and AS4, each with a
+      published decision tree and a deadline. <strong>mako implements them</strong>: the BDEW
+      formats are read as data, every process runs as an event-sourced workflow, and
+      settlement, billing and the ledger sit on the same events.</p>
     <div class="hero-cta">
       <a class="btn btn-primary" href="{{ get_url(path='@/docs/guide/getting-started.md') | safe }}">Get started</a>
       <a class="btn btn-ghost" href="{{ get_url(path='@/docs/_index.md') | safe }}">Read the docs</a>
       <a class="btn btn-ghost" href="{{ config.extra.repo }}" rel="noopener">GitHub ↗</a>
     </div>
+    <p class="hero-run">
+      <code>cargo add edi-energy</code>
+      <span>for the format layer, or</span>
+      <code>docker run ghcr.io/hupe1980/makod</code>
+      <span>for the daemon.</span>
+    </p>
   </div>
 </section>
 
-<section class="stats">
+<section class="stats" aria-label="Scope">
   <div class="stats-inner">
+    <div><strong>482 / 482</strong><span>published Prüfidentifikatoren imported</span></div>
     <div><strong>469</strong><span>Prüfidentifikatoren routed</span></div>
     <div><strong>71</strong><span>MaKo workflows</span></div>
     <div><strong>17</strong><span>EDI@Energy message types</span></div>
     <div><strong>17</strong><span>services</span></div>
     <div><strong>4</strong><span>market roles (NB·LF·MSB·ESA)</span></div>
   </div>
+  <p class="stats-note wrap">Three numbers, from three sides of the same catalogue. Every one of the
+    482 Prüfidentifikatoren the BDEW Anwendungsübersicht publishes is imported. 469 are
+    <em>routed</em> to a workflow — including the DVGW gas codes BDEW does not publish — and
+    <strong>434</strong> additionally carry validated AHB segment rules. The 35 that do not
+    are exactly that DVGW block: ALOCAT, NOMINT/NOMRES and SSQNOT ride <code>dvgw-edi</code>,
+    for which no BDEW AHB exists to import rules from. A release that would shrink any of the
+    three fails the build.</p>
 </section>
 
-<section class="features section-pad">
+<section class="roles section-pad" aria-labelledby="who">
+  <div class="wrap">
+    <h2 id="who">Who runs this</h2>
+    <p class="section-lead">German market law splits the industry into four roles, and every
+      message has one on each end. mako implements all four from one engine — and a
+      deployment scoped to a role contains no other role's code, which is what
+      § 6a EnWG unbundling asks for.</p>
+    <div class="card-grid card-grid-4">
+      <div class="card">
+        <h3><span class="role-abbr">NB</span> Netzbetreiber</h3>
+        <p class="role-gloss">Distribution grid operator</p>
+        <p>Answers supplier registrations and terminations from the published
+          Entscheidungsbäume, bills network use (NNE), settles Mehr-/Mindermengen, reports
+          MaBiS Summenzeitreihen and executes Sperrung orders.</p>
+        <a class="card-count" href="{{ get_url(path='@/docs/services/processd.md') | safe }}">processd · netzbilanzd · mabis-syncd →</a>
+      </div>
+      <div class="card">
+        <h3><span class="role-abbr">LF</span> Lieferant</h3>
+        <p class="role-gloss">Energy supplier</p>
+        <p>Wins and switches customers, prices contracts against the tariff catalogue, bills
+          retail consumption, issues EN 16931 e-invoices (XRechnung, ZUGFeRD) and collects
+          by SEPA.</p>
+        <a class="card-count" href="{{ get_url(path='@/docs/services/billingd.md') | safe }}">billingd · vertragd · invoicd →</a>
+      </div>
+      <div class="card">
+        <h3><span class="role-abbr">MSB</span> Messstellenbetreiber</h3>
+        <p class="role-gloss">Metering point operator</p>
+        <p>Runs the WiM device processes — installation, change of operator, fault handling —
+          manages the smart-meter gateway lifecycle, and delivers metered values to everyone
+          entitled to them.</p>
+        <a class="card-count" href="{{ get_url(path='@/docs/services/edmd.md') | safe }}">edmd · makod →</a>
+      </div>
+      <div class="card">
+        <h3><span class="role-abbr">ESA</span> Energieserviceanbieter</h3>
+        <p class="role-gloss">Energy service provider</p>
+        <p>Orders measured values under the § 34 MsbG Wertebestellung, quotes its own
+          measurement products, and invoices the service against the quotation the
+          counterparty accepted.</p>
+        <a class="card-count" href="{{ get_url(path='@/docs/services/makod.md') | safe }}">makod — ESA messages →</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="features section-pad alt">
   <div class="wrap">
     <h2>What happens to a message</h2>
-    <p>A market partner sends an interchange over AS4. Everything after that is the
-      same path for every process — parse, validate against the AHB in force on
+    <p class="section-lead">A market partner sends an interchange over AS4. Everything after
+      that is the same path for every process — parse, validate against the AHB in force on
       that date, route to a workflow, and answer inside the Frist.</p>
 
     <pre class="mermaid">
@@ -51,23 +126,17 @@ graph LR
     AS4 -->|"CONTRL / APERAK"| MP
     </pre>
 
-    <p>The format layer reads the BDEW profiles as data, so an annual release is
-      an import run rather than a rewrite. The domain layer never sees EDIFACT: it
-      receives typed commands and emits typed events.</p>
-
-    <p>Two numbers describe the same catalogue from different sides:
-      <strong>469</strong> Prüfidentifikatoren are <em>routed</em> to a workflow, and
-      <strong>434</strong> additionally carry validated AHB segment rules. The gap is
-      a declared set of routed-without-rules PIDs, not an accident — and a release
-      that would shrink either number fails the build.</p>
+    <p>The format layer reads the BDEW profiles as data, so an annual release is an import run
+      rather than a rewrite. The domain layer never sees EDIFACT: it receives typed commands
+      and emits typed events.</p>
   </div>
 </section>
 
-<section class="features section-pad alt">
+<section class="features section-pad">
   <div class="wrap">
     <h2>What it looks like</h2>
-    <p>The format layer stands alone. Add one crate and an interchange becomes a
-      typed message, validated against the AHB profile in force on its date.</p>
+    <p class="section-lead">The format layer stands alone. Add one crate and an interchange
+      becomes a typed message, validated against the AHB profile in force on its date.</p>
 
 <pre><code class="language-rust">use edi_energy::{EdiEnergyMessage, Platform};
 
@@ -81,18 +150,19 @@ let report = msg.validate()?;      // MIG + AHB + semantic
 report.is_valid();                 // true
 </code></pre>
 
-    <p>An unregistered Prüfidentifikator is reported, never silently accepted —
-      and the profile is chosen by the message's own date, because two
-      Formatversionen can share one wire release code and only the date tells
-      them apart.</p>
+    <p>An unregistered Prüfidentifikator is reported, never silently accepted — and the
+      profile is chosen by the message's own date, because two Formatversionen can share one
+      wire release code and only the date tells them apart.</p>
+    <p><a href="{{ get_url(path='@/docs/reference/parsing.md') | safe }}">Parsing reference →</a>
+      &nbsp;<a href="{{ get_url(path='@/docs/reference/validation.md') | safe }}">Validation reference →</a></p>
   </div>
 </section>
 
-<section class="features section-pad">
+<section class="features section-pad alt">
   <div class="wrap">
     <h2>The shape of the platform</h2>
-    <p>Seventeen services along one path: transport and protocol at the edge, master
-      data in the middle, settlement and billing at the end — each owning its own
+    <p class="section-lead">Seventeen services along one path: transport and protocol at the
+      edge, master data in the middle, settlement and billing at the end — each owning its own
       data, talking over typed REST and CloudEvents.</p>
 
     <pre class="mermaid">
@@ -134,52 +204,75 @@ graph TB
     AGENTD -.->|"MCP reads"| MARKTD
     AGENTD -.->|"MCP reads"| OBSD
     </pre>
+    <p><a href="{{ get_url(path='@/docs/services/_index.md') | safe }}">One operator guide per service →</a></p>
   </div>
 </section>
 
-<section class="features section-pad alt">
+<section class="features section-pad">
   <div class="wrap">
     <h2>What you get</h2>
     <div class="card-grid">
       <div class="card">
         <h3>Protocol &amp; process</h3>
-        <p>Parse, validate and build all 17 EDI@Energy EDIFACT types, plus the four DVGW gas-transport formats; run every MaKo process as an event-sourced, replayable workflow over AS4/ebMS3 — BDEW AS4-Profil, sign and encrypt, signed receipts, retry with duplicate elimination.</p>
+        <p>Parse, validate and build all 17 EDI@Energy EDIFACT types plus the four DVGW gas
+          formats, and run every MaKo process as an event-sourced, replayable workflow over
+          AS4/ebMS3 — BDEW AS4-Profil, sign and encrypt, signed receipts, retry with
+          duplicate elimination.</p>
         <a class="card-count" href="{{ get_url(path='@/docs/services/makod.md') | safe }}">makod · processd →</a>
       </div>
       <div class="card">
         <h3>Market data</h3>
-        <p>A typed BO4E market-data hub — MaLo/MeLo, contracts, supply status, device configuration, grid-operator registry — with durable CloudEvents fan-out and OIDC/JWT on every route.</p>
+        <p>A typed BO4E market-data hub — MaLo/MeLo, contracts, supply status, device
+          configuration, grid-operator registry — with durable CloudEvents fan-out and
+          OIDC/JWT on every route.</p>
         <a class="card-count" href="{{ get_url(path='@/docs/services/marktd.md') | safe }}">marktd · vertragd · productd →</a>
       </div>
       <div class="card">
         <h3>Metering &amp; settlement</h3>
-        <p>Quarter-hourly metering with §60 MsbG substitute values and SMGW lifecycle; role-neutral grid settlement (NNE/MMM/MSB), EEG/KWKG feed-in and MaBiS Summenzeitreihen — each position carrying a legal-reference calculation trace.</p>
+        <p>Quarter-hourly metering with § 60 MsbG substitute values and SMGW lifecycle;
+          role-neutral grid settlement (NNE/MMM/MSB), EEG/KWKG feed-in and MaBiS
+          Summenzeitreihen — each position carrying a legal-reference calculation trace.</p>
         <a class="card-count" href="{{ get_url(path='@/docs/services/edmd.md') | safe }}">edmd · netzbilanzd · einsd →</a>
       </div>
       <div class="card">
         <h3>Billing &amp; ledger</h3>
-        <p>Retail billing with EN 16931 e-invoicing (XRechnung, ZUGFeRD), SEPA collection and returns, and a hash-chained FI-CA ledger with § 147 AO period seals and Merkle inclusion proofs.</p>
+        <p>Retail billing with EN 16931 e-invoicing (XRechnung, ZUGFeRD), SEPA collection and
+          returns, and a hash-chained FI-CA ledger with § 147 AO period seals and Merkle
+          inclusion proofs.</p>
         <a class="card-count" href="{{ get_url(path='@/docs/services/billingd.md') | safe }}">billingd · invoicd · accountingd →</a>
       </div>
       <div class="card">
         <h3>Operations &amp; oversight</h3>
-        <p>BNetzA KPI observability with Fristen tracking, a customer portal, and an agent plane over the platform's 163 MCP tools. Its 28 declarative specialists are advisory by construction: every model and tool call is a journaled effect, and a four-eyes worklist sits in front of anything that acts.</p>
+        <p>BNetzA KPI observability with Fristen tracking, a customer portal, and an
+          <!-- check-tool-grants pins the two phrases below verbatim; keep each on one
+               line, and update the counts only via the guard's own numbers. -->
+          agent plane over the platform's 163 MCP tools.
+          Its 28 declarative specialists are advisory by
+          construction: no active manifest grants a mutating tool, every model and tool call
+          is a journaled effect, and a triage worklist carries what a person has to see.</p>
         <a class="card-count" href="{{ get_url(path='@/docs/services/agentd.md') | safe }}">obsd · portald · agentd →</a>
       </div>
       <div class="card">
         <h3>Testable from Python</h3>
-        <p><a href="{{ get_url(path='@/docs/reference/makotest.md') | safe }}">makotest</a> binds the same Rust core the platform runs — BDEW check digits, the Werktag calendar, the published answer Fristen, EDIFACT build and AHB validation — so a test and production can never disagree about what &ldquo;valid&rdquo; means, nor about when a Frist expires.</p>
+        <p><a href="{{ get_url(path='@/docs/reference/makotest.md') | safe }}">makotest</a> binds
+          the same Rust core the platform runs — BDEW check digits, the Werktag calendar, the
+          published answer Fristen, EDIFACT build and AHB validation — so a test and
+          production can never disagree about what &ldquo;valid&rdquo; means, nor about when a
+          Frist expires.</p>
         <a class="card-count" href="{{ get_url(path='@/docs/reference/makotest.md') | safe }}">makotest →</a>
       </div>
     </div>
   </div>
 </section>
 
-<section class="why section-pad">
+<section class="why section-pad alt">
   <div class="wrap why-grid">
     <div>
       <h2>Built for the regulatory pace</h2>
-      <p>German market communication moves fast — LFW24, §14a, §41a dynamic tariffs, §42b/c energy sharing, the EDIFACT→API transition, the MaBiS-Hub cutover. mako’s domain layer is deliberately split from transport and format, so when the market moves, the platform moves with an import run — not a rewrite.</p>
+      <p>German market communication moves fast — LFW24, § 14a, § 41a dynamic tariffs,
+        § 42b/c energy sharing, the EDIFACT→API transition, the MaBiS-Hub cutover. mako's
+        domain layer is deliberately split from transport and format, so when the market
+        moves, the platform moves with an import run — not a rewrite.</p>
       <ul class="check">
         <li><strong>Auditable by construction</strong> — event-sourced processes, replayable state, hash-chained ledger with § 147 AO period seals.</li>
         <li><strong>Four market roles, one engine</strong> — NB, LF, MSB and ESA answer from the published Entscheidungsbäume, and a role-scoped build contains only its own arm's code.</li>
@@ -199,7 +292,11 @@ docker run --rm -p 8080:8080 \
 
 # Drive it from Python — generators, simulators, pytest plugin
 pip install makotest</code></pre>
-      <p><a href="{{ get_url(path='@/docs/guide/getting-started.md') | safe }}">Full getting-started guide →</a></p>
+      <p><a class="btn btn-primary" href="{{ get_url(path='@/docs/guide/getting-started.md') | safe }}">Full getting-started guide →</a></p>
+      <p class="fineprint">{{ config.extra.status }}: interfaces may change between releases,
+        and a production deployment needs your own testing against your own counterparties.
+        Dual-licensed <a href="{{ config.extra.repo }}/blob/main/LICENSE-MIT">MIT</a> or
+        <a href="{{ config.extra.repo }}/blob/main/LICENSE-APACHE">Apache&nbsp;2.0</a>.</p>
     </div>
   </div>
 </section>

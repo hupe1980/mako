@@ -1320,7 +1320,7 @@ impl ServerHandler for MdmdMcpHandler {
              `lookup-malo`, `investigate-supply-gap`, `versorgungswechsel-tracking`, `grid-topology`\n\
              \n\
              All access is scoped to this deployment's tenant. Cross-tenant access is denied by Cedar ABAC.\n\
-             §9 EnWG Informatorisches Unbundling: LF actors must not access NB-private endpoints.",
+             § 6a EnWG Informatorisches Unbundling: LF actors must not access NB-private endpoints.",
             )
     }
 }

@@ -9,6 +9,10 @@
 //! artefacts: they are committed so the crate builds without the mirror, and
 //! `--check` proves they still match their sources.
 //!
+//! Every Bedingung a status cites has to have its text, and every status that
+//! cites one has to read as an expression bar the truncations
+//! [`crate::profile_expressions::ALLOWLIST_FILE`] records.
+//!
 //! ```text
 //! cargo xtask import-profiles                    # all profiles
 //! cargo xtask import-profiles --profile utilmd/fv20261001
@@ -115,12 +119,21 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
 
     let mut ok = true;
     let mut written = 0;
+    let recorded = crate::profile_expressions::allowlist(root);
     for (dir, src) in &sources.profiles {
         if only.is_some_and(|o| o != dir) {
             continue;
         }
         match import_one(root, &manifest, dir, src) {
             Ok((mig_json, ahb_json)) => {
+                // A status the reader cut in half carries no Bedingung, so
+                // the place would be judged unconditioned. The known ones are
+                // recorded; a new one is an import regression.
+                let malformed = crate::profile_expressions::malformed(&ahb_json);
+                for e in crate::profile_expressions::compare(dir, &malformed, &recorded) {
+                    eprintln!("error   {e}");
+                    ok = false;
+                }
                 let out_dir = root.join(PROFILES_DIR).join(dir);
                 for (name, value) in [("mig.json", mig_json), ("ahb.json", ahb_json)] {
                     let path = out_dir.join(name);

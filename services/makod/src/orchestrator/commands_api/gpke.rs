@@ -1242,11 +1242,29 @@ pub(super) async fn dispatch_gpke_sperrung_lf_beauftragen(
         .await?;
 
     let identity = process.identity();
-    let _ = state
+    // The correlation index is how an inbound answer finds this
+    // process; it is append-only and nothing rebuilds it. Discarding a
+    // failure here left a live process that no ORDRSP/UTILMD answer
+    // could ever be routed to — the answer is dropped as
+    // `process_not_found` and the Frist expires against a process that
+    // was doing everything right. Not propagated: the process is spawned
+    // and its message already enqueued, so failing the caller now would
+    // have it re-issue the command and start a second one. Logged with
+    // the key and process id, which is what a repair needs.
+    if let Err(e) = state
         .store
         .as_process_registry()
         .register_correlated(state.tenant_id, malo_id.as_str(), process_id, identity)
-        .await;
+        .await
+    {
+        tracing::error!(
+            process_id = %process_id,
+            malo_id    = %malo_id,
+            error      = %e,
+            "gpke.sperrung: business-key registration failed — the LF's answer to this \
+             Sperrauftrag cannot be correlated back to it",
+        );
+    }
 
     Ok(DispatchOutcome::Spawned { process_id })
 }

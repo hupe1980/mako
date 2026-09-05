@@ -168,13 +168,18 @@ pub async fn update_run_aggregated(
 /// is [`list_series`]. Before that table existed these were the only record of a
 /// submission, so a run spanning four territories reported one and lost three.
 ///
+/// `None` is the run that filed nothing because every territory of the month was
+/// already with the BIKO. It is still `acked` — the month is complete — but it
+/// has no reference of its own, and copying an earlier run's in would point an
+/// auditor at a message this run never sent.
+///
 /// # Errors
 ///
 /// Propagates database errors.
 pub async fn mark_acked(
     pool: &PgPool,
     id: Uuid,
-    message_ref: &str,
+    message_ref: Option<&str>,
     process_id: Option<Uuid>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
@@ -662,21 +667,60 @@ pub async fn list_series(pool: &PgPool, run_id: Uuid) -> Result<Vec<SeriesRow>, 
     .await
 }
 
-/// The territories of a run that reached the BIKO.
+/// The territories of this **filing** the BIKO has already acknowledged, for the
+/// Bilanzierungsmonat `period_from..=period_to`.
 ///
-/// A retry must not re-file them: an acked Summenzeitreihe cannot be withdrawn,
-/// and sending the same territory again under a new version is a correction,
-/// not a retry.
+/// # Why this is not keyed on the run
+///
+/// It was, and the skip list it produced was always empty: a retry is a *new*
+/// run, and a run that has not submitted anything yet has no `submission_series`
+/// rows of its own. So every retry re-filed the territories the BIKO had already
+/// acked — and an acked Summenzeitreihe cannot be withdrawn, which makes that a
+/// second binding filing for a period that is already settled, not a harmless
+/// duplicate.
+///
+/// Acknowledgement is a property of the **(Bilanzierungsgebiet,
+/// Bilanzierungsmonat)** — it is what the BIKO holds, and it survives whichever
+/// of our runs happened to file it. Hence the period key.
+///
+/// # Why `corrects_run_id` is part of the key
+///
+/// Re-filing an acked territory under a new version is exactly what a
+/// correction is (§9.8.1), so a correction must *not* skip it. The lineage is
+/// what tells the two apart: every run answering the same negative
+/// Prüfmitteilung — the first correction and any retry of it — carries the same
+/// `corrects_run_id`, and a first filing and its retries carry `NULL`. Matching
+/// it with `IS NOT DISTINCT FROM` therefore reads as "what this filing has
+/// already put on the wire", which is the set a retry must not send twice and a
+/// correction is entitled to send again.
 ///
 /// # Errors
 ///
-/// Propagates database errors.
-pub async fn acked_territories(pool: &PgPool, run_id: Uuid) -> Result<Vec<String>, sqlx::Error> {
+/// Propagates database errors. The caller must **not** treat a failure as an
+/// empty skip list: "I could not find out what was filed" and "nothing was
+/// filed" lead to opposite actions.
+pub async fn acked_territories_for_period(
+    pool: &PgPool,
+    tenant: &str,
+    period_from: Date,
+    period_to: Date,
+    corrects_run_id: Option<Uuid>,
+) -> Result<Vec<String>, sqlx::Error> {
     sqlx::query_scalar(
-        "SELECT bilanzierungsgebiet_id FROM submission_series
-          WHERE run_id = $1 AND status = 'acked'",
+        "SELECT DISTINCT s.bilanzierungsgebiet_id
+           FROM submission_series s
+           JOIN submission_runs r ON r.id = s.run_id
+          WHERE r.tenant = $1
+            AND r.period_from = $2
+            AND r.period_to = $3
+            AND r.corrects_run_id IS NOT DISTINCT FROM $4
+            AND s.status = 'acked'
+          ORDER BY 1",
     )
-    .bind(run_id)
+    .bind(tenant)
+    .bind(period_from)
+    .bind(period_to)
+    .bind(corrects_run_id)
     .fetch_all(pool)
     .await
 }

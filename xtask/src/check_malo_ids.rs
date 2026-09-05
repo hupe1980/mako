@@ -46,12 +46,21 @@
 //!
 //! ## What counts as a MaLo literal
 //!
-//! An eleven-digit run — not part of a longer digit sequence, so the digits
-//! inside a 33-character MeLo are never examined — on a line that also mentions
-//! a MaLo (`malo`, `marktlokation`, `location_id`), or on the line directly
-//! below one that does. Deliberately narrow: the repository is full of other
-//! eleven-digit numbers (timestamps, Zählernummern, BDEW Codenummern), and a
-//! guard that flagged those would be turned off rather than fixed.
+//! An eleven-digit **token** — bounded by non-alphanumerics on both sides, so
+//! the digits inside a 33-character MeLo (`DE00056266802AO6G…`) are never
+//! examined — on a line that also names a MaLo, or on the line directly below
+//! one that does.
+//!
+//! A line names a MaLo two ways: a word (`malo`, `marktlokation`,
+//! `location_id`), or an **EDIFACT segment qualifier** that carries one. A
+//! fixture line reads `LOC+Z16+41373559241'` and says "Marktlokation" nowhere,
+//! so the word test alone left the whole EDIFACT corpus unchecked — the files
+//! where a mistyped ID is hardest to spot by eye.
+//!
+//! Deliberately narrow: the repository is full of other eleven-digit numbers
+//! (timestamps, Zählernummern, BDEW Codenummern, and the `RFF` position
+//! references the UTILMD fixtures spell `<PID>000000`), and a guard that
+//! flagged those would be turned off rather than fixed.
 
 use std::path::{Path, PathBuf};
 
@@ -150,10 +159,28 @@ fn check_digit(d10: &str) -> Option<char> {
     char::from_digit(check, 10)
 }
 
+/// EDIFACT segment prefixes that introduce a location identifier.
+///
+/// A `.edi` fixture names a Marktlokation in no words at all, so without these
+/// the EDIFACT corpus is a blind spot — and it is the corpus where an ID is a
+/// bare run of digits between two separators, with nothing around it to read.
+///
+/// `LOC+Z16` carries the Marktlokation and `LOC+172` the Gas Meldepunkt: the
+/// two qualifiers an eleven-digit ID rides. `LOC+Z17` (Messlokation) and
+/// `RFF+Z18` are listed beside them because an eleven-digit token under either
+/// answers to the same arithmetic — neither yields one in the corpus today,
+/// `LOC+Z17` because a MeLo is 33 characters and `RFF+Z18` because the fixtures
+/// write that reference with the component separator (`RFF+Z18:`), where the
+/// value is a Vorgangsnummer and not a location.
+const LOCATION_SEGMENTS: &[&str] = &["LOC+Z16+", "LOC+Z17+", "LOC+172+", "RFF+Z18+"];
+
 /// Whether a line talks about a Marktlokation.
 fn mentions_malo(line: &str) -> bool {
     let l = line.to_ascii_lowercase();
-    l.contains("malo") || l.contains("marktlokation") || l.contains("location_id")
+    l.contains("malo")
+        || l.contains("marktlokation")
+        || l.contains("location_id")
+        || LOCATION_SEGMENTS.iter().any(|s| line.contains(s))
 }
 
 /// Scan the workspace. Returns `true` when every MaLo literal validates.
@@ -169,6 +196,7 @@ pub fn run(workspace_root: &Path) -> bool {
         "xtask",
         "makotest",
         "site/content",
+        "site/templates",
     ] {
         collect(&workspace_root.join(dir), &mut findings);
     }
@@ -226,7 +254,18 @@ fn collect(dir: &Path, findings: &mut Vec<Finding>) {
         } else if path.extension().is_some_and(|e| {
             matches!(
                 e.to_str(),
-                Some("rs" | "py" | "json" | "yaml" | "yml" | "md" | "sh" | "sql" | "toml" | "edi")
+                Some(
+                    "rs" | "py"
+                        | "json"
+                        | "yaml"
+                        | "yml"
+                        | "md"
+                        | "sh"
+                        | "sql"
+                        | "toml"
+                        | "edi"
+                        | "html"
+                )
             )
         }) {
             scan(&path, findings);
@@ -391,7 +430,13 @@ fn offending_eics(src: &str) -> Vec<(String, usize)> {
     out
 }
 
-/// Every maximal run of exactly eleven ASCII digits in `line`.
+/// Every eleven-digit token in `line`.
+///
+/// A token, not merely a run: the eleven digits must be bounded by
+/// non-alphanumerics on both sides. A 33-character MeLo is `DE` followed by
+/// digits and letters, and the digit run inside it is not an identifier of its
+/// own — reading it as one reports a check-digit failure on a value that has no
+/// check digit.
 fn eleven_digit_runs(line: &str) -> Vec<String> {
     let b = line.as_bytes();
     let mut out = Vec::new();
@@ -405,7 +450,9 @@ fn eleven_digit_runs(line: &str) -> Vec<String> {
         while i < b.len() && b[i].is_ascii_digit() {
             i += 1;
         }
-        if i - start == 11 {
+        let bounded = start == 0 || !b[start - 1].is_ascii_alphanumeric();
+        let bounded = bounded && (i == b.len() || !b[i].is_ascii_alphanumeric());
+        if i - start == 11 && bounded {
             out.push(line[start..i].to_owned());
         }
     }
@@ -485,6 +532,28 @@ mod tests {
             "{:?}",
             eleven_digit_runs(line)
         );
+        // The MeLo the EDIFACT fixtures carry: eleven digits between `DE` and
+        // `AO`, which are a substring of the MeLo and not an identifier.
+        let segment = "LOC+Z17+DE00056266802AO6G56M11SN51G21M24S'";
+        assert!(
+            eleven_digit_runs(segment).is_empty(),
+            "{:?}",
+            eleven_digit_runs(segment)
+        );
+    }
+
+    /// The EDIFACT corpus names a MaLo by segment qualifier, never in words.
+    ///
+    /// `LOC+Z16+41373559241'` is the whole line; without the qualifier as
+    /// context every `.edi` fixture in the tree went unchecked.
+    #[test]
+    fn a_loc_segment_is_malo_context() {
+        assert!(offending("LOC+Z16+41373559240'").len() == 1);
+        assert!(offending("LOC+Z16+41373559241'").is_empty());
+        // The Gas Meldepunkt rides its own qualifier.
+        assert!(offending("LOC+172+51238696780'").len() == 1);
+        // A segment that names no location is not MaLo context.
+        assert!(offending("RFF+Z13:55001'\nQTY+31:41373559240'").is_empty());
     }
 
     /// An eleven-digit number with no MaLo context is not examined.

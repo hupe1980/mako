@@ -12,7 +12,7 @@
 //! | `get_decision`              | Get a single decision by process_id |
 //! | `get_stp_rate`              | Approval rate for NB STP decisions over N days |
 //! | `get_stp_breakdown_by_erc`  | Rejection counts by ERC code (root-cause analysis) |
-//! | `list_affiliate_decisions`  | §20 EnWG parity: decisions for affiliate-initiated requests |
+//! | `list_affiliate_decisions`  | Gleichbehandlung: decisions for affiliate-initiated requests |
 //! | `list_pending_approvals`    | List LF approval-queue entries needing operator action |
 //! | `get_queue_entry`           | Get a single LF approval-queue entry by its UUID |
 //! | `approve_queue_entry`       | Approve a pending queue entry (dispatch einwilligung) |
@@ -357,8 +357,7 @@ Use `list_pending_approvals` first to check `expires_at` before approving.",
             Some(self.state.makod_api_key.clone()),
             mako_service::http::default_client(),
         );
-        let path = format!("/api/v1/approval-queue/{id}/approve");
-        match up.put(&path).send().await {
+        match crate::server::QUEUE_APPROVE.request(&up, id).send().await {
             Ok(resp) if resp.status().is_success() || resp.status() == 204 => {
                 ContentBlock::json(serde_json::json!({
                     "id": p.id,
@@ -402,8 +401,7 @@ For §20 parity data: use `obsd` `get_kpi_report`.",
             Some(self.state.makod_api_key.clone()),
             mako_service::http::default_client(),
         );
-        let path = format!("/api/v1/approval-queue/{id}/reject");
-        match up.put(&path).send().await {
+        match crate::server::QUEUE_REJECT.request(&up, id).send().await {
             Ok(resp) if resp.status().is_success() || resp.status() == 204 => {
                 ContentBlock::json(serde_json::json!({
                     "id": p.id,
@@ -443,11 +441,11 @@ impl ProcessdMcpHandler {
                     - A06: Lieferbeginn date outside allowed range (too far future / past)\n\
                     - A99: internal processing error (check processd logs)\n\
                  3. AFFILIATE (not an ERC): the decision carries `initiator_is_affiliate = true` — \
-                    auto-accept was blocked under §20 EnWG parity even though the checks passed. \
+                    auto-accept was blocked under the § 20 Abs. 1 Satz 1 affiliate rule even though the checks passed. \
                     These surface via `list_affiliate_decisions`, not the ERC breakdown.\n\
                  4. Fix A02: PUT /api/v1/malos/{malo_id}/grid in marktd with correct netzebene/bilanzierungsgebiet.\n\
                  5. Fix A05: PUT /api/v1/preisblaetter/{nb_mp_id} in marktd with current tariff.\n\
-                 6. Fix AFFILIATE: submit manual approval via PUT /api/v1/approval-queue/{id}/approve.",
+                 6. Fix AFFILIATE: submit manual approval via POST /api/v1/queue/{id}/approve.",
             ),
         ]
     }
@@ -478,12 +476,12 @@ impl ProcessdMcpHandler {
                  → LF submitted a date outside the valid window (too far future or past).\n\
                  → Check UTILMD AHB for the PID-specific Vorlauffrist rules.\n\
                  → No action needed on NB side — this is an LF error.\n\n\
-                 **AFFILIATE (§20 EnWG parity — not an ERC)**\n\
+                 **AFFILIATE (§ 20 Abs. 1 Satz 1 affiliate rule — not an ERC)**\n\
                  → Affiliate-initiated Anmeldungen pass the checks but auto-accept is blocked; \
                    they are tracked by the `initiator_is_affiliate` marker, not an ERC bucket.\n\
                  → Call `list_affiliate_decisions(days=7)` to see affected MaLos.\n\
                  → Each entry requires manual operator review before acceptance.\n\
-                 → Approve via PUT /api/v1/approval-queue/{id}/approve.\n\n\
+                 → Approve via POST /api/v1/queue/{id}/approve.\n\n\
                  3. After fixing root causes, STP should recover on the next batch of Anmeldungen.",
             ),
         ]

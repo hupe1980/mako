@@ -15,7 +15,7 @@ use mako_mabis::BilanzierungsgebietId;
 use mako_mabis::{Summenzeitreihe, SummenzeitreiheBuilder};
 use rust_decimal::Decimal;
 use time::{Date, Duration, OffsetDateTime};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::config::Config;
@@ -167,6 +167,25 @@ pub struct TerritorySeries {
     pub malo_count: usize,
 }
 
+/// What a submission pass actually put on the wire.
+///
+/// A run that files nothing because the BIKO already holds every territory of
+/// the month is a **success**, not an empty submission: it is the state a retry
+/// of a fully-filed month reaches, and reporting it as "no Summenzeitreihe to
+/// submit" would fail the run for having correctly declined to file a second
+/// binding copy.
+pub enum Filed {
+    /// At least one territory was filed in this run. Carries the first one's
+    /// reference, which is what the run row records.
+    Submitted {
+        message_ref: String,
+        process_id: Option<Uuid>,
+    },
+    /// Every territory was already acked for this Bilanzierungsmonat, so this
+    /// run sent nothing.
+    AlreadyWithBiko,
+}
+
 // ── SyncEngine ────────────────────────────────────────────────────────────────
 
 /// Core aggregation and submission engine.
@@ -302,17 +321,69 @@ impl SyncEngine {
                 // territories the BIKO already acked: an acked Summenzeitreihe
                 // cannot be withdrawn, and resending one under a new version is
                 // a correction, not a retry.
-                let already_acked = pg::acked_territories(&self.pool, run_id)
-                    .await
-                    .unwrap_or_default();
+                //
+                // The lookup is keyed on the *period and the filing lineage*,
+                // not on this run: a retry is a new run and has no series rows
+                // of its own yet, so a run-keyed skip list is empty by
+                // construction and skips nothing. A correction carries a
+                // `corrects_run_id` of its own and so sees an empty set, which
+                // is right — re-filing under a new version is what a correction
+                // *is*.
+                //
+                // A failure here is not an empty skip list. "I cannot find out
+                // what has been filed" and "nothing has been filed" lead to
+                // opposite actions, and the safe one is to file nothing: the
+                // month can be retried, an over-filed month cannot be
+                // withdrawn.
+                let already_acked = match pg::acked_territories_for_period(
+                    &self.pool,
+                    &cfg.identity.tenant,
+                    period_from,
+                    period_to,
+                    corrects_run_id,
+                )
+                .await
+                {
+                    Ok(t) => t,
+                    Err(e) => {
+                        let msg = format!(
+                            "cannot read which Bilanzierungsgebiete the BIKO has already \
+                             acked for this period ({e}) — refusing to file, because \
+                             re-filing an acked Summenzeitreihe cannot be undone"
+                        );
+                        warn!(run_id = %run_id, "mabis-syncd: {msg}");
+                        self.mark_failed_and_emit(
+                            run_id,
+                            period_from,
+                            period_to,
+                            abrechnungslauf,
+                            phase,
+                            &msg,
+                        )
+                        .await;
+                        anyhow::bail!("{msg}");
+                    }
+                };
 
                 // Submit to BIKO via makod — one MSCONS 13003 per Bilanzierungsgebiet.
                 match self
                     .submit_all_to_makod(&series, run_id, &already_acked)
                     .await
                 {
-                    Ok((message_ref, process_id)) => {
-                        pg::mark_acked(&self.pool, run_id, &message_ref, process_id)
+                    Ok(filed) => {
+                        let (message_ref, process_id) = match &filed {
+                            Filed::Submitted {
+                                message_ref,
+                                process_id,
+                            } => (Some(message_ref.as_str()), *process_id),
+                            // Nothing went out, so there is no reference of
+                            // this run's to record. Inventing one would point
+                            // an auditor at a message that was never sent; the
+                            // filings that settle the month are the earlier
+                            // runs' `submission_series` rows.
+                            Filed::AlreadyWithBiko => (None, None),
+                        };
+                        pg::mark_acked(&self.pool, run_id, message_ref, process_id)
                             .await
                             .context("failed to mark run as acked")?;
                         // §9.8.1: the corrected BG-SZR is the answer to the
@@ -330,13 +401,22 @@ impl SyncEngine {
                                 ),
                             }
                         }
-                        info!(
-                            run_id = %run_id,
-                            message_ref,
-                            total_kwh = %total_kwh,
-                            malo_count,
-                            "mabis-syncd: Summenzeitreihe submission succeeded"
-                        );
+                        match &filed {
+                            Filed::Submitted { message_ref, .. } => info!(
+                                run_id = %run_id,
+                                message_ref,
+                                total_kwh = %total_kwh,
+                                malo_count,
+                                "mabis-syncd: Summenzeitreihe submission succeeded"
+                            ),
+                            Filed::AlreadyWithBiko => info!(
+                                run_id = %run_id,
+                                total_kwh = %total_kwh,
+                                malo_count,
+                                "mabis-syncd: every Bilanzierungsgebiet of this month was \
+                                 already acked by the BIKO — nothing re-filed"
+                            ),
+                        }
                     }
                     Err(e) => {
                         warn!(run_id = %run_id, error = %e, "mabis-syncd: Summenzeitreihe submission failed");
@@ -472,8 +552,16 @@ impl SyncEngine {
                             continue;
                         }
 
-                        // Log per-MaLo contribution
-                        pg::insert_malo_log(
+                        // Log per-MaLo contribution. Non-fatal — the MaLo is
+                        // already in the Summenzeitreihe and aborting would
+                        // settle the month short over a bookkeeping row — but
+                        // not silent: this table *is* the audit trail behind a
+                        // binding filing (which MaLos were summed, which had
+                        // gaps, which carried Ersatzwerte), and
+                        // `submission_runs.malo_count` is a COUNT over it, so a
+                        // lost row makes the run under-report its own scope
+                        // while the Summenzeitreihe on the wire says otherwise.
+                        if let Err(e) = pg::insert_malo_log(
                             &self.pool,
                             run_id,
                             malo_id,
@@ -483,7 +571,14 @@ impl SyncEngine {
                             substituted_count,
                         )
                         .await
-                        .ok(); // Non-fatal: log failure should not abort aggregation
+                        {
+                            error!(
+                                run_id = %run_id, malo_id, error = %e,
+                                "mabis-syncd: MaLo contribution not logged — it is summed into \
+                                 the Summenzeitreihe but missing from the run's audit trail \
+                                 and from its malo_count"
+                            );
+                        }
                     }
                     Err(e) => {
                         warn!(malo_id, error = %e, "mabis-syncd: failed to fetch Lastgang for MaLo");
@@ -854,18 +949,21 @@ impl SyncEngine {
     /// re-files three binding submissions.
     ///
     /// Each territory therefore gets a `submission_series` row saying `acked`
-    /// or `failed` with its reference or its reason; `skip` carries the ones a
-    /// retry must not re-file. The run still fails as a whole, because a month
+    /// or `failed` with its reference or its reason. `skip` is what the caller
+    /// read out of that table for the whole Bilanzierungsmonat — see
+    /// [`pg::acked_territories_for_period`] — and this function files no
+    /// territory named in it. The run still fails as a whole, because a month
     /// settled short is not a success.
     ///
     /// Returns the first territory's `(message_ref, process_id)` for the run
-    /// row — the whole story in a single-territory deployment.
+    /// row — the whole story in a single-territory deployment — or
+    /// [`Filed::AlreadyWithBiko`] when every territory was skipped.
     async fn submit_all_to_makod(
         &self,
         series: &[TerritorySeries],
         run_id: Uuid,
         skip: &[String],
-    ) -> Result<(String, Option<Uuid>)> {
+    ) -> Result<Filed> {
         let mut first: Option<(String, Option<Uuid>)> = None;
         let mut failures: Vec<String> = Vec::new();
 
@@ -908,11 +1006,36 @@ impl SyncEngine {
                 Err(e) => {
                     // Recorded, then the loop continues: the remaining
                     // territories are independent filings, and stopping here
-                    // would leave them unfiled *and* unexplained.
+                    // would leave them unfiled *and* unexplained. That rules out
+                    // propagating a failure of the *record* too.
                     let msg = e.to_string();
                     warn!(run_id = %run_id, gebiet, error = %msg, "mabis-syncd: territory not filed");
-                    let _ = pg::mark_series_failed(&self.pool, series_id, &msg).await;
-                    failures.push(format!("{gebiet}: {msg}"));
+                    let mut note = format!("{gebiet}: {msg}");
+                    if let Err(record_err) =
+                        pg::mark_series_failed(&self.pool, series_id, &msg).await
+                    {
+                        // The territory's row stays at 'pending' with no
+                        // error_msg, and that row is what `GET /api/v1/runs`
+                        // serves per territory — so an operator reading the run
+                        // sees a filing that looks still in flight rather than
+                        // one that failed. Nothing sweeps it back: a retry is a
+                        // *new* run with new series rows, so this row keeps
+                        // lying for as long as it is kept. The run-level failure
+                        // below is the one record that still lands, so the
+                        // territory's reason is carried into it, and the log
+                        // names the row so it can be corrected by hand.
+                        error!(
+                            run_id = %run_id, gebiet, series_id = %series_id,
+                            error = %record_err, submission_error = %msg,
+                            "mabis-syncd: could not mark the territory's series failed — its \
+                             submission_series row still reads 'pending' and misreports a failed \
+                             filing as one still in flight"
+                        );
+                        note.push_str(&format!(
+                            " (submission_series {series_id} still reads 'pending': {record_err})"
+                        ));
+                    }
+                    failures.push(note);
                 }
             }
         }
@@ -927,7 +1050,17 @@ impl SyncEngine {
                 failures.join("; ")
             );
         }
-        first.ok_or_else(|| anyhow::anyhow!("no Summenzeitreihe to submit"))
+        // Nothing left in `first` and nothing in `failures` means every
+        // territory was in `skip`: the BIKO already holds this month's filing.
+        // That is a completed run, not an empty one — the empty-aggregate case
+        // is caught before this function is called.
+        Ok(match first {
+            Some((message_ref, process_id)) => Filed::Submitted {
+                message_ref,
+                process_id,
+            },
+            None => Filed::AlreadyWithBiko,
+        })
     }
 
     async fn submit_to_makod(
@@ -959,7 +1092,7 @@ impl SyncEngine {
         // `CCYYMMDDHHMMSSZZZ` (DTM+293, format 304), and each slot bound
         // `CCYYMMDDHHMMZZZ` (format 303).
         let command = serde_json::json!({
-            "command": "mabis.summenzeitreihe.uebermitteln",
+            "command": mako_markt::commands::MABIS_SUMMENZEITREIHE_UEBERMITTELN,
             "marktrolle": "ÜNB",
             "correlation_id": run_id.to_string(),
             "payload": {

@@ -1,14 +1,17 @@
 //! Fuzz target: `fuzz_validation_engine`
 //!
-//! Verifies that the metering validation engine (V01–V10) never panics on
-//! arbitrary interval sequences, regardless of timestamps, values, or quality flags.
+//! Verifies that the metering validation engine never panics on arbitrary
+//! interval sequences, regardless of timestamps, values, or quality flags.
 //!
 //! ## What this catches
 //!
 //! - Overflow/underflow in gap duration arithmetic
-//! - Panic in rolling-mean spike detection with extreme values
-//! - DST boundary edge cases in V07
-//! - Register rollover detection with NaN-like Decimal inputs
+//! - Panic in the robust-sigma outlier test with extreme values
+//! - DST boundary edge cases in the interval-length check
+//! - Register rollover detection with degenerate `Decimal` inputs
+//! - A `ValidationResult` whose `issues` do not partition across the three
+//!   severities — a caller that triages by severity would silently drop a
+//!   finding that blocks billing
 //!
 //! ## Run locally
 //!
@@ -32,7 +35,9 @@ fuzz_target!(|data: &[u8]| -> Corpus {
     let interval_count = (data[0] as usize % 48) + 1; // 1–48 intervals
     let quality_byte = data[1];
     let base_seconds = i64::from(u32::from_le_bytes(
-        data.get(2..6).and_then(|b| b.try_into().ok()).unwrap_or([0u8; 4])
+        data.get(2..6)
+            .and_then(|b| b.try_into().ok())
+            .unwrap_or([0u8; 4]),
     ));
 
     let quality = match quality_byte % 8 {
@@ -55,12 +60,19 @@ fuzz_target!(|data: &[u8]| -> Corpus {
             let from = base_ts.checked_add(time::Duration::minutes(i as i64 * 15))?;
             let to = from.checked_add(time::Duration::minutes(15))?;
             // Use fuzz bytes for value; default to 0 if not enough bytes
-            let val_bytes = data.get(6 + i * 4..6 + i * 4 + 4)
+            let val_bytes = data
+                .get(6 + i * 4..6 + i * 4 + 4)
                 .and_then(|b| b.try_into().ok())
                 .map(u32::from_le_bytes)
                 .unwrap_or(0);
-            let value_kwh = Decimal::new(val_bytes as i64, 3); // 0.000 .. 4294967.295
-            Some(MeterInterval { from, to, value_kwh, quality, obis_code: None })
+            let value = Decimal::new(i64::from(val_bytes), 3); // 0.000 .. 4294967.295
+            Some(MeterInterval {
+                from,
+                to,
+                value,
+                quality,
+                obis_code: None,
+            })
         })
         .collect();
 
@@ -75,12 +87,19 @@ fuzz_target!(|data: &[u8]| -> Corpus {
     };
     let result = validate_intervals(&intervals, &config);
 
-    // Basic sanity: issue count must be consistent
+    // Every issue carries exactly one of the three severities: the per-severity
+    // counts must add up to the whole finding set.
     assert_eq!(
         result.issues.len(),
-        result.by_severity(metering::ValidationSeverity::Error).count()
-            + result.by_severity(metering::ValidationSeverity::Warning).count()
-            + result.by_severity(metering::ValidationSeverity::Info).count(),
+        result
+            .by_severity(metering::ValidationSeverity::Error)
+            .count()
+            + result
+                .by_severity(metering::ValidationSeverity::Warning)
+                .count()
+            + result
+                .by_severity(metering::ValidationSeverity::Info)
+                .count(),
         "issue count inconsistency"
     );
 

@@ -386,13 +386,13 @@ pub fn geli_gas_partin_registry() -> AdapterRegistry<GeliGasPartinWorkflow> {
 /// Handles inbound PIDs 44023/44024 (Bestätigung / Ablehnung Stornierung)
 /// from GNB → LF. Produces [`LfStornierungCommand::HandleAntwort`].
 ///
-/// Build an [`AdapterRegistry`] for `GeliGasDatanabrufWorkflow` — ORDERS 17103/17104 receive.
+/// Build an [`AdapterRegistry`] for `GeliGasDatenabrufWorkflow` — ORDERS 17103/17104 receive.
 ///
 /// NB-side: receives inbound ORDERS from LF requesting Brennwert/Zustandszahl.
 #[must_use]
 pub fn geli_gas_datenabruf_receive_registry()
--> AdapterRegistry<mako_geli_gas::GeliGasDatanabrufWorkflow> {
-    use mako_geli_gas::datenabruf::{GeliGasDatanabrufCommand, ORDERS_ANFRAGE_PIDS};
+-> AdapterRegistry<mako_geli_gas::GeliGasDatenabrufWorkflow> {
+    use mako_geli_gas::datenabruf::{GeliGasDatenabrufCommand, ORDERS_ANFRAGE_PIDS};
 
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
@@ -421,7 +421,7 @@ pub fn geli_gas_datenabruf_receive_registry()
                     "GeLi Gas Datenabruf receive adapter: unexpected PID {pid}"
                 )));
             }
-            Ok(GeliGasDatanabrufCommand::ReceiveAnfrage {
+            Ok(GeliGasDatenabrufCommand::ReceiveAnfrage {
                 pid,
                 sender: MarktpartnerCode::new(
                     o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
@@ -436,13 +436,13 @@ pub fn geli_gas_datenabruf_receive_registry()
     registry
 }
 
-/// Build an [`AdapterRegistry`] for `GeliGasDatanabrufWorkflow` — ORDRSP 19103/19104.
+/// Build an [`AdapterRegistry`] for `GeliGasDatenabrufWorkflow` — ORDRSP 19103/19104.
 ///
 /// LF-side: receives ORDRSP rejection from NB after sending ORDERS 17103.
 #[must_use]
 pub fn geli_gas_datenabruf_ablehnung_registry()
--> AdapterRegistry<mako_geli_gas::GeliGasDatanabrufWorkflow> {
-    use mako_geli_gas::datenabruf::{GeliGasDatanabrufCommand, ORDRSP_ABLEHNUNG_PIDS};
+-> AdapterRegistry<mako_geli_gas::GeliGasDatenabrufWorkflow> {
+    use mako_geli_gas::datenabruf::{GeliGasDatenabrufCommand, ORDRSP_ABLEHNUNG_PIDS};
 
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
@@ -475,7 +475,7 @@ pub fn geli_gas_datenabruf_ablehnung_registry()
                     .to_owned(),
                 _ => String::new(),
             };
-            Ok(GeliGasDatanabrufCommand::ReceiveAblehnung {
+            Ok(GeliGasDatenabrufCommand::ReceiveAblehnung {
                 pid,
                 sender: MarktpartnerCode::new(sender_mp_id),
                 message_ref: MessageRef::new(msg.message_ref()),

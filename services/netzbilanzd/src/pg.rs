@@ -362,6 +362,14 @@ pub enum InsertDraftError {
          under its own invoice_date, or reject the existing draft"
     )]
     AbschlagAlreadyBilled,
+    /// One of the named Abschlagsrechnungen is already settled by another invoice.
+    #[error(
+        "one of these Abschlagsrechnungen is already deducted from another invoice — an \
+         Anzahlung is settled once, and deducting it twice collects money the \
+         Netzbetreiber already holds. Reverse the invoice that settled it, or drop it \
+         from this one"
+    )]
+    AbschlagAlreadyDeducted,
     /// The allocated invoice number is already in use.
     #[error("invoice number already issued")]
     DuplicateRechnungsnummer,
@@ -725,6 +733,10 @@ pub async fn mark_dispatched(
 /// Rejection is how a period is reopened: the partial unique index excludes
 /// rejected rows, so a corrected run can bill the same MaLo and period again.
 ///
+/// Any Abschlagsrechnungen the draft settled are released with it, in the same
+/// transaction. Reopening the period without reopening its Anzahlungen leaves
+/// the re-billed invoice unable to deduct money the customer has already paid.
+///
 /// # Errors
 ///
 /// Propagates any database failure.
@@ -734,6 +746,7 @@ pub async fn reject_draft(
     id: Uuid,
     reason: &str,
 ) -> anyhow::Result<bool> {
+    let mut tx = pool.begin().await.context("reject_draft: begin")?;
     let rows = sqlx::query(
         r"UPDATE invoice_drafts
           SET status = 'rejected', reject_reason = $3, updated_at = now()
@@ -742,10 +755,14 @@ pub async fn reject_draft(
     .bind(tenant)
     .bind(id)
     .bind(reason)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .context("reject_draft")?
     .rows_affected();
+    if rows > 0 {
+        release_abschlag_verrechnungen(&mut *tx, tenant, id).await?;
+    }
+    tx.commit().await.context("reject_draft: commit")?;
     Ok(rows > 0)
 }
 
@@ -865,6 +882,14 @@ pub async fn load_abschlaege(
             ));
             continue;
         }
+        if let Some(rechnungsnummer) = verrechnet_von(&mut *conn, tenant, id).await? {
+            problems.push(format!(
+                "{id}: already deducted from invoice {rechnungsnummer} — an Anzahlung is \
+                 settled once, and deducting it twice collects money the Netzbetreiber \
+                 already holds"
+            ));
+            continue;
+        }
         deductions.push(grid_billing::Abschlagsverrechnung {
             rechnungsnummer: row.rechnungsnummer,
             rechnungsdatum: row.invoice_date,
@@ -881,7 +906,138 @@ pub async fn load_abschlaege(
     })
 }
 
-/// Whether a draft has already been reversed by a Stornorechnung.
+/// The invoice number of the Rechnung that already settled this Abschlag, if any.
+///
+/// # Errors
+///
+/// Propagates any database failure.
+async fn verrechnet_von(
+    conn: &mut sqlx::PgConnection,
+    tenant: &str,
+    abschlag_draft_id: Uuid,
+) -> anyhow::Result<Option<String>> {
+    sqlx::query_scalar::<_, String>(
+        r"SELECT d.rechnungsnummer
+            FROM abschlag_verrechnungen v
+            JOIN invoice_drafts d ON d.id = v.invoice_draft_id
+           WHERE v.tenant = $1 AND v.abschlag_draft_id = $2",
+    )
+    .bind(tenant)
+    .bind(abschlag_draft_id)
+    .fetch_optional(conn)
+    .await
+    .context("verrechnet_von")
+}
+
+/// Record that `invoice_draft_id` settles these Abschlagsrechnungen.
+///
+/// Written in the same transaction as the invoice, so the deduction and the
+/// record of it stand or fall together. The primary key is the guard the
+/// [`load_abschlaege`] read cannot be: two concurrent billing runs both pass the
+/// read and one of them loses here.
+///
+/// # Errors
+///
+/// [`InsertDraftError::AbschlagAlreadyDeducted`] when another invoice already
+/// settled one of them; otherwise propagates the database failure.
+pub async fn record_abschlag_verrechnungen(
+    conn: &mut sqlx::PgConnection,
+    tenant: &str,
+    invoice_draft_id: Uuid,
+    abschlag_draft_ids: &[Uuid],
+) -> Result<(), InsertDraftError> {
+    for &abschlag_draft_id in abschlag_draft_ids {
+        let result = sqlx::query(
+            r"INSERT INTO abschlag_verrechnungen (tenant, abschlag_draft_id, invoice_draft_id)
+              VALUES ($1, $2, $3)",
+        )
+        .bind(tenant)
+        .bind(abschlag_draft_id)
+        .bind(invoice_draft_id)
+        .execute(&mut *conn)
+        .await;
+        match result {
+            Ok(_) => {}
+            Err(sqlx::Error::Database(db))
+                if db.constraint() == Some("av_one_invoice_per_abschlag") =>
+            {
+                return Err(InsertDraftError::AbschlagAlreadyDeducted);
+            }
+            Err(e) => {
+                return Err(InsertDraftError::Database(
+                    anyhow::Error::new(e).context("record Abschlag deduction"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Release the Abschlagsrechnungen an invoice settled, so they can be settled
+/// again by the document that replaces it.
+///
+/// Called where the invoice stops standing: a Stornorechnung cancels its
+/// deductions with it, and rejecting a draft reopens the period. Leaving the
+/// records would strand the Anzahlung — the Korrekturrechnung could not deduct
+/// it, and the customer would be billed for money it had already paid.
+///
+/// Returns how many were released.
+///
+/// # Errors
+///
+/// Propagates any database failure.
+pub async fn release_abschlag_verrechnungen(
+    conn: impl sqlx::PgExecutor<'_>,
+    tenant: &str,
+    invoice_draft_id: Uuid,
+) -> anyhow::Result<u64> {
+    Ok(sqlx::query(
+        r"DELETE FROM abschlag_verrechnungen
+           WHERE tenant = $1 AND invoice_draft_id = $2",
+    )
+    .bind(tenant)
+    .bind(invoice_draft_id)
+    .execute(conn)
+    .await
+    .context("release_abschlag_verrechnungen")?
+    .rows_affected())
+}
+
+/// How many Abschlagsrechnungen an invoice currently holds deducted.
+///
+/// The read half of [`release_abschlag_verrechnungen`]: a Storno draft reports
+/// what it *will* free on dispatch without freeing it yet.
+///
+/// # Errors
+///
+/// Propagates any database failure.
+pub async fn count_abschlag_verrechnungen(
+    conn: impl sqlx::PgExecutor<'_>,
+    tenant: &str,
+    invoice_draft_id: Uuid,
+) -> anyhow::Result<i64> {
+    sqlx::query_scalar::<_, i64>(
+        r"SELECT COUNT(*)::bigint FROM abschlag_verrechnungen
+           WHERE tenant = $1 AND invoice_draft_id = $2",
+    )
+    .bind(tenant)
+    .bind(invoice_draft_id)
+    .fetch_one(conn)
+    .await
+    .context("count_abschlag_verrechnungen")
+}
+
+/// Whether a draft has a **standing** Stornorechnung against it.
+///
+/// A rejected Storno does not count. Rejecting a draft is how an operator
+/// discards a document that never left the house, so an original whose only
+/// reversal was rejected still stands in full: it has not been credited, its
+/// Abschlag deductions are still its own, and the next honest step is a fresh
+/// Storno — not a Korrekturrechnung correcting a reversal that never went out.
+///
+/// Matches the predicate on `id_one_storno_per_original`, deliberately: the
+/// gate that decides whether a Storno may be *written* and the gate that
+/// decides whether one *exists* must answer the same question.
 ///
 /// # Errors
 ///
@@ -896,6 +1052,7 @@ pub async fn has_storno(
               SELECT 1 FROM invoice_drafts
               WHERE tenant = $1 AND original_draft_id = $2
                 AND rechnungsart = 'STORNORECHNUNG'
+                AND status <> 'rejected'
           )",
     )
     .bind(tenant)

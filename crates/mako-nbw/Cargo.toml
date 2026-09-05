@@ -1,11 +1,28 @@
 [package]
 name         = "mako-nbw"
 version.workspace     = true
-description  = "Netzbetreiberwechsel process engine for German energy market DSO concession change (PARTIN-based market location transfer)"
+description  = "Netzbetreiberwechsel (§ 46 EnWG grid handover): the Paket-ID, the Änderungszeitpunkt and the BDEW Fristenkalender that sequences the handover"
 authors.workspace     = true
 edition.workspace     = true
 license.workspace     = true
 repository.workspace  = true
+homepage.workspace     = true
 rust-version.workspace = true
-keywords     = ["nbw", "netzbetreiberwechsel", "partin", "energy", "bdew"]
-categories   = ["data-structures"]
+keywords     = ["nbw", "netzbetreiberwechsel", "paket-id", "energy", "bdew"]
+categories   = ["data-structures", "date-and-time"]
+
+[dependencies]
+# Werktage and the BDEW MaKo holiday calendar. Two Gas Fristen are stated in
+# Werktagen („3 Monate + 10 WT", „25 WT"), and every Frist in mako counts them
+# in one place.
+mako-fristen = { workspace = true }
+# The validated 13-digit Marktpartner-ID. A Paket-ID names the NBA and the NBN
+# by MP-ID, and the „NBN identisch mit NBA" refusal of Kap. 3 is an equality on
+# that identifier — free text cannot carry it.
+rubo4e       = { workspace = true }
+serde        = { workspace = true }
+thiserror    = { workspace = true }
+time         = { workspace = true }
+
+[dev-dependencies]
+serde_json   = { workspace = true }

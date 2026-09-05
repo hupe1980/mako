@@ -13,8 +13,13 @@
 //! cargo +nightly fuzz run fuzz_parse_validate
 //! ```
 //!
-//! Add a corpus of real EDI fixtures to `fuzz/corpus/fuzz_parse_validate/` to
-//! guide coverage-guided mutation efficiently.
+//! Seed the corpus from the tracked EDIFACT fixtures, which sit one directory
+//! per message type:
+//!
+//! ```text
+//! find crates/edi-energy/tests/fixtures -name '*.edi' \
+//!      -exec cp {} fuzz/corpus/fuzz_parse_validate/ \;
+//! ```
 
 #![no_main]
 
