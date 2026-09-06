@@ -30,7 +30,7 @@ mako-mabis       = { workspace = true }
 # The command-name catalogue, so the name this service posts to `makod` is the
 # one `makod` registers rather than a literal the two can drift apart on.
 mako-markt       = { workspace = true }
-mako-service     = { workspace = true, features = ["otel", "oidc", "cedar"] }
+mako-service     = { workspace = true, features = ["otel", "oidc", "cedar", "metrics"] }
 metering         = { workspace = true, features = ["serde"] }
 reqwest          = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rubo4e           = { workspace = true }

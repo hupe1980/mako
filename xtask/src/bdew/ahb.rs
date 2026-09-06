@@ -717,7 +717,13 @@ pub fn parse(lines: &[Line], mig: &MigDoc) -> Result<AhbDoc, String> {
             .iter()
             .filter(|k| k.x + 1 >= region_x && k.x + 1 < tb.bedingung_x)
             .collect();
-        if region.is_empty() || !region.iter().all(|k| is_status_token(k.text)) {
+        if region.is_empty()
+            || !region.iter().all(|k| {
+                is_status_token(k.text)
+                    || is_disjunction_typo(k.text)
+                    || strip_stray_bracket(k.text).is_some()
+            })
+        {
             collect_condition(
                 line,
                 tb.bedingung_x.saturating_sub(1),
@@ -774,7 +780,75 @@ pub fn parse(lines: &[Line], mig: &MigDoc) -> Result<AhbDoc, String> {
         resolve_group_before(af);
         infer_missing_statuses(af, &by_nr);
     }
+    infer_missing_operands(&mut doc);
     Ok(doc)
+}
+
+/// An operand cell printed without its operand letter takes the letter another
+/// column prints for the same place.
+///
+/// An operand is a letter and an optional expression. A cell holding the
+/// expression alone states no operand at all, and the validator reads the place
+/// as unconditioned — for a code that means admitting it without the
+/// precondition the AHB attaches. UTILTS AHB 1.1 does this four times, in the
+/// `SG8 DTM` DE 2379 of Anwendungsfälle 25008 and 25009: their `[9P0..1]` and
+/// `[10P0..1]` are printed as `X [9P0..1]` / `X [10P0..1]` in 25005, the same
+/// data element and the same code.
+///
+/// The letter is taken from that evidence and never defaulted: a bare
+/// expression with no such twin is left as it stands, for
+/// `validate-profiles` to keep counting.
+fn infer_missing_operands(doc: &mut AhbDoc) {
+    // (data element, occurrence, code, expression) → the letter a column prints.
+    let mut letters: BTreeMap<(String, u8, Option<String>, String), String> = BTreeMap::new();
+    for af in &doc.anwendungsfaelle {
+        for el in &af.elements {
+            for op in &el.operands {
+                let mut parts = op.operand.split_whitespace();
+                let Some(letter) = parts.next().filter(|w| is_status_word(w)) else {
+                    continue;
+                };
+                let expr = parts.collect::<Vec<_>>().join(" ");
+                if expr.is_empty() {
+                    continue;
+                }
+                letters.insert(
+                    (el.de.clone(), el.occurrence, op.code.clone(), expr),
+                    letter.to_owned(),
+                );
+            }
+        }
+    }
+    for af in &mut doc.anwendungsfaelle {
+        let named = af.pid.map_or_else(|| af.name.clone(), |p| p.to_string());
+        for el in &mut af.elements {
+            for op in &mut el.operands {
+                if op
+                    .operand
+                    .split_whitespace()
+                    .next()
+                    .is_some_and(is_status_word)
+                {
+                    continue;
+                }
+                let key = (
+                    el.de.clone(),
+                    el.occurrence,
+                    op.code.clone(),
+                    op.operand.trim().to_owned(),
+                );
+                let Some(letter) = letters.get(&key) else {
+                    continue;
+                };
+                eprintln!(
+                    "warn    {named}: {} DE {} operand {:?} carries no operand letter; \
+                     {letter} taken from the column that prints one",
+                    el.nr, el.de, op.operand
+                );
+                op.operand = format!("{letter} {}", op.operand.trim());
+            }
+        }
+    }
 }
 
 /// A segment row printed without a status in a column that marks the
@@ -830,19 +904,36 @@ struct PendingEntry {
 
 /// Append buffered status lines to the rows they followed.
 fn flush_pending(pending: &mut Vec<Pending>, doc: &mut AhbDoc) {
+    // Rows this flush created, so the *second* buffered line of one wrapped
+    // cell extends the row the first opened instead of opening another.
+    //
+    // A row printed with its statuses on the following lines has no row index
+    // to append to — that is why the `None` arm creates one. UTILMD Strom 2.1
+    // PID 55043 `SG10` wraps over two of them (`Muss [386]` / `∧ [387]`), and
+    // without this the tail became a row of its own carrying an expression
+    // with no status word, which reads as no condition at all.
+    let mut opened: BTreeMap<(usize, Option<String>, Option<String>), usize> = BTreeMap::new();
     for p in pending.drain(..) {
         for e in p.entries {
             let af = &mut doc.anwendungsfaelle[e.target];
             match p.kind {
                 Last::Row => match e.row {
                     Some(ri) => append_status(&mut af.rows[ri].status, &e.cell),
-                    // A row printed with its statuses on the next line.
-                    None if p.nr.is_some() || p.group.is_some() => af.rows.push(Row {
-                        nr: p.nr.clone(),
-                        group: p.group.clone(),
-                        before: None,
-                        status: vec![e.cell.clone()],
-                    }),
+                    None if p.nr.is_some() || p.group.is_some() => {
+                        let key = (e.target, p.nr.clone(), p.group.clone());
+                        match opened.get(&key) {
+                            Some(&ri) => append_status(&mut af.rows[ri].status, &e.cell),
+                            None => {
+                                opened.insert(key, af.rows.len());
+                                af.rows.push(Row {
+                                    nr: p.nr.clone(),
+                                    group: p.group.clone(),
+                                    before: None,
+                                    status: vec![e.cell.clone()],
+                                });
+                            }
+                        }
+                    }
                     None => {}
                 },
                 Last::Element => match (e.element, &p.nr, &p.de) {
@@ -864,8 +955,9 @@ fn flush_pending(pending: &mut Vec<Pending>, doc: &mut AhbDoc) {
 }
 
 /// Decide where buffered status lines belong once a labelled row arrives:
-/// when that row's own cells are empty or begin mid-expression, the buffer
-/// is the first half of its cells; otherwise it belonged to the row before.
+/// when that row's own cells are empty or are themselves mid-expression, the
+/// buffer is the first half of its cells; otherwise it belonged to the row
+/// before.
 fn take_pending(
     pending: &mut Vec<Pending>,
     doc: &mut AhbDoc,
@@ -874,10 +966,7 @@ fn take_pending(
     if pending.is_empty() {
         return cells;
     }
-    let fragment = cells
-        .iter()
-        .flatten()
-        .all(|c| c.chars().next().is_some_and(|f| "[∧∨⊻()".contains(f)));
+    let fragment = cells.iter().flatten().all(|c| is_expression_tail(c));
     let all_empty = cells.iter().all(Option::is_none);
     if !(fragment || all_empty) {
         flush_pending(pending, doc);
@@ -983,6 +1072,35 @@ fn is_status_token(t: &str) -> bool {
     is_status_word(t) || is_expression_fragment(t)
 }
 
+/// A Latin `V` typed for `∨`.
+///
+/// The AHBs set the operator as U+2228 throughout — INVOIC 1.0a and 1.0b
+/// print it 29 times and slip twice, both inside the one `SG2 LOC` DE 3225
+/// expression of the Rechnung Sonstige Leistung. Read as prose the slip
+/// disqualifies the whole continuation line, so the expression's middle third
+/// never reaches the profile and the place is judged unconditioned. Only the
+/// Anwendungsfall columns are read through this, so a `V` of the Beschreibung
+/// column stays prose.
+fn is_disjunction_typo(t: &str) -> bool {
+    t == "V"
+}
+
+/// A citation the AHB closes twice — `[2080]]` — with the stray bracket off.
+///
+/// `]` closes nothing, so a token that reads as an expression only without a
+/// trailing one is that token plus a slip of the pen. UTILMD Strom 2.1 prints
+/// `[2080]` eleven times and `[2080]]` once, as the last operand of PID 55692's
+/// `SG6` `Soll [8] ∧ [301] ∧ [2080]`. Left as it stands the token is prose, the
+/// continuation line carrying it is refused whole, and the expression keeps its
+/// operator and loses what it applies to.
+///
+/// Narrow by construction: a token that already reads is returned unchanged, so
+/// this can only ever rescue one that does not.
+fn strip_stray_bracket(t: &str) -> Option<&str> {
+    let trimmed = t.strip_suffix(']')?;
+    (!is_expression_fragment(t) && is_expression_fragment(trimmed)).then_some(trimmed)
+}
+
 /// The status word or column operand a cell opens with.
 fn is_status_word(t: &str) -> bool {
     matches!(t, "Muss" | "Soll" | "Kann" | "X" | "x" | "M" | "S" | "K")
@@ -1046,6 +1164,66 @@ fn is_condition_ref(id: &str) -> bool {
                 && (high == "n" || (!high.is_empty() && high.chars().all(|c| c.is_ascii_digit())))
         }),
     }
+}
+
+/// Whether a Bedingung expression so far is syntactically unfinished — it ends
+/// on a binary operator, or it has an unclosed `(`.
+///
+/// What it settles is where a cell ends and the Bedingung column begins. That
+/// boundary is read off position, and position alone gets it wrong when the
+/// last column's expression runs past its own nominal edge: MSCONS 3.1g prints
+/// `X ([32] ∧ ([33] ∨ [36] ∨ [42]` with the Bedingung column's OBIS text after
+/// it on the same line, and `[42]` sits where that column is expected. An
+/// expression waiting on an operand cannot have ended, so a `[n]` one space
+/// behind an open cell is that cell's operand however far right it is printed.
+fn is_open(expr: &str) -> bool {
+    let trimmed = expr.trim_end();
+    if trimmed.ends_with(['∧', '∨', '⊻']) {
+        return true;
+    }
+    let opens = trimmed.matches('(').count();
+    let closes = trimmed.matches(')').count();
+    opens > closes
+}
+
+/// Whether a cell is the middle of an expression rather than one in its own
+/// right.
+///
+/// Asked of a labelled row's own cells, to tell a row whose expression began on
+/// the line above from one that opens its own. The first character does not
+/// answer it: `[33]) ⊻` and `[9P0..1]` both start with a bracket, and only the
+/// first is a tail. What answers it is whether the cell stands alone — balanced
+/// parentheses, opening on neither a binary operator nor a closing bracket, and
+/// not ending on one.
+///
+/// UTILTS 1.1 needs the distinction. Its `SG8 DTM 2380` expression wraps over
+/// five lines, and the `SG8 DTM 2379` row below it carries `[9P0..1]` — a
+/// complete Paket operand, printed without the `X` its two sibling columns
+/// carry. Read as a tail it swallowed the whole buffered expression, leaving
+/// DE 2380 with its first line and DE 2379 with everything else.
+///
+/// Three questions in order, because the shapes overlap:
+///
+/// 1. A cell opening with a status word or an operand letter opens its own
+///    statement, however it ends — `X [153] ∧` is a wrapped status, not a tail.
+/// 2. A status word *after* the first token means the cell is a tail with the
+///    next status behind it — `[138] X ((…))`, which [`split_statuses`] cuts
+///    apart once it has been appended.
+/// 3. Otherwise it is a tail only if it cannot stand on its own: it opens on a
+///    binary operator or a closing bracket, ends on a binary operator, or its
+///    parentheses do not balance.
+fn is_expression_tail(cell: &str) -> bool {
+    let trimmed = cell.trim();
+    let mut tokens = trimmed.split_whitespace();
+    if tokens.next().is_some_and(is_status_word) {
+        return false;
+    }
+    if tokens.any(is_status_word) {
+        return true;
+    }
+    trimmed.starts_with(['∧', '∨', '⊻', ')'])
+        || is_open(trimmed)
+        || trimmed.matches(')').count() > trimmed.matches('(').count()
 }
 
 /// The byte offset of character `char_idx`.
@@ -1241,16 +1419,39 @@ fn column_cells(
         if x < base {
             continue;
         }
-        if !is_status_token(k.text) {
+        // Two slips the AHBs carry: a `V` between two expression tokens is the
+        // disjunction, and a citation closed twice is that citation.
+        let text = if is_disjunction_typo(k.text)
+            && !raw.is_empty()
+            && toks.get(i + 1).is_some_and(|n| is_status_token(n.text))
+        {
+            "∨"
+        } else {
+            strip_stray_bracket(k.text).unwrap_or(k.text)
+        };
+        if !is_status_token(text) {
             if x + 1 >= tb.bedingung_x {
                 break;
             }
             continue;
         }
-        let is_operator = matches!(k.text, "∧" | "∨" | "⊻" | ")");
+        let is_operator = matches!(text, "∧" | "∨" | "⊻" | ")");
+        let metric = metric_of(metrics, i, x);
         // A `[n]` with prose after it, right of the last column, is the
-        // Bedingung column's text and says where that column starts.
-        if k.text.starts_with('[')
+        // Bedingung column's text and says where that column starts — unless
+        // the cell it would end is still open and this `[n]` is one space
+        // behind it, in which case it is that cell's next operand printed past
+        // the column's nominal edge. Both hold in MSCONS 3.1g, where the last
+        // column's `… [36] ∨ [42]` is followed on the same line by the
+        // Bedingung column's OBIS text.
+        let continues_open_cell = raw
+            .last()
+            .is_some_and(|(_, _, _, cell): &(usize, usize, usize, String)| is_open(cell))
+            && metric
+                .and_then(|m| m.gap)
+                .is_some_and(|gap| gap <= SPACE_MAX_PT);
+        if text.starts_with('[')
+            && !continues_open_cell
             && toks.get(i + 1).is_some_and(|n| !is_status_token(n.text))
             && x > tb.columns.last().map_or(0, |c| c.x + tb.tol)
         {
@@ -1262,21 +1463,20 @@ fn column_cells(
                 .get(i + 1)
                 .is_some_and(|n| matches!(n.text, "∧" | "∨" | "⊻" | ")"));
             let continues =
-                !raw.is_empty() && (is_operator || (k.text.starts_with('[') && next_continues));
+                !raw.is_empty() && (is_operator || (text.starts_with('[') && next_continues));
             if !continues {
                 break;
             }
         }
-        let is_word = is_status_word(k.text);
+        let is_word = is_status_word(text);
         // `x` for `X` is a typo the AHBs carry now and then.
-        let word = if k.text == "x" { "X" } else { k.text };
-        let metric = metric_of(metrics, i, x);
-        let end = metric.map_or_else(|| rendered_end(x, k.text), |m| m.end);
+        let word = if text == "x" { "X" } else { text };
+        let end = metric.map_or_else(|| rendered_end(x, text), |m| m.end);
         let here = territory(&tb.columns, (x + end) / 2);
-        grid_end = grid_end.max(x + k.text.chars().count());
+        grid_end = grid_end.max(x + text.chars().count());
         let joins = match raw.last() {
             None => false,
-            Some((_, last_end, cell, _)) => {
+            Some((first_x, last_end, cell, _)) => {
                 if *cell == here {
                     // Inside one column's half of the table, everything is one
                     // cell — as long as it is not a whole column away, which
@@ -1293,9 +1493,25 @@ fn column_cells(
                     // not to be a cell in its own right. A word as wide as a
                     // column is: IFTSTA 2.0h prints `([940][147]))` once per
                     // column, one space apart, each filling its own.
-                    metric.and_then(|m| m.gap).is_some_and(|gap| {
-                        (SPACE_MIN_PT..=SPACE_MAX_PT).contains(&gap) && end - x <= 2 * tb.tol
-                    })
+                    //
+                    // The blank settles it only where the columns are set
+                    // apart. Where they are set flush it does not: on the
+                    // continuation line of a wrapped MSCONS row the two columns
+                    // print `[93]) ∧ [126]` twice, 2.4 pt apart against 2.0 pt
+                    // inside each — a difference no threshold separates, and
+                    // each word is as narrow as the last word of one cell. The
+                    // table's own geometry does separate them. A cell is set
+                    // inside its column, so it cannot be wider than the step
+                    // from one column to the next without running into its
+                    // neighbour: joined, the MSCONS pair measures 30 cells
+                    // against a 22-cell step and is two cells; INVOIC 1.0a's
+                    // `X [908] [85]`, whose trailing `[85]` reaches into the
+                    // next column's half, measures 18 against 21 and is one.
+                    let step = tb.columns[here].x.abs_diff(tb.columns[*cell].x);
+                    end - *first_x <= step
+                        && metric.and_then(|m| m.gap).is_some_and(|gap| {
+                            (SPACE_MIN_PT..=SPACE_MAX_PT).contains(&gap) && end - x <= 2 * tb.tol
+                        })
                 }
             }
         };
@@ -1588,6 +1804,181 @@ mod tests {
             "[UB12]",
         ] {
             assert!(!is_status_token(no), "{no:?} is not part of a status cell");
+        }
+    }
+
+    /// A `Line` whose words sit where the caller says, with the point metrics
+    /// the character grid rounds away — what a real page hands
+    /// [`column_cells`]. A grid cell is 2.2 pt, so neighbouring words one cell
+    /// apart read as the 2.2 pt blank that separates two words of one cell.
+    fn measured(words: &[(usize, usize, &str)]) -> Line {
+        let mut line = Line::default();
+        let mut prev_end: Option<usize> = None;
+        for (x, end, text) in words {
+            while line.text.chars().count() < *x {
+                line.text.push(' ');
+            }
+            line.text.push_str(text);
+            line.metrics.push(Metric {
+                x: *x,
+                end: *end,
+                gap: prev_end.map(|p| (*x - p) as f64 * 2.2),
+            });
+            prev_end = Some(*end);
+        }
+        line
+    }
+
+    fn table_of(columns: &[usize], bedingung_x: usize) -> Table {
+        Table {
+            columns: columns
+                .iter()
+                .map(|x| Column {
+                    x: *x,
+                    pid: None,
+                    name: String::new(),
+                    communication: String::new(),
+                })
+                .collect(),
+            desc_x: 0,
+            bedingung_x,
+            tol: 7,
+            targets: Vec::new(),
+            header_done: true,
+            pending: Vec::new(),
+            pid_line: None,
+        }
+    }
+
+    #[test]
+    fn flush_set_columns_are_split_on_the_table_step() {
+        // MSCONS 3.1g wraps `Soll ([92] ⊻ [93]) ∧ [126]` in two columns 22
+        // cells apart and prints the continuation of both on one line, 2.4 pt
+        // between them against 2.0 pt inside each. Joined the pair measures 30
+        // cells, wider than the step, so it is two cells.
+        let line = measured(&[
+            (134, 142, "[93])"),
+            (143, 146, "∧"),
+            (147, 155, "[126]"),
+            (156, 164, "[93])"),
+            (165, 168, "∧"),
+            (169, 177, "[126]"),
+        ]);
+        let mut tb = table_of(&[145, 167], 190);
+        let (cells, _) = column_cells(&mut tb, &line.text, &line.metrics, 0);
+        assert_eq!(
+            cells,
+            [
+                Some("[93]) ∧ [126]".to_owned()),
+                Some("[93]) ∧ [126]".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn a_trailing_operand_reaching_into_the_next_column_stays_with_its_cell() {
+        // INVOIC 1.0a prints `X [908] [85]` once per column, 21 cells apart.
+        // Each cell's `[85]` falls in the next column's half and still belongs
+        // to the cell it follows: joined it measures 18, inside the step.
+        let line = measured(&[
+            (149, 153, "X"),
+            (154, 160, "[908]"),
+            (161, 167, "[85]"),
+            (170, 174, "X"),
+            (175, 181, "[908]"),
+            (182, 188, "[85]"),
+        ]);
+        let mut tb = table_of(&[153, 174], 210);
+        let (cells, _) = column_cells(&mut tb, &line.text, &line.metrics, 0);
+        assert_eq!(
+            cells,
+            [
+                Some("X [908] [85]".to_owned()),
+                Some("X [908] [85]".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn an_operand_after_an_operator_is_not_the_bedingung_column() {
+        // MSCONS 3.1g sets the last column's `… [36] ∨ [42]` past the column's
+        // nominal edge, with the Bedingung column's OBIS text on the same
+        // line. `[42]` follows an operator one space behind, so it is the
+        // cell's next operand and not the Bedingung column's first word.
+        let line = measured(&[
+            (138, 140, "X"),
+            (141, 147, "([32]"),
+            (148, 150, "∧"),
+            (151, 157, "([33]"),
+            (158, 160, "∨"),
+            (161, 166, "[36]"),
+            (167, 169, "∨"),
+            (170, 175, "[42]"),
+            (180, 200, "0?:54.0.16/7-"),
+        ]);
+        let mut tb = table_of(&[150], 210);
+        let (cells, _) = column_cells(&mut tb, &line.text, &line.metrics, 0);
+        assert_eq!(cells, [Some("X ([32] ∧ ([33] ∨ [36] ∨ [42]".to_owned())]);
+    }
+
+    #[test]
+    fn an_expression_is_open_while_it_can_still_grow() {
+        for open in ["Soll ([92] ⊻", "X ([950] [509] ∧ ([64]", "Muss [7] ∧"] {
+            assert!(is_open(open), "{open:?} is unfinished");
+        }
+        for closed in ["[93]) ∧ [126]", "X [908] [85]", "Muss [7]", "X"] {
+            assert!(!is_open(closed), "{closed:?} is finished");
+        }
+    }
+
+    #[test]
+    fn a_cell_that_stands_alone_is_not_a_continuation() {
+        // The first character does not answer it: `[33]) ⊻` and `[9P0..1]`
+        // both open with a bracket and only the first is a tail.
+        for tail in [
+            "∧ [32] ∧",
+            "[33]) ⊻",
+            "(([964] ∧",
+            "[965]) [34] ∧",
+            "[507])",
+            "[138] X ((([97] ⊻ [98]) ∧ [95]))",
+        ] {
+            assert!(
+                is_expression_tail(tail),
+                "{tail:?} continues the line above"
+            );
+        }
+        for own in [
+            "[9P0..1]",
+            "[10P0..1]",
+            "X [153] ∧",
+            "Muss [315] ∧ [2080]",
+            "X ([31] ∧ [32])",
+        ] {
+            assert!(!is_expression_tail(own), "{own:?} opens its own cell");
+        }
+    }
+
+    #[test]
+    fn a_citation_closed_twice_is_the_citation() {
+        assert_eq!(strip_stray_bracket("[2080]]"), Some("[2080]"));
+        assert_eq!(strip_stray_bracket("[507])]"), Some("[507])"));
+        // A token that already reads is left alone, and one that does not read
+        // either way is not rescued into something else.
+        for no in ["[2080]", "X", "∧", "Wert]", "[abc]]"] {
+            assert_eq!(
+                strip_stray_bracket(no),
+                None,
+                "{no:?} is not a stray bracket"
+            );
+        }
+    }
+
+    #[test]
+    fn a_latin_v_between_citations_is_the_disjunction() {
+        assert!(is_disjunction_typo("V"));
+        for no in ["v", "X", "∨", "[10]"] {
+            assert!(!is_disjunction_typo(no), "{no:?} is not the typo");
         }
     }
 

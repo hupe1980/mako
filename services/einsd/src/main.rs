@@ -45,6 +45,8 @@
 //! readiness, graceful shutdown); this only supplies the migrations, the domain
 //! router and the background workers.
 
+#![deny(unsafe_code)]
+
 use std::sync::Arc;
 
 use anyhow::Context as _;

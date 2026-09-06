@@ -32,6 +32,8 @@
 //!
 //! [agentplane]: https://hupe1980.github.io/agentplane/
 
+#![deny(unsafe_code)]
+
 use std::sync::Arc;
 
 use anyhow::Context as _;

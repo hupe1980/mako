@@ -334,6 +334,14 @@ in the query — an open route's safety must be a checked fact, not a comment.
 Check24**, BNetzA Markttransparenzstelle, and similar integrators. The feed is also
 compliant with § 41c EnWG (mandatory machine-readable tariff publication since 2024).
 
+**The prices are the ones that apply at the consumption asked for.** A
+Preisposition carries its prices as Preisstaffeln, and which one applies is
+decided by a quantity — the `verbrauch_kwh` of the request. Selection follows
+BO4E's own rule, a quantity in the gap between two tiers „rutscht in die obere
+Zone". A Leistungspreis is tiered by kW rather than kWh and the feed carries no
+demand figure, so a tiered one is reported as absent rather than selected with
+the wrong quantity; a flat one is carried.
+
 Each entry includes a `tarifinfo` field — a pre-built **BO4E `Tarifinfo` Business
 Object** that portals can import directly without custom ETL.  For portals that require
 a pure BO4E array, use `GET /api/v1/comparison-feed/bo4e`.
@@ -405,7 +413,7 @@ Both endpoints accept identical query parameters and return the same ETag/cachin
 |---|---|---|---|
 | `sparte` | string | all | Filter: `STROM` \| `GAS` \| `WAERME` |
 | `kundentyp` | string | all | Filter: `Haushalt` \| `Gewerbe` \| `Waermepumpe` \| `Ladesaeule` \| `Einspeiser` \| `HEMS` \| `Gewerbe_RLM` |
-| `verbrauch_kwh` | decimal | `3500` | Annual consumption for `jahreskosten` estimation |
+| `verbrauch_kwh` | decimal | `3500` | Annual consumption — selects the Preisstaffel and drives the `jahreskosten` estimate |
 | `oekolabel` | string | — | Show only products with this label (e.g. `OK_POWER`) |
 | `include_dynamic` | bool | `true` | Include §41a EPEX-linked dynamic tariffs |
 | `only_dynamic` | bool | `false` | Return only §41a dynamic tariffs |

@@ -41,7 +41,7 @@ oidc = ["dep:jsonwebtoken", "cedar"]
 ## Registers `mako_http_requests_total` and `mako_http_request_duration_seconds`
 ## on the default Prometheus registry. `ServiceBuilder::with_metrics()` mounts the
 ## handler and adds a per-request recording middleware automatically.
-metrics = ["dep:prometheus"]
+metrics = ["dep:prometheus", "dep:rubo4e"]
 
 ## Enables `ServiceBuilder::with_rate_limit(RateLimitConfig)`.
 ## Adds a global GCRA rate limiter (429 when exhausted) via `governor`.
@@ -97,6 +97,9 @@ jsonwebtoken              = { workspace = true, optional = true }
 
 # Optional Prometheus dep — only compiled when feature=metrics is enabled
 prometheus                = { version = "0.14", default-features = false, features = ["process"], optional = true }
+# Only for `decimal_serde::decimal_from_json_number_count` — the process-wide
+# count of BO4E amounts read from a JSON number, exported by `metrics`.
+rubo4e                    = { workspace = true, optional = true }
 
 # Optional governor dep — only compiled when feature=rate-limit is enabled
 governor                  = { version = "0.6", optional = true }

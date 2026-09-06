@@ -395,6 +395,16 @@ CREATE TABLE vertragskomponenten (
     -- edmd reading-order id for the Beginn-/Schlussablesung (GPKE
     -- Ablesesteuerung) — the trail from a Schlussrechnung back to its reading.
     ablese_auftrag_id       UUID,
+    -- The annual consumption the tariff was agreed against, in kWh.
+    --
+    -- A contract fact, not a measurement: a Preisstaffel is selected by the
+    -- *expected* year, which is what the parties agreed and what the offer was
+    -- priced on, and it does not move when a billing period comes in above or
+    -- below it. `billingd` reads it through the product slices and picks the
+    -- Staffel with it; a flat-priced product ignores it, and a tiered one
+    -- without it is refused rather than billed at an arbitrary tier.
+    jahresverbrauch_kwh     NUMERIC(14,3)
+                        CHECK (jahresverbrauch_kwh IS NULL OR jahresverbrauch_kwh >= 0),
     fulfillment_data        JSONB,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()

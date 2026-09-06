@@ -57,6 +57,8 @@
 //!
 //! Port: `:9080`
 
+#![deny(unsafe_code)]
+
 use anyhow::Context as _;
 use axum::{
     Extension, Router,

@@ -661,6 +661,39 @@ its own `main`, taking `mako-service` piecemeal (`http::default_client`,
 See the [`mako-service` README](https://github.com/hupe1980/mako/tree/main/crates/mako-service)
 for code examples covering every module.
 
+#### What `/metrics` carries on every service
+
+Three metrics come from the runner, before a service registers anything of its
+own, and every daemon it hosts compiles them in. Scrape them the same way on
+every port. `makod` drives its own `main` and renders the third itself, beside
+its own `makod_*` gauges.
+
+| Metric | Type | What it says |
+|---|---|---|
+| `mako_http_requests_total{method,path,status}` | counter | Request volume and status mix. Path labels are normalised — a UUID, a pure-digit segment or anything over 24 characters becomes `{id}` — so a MaLo-ID cannot turn one route into ten thousand series |
+| `mako_http_request_duration_seconds{method,path}` | histogram | Latency, bucketed 1 ms → 5 s |
+| `mako_bo4e_decimal_from_json_number_total` | counter | BO4E amounts read from a JSON **number** rather than a string |
+
+A service with gauges of its own has two ways to publish them, and only one of
+them scales. `marktd` and `processd` register theirs on the same Prometheus
+registry, so they appear on `/metrics` beside the three above — one endpoint,
+one scrape. `invoicd`, `obsd` and `accountingd` render their own text and serve
+it from their own path (`/invoicd/metrics`, `/obs/metrics`,
+`/accountingd/metrics`), which costs a second scrape target. What none of them
+may do is route `/metrics` a second time: `Router::merge` panics on an
+overlapping method route while the router is assembled, so the daemon does not
+start. `cargo xtask check-runner-routes` holds every daemon to that.
+
+The third metric is the one worth an alert. Every amount on a BO4E wire — a
+price, a billed quantity, an invoice total — is read by a deserializer that
+accepts both spellings, because BO4E permits both. A **fractional** JSON number
+has already been through `f64` before any deserializer sees it: `0.1` is really
+`0.1000000000000000055511151231`, and `1.005` cannot round to `1.01` because it
+is no longer `1.005`. mako does not choose how a counterparty encodes its JSON
+and will not refuse a spelling the standard allows — so what it does instead is
+count. A rising series identifies the producer; a flat zero says every amount
+arrived with its scale intact.
+
 ---
 
 ## EDM reference architecture mapping

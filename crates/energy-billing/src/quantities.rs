@@ -1133,8 +1133,12 @@ impl Quantities {
 ///
 /// ## Network charge exemption
 ///
-/// Self-consumed electricity does not transit the public grid; therefore no
-/// NNE (§14a StromNEV) applies to `self_consumption_kwh`.
+/// Netzentgelte are charged for *Netznutzung* — the § 17 StromNEV Arbeits- and
+/// Leistungspreis are levied on what is taken from the grid at the
+/// Entnahmestelle. Self-consumed electricity never enters it, so it is outside
+/// that base and no NNE applies to `self_consumption_kwh`. This is not the
+/// § 14a EnWG reduction, which is a *reduced* Netzentgelt for a controllable
+/// load that does draw from the grid.
 ///
 /// ## Example
 ///
@@ -1144,7 +1148,7 @@ impl Quantities {
 ///
 /// let m = ProsumerMeterInput {
 ///     grid_consumption_kwh: dec!(250),   // drawn from grid → full tariff
-///     self_consumption_kwh: dec!(150),   // from own PV → Stromsteuer-exempt, no NNE
+///     self_consumption_kwh: dec!(150),   // from own PV → Stromsteuer-exempt, no Netznutzung
 ///     export_kwh: Some(dec!(100)),       // fed back to grid (via eeg-billing)
 /// };
 /// assert_eq!(m.total_consumption_kwh(), dec!(400));

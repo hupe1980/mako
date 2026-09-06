@@ -44,11 +44,13 @@ impl ProductdClient {
     /// A code with no version valid on its date comes back as `None` **in
     /// place**, so the caller can name which leg is unpriceable rather than
     /// getting a shorter list than it asked for.
+    /// The product definitions for a list of legs, each priced at the quantity
+    /// its contract states.
     pub async fn resolve_products(
         &self,
         lf_mp_id: &str,
-        anfragen: &[(String, time::Date)],
-    ) -> Result<Vec<Option<Product>>> {
+        anfragen: &[ProductAnfrage],
+    ) -> crate::error::BillingResult<Vec<Option<Product>>> {
         if anfragen.is_empty() {
             return Ok(Vec::new());
         }
@@ -56,9 +58,9 @@ impl ProductdClient {
         let body = serde_json::json!({
             "anfragen": anfragen
                 .iter()
-                .map(|(code, as_of)| serde_json::json!({
-                    "product_code": code,
-                    "as_of": as_of.to_string(),
+                .map(|a| serde_json::json!({
+                    "product_code": a.product_code,
+                    "as_of": a.as_of.to_string(),
                 }))
                 .collect::<Vec<_>>(),
         });
@@ -66,18 +68,24 @@ impl ProductdClient {
             .up
             .json(self.up.post(&path).json(&body))
             .await
-            .context("productd POST products/resolve")?
-            .context("productd knows no products for this Lieferant")?;
+            .context("productd POST products/resolve")
+            .and_then(|p| p.context("productd knows no products for this Lieferant"))
+            .map_err(|e| crate::error::BillingError::upstream("productd", e))?;
         let mut out = Vec::with_capacity(anfragen.len());
-        for entry in payload
+        for (entry, anfrage) in payload
             .get("produkte")
             .and_then(serde_json::Value::as_array)
             .into_iter()
             .flatten()
+            .zip(anfragen)
         {
             let product = entry.get("product").filter(|p| !p.is_null());
             out.push(match product {
-                Some(p) => Some(extract_tariff_from_product_data(p.get("data"), Some(p))?),
+                Some(p) => Some(extract_tariff_from_product_data(
+                    p.get("data"),
+                    Some(p),
+                    anfrage.jahresverbrauch_kwh,
+                )?),
                 None => None,
             });
         }
@@ -214,7 +222,8 @@ fn decimal_from_json(v: Option<&serde_json::Value>) -> Option<Decimal> {
 fn extract_tariff_from_product_data(
     data: Option<&serde_json::Value>,
     product: Option<&serde_json::Value>,
-) -> Result<Product> {
+    jahresverbrauch_kwh: Option<Decimal>,
+) -> crate::error::BillingResult<Product> {
     let category = product
         .and_then(|p| p.get("category"))
         .and_then(|v| v.as_str())
@@ -272,8 +281,9 @@ fn extract_tariff_from_product_data(
     // position is money the customer is not charged (or not credited), and it
     // looks exactly like a product that never had one — the same failure shape
     // as `KEIN_ARBEITSPREIS`, which is why that one is an Error-severity engine
-    // finding. This mapper cannot refuse (a catalog may legitimately carry
-    // positions billingd does not model), so it says so instead.
+    // finding. A catalog may legitimately carry positions billingd does not
+    // model, so these are reported rather than refused; a position it *does*
+    // model and cannot price is a refusal, below.
     let mut dropped: Vec<String> = Vec::new();
 
     for pp in &preispositionen {
@@ -297,20 +307,31 @@ fn extract_tariff_from_product_data(
         // which `rubo4e`'s `PreisstaffelSliceExt::select_for` implements and
         // `invoic-checker` uses on the grid side.
         //
-        // Reported rather than guessed, through the same channel as an unmapped
-        // preistyp. Tiered retail pricing is a `Product` model change, not
-        // something to approximate at the mapping boundary.
+        // With a quantity the tier is decided; without one it cannot be, and a
+        // tiered position is then one of two things: one billingd bills, which
+        // it must refuse, or one it has no field for anyway, which stays a
+        // report. The match below is what tells those apart — the position runs
+        // through it with no price, and whether an arm reports it as unmapped
+        // is the answer. Reading the match rather than keeping a second list of
+        // the preistypen it bills is what stops the two drifting apart.
         let staffeln = pp.get("preisstaffeln").and_then(|v| v.as_array());
-        if let Some(tiers) = staffeln.filter(|a| a.len() > 1) {
-            dropped.push(format!(
-                "{pt} ({} Preisstaffeln — a retail Product is flat-priced)",
-                tiers.len()
-            ));
-            continue;
-        }
-        let preis = staffeln
-            .and_then(|a| a.first())
-            .and_then(|s| decimal_from_json(s.get("preis")));
+        let tiers = staffeln.map_or(0, Vec::len);
+        let preis = if tiers > 1 {
+            // A Leistungspreis is tiered by **kW**, not by kWh, and billingd
+            // resolves no demand figure — so it is left unpriced and refused
+            // rather than selected with the wrong unit. `productd`'s Angebot,
+            // which does carry `leistung_kw`, is where a tiered one is priced.
+            (pt != "LEISTUNGSPREIS")
+                .then_some(jahresverbrauch_kwh)
+                .flatten()
+                .and_then(|menge| select_tier(staffeln, menge))
+        } else {
+            staffeln
+                .and_then(|a| a.first())
+                .and_then(|s| decimal_from_json(s.get("preis")))
+        };
+        let unpriced_tier = tiers > 1 && preis.is_none();
+        let unmapped_before = dropped.len();
 
         match (pt, category.as_str()) {
             ("GRUNDPREIS", "GAS") => gas_grundpreis_ct_per_day = preis,
@@ -370,6 +391,44 @@ fn extract_tariff_from_product_data(
             ("SERVICE_EVENT", _) => service_event_price_eur = preis,
             ("", _) => {}
             (other, _) => dropped.push((*other).to_owned()),
+        }
+
+        // The arm took the price, and no tier could be selected for it.
+        //
+        // Not reported through `dropped` like an unmapped preistyp: that
+        // channel is for a position billingd has no field for, which a catalog
+        // may legitimately carry. This is a position billingd *bills* — an
+        // Arbeitspreis, a Grundpreis — that would go missing from the invoice
+        // altogether, reconciling to nothing and reading exactly like a product
+        // that never had one.
+        //
+        // Two ways to get here, and the message says which: the contract states
+        // no Jahresverbrauch, or it states one that falls below every tier's
+        // floor.
+        if unpriced_tier && !pt.is_empty() && dropped.len() == unmapped_before {
+            let named = product
+                .and_then(|p| p.get("product_code"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("<unnamed>");
+            let why = if pt == "LEISTUNGSPREIS" {
+                "a Leistungspreis is tiered by kW and billingd resolves no demand figure".to_owned()
+            } else {
+                jahresverbrauch_kwh.map_or_else(
+                    || {
+                        "the contract states no jahresverbrauch_kwh, and a Preisstaffel is \
+                         selected by one"
+                            .to_owned()
+                    },
+                    |menge| format!("no Preisstaffel covers {menge} kWh/a"),
+                )
+            };
+            return Err(crate::error::BillingError::unprocessable(
+                "TARIFSTAFFEL_OHNE_MENGE",
+                format!(
+                    "product {named} carries {pt} with {tiers} Preisstaffeln and {why}, so \
+                     this product cannot be billed"
+                ),
+            ));
         }
     }
 
@@ -487,8 +546,36 @@ fn extract_tariff_from_product_data(
         "sharing_description": product.and_then(|p| p.get("sharing_description")).and_then(|v| v.as_str()),
         "energiequellen": energiequellen,
     });
-    serde_json::from_value::<Product>(flat)
-        .map_err(|e| anyhow::anyhow!("product deserialization from productd JSONB: {e}"))
+    serde_json::from_value::<Product>(flat).map_err(|e| {
+        crate::error::BillingError::upstream(
+            "productd",
+            format!("product deserialization from productd JSONB: {e}"),
+        )
+    })
+}
+
+/// The price of the Preisstaffel that applies at `menge`.
+///
+/// BO4E's own rule, through `rubo4e`'s `select_for`: the tightest tier whose
+/// ceiling is still at or above the quantity, so a quantity in the gap between
+/// two tiers „rutscht in die obere Zone". `None` below the lowest stated floor,
+/// where the product prices nothing at all, and for a tier list that does not
+/// read as BO4E — the catalogue is refused rather than approximated.
+fn select_tier(staffeln: Option<&Vec<serde_json::Value>>, menge: Decimal) -> Option<Decimal> {
+    use rubo4e::convenience::PreisstaffelSliceExt as _;
+    let tiers: Vec<rubo4e::current::Preisstaffel> =
+        serde_json::from_value(serde_json::Value::Array(staffeln?.clone())).ok()?;
+    tiers.select_for(menge).and_then(|s| s.preis)
+}
+
+/// One leg to price: which product, on which day, at which annual consumption.
+#[derive(Debug, Clone)]
+pub struct ProductAnfrage {
+    pub product_code: String,
+    /// The day whose catalogue version applies — the leg's first.
+    pub as_of: time::Date,
+    /// The contract's annual consumption, which selects a Preisstaffel.
+    pub jahresverbrauch_kwh: Option<Decimal>,
 }
 
 /// One valid-time slice of a MaLo's product assignment, clipped to the period.
@@ -503,6 +590,15 @@ pub struct ProductSlice {
     /// Exclusive end; `None` when the slice runs past the requested period.
     #[serde(default)]
     pub gueltig_bis: Option<time::Date>,
+    /// The annual consumption in kWh the tariff was agreed against — a
+    /// contract fact `vertragd` holds, and what selects a Preisstaffel.
+    ///
+    /// Not the billed period's consumption: a tier is agreed against the
+    /// *expected* year, so a cold quarter does not move a customer into a
+    /// cheaper band and a warm one does not move them out of it. `None` where
+    /// the contract states none, which only a tiered product needs.
+    #[serde(default)]
+    pub jahresverbrauch_kwh: Option<Decimal>,
 }
 
 impl ProductSlice {
@@ -585,6 +681,7 @@ mod slice_tests {
             product_code: "P".into(),
             gueltig_von: from,
             gueltig_bis: to,
+            jahresverbrauch_kwh: None,
         }
     }
 
@@ -1512,8 +1609,9 @@ impl AccountingdClient {
 
 #[cfg(test)]
 mod vertragsart_tests {
-    use super::VertragByMalo;
-    use energy_billing::Vertragsart;
+    use super::{VertragByMalo, extract_tariff_from_product_data};
+    use energy_billing::{Product, Vertragsart};
+    use rust_decimal::dec;
 
     /// The by-malo answer `vertragd` actually serves, trimmed to what this
     /// client reads. `versorgungsvertraege.vertragsart` is `NOT NULL` under a
@@ -1547,6 +1645,167 @@ mod vertragsart_tests {
                 "{wire} must reach the engine as itself"
             );
         }
+    }
+
+    // ── Tiered Preisstaffeln ──────────────────────────────────────────────
+
+    fn map(tarifpreise: serde_json::Value, category: &str) -> crate::error::BillingResult<Product> {
+        map_at(tarifpreise, category, None)
+    }
+
+    fn map_at(
+        tarifpreise: serde_json::Value,
+        category: &str,
+        jahresverbrauch_kwh: Option<rust_decimal::Decimal>,
+    ) -> crate::error::BillingResult<Product> {
+        let data = serde_json::json!({ "tarifpreise": tarifpreise });
+        let product = serde_json::json!({ "product_code": "P-TIER", "category": category });
+        extract_tariff_from_product_data(Some(&data), Some(&product), jahresverbrauch_kwh)
+    }
+
+    fn tiered() -> serde_json::Value {
+        serde_json::json!([{
+            "preistyp": "ARBEITSPREIS_EINTARIF",
+            "preisstaffeln": [
+                { "staffelgrenzeVon": "0",    "staffelgrenzeBis": "5000", "preis": "25.00" },
+                { "staffelgrenzeVon": "5001", "staffelgrenzeBis": "50000", "preis": "22.00" }
+            ]
+        }])
+    }
+
+    /// The contract's annual consumption picks the tier.
+    #[test]
+    fn a_tiered_position_bills_at_the_tier_the_year_falls_in() {
+        for (jahr, expected) in [(dec!(3500), dec!(25.00)), (dec!(20000), dec!(22.00))] {
+            let p = map_at(tiered(), "GAS", Some(jahr))
+                .unwrap_or_else(|e| panic!("{jahr} kWh/a must price: {e}"));
+            let Product::Gas(gas) = p else {
+                panic!("a GAS catalogue entry maps to Product::Gas")
+            };
+            assert_eq!(
+                gas.gas_arbeitspreis_ct_per_kwh_hs,
+                Some(expected),
+                "at {jahr}"
+            );
+        }
+    }
+
+    /// BO4E's own rule: a year in the gap between two tiers „rutscht in die
+    /// obere Zone".
+    #[test]
+    fn a_year_between_two_tiers_takes_the_upper_one() {
+        let p = map_at(tiered(), "GAS", Some(dec!(5000.6))).expect("prices");
+        let Product::Gas(gas) = p else {
+            panic!("a GAS catalogue entry maps to Product::Gas")
+        };
+        assert_eq!(gas.gas_arbeitspreis_ct_per_kwh_hs, Some(dec!(22.00)));
+    }
+
+    /// A year below every tier's floor prices nothing, and that is a refusal.
+    #[test]
+    fn a_year_under_every_floor_refuses_the_product() {
+        let staffeln = serde_json::json!([{
+            "preistyp": "ARBEITSPREIS_EINTARIF",
+            "preisstaffeln": [
+                { "staffelgrenzeVon": "1000", "staffelgrenzeBis": "5000", "preis": "25.00" },
+                { "staffelgrenzeVon": "5001", "staffelgrenzeBis": "50000", "preis": "22.00" }
+            ]
+        }]);
+        let err =
+            map_at(staffeln, "GAS", Some(dec!(500))).expect_err("no Preisstaffel covers 500 kWh/a");
+        assert!(
+            err.to_string().contains("no Preisstaffel covers"),
+            "the message must say which quantity found no tier: {err}"
+        );
+    }
+
+    /// A tiered price on a position billingd bills stops the invoice when the
+    /// contract states no year to select with.
+    ///
+    /// Before, it was pushed onto `dropped` and became one log line: the
+    /// invoice went out with no Arbeitspreis at all, which reads exactly like
+    /// a product that never had one.
+    #[test]
+    fn a_tiered_billed_position_refuses_the_product() {
+        let err = map(tiered(), "GAS").expect_err("a tiered Arbeitspreis needs a quantity");
+        let message = err.to_string();
+        assert!(
+            matches!(
+                err,
+                crate::error::BillingError::Unprocessable { code, .. }
+                    if code == "TARIFSTAFFEL_OHNE_MENGE"
+            ),
+            "expected a 422 naming the catalogue, got {message}"
+        );
+        assert!(
+            message.contains("P-TIER"),
+            "{message} must name the product"
+        );
+    }
+
+    /// A single Staffel is the flat case and prices as before.
+    #[test]
+    fn one_staffel_is_the_flat_price() {
+        let p = map(
+            serde_json::json!([
+                { "preistyp": "GRUNDPREIS",            "preisstaffeln": [{ "preis": "9.90" }] },
+                { "preistyp": "ARBEITSPREIS_EINTARIF", "preisstaffeln": [{ "preis": "28.40" }] }
+            ]),
+            "STROM",
+        )
+        .expect("a flat product prices");
+        let Product::Strom(strom) = p else {
+            panic!("a STROM catalogue entry maps to Product::Strom")
+        };
+        assert_eq!(strom.arbeitspreis_ct_per_kwh, Some(dec!(28.40)));
+        assert_eq!(strom.grundpreis_ct_per_day, Some(dec!(9.90)));
+    }
+
+    /// A Leistungspreis is tiered by kW, and billingd has no kW.
+    ///
+    /// Selecting it with the annual *kWh* would put a demand charge on the
+    /// invoice off a quantity three orders of magnitude away from the one the
+    /// tiers are stated in — the same hundredfold risk that keeps the Strom and
+    /// Gas Leistungspreis unmapped here at all.
+    #[test]
+    fn a_tiered_leistungspreis_is_refused_not_selected_by_kwh() {
+        let staffeln = serde_json::json!([
+            { "preistyp": "ARBEITSPREIS_EINTARIF", "preisstaffeln": [{ "preis": "9.00" }] },
+            { "preistyp": "LEISTUNGSPREIS", "preisstaffeln": [
+                { "staffelgrenzeVon": "0",   "staffelgrenzeBis": "100", "preis": "60.00" },
+                { "staffelgrenzeVon": "101", "staffelgrenzeBis": "500", "preis": "48.00" }
+            ]}
+        ]);
+        let err = map_at(staffeln, "WAERME", Some(dec!(20000)))
+            .expect_err("20 000 kWh/a says nothing about a kW tier");
+        assert!(
+            err.to_string().contains("tiered by kW"),
+            "the message must name the unit mismatch: {err}"
+        );
+    }
+
+    /// A tiered position the mapper has no field for is still only reported.
+    ///
+    /// The refusal is about a price that would go missing from an invoice, not
+    /// about tiers as such: a `LEISTUNGSPREIS` on a Strom product is already
+    /// unmappable flat or tiered, so tiering it changes nothing.
+    #[test]
+    fn a_tiered_unmapped_position_is_only_reported() {
+        let p = map(
+            serde_json::json!([
+                { "preistyp": "ARBEITSPREIS_EINTARIF", "preisstaffeln": [{ "preis": "28.40" }] },
+                { "preistyp": "LEISTUNGSPREIS", "preisstaffeln": [
+                    { "staffelgrenzeVon": "0",   "staffelgrenzeBis": "100", "preis": "60.00" },
+                    { "staffelgrenzeVon": "101", "preis": "48.00" }
+                ]}
+            ]),
+            "STROM",
+        )
+        .expect("an unmappable position does not stop the invoice");
+        let Product::Strom(strom) = p else {
+            panic!("a STROM catalogue entry maps to Product::Strom")
+        };
+        assert_eq!(strom.arbeitspreis_ct_per_kwh, Some(dec!(28.40)));
     }
 
     /// An absent or unrecognised value claims no statutory regime.

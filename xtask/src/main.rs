@@ -1,4 +1,5 @@
 // Suppress lints that are impractical to fix in build-tool code.
+#![deny(unsafe_code)]
 #![allow(clippy::collapsible_if)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::too_many_lines)]
@@ -19,6 +20,11 @@ Commands:
                         band would let types appear or vanish unnoticed.
   check-release-coverage  Fail when no profile covers the current (or --date) date
   check-prompt-tools  Refuse a procedure step naming a tool the agent cannot reach
+  check-crate-lints   Every crate root denies `unsafe_code`
+  check-runner-routes No daemon claims a route `mako_service::run` already mounts
+                              (`Router::merge` panics on those at startup)
+  check-sql           Every service's SQL literals prepare against its own schema
+                              (needs a Docker daemon)
   check-routes        Refuse axum 0.7 `/:param` route literals, which panic at startup
   check-publish-order Refuse a crates.io publish order that precedes its own dependencies
   check-bo4e-attributes Refuse a ZusatzAttribut that is not `mako:`-namespaced and registered
@@ -56,6 +62,7 @@ mod check_bo4e_attributes;
 mod check_bo4e_discriminants;
 mod check_bo4e_examples;
 mod check_business_dates;
+mod check_crate_lints;
 mod check_dep_versions;
 mod check_malo_ids;
 mod check_prompt_tools;
@@ -63,6 +70,8 @@ mod check_publish_order;
 mod check_release_coverage;
 mod check_rounding;
 mod check_routes;
+mod check_runner_routes;
+mod check_sql;
 mod check_tool_grants;
 mod check_wire_timestamps;
 mod import_profiles;
@@ -79,7 +88,10 @@ fn main() {
         Some("check-bo4e-coverage") => check_bo4e_coverage(),
         Some("check-release-coverage") => check_release_coverage::check_release_coverage(),
         Some("check-prompt-tools") => check_prompt_tools(),
+        Some("check-crate-lints") => check_crate_lints(),
         Some("check-routes") => check_routes(),
+        Some("check-runner-routes") => check_runner_routes(),
+        Some("check-sql") => check_sql(),
         Some("check-publish-order") => check_publish_order::check_publish_order(),
         Some("check-bo4e-attributes") => check_bo4e_attributes(),
         Some("check-bo4e-discriminants") => check_bo4e_discriminants(),
@@ -156,9 +168,30 @@ fn bump_version() {
     }
 }
 
+fn check_crate_lints() {
+    let (workspace_root, _) = workspace_info();
+    if !check_crate_lints::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
 fn check_routes() {
     let (workspace_root, _) = workspace_info();
     if !check_routes::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_runner_routes() {
+    let (workspace_root, _) = workspace_info();
+    if !check_runner_routes::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_sql() {
+    let (workspace_root, _) = workspace_info();
+    if !check_sql::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }

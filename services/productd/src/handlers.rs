@@ -2482,7 +2482,29 @@ pub async fn put_angebot(
 /// For single-rate tariffs:
 /// - `arbeitspreis_ct_per_kwh` is set to ARBEITSPREIS_EINTARIF
 /// - `arbeitspreis_ht_ct_per_kwh` and `arbeitspreis_nt_ct_per_kwh` are `None`
-pub fn extract_tarif_preise(data: &serde_json::Value) -> crate::pg::TarifPreise {
+///
+/// # Which tier
+///
+/// A Preisposition carries its prices as a list of Preisstaffeln, and which one
+/// applies is decided by the quantity — `verbrauch_kwh`, the reference annual
+/// consumption the feed is computed for. Reading `preisstaffeln[0]` instead
+/// publishes the lowest tier's price for every consumption, which understates
+/// the bill of any customer past the first boundary in the one place § 41c EnWG
+/// exists to make comparable. Selection follows BO4E's own rule — a quantity in
+/// a gap between two tiers „rutscht in die obere Zone" — through
+/// [`rubo4e::convenience::PreisstaffelSliceExt::select_for`], the same call the
+/// Angebot path makes.
+///
+/// A Leistungspreis is tiered by kW, not by kWh, and the feed carries no demand
+/// figure, so a tiered one is left unset rather than selected with the wrong
+/// quantity. A flat one (a single Staffel) is carried as before.
+pub fn extract_tarif_preise(
+    data: &serde_json::Value,
+    verbrauch_kwh: Decimal,
+) -> crate::pg::TarifPreise {
+    use rubo4e::convenience::PreisstaffelSliceExt as _;
+    use rubo4e::current::Preisstaffel;
+
     let positionen = data
         .get("tarifpreise")
         .and_then(|v| v.as_array())
@@ -2496,20 +2518,25 @@ pub fn extract_tarif_preise(data: &serde_json::Value) -> crate::pg::TarifPreise 
     let mut lp: Option<Decimal> = None;
 
     for pos in positionen {
-        let pt = pos.get("preistyp").and_then(|v| v.as_str()).unwrap_or("");
-        let first_staffel_preis = pos
-            .get("preisstaffeln")
-            .and_then(|s| s.as_array())
-            .and_then(|a| a.first())
-            .and_then(|s| s.get("preis"))
-            .and_then(parse_decimal_value);
+        let pt = mako_markt::bo4e::position_preistyp(pos);
+        let raw = pos.get("preisstaffeln").and_then(|s| s.as_array());
+        // A Preisstaffel that does not deserialise cannot be selected from; the
+        // feed drops the position rather than falling back to its first entry,
+        // which is the reading this function exists to stop making.
+        let tiers: Vec<Preisstaffel> = raw
+            .and_then(|a| serde_json::from_value(serde_json::Value::Array(a.clone())).ok())
+            .unwrap_or_default();
+        let at = |menge: Decimal| tiers.select_for(menge).and_then(|s| s.preis);
+        let preis = at(verbrauch_kwh);
 
         match pt {
-            "GRUNDPREIS" => gp = gp.or(first_staffel_preis),
-            "ARBEITSPREIS_EINTARIF" => ap_eintarif = ap_eintarif.or(first_staffel_preis),
-            "ARBEITSPREIS_HT" => ap_ht = ap_ht.or(first_staffel_preis),
-            "ARBEITSPREIS_NT" => ap_nt = ap_nt.or(first_staffel_preis),
-            "LEISTUNGSPREIS" => lp = lp.or(first_staffel_preis),
+            "GRUNDPREIS" => gp = gp.or(preis),
+            "ARBEITSPREIS_EINTARIF" => ap_eintarif = ap_eintarif.or(preis),
+            "ARBEITSPREIS_HT" => ap_ht = ap_ht.or(preis),
+            "ARBEITSPREIS_NT" => ap_nt = ap_nt.or(preis),
+            "LEISTUNGSPREIS" if tiers.len() == 1 => {
+                lp = lp.or(tiers.first().and_then(|s| s.preis));
+            }
             _ => {}
         }
     }
@@ -3058,7 +3085,7 @@ pub async fn get_comparison_feed(
     let tarife: Vec<crate::pg::ComparisonFeedEntry> = match rows
         .iter()
         .map(|row| {
-            let preise = extract_tarif_preise(&row.data);
+            let preise = extract_tarif_preise(&row.data, verbrauch_kwh);
             let netto = compute_jahreskosten_supply_netto(&preise, verbrauch_kwh);
             // The product's own Umsatzsteuersatz, not a fixed 19 %: the feed
             // and the invoice have to agree about what a household pays.

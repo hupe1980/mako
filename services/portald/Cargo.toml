@@ -19,7 +19,7 @@ path = "src/main.rs"
 
 [dependencies]
 mako-fristen = { workspace = true }
-mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
+mako-service = { workspace = true, features = ["oidc", "cedar", "otel", "metrics"] }
 axum         = { version = "0.8" }
 tokio        = { version = "1", features = ["full"] }
 serde        = { workspace = true, features = ["derive"] }

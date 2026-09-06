@@ -430,7 +430,7 @@ so the table stays small.
 | `oidc` | `OidcVerifier`, `Claims` extractor, JWKS background refresh |
 | `cedar` | `CedarEnforcer`, Cedar ABAC policy evaluation |
 | `otel` | OpenTelemetry OTLP/gRPC traces via `tracing-opentelemetry` |
-| `metrics` | Real Prometheus `/metrics` + `mako_http_requests_total` / `mako_http_request_duration_seconds` |
+| `metrics` | Real Prometheus `/metrics` + `mako_http_requests_total`, `mako_http_request_duration_seconds` and `mako_bo4e_decimal_from_json_number_total` |
 | `rate-limit` | GCRA rate limiter via `governor` |
 
 Typical production config:

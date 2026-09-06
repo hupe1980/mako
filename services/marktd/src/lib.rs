@@ -1,5 +1,7 @@
 //! `marktd` library root — exposes all modules for both `main.rs` and tests.
 
+#![deny(unsafe_code)]
+
 pub mod config;
 pub mod consent_lifecycle;
 pub mod fanout;

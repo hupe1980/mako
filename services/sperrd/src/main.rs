@@ -26,6 +26,8 @@
 //! | `PUT`   | `/api/v1/sperr-orders/{id}/cancel` | Withdraw a pending order |
 //! | `GET`   | `/health/live`, `/health/ready` | Probes |
 
+#![deny(unsafe_code)]
+
 use std::sync::Arc;
 
 use anyhow::Context as _;

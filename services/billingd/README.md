@@ -142,6 +142,7 @@ sniffing the body. The codes are stable and part of the API:
 | `NO_METER_DATA`, `NO_ACTIVE_PRODUCT` | 422 | edmd/productd has nothing for this MaLo, or a category mako reads from nowhere else arrived without its quantity |
 | `INCOMPLETE_METER_DATA` | 422 | the readings cover less of the period than the operator's `min_meter_coverage_pct` floor; unset, nothing is refused and the gap is a § 40a Abs. 2 EnWG estimate |
 | `TARIFWECHSEL_OHNE_TEILMENGEN` | 422 | the period splits into legs at different prices and the quantity arrived as one period total |
+| `TARIFSTAFFEL_OHNE_MENGE` | 422 | a billed position is priced in Preisstaffeln and no tier can be selected — the contract states no `jahresverbrauch_kwh`, or one below every tier's floor, or the position is a Leistungspreis whose tiers are in kW |
 | `MODEL_MISSING`, `XRECHNUNG_NOT_CONFORMANT` | 422 | the stored EN 16931 model is absent or does not satisfy its own BT-24 |
 | `UPSTREAM_UNAVAILABLE` | 502 | an upstream did not answer — the body names which |
 

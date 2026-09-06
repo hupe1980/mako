@@ -48,6 +48,8 @@
 //! master-data types in `mako-markt`. New shared code goes to the crate
 //! whose purpose it serves; a new purpose gets a new purpose-named crate.
 
+#![deny(unsafe_code)]
+
 /// Core MaKo process lifecycle + EDIFACT transport events (`de.mako.*`).
 ///
 /// Emitted by `makod` toward the ERP adapter / event bus; consumed by

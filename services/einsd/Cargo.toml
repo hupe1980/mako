@@ -20,7 +20,7 @@ path = "src/main.rs"
 [dependencies]
 mako-fristen = { workspace = true }
 mako-events = { workspace = true }
-mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
+mako-service = { workspace = true, features = ["oidc", "cedar", "otel", "metrics"] }
 billing      = { workspace = true }
 eeg-billing  = { path = "../../crates/eeg-billing", features = ["serde", "bo4e"] }
 # The BO4E outbound gate. A Gutschrift einsd assembles is the settlement's legal

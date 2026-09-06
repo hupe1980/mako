@@ -26,6 +26,8 @@
 //!
 //! Port: `:9380`
 
+#![deny(unsafe_code)]
+
 use accountingd::{config, handlers, mcp_server};
 use anyhow::Context as _;
 use axum::{
@@ -225,7 +227,11 @@ impl Daemon for Accountingd {
                 "/api/v1/business-partners/{kunden_nr}/balance",
                 get(handlers::get_bp_balance),
             )
-            .route("/metrics", get(handlers::metrics))
+            // Not `/metrics`: `mako_service::run` mounts that itself, and
+            // merging two routers that both claim `GET /metrics` panics while
+            // the router is assembled — i.e. at startup. The ledger gauges get
+            // their own path, the way `invoicd` and `obsd` already do.
+            .route("/accountingd/metrics", get(handlers::metrics))
             .route("/api/v1/offene-posten", get(handlers::get_offene_posten))
             // ── Dunning ────────────────────────────────────────────────────────────
             .route("/api/v1/dunning", get(handlers::get_dunning))

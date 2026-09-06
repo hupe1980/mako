@@ -69,6 +69,13 @@ pub struct CreateKomponenteInput {
     pub product_code: String,
     pub lieferbeginn: Date,
     pub lieferende: Option<Date>,
+    /// The annual consumption in kWh the tariff was agreed against.
+    ///
+    /// What selects a Preisstaffel. A flat-priced product does not need it; a
+    /// tiered one cannot be billed without it, and `billingd` refuses the
+    /// product rather than picking a tier.
+    #[serde(default)]
+    pub jahresverbrauch_kwh: Option<rust_decimal::Decimal>,
     pub fulfillment_data: Option<serde_json::Value>,
 }
 
@@ -486,8 +493,8 @@ async fn insert_komponente(
     sqlx::query(
         "INSERT INTO vertragskomponenten
          (id,vertrag_id,tenant,sparte,malo_id,melo_id,lf_mp_id,nb_mp_id,
-          lieferbeginn,lieferende,fulfillment_data)
-         SELECT $1,$2,v.tenant,$3,$4,$5,$6,$7,$8,$9,$10
+          lieferbeginn,lieferende,jahresverbrauch_kwh,fulfillment_data)
+         SELECT $1,$2,v.tenant,$3,$4,$5,$6,$7,$8,$9,$10,$11
          FROM versorgungsvertraege v WHERE v.id=$2",
     )
     .bind(id)
@@ -499,6 +506,7 @@ async fn insert_komponente(
     .bind(&k.nb_mp_id)
     .bind(k.lieferbeginn)
     .bind(k.lieferende)
+    .bind(k.jahresverbrauch_kwh)
     .bind(&k.fulfillment_data)
     .execute(&mut *conn)
     .await?;

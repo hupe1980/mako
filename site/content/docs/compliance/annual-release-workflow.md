@@ -83,9 +83,14 @@ cargo xtask pdf-grid path/to/UTILMD_AHB_Strom_2.3.pdf                   # the gr
 
 The fix belongs in `xtask/src/bdew/`, never in the JSON.
 
-A document defect the importer works around is printed as `warn` — an `SG27
-MOA` row without any status in INVOIC AHB 1.0b gets its status from the MIG.
-Read those lines; they are the places where the AHB and the profile differ.
+A document defect the importer works around is printed as `warn`, and those
+lines are the places where the AHB and the profile differ. Two shapes exist
+today: an `SG27 MOA` row without any status in INVOIC AHB 1.0b gets its status
+from the MIG, and an operand cell printed without its operand letter (UTILTS
+AHB 1.1 `SG8 DTM` DE 2379 in two of its three columns) takes the letter the
+column that prints one uses for the same data element and code. Both are
+evidenced rather than defaulted; a defect with no such evidence fails the
+import instead.
 
 Every Bedingung a status expression or an operand cites must have its text; a
 citation the reader cannot resolve fails the import, because the evaluator
@@ -128,6 +133,18 @@ cargo xtask validate-profiles            # sources ↔ files, dates and continui
 cargo xtask check-pid-coverage           # the shipped columns against the Anwendungsübersicht
 cargo xtask check-release-coverage --date 2027-10-01
 ```
+
+`validate-profiles` also counts the status expressions the extraction cut in
+half. That count is **zero**, pinned in
+`xtask/profile-expression-defects.json`, and may only shrink — so a new
+publication whose typesetting the reader does not yet handle fails the import
+rather than shipping a place the validator would judge unconditioned. What it
+cannot see is an expression that lost an *operator* rather than a citation: two
+citations side by side read as a conjunction, so `(…) ⊻ ([177] ∧ [178])`
+printed with the `⊻` on a line of its own becomes `(…) ([177] ∧ [178])` — a
+rule that parses, and demands both branches of an exclusive choice. Read the
+`profile-diff` output for operators that appear or vanish, and check a
+suspicious column against `pdf-grid`.
 
 A Prüfidentifikator carried by the predecessor and absent from the new profile
 fails `validate-profiles`. Confirm the retirement in the AHB's Änderungshistorie

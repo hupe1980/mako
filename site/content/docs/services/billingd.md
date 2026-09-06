@@ -907,6 +907,7 @@ code:
 | `VALIDATION_BLOCKED` | 422 | the engine refused — the body carries every blocking warning |
 | `SECT41A_NO_LASTGANG` | 422 | a dynamic tariff with no interval data to price |
 | `NO_METER_DATA`, `NO_ACTIVE_PRODUCT` | 422 | `edmd` / `productd` has nothing for this MaLo |
+| `TARIFSTAFFEL_OHNE_MENGE` | 422 | the product prices a billed position in Preisstaffeln and no tier can be selected — the contract states no `jahresverbrauch_kwh`, or one below every tier's floor, or the position is a Leistungspreis whose tiers are in kW |
 | `MODEL_MISSING`, `XRECHNUNG_NOT_CONFORMANT`, `BT24_NOT_AN_INVOICE` | 422 | the stored EN 16931 model is absent or does not satisfy its own BT-24 |
 | `NUTZUNGSPLAN_INVALID`, `NUTZUNGSPLAN_INCOMPLETE`, `RABATT_EXCEEDS_ARBEITSPREIS` | 422 | a §42b GGV input that would mis-bill a participant |
 | `UPSTREAM_UNAVAILABLE` | 502 | an upstream did not answer — the body names which |

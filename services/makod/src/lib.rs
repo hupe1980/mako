@@ -38,6 +38,8 @@
 //! use makod::deadline_dispatch;
 //! ```
 
+#![deny(unsafe_code)]
+
 pub mod api;
 pub mod core;
 pub mod orchestrator;

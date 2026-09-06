@@ -297,6 +297,13 @@ pub struct MaloProduktSlice {
     pub gueltig_von: Date,
     /// Exclusive; `None` when the slice runs past the period asked about.
     pub gueltig_bis: Option<Date>,
+    /// The annual consumption the tariff was agreed against, in kWh.
+    ///
+    /// Rides with the slice because it is what selects a Preisstaffel, and the
+    /// only reader that needs it is the one pricing this slice. `None` where
+    /// the contract states none — which a flat-priced product does not need
+    /// and a tiered one cannot be billed without.
+    pub jahresverbrauch_kwh: Option<rust_decimal::Decimal>,
 }
 
 /// The product slices covering `[von, bis]` for a MaLo, clipped and ordered.
@@ -319,6 +326,7 @@ pub async fn malo_slices(
     let bis_exkl = bis.next_day().unwrap_or(bis);
     Ok(sqlx::query_as::<_, MaloProduktSlice>(
         r"SELECT k.malo_id, k.lf_mp_id, k.sparte, p.product_code,
+                 k.jahresverbrauch_kwh,
                  GREATEST(p.gueltig_von, $3) AS gueltig_von,
                  CASE WHEN p.gueltig_bis IS NULL OR p.gueltig_bis > $4
                       THEN $4 ELSE p.gueltig_bis END AS gueltig_bis

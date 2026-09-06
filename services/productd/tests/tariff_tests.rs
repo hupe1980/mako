@@ -775,7 +775,7 @@ mod comparison_feed_tests {
                 { "preistyp": "ARBEITSPREIS_EINTARIF", "preisstaffeln": [{ "preis": "28.40" }] }
             ]
         });
-        let preise = extract_tarif_preise(&data);
+        let preise = extract_tarif_preise(&data, dec!(3500));
         assert_eq!(preise.grundpreis_ct_per_day, Some(dec!(5.50)));
         assert_eq!(preise.arbeitspreis_ct_per_kwh, Some(dec!(28.40)));
         assert!(preise.arbeitspreis_ht_ct_per_kwh.is_none());
@@ -792,7 +792,7 @@ mod comparison_feed_tests {
                 { "preistyp": "ARBEITSPREIS_NT", "preisstaffeln": [{ "preis": "22.80" }] }
             ]
         });
-        let preise = extract_tarif_preise(&data);
+        let preise = extract_tarif_preise(&data, dec!(3500));
         assert_eq!(preise.grundpreis_ct_per_day, Some(dec!(6.00)));
         // For portal display, arbeitspreis_ct_per_kwh = HT rate
         assert_eq!(preise.arbeitspreis_ct_per_kwh, Some(dec!(31.20)));
@@ -808,14 +808,14 @@ mod comparison_feed_tests {
                 { "preistyp": "ARBEITSPREIS_EINTARIF", "preisstaffeln": [{ "preis": 29.5 }] }
             ]
         });
-        let preise = extract_tarif_preise(&data);
+        let preise = extract_tarif_preise(&data, dec!(3500));
         assert_eq!(preise.arbeitspreis_ct_per_kwh, Some(dec!(29.5)));
     }
 
     #[test]
     fn extract_preise_empty_positionen() {
         let data = serde_json::json!({ "tarifpreise": [] });
-        let preise = extract_tarif_preise(&data);
+        let preise = extract_tarif_preise(&data, dec!(3500));
         assert!(preise.grundpreis_ct_per_day.is_none());
         assert!(preise.arbeitspreis_ct_per_kwh.is_none());
     }
@@ -823,7 +823,7 @@ mod comparison_feed_tests {
     #[test]
     fn extract_preise_no_positionen_field() {
         let data = serde_json::json!({ "name": "No positions" });
-        let preise = extract_tarif_preise(&data);
+        let preise = extract_tarif_preise(&data, dec!(3500));
         assert!(preise.grundpreis_ct_per_day.is_none());
         assert!(preise.arbeitspreis_ct_per_kwh.is_none());
     }
@@ -837,10 +837,80 @@ mod comparison_feed_tests {
                 { "preistyp": "GRUNDPREIS",     "preisstaffeln": [{ "preis": "4.80" }] }
             ]
         });
-        let preise = extract_tarif_preise(&data);
+        let preise = extract_tarif_preise(&data, dec!(3500));
         assert_eq!(preise.grundpreis_ct_per_day, Some(dec!(4.80)));
         // EEG_VERGUETUNG must NOT appear as arbeitspreis
         assert!(preise.arbeitspreis_ct_per_kwh.is_none());
+    }
+
+    #[test]
+    fn extract_preise_selects_the_tier_the_consumption_falls_in() {
+        // A tiered Gas Arbeitspreis: 25 ct up to 5 000 kWh/a, 22 ct above it.
+        // Reading `preisstaffeln[0]` publishes 25 ct for every consumption, so
+        // the § 41c comparison feed overstates a 20 000 kWh household's bill by
+        // 3 ct on every kWh — and understates the other direction just as
+        // easily, since a tiered tariff is as often cheaper at the top.
+        let data = serde_json::json!({
+            "tarifpreise": [
+                { "preistyp": "GRUNDPREIS", "preisstaffeln": [{ "preis": "9.90" }] },
+                { "preistyp": "ARBEITSPREIS_EINTARIF", "preisstaffeln": [
+                    { "staffelgrenzeVon": "0",    "staffelgrenzeBis": "5000",  "preis": "25.00" },
+                    { "staffelgrenzeVon": "5001", "staffelgrenzeBis": "50000", "preis": "22.00" }
+                ]}
+            ]
+        });
+        let unten = extract_tarif_preise(&data, dec!(3500));
+        assert_eq!(unten.arbeitspreis_ct_per_kwh, Some(dec!(25.00)));
+        let oben = extract_tarif_preise(&data, dec!(20000));
+        assert_eq!(oben.arbeitspreis_ct_per_kwh, Some(dec!(22.00)));
+        // The Grundpreis has one unbounded tier and is the same either way.
+        assert_eq!(unten.grundpreis_ct_per_day, Some(dec!(9.90)));
+        assert_eq!(oben.grundpreis_ct_per_day, Some(dec!(9.90)));
+    }
+
+    #[test]
+    fn extract_preise_lands_in_the_upper_zone_between_two_tiers() {
+        // BO4E's own rule: a quantity in the gap between `…Bis 5000` and
+        // `…Von 5001` „rutscht in die obere Zone".
+        let data = serde_json::json!({
+            "tarifpreise": [
+                { "preistyp": "ARBEITSPREIS_EINTARIF", "preisstaffeln": [
+                    { "staffelgrenzeVon": "0",    "staffelgrenzeBis": "5000",  "preis": "25.00" },
+                    { "staffelgrenzeVon": "5001", "staffelgrenzeBis": "50000", "preis": "22.00" }
+                ]}
+            ]
+        });
+        let preise = extract_tarif_preise(&data, dec!(5000.6));
+        assert_eq!(preise.arbeitspreis_ct_per_kwh, Some(dec!(22.00)));
+    }
+
+    #[test]
+    fn a_tiered_leistungspreis_is_left_unset() {
+        // A Leistungspreis is tiered by kW; the feed carries no demand figure,
+        // so there is no quantity to select on and the first tier would be a
+        // guess. A flat one is carried as before.
+        let tiered = serde_json::json!({
+            "tarifpreise": [
+                { "preistyp": "LEISTUNGSPREIS", "preisstaffeln": [
+                    { "staffelgrenzeVon": "0",   "staffelgrenzeBis": "100", "preis": "60.00" },
+                    { "staffelgrenzeVon": "101", "preis": "48.00" }
+                ]}
+            ]
+        });
+        assert!(
+            extract_tarif_preise(&tiered, dec!(3500))
+                .leistungspreis_ct_per_kw_month
+                .is_none()
+        );
+        let flat = serde_json::json!({
+            "tarifpreise": [
+                { "preistyp": "LEISTUNGSPREIS", "preisstaffeln": [{ "preis": "60.00" }] }
+            ]
+        });
+        assert_eq!(
+            extract_tarif_preise(&flat, dec!(3500)).leistungspreis_ct_per_kw_month,
+            Some(dec!(60.00))
+        );
     }
 
     // ── compute_jahreskosten_supply_netto ─────────────────────────────────────
@@ -1093,7 +1163,7 @@ mod comparison_feed_tests {
             ]
         });
 
-        let preise = extract_tarif_preise(&data);
+        let preise = extract_tarif_preise(&data, dec!(3500));
         assert_eq!(preise.grundpreis_ct_per_day, Some(dec!(5.50)));
         assert_eq!(preise.arbeitspreis_ct_per_kwh, Some(dec!(28.40)));
 

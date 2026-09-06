@@ -4,6 +4,8 @@
 //! durability rails. This binary owns only the wiring: fail-closed
 //! authentication checks, the router, and the background workers.
 
+#![deny(unsafe_code)]
+
 use std::sync::Arc;
 
 use anyhow::Context as _;

@@ -65,6 +65,7 @@ fn vertrag_input(erp_id: &str) -> pg::CreateVersorgungsvertragInput {
             product_code: "STROM-BASIS-2026".to_owned(),
             lieferbeginn: d,
             lieferende: None,
+            jahresverbrauch_kwh: None,
             fulfillment_data: None,
         }],
     }

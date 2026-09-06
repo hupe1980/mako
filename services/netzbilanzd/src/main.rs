@@ -40,6 +40,8 @@
 //! Liveness and readiness (`/health`, `/health/ready`) are mounted by
 //! `mako_service::run`.
 
+#![deny(unsafe_code)]
+
 use std::sync::Arc;
 
 use anyhow::Context as _;

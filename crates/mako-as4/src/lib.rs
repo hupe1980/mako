@@ -78,6 +78,8 @@
 //! assert!(pm.is_some());
 //! ```
 
+#![deny(unsafe_code)]
+
 pub mod constants;
 pub mod partner_directory;
 pub mod pmode;

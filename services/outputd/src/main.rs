@@ -30,6 +30,8 @@
 //! | `GET` | `/api/v1/templates/by-hash/{hash}` | Resolve the layout an issued document used |
 //! | `GET` | `/health` · `/health/ready` | Liveness · readiness |
 
+#![deny(unsafe_code)]
+
 use std::sync::Arc;
 
 use anyhow::Context as _;

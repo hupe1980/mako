@@ -20,7 +20,7 @@ path = "src/main.rs"
 [dependencies]
 mako-fristen = { workspace = true }
 mako-events = { workspace = true }
-mako-service  = { path = "../../crates/mako-service", features = ["otel","oidc","cedar"] }
+mako-service  = { path = "../../crates/mako-service", features = ["otel","oidc","cedar", "metrics"] }
 mako-markt    = { path = "../../crates/mako-markt" }
 axum          = { version = "0.8" }
 strsim        = { workspace = true }

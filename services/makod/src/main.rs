@@ -984,15 +984,11 @@ fn main() -> anyhow::Result<()> {
     // to clear the image's baked-in default), remove it from the environment before
     // clap parses arguments.  Clap treats an env var that is present-but-empty as
     // "the flag was invoked with no value", which fails for required-value args.
-    //
-    // Safety: main() runs single-threaded before any call to thread::spawn or
-    // tokio::runtime::Builder::build(), so no other thread can race on the
-    // environment here.
     if matches!(std::env::var("MAKOD_DATA_DIR").as_deref(), Ok("")) {
-        // SAFETY: single-threaded at this point; no concurrent env access.
+        // SAFETY: `main` is still single-threaded here — before any
+        // `thread::spawn` and before the tokio runtime is built — so nothing
+        // else can be reading the environment while it is written.
         #[allow(unsafe_code)]
-        // SAFETY: main() is single-threaded before any tokio::spawn or thread::spawn
-        // call, so no other thread races on the environment.
         unsafe {
             std::env::remove_var("MAKOD_DATA_DIR");
         }

@@ -40,6 +40,23 @@ CREATE EXTENSION IF NOT EXISTS btree_gist;
 --     BO4E v202601 ships. Write path always records current version.
 --   • preisblaetter.source / pricat_versions.source: discriminates operator API
 --     uploads ('api') from makod-sourced PRICAT 27003 ingest ('mako').
+--   • `tenant` is on state, not on identity. What the whole market names the
+--     same way is keyed by that name alone — `malo` with its
+--     `rollenzuordnungen`, `melo`, `partners`, the `preisblaetter*` a
+--     Netzbetreiber publishes, and the nationwide BDEW series
+--     `mmm_preise_strom` / `mmma_preise_gas`. What *this* deployment
+--     knows or decides carries `tenant`: `versorgungsstatus`, `bilanzierungen`,
+--     `lf_zuordnung`, `melo_msb_zuordnungen`, `nelo`, `tranche`, the devices
+--     and the ESA tables. Two exceptions with reasons of their own — the
+--     outbound plumbing (`subscriptions`, `event_log`, `event_delivery`,
+--     `processed_events`, `process_correlation`) is per-deployment by
+--     construction, and `zaehler_saisons` is scoped through its
+--     `zaehler_register` parent.
+--
+--     A query that joins across the line scopes only the tenant-carrying side.
+--     `melo m … WHERE m.tenant = $1` names a column that does not exist, and
+--     because sqlx prepares at run time it fails on the request rather than in
+--     the build — which is what `cargo xtask check-sql` is for.
 
 -- ── Marktlokation ─────────────────────────────────────────────────────────────
 

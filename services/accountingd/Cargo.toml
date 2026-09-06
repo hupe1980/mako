@@ -21,7 +21,7 @@ path = "src/main.rs"
 mako-fristen = { workspace = true }
 mako-events = { workspace = true }
 mako-markt  = { workspace = true, features = ["makod-client"] }
-mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
+mako-service = { workspace = true, features = ["oidc", "cedar", "otel", "metrics"] }
 rmcp         = { workspace = true }
 schemars     = { workspace = true }
 axum         = { version = "0.8" }

@@ -710,7 +710,7 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         let entries: Vec<serde_json::Value> = rows.iter().map(|row| {
-            let preise = extract_tarif_preise(&row.data);
+            let preise = extract_tarif_preise(&row.data, dec!(3500));
             let jk_netto = compute_jahreskosten_supply_netto(&preise, dec!(3500));
             serde_json::json!({
                 "product_code":    row.product_code,

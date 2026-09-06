@@ -1689,6 +1689,11 @@ pub async fn get_sharing_eligibility(
     // Fernauslesbarkeit). The MeLo may have no MaLo and no meter yet; LEFT JOINs
     // keep those cases reportable instead of 404-ing a point that simply lacks
     // master data.
+    //
+    // Only `zaehler` is tenant-scoped. `melo` and `malo` are keyed by their
+    // market-wide identifiers and carry no `tenant` column — the schema's
+    // division between identity and this deployment's own state — so scoping
+    // them is not merely unnecessary, it names a column that does not exist.
     let row = sqlx::query(
         r"SELECT m.melo_id,
                  m.malo_id,
@@ -1698,8 +1703,8 @@ pub async fn get_sharing_eligibility(
                  z.data ->> 'istFernauslesbar' AS ist_fernauslesbar
             FROM melo m
             LEFT JOIN malo    ma ON ma.malo_id = m.malo_id
-            LEFT JOIN zaehler z  ON z.melo_id  = m.melo_id AND z.tenant = m.tenant
-           WHERE m.melo_id = $1 AND m.tenant = $2
+            LEFT JOIN zaehler z  ON z.melo_id  = m.melo_id AND z.tenant = $2
+           WHERE m.melo_id = $1
            ORDER BY z.updated_at DESC NULLS LAST
            LIMIT 1",
     )

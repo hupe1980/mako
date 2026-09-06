@@ -45,7 +45,7 @@ uuid               = { workspace = true }
 tokio              = { version = "1", features = ["full"] }
 tokio-util         = { workspace = true }
 tracing            = "0.1"
-mako-service       = { workspace = true, features = ["otel", "cedar", "oidc", "rate-limit"] }
+mako-service       = { workspace = true, features = ["otel", "cedar", "oidc", "rate-limit", "metrics"] }
 krafka             = { workspace = true }
 futures            = { version = "0.3", default-features = false, features = ["std"] }
 rmcp               = { workspace = true }

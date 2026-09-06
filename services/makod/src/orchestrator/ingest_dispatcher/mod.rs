@@ -154,8 +154,8 @@ impl IngestOutcome {
 /// [`mako_engine::workflow::OccupiesBusinessKey::occupies_business_key`].
 ///
 /// A parameter rather than a `W::State: OccupiesBusinessKey` bound because only
-/// 13 of the 63 workflow names dispatched here supply a verdict at all — 6
-/// through that trait, 7 through an inherent `!is_terminal()` closure — and the
+/// 15 of the 63 workflow names dispatched here supply a verdict at all — 7
+/// through that trait, 8 through an inherent terminal-state closure — and the
 /// verdict is domain knowledge that belongs in the workflow's own crate
 /// — makod only *consumes* what a crate has already published (that trait, or an
 /// inherent `is_terminal()`). Families that publish neither pass `None` and keep

@@ -142,7 +142,10 @@ impl EdifactIngestDispatcher {
                         cmd,
                         &fv,
                         &[],
-                        |s| !s.is_terminal(),
+                        // The crate publishes the verdict; a local `!is_terminal()`
+                        // would be a second definition of the same domain fact,
+                        // and it differs — `New` occupies nothing.
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 }

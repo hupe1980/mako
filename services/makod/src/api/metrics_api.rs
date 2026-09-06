@@ -172,6 +172,12 @@ async fn handler(
     // EngineMetrics instance (AtomicU64 reads, no I/O).
     let event_counters = EngineMetrics::global().snapshot().render_prometheus();
 
+    // The same series the runner exports on the fifteen daemons it hosts.
+    // makod drives its own `main` and so renders it here instead — and it is
+    // the daemon that reads the most BO4E, so a counterparty encoding amounts
+    // as JSON numbers shows up here first.
+    let bo4e_json_numbers = rubo4e::decimal_serde::decimal_from_json_number_count();
+
     // Build Prometheus text exposition format (v0.0.4).
     let body = format!(
         "# HELP makod_outbox_pending_total Number of outbound messages waiting in the AS4 outbox.\n\
@@ -195,6 +201,9 @@ async fn handler(
          # HELP makod_build_info A metric with a constant value 1 labelled with version information.\n\
          # TYPE makod_build_info gauge\n\
          makod_build_info{{version=\"{version}\"}} 1\n\
+         # HELP mako_bo4e_decimal_from_json_number_total BO4E decimal fields read from a JSON number rather than a string (a fractional one has already lost its scale to f64).\n\
+         # TYPE mako_bo4e_decimal_from_json_number_total counter\n\
+         mako_bo4e_decimal_from_json_number_total {bo4e_json_numbers}\n\
          {event_counters}",
     );
 

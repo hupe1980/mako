@@ -1,48 +1,11 @@
 {
   "comment": [
-    "Bedingung expressions the profile import writes truncated: a PDF column break cut them in half.",
-    "The AHB rule they stand for is not recoverable from the extraction, so they are recorded here rather than guessed at.",
-    "Per profile directory: the status text as committed, and how often it occurs.",
-    "`cargo xtask validate-profiles` refuses any fragment that is new or more frequent than recorded.",
+    "Bedingung expressions the profile import writes truncated — currently none.",
+    "A PDF column break, a row the clustering splits, or a slip in the document itself can cut one in half; the reader handles the shapes the 32 mirrored publications contain, and this file is what keeps that true.",
+    "`cargo xtask validate-profiles` refuses any fragment that is new or more frequent than recorded, so the empty set is a ratchet: a parser change that reintroduces one fails the build.",
+    "It is deliberately kept rather than deleted. An entry here is a documented gap; no file at all would be a silent one.",
+    "It sees only what `Status::parse` refuses. An extraction that loses an *operator* still parses — two citations side by side read as a conjunction — so a suspicious column is read against `cargo xtask pdf-grid` and `profile-diff`.",
     "Regenerate with BLESS_PROFILE_EXPRESSIONS=1 cargo xtask validate-profiles."
   ],
-  "profiles": {
-    "invoic/fv20260401": {
-      "X ([950] [509] ∧ ([64] ∧ [53])": 1
-    },
-    "invoic/fv20261001": {
-      "X ([950] [509] ∧ ([64] ∧ [53])": 1
-    },
-    "mscons/fv20260401": {
-      "Soll ([92] ⊻": 1,
-      "Soll ([92] ⊻ [93]) ∧ [126] [93]) ∧ [126]": 1,
-      "X ([32] ∧ ([33] ∨ [36] ∨ ∨ [141]))": 1
-    },
-    "mscons/fv20261001": {
-      "Soll ([92] ⊻": 1,
-      "Soll ([92] ⊻ [93]) ∧ [126] [93]) ∧ [126]": 1,
-      "X ([32] ∧ ([33] ∨ [36] ∨ ∨ [141]))": 1
-    },
-    "ordrsp/fv20260401": {
-      "X [15] [493] ∧": 1
-    },
-    "quotes/fv20251001": {
-      "X ([31] ∧ ([65] ⊻ [66])) ⊻ ([942] [69] ∧ ([67] ⊻": 1
-    },
-    "quotes/fv20261001": {
-      "X ([31] ∧ ([65] ⊻ [66])) ⊻ ([942] [69] ∧ ([67] ⊻": 1
-    },
-    "utilmd/fv20251001": {
-      "Soll [8] ∧ [301] ∧": 1,
-      "∧ [387]": 1
-    },
-    "utilmd/fv20261001": {
-      "∧ [387]": 1
-    },
-    "utilts/fv20261001": {
-      "X ([931] [31]": 2,
-      "[10P0..1]": 2,
-      "∧ [32] ∧ [33]) ⊻ (([964] ∧ [965] [34]) ∧ [507]) [9P0..1]": 2
-    }
-  }
+  "profiles": {}
 }

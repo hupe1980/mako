@@ -519,15 +519,23 @@ pub(crate) async fn resolve_legs(
     // One round trip prices every leg: asking productd per leg is an N+1 on
     // every invoice, and two calls could disagree if the catalogue changed
     // between them.
-    let anfragen: Vec<(String, time::Date)> = slices
+    let anfragen: Vec<crate::clients::ProductAnfrage> = slices
         .iter()
-        .map(|s| (s.product_code.clone(), s.gueltig_von.max(from)))
+        .map(|s| crate::clients::ProductAnfrage {
+            product_code: s.product_code.clone(),
+            as_of: s.gueltig_von.max(from),
+            // A Preisstaffel is selected by the year the contract states, not
+            // by the period being billed — see `ProductSlice`.
+            jahresverbrauch_kwh: s.jahresverbrauch_kwh,
+        })
         .collect();
+    // No `map_err` here: `resolve_products` already says whether the fault is
+    // productd's (502) or the catalogue's (422). Re-wrapping it as `upstream`
+    // would send an operator to a healthy service.
     let produkte = deps
         .productd
         .resolve_products(&req.lf_mp_id, &anfragen)
-        .await
-        .map_err(|e| BillingError::upstream("productd", e))?;
+        .await?;
     let mut legs = Vec::with_capacity(slices.len());
     for (slice, produkt) in slices.iter().zip(produkte) {
         let am = slice.gueltig_von.max(from);

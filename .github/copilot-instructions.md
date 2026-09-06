@@ -117,6 +117,7 @@ cargo check --all-targets --all-features
 cargo test --all-features
 cargo test -p mako-engine --all-features
 cargo test --test <name> --all-features
+just test-db                          # every service's PostgreSQL suite + check-sql (needs Docker)
 just test-edmd-db                     # edmd meterstore storage integration (testcontainers Docker)
 cargo build -p makod --release
 cargo clippy --all-targets --all-features -- -D warnings
@@ -132,13 +133,22 @@ cargo xtask check-release-coverage    # verify format-version coverage
 cargo xtask check-bo4e-coverage       # verify rubo4e::current type count matches README exactly
 cargo xtask check-bo4e-discriminants  # refuse a hand-written BO4E `_typ` (build it typed instead)
 cargo xtask check-bo4e-examples       # refuse a documented BO4E example using an undefined field
+cargo xtask check-crate-lints         # every crate root denies `unsafe_code` (it is a crate attribute, so a lib.rs and a main.rs each need their own)
+cargo xtask check-runner-routes       # no daemon claims a route `mako_service::run` mounts — `Router::merge` panics on those at startup
+cargo xtask check-sql                 # every service's SQL prepares against its own schema (needs Docker; not in `just ci`)
 cargo xtask sync-regulatories         # mirror the BDEW document set the profiles are read from
 ```
+
+`sqlx::query` prepares at run time, so nothing in a normal build or test run
+looks at the SQL. `check-sql` is the only thing that does — run it after
+touching a query or a schema.
 
 **`just ci` is the minimum gate before any commit.** It runs check + test + clippy
 (including `clippy-roles`, which lints each role-scoped makod build — `--all-features`
 enables every role at once and so can never catch role-gating mistakes)
-+ fmt-check + deny + no-version-alias + doc-check + validate-profiles + import-profiles-check.
++ fmt-check + deny + no-version-alias + doc-check + validate-profiles + import-profiles-check,
+plus the `check-*` guards. It does **not** run the database suites or `check-sql`
+— those need a Docker daemon and live in `just test-db`.
 
 **MSRV: 1.94** — do not use language features or stdlib APIs introduced after 1.94.
 

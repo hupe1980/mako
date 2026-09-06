@@ -162,6 +162,15 @@ what makes the open route safe — there is no second credential to check here, 
 the exemption's justification is *what leaves the house*, and
 `tests/authorization_guard.rs` asserts the query still carries it.
 
+**The prices are the ones that apply at the consumption asked for.** A
+Preisposition holds its prices as Preisstaffeln, and `verbrauch_kwh` selects the
+one that applies — BO4E's rule, so a quantity in the gap between two tiers
+„rutscht in die obere Zone". Publishing the first tier instead would understate
+every bill past the first boundary in the one place § 41c exists to make
+comparable. A Leistungspreis is tiered by kW and the feed carries no demand
+figure, so a tiered one is reported absent rather than selected with the wrong
+unit.
+
 ## B2B Angebote (CPQ)
 
 `ANGELEGT → VERSANDT → ANGENOMMEN | ABGELEHNT | ABGELAUFEN`, auto-expired daily

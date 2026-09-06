@@ -351,7 +351,11 @@ impl Workflow for GeliGasZuordnungsmeldungWorkflow {
     type Event = ZuordnungsmeldungEvent;
     type Command = ZuordnungsmeldungCommand;
 
-    fn apply(state: Self::State, event: &Self::Event) -> Self::State {
+    /// The prior state is not read: a Meldung is one message and done, so its
+    /// event names the whole state. Matching the event exhaustively is what
+    /// keeps that true — a third event added to the enum has to be given a
+    /// state here rather than falling through to the one already held.
+    fn apply(_state: Self::State, event: &Self::Event) -> Self::State {
         match event {
             ZuordnungsmeldungEvent::Gesendet {
                 pruefidentifikator,
@@ -373,8 +377,6 @@ impl Workflow for GeliGasZuordnungsmeldungWorkflow {
                 location_id: location_id.clone(),
                 sender: sender.clone(),
             },
-            #[allow(unreachable_patterns)]
-            _ => state,
         }
     }
 

@@ -16,6 +16,18 @@ pub mod mig;
 use std::path::Path;
 use std::process::Command;
 
+/// How far the top of a word's ink may sit below the row's first word and still
+/// belong to that row, in PDF points.
+///
+/// Words of one AHB row do not share a `yMin` — the columns are set on slightly
+/// different baselines and the expression glyphs come from a taller font — but
+/// text lines are 11 pt apart, so three is wide enough for the spread and far
+/// short of the line below. Widening it does not help the rows it misses:
+/// raising it to four pulled the *next* line's cells into `ordrsp/fv20260401`
+/// and broke five expressions that read correctly at three. What those rows
+/// need is [`grid_lines`]' operator-spill pass, not a looser threshold.
+const ROW_SPAN_PT: f64 = 3.0;
+
 /// Characters per PDF point when a page is laid out on the character grid.
 ///
 /// `pdftotext -layout` fits every line to its own grid, so the same table
@@ -136,16 +148,42 @@ pub fn grid_lines(xml: &str) -> Vec<Line> {
                 .then(a.1.partial_cmp(&b.1).unwrap())
         });
         // Cluster into visual lines: a word belongs to the current line while
-        // its baseline is within 3 pt of the line's first word.
+        // the top of its ink is within [`ROW_SPAN_PT`] of the line's first
+        // word.
         let mut rows: Vec<Vec<(f64, f64, String)>> = Vec::new();
         let mut row_y = f64::MIN;
         for (y, x0, x1, text) in words {
-            if (y - row_y).abs() > 3.0 {
+            if (y - row_y).abs() > ROW_SPAN_PT {
                 rows.push(Vec::new());
                 row_y = y;
             }
             rows.last_mut().unwrap().push((x0, x1, text));
         }
+        // Put back an operator the clustering shook loose.
+        //
+        // `∧`, `∨` and `⊻` are set from a font whose box is nearly three times
+        // as tall as the text's, and their ink starts a fraction lower than the
+        // citations they sit between — 0.7 pt in ORDRSP AHB 1.1a, which is
+        // enough to push `X [15] ∧ [493]` over [`ROW_SPAN_PT`] when the row is
+        // anchored on the Bedingung column. What is left is `X [15] [493]`,
+        // which reads as a conjunction and parses, and a row holding the `∧`
+        // alone.
+        //
+        // A row of nothing but operators is never a line of an AHB: a real
+        // continuation always carries a citation with them. So it is the spill,
+        // and it belongs to the row above — where sorting by x puts each
+        // operator back between the two citations it joins.
+        for i in (1..rows.len()).rev() {
+            if !rows[i].is_empty()
+                && rows[i]
+                    .iter()
+                    .all(|(_, _, t)| matches!(t.as_str(), "∧" | "∨" | "⊻"))
+            {
+                let spill = std::mem::take(&mut rows[i]);
+                rows[i - 1].extend(spill);
+            }
+        }
+        rows.retain(|r| !r.is_empty());
         for mut row in rows {
             row.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
             let mut line = Line::default();

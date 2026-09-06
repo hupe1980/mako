@@ -62,6 +62,8 @@
 //! | `GET` | `/health/live` | Liveness |
 //! | `GET` | `/health/ready` | Readiness |
 
+#![deny(unsafe_code)]
+
 use anyhow::Context as _;
 use axum::{
     Extension, Router,

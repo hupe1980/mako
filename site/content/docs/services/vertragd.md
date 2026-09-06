@@ -438,14 +438,25 @@ GET /api/v1/malo/{malo_id}/produkte?from=2026-11-01&to=2026-11-30
   "slice_count": 2,
   "fully_covered": true,
   "slices": [
-    { "product_code": "STROM-ALT", "gueltig_von": "2026-11-01", "gueltig_bis": "2026-11-15" },
-    { "product_code": "STROM-NEU", "gueltig_von": "2026-11-15", "gueltig_bis": "2026-12-01" }
+    { "product_code": "STROM-ALT", "gueltig_von": "2026-11-01", "gueltig_bis": "2026-11-15",
+      "jahresverbrauch_kwh": "3500.000" },
+    { "product_code": "STROM-NEU", "gueltig_von": "2026-11-15", "gueltig_bis": "2026-12-01",
+      "jahresverbrauch_kwh": "3500.000" }
   ]
 }
 ```
 
 `billingd` bills one leg per slice; [`productd`](@/docs/services/productd.md)
 answers what each code costs on its own dates and does not know who is on it.
+
+**`jahresverbrauch_kwh` rides with the slice** because it is what selects a
+Preisstaffel, and the only reader that needs it is the one pricing that leg. It
+is the **expected** year the tariff was agreed against — a contract fact on
+`vertragskomponenten`, set from the offer's `gesamtmengeAngebotsteil` where one
+was accepted — not the billed period's consumption: a tier agreed for the year
+does not move because a quarter came in cold. A flat-priced product ignores it;
+a tiered one without it is refused by `billingd` (`422
+TARIFSTAFFEL_OHNE_MENGE`) rather than billed at an arbitrary tier.
 
 **A future-dated Tarifwechsel is a slice that starts in the future** — no
 pending state, nothing to apply on the day. Re-applying the same change is

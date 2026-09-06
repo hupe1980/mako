@@ -508,6 +508,9 @@ fn collect_sites(
                     product_code,
                     lieferbeginn: placeholder,
                     lieferende: None,
+                    // The offer priced the year; the contract is agreed on the
+                    // same figure, and it is what selects a Preisstaffel.
+                    jahresverbrauch_kwh: sp.jahresverbrauch_kwh,
                     fulfillment_data: None,
                 });
         }
@@ -542,6 +545,10 @@ fn collect_sites(
                 product_code,
                 lieferbeginn: placeholder,
                 lieferende: None,
+                jahresverbrauch_kwh: pos
+                    .get("jahresverbrauch_kwh")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|v| v.parse().ok()),
                 fulfillment_data: None,
             });
     }

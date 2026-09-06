@@ -26,7 +26,7 @@ grid-billing    = { workspace = true, features = ["bo4e"] }
 billing = { workspace = true }
 mako-redispatch = { path = "../../crates/mako-redispatch" }
 mako-markt      = { workspace = true, features = ["makod-client", "marktd-client"] }
-mako-service    = { workspace = true, features = ["oidc", "cedar", "otel"] }
+mako-service    = { workspace = true, features = ["oidc", "cedar", "otel", "metrics"] }
 invoic-checker  = { workspace = true }
 axum            = { version = "0.8" }
 sqlx            = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json", "rust_decimal"] }

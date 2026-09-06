@@ -6001,7 +6001,7 @@ pub(crate) async fn create_eeg_payout_order(
                creditor_town, creditor_country, creditor_street,
                creditor_building_number, creditor_post_code,
                creditor_country_subdivision)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
           ON CONFLICT (end_to_end_ref) DO NOTHING",
     )
     .bind(params.malo_id)

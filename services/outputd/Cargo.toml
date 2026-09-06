@@ -18,7 +18,7 @@ name = "outputd"
 path = "src/main.rs"
 
 [dependencies]
-mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
+mako-service = { workspace = true, features = ["oidc", "cedar", "otel", "metrics"] }
 axum         = { version = "0.8" }
 sqlx         = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json"] }
 tokio        = { version = "1", features = ["full"] }

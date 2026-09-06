@@ -1,7 +1,7 @@
 //! Guard: the workflow and Prüfidentifikator counts the published docs state
 //! must be the counts the daemon actually registers.
 //!
-//! "71 workflows over 469 Prüfidentifikatoren" appears in the README, on the
+//! Two claims live here. "71 workflows over 469 Prüfidentifikatoren" appears in the
 //! landing docs, in the `makod` operator guide and in the `agentd` concept as
 //! the scope claim a reader sizes the platform by. Nothing held it to the
 //! registry, so registering a workflow or routing a PID moved the truth and
@@ -11,6 +11,11 @@
 //! Both numbers come from the one production module list
 //! (`makod::startup::production_modules`) with every Marktrolle active, which is
 //! the widest configuration and therefore the one a scope claim describes.
+//!
+//! The second is the answer-obligation catalogue and its two splits. A total on
+//! its own does not hold them: an obligation that moves between family tables
+//! leaves the total right and two family figures wrong, which is how "GPKE 28,
+//! WIM 20" outlived a catalogue holding 29 and 19.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -144,4 +149,91 @@ fn every_published_scope_claim_matches_the_registry() {
          ({workflows} workflows, {pids} Prüfidentifikatoren):\n  {}",
         missing.join("\n  ")
     );
+}
+
+/// The answer-obligation catalogue, split the way the docs split it.
+///
+/// A total alone does not hold: `mako_fristen::antwort::all()` folds five
+/// family tables, and an obligation moved from one to another leaves the total
+/// right and both family figures wrong — which is what happened to GPKE and
+/// WiM. Both the per-family and the per-answer-message split are stated, so
+/// both are checked.
+#[test]
+fn the_answer_obligation_split_matches_the_catalogue() {
+    use mako_fristen::antwort::Family;
+
+    let mut by_family: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut by_message: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut total = 0usize;
+    for obligation in mako_fristen::antwort::all() {
+        total += 1;
+        *by_family
+            .entry(match obligation.family {
+                Family::Gpke => "GPKE",
+                Family::Wim => "WiM",
+                Family::GeliGas => "GeLi Gas",
+                Family::WimGas => "WiM Gas",
+                Family::Emob => "EMob",
+            })
+            .or_default() += 1;
+        // The answer's Prüfidentifikator names its message type by range; the
+        // docs quote the same split.
+        *by_message
+            .entry(match obligation.antwort_pids.0 / 1000 {
+                55 | 44 => "UTILMD",
+                19 => "ORDRSP",
+                21 => "IFTSTA",
+                15 => "QUOTES",
+                17 => "ORDERS",
+                13 => "MSCONS",
+                33 => "REMADV",
+                other => panic!("PID range {other}xxx has no message type in this guard"),
+            })
+            .or_default() += 1;
+    }
+
+    // `concepts/` is not in git; the site page is, and states the message split.
+    let claims: &[(&str, String)] = &[
+        (
+            "../../concepts/MAKOTEST.md",
+            format!(
+                "into **{total}** obligations (GPKE {}, WiM {}, GeLi Gas {}, WiM Gas {}, \
+                 EMob {})",
+                by_family["GPKE"],
+                by_family["WiM"],
+                by_family["GeLi Gas"],
+                by_family["WiM Gas"],
+                by_family["EMob"],
+            ),
+        ),
+        (
+            "../../site/content/docs/reference/makotest.md",
+            format!(
+                "All **{total}** published obligations are answerable — UTILMD {}, ORDRSP {}, \
+                 IFTSTA {}, QUOTES {}, ORDERS {}",
+                by_message["UTILMD"],
+                by_message["ORDRSP"],
+                by_message["IFTSTA"],
+                by_message["QUOTES"],
+                by_message["ORDERS"],
+            ),
+        ),
+    ];
+
+    for (path, claim) in claims {
+        let full = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+        let Ok(raw) = std::fs::read_to_string(&full) else {
+            assert!(
+                path.contains("/concepts/"),
+                "{} is a tracked claimant and must be readable",
+                full.display()
+            );
+            eprintln!("skipping: {} is not present", full.display());
+            continue;
+        };
+        assert!(
+            collapse(&raw).contains(claim.as_str()),
+            "{path} must state `{claim}`"
+        );
+    }
 }

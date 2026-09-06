@@ -1307,8 +1307,9 @@ same instant.
 | `marktd_active_subscriptions` | Rows in `subscriptions` with `active` set |
 | `marktd_processed_events` | Rows in the inbound idempotency table. Bounded by the retention sweep, so this is **not** an all-time total: unbounded growth means the sweep is not running |
 
-`mako_service` adds `mako_http_requests_total{method,path,status}` and the
-`mako_http_request_duration_seconds` histogram on the same endpoint.
+`mako_service` adds three more on the same endpoint — request count, latency
+and the BO4E decimal-spelling counter; see
+[what `/metrics` carries on every service](@/docs/architecture/_index.md#what-metrics-carries-on-every-service).
 
 Scrape via Prometheus `static_configs` or a `ServiceMonitor` in Kubernetes.
 

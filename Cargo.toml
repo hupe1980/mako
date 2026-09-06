@@ -76,6 +76,12 @@ rubo4e       = { version = "0.13.0", features = ["versioned", "identifiers", "de
 # `metering/serde`, because a feature picked up through one dependency applies
 # only to builds that happen to include it: `cargo build -p billingd` would
 # accept the float its workspace test run refuses.
+#
+# It governs mako's **own** `Decimal` fields and no BO4E one: every amount on a
+# BO4E wire is read by `rubo4e`'s `decimal_serde`, which deliberately accepts a
+# JSON number as well, so the guarantee stops at the gate. What crosses it is
+# counted — `mako_service::metrics` exports
+# `mako_bo4e_decimal_from_json_number_total` for exactly that.
 rust_decimal = { version = "1", features = ["db-postgres", "macros", "serde-str"] }
 billing      = { version = "0.14.0", features = ["serde"] }
 # EN 16931 semantic invoice model + business-rule validation (the `billing`

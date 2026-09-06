@@ -268,7 +268,7 @@ Stufe is 3.
 | `PUT` | `/api/v1/accounts/{malo_id}/business-partner` | Link account to a `kunden_nr` |
 | `GET` | `/api/v1/business-partners/{kunden_nr}/accounts` | All accounts of a business partner |
 | `GET` | `/api/v1/business-partners/{kunden_nr}/balance` | Consolidated balance |
-| `GET` | `/metrics` | Prometheus financial + operational gauges |
+| `GET` | `/accountingd/metrics` | Prometheus financial + operational gauges |
 | `GET` | `/health` · `/health/ready` | Liveness / readiness |
 | `POST\|GET` | `/mcp` | MCP Streamable HTTP — `[mcp]` plus a Cedar action per tool |
 
@@ -567,12 +567,17 @@ avoidance options.
 
 ## Metrics
 
-`GET /metrics` exposes Prometheus gauges queried live on scrape:
+`GET /accountingd/metrics` exposes Prometheus gauges queried live on scrape:
 `accountingd_open_receivables_ct`, `accountingd_credit_balances_ct`,
 `accountingd_dunning_open{stufe}`, `accountingd_sepa_runs_pending`,
 `accountingd_sepa_collections{status}` (submitted/rejected/returned),
 `accountingd_sepa_collections_open_ct`,
 `accountingd_sperrung_pending`, `accountingd_accounts_total`.
+
+Its own path, not `/metrics`: the daemon runner mounts that itself, and a
+service router claiming it too makes `Router::merge` panic while the router is
+assembled — i.e. at startup. `/metrics` carries the runner's own series; see
+[what `/metrics` carries on every service](@/docs/architecture/_index.md#what-metrics-carries-on-every-service).
 
 ## Vorauszahlung (§40 Abs. 1 EnWG)
 

@@ -42,7 +42,18 @@ test-integration name:
 # vars. Without Docker the `#[ignore]`d tests skip gracefully.
 
 # All database integration suites in one go.
-test-db: test-edmd-db test-einsd-db test-accountingd-db test-billingd-db test-outputd-db test-vertragd-db test-productd-db test-marktd-db test-processd-db test-sperrd-db
+test-db: check-sql test-edmd-db test-einsd-db test-accountingd-db test-billingd-db test-outputd-db test-vertragd-db test-productd-db test-marktd-db test-processd-db test-sperrd-db
+
+# Every service's SQL literals prepare against its own schema.
+#
+# `sqlx::query` prepares at run time, so a statement Postgres will not accept
+# compiles and fails on the first request that reaches it — a `melo` scoped by a
+# `tenant` column it does not have, an INSERT naming nineteen columns against
+# eighteen placeholders. One throwaway server answers for all fourteen services.
+# Not in `just ci`: it needs a Docker daemon, and it fails rather than skipping
+# when there is none.
+check-sql:
+    cargo xtask check-sql
 
 # Storage integration tests for edmd (meterstore hot/cold over PostgreSQL + a
 # filesystem Iceberg warehouse).
@@ -275,7 +286,7 @@ examples:
         python3 -c "import json,sys; m=json.load(sys.stdin); [print(p['name'], t['name']) for p in m['packages'] for t in p['targets'] if 'example' in t['kind']]" | sort)
     exit $fail
 
-ci: check check-fuzz test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-wire-timestamps check-business-dates check-rounding check-pid-coverage check-release-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+ci: check check-fuzz test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-runner-routes check-wire-timestamps check-business-dates check-rounding check-pid-coverage check-release-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -563,6 +574,21 @@ check-prompt-tools:
 # router is built — i.e. at startup — so nothing in the test suite catches them.
 check-routes:
     cargo xtask check-routes
+
+# Every crate root denies `unsafe_code`. `#![deny(...)]` is a crate attribute and
+# cannot be inherited: a service with a lib.rs *and* a main.rs is two crates, and
+# denying it in one leaves the other outside the lint.
+check-crate-lints:
+    cargo xtask check-crate-lints
+
+# No daemon claims a route `mako_service::run` already mounts.
+#
+# The runner merges the daemon's router onto one that already carries
+# `/health/*` and `/metrics`, and `Router::merge` panics on an overlapping
+# method route — while the router is assembled, so the daemon does not boot.
+# `accountingd` shipped exactly that for its ledger gauges.
+check-runner-routes:
+    cargo xtask check-runner-routes
 
 # `cargo publish` resolves workspace dependencies against crates.io, not the
 # working tree, so a crate published before one it depends on fails outright.
