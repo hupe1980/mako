@@ -142,7 +142,7 @@ How a single AS4 EDIFACT interchange becomes committed process state inside mako
 
 ```mermaid
 graph TD
-    A["BDEW counterparty"] -->|"AS4/ebMS3 push · SOAP+MTOM / HTTPS"| B
+    A["BDEW counterparty"] -->|"AS4/ebMS3 push · SOAP+SwA / HTTPS"| B
     B["makod · as4_ingest<br/>WSS-verify signature · extract MIME attachment"] -->|"raw EDIFACT bytes"| C
     C["InboxStore::accept<br/>72-hour dedup (no double-processing)"] --> D
     D["Platform::parse_interchange · edi-energy<br/>structured messages · PID per message"] --> E
@@ -214,7 +214,7 @@ mid-pattern glob such as `de.*.rechnung.*` matched in one and not the other.
 ```mermaid
 graph TD
     subgraph pure ["Pure calculation crates (zero I/O)"]
-        billing["billing 0.14 (crates.io)<br/>PricingModel · RateSchedule · TimeOfUsePricing<br/>EN 16931 line items — BG-23 VAT breakdown · BG-27/28 line<br/>allowances · BG-29 price detail · BT-130 unit code<br/>AmountScale · AdvancePayment · integer-cent money"]
+        billing["billing 0.15 (crates.io)<br/>PricingModel · RateSchedule · TimeOfUsePricing<br/>EN 16931 line items — BG-23 VAT breakdown · BG-27/28 line<br/>allowances · BG-29 price detail · BT-130 unit code<br/>AmountScale · AdvancePayment · integer-cent money"]
         metering["metering<br/>MeterInterval · fill_gaps (§17)<br/>Hampel quality · gas_m3_to_kwh_hs"]
         eeg["eeg-billing<br/>10 EEG/KWKG schemes · §51/§52/§36h<br/>§14 UStG Gutschrift → BO4E Rechnung (bo4e)"]
         grid["grid-billing<br/>NNE · KA · MMM · MSB · §13a<br/>CalculationTrace · into_rechnung (bo4e)"]
@@ -281,16 +281,16 @@ Pass 5  Cancellation sign reversal   (Stornorechnung)
 
 | Crate | Version | Purpose |
 |---|---|---|
-| [`billing`](https://crates.io/crates/billing) | `0.14` | Generic billing engine — fixed-point `Amount`, pricing models, document assembly, sum-exact allocation |
-| [`en16931`](https://crates.io/crates/en16931) | `0.6` | EN 16931 semantic invoice model and business-rule validation |
-| [`en16931-formats`](https://crates.io/crates/en16931-formats) | `0.6` | EN 16931 renderers over that model — XRechnung/CII, PEPPOL UBL and the ZUGFeRD carrier |
-| [`sepa`](https://crates.io/crates/sepa) | `0.6` | SEPA payment utilities — IBAN/BIC validation, pain.001/008/007 generation, camt.05x and pain.002 parsing |
-| [`metering`](https://crates.io/crates/metering) | `0.22` | German energy metering domain — intervals, aggregation, gap filling, quality scoring, GGV allocation |
-| [`meterstore`](https://crates.io/crates/meterstore) | `0.9` | Metering time-series store beneath `edmd` — hot PostgreSQL window, settled Iceberg V2 history, version resolution |
+| [`billing`](https://crates.io/crates/billing) | `0.15` | Generic billing engine — fixed-point `Amount`, pricing models, document assembly, sum-exact allocation |
+| [`en16931`](https://crates.io/crates/en16931) | `0.7` | EN 16931 semantic invoice model and business-rule validation |
+| [`en16931-formats`](https://crates.io/crates/en16931-formats) | `0.7` | EN 16931 renderers over that model — XRechnung/CII, PEPPOL UBL and the ZUGFeRD carrier |
+| [`sepa`](https://crates.io/crates/sepa) | `0.7` | SEPA payment utilities — IBAN/BIC validation, pain.001/008/007 generation, camt.05x and pain.002 parsing |
+| [`metering`](https://crates.io/crates/metering) | `0.23` | German energy metering domain — intervals, aggregation, gap filling, quality scoring, GGV allocation |
+| [`meterstore`](https://crates.io/crates/meterstore) | `0.11` | Metering time-series store beneath `edmd` — hot PostgreSQL window, settled Iceberg V2 history, version resolution |
 | [`doubleentry`](https://crates.io/crates/doubleentry) | `0.7` | Double-entry ledger — append-only BLAKE3 Merkle log, inclusion and consistency proofs, period seals |
-| [`rubo4e`](https://crates.io/crates/rubo4e) | `0.13` | BO4E business-object types — the `rubo4e::current` versioned schema with validation |
-| [`agentplane`](https://crates.io/crates/agentplane) | `0.25` | Durable agent runtime behind `agentd` — journaled effects, typed manifests, human triage |
-| [`asx-rs`](https://crates.io/crates/asx-rs) | `0.13` | AS4/ebMS3 stack under the BDEW MaKo profile |
+| [`rubo4e`](https://crates.io/crates/rubo4e) | `0.14` | BO4E business-object types — the `rubo4e::current` versioned schema with validation |
+| [`agentplane`](https://crates.io/crates/agentplane) | `0.29` | Durable agent runtime behind `agentd` — journaled effects, typed manifests, human triage |
+| [`asx-rs`](https://crates.io/crates/asx-rs) | `0.14` | AS4/ebMS3 stack under the BDEW MaKo profile |
 | [`edifact-rs`](https://crates.io/crates/edifact-rs) | `~0.17` | EDIFACT syntax layer beneath `edi-energy` — parse, serialise, directory validation |
 
 ---
@@ -785,7 +785,7 @@ sequenceDiagram
 
 1. Render EDIFACT interchange via `edi-energy` builders.
 2. Look up trading partner AS4 endpoint in `PartnerStore`.
-3. Sign + encrypt with operator BrainpoolP256r1 credentials (`asx-rs` v0.13 — ECDSA-SHA256 + ECDH-ES key agreement via `with_signing_material(cert, key)`).
+3. Sign + encrypt with operator BrainpoolP256r1 credentials (`asx-rs` v0.14 — ECDSA-SHA256 + ECDH-ES key agreement via `with_signing_material(cert, key)`).
 4. POST via `asx-rs` AS4 sender.
 5. On HTTP 200: delete outbox entry. On 4xx/5xx: back-off and retry.
 

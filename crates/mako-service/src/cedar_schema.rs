@@ -167,12 +167,14 @@ impl BearerAuthenticator {
             });
         }
 
-        // HeaderMap::get is case-insensitive per HTTP spec; use the typed
-        // constant to avoid redundant lookups.
-        let provided = headers
-            .get(axum::http::header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.strip_prefix("Bearer "))?;
+        // A repeated `Authorization` header is treated as no credential at
+        // all: reading the first occurrence would let an intermediary that
+        // authorized the second decide who this caller is.
+        let provided =
+            crate::headers::single_str(headers, axum::http::header::AUTHORIZATION.as_str())
+                .ok()
+                .flatten()
+                .and_then(|s| s.strip_prefix("Bearer "))?;
 
         // Route by token shape: 3 dot-separated non-empty parts → JWT → OIDC.
         if OidcVerifier::looks_like_jwt(provided)

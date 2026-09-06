@@ -106,12 +106,11 @@ impl Daemon for Productd {
         .context("OIDC setup")?;
 
         // ── Cedar ABAC ────────────────────────────────────────────────────────
-        // Authentication says who is calling; this says what they may do. The
-        // two are separate decisions, and this service used to make only the
-        // first: every route extracted `Claims` and, at most, compared the
-        // path's `lf_mp_id` with the token's tenant — so any token the verifier
-        // accepted for the tenant could `PUT` a new Arbeitspreis onto a live
-        // tariff, and the next `billingd` run would bill it.
+        // Authentication says who is calling; this says what they may do. They
+        // are separate decisions: comparing the path's `lf_mp_id` with the
+        // token's tenant is authentication only, and on its own it lets any
+        // token the verifier accepts for the tenant `PUT` a new Arbeitspreis
+        // onto a live tariff, which the next `billingd` run bills.
         let cedar = Arc::new(
             mako_service::cedar::CedarEnforcer::from_policy_str(include_str!(
                 "../policies/productd.cedar"

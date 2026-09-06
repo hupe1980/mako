@@ -19,7 +19,7 @@ human before it changes anything.
 | **Journal** | redb *or* Postgres — durable, tamper-evident evidence; optional sealing, workload signatures and independent witnessing |
 | **Witnessing** | checkpoints cosigned over C2SP `tlog-witness` — the one control that is not a check on ourselves |
 | **Case layer** | every run joins a case keyed on its MaLo/MeLo/process — the unit of approval, obligation and **erasure** |
-| **Oversight** | `/api/v1/oversight/*` — worklist, run views, case history, four-eyes decisions |
+| **Oversight** | `/api/v1/oversight/*` — worklist, run views, case history, four-eyes decisions, quarantine resolution, the dead-letter and parked-receiver backlogs |
 | **Role scoping** | `role-lf` · `role-nb` · `role-msb` — supports § 6a EnWG confidentiality and, where applicable, § 7a EnWG operational unbundling |
 
 ## How a run happens

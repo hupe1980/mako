@@ -1916,14 +1916,13 @@ mod tests {
     /// `get_preisblatt`: after `CB_FAILURE_THRESHOLD` consecutive failures the
     /// circuit opens and no request is made. What it returns then matters.
     ///
-    /// It used to return `Ok(None)` — the same value marktd's **404** produces,
-    /// which means *this Marktpartner has no such Preisblatt published*. A
-    /// caller cannot tell those apart, so `invoicd` priced an invoice as though
-    /// no Preisblatt existed and still reported a plausibility verdict on it,
-    /// for as long as the breaker stayed open. `invoicd` had its own copy of
-    /// this bug (`.await.ok().flatten()`) and fixing it there was not enough:
-    /// the breaker re-opened the hole one layer down, and every other
-    /// price-sheet consumer had it too.
+    /// Answering `Ok(None)` would be the value marktd's **404** produces, which
+    /// means *this Marktpartner has no such Preisblatt published*. A caller
+    /// cannot tell those apart, so for as long as the breaker stayed open
+    /// `invoicd` would price an invoice as though no Preisblatt existed and
+    /// still report a plausibility verdict on it. The refusal belongs here
+    /// rather than in each consumer: a `.ok().flatten()` one layer up re-opens
+    /// the same hole for every price-sheet reader.
     #[tokio::test]
     async fn an_open_circuit_is_not_a_missing_preisblatt() {
         let client = unreachable_client();

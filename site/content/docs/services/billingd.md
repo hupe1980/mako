@@ -1765,8 +1765,8 @@ inbound_webhook_secret = "env:BILLINGD_INBOUND_HMAC_SECRET"  # HMAC for POST /we
 
 # ── Every table follows; TOML binds a bare key to the most recent header ──────
 # BG-5 postal address and BG-6 contact, each EN 16931 term on its own key
-# (BR-DE-2..7). The former free-text `seller_address` / `seller_contact` keys are
-# refused at startup, naming their replacement.
+# (BR-DE-2..7). A free-text `seller_address` / `seller_contact` key is refused at
+# startup, naming the keys that replace it.
 [seller]
 street    = "Musterweg 1"
 post_code = "12345"

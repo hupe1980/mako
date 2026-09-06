@@ -32,6 +32,10 @@
 // ── Re-exports from the sepa crate ────────────────────────────────────────────
 
 pub use sepa::camt::{AccountRef, BatchInfo, CashEntry, EntryDetail, EntryStatus};
+pub use sepa::camt029::{Camt029Document, CancellationStatus, ResolutionOutcome, parse_camt029};
+pub use sepa::camt055::{
+    Camt055Builder, CancellationEntry, CancellationGroup, CancellationReason, OriginalMessage,
+};
 pub use sepa::pain001::{ExecutionMoment, LocalInstrument};
 pub use sepa::pain002::{ReasonCode, TransactionStatus, VerificationOutcome};
 pub use sepa::pain007::{
@@ -421,9 +425,7 @@ pub fn build_pain_008(
         ("OOFF", SequenceType::Ooff),
     ];
 
-    let mut builder = Pain008Builder::new(creditor.name)
-        .msg_id(msg_id.clone())
-        .schema(schema);
+    let mut builder = Pain008Builder::new(creditor.name, msg_id.clone()).schema(schema);
     let mut groups_info = Vec::new();
     let mut entries_info = Vec::new();
     let mut total_ct = 0i64;
@@ -455,11 +457,11 @@ pub fn build_pain_008(
             let payment_info_id = format!("{msg_id}-{scheme_key}-{seq_key}");
             // The group borrows the Creditor Identifier (`&CreditorId`), so the same
             // creditor identity is not cloned once per group.
-            let mut group = DirectDebitGroup::new(creditor.name, &creditor_iban, &creditor_id)
-                .scheme(scheme)
-                .sequence_type(seq_type)
-                .collection_date(collection_iso)
-                .payment_info_id(payment_info_id.clone());
+            let mut group =
+                DirectDebitGroup::new(creditor.name, &creditor_iban, &creditor_id, collection_iso)
+                    .scheme(scheme)
+                    .sequence_type(seq_type)
+                    .payment_info_id(payment_info_id.clone());
             if let Some(address) = creditor_address.clone() {
                 group = group.creditor_address(address);
             }
@@ -710,8 +712,7 @@ pub fn build_pain_001(
         anyhow::anyhow!("execution date {execution_date} is not a valid ISO date: {e}")
     })?;
 
-    let mut group =
-        CreditTransferGroup::new(debtor.name, &debtor_iban).execution_date(execution_iso);
+    let mut group = CreditTransferGroup::new(debtor.name, &debtor_iban, execution_iso);
     if instant {
         group = group.local_instrument(LocalInstrument::Inst);
     }
@@ -733,8 +734,7 @@ pub fn build_pain_001(
         group = group.add_entry(entry);
     }
 
-    Pain001Builder::new(debtor.name)
-        .msg_id(msg_id)
+    Pain001Builder::new(debtor.name, msg_id)
         .schema(schema)
         .add_group(group)
         .build()
@@ -897,8 +897,7 @@ pub fn build_pain_007(
         group = group.add_entry(entry);
     }
 
-    let builder = Pain007Builder::new(creditor.name, first.original_msg_id)
-        .msg_id(msg_id.clone())
+    let builder = Pain007Builder::new(creditor.name, first.original_msg_id, msg_id.clone())
         .original_schema(original_schema)
         .add_group(group);
 
@@ -915,15 +914,153 @@ pub fn build_pain_007(
     })
 }
 
+// ── camt.055 recall ──────────────────────────────────────────────────────────
+
+/// What a recall asks the bank to stop.
+///
+/// The two are mutually exclusive in the schema — naming transactions after
+/// asking for the whole file says two different things — so they are one value.
+#[derive(Debug, Clone)]
+pub enum RecallScope<'a> {
+    /// `GrpCxl` = true. Stop the whole submission.
+    WholeMessage,
+    /// Stop the named `EndToEndId`s, and nothing else.
+    Entries(&'a [RecallEntry<'a>]),
+}
+
+/// One collection named in a recall.
+#[derive(Debug, Clone, Copy)]
+pub struct RecallEntry<'a> {
+    /// `OrgnlEndToEndId` — accountingd's Mandatsreferenz, as submitted.
+    pub end_to_end_id: &'a str,
+    /// `OrgnlPmtInfId` — the group the entry sat in.
+    pub payment_info_id: &'a str,
+    /// The amount as submitted, in ct.
+    pub amount_ct: i64,
+}
+
+/// A generated camt.055 recall.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Camt055Recall {
+    /// camt.055.001.05 XML, validated before serialisation.
+    pub xml: String,
+    /// `Assgnmt/Id` — the key the camt.029 answer quotes in `RslvdCase/Id`.
+    pub assignment_id: String,
+    /// `MESSAGE` or `ENTRIES`, as stored.
+    pub scope: &'static str,
+    /// How many transactions the request names. Zero for a whole-message recall,
+    /// which names none and writes no `CtrlData` at all.
+    pub entry_count: usize,
+    /// The total of the named originals, where every one stated an amount.
+    pub total_ct: Option<i64>,
+}
+
+/// Build a camt.055 recalling a pain.008 that has not settled yet.
+///
+/// A recall is a **request**: the bank may refuse it, and the answer comes back
+/// as a camt.029 quoting `assignment_id`. That is the difference from a
+/// pain.007, which the creditor issues unilaterally for a collection that
+/// already settled — by then there is nothing left to stop.
+///
+/// `original_msg_id` and `original_schema` describe the submission, and both are
+/// read off the stored run rather than the archived XML: the run row is the
+/// system of record for what was sent.
+///
+/// # Errors
+///
+/// [`anyhow::Error`] when the request names nothing, when an identifier is not
+/// `Max35Text`, or when the builder refuses the message.
+pub fn build_camt_055(
+    creditor_name: &str,
+    debtor_agent_bic: &str,
+    original_msg_id: &str,
+    original_schema: DirectDebitSchema,
+    scope: &RecallScope<'_>,
+    reason: CancellationReason,
+) -> anyhow::Result<Camt055Recall> {
+    let bic = validate_bic(debtor_agent_bic)
+        .map_err(|e| anyhow::anyhow!("debtor agent BIC '{debtor_agent_bic}' invalid: {e}"))?;
+
+    // `Assgnmt/Id` is Max35Text and has to survive a restart, so it is minted
+    // the way a `MsgId` is rather than derived from the run's own identifiers —
+    // a second recall of one run is a second case, not a repeat of the first.
+    let unique = uuid::Uuid::new_v4().simple().to_string();
+    let assignment_id = format!("RC-{}", &unique[..24]);
+
+    let original = OriginalMessage::new(original_msg_id, original_schema.message_id());
+    let mut builder = Camt055Builder::new(assignment_id.clone(), creditor_name, bic, original)
+        // One case per recall, named after it: a follow-up refers to the
+        // investigation rather than opening a second one.
+        .case_id(assignment_id.clone());
+
+    let (scope_label, entry_count, total_ct) = match scope {
+        RecallScope::WholeMessage => {
+            builder = builder.cancel_whole_message(reason);
+            ("MESSAGE", 0usize, None)
+        }
+        RecallScope::Entries(entries) => {
+            if entries.is_empty() {
+                anyhow::bail!("a camt.055 must name at least one collection to recall");
+            }
+            // `OrgnlPmtInfId` identifies exactly one submitted block, so the
+            // named entries are grouped by it — the same rule a pain.007 follows.
+            let mut by_group: std::collections::BTreeMap<&str, Vec<&RecallEntry<'_>>> =
+                std::collections::BTreeMap::new();
+            for e in *entries {
+                by_group.entry(e.payment_info_id).or_default().push(e);
+            }
+            for (payment_info_id, group_entries) in by_group {
+                let mut group = CancellationGroup::new(payment_info_id);
+                for e in group_entries {
+                    group = group.add_entry(
+                        CancellationEntry::new(e.end_to_end_id, reason.clone())
+                            .original_amount(e.amount_ct),
+                    );
+                }
+                builder = builder.add_group(group);
+            }
+            ("ENTRIES", builder.entry_count(), builder.total_ct())
+        }
+    };
+
+    let xml = builder
+        .build()
+        .map_err(|e| anyhow::anyhow!("camt.055 validation failed: {e}"))?;
+
+    Ok(Camt055Recall {
+        xml,
+        assignment_id,
+        scope: scope_label,
+        entry_count,
+        total_ct,
+    })
+}
+
+/// The `sepa_recalls.status` a camt.029 answer resolves to.
+///
+/// `Sts/Conf` is the message-level confirmation; where the bank sent none, the
+/// document's own reading of its per-transaction statuses decides. A code this
+/// build cannot interpret resolves to `PENDING` — an unknown outcome is not an
+/// acceptance, and the case stays open for a person to look at.
+#[must_use]
+pub fn recall_status_of(doc: &Camt029Document) -> &'static str {
+    match &doc.outcome {
+        Some(ResolutionOutcome::Cancelled) => "ACCEPTED",
+        Some(ResolutionOutcome::PartiallyCancelled) => "PARTIAL",
+        Some(ResolutionOutcome::RejectedCancellation) => "REJECTED",
+        Some(ResolutionOutcome::PendingCancellation) => "PENDING",
+        _ if doc.is_accepted() => "ACCEPTED",
+        _ => "PENDING",
+    }
+}
+
 // ── Flat bank-export import ──────────────────────────────────────────────────
 
 /// One row of a flat bank export — a CSV-turned-JSON or an ERP's payment feed.
 ///
-/// The `sepa` crate removed `camt054::parse_simple_json` in 0.6, correctly: the
-/// shape is not specified anywhere, so it does not belong in a module named
-/// after an ISO 20022 message, and its `to_ledger_ct` carried the opposite sign
-/// convention to `CashEntry::signed_ct` sitting beside it. The shape *is*
-/// accountingd's own import contract, so it lives here — parsed with `serde`,
+/// The shape is specified nowhere, so it is not an ISO 20022 message and the
+/// `sepa` crate carries no reader for it. It *is* accountingd's own import
+/// contract, so it lives here — parsed with `serde`,
 /// with amounts through [`ct_from_eur_str`] (integer ct, never `f64`) and dates
 /// through [`IsoDate::parse`], and with the **one** sign convention
 /// [`bank_to_ledger_ct`] applies for every bank file.

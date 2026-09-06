@@ -275,12 +275,24 @@ Zählerstand in the wrong dimension is refused rather than filed.
 ## GDPR
 
 `DELETE /api/v1/gdpr/erasure/{malo_id}` — Art. 17 pseudonymisation in one
-transaction. It destroys the MaLo's subject mapping in meterstore's registry,
+transaction. It destroys the MaLo's subject mapping in meterstore's registry —
+every retention epoch it holds, since a reference names one collection year —
 which unlinks **both** reading stores at once (non-authoritative is a statement
 about settlement, not about personal data); **rewrites `malo_id` to that subject
 reference** in the Buchungsbeleg tables it may not delete (§ 147 Abs. 1 AO,
 Art. 17 Abs. 3 lit. b DSGVO); and deletes the derived, operational and device
 tables outright.
+
+`GET /api/v1/gdpr/erasures?since=&until=&trigger=&limit=` is the audit trail:
+when, why, by whom, and which duty each erasure discharged (`request` for
+Art. 17, `retention` for the § 60 Abs. 6 sweep — a quarter with no `retention`
+rows is a sweep that stopped). It holds no natural identifier.
+
+Set `[privacy] erasure_secret` (≥ 32 bytes, `env:` supported). Without it an
+erasure destroys the mapping and records nothing, so the next delivery for the
+same MaLo re-links it. Rotation is additive — the outgoing key moves to
+`retired_erasure_secrets` and keeps recognising the erasures it wrote, because
+a tombstone is a MAC over an identifier that no longer exists.
 
 ---
 
@@ -398,6 +410,14 @@ enabled           = true
 bootstrap_servers = "kafka-1:9092,kafka-2:9092"
 topic             = "edmd.meter-reads"   # default
 group_id          = "edmd-ingest"        # default
+```
+
+### Erasure suppression (`[privacy]` in `edmd.toml`)
+
+```toml
+[privacy]
+erasure_secret          = "env:EDMD_ERASURE_SECRET"          # ≥ 32 bytes
+retired_erasure_secrets = ["env:EDMD_ERASURE_SECRET_2025"]   # still checked, never written
 ```
 
 ### Archive configuration (`[archive]` in `edmd.toml`)

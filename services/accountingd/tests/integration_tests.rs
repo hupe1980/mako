@@ -637,10 +637,8 @@ fn pain008_groups_carry_distinct_payment_info_ids() {
 fn pain001_sets_the_execution_date_explicitly() {
     use accountingd::sepa::{CreditTransferItem, DebtorIdentity, build_pain_001};
 
-    // sepa 0.6 changed the crate's default execution date from "five days out"
-    // (a pain.008 pre-notification floor borrowed wholesale) to "today". A
-    // payment date is not something to inherit from a library default, so
-    // accountingd always states it.
+    // A payment date is not something to inherit from a library default, so
+    // accountingd states `ReqdExctnDt` on every group.
     let execution = time::Date::from_calendar_date(2026, time::Month::August, 3).unwrap();
     let xml = build_pain_001(
         &DebtorIdentity {
@@ -840,9 +838,9 @@ fn bank_row_rejects_malformed_input() {
     use accountingd::sepa::BankStatementEntry;
 
     let cases = [
-        // A repeated sign parsed as +5.00 EUR before sepa 0.6.
+        // A repeated sign must not parse as +5.00 EUR.
         serde_json::json!({"iban": "DE89370400440532013000", "amount_eur": "--5", "date": "2026-07-10"}),
-        // Trailing junk after the cents parsed as 1.50 EUR before sepa 0.6.
+        // Trailing junk after the cents must not parse as 1.50 EUR.
         serde_json::json!({"iban": "DE89370400440532013000", "amount_eur": "1.50abc", "date": "2026-07-10"}),
         // A signed fractional part silently changed the amount.
         serde_json::json!({"iban": "DE89370400440532013000", "amount_eur": "1.-5", "date": "2026-07-10"}),

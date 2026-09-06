@@ -33,6 +33,11 @@ use uuid::Uuid;
 
 /// Container guard the test holds until it ends — dropping it removes the
 /// container (no leak, no external reaper).
+///
+/// Every test here is `#[ignore]`d, which is what keeps `just ci` runnable
+/// without a Docker daemon: `just test-db` adds `--include-ignored`, and there
+/// Docker is a precondition rather than an option, so this helper panics
+/// instead of skipping.
 type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
 
 async fn pg_pool() -> (sqlx::PgPool, PgContainer) {
@@ -62,6 +67,7 @@ async fn pg_pool() -> (sqlx::PgPool, PgContainer) {
 // ── Approval queue ────────────────────────────────────────────────────────────
 
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn approval_queue_enqueue_list_approve() {
     let (pool, _pg) = pg_pool().await;
     let queue = processd::pg::PgApprovalQueue::new(pool.clone());
@@ -199,6 +205,7 @@ async fn approval_queue_enqueue_list_approve() {
 // ── Anmeldung decisions ───────────────────────────────────────────────────────
 
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn anmeldung_decisions_insert_and_list() {
     let (pool, _pg) = pg_pool().await;
     let repo = processd::pg::PgAnmeldungRepository::new(pool.clone());
@@ -268,6 +275,7 @@ async fn anmeldung_decisions_insert_and_list() {
 /// an `msb-only` or `lf-only` binary has no Prüflauf to remember.
 #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn neuanlage_pruflauf_defers_records_and_resolves() {
     use mako_pruefung::nb::types::Marktlokationsart;
     use processd::pg::neuanlage::{
@@ -389,6 +397,7 @@ async fn neuanlage_pruflauf_defers_records_and_resolves() {
 /// The `beantwortet` status may not exist without the code that was sent —
 /// `SG4 STS+E01` is Muss, so „answered, code unknown" is not a state.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_closed_neuanlage_case_must_state_its_antwortcode() {
     let (pool, _pg) = pg_pool().await;
     let err = sqlx::query(
@@ -416,6 +425,7 @@ async fn a_closed_neuanlage_case_must_state_its_antwortcode() {
 /// the first one to arrive. It resolves when the last outstanding LFA answers,
 /// or when the 09:00 Frist lapses and the rest are silence.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_tranchierte_anmeldung_waits_for_every_lfa() {
     let (pool, _pg) = pg_pool().await;
     let repo = processd::pg::abmeldeanfrage::PgAbmeldeanfrageRepository::new(pool);
@@ -478,6 +488,7 @@ async fn a_tranchierte_anmeldung_waits_for_every_lfa() {
 /// Zustimmung — „Verstreicht die Frist, ohne dass eine Antwort beim NB eingeht,
 /// gilt dies als Bestätigung nach Fall a)".
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_lapsed_frist_resolves_a_tranchierte_anmeldung_at_once() {
     let (pool, _pg) = pg_pool().await;
     let repo = processd::pg::abmeldeanfrage::PgAbmeldeanfrageRepository::new(pool);
@@ -524,6 +535,7 @@ async fn a_lapsed_frist_resolves_a_tranchierte_anmeldung_at_once() {
 /// and both of which the projection has moved on from by then — so they travel
 /// with the waiting row or the Meldung cannot be sent at all.
 #[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_waiting_anmeldung_carries_its_meldepflicht_facts() {
     let (pool, _pg) = pg_pool().await;
     let repo = processd::pg::abmeldeanfrage::PgAbmeldeanfrageRepository::new(pool);

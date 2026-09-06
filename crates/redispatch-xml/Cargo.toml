@@ -11,7 +11,7 @@ keywords     = ["redispatch", "xml", "xsd", "energy", "bdew"]
 categories   = ["encoding", "data-structures"]
 
 [dependencies]
-quick-xml   = { version = "0.40", features = ["serialize"] }
+quick-xml   = { version = "0.41", features = ["serialize"] }
 serde       = { workspace = true }
 thiserror   = { workspace = true }
 time        = { workspace = true }

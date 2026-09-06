@@ -40,6 +40,7 @@ pub mod builder;
 pub mod cloudevent;
 pub mod config;
 pub mod error;
+pub mod headers;
 pub mod health;
 pub mod http;
 pub mod outbox;

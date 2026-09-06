@@ -1,6 +1,6 @@
 +++
 title = "API-Webdienste Strom"
-description = "BDEW API-Webdienste Strom — REST/JSON iMS channel vs. EDIFACT/AS4 channel. energy-api crate for iMS control measures, MaLo-ID queries, and directory service integration."
+description = "BDEW API-Webdienste Strom: the REST/JSON iMS channel beside EDIFACT/AS4 — control measures, MaLo-ID queries and the Directory Service, via energy-api."
 weight = 11
 +++
 The German energy market uses **two distinct communication channels** for
@@ -40,7 +40,7 @@ graph LR
 
 | Channel | Crates | Transport | Processes |
 |---------|--------|-----------|-----------|
-| EDIFACT/AS4 | `edi-energy` + `mako-engine` + `makod` | SOAP/MTOM, TLS, WS-Security | UTILMD, MSCONS, APERAK, CONTRL, INVOIC, REMADV, ORDERS, ORDRSP, and all other MaKo message types |
+| EDIFACT/AS4 | `edi-energy` + `mako-engine` + `makod` | SOAP/SwA, TLS, WS-Security | UTILMD, MSCONS, APERAK, CONTRL, INVOIC, REMADV, ORDERS, ORDRSP, and all other MaKo message types |
 | REST/JSON (API-Webdienste) | `energy-api` | HTTPS, JWS signatures | iMS control measures, MaLo-ID queries, directory service |
 
 The REST channel is a **parallel channel introduced for intelligente Messsysteme

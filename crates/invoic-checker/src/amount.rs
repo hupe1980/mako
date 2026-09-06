@@ -11,10 +11,9 @@ pub use billing::RoundingStrategy;
 
 /// A monetary amount in euro at the checker's 5-decimal working resolution.
 ///
-/// `billing` 0.12 removed its own `EuroAmount` alias because the crate is
-/// currency-agnostic and the name asserted a currency the type does not carry.
-/// mako's INVOIC domain *is* euro-denominated (BDEW MaKo settles in EUR), so the
-/// alias is correct here — it just belongs to the domain crate, not the engine.
+/// `billing` is currency-agnostic and names no currency in its own types. The
+/// INVOIC domain *is* euro-denominated (BDEW MaKo settles in EUR), so the alias
+/// is correct here — it belongs to the domain crate, not to the engine.
 pub type EuroAmount = Amount<5>;
 
 /// Convert a `Decimal` into a 5-dp [`EuroAmount`], rounding to the checker's

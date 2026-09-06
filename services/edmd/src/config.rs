@@ -38,6 +38,7 @@
 //! # audience = "api://mako-edmd"
 //! ```
 
+use anyhow::Context as _;
 use serde::Deserialize;
 
 // ── meterstore / cold-tier config ───────────────────────────────────────────
@@ -58,7 +59,7 @@ use serde::Deserialize;
 /// settlement_lag_days = 7
 /// # access_key_id / secret_access_key optional — omit to use an instance role.
 /// ```
-#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArchiveConfig {
     /// Enable the cold tier. When `false`, meterstore runs hot-only against an
@@ -131,6 +132,79 @@ pub struct ArchiveConfig {
     pub secret_access_key: Option<String>,
 }
 
+/// Hand-written to keep the object-store credentials out of the log, matching
+/// what `meterstore::WarehouseAuth` does with the same two values. Presence is
+/// printed — it decides whether the credential chain is used — the values are
+/// not: an access key id is not a secret alone, but the pair in one line is.
+impl std::fmt::Debug for ArchiveConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ArchiveConfig")
+            .field("enabled", &self.enabled)
+            .field("storage_uri", &self.storage_uri)
+            .field("settlement_lag_days", &self.settlement_lag_days)
+            .field("archival_step_days", &self.archival_step_days)
+            .field("cold_file_target_mib", &self.cold_file_target_mib)
+            .field("maintenance_interval_secs", &self.maintenance_interval_secs)
+            .field("ddl_lock_timeout_secs", &self.ddl_lock_timeout_secs)
+            .field("region", &self.region)
+            .field("endpoint_url", &self.endpoint_url)
+            .field("access_key_id", &self.access_key_id.is_some())
+            .field("secret_access_key", &self.secret_access_key.is_some())
+            .finish()
+    }
+}
+
+/// `[privacy]` — the key that keeps an Article 17 erasure erased.
+///
+/// An erasure destroys the mapping between a MaLo and its pseudonymous
+/// reference. Without a suppression key that is all it does, so the next
+/// delivery for the same MaLo registers a fresh mapping and the linkage is back
+/// — a replaying broker, a reprocessing job on an old offset or a nightly import
+/// from a system that never learned is enough. The key lets an erasure record a
+/// tombstone (`HMAC(key, identifier)`) that later registrations are refused
+/// against, without keeping the identifier it was computed from.
+///
+/// ```toml
+/// [privacy]
+/// erasure_secret          = "env:EDMD_ERASURE_SECRET"
+/// retired_erasure_secrets = ["env:EDMD_ERASURE_SECRET_2025"]
+/// ```
+///
+/// **The key cannot be recovered and cannot be dropped.** A tombstone is a MAC
+/// over an identifier that no longer exists anywhere, so a lost or replaced key
+/// silently stops recognising every erasure recorded under it. Rotation is
+/// therefore additive: move the outgoing key to `retired_erasure_secrets` and
+/// put the new one in `erasure_secret`. Retired keys stay for as long as the
+/// erasures they recorded must stay suppressed — indefinitely, under Art. 17.
+#[derive(Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct PrivacyConfig {
+    /// The key new tombstones are written under. At least 32 bytes.
+    /// Supports `"env:VAR_NAME"`.
+    #[serde(default)]
+    pub erasure_secret: Option<String>,
+    /// Keys that wrote earlier tombstones and are still checked on every
+    /// registration. Refused without `erasure_secret` — a ring of retired keys
+    /// alone is a half-finished rotation in which nothing records new erasures.
+    #[serde(default)]
+    pub retired_erasure_secrets: Vec<String>,
+}
+
+/// Hand-written: these are the one secret whose loss cannot be repaired by
+/// rotating it, so it must not reach a log. Presence and ring size are printed
+/// because they decide whether suppression is enforced at all.
+impl std::fmt::Debug for PrivacyConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrivacyConfig")
+            .field("erasure_secret", &self.erasure_secret.is_some())
+            .field(
+                "retired_erasure_secrets",
+                &self.retired_erasure_secrets.len(),
+            )
+            .finish()
+    }
+}
+
 fn archive_default_settlement_lag_days() -> u32 {
     7
 }
@@ -185,6 +259,9 @@ pub struct Config {
     /// Cold-tier warehouse for meterstore's Iceberg history. Disabled by default.
     #[serde(default)]
     pub archive: ArchiveConfig,
+    /// Erasure suppression keys. See [`PrivacyConfig`].
+    #[serde(default)]
+    pub privacy: PrivacyConfig,
     /// Request rate limits, global and per tenant. See `[rate_limit]` in TOML.
     #[serde(default)]
     pub rate_limit: mako_service::RateLimitConfig,
@@ -551,6 +628,81 @@ pub fn resolve_env(value: &str) -> anyhow::Result<String> {
     }
 }
 
+/// The erasure suppression key ring, current key first, `env:` references
+/// resolved.
+///
+/// Empty when `[privacy]` names no key at all — suppression is then off, which
+/// the store logs. Retired keys **without** a current one are refused rather
+/// than accepted as a shorter ring: every erasure from then on would record no
+/// tombstone, so the rotation that was started would silently stop protecting
+/// anything new while looking configured.
+pub fn erasure_key_ring(privacy: &PrivacyConfig) -> anyhow::Result<Vec<Vec<u8>>> {
+    let Some(current) = privacy.erasure_secret.as_deref() else {
+        if privacy.retired_erasure_secrets.is_empty() {
+            return Ok(Vec::new());
+        }
+        anyhow::bail!(
+            "[privacy] retired_erasure_secrets is set without erasure_secret — a ring of \
+             retired keys records no new erasure. Put the current key in erasure_secret."
+        );
+    };
+    let mut ring = vec![
+        resolve_env(current)
+            .context("privacy.erasure_secret")?
+            .into_bytes(),
+    ];
+    for (i, retired) in privacy.retired_erasure_secrets.iter().enumerate() {
+        ring.push(
+            resolve_env(retired)
+                .with_context(|| format!("privacy.retired_erasure_secrets[{i}]"))?
+                .into_bytes(),
+        );
+    }
+    Ok(ring)
+}
+
 pub fn resolve_env_secret(value: &str) -> anyhow::Result<secrecy::SecretString> {
     resolve_env(value).map(secrecy::SecretString::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ArchiveConfig;
+
+    /// Object-store credentials must not reach a log through `Debug`, and a
+    /// field added later must not slip in unnoticed: the exhaustive
+    /// destructuring below stops compiling when one appears.
+    #[test]
+    fn archive_config_debug_hides_object_store_credentials() {
+        let cfg = ArchiveConfig {
+            enabled: true,
+            storage_uri: "s3://bucket/edmd".to_owned(),
+            access_key_id: Some("AKIAEXAMPLE".to_owned()),
+            secret_access_key: Some("s3cr3t-value".to_owned()),
+            ..ArchiveConfig::default()
+        };
+        let ArchiveConfig {
+            enabled: _,
+            storage_uri: _,
+            settlement_lag_days: _,
+            archival_step_days: _,
+            cold_file_target_mib: _,
+            maintenance_interval_secs: _,
+            ddl_lock_timeout_secs: _,
+            region: _,
+            endpoint_url: _,
+            access_key_id: _,
+            secret_access_key: _,
+        } = &cfg;
+
+        let rendered = format!("{cfg:?}");
+        assert!(
+            !rendered.contains("s3cr3t-value") && !rendered.contains("AKIAEXAMPLE"),
+            "credentials must not appear in Debug output: {rendered}"
+        );
+        assert!(
+            rendered.contains("s3://bucket/edmd"),
+            "non-secret fields still print: {rendered}"
+        );
+    }
 }

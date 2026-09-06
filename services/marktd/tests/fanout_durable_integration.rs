@@ -575,10 +575,10 @@ async fn a_transient_fault_on_the_delivered_write_does_not_duplicate_the_webhook
 }
 
 /// The subscriber refuses every attempt and the failure write cannot land
-/// either. The attempt counter used to be advanced by that same lost write, so
-/// the budget never moved: the row was claimed, POSTed and re-queued forever and
-/// never reached the DLQ — and, holding its `ordering_key`, it blocked every
-/// later event about that Marktlokation for good.
+/// either. Advancing the attempt counter from that same lost write would leave
+/// the budget unmoved: the row is claimed, POSTed and re-queued for ever, never
+/// reaches the DLQ, and — holding its `ordering_key` — blocks every later event
+/// about that Marktlokation.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_delivery_whose_failure_write_is_lost_still_dead_letters() {

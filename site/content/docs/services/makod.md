@@ -1,6 +1,6 @@
 +++
 title = "makod Operator Guide"
-description = "makod operator guide: port layout, CLI flags, config file, persistent and volatile storage, AS4 inbound, HTTP REST API, health checks, and Kubernetes deployment."
+description = "makod operator guide: ports, CLI flags, the config file, persistent and volatile storage, AS4 inbound, the REST API and Kubernetes deployment."
 weight = 21
 +++
 `makod` is the production daemon for the Mako process engine. It assembles the
@@ -1184,6 +1184,10 @@ an attempt belt only against runaway loops. `outbox_delivery_attempted` separate
 `--as4-lenient-receipts` drops to asx-rs's `relaxed()` policy (unsigned / non-NRR
 receipts) for interop bring-up.
 
+**Connectivity pings.** A message carrying both ebMS3 Test Service URIs
+(Core §5.2.2) is acknowledged with the signed receipt and not delivered: its
+payload is empty or a loopback, so routing it would dead-letter a health check.
+
 **Per-sender rate limiting.** The AS4 port applies two independent GCRA
 limits: per peer IP (100 req/s, burst 50) and per sender MP-ID (50 req/s,
 burst 25), the latter keyed on the `eb:From` PartyId extracted *before* the
@@ -1692,9 +1696,9 @@ the correlation-index entries all commit in a single SlateDB transaction. The
 correlation entry is what makes a process reachable: until the business key
 resolves to it, the counterparty's reply finds nothing and is skipped, and the
 next thing to happen is the process's own Frist expiring as a false timeout.
-Writing that entry after the events left a window where a crash produced a live
-process that was unreachable for the rest of its life — with the business key
-itself blocked against a fresh spawn.
+Writing it after the events would leave a window in which a crash produces a live
+process unreachable for the rest of its life — with the business key itself
+blocked against a fresh spawn.
 
 **One business key, one process.** Spawning is a check-then-act — the lookup
 finds no live process, so one is created — so the lookup→spawn section is
@@ -1783,7 +1787,9 @@ For multi-role commands, include `"marktrolle"` to disambiguate:
 | `payload` | ✅ | Command-specific fields (see payload table below) |
 
 **Required:** every command must carry an `Idempotency-Key` header. A missing or
-empty value is rejected with `422 missing_idempotency_key`.
+empty value is rejected with `422 missing_idempotency_key`; sending it twice is
+rejected with `400 duplicate_idempotency_key_header`, because the stored
+response is keyed on the value and no reader may pick a different occurrence.
 
 The accepted response is stored under the key for 24 hours and replayed verbatim
 on a retry — same `202`, same `process_id`, no second dispatch. Reusing one key
@@ -2661,15 +2667,15 @@ falls back to a conservative message-level heuristic: an unambiguous Gas-only PI
 track. A PID qualifies only when **every** row the BDEW *Anwendungsübersicht
 Prüfidentifikatoren* 4.0 carries for it is Gas. INVOIC **31004** is the familiar
 case — the Stornorechnung is the Sparte-neutral universal Storno of any INVOIC
-(INVOIC AHB §3.1.2) — but four more had been listed as Gas-only while the
-overview carries them in both Sparten, and each made this heuristic send a Gas
-CONTRL into a Strom interchange, which expects none: INVOIC **31003**
-(WiM-Rechnung, also WiM Strom Teil 1 MSBA → MSBN), INVOIC **31011** (Rechnung
-sonstige Leistung, also GPKE Teil 2 NB → LF) and INSRPT **23005**/**23009**
-(Informationsmeldung, also WiM Strom Teil 2). All five resolve by recipient
-MP-ID. In the other direction, INVOIC **31009** (MSB-Rechnung) is Strom in all
-seven of its rows — the Gas MSB bills on 31003 — and IFTSTA **21028** is a GeLi
-Gas Informationsmeldung that used to sit inside a Strom-only IFTSTA range.
+(INVOIC AHB §3.1.2) — and four more carry both Sparten in the overview: INVOIC
+**31003** (WiM-Rechnung, also WiM Strom Teil 1 MSBA → MSBN), INVOIC **31011**
+(Rechnung sonstige Leistung, also GPKE Teil 2 NB → LF) and INSRPT
+**23005**/**23009** (Informationsmeldung, also WiM Strom Teil 2). Calling any of
+the five Gas-only would send a Gas CONTRL into a Strom interchange, which expects
+none, so all five resolve by recipient MP-ID. In the other direction, INVOIC
+**31009** (MSB-Rechnung) is Strom in all seven of its rows — the Gas MSB bills on
+31003 — and IFTSTA **21028** is a GeLi Gas Informationsmeldung inside an
+otherwise Strom IFTSTA range.
 
 The CONTRL and its 6 h escalation deadline are written in one transaction
 (`enqueue_outbox_with_deadlines`), so a crash cannot queue the acknowledgement
@@ -2850,10 +2856,10 @@ The same scrape carries seven unlabelled gauges, sampled per request:
 `mabis`, `emob`, `redispatch`, `netzzugang`, and `other` for anything unclaimed.
 Each row owns the label, the workflow-name prefix that produces it and the
 command-name prefixes that initiate it, so an initiated-vs-completed dashboard
-joins on the label with no hand-matching. It did not always: the initiation
-counter cut the command name and the completion counter cut the workflow name at
-its first hyphen, so `family="geli-gas"` initiations never met `family="geli"`
-completions and both Gas families read as processes that start and never finish.
+joins on the label with no hand-matching. Deriving each side's label by cutting
+its own identifier at the first hyphen would not: `family="geli-gas"` initiations
+would never meet `family="geli"` completions, and both Gas families would read as
+processes that start and never finish.
 An `invoic.*` command is labelled with the family of the workflow it enters
 (`gpke`, `wim` or `geli-gas`) rather than with the message type, because the
 completion side has only the workflow name to label with. `netzzugang` is the one

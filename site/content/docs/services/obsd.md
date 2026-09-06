@@ -1,6 +1,6 @@
 +++
 title = "obsd Operator Guide"
-description = "obsd operator guide: business-process observability. Process projections, the two deadline clocks, per-PID KPIs, § 7a Abs. 5 EnWG Gleichbehandlung parity evidence, and the de.obs.* producers. PostgreSQL-backed, OIDC-secured."
+description = "obsd operator guide: process projections, the two deadline clocks, per-PID KPIs and the § 7a Abs. 5 EnWG Gleichbehandlung parity evidence."
 weight = 29
 +++
 `obsd` subscribes to every `de.mako.*` CloudEvent from `marktd` and projects it

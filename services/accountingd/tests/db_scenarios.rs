@@ -2909,15 +2909,118 @@ async fn seed_collection(
     (run_id, entry, malo)
 }
 
+/// A recall is a request, and only its answer closes the collection.
+///
+/// The camt.055 leaves the entries `SUBMITTED`: until the bank answers, the
+/// money may still move, and a receivable marked settled-or-cancelled on the
+/// strength of an unanswered request is a receivable nobody chases. The
+/// camt.029 is what decides — `CNCL` closes them `RECALLED`, `RJCR` leaves them
+/// exactly as they were.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_recall_closes_a_collection_only_once_the_bank_accepts_it() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let d = date!(2026 - 09 - 25);
+    let (run_id, entry, _malo) = seed_collection(&pool, d, 4_200).await;
+
+    let targets = pg::recallable_entries(&pool, TENANT, run_id)
+        .await
+        .expect("recallable entries");
+    let target = targets
+        .iter()
+        .find(|t| t.end_to_end_id == entry.end_to_end_id)
+        .expect("the seeded collection");
+    assert_eq!(target.status, "SUBMITTED");
+
+    let recall = accountingd::sepa::build_camt_055(
+        "Test Energie GmbH",
+        "MARKDEF1100",
+        &entry.msg_id,
+        Default::default(),
+        &accountingd::sepa::RecallScope::Entries(&[accountingd::sepa::RecallEntry {
+            end_to_end_id: &target.end_to_end_id,
+            payment_info_id: &target.payment_info_id,
+            amount_ct: target.amount_ct,
+        }]),
+        accountingd::sepa::CancellationReason::Upay,
+    )
+    .expect("camt.055 builds");
+    assert_eq!(recall.entry_count, 1);
+    assert_eq!(recall.total_ct, Some(4_200));
+
+    pg::record_sepa_recall(&pool, TENANT, run_id, &recall, "UPAY", Some("dpo"))
+        .await
+        .expect("record the recall");
+
+    // Still in flight: the request alone changes nothing about the collection.
+    let after_request = pg::recallable_entries(&pool, TENANT, run_id)
+        .await
+        .expect("entries");
+    assert_eq!(
+        after_request[0].status, "SUBMITTED",
+        "an unanswered recall must not close the collection"
+    );
+
+    // A refusal leaves it that way too.
+    let rejected = pg::resolve_sepa_recall(
+        &pool,
+        TENANT,
+        &recall.assignment_id,
+        "REJECTED",
+        Some("RJCR"),
+        "<Document/>",
+    )
+    .await
+    .expect("resolve")
+    .expect("the recall is found by its Assgnmt/Id");
+    assert_eq!(rejected.status, "REJECTED");
+    assert!(rejected.resolved_at.is_some());
+    let after_refusal = pg::recallable_entries(&pool, TENANT, run_id)
+        .await
+        .expect("entries");
+    assert_eq!(after_refusal[0].status, "SUBMITTED");
+
+    // Acceptance is what closes it, and only what the recall named.
+    let closed = pg::mark_entries_recalled(
+        &pool,
+        TENANT,
+        run_id,
+        Some(std::slice::from_ref(&entry.end_to_end_id)),
+        "camt.029 CNCL",
+    )
+    .await
+    .expect("close the recalled collections");
+    assert_eq!(closed, 1);
+    let after_accept = pg::recallable_entries(&pool, TENANT, run_id)
+        .await
+        .expect("entries");
+    assert_eq!(after_accept[0].status, "RECALLED");
+
+    // An answer to a case this tenant never opened is not applied to anything.
+    let unknown = pg::resolve_sepa_recall(
+        &pool,
+        TENANT,
+        "RC-does-not-exist",
+        "ACCEPTED",
+        None,
+        "<Document/>",
+    )
+    .await
+    .expect("resolve");
+    assert!(unknown.is_none());
+}
+
 /// A pain.008 the bank already has must not be rebuilt underneath it.
 ///
-/// The N-5 scheduler is a daily loop over every replica. `LOCK_SEPA_N5` now
+/// The N-5 scheduler is a daily loop over every replica. `LOCK_SEPA_N5`
 /// serialises it, but a lost lock or a same-day restart still reaches
-/// `persist_sepa_collection`, and the old code upserted the run row and replaced
-/// its entries unconditionally. The stored XML and entries are the only record
-/// of what was submitted: overwrite them and the pain.002 that comes back names
-/// an `EndToEndId` no row carries, so the rejection is unattributable and the
-/// receivable stays open with nothing pointing at it.
+/// `persist_sepa_collection`, so that function has to refuse rather than upsert.
+/// The stored XML and entries are the only record of what was submitted:
+/// overwrite them and the pain.002 that comes back names an `EndToEndId` no row
+/// carries, so the rejection is unattributable and the receivable stays open
+/// with nothing pointing at it.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_dispatched_collection_run_is_frozen() {

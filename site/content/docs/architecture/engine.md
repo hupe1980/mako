@@ -1,6 +1,6 @@
 +++
 title = "Process Engine"
-description = "mako-engine architecture: event-sourced Workflow FSMs, atomic dual-write, DeadlineStore, OutboxWorker, PidRouter, ProcessRegistry, SlateDB backend, format-version coexistence, and ForwardCompatible policy."
+description = "mako-engine: event-sourced workflow state machines, atomic dual-write, deadlines, the outbox, PID routing and format-version coexistence."
 weight = 14
 +++
 `mako-engine` is an event-sourced process runtime for long-running German energy

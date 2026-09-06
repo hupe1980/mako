@@ -97,9 +97,9 @@ spec:
   # besides a plan's `parse` steps where the declarative tier points a model at
   # untrusted-derived content, and it is what makes the second model role mean
   # something rather than decorate the file.
-  # 0.19 moved formation under `memory`, beside a `recall` channel this
-  # plane does not use: recall order is a ranking signal any writer can
-  # influence, and adopting it is a decision somebody makes deliberately.
+  # `memory` also carries a `recall` channel this plane does not use: recall
+  # order is a ranking signal any writer can influence, so adopting it is a
+  # decision somebody makes deliberately.
   memory:
     formation:
       subject: "bnetza-reporting-posture"

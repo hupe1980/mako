@@ -173,6 +173,7 @@ fn iso_now() -> String {
     params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
     responses(
         (status = 200, description = "MaLo record found"),
+        (status = 400, description = "X-Tenant-Id sent more than once"),
         (status = 401, description = "Missing or invalid bearer token"),
         (status = 403, description = "Tenant mismatch"),
         (status = 404, description = "MaLo not found"),
@@ -201,17 +202,9 @@ pub(crate) async fn handle_get(
     ) {
         return forbidden();
     }
-    let tenant_id = if let Some(id) = tenant_from_header(&headers) {
-        if id != state.tenant_id {
-            return (
-                StatusCode::FORBIDDEN,
-                "X-Tenant-Id does not match operator tenant",
-            )
-                .into_response();
-        }
-        id
-    } else {
-        state.tenant_id.clone()
+    let tenant_id = match resolve_tenant(&headers, &state.tenant_id) {
+        Ok(id) => id,
+        Err(rejection) => return rejection.into_response(),
     };
     match state.cache.get(&tenant_id, &malo_id).await {
         Ok(Some(result)) => Json(result).into_response(),
@@ -302,6 +295,7 @@ pub(crate) async fn handle_put(
     params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
     responses(
         (status = 200, description = "Deletion result", body = DeleteResponse),
+        (status = 400, description = "X-Tenant-Id sent more than once"),
         (status = 401, description = "Missing or invalid bearer token"),
         (status = 403, description = "Tenant mismatch"),
     ),
@@ -329,17 +323,9 @@ pub(crate) async fn handle_delete(
     ) {
         return forbidden();
     }
-    let tenant_id = if let Some(id) = tenant_from_header(&headers) {
-        if id != state.tenant_id {
-            return (
-                StatusCode::FORBIDDEN,
-                "X-Tenant-Id does not match operator tenant",
-            )
-                .into_response();
-        }
-        id
-    } else {
-        state.tenant_id.clone()
+    let tenant_id = match resolve_tenant(&headers, &state.tenant_id) {
+        Ok(id) => id,
+        Err(rejection) => return rejection.into_response(),
     };
     match state.cache.remove(&tenant_id, &malo_id).await {
         Ok(deleted) => Json(DeleteResponse { malo_id, deleted }).into_response(),
@@ -396,18 +382,27 @@ pub(crate) async fn handle_stats(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Extract `X-Tenant-Id` from request headers.
+/// Resolve the tenant a request acts for.
 ///
-/// Returns `None` when the header is absent or non-UTF8.
-/// When present, callers must validate the value matches the operator's configured
-/// `tenant_id` before use — accepting arbitrary tenant IDs from headers enables
-/// cross-tenant data access.
-fn tenant_from_header(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get("x-tenant-id")
-        .or_else(|| headers.get("X-Tenant-Id"))
-        .and_then(|v| v.to_str().ok())
-        .map(ToOwned::to_owned)
+/// `X-Tenant-Id` may be omitted, in which case the operator's own tenant is
+/// used; when present it must name that same tenant, because accepting an
+/// arbitrary tenant ID from a header is cross-tenant data access. A repeated
+/// header is refused rather than resolved first-wins: an intermediary that
+/// authorizes on the second value would disagree with what this reads.
+fn resolve_tenant(
+    headers: &HeaderMap,
+    operator_tenant: &str,
+) -> Result<String, (StatusCode, String)> {
+    let header = mako_service::headers::single_str(headers, "x-tenant-id")
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    match header {
+        Some(id) if id != operator_tenant => Err((
+            StatusCode::FORBIDDEN,
+            "X-Tenant-Id does not match operator tenant".to_owned(),
+        )),
+        Some(id) => Ok(id.to_owned()),
+        None => Ok(operator_tenant.to_owned()),
+    }
 }
 
 fn stats_to_json(s: MaloCacheStats) -> TenantStats {

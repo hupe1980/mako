@@ -242,17 +242,26 @@ CREATE TABLE eeg_anlagen (
     -- JSONB Vec<{wirksam_ab_jahr: 6|11|16, guetefaktor}> — the effective
     -- Korrekturfaktor per billing period is derived (korrekturfaktor_fuer_periode).
     wind_guetefaktor_reevaluations JSONB NOT NULL DEFAULT '[]',
-    -- §9 EEG — Steuerbarkeit. The obligation is staged by installed capacity:
-    -- from 100 kW only Fernsteuerbarkeit satisfies it (Abs. 2 Nr. 1), the
-    -- 25–100 kW band may take the 60-%-Leistungsbegrenzung instead (Nr. 2),
-    -- below 25 kW the cap alone is enough (Nr. 3), and a Steckersolargerät under
-    -- 2 kW is out of scope (Abs. 1 Satz 2). Recording only the Fernsteuerbarkeit
-    -- date made every compliant plant on the 60 % route look like a §52 Abs. 1
-    -- Nr. 1 violation at 10 €/kW/month.
-    sect9_erfuellung           TEXT        NOT NULL DEFAULT 'KEINE' CHECK (sect9_erfuellung IN (
-        'KEINE', 'FERNSTEUERBARKEIT', 'LEISTUNGSBEGRENZUNG_60'
-    )),
-    -- When the Fernsteuerbarkeit was installed, where that is the chosen route.
+    -- §9 Abs. 2 EEG — Steuerbarkeit. Satz 1 stages the obligation by installed
+    -- capacity and gates the 60-%-Begrenzung on the Vergütungsform:
+    --
+    --   Nr. 1  ab 100 kW              — ferngesteuerte Reduzierung, ohne Ausnahme
+    --   Nr. 2  ab 25 kW bis < 100 kW  — lit. a ferngesteuerte Reduzierung **und**
+    --                                   lit. b 60 % nur bei Einspeisevergütung
+    --                                   oder Mieterstromzuschlag
+    --   Nr. 3  < 25 kW                — 60 % nur bei geförderten Anlagen und
+    --                                   bei KWK-Anlagen
+    --
+    -- The two routes are cumulative in Nr. 2, so they are two facts and two
+    -- columns; a single enum could not represent a plant that carries both.
+    sect9_fernsteuerbarkeit    BOOLEAN     NOT NULL DEFAULT false,
+    sect9_begrenzung_60        BOOLEAN     NOT NULL DEFAULT false,
+    -- Wechselrichterleistung in Voltampere. The Abs. 2 Satz 4 Steckersolar
+    -- carve-out is a two-part test — „bis zu 2 Kilowatt und mit einer
+    -- Wechselrichterleistung von insgesamt bis zu 800 Voltampere" — so NULL
+    -- leaves it shut rather than assuming the standard build.
+    wechselrichterleistung_va  NUMERIC(10, 2),
+    -- When the Fernsteuerbarkeit was installed.
     fernsteuerbarkeit_datum    DATE,
     -- §24 Erweiterung: capacity blocks JSONB (Vec<CapacityBlock>)
     capacity_blocks            JSONB,

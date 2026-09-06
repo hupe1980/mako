@@ -1750,8 +1750,8 @@ pub async fn import_payments_camt052(
         reports.push(serde_json::json!({
             "report_id":        report.report_id,
             "account":          account_ref_json(&report.account),
-            "from_date":        report.from_date,
-            "to_date":          report.to_date,
+            "from_date":        report.from_date_raw,
+            "to_date":          report.to_date_raw,
             "net_movement_ct":  report.net_movement_ct(),
             "balances":         balances_json(&report.balances),
         }));
@@ -5794,6 +5794,344 @@ pub async fn post_sepa_reversal(
             "reason_code":        reason.as_code(),
             "ledger_id":          ledger_entry_id.map(|id| id.to_string()),
             "xml":                reversal.xml,
+        })),
+    )
+        .into_response()
+}
+
+/// Body of `POST /api/v1/sepa/recalls`.
+#[derive(Debug, serde::Deserialize)]
+pub struct CreateRecallRequest {
+    /// The submitted run to recall (`sepa_collection_runs.run_id`).
+    pub run_id: uuid::Uuid,
+    /// ISO 20022 `CancellationReason5Code` — `DUPL`, `AGNT`, `CURR`, `CUST`,
+    /// `UPAY`, `CUTA`, `TECH`, `FRAD`. Defaults to `UPAY`: the ordinary case is
+    /// a collection that was not due.
+    pub reason_code: Option<String>,
+    /// The `EndToEndId`s to recall. Absent or empty recalls the **whole**
+    /// submission (`GrpCxl`), which is a different request, not a shorthand.
+    pub end_to_end_ids: Option<Vec<String>>,
+}
+
+/// `POST /api/v1/sepa/recalls` — build a **camt.055** asking the bank to stop a
+/// submitted collection before it settles.
+///
+/// The counterpart to `POST /api/v1/sepa/reversals`, and not a substitute for
+/// it: a pain.007 gives back a collection that already settled, while a recall
+/// tries to prevent the debit. Only entries still `SUBMITTED` can be recalled —
+/// a settled one is the reversal's business and a rejected one never moved
+/// money.
+///
+/// A recall is a **request**. The bank answers with a camt.029, which
+/// `POST /api/v1/sepa/camt029` applies; until then the recall stands
+/// `REQUESTED` and the collections stay open.
+pub async fn post_sepa_recall(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Json(req): Json<CreateRecallRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "manage-sepa", &cfg.tenant) {
+        return forbidden(&e);
+    }
+
+    let Some(run) = (match crate::pg::fetch_sepa_run(&pool, req.run_id, &cfg.tenant).await {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "collection run not found" })),
+        )
+            .into_response();
+    };
+
+    let Some(bic) = cfg.debtor_agent_bic.as_deref().filter(|s| !s.is_empty()) else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "debtor_agent_bic must be configured — a camt.055 is addressed to \
+                          the bank that holds the submission (Assgnmt/Assgne)"
+            })),
+        )
+            .into_response();
+    };
+    let creditor_name = cfg.creditor_name.as_deref().unwrap_or(&cfg.tenant);
+
+    let reason: crate::sepa::CancellationReason = match req.reason_code.as_deref() {
+        None | Some("UPAY") => crate::sepa::CancellationReason::Upay,
+        Some("DUPL") => crate::sepa::CancellationReason::Dupl,
+        Some("AGNT") => crate::sepa::CancellationReason::Agnt,
+        Some("CURR") => crate::sepa::CancellationReason::Curr,
+        Some("CUST") => crate::sepa::CancellationReason::Cust,
+        Some("CUTA") => crate::sepa::CancellationReason::Cuta,
+        Some("TECH") => crate::sepa::CancellationReason::Tech,
+        Some("FRAD") => crate::sepa::CancellationReason::Frad,
+        Some(other) => crate::sepa::CancellationReason::Other(other.to_owned()),
+    };
+
+    let dd_schema = match crate::sepa::resolve_pain008_schema(cfg.pain008_schema.as_deref()) {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let targets = match crate::pg::recallable_entries(&pool, &cfg.tenant, req.run_id).await {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let named = req.end_to_end_ids.as_deref().unwrap_or(&[]);
+    let (scope_entries, recalled_ids): (Vec<crate::sepa::RecallEntry<'_>>, Option<Vec<String>>) =
+        if named.is_empty() {
+            (Vec::new(), None)
+        } else {
+            let mut picked = Vec::with_capacity(named.len());
+            for id in named {
+                let Some(t) = targets.iter().find(|t| &t.end_to_end_id == id) else {
+                    return (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        Json(serde_json::json!({
+                            "error": format!("`{id}` is not a collection of this run"),
+                        })),
+                    )
+                        .into_response();
+                };
+                if t.status != "SUBMITTED" {
+                    return (
+                        StatusCode::CONFLICT,
+                        Json(serde_json::json!({
+                            "error": format!(
+                                "`{id}` is {} — only a SUBMITTED collection is still in \
+                                 flight; a SETTLED one is reversed with pain.007 and a \
+                                 REJECTED one never moved money",
+                                t.status
+                            ),
+                            "status": t.status,
+                        })),
+                    )
+                        .into_response();
+                }
+                picked.push(crate::sepa::RecallEntry {
+                    end_to_end_id: t.end_to_end_id.as_str(),
+                    payment_info_id: t.payment_info_id.as_str(),
+                    amount_ct: t.amount_ct,
+                });
+            }
+            (picked, Some(named.to_vec()))
+        };
+    let scope = if scope_entries.is_empty() {
+        crate::sepa::RecallScope::WholeMessage
+    } else {
+        crate::sepa::RecallScope::Entries(&scope_entries)
+    };
+
+    let recall = match crate::sepa::build_camt_055(
+        creditor_name,
+        bic,
+        &run.msg_id,
+        dd_schema,
+        &scope,
+        reason.clone(),
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let recall_id = match crate::pg::record_sepa_recall(
+        &mut *tx,
+        &cfg.tenant,
+        req.run_id,
+        &recall,
+        reason.as_code(),
+        Some(claims.sub()),
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("accountingd", &cfg.tenant),
+        mako_events::accounting::SEPA_RECALL_REQUESTED,
+        &run.msg_id,
+        serde_json::json!({
+            "recall_id":       recall_id.to_string(),
+            "run_id":          req.run_id.to_string(),
+            "assignment_id":   recall.assignment_id,
+            "original_msg_id": run.msg_id,
+            "scope":           recall.scope,
+            "reason_code":     reason.as_code(),
+            "entry_count":     recall.entry_count,
+            "total_ct":        recall.total_ct,
+            "end_to_end_ids":  recalled_ids,
+        }),
+    );
+    if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "recall_id":       recall_id.to_string(),
+            "assignment_id":   recall.assignment_id,
+            "original_msg_id": run.msg_id,
+            "scope":           recall.scope,
+            "reason_code":     reason.as_code(),
+            "entry_count":     recall.entry_count,
+            "total_ct":        recall.total_ct,
+            "status":          "REQUESTED",
+            "xml":             recall.xml,
+        })),
+    )
+        .into_response()
+}
+
+/// `POST /api/v1/sepa/camt029` — apply the bank's answer to a recall.
+///
+/// The document quotes the request's `Assgnmt/Id` in `RslvdCase/Id`; that is the
+/// only thing in it that points back at the case, so an answer naming an
+/// assignment this tenant never opened is a `404` rather than a guess.
+///
+/// An accepted recall (`CNCL`, or every named transaction `ACCR`) closes the
+/// collections it stopped as `RECALLED`. Any other outcome leaves them open:
+/// a rejected recall means the collection stands, and a pending one means the
+/// bank has not decided.
+pub async fn import_camt029(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    body: String,
+) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "manage-sepa", &cfg.tenant) {
+        return forbidden(&e);
+    }
+    let doc = match crate::sepa::parse_camt029(&body) {
+        Ok(d) => d,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": format!("not a readable camt.029: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    let Some(case_id) = doc.resolved_case_id.clone() else {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "the camt.029 carries no RslvdCase/Id, so it names no recall"
+            })),
+        )
+            .into_response();
+    };
+
+    let status = crate::sepa::recall_status_of(&doc);
+    let reason = doc
+        .outcome
+        .as_ref()
+        .map(|o| o.as_code().to_owned())
+        .unwrap_or_else(|| "no message-level Sts/Conf".to_owned());
+
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let recall = match crate::pg::resolve_sepa_recall(
+        &mut *tx,
+        &cfg.tenant,
+        &case_id,
+        status,
+        Some(&reason),
+        &body,
+    )
+    .await
+    {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": format!("no recall of this tenant carries Assgnmt/Id `{case_id}`"),
+                })),
+            )
+                .into_response();
+        }
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    let mut closed = 0u64;
+    if status == "ACCEPTED" {
+        // A whole-message recall names no transaction, so it closes every entry
+        // of the run still in flight; a named one closes exactly what it named.
+        let named: Option<Vec<String>> = (recall.scope == "ENTRIES").then(|| {
+            doc.transactions()
+                .filter_map(|t| t.original_end_to_end_id.clone())
+                .collect()
+        });
+        match crate::pg::mark_entries_recalled(
+            &mut *tx,
+            &cfg.tenant,
+            recall.run_id,
+            named.as_deref(),
+            &format!("camt.029 {reason}"),
+        )
+        .await
+        {
+            Ok(n) => closed = n,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    }
+
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("accountingd", &cfg.tenant),
+        mako_events::accounting::SEPA_RECALL_RESOLVED,
+        &recall.assignment_id,
+        serde_json::json!({
+            "recall_id":        recall.recall_id.to_string(),
+            "run_id":           recall.run_id.to_string(),
+            "assignment_id":    recall.assignment_id,
+            "status":           status,
+            "outcome":          doc.outcome.as_ref().map(|o| o.as_code().to_owned()),
+            "collections_closed": closed,
+        }),
+    );
+    if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "recall_id":          recall.recall_id.to_string(),
+            "run_id":             recall.run_id.to_string(),
+            "assignment_id":      recall.assignment_id,
+            "status":             status,
+            "outcome":            doc.outcome.as_ref().map(|o| o.as_code().to_owned()),
+            "collections_closed": closed,
         })),
     )
         .into_response()

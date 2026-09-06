@@ -312,11 +312,10 @@ fn dtm303_to_rfc3339(value: &str, format: Option<&str>) -> Option<String> {
 ///
 /// # Why this exists
 ///
-/// The values were decoded and then dropped. Both MSCONS adapters used to take
-/// only the `SG5 NAD` party id off the message and discard the readings, so a
-/// delivery arrived, was acknowledged, completed its process — and reached the
-/// ERP as `{"pid": 13027}`. `edmd`'s interval store and its separate ESA Typ-2
-/// store both parse a `reads` array that nothing produced.
+/// The readings are the payload. Taking only the `SG5 NAD` party id off an
+/// MSCONS leaves a delivery that arrives, is acknowledged, completes its
+/// process — and reaches the ERP as `{"pid": 13027}`, while `edmd`'s interval
+/// store and its ESA Typ-2 store both wait on a `reads` array nothing produced.
 ///
 /// The OBIS code is inherited from the `SG9 PIA` of the line item the reading
 /// sits under and the Messlokation from the `SG6 LOC`, because a reading is

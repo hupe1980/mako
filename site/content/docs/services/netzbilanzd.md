@@ -362,7 +362,7 @@ the ceiling depends on the customer group:
 | `Tarifkunde`, ≤ 100 000 | 1.59 | 0.27 (0.61) |
 | `Tarifkunde`, ≤ 500 000 | 1.99 | 0.33 (0.77) |
 | `Tarifkunde`, > 500 000 | 2.39 | 0.40 (0.93) |
-| `Exempt` (§2 Abs. 7) | — | — |
+| `Exempt` (§2 Abs. 4 Strom / Abs. 5 Gas) | — | — |
 
 `Exempt` states that no Konzessionsabgabe is due, which is a different fact from a rate of
 zero: the position is not billed at all and the ceiling check has nothing to compare.
@@ -370,6 +370,45 @@ zero: the position is not billed at all and the ceiling check has nothing to com
 The rate and the group travel together in one value, so the ceiling check can never be
 skipped. Sending 1.32 ct/kWh on a `Sondervertragskunde` — twelve times its lawful maximum —
 raises the warning rather than passing silently.
+
+#### The group is a consequence, not a label
+
+KAV § 2 Abs. 7 decides which group a **Niederspannungslieferung** belongs to, and it decides
+it from facts: a supply counts as a Tariflieferung „es sei denn, die gemessene Leistung des
+Kunden überschreitet in mindestens zwei Monaten des Abrechnungsjahres 30 Kilowatt **und** der
+Jahresverbrauch beträgt mehr als 30.000 Kilowattstunden". Both limbs, measured on the
+einzelne Betriebsstätte oder Abnahmestelle — one of them alone leaves the point a Tarifkunde,
+and the two ceilings are 1,32 ct and 0,11 ct apart.
+
+State the facts in `konzessionsabgabe.niederspannung` and the settlement holds the group
+against them, raising `KA_GRUPPE_WIDERSPRICHT_KAV_ABS7` when the two disagree:
+
+```json
+"konzessionsabgabe": {
+  "satz_ct_per_kwh": "0.11",
+  "klasse": "Sondervertragskunde",
+  "niederspannung": { "monate_ueber_leistungsgrenze": 5, "jahresverbrauch_kwh": "90000" }
+}
+```
+
+`leistungsgrenze_kw` and `verbrauchsgrenze_kwh` carry the lower figures Netzbetreiber and
+Gemeinde may agree under Satz 4; omitted, the statutory 30 kW and 30 000 kWh apply. The month
+count is the caller's, because only it holds the per-month Leistung.
+
+#### Two rules forbid a Konzessionsabgabe outright
+
+Neither is a ceiling, so neither is caught by the table above — a rate well inside the
+Höchstbetrag is still unlawful.
+
+| Warning | Rule | Fact it needs |
+|---|---|---|
+| `KA_UNTER_GRENZPREIS` | § 2 Abs. 4 (Strom) resp. Abs. 5 Nr. 2 (Gas) — a Sondervertragskunde whose Durchschnittspreis im Kalenderjahr lies **under** the Grenzpreis | `konzessionsabgabe.grenzpreis`, both figures in ct/kWh ohne USt |
+| `KA_GAS_UEBER_GRENZMENGE` | § 2 Abs. 5 Nr. 1 — Gas above **5 Millionen kWh** je Jahr und Abnahmefall | none — read off `jahresarbeit_kwh` |
+
+The Grenzpreis is not derivable here: for Strom it is the Durchschnittserlös the amtliche
+Statistik published for the *vorletzte* Kalenderjahr, and the customer's own price is measured
+„unter Einschluß des Netznutzungsentgelts" over the whole supply. Both are supplied; omitted,
+the comparison is simply not made.
 
 ### §14a EnWG
 
@@ -390,10 +429,10 @@ makes them mutually exclusive by construction:
 }}
 ```
 
-All three bands are required — a band with no energy carries `menge_kwh: "0"`. Permitting a
-subset would reintroduce exactly the partial state the type exists to prevent: the old flat
-request had four independent HT/NT fields, of which two combinations were valid, and setting
-three of them fell through to flat billing with no error at all.
+All three bands are required — a band with no energy carries `menge_kwh: "0"`. That is the
+partial state the variant exists to prevent: independent per-band fields admit combinations
+that are not a Modul-3 tariff, and a half-filled set falls through to flat billing with no
+error at all.
 
 The Modul-2 `reduktion` is range-checked at the request boundary: a factor outside `(0, 1]`
 is refused, so a request body carrying `5` cannot multiply the Arbeitspreis by five.
@@ -442,7 +481,7 @@ fall below the statutory floor.
 |---|---|
 | NNE | Arbeit (flat, or one per §14a module) · Leistung (RLM) · Gas Grundpreis (§14 GasNEV) · Gas Kapazitätsentgelt (§15 GasNEV, pro-rated by calendar days over the actual year length) · Konzessionsabgabe · the three EnFG levies (Strom only) · Blindmehrarbeit |
 | MMM | Mehrmengen (Gutschrift, negated) · Mindermengen |
-| MSB | Grundgebühr Messstellenbetrieb · Messdienstleistung, both checked against the §30 MsbG Preisobergrenze when `messstellen_kategorie` is supplied |
+| MSB | Grundgebühr Messstellenbetrieb · Messdienstleistung, both measured together against the §30 Abs. 1 MsbG Preisobergrenze when `messstellen_kategorie` is supplied — and only for a period ending from 01.01.2025, which is what that schedule dates itself to · Steuerungseinrichtung am Netzanschlusspunkt, which §30 Abs. 2 charges „zusätzlich“ and caps separately at 50 EUR brutto/Jahr |
 | NNE (privileged) | the §19 Aufschlag splits into two positions where the period straddles the EnFG 1-GWh boundary |
 | Gas AWH | one per chargeable action: `anzahl × preis_eur` |
 

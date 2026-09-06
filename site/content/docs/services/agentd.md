@@ -1,6 +1,6 @@
 +++
 title = "agentd Operator Guide"
-description = "agentd operator guide: 28 specialist manifests on agentplane — 26 read-only model-backed specialists and two deterministic coded specialists, with typed results, durable triage, semantic trust labels, journal-backed runs and role-scoped builds."
+description = "agentd operator guide: 28 specialist manifests on agentplane — typed results, durable triage, semantic trust labels and journal-backed runs."
 weight = 38
 +++
 `agentd` is the **AI automation layer** for the mako platform. It connects large
@@ -138,7 +138,8 @@ top by a retry loop. There is no retry worklist to drain and no exhaustion event
 to subscribe to.
 
 `de.agent.decision.made` carries the run's real outcome — `completed`,
-`failed`, `suspended`, `exhausted`, `quarantined`, `replanning` or `cancelled` —
+`failed`, `suspended`, `exhausted`, `quarantined`, `replanning`, `cancelled` or
+`abandoned` —
 so a subscriber sees a run waiting on human approval as readily as a successful
 one. What travels with it, and what deliberately does not, is set out under
 [decision delivery](#decision-delivery).
@@ -317,6 +318,9 @@ The worklist itself is agentplane's operator surface, mounted at
 | `GET /cases/{case}` | What has happened on this matter, and by when must it end? |
 | `GET /obligations` | What did we miss? — obligations in the `breached` state |
 | `POST /runs/{run}/cancel` | Stop it, with a reason on the record |
+| `POST /runs/{run}/reconcile` · `/reopen` · `/abandon` | A quarantined run: what actually happened, judge it again, or write it off |
+| `GET /dead-letters` | Which message arrived that no run was waiting for? |
+| `GET /push` · `POST /push/rearm` | Which receivers stopped acknowledging, and resume one |
 | `POST /events` | This message arrived; wake whoever wanted it |
 
 Four properties are worth stating because each is a control rather than a
@@ -365,6 +369,20 @@ convenience:
   held to `mako-operations` and `regulatory`, because `GET /obligations` does
   not narrow by domain and handing it to `metering` would hand `metering` every
   other domain's missed Fristen.
+
+- **A quarantine is three verbs with three audiences.** The runtime quarantines
+  a run when it cannot establish what an effect did — a dispatch whose answer
+  never came back. *Reconciling* is looking that outcome up where the truth is
+  (the counterparty's answer, the ledger), so it carries the same domain
+  audience as deciding a task; what an operator supplies is untrusted by
+  construction, and a run that needed the output trusted unwinds at its next
+  gate rather than proceeding on a typed value. *Reopening* lets the run be
+  judged again — it decides nothing about the verdict, which the run re-derives
+  — and is an intervention, like cancelling. *Abandoning* closes the run and
+  unwinds nothing: whatever it put in the market stays there, unexplained, so it
+  is held to the same two roles as the breach listing. Cancelling a quarantined
+  run is refused outright: it promises to put the world back, which is the one
+  thing a run holding an unknown outcome may not do.
 
 Behind it, the **sweeper** ticks every `sweep_interval_secs`: it warns on
 approaching obligations, breaches the ones that passed, applies each overdue
@@ -1031,11 +1049,13 @@ journaled `clock.now` effects so a replay sees the instant the run saw, and
 stamping the moment the outbox swept would be a lie about when the run finished.
 
 `outcome` is one of `completed`, `failed`, `suspended`, `exhausted`,
-`quarantined`, `replanning`, `cancelled` or `not-admitted` — the wire label for a successful
-run is `completed`, not `succeeded`. A **suspended** run is not a
-failure — it waits for a human decision or an inbound event — and a
-**quarantined** one means the durable record is untrustworthy, which is why it
-is its own outcome rather than `failed`.
+`quarantined`, `replanning`, `cancelled`, `abandoned` or `not-admitted` — the
+wire label for a successful run is `completed`, not `succeeded`. A **suspended**
+run is not a failure — it waits for a human decision or an inbound event — and a
+**quarantined** one is the runtime saying it cannot establish what an effect
+did, which is why it is its own outcome rather than `failed`: a failure may be
+unwound, an unknown outcome may not. **`abandoned`** is that doubt closed by a
+person without unwinding it.
 
 A failed run also carries **`reason`** — the refusal in the runtime's own words,
 which is the only actionable part of a failure. It is **absent** on a success

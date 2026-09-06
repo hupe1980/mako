@@ -1,6 +1,6 @@
 +++
 title = "Release Lifecycle"
-description = "BDEW format version lifecycle: active, upcoming, and archived states. How mako-engine handles concurrent FV coexistence with WorkflowVersionPolicy::ForwardCompatible."
+description = "The BDEW format-version lifecycle — active, upcoming and archived — and how mako-engine runs two Formatversionen side by side without splitting a process."
 weight = 11
 +++
 EDI@Energy specifications are updated on a recurring cycle. This document describes how new BDEW releases are incorporated into `edi-energy`, how they are rolled out across the platform, and what the `xtask` automation covers.

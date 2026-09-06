@@ -1356,10 +1356,10 @@ pub async fn get_zaehlzeitdefinitionen(
         // Return an empty but schema-valid Zaehlzeitdefinition.
         //
         // `..Default::default()` stamps `_typ` *and* `_version` — rubo4e
-        // pre-fills both on construction, for COMs as well as BOs since 0.12,
-        // matching BO4E-python and go-bo4e. Writing either by hand reintroduces
-        // a literal that goes stale on a schema bump, and a discriminant
-        // written down is one that can name a different BO than the type.
+        // pre-fills both on construction, for COMs as well as BOs, matching
+        // BO4E-python and go-bo4e. Writing either by hand is a literal that goes
+        // stale on a schema bump, and a discriminant written down is one that
+        // can name a different BO than the type.
         let empty = Zaehlzeitdefinition {
             id: Some(zaehler_id.clone()),
             ..Default::default()

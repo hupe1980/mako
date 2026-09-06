@@ -54,7 +54,6 @@ fn open_series(
 pub(crate) async fn get_archive_status(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    Extension(pool): Extension<Arc<PgPool>>,
     State(state): State<HandlerState>,
 ) -> impl IntoResponse {
     let resource_tenant = state.tenant.as_str();
@@ -66,7 +65,6 @@ pub(crate) async fn get_archive_status(
             .into_response();
     }
 
-    let _ = &pool;
     // Archival is owned by meterstore (hot Postgres + cold Iceberg). Report the
     // tier it manages rather than the former per-batch export bookkeeping — and
     // report it honestly: without `[archive] enabled = true` there is no cold

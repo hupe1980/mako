@@ -56,6 +56,7 @@ mod lastgang;
 mod quality;
 pub(crate) mod quality_alert;
 mod reading_orders;
+mod session;
 mod sharing;
 mod substitute;
 mod virtual_meter;
@@ -236,6 +237,10 @@ pub fn router(state: HandlerState) -> Router {
         .route(
             "/api/v1/gdpr/erasure/{malo_id}",
             axum::routing::delete(post_gdpr_erasure),
+        )
+        .route(
+            "/api/v1/gdpr/erasures",
+            axum::routing::get(get_gdpr_erasures),
         )
         // Analytical SQL — runs read-only SQL across both tiers in meterstore's
         // DataFusion session, returning JSON rows or an Arrow IPC stream. External
@@ -424,6 +429,12 @@ pub struct RunConfig {
     pub shutdown: CancellationToken,
     /// Resolved archive config (env vars already substituted, disabled when absent).
     pub archive: Option<crate::config::ArchiveConfig>,
+    /// Erasure suppression keys, `env:` references already resolved. `keys[0]`
+    /// writes new tombstones and every key is checked, so the current key comes
+    /// first and retired ones follow. Empty disables suppression: an Art. 17
+    /// erasure then unlinks without recording that it happened, and the next
+    /// delivery for the same MaLo re-links it.
+    pub erasure_keys: Vec<Vec<u8>>,
     /// ERP webhook URL for outbound CloudEvents (direct push + quality warnings).
     pub erp_webhook_url: Option<String>,
     /// Optional secret signing every outbound CloudEvent (Standard Webhooks).
@@ -528,6 +539,7 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
         &warehouse_uri,
         tiering,
         &warehouse_auth,
+        &cfg.erasure_keys,
     )
     .await?;
     tracing::info!(warehouse = %warehouse_uri, "edmd: meterstore tiers ready");

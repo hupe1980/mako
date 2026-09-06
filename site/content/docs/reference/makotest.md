@@ -1,6 +1,6 @@
 +++
 title = "makotest (Python)"
-description = "Python test & simulation toolkit for MaKo platforms: BDEW identifier check digits, the published answer-Frist table, AHB-validated EDIFACT, counterparties that answer in EDIFACT, and a pytest plugin — over the same Rust core the platform runs."
+description = "Python test and simulation toolkit for MaKo platforms: BDEW check digits, answer-Fristen, AHB-validated EDIFACT and a pytest plugin, over mako's Rust core."
 weight = 18
 +++
 

@@ -589,11 +589,9 @@ fn the_pflichtverstoss_check_matches_the_enum() {
     );
 }
 
-/// The §9 obligation is staged by capacity, so a flat capacity test is a bug.
-///
-/// A flat "≥ 25 kW needs Fernsteuerbarkeit" charged 10 €/kW/month to every
-/// compliant plant in the 25–100 kW band that took the 60 % Leistungsbegrenzung
-/// §9 Abs. 2 Nr. 2 offers it.
+/// § 9 Abs. 2 Satz 1 stages the obligation by capacity **and** gates lit. b and
+/// Nr. 3 on the Veräußerungsform, so neither a bare capacity test nor a bare
+/// "has a Fernsteuerbarkeit date" test can decide it.
 #[test]
 fn sect9_compliance_is_not_a_bare_capacity_test() {
     let code = code_only(SECT52);
@@ -603,7 +601,7 @@ fn sect9_compliance_is_not_a_bare_capacity_test() {
     );
     assert!(
         !code.contains("fernsteuerbarkeit_datum.is_none()"),
-        "a bare 'no Fernsteuerbarkeit date' test ignores the 60 % Leistungsbegrenzung route"
+        "a date test cannot see the 60 % Wirkleistungsbegrenzung"
     );
 }
 

@@ -103,6 +103,9 @@ test-marktd-db:
         -- --include-ignored --test-threads=1
 
 # processd's SQL suite (approval queue claim/dispatch, decision audit log).
+#
+# `--no-default-features --features integrated` because the default build is
+# role-split and these tests drive both the NB and the LF module.
 test-processd-db:
     cargo test -p processd --no-default-features --features integrated \
         --test sql_integration -- --include-ignored --test-threads=1
@@ -286,7 +289,7 @@ examples:
         python3 -c "import json,sys; m=json.load(sys.stdin); [print(p['name'], t['name']) for p in m['packages'] for t in p['targets'] if 'example' in t['kind']]" | sort)
     exit $fail
 
-ci: check check-fuzz test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-runner-routes check-wire-timestamps check-business-dates check-rounding check-pid-coverage check-release-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
+ci: check check-fuzz test test-features examples regulatories check-publishable check-publish-order clippy clippy-roles smoke-roles fmt-check deny check-licenses no-version-alias check-bo4e-coverage check-bo4e-discriminants check-bo4e-examples check-routes check-crate-lints check-runner-routes check-wire-timestamps check-business-dates check-rounding check-pid-coverage check-release-coverage check-dep-versions check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check validate-profiles import-profiles-check validate-ebd-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -540,6 +543,14 @@ check-rounding:
 
 check-pid-coverage:
     cargo xtask check-pid-coverage
+
+# The licence governance page tells a compliance reader what this workspace may
+# depend on, and instructs a maintainer to keep it in step with `deny.toml` —
+# a promise nothing enforced until this ran. Both directions: an allowed licence
+# nobody recorded a review for, and a page stating a permission `cargo deny`
+# refuses.
+check-licenses:
+    cargo xtask check-licenses
 
 # The architecture page lists every external crate mako's domain rests on with
 # the version it is pinned to. A version in prose is a claim like any other:

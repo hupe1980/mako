@@ -37,6 +37,7 @@ Commands:
                         Prüfidentifikator inventory (no source documents needed)
   import-pid-overview    Extract that inventory from the BDEW Anwendungsübersicht .xlsx
   check-dep-versions     Documented dependency versions must match the manifests
+  check-licenses         The licence governance page must state deny.toml's allow list
   check-wire-timestamps  Refuse raw `time` values in JSON output (they serialise as component arrays)
                         under axum 0.8 (the fix is `/{param}`)
   check-answer-commands  Refuse an invoicd PID route naming a makod command that does not exist
@@ -64,6 +65,7 @@ mod check_bo4e_examples;
 mod check_business_dates;
 mod check_crate_lints;
 mod check_dep_versions;
+mod check_licenses;
 mod check_malo_ids;
 mod check_prompt_tools;
 mod check_publish_order;
@@ -103,6 +105,7 @@ fn main() {
         Some("check-pid-coverage") => check_pid_coverage(),
         Some("import-pid-overview") => import_pid_overview(),
         Some("check-dep-versions") => check_dep_versions(),
+        Some("check-licenses") => check_licenses(),
         Some("check-wire-timestamps") => check_wire_timestamps(),
         Some("check-answer-commands") => check_answer_commands(),
         Some("check-tool-grants") => check_tool_grants(),
@@ -278,6 +281,13 @@ fn import_pid_overview() {
 fn check_dep_versions() {
     let (workspace_root, _) = workspace_info();
     if !check_dep_versions::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_licenses() {
+    let (workspace_root, _) = workspace_info();
+    if !check_licenses::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }

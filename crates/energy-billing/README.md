@@ -331,8 +331,9 @@ let rechnung_json: serde_json::Value = invoice.to_rechnung_json();  // feature `
 
 ## Product enum
 
-`Product` is the typed dispatch enum that replaces the old flat `TariffInput` god-struct.
-Each category has its own struct with only the relevant fields — no silent field confusion.
+`Product` is the typed dispatch enum the engine bills from. Each category has its own
+struct carrying only the fields that category prices, so a Gas field cannot be read on an
+electricity tariff.
 
 ```rust
 // Deserializes via #[serde(tag = "category")] from flat productd JSONB:

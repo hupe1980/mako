@@ -1,6 +1,6 @@
 +++
 title = "ERP Integration"
-description = "Integrate with your ERP using CloudEvents 1.0 JSON webhooks, the Command API, and typed BO4E market data. Covers HMAC-SHA256 signature verification, idempotency keys, payment lifecycle CloudEvents, and the full integration topology diagram."
+description = "Integrate your ERP with mako over CloudEvents 1.0 webhooks, the Command API and typed BO4E market data — HMAC signatures, idempotency keys, topology."
 weight = 10
 +++
 `makod` is a protocol processor, not a business system. It handles EDIFACT

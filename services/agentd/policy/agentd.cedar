@@ -171,10 +171,17 @@ forbid(principal, action == Action::"data:release", resource);
 
 // Reading the plane: what ran, what is waiting, what is on this case. Broad on
 // purpose — an operator who cannot see a stuck run pages somebody who can.
+//
+// The two backlogs belong here for exactly that reason: a dead-lettered event is
+// a run that will never wake (the diagnosis is always *which correlation key
+// does not match what the run subscribed to*, which is what the listing
+// carries — never the counterparty's payload), and a parked push registration
+// is a receiver that stopped acknowledging. Both present as silence otherwise.
 permit(
   principal,
   action in [Action::"api:run.read", Action::"api:run.list", Action::"api:task.list",
-             Action::"api:task.read", Action::"api:case.read", Action::"api:case.list"],
+             Action::"api:task.read", Action::"api:case.read", Action::"api:case.list",
+             Action::"api:deadletter.list", Action::"api:push.list"],
   resource
 )
 when {
@@ -238,14 +245,56 @@ when {
     .containsAny(context.roles)
 };
 
-// Interventions: stopping a run, and taking a claimed task over somebody's
-// reservation. Both are recorded with the actor's name; operations only.
+// Interventions: stopping a run, taking a claimed task over somebody's
+// reservation, and resuming delivery to a receiver that was parked. All are
+// recorded with the actor's name; operations only. Re-arming replays from the
+// first record the receiver never acknowledged, so it puts messages back on the
+// wire rather than merely clearing a flag.
 permit(
   principal,
-  action in [Action::"api:run.cancel", Action::"api:task.takeover"],
+  action in [Action::"api:run.cancel", Action::"api:task.takeover",
+             Action::"api:push.rearm"],
   resource
 )
 when { context.roles.contains("mako-operations") };
+
+// Quarantine: the runtime saying it does not know what an effect did.
+//
+// Three verbs and three audiences, because supplying a fact is not deciding a
+// run and deciding a run is not writing off what it left behind.
+//
+// **Reconciling** is looking the outcome up where the truth actually is — the
+// counterparty's answer, the ledger, the provider's console — and that is the
+// domain's job rather than the plane operator's. So it carries the same audience
+// as deciding a task: whoever answers for the domain the effect belongs to.
+// What an operator supplies is untrusted by construction (nobody typing a value
+// is the provider that returned it), so a run that needed the output trusted
+// unwinds at its next gate rather than proceeding on it.
+permit(principal, action == Action::"api:effect.reconcile", resource)
+when {
+  ["mako-operations", "gas-operations", "billing-operations", "billing-compliance",
+   "credit-control", "eeg-operations", "grid-operations", "marktkommunikation",
+   "metering", "netzbilanz", "regulatory"]
+    .containsAny(context.roles)
+};
+
+// **Reopening** says the doubt is answered and the run may be judged again. It
+// decides nothing about the outcome — the run re-derives its verdict from the
+// history and quarantines again if the answer was wrong — but it is the verb
+// that puts a market-facing run back in motion, so it is an intervention like
+// cancelling.
+permit(principal, action == Action::"api:run.reopen", resource)
+when { context.roles.contains("mako-operations") };
+
+// **Abandoning** closes a run whose outcome nobody could establish and unwinds
+// nothing: whatever it put in the market stays there, unexplained. That is a
+// compliance decision before it is an operational one, so it carries the same
+// narrow audience as the breach listing and cryptographic erasure — the two
+// roles whose remit is the whole plane.
+permit(principal, action == Action::"api:run.abandon", resource)
+when {
+  ["mako-operations", "regulatory"].containsAny(context.roles)
+};
 
 // Event delivery wakes a suspended run. mako's services authenticate with their
 // own service keys, so this is the machine door and stays separate from the

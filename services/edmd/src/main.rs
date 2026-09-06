@@ -93,6 +93,11 @@ impl Daemon for Edmd {
             archive
         });
 
+        // The erasure suppression key ring. Resolved before the server is built:
+        // a half-finished rotation must stop startup, not surface later as
+        // erasures that record nothing.
+        let erasure_keys = config::erasure_key_ring(&cfg.privacy)?;
+
         edmd::server::build(edmd::server::RunConfig {
             pool: ctx.pool().clone(),
             smgw: cfg.smgw.clone(),
@@ -115,6 +120,7 @@ impl Daemon for Edmd {
             kafka_ingest: cfg.kafka_ingest.clone(),
             confirmation: cfg.confirmation.clone(),
             archive,
+            erasure_keys,
         })
         .await
     }

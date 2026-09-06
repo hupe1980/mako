@@ -1,6 +1,6 @@
 +++
 title = "sperrd Operator Guide"
-description = "Operator guide for sperrd — the Netzbetreiber's Sperr-/Entsperrauftrag execution queue: ORDERS 17115/17117 in, field dispatch, IFTSTA 21039 out, with a retry queue for the outcomes that do not reach the Lieferant."
+description = "Operator guide for sperrd, the Netzbetreiber's Sperr-/Entsperrauftrag queue: ORDERS 17115/17117 in, field dispatch, IFTSTA 21039 out."
 weight = 26
 +++
 `sperrd` is the Netzbetreiber's work queue for the physical acts GPKE orders it

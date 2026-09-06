@@ -173,6 +173,14 @@ pub struct AccountingdConfig {
     /// and at generation time) to prevent bank batch rejections.
     pub creditor_id: Option<String>,
 
+    /// BIC of the bank the pain.008 files are submitted to.
+    ///
+    /// A camt.055 recall is *addressed* — `Assgnmt/Assgne` is the institution
+    /// being asked to stop the collection — so a recall cannot be built without
+    /// it. It is not needed to submit a pain.008, which is why it is optional:
+    /// `POST /api/v1/sepa/recalls` answers `503` naming it when it is absent.
+    pub debtor_agent_bic: Option<String>,
+
     /// pain.008 (SEPA Direct Debit) schema version the bank requires, e.g.
     /// `pain.008.001.08` (current, default) or `pain.008.001.02` (EPC version
     /// accepted by many banks until Nov 2023). Absent → the crate default.

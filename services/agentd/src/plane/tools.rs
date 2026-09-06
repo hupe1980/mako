@@ -145,12 +145,21 @@ async fn connect_one(
         .await
         .with_context(|| format!("MCP handshake with '{name}'"))?;
 
-    // Fallible since 0.21: rmcp deserializes any string into a protocol
+    // Fallible on purpose: rmcp deserializes any string into a protocol
     // version, so a server answering a revision nobody implements would
     // otherwise be talked to in a dialect that does not exist. Refusing here is
     // a startup failure naming the server, which is the same class as a granted
     // server missing from `[mcp_servers]`.
-    let client = McpClient::new(name, Arc::new(service))
+    // The destination the allowlist judges has to be the host actually dialled,
+    // so it is read off `uri` rather than restated — every mako MCP server is a
+    // streamable-HTTP endpoint, so it is always a remote one.
+    let destination = reqwest::Url::parse(uri)
+        .ok()
+        .and_then(|u| u.host_str().map(ToOwned::to_owned))
+        .map_or(agentplane::tools::Destination::Local, |host| {
+            agentplane::tools::Destination::remote(host)
+        });
+    let client = McpClient::new(name, Arc::new(service), destination)
         .with_context(|| format!("MCP protocol negotiation with '{name}'"))?;
 
     // MCP negotiates *down* by design, and a downgrade is silent: the tasks

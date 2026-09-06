@@ -712,8 +712,11 @@ CREATE TABLE sepa_collection_entries (
     --   REJECTED   pain.002 RJCT (never left the bank)
     --   RETURNED   camt.054 Rückläufer after settlement (R-transaction)
     --   REVERSED   the creditor sent it back via pain.007
+    --   RECALLED   a camt.055 was accepted before it settled (camt.029 `ACCR`)
     status          TEXT        NOT NULL DEFAULT 'SUBMITTED'
-                    CHECK (status IN ('SUBMITTED', 'SETTLED', 'REJECTED', 'RETURNED', 'REVERSED')),
+                    CHECK (status IN (
+                        'SUBMITTED', 'SETTLED', 'REJECTED', 'RETURNED', 'REVERSED', 'RECALLED'
+                    )),
     status_reason   TEXT,
     status_at       TIMESTAMPTZ,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -723,6 +726,60 @@ COMMENT ON TABLE sepa_collection_entries IS
     'One row per mandate collected in a pain.008 run. The attribution key for '
     'pain.002 replies (EndToEndId), camt bookings (Btch/PmtInfId) and pain.007 '
     'reversals. Holds no IBAN — that stays on sepa_mandates for GDPR erasure.';
+
+-- ── Recalls: stopping a collection before it settles ─────────────────────────
+--
+-- A pain.007 gives back a collection that **settled**. A camt.055 asks the bank
+-- to stop one that has not — a run built on a mandate that turned out to be
+-- revoked, a duplicated collection date, a debtor who paid by transfer in the
+-- meantime. The two are different messages at different moments, and only the
+-- second can still prevent the debit.
+--
+-- The bank answers with a camt.029 quoting the request's `Assgnmt/Id` in
+-- `RslvdCase/Id`, which is why that id is this table's natural key: it is the
+-- only thing the answer carries that points back here.
+
+CREATE TABLE sepa_recalls (
+    recall_id       UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant          TEXT        NOT NULL,
+    run_id          UUID        NOT NULL REFERENCES sepa_collection_runs (run_id) ON DELETE CASCADE,
+    -- `Assgnmt/Id` of the camt.055, echoed by the camt.029 in `RslvdCase/Id`.
+    assignment_id   TEXT        NOT NULL,
+    -- Whether the whole submission was recalled (`GrpCxl`) or named entries.
+    -- The two are mutually exclusive in the schema, so they are one column.
+    scope           TEXT        NOT NULL CHECK (scope IN ('MESSAGE', 'ENTRIES')),
+    -- ISO 20022 `CxlRsnInf/Rsn` — `DUPL`, `AGNT`, `CUST`, `CURR`, `UPAY`, …
+    reason_code     TEXT        NOT NULL,
+    camt055_xml     TEXT        NOT NULL,
+    -- What the request names. A whole-message recall names none, and then
+    -- `CtrlData` is absent from the XML rather than stating zero.
+    entry_count     INTEGER     NOT NULL DEFAULT 0,
+    total_ct        BIGINT,
+    -- The bank's answer. REQUESTED until a camt.029 arrives; the other four are
+    -- `Sts/Conf` verbatim (`ACCR`/`RJCR`/`PDCR`/`PACR`).
+    status          TEXT        NOT NULL DEFAULT 'REQUESTED'
+                    CHECK (status IN ('REQUESTED', 'ACCEPTED', 'REJECTED', 'PENDING', 'PARTIAL')),
+    status_reason   TEXT,
+    resolved_at     TIMESTAMPTZ,
+    camt029_xml     TEXT,
+    created_by      TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- A resolved recall has to say when, and an unresolved one must not.
+    CONSTRAINT sepa_recalls_resolution CHECK (
+        (status = 'REQUESTED') = (resolved_at IS NULL)
+    )
+);
+
+COMMENT ON TABLE sepa_recalls IS
+    'camt.055 payment cancellation requests against a submitted pain.008 run, '
+    'and the camt.029 answers to them. Keyed on Assgnmt/Id, which is what a '
+    'camt.029 quotes in RslvdCase/Id.';
+
+-- The answer arrives naming only the assignment id.
+CREATE UNIQUE INDEX sr_assignment ON sepa_recalls (tenant, assignment_id);
+CREATE INDEX sr_run ON sepa_recalls (tenant, run_id, created_at DESC);
+-- „which recalls are still open?" — the operator's list.
+CREATE INDEX sr_open ON sepa_recalls (tenant, created_at DESC) WHERE status = 'REQUESTED';
 
 -- EndToEndId is the key a pain.002 rejection names.
 CREATE UNIQUE INDEX sce_e2e     ON sepa_collection_entries (tenant, end_to_end_id, run_id);

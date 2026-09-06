@@ -1,6 +1,6 @@
 +++
 title = "Documentation"
-description = "Complete documentation for mako — the open-source German energy-market platform in Rust. Guides, service operator manuals, EDIFACT reference, regulatory mapping and the annual BDEW release workflow."
+description = "Documentation for mako, the open-source German energy-market platform in Rust: guides, operator manuals, EDIFACT reference and regulatory mapping."
 sort_by = "weight"
 template = "section.html"
 +++

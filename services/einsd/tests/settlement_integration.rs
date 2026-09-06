@@ -771,15 +771,12 @@ async fn the_statutory_rate_table_is_seeded_by_the_schema() {
 /// The award facts must survive registration, and the **awarded** value must be
 /// the one the settlement uses.
 ///
-/// `AusschreibungMetadata` was constructed with `..Default::default()`, so
-/// `award_ct`, `award_expired`, `innovation_auction` and `is_buergerenergie`
-/// were always `None`/`false` no matter what was registered — §22b
-/// Bürgerenergie and §39n Innovationsausschreibung were unreachable.
-///
-/// A second trap sat beside it: the plant carries two AW columns, and the
-/// settlement read only `direktverm_aw_ct`. A tender plant registered with
-/// `zuschlagswert_ct` — the field named after its award, which is what an
-/// operator reaches for — settled at AW = 0 and was paid nothing, every month,
+/// Two invariants meet here. Every field of `AusschreibungMetadata` has to be
+/// carried from the registration — defaulting any of them makes §22b
+/// Bürgerenergie and §39n Innovationsausschreibung unreachable however the plant
+/// was registered. And the plant carries **two** AW columns: a tender plant
+/// registered with `zuschlagswert_ct` — the field named after its award, which
+/// is what an operator reaches for — must not settle at AW = 0 and report that
 /// as a `calculated` result.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
@@ -2083,92 +2080,126 @@ async fn the_sixty_percent_cap_is_not_a_sect52_violation() {
         return;
     };
 
-    let settle = |tr_id: &'static str, kwp: &'static str, sect9: &'static str| {
-        let pool = pool.clone();
-        async move {
-            sqlx::query(
-                // A plant over 100 kW cannot be on VERGUETUNG (§ 21 Abs. 1 Satz 1
-                // Nr. 1), and this test reaches 150 kW, so every fixture is put in
-                // Direktvermarktung. § 52 Abs. 1 Nr. 1 is owed either way — the
-                // Pflichtzahlung does not depend on the Veräußerungsform.
-                "INSERT INTO eeg_anlagen
+    // `model` decides whether § 9 Abs. 2 Satz 1 Nr. 2 lit. b and Nr. 3 apply at
+    // all: they bind „Anlagen, die der Einspeisevergütung oder dem
+    // Mieterstromzuschlag … zugeordnet sind". Nr. 1 and Nr. 2 lit. a do not care.
+    let settle =
+        |tr_id: &'static str, kwp: &'static str, model: &'static str, fern: bool, cap: bool| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query(
+                    "INSERT INTO eeg_anlagen
                    (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
                     erzeugungsart, verguetungssatz_ct, settlement_model, direktverm_aw_ct,
-                    foerderendedatum, sect9_erfuellung, einspeiser_id)
+                    foerderendedatum, sect9_fernsteuerbarkeit, sect9_begrenzung_60,
+                    einspeiser_id)
                  VALUES ($1, $2, '51238696781', 2023, '2024-06-01', $3::numeric,
-                         'SOLAR_FREIFLAECHE', 8.11, 'DIREKTVERMARKTUNG', 8.11,
-                         '2044-12-31', $4, 'EB-1')",
+                         'SOLAR_FREIFLAECHE', 8.11, $4, 8.11,
+                         '2044-12-31', $5, $6, 'EB-1')",
+                )
+                .bind(tr_id)
+                .bind(TENANT)
+                .bind(kwp)
+                .bind(model)
+                .bind(fern)
+                .bind(cap)
+                .execute(&pool)
+                .await
+                .expect("seed");
+
+                let anlage = einsd::pg::fetch_anlage(&pool, TENANT, tr_id)
+                    .await
+                    .expect("fetch")
+                    .expect("plant exists");
+                let input = einsd::pg::build_settle_input(
+                    TENANT,
+                    &anlage,
+                    &regelbesteuert(),
+                    2026,
+                    6,
+                    einsd::pg::SettleOverrides {
+                        einspeisemenge_kwh: Some(dec!(1000)),
+                        jahresmarktwert_ct_kwh: Some(dec!(0)),
+                        ..Default::default()
+                    },
+                );
+                let mut tx = pool.begin().await.expect("begin");
+                let res = einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
+                    .await
+                    .expect("settle");
+                tx.commit().await.expect("commit");
+                res
+            }
+        };
+
+    let pflichtzahlung = |tr_id: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Option<rust_decimal::Decimal>>(
+                "SELECT pflichtzahlung_eur FROM settlement_receipts WHERE tr_id = $1",
             )
             .bind(tr_id)
-            .bind(TENANT)
-            .bind(kwp)
-            .bind(sect9)
-            .execute(&pool)
+            .fetch_one(&pool)
             .await
-            .expect("seed");
-
-            let anlage = einsd::pg::fetch_anlage(&pool, TENANT, tr_id)
-                .await
-                .expect("fetch")
-                .expect("plant exists");
-            let input = einsd::pg::build_settle_input(
-                TENANT,
-                &anlage,
-                &regelbesteuert(),
-                2026,
-                6,
-                einsd::pg::SettleOverrides {
-                    einspeisemenge_kwh: Some(dec!(1000)),
-                    jahresmarktwert_ct_kwh: Some(dec!(0)),
-                    ..Default::default()
-                },
-            );
-            let mut tx = pool.begin().await.expect("begin");
-            let res = einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
-                .await
-                .expect("settle");
-            tx.commit().await.expect("commit");
-            res
+            .expect("read receipt")
         }
     };
 
-    // 50 kW on the 60 % cap — compliant.
-    settle("TR-S9-CAP", "50", "LEISTUNGSBEGRENZUNG_60").await;
-    let pflicht: Option<rust_decimal::Decimal> = sqlx::query_scalar(
-        "SELECT pflichtzahlung_eur FROM settlement_receipts WHERE tr_id = 'TR-S9-CAP'",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("read receipt");
+    // 50 kW in der Direktvermarktung with the ferngesteuerte Reduzierung — lit. b
+    // does not reach it, so lit. a alone is the whole obligation.
+    settle("TR-S9-DV-FERN", "50", "DIREKTVERMARKTUNG", true, false).await;
     assert!(
-        pflicht.is_none_or(|p| p.is_zero()),
-        "a 50 kW plant on the 60 % Leistungsbegrenzung owes nothing under §52, got {pflicht:?}"
+        pflichtzahlung("TR-S9-DV-FERN")
+            .await
+            .is_none_or(|p| p.is_zero()),
+        "a directly-marketed 50 kW plant owes only § 9 Abs. 2 Satz 1 Nr. 2 lit. a"
     );
 
-    // 50 kW with nothing installed — a real violation.
-    settle("TR-S9-NONE", "50", "KEINE").await;
-    let pflicht: Option<rust_decimal::Decimal> = sqlx::query_scalar(
-        "SELECT pflichtzahlung_eur FROM settlement_receipts WHERE tr_id = 'TR-S9-NONE'",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("read receipt");
+    // The same plant with the 60 % cap instead — lit. a is still open.
+    settle("TR-S9-DV-CAP", "50", "DIREKTVERMARKTUNG", false, true).await;
     assert!(
-        pflicht.is_some_and(|p| p > dec!(0)),
-        "a plant that satisfies §9 by no route at all does owe the Nr. 1 charge"
+        pflichtzahlung("TR-S9-DV-CAP")
+            .await
+            .is_some_and(|p| p > dec!(0)),
+        "the 60 % cap does not discharge lit. a"
     );
 
-    // 150 kW on the 60 % cap — above 100 kW the alternative is gone (Abs. 2 Nr. 1).
-    settle("TR-S9-BIG", "150", "LEISTUNGSBEGRENZUNG_60").await;
-    let pflicht: Option<rust_decimal::Decimal> = sqlx::query_scalar(
-        "SELECT pflichtzahlung_eur FROM settlement_receipts WHERE tr_id = 'TR-S9-BIG'",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("read receipt");
+    // 50 kW in der Einspeisevergütung with the Fernsteuerbarkeit alone — lit. b
+    // is owed as well, „a) … und b) …".
+    settle("TR-S9-EV-FERN", "50", "VERGUETUNG", true, false).await;
     assert!(
-        pflicht.is_some_and(|p| p > dec!(0)),
-        "from 100 kW the 60 % route no longer satisfies §9"
+        pflichtzahlung("TR-S9-EV-FERN")
+            .await
+            .is_some_and(|p| p > dec!(0)),
+        "Nr. 2 joins lit. a and lit. b with „und\", so the cap is owed too"
+    );
+
+    // Both routes — compliant.
+    settle("TR-S9-EV-BOTH", "50", "VERGUETUNG", true, true).await;
+    assert!(
+        pflichtzahlung("TR-S9-EV-BOTH")
+            .await
+            .is_none_or(|p| p.is_zero()),
+        "carrying both routes discharges Nr. 2"
+    );
+
+    // 10 kW in der Direktvermarktung — Nr. 3 names only geförderte Anlagen und
+    // KWK-Anlagen, so § 9 Abs. 2 asks this plant for nothing.
+    settle("TR-S9-SMALL-DV", "10", "DIREKTVERMARKTUNG", false, false).await;
+    assert!(
+        pflichtzahlung("TR-S9-SMALL-DV")
+            .await
+            .is_none_or(|p| p.is_zero()),
+        "Nr. 3 does not reach a directly-marketed plant below 25 kW"
+    );
+
+    // 150 kW on the 60 % cap — Nr. 1 knows no cap route.
+    settle("TR-S9-BIG", "150", "DIREKTVERMARKTUNG", false, true).await;
+    assert!(
+        pflichtzahlung("TR-S9-BIG")
+            .await
+            .is_some_and(|p| p > dec!(0)),
+        "from 100 kW only the ferngesteuerte Reduzierung satisfies § 9"
     );
 }
 
@@ -2176,10 +2207,10 @@ async fn the_sixty_percent_cap_is_not_a_sect52_violation() {
 /// 20 % (§53 Abs. 3), and running past its Höchstdauern is a §52 Abs. 1 Nr. 5
 /// Pflichtverstoß.
 ///
-/// Neither was implemented: the scheme existed, the caller was expected to store
-/// a pre-reduced rate and never did, and nothing counted the months. A plant
-/// parked on the Ausfallvergütung was paid 25 % more than the statute allows,
-/// indefinitely.
+/// Both are the engine's own arithmetic: the deduction is applied to the stored
+/// rate rather than expected in it, and the months are counted from the receipts.
+/// A caller that stored a pre-reduced rate would otherwise be deducted twice, and
+/// a plant parked on the Ausfallvergütung would run past its Höchstdauern unseen.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_ausfallverguetung_is_reduced_and_time_limited() {
@@ -2191,10 +2222,10 @@ async fn the_ausfallverguetung_is_reduced_and_time_limited() {
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
             erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
-            sect9_erfuellung, einspeiser_id)
+            sect9_fernsteuerbarkeit, einspeiser_id)
          VALUES ('TR-AV', $1, '51238696781', 2023, '2024-06-01', 500,
                  'SOLAR_FREIFLAECHE', 10.00, 'AUSFALLVERGUETUNG', '2044-12-31',
-                 'FERNSTEUERBARKEIT', 'EB-1')",
+                 true, 'EB-1')",
     )
     .bind(TENANT)
     .execute(&pool)
@@ -2287,10 +2318,11 @@ async fn an_unnotified_veraeusserungsform_switch_is_charged() {
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
             erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
-            sect9_erfuellung, last_veraeusserungsform_switch, einspeiser_id)
+            sect9_fernsteuerbarkeit, sect9_begrenzung_60,
+            last_veraeusserungsform_switch, einspeiser_id)
          VALUES ('TR-21C', $1, '51238696781', 2023, '2024-06-01', 50,
                  'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', '2044-12-31',
-                 'FERNSTEUERBARKEIT', '2026-05-01', 'EB-1')",
+                 true, true, '2026-05-01', 'EB-1')",
     )
     .bind(TENANT)
     .execute(&pool)
@@ -2563,10 +2595,10 @@ async fn the_pflichtverstoss_register_drives_the_sect52_charge() {
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
             erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
-            sect9_erfuellung, mastr_registriert, einspeiser_id)
+            sect9_fernsteuerbarkeit, mastr_registriert, einspeiser_id)
          VALUES ('TR-REG', $1, '51238696781', 2023, '2024-06-01', 100,
                  'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', '2044-12-31',
-                 'FERNSTEUERBARKEIT', true, 'EB-1')",
+                 true, true, 'EB-1')",
     )
     .bind(TENANT)
     .execute(&pool)
@@ -2687,10 +2719,10 @@ async fn the_sect52_claim_reaches_the_cloudevent_as_a_running_total() {
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
             erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
-            sect9_erfuellung, mastr_registriert, einspeiser_id)
+            sect9_fernsteuerbarkeit, mastr_registriert, einspeiser_id)
          VALUES ('TR-CE52', $1, '51238696781', 2023, '2024-06-01', 100,
                  'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', '2044-12-31',
-                 'FERNSTEUERBARKEIT', true, 'EB-1')",
+                 true, true, 'EB-1')",
     )
     .bind(TENANT)
     .execute(&pool)
@@ -2757,10 +2789,10 @@ async fn a_cure_reduces_only_the_four_nummern_abs3_names() {
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
             erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
-            sect9_erfuellung, mastr_registriert, einspeiser_id)
+            sect9_fernsteuerbarkeit, mastr_registriert, einspeiser_id)
          VALUES ('TR-ABS3', $1, '51238696781', 2023, '2024-06-01', 100,
                  'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', '2044-12-31',
-                 'FERNSTEUERBARKEIT', true, 'EB-1')",
+                 true, true, 'EB-1')",
     )
     .bind(TENANT)
     .execute(&pool)
@@ -2831,9 +2863,8 @@ async fn a_cure_reduces_only_the_four_nummern_abs3_names() {
 /// § 10b Abs. 1 binds the operator of a plant over 25 kW **that direct-markets**
 /// to fit the Abruf- und Fernsteuereinrichtung and grant the
 /// Direktvermarktungsunternehmen the authority to use it. Two things follow, and
-/// this pins both, because the check used to be „over 100 kW on an
-/// Einspeisevergütung model" — a different statute, and not a Pflichtverstoß at
-/// all:
+/// this pins both — „over 100 kW on an Einspeisevergütung model" is a different
+/// statute and not a Pflichtverstoß at all:
 ///
 /// 1. A plant over 100 kW left on `VERGUETUNG` owes **nothing**. It has no
 ///    § 21 Abs. 1 Satz 1 Nr. 1 claim, so it is unpaid (`kein_anspruch`), and
@@ -2851,14 +2882,14 @@ async fn sect52_nr4_charges_a_sect10b_breach_not_a_plant_over_100_kw() {
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
             erzeugungsart, verguetungssatz_ct, settlement_model, direktverm_aw_ct,
-            foerderendedatum, sect9_erfuellung, einspeiser_id)
+            foerderendedatum, sect9_fernsteuerbarkeit, einspeiser_id)
          VALUES
            ('TR-10B-VERG', $1, '51238696781', 2023, '2024-06-01', 250,
             'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', NULL,
-            '2044-12-31', 'FERNSTEUERBARKEIT', 'EB-1'),
+            '2044-12-31', true, 'EB-1'),
            ('TR-10B-DV',   $1, '51238696781', 2023, '2024-06-01', 250,
             'SOLAR_FREIFLAECHE', 8.11, 'DIREKTVERMARKTUNG', 8.11,
-            '2044-12-31', 'FERNSTEUERBARKEIT', 'EB-1')",
+            '2044-12-31', true, 'EB-1')",
     )
     .bind(TENANT)
     .execute(&pool)
@@ -2945,10 +2976,9 @@ async fn sect52_nr4_charges_a_sect10b_breach_not_a_plant_over_100_kw() {
 
 /// §36e / §37e / §39e EEG 2023 — a lapsed Zuschlag stops the settlement.
 ///
-/// The branch that answers "the award has lapsed, nothing left to settle" was
-/// read by `run_settlement` and written by nothing: `award_expired` was a stored
-/// flag no endpoint or worker ever set, so it was unreachable. The expiry is now
-/// derived from the date the award actually lapses.
+/// The expiry is derived from `zuschlag_erloeschen_datum` against the billing
+/// period rather than stored as a flag: a flag needs a worker to set it, and a
+/// branch waiting on one nothing writes is a branch that never runs.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_lapsed_zuschlag_stops_the_settlement_on_its_date() {
@@ -2960,11 +2990,11 @@ async fn a_lapsed_zuschlag_stops_the_settlement_on_its_date() {
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
             erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
-            sect9_erfuellung, ausschreibungs_zuschlag_id, direktverm_aw_ct,
+            sect9_fernsteuerbarkeit, ausschreibungs_zuschlag_id, direktverm_aw_ct,
             zuschlag_erloeschen_datum, einspeiser_id)
          VALUES ('TR-ZUSCHLAG', $1, '51238696781', 2023, '2024-06-01', 2000,
                  'SOLAR_FREIFLAECHE', 0, 'AUSSCHREIBUNG', '2044-12-31',
-                 'FERNSTEUERBARKEIT', 'BNETZA-2024-0815', 7.00,
+                 true, 'BNETZA-2024-0815', 7.00,
                  '2026-07-01', 'EB-1')",
     )
     .bind(TENANT)
@@ -3030,10 +3060,10 @@ async fn an_unreported_negative_period_cuts_the_ausfallverguetung() {
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
             erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
-            sect9_erfuellung, einspeiser_id)
+            sect9_fernsteuerbarkeit, einspeiser_id)
          VALUES ('TR-513', $1, '51238696781', 2023, '2024-06-01', 500,
                  'SOLAR_FREIFLAECHE', 10.00, 'AUSFALLVERGUETUNG', '2044-12-31',
-                 'FERNSTEUERBARKEIT', 'EB-1')",
+                 true, 'EB-1')",
     )
     .bind(TENANT)
     .execute(&pool)
@@ -3183,9 +3213,9 @@ async fn the_annual_statement_follows_the_corrections() {
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
             erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
-            sect9_erfuellung, einspeiser_id)
+            sect9_begrenzung_60, einspeiser_id)
          VALUES ('TR-JA', $1, '51238696781', 2023, '2026-11-01', 9.5,
-                 'SOLAR_AUFDACH', 10.00, 'VERGUETUNG', '2046-12-31', 'FERNSTEUERBARKEIT', 'EB-1')",
+                 'SOLAR_AUFDACH', 10.00, 'VERGUETUNG', '2046-12-31', true, 'EB-1')",
     )
     .bind(TENANT)
     .execute(&pool)

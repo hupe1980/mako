@@ -271,6 +271,7 @@ pub async fn build_stores(
     warehouse_uri: &str,
     tiering: TieringConfig,
     auth: &WarehouseAuth,
+    erasure_keys: &[Vec<u8>],
 ) -> anyhow::Result<(MeterStore, MeterStore, MeterStore, meterstore::ColdTier)> {
     let cold_tier = meterstore::IcebergSqlCatalog {
         database_url,
@@ -291,10 +292,13 @@ pub async fn build_stores(
     // `meter_reads` is authoritative and carries the GDPR subject registry;
     // `esa_typ2_reads` is the non-authoritative ESA stream (never billed).
     use meterstore::config::TimeModel;
+    // One registry for the three tables, as the model requires: they enrol the
+    // same `(tenant, MaLo)` identifier, so one erasure must unlink all of them.
+    let registry = subject_registry(&pool, erasure_keys)?;
     let reads = table_builder(
         &cold,
         &hot,
-        &pool,
+        &registry,
         READS_TABLE,
         true,
         tiering,
@@ -304,7 +308,7 @@ pub async fn build_stores(
     let typ2 = table_builder(
         &cold,
         &hot,
-        &pool,
+        &registry,
         TYP2_TABLE,
         false,
         tiering,
@@ -318,7 +322,7 @@ pub async fn build_stores(
     let zsg = table_builder(
         &cold,
         &hot,
-        &pool,
+        &registry,
         ZSG_TABLE,
         true,
         tiering,
@@ -358,6 +362,25 @@ pub async fn build_stores(
 /// tenants reporting the same measuring point stay distinct). `source`,
 /// `sender_mp_id` and `allocation_version` are nullable **attribute** columns:
 /// provenance that travels with the values but stays out of the merge key, folded
+/// The subject registry, with the suppression key ring when one is configured.
+///
+/// Without a key an erasure destroys the mapping and nothing more: the next
+/// delivery for the same MaLo registers a fresh one and the linkage Article 17
+/// destroyed is back. `keys[0]` writes new tombstones and every key is checked,
+/// so rotation is additive — a retired key keeps recognising the erasures it
+/// recorded, which is why it can never simply be dropped.
+fn subject_registry(pool: &PgPool, erasure_keys: &[Vec<u8>]) -> anyhow::Result<SubjectRegistry> {
+    if erasure_keys.is_empty() {
+        tracing::warn!(
+            "edmd: no [privacy] erasure_secret — an Art. 17 erasure can be undone by the \
+             next delivery for the same MaLo, because nothing records that it happened"
+        );
+        return Ok(SubjectRegistry::new(pool.clone()));
+    }
+    let refs: Vec<&[u8]> = erasure_keys.iter().map(Vec::as_slice).collect();
+    Ok(SubjectRegistry::with_erasure_keys(pool.clone(), &refs)?)
+}
+
 /// from the newest contributing delivery on read (§4.2) — declaring them here is
 /// what stops the store round-trip dropping them.
 ///
@@ -370,7 +393,7 @@ pub async fn build_stores(
 async fn table_builder(
     cold: &Arc<meterstore::IcebergCold>,
     hot: &Arc<PostgresHot>,
-    pool: &PgPool,
+    registry: &SubjectRegistry,
     table_name: &str,
     with_subject: bool,
     tiering: TieringConfig,
@@ -468,7 +491,7 @@ async fn table_builder(
         .hot(hot.clone())
         .cold(cold.clone(), provider)
         .table(config)
-        .subject_registry(SubjectRegistry::new(pool.clone()));
+        .subject_registry(registry.clone());
     Ok(builder)
 }
 
@@ -1037,20 +1060,28 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         // append. `register` is idempotent, so a re-ingest is one lookup per MaLo.
         let mut stored: Vec<StoredSeries> = Vec::with_capacity(reads.len());
         let mut refs: Vec<String> = Vec::with_capacity(reads.len());
-        let mut subjects: HashMap<String, String> = HashMap::new();
+        // Keyed on `(natural id, retention epoch)`: § 60 Abs. 6 MsbG comes due
+        // per value, so a subject reference belongs to one collection year and a
+        // batch straddling New Year carries two. The instant is the reading's
+        // own, never `now()` — a backfill of 2024 must carry 2024's reference.
+        let mut subjects: HashMap<(String, i32), String> = HashMap::new();
         for r in reads {
             let natural = subject_natural_id(&r.tenant, &r.malo_id);
-            let subject = match subjects.get(&natural) {
+            let key = (
+                natural.clone(),
+                meterstore::erasure::retention_epoch(r.dtm_from, r.sparte),
+            );
+            let subject = match subjects.get(&key) {
                 Some(s) => s.clone(),
                 None => {
                     let s = self
                         .store
-                        .register_subject(&natural)
+                        .register_subject(&natural, r.dtm_from, r.sparte)
                         .await
                         .map_err(store_err)?
                         .as_str()
                         .to_owned();
-                    subjects.insert(natural, s.clone());
+                    subjects.insert(key, s.clone());
                     s
                 }
             };
@@ -1608,7 +1639,11 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             // the same pseudonymous reference; `register` returns the existing one.
             let subject = self
                 .store
-                .register_subject(&subject_natural_id(&rec.tenant, &rec.malo_id))
+                .register_subject(
+                    &subject_natural_id(&rec.tenant, &rec.malo_id),
+                    rec.dtm_from,
+                    sparte,
+                )
                 .await
                 .map_err(store_err)?;
             // A correction is edmd asserting a value, not a delivery arriving:
@@ -1718,7 +1753,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             let natural = subject_natural_id(&first.tenant, &first.malo_id);
             let subject = self
                 .zsg
-                .register_subject(&natural)
+                .register_subject(&natural, first.read_at, first.sparte)
                 .await
                 .map_err(store_err)?
                 .as_str()
@@ -2001,21 +2036,25 @@ impl Typ2Repository for MeterStoreTyp2Repository {
         // Article 17 erasure unlinks the Typ-2 readings along with the billed
         // ones. Without it the ESA stream was the one place an erased MaLo stayed
         // named. `register_subject` is idempotent, so this is one lookup per MaLo.
-        let mut subjects: HashMap<String, String> = HashMap::new();
+        let mut subjects: HashMap<(String, i32), String> = HashMap::new();
         let mut stored: Vec<StoredSeries> = Vec::with_capacity(reads.len());
         for r in reads {
             let natural = subject_natural_id(&r.tenant, &r.malo_id);
-            let subject = match subjects.get(&natural) {
+            let key = (
+                natural.clone(),
+                meterstore::erasure::retention_epoch(r.dtm_from, r.sparte),
+            );
+            let subject = match subjects.get(&key) {
                 Some(s) => s.clone(),
                 None => {
                     let s = self
                         .store
-                        .register_subject(&natural)
+                        .register_subject(&natural, r.dtm_from, r.sparte)
                         .await
                         .map_err(store_err)?
                         .as_str()
                         .to_owned();
-                    subjects.insert(natural, s.clone());
+                    subjects.insert(key, s.clone());
                     s
                 }
             };

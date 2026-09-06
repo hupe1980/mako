@@ -9,7 +9,7 @@
 //!
 //! [`eeg-billing`]: eeg_billing
 
-use crate::models::{KWKG_ZUSCHLAG, VERGUETUNG};
+use crate::models::{AUSFALLVERGUETUNG, KWKG_ZUSCHLAG, MIETERSTROM, VERGUETUNG};
 use anyhow::Context as _;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -145,17 +145,24 @@ pub struct AnlageUpsertRequest {
     /// (`PUT /api/v1/einspeiser/{einspeiser_id}`).
     pub einspeiser_id: String,
     pub notes: Option<String>,
-    /// §9 EEG — how the plant satisfies the Steuerbarkeit requirement:
-    /// `"FERNSTEUERBARKEIT"`, `"LEISTUNGSBEGRENZUNG_60"` (the 60 % cap at the
-    /// Netzverknüpfungspunkt, which §9 Abs. 2 Nr. 2 offers below 100 kW) or
-    /// `"KEINE"`.
+    /// § 9 Abs. 2 EEG — the plant carries a technische Einrichtung with which
+    /// the Netzbetreiber can reduce the Einspeiseleistung remotely (Satz 1
+    /// Nr. 1 resp. Nr. 2 lit. a).
     ///
-    /// Defaults to `"KEINE"`, which is a §52 Abs. 1 Nr. 1 violation wherever §9
-    /// requires anything — so a compliant plant must say which route it took.
-    #[serde(default = "default_sect9_keine")]
-    pub sect9_erfuellung: String,
-    /// §9 EEG — date the Fernsteuerbarkeit was installed (ISO 8601), where that
-    /// is the chosen route.
+    /// Defaults to `false`, which is a § 52 Abs. 1 Nr. 1 breach wherever § 9
+    /// asks for it — so a compliant plant has to say so.
+    #[serde(default)]
+    pub sect9_fernsteuerbarkeit: bool,
+    /// § 9 Abs. 2 EEG — the maximale Wirkleistungseinspeisung is limited to 60 %
+    /// of the installed capacity at the Verknüpfungspunkt (Satz 1 Nr. 2 lit. b
+    /// resp. Nr. 3). Cumulative with the Fernsteuerbarkeit in the Nr. 2 band,
+    /// not an alternative to it.
+    #[serde(default)]
+    pub sect9_begrenzung_60: bool,
+    /// Wechselrichterleistung in Voltampere — the second half of the § 9 Abs. 2
+    /// Satz 4 Steckersolar carve-out. Absent leaves the carve-out shut.
+    pub wechselrichterleistung_va: Option<Decimal>,
+    /// §9 EEG — date the Fernsteuerbarkeit was installed (ISO 8601).
     pub fernsteuerbarkeit_datum: Option<String>,
     /// §51b EEG 2023 — Biogas Ausschreibungsanlage with slightly-positive price rule.
     ///
@@ -289,8 +296,12 @@ pub struct AnlageRow {
     // §36h Abs. 2: JSONB Vec<GuetefaktorReeval> (year 6/11/16 re-evaluations)
     pub wind_guetefaktor_reevaluations: Option<serde_json::Value>,
     pub fernsteuerbarkeit_datum: Option<Date>,
-    /// How the plant satisfies §9 — `KEINE` | `FERNSTEUERBARKEIT` | `LEISTUNGSBEGRENZUNG_60`.
-    pub sect9_erfuellung: String,
+    /// § 9 Abs. 2 Satz 1 Nr. 1 / Nr. 2 lit. a — ferngesteuerte Reduzierung.
+    pub sect9_fernsteuerbarkeit: bool,
+    /// § 9 Abs. 2 Satz 1 Nr. 2 lit. b / Nr. 3 — 60 % Wirkleistungsbegrenzung.
+    pub sect9_begrenzung_60: bool,
+    /// Wechselrichterleistung in VA, for the Abs. 2 Satz 4 Steckersolar carve-out.
+    pub wechselrichterleistung_va: Option<Decimal>,
     // Settlement lifecycle
     pub settlement_state: Option<String>,
     // §51b EEG 2023 biogas Ausschreibungsanlage
@@ -347,23 +358,34 @@ fn default_mastr_true() -> bool {
     true
 }
 
-fn default_sect9_keine() -> String {
-    "KEINE".to_owned()
-}
-
 impl AnlageRow {
-    /// How this plant satisfies §9, as a typed value.
-    ///
-    /// An unrecognised token reads as `Keine` — the conservative direction, since
-    /// claiming compliance the registry cannot name would suppress a real §52
-    /// Abs. 1 Nr. 1 charge.
+    /// Which of the two § 9 Abs. 2 routes this plant carries.
     #[must_use]
     pub fn sect9_erfuellung(&self) -> eeg_billing::settlement_state::Sect9Erfuellung {
-        use eeg_billing::settlement_state::Sect9Erfuellung as S;
-        match self.sect9_erfuellung.as_str() {
-            "FERNSTEUERBARKEIT" => S::Fernsteuerbarkeit,
-            "LEISTUNGSBEGRENZUNG_60" => S::Leistungsbegrenzung60,
-            _ => S::Keine,
+        eeg_billing::settlement_state::Sect9Erfuellung {
+            fernsteuerbarkeit: self.sect9_fernsteuerbarkeit,
+            begrenzung_60: self.sect9_begrenzung_60,
+        }
+    }
+
+    /// The plant facts § 9 Abs. 2 stages its obligation by.
+    ///
+    /// The 60 % cap of Satz 1 Nr. 2 lit. b and Nr. 3 binds only Anlagen „die der
+    /// Einspeisevergütung oder dem Mieterstromzuschlag nach § 19 Absatz 1
+    /// Nummer 2 oder Nummer 3 zugeordnet sind", and Nr. 3 additionally every
+    /// KWK-Anlage — both read off `settlement_model`, which already names the
+    /// § 19 claim.
+    #[must_use]
+    pub fn sect9_anlage(&self) -> eeg_billing::settlement_state::Sect9Anlage {
+        eeg_billing::settlement_state::Sect9Anlage {
+            leistung_kwp: self.leistung_kwp,
+            erzeugungsart: eeg_billing::ErzeugungsArt::from_db_str(&self.erzeugungsart).ok(),
+            einspeiseverguetung_oder_mieterstrom: matches!(
+                self.settlement_model.as_str(),
+                VERGUETUNG | AUSFALLVERGUETUNG | MIETERSTROM
+            ),
+            ist_kwk_anlage: self.settlement_model == KWKG_ZUSCHLAG,
+            wechselrichterleistung_va: self.wechselrichterleistung_va,
         }
     }
 }
@@ -514,7 +536,8 @@ pub async fn upsert_anlage(
                biomasse_hauptbrennstoff, biomasse_guelle_anteil, biomasse_getreide_mais_anteil,
                zuschlagswert_ct, zuschlag_datum,
                ist_innovationsausschreibung, ist_buergerenergie, ist_pilotwindanlage,
-               sect51_optin_erklaert_am, sect9_erfuellung, fernsteuerbarkeit_datum,
+               sect51_optin_erklaert_am, sect9_fernsteuerbarkeit, fernsteuerbarkeit_datum,
+               sect9_begrenzung_60, wechselrichterleistung_va,
                updated_at
            ) VALUES (
                $1, $2, $3, $4, $5, $6,
@@ -531,7 +554,9 @@ pub async fn upsert_anlage(
                $32, $33, $34,
                $35, $36,
                $37, $38, $39,
-               $41, $42, $43, now()
+               $41, $42, $43,
+               $47, $48,
+               now()
            )
            ON CONFLICT (tr_id, tenant) DO UPDATE SET
                malo_id                   = EXCLUDED.malo_id,
@@ -555,7 +580,9 @@ pub async fn upsert_anlage(
                ist_buergerenergie        = EXCLUDED.ist_buergerenergie,
                ist_pilotwindanlage       = EXCLUDED.ist_pilotwindanlage,
                sect51_optin_erklaert_am  = EXCLUDED.sect51_optin_erklaert_am,
-               sect9_erfuellung          = EXCLUDED.sect9_erfuellung,
+               sect9_fernsteuerbarkeit   = EXCLUDED.sect9_fernsteuerbarkeit,
+               sect9_begrenzung_60       = EXCLUDED.sect9_begrenzung_60,
+               wechselrichterleistung_va = EXCLUDED.wechselrichterleistung_va,
                fernsteuerbarkeit_datum   = EXCLUDED.fernsteuerbarkeit_datum,
                ist_repowering            = EXCLUDED.ist_repowering,
                ursprungs_inbetriebnahme  = EXCLUDED.ursprungs_inbetriebnahme,
@@ -621,11 +648,13 @@ pub async fn upsert_anlage(
     .bind(req.ist_pilotwindanlage) // $39
     .bind(&req.verguetungsform) // $40
     .bind(sect51_optin_erklaert_am) // $41
-    .bind(&req.sect9_erfuellung) // $42
+    .bind(req.sect9_fernsteuerbarkeit) // $42
     .bind(fernsteuerbarkeit_datum) // $43
     .bind(&req.kwk_verwendung) // $44
     .bind(req.kwk_kostenanteil) // $45
     .bind(req.kwk_bmwk_feststellung.unwrap_or(false)) // $46
+    .bind(req.sect9_begrenzung_60) // $47
+    .bind(req.wechselrichterleistung_va) // $48
     .execute(pool)
     .await
     .map_err(|e| {
@@ -895,8 +924,10 @@ pub struct SettleInput {
     /// §36h EEG — certified wind onshore Korrekturfaktor from the plant DB record.
     /// Forwarded directly to `eeg-billing` for MarketPremium wind plants.
     pub wind_korrekturfaktor: Option<Decimal>,
-    /// §9 EEG — how the plant satisfies the Steuerbarkeit requirement.
+    /// § 9 Abs. 2 EEG — which of the two routes the plant carries.
     pub sect9_erfuellung: eeg_billing::settlement_state::Sect9Erfuellung,
+    /// § 9 Abs. 2 EEG — the plant facts the obligation is staged by.
+    pub sect9_anlage: eeg_billing::settlement_state::Sect9Anlage,
     /// Whether this is a §51b biogas Ausschreibungsanlage.
     pub is_biogas_sect51b: bool,
     /// §52 Abs. 1 EEG 2023 — every violation this plant is in for the period,
@@ -1638,6 +1669,7 @@ pub fn build_settle_input(
         vat_status,
         wind_korrekturfaktor,
         sect9_erfuellung: anlage.sect9_erfuellung(),
+        sect9_anlage: anlage.sect9_anlage(),
         is_biogas_sect51b: anlage.is_biogas_sect51b,
         // Left empty on purpose. §52 Abs. 1 is derived from the plant record
         // **and** the `eeg_pflichtverstoesse` register, and this function is
@@ -2682,8 +2714,7 @@ pub async fn run_settlement(
             &eeg_billing::settlement_state::SettlementStateFacts {
                 mastr_registriert: input.mastr_registriert,
                 sect9_erfuellung: input.sect9_erfuellung,
-                leistung_kwp: input.leistung_kwp.unwrap_or(Decimal::ZERO),
-                erzeugungsart: eeg_billing::ErzeugungsArt::from_db_str(&input.erzeugungsart).ok(),
+                sect9_anlage: input.sect9_anlage,
                 foerderendedatum: input.foerderendedatum,
                 billing_date: bd,
                 eeg_gesetz_year: eeg_gesetz_enum.to_db_year(),

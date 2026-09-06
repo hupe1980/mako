@@ -26,12 +26,15 @@ use super::*;
 ///
 /// 1. Records the erasure request in `gdpr_deletions` (idempotent on
 ///    `malo_id + tenant`).
-/// 2. Destroys the MaLo's subject mapping in meterstore's registry
-///    ([`SubjectRegistry::erase_in`]) — the intervals, the ESA Typ-2 values and
-///    the Zählerstandsgang become unattributable in both tiers at once. One
+/// 2. Destroys every one of the MaLo's subject mappings in meterstore's registry
+///    ([`SubjectRegistry::erase_all_in`]) — the intervals, the ESA Typ-2 values
+///    and the Zählerstandsgang become unattributable in both tiers at once. One
 ///    registry spans the catalog's tables, so this is one destruction rather
-///    than three. Skipped when the MaLo has no mapping (never stored, or already
-///    erased), which is recorded rather than treated as an error.
+///    than three, and one call covers every retention epoch the identifier is
+///    still linked in. A MaLo with no mapping (never stored, or already erased)
+///    is not an error: with `[privacy] erasure_secret` configured the tombstone
+///    is still written, so a request that arrived before the delivery did is
+///    honoured and the later delivery refused.
 /// 3. Rewrites `malo_id` to the (now unmapped) subject reference in every table
 ///    whose rows are Buchungsbelege — `meter_read_corrections`,
 ///    `substitute_value_log`, `meter_data_receipts`, `ablese_auftraege`,
@@ -50,7 +53,7 @@ use super::*;
 /// **Cedar action**: `write-gdpr-erasure` — erasure is irreversible, so it is
 /// gated by its own action rather than the general write permission.
 ///
-/// [`SubjectRegistry::erase_in`]: meterstore::SubjectRegistry::erase_in
+/// [`SubjectRegistry::erase_all_in`]: meterstore::SubjectRegistry::erase_all_in
 #[derive(serde::Deserialize)]
 pub(crate) struct GdprErasureRequest {
     /// Human-readable reason for erasure (required for the audit trail).
@@ -88,24 +91,19 @@ pub(crate) async fn post_gdpr_erasure(
     let store = state.repo.store();
     let pool = state.repo.pool();
 
-    // Resolve the subject mapping first (a plain read). `None` means the MaLo was
-    // never stored or was already erased — there is nothing to unlink, but the
-    // request is still recorded so a repeat stays auditable.
+    // Enumerate the mappings first (a plain read). An empty result means the MaLo
+    // was never stored or was already erased — there is nothing to unlink, but
+    // the request is still recorded, and with a suppression key configured the
+    // erasure below still writes the tombstone that refuses a later delivery.
+    //
+    // **One mapping per collection year.** § 60 Abs. 6 MsbG comes due per value,
+    // so `meterstore` mints a subject reference per retention epoch and a MaLo
+    // that fed in for a decade has ten of them. An Art. 17 request is about the
+    // person rather than a year, so all of them go in one call rather than the
+    // registry being probed year by year — a probe one year short reports a
+    // subject as fully erased while a mapping survives.
     let natural_id = crate::store::subject_natural_id(resource_tenant, &malo_id);
-    let subject = match store.subject_registry() {
-        Some(reg) => match reg.lookup(&natural_id).await {
-            Ok(subject) => subject,
-            Err(e) => {
-                tracing::error!(malo_id = %malo_id, error = %e, "edmd: GDPR subject lookup failed");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": e.to_string() })),
-                )
-                    .into_response();
-            }
-        },
-        None => None,
-    };
+    let now = OffsetDateTime::now_utc();
 
     // Every step runs in one transaction: the mapping erasure and the derived-row
     // deletes must commit together or roll back together.
@@ -165,25 +163,29 @@ pub(crate) async fn post_gdpr_erasure(
     );
 
     // 2. Destroy the subject linkage in the same transaction (pseudonymisation).
-    //    `FOR UPDATE` inside `erase_in` holds the mapping row so a concurrent
+    //    One call for the identifier rather than one per reference: it unlinks
+    //    every epoch and, where a suppression key is configured, records the
+    //    tombstone even for an identifier this deployment holds no mapping for —
+    //    a request that arrived before the delivery did is honoured rather than
+    //    lost. The advisory lock inside it is transaction-scoped, which is why
+    //    this takes the transaction and not a bare connection: a concurrent
     //    re-registration cannot interleave.
-    let subject_unlinked = if let (Some(reg), Some(subject)) = (store.subject_registry(), &subject)
-    {
-        erasure_step!(
-            "erase_subject",
-            reg.erase_in(
-                &mut tx,
-                subject,
-                &req.reason,
-                &req.authorized_by,
-                OffsetDateTime::now_utc(),
-            )
-            .await
-        );
-        true
-    } else {
-        false
+    let subjects: Vec<meterstore::erasure::SubjectRef> = match store.subject_registry() {
+        Some(reg) => {
+            let erased = erasure_step!(
+                "erase_subject",
+                reg.erase_all_in(&mut tx, &natural_id, &req.reason, &req.authorized_by, now)
+                    .await
+            );
+            // What was actually unlinked, in this transaction — not what a read
+            // before it saw. A record naming no reference is the pre-emptive
+            // case: a request that arrived before any delivery did, which
+            // leaves a tombstone and nothing to pseudonymise with.
+            erased.into_iter().filter_map(|r| r.subject).collect()
+        }
+        None => Vec::new(),
     };
+    let subject_unlinked = !subjects.is_empty();
 
     // 3. Every other table that keys rows on this MaLo. Unlinking the reading
     //    store alone left the MaLo-ID — and, in four of these, register readings
@@ -200,7 +202,12 @@ pub(crate) async fn post_gdpr_erasure(
     //
     //    A MaLo-ID is not unique across tenants, so every statement is
     //    tenant-scoped.
-    let pseudonym = subject.as_ref().map(|s| s.as_str().to_owned());
+    // Any of the erased references does as the pseudonym for the rows kept as
+    // Buchungsbelege: none of them resolves to a person any more, and the rows
+    // were already linked to one another by the MaLo-ID this replaces. The
+    // oldest epoch comes first, so the last is the most recent one — the token
+    // matching the epoch the surviving rows mostly carry.
+    let pseudonym = subjects.last().map(|s| s.as_str().to_owned());
 
     /// Rewrite `malo_id` to the pseudonym, or delete the rows when the MaLo
     /// never had a mapping (nothing to keep them linked to).
@@ -352,4 +359,119 @@ pub(crate) async fn post_gdpr_erasure(
         })),
     )
         .into_response()
+}
+
+/// `GET /api/v1/gdpr/erasures`
+///
+/// The erasure audit trail — proof that erasures happened, and that the
+/// § 60 Abs. 6 MsbG sweep is running.
+///
+/// "We deleted it" is not evidence. The trail records when, why, by whom, and
+/// which duty each erasure discharged; it deliberately holds **no** natural
+/// identifier, since that is the thing being erased. A subject reference is
+/// named where one existed — absent for a request that arrived before any
+/// reading did, which leaves a suppression tombstone and no linkage to destroy.
+///
+/// The two triggers read in opposite directions and are therefore separable:
+/// a quarter with no `request` rows is an ordinary quarter, while a quarter with
+/// no `retention` rows is a sweep that has stopped running. Summed into one
+/// list, a deployment whose sweep had silently died but which handled the
+/// occasional Art. 17 request would look like one whose sweep was working.
+///
+/// Query: `since` / `until` (RFC 3339, half-open), `trigger`
+/// (`request` | `retention`), `limit`. The registry refuses a backwards period
+/// or a non-positive limit rather than answering with an empty list — which
+/// would read as "nothing was erased", the one answer an audit query must not
+/// give by accident.
+///
+/// **Cedar action**: `read-gdpr-erasures` — the trail names no person, but it is
+/// the compliance record of an irreversible action, so it carries the audience
+/// that may perform one rather than every reader of the tenant's data.
+#[derive(serde::Deserialize)]
+pub(crate) struct ErasureTrailQuery {
+    since: Option<String>,
+    until: Option<String>,
+    trigger: Option<String>,
+    limit: Option<i64>,
+}
+
+pub(crate) async fn get_gdpr_erasures(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    axum::extract::Query(q): axum::extract::Query<ErasureTrailQuery>,
+) -> impl IntoResponse {
+    let resource_tenant = state.tenant.as_str();
+    if let Err(e) = enforcer.check(&claims.principal(), "read-gdpr-erasures", resource_tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    fn instant(field: &str, raw: &str) -> Result<OffsetDateTime, String> {
+        OffsetDateTime::parse(raw, &time::format_description::well_known::Rfc3339)
+            .map_err(|e| format!("{field} must be an RFC 3339 instant: {e}"))
+    }
+
+    let mut query = meterstore::ErasureQuery::new();
+    let parsed = (|| -> Result<(), String> {
+        if let Some(raw) = q.since.as_deref() {
+            query = query.since(instant("since", raw)?);
+        }
+        if let Some(raw) = q.until.as_deref() {
+            query = query.until(instant("until", raw)?);
+        }
+        if let Some(raw) = q.trigger.as_deref() {
+            query = query.trigger(raw.parse().map_err(|e: meterstore::Error| e.to_string())?);
+        }
+        if let Some(limit) = q.limit {
+            query = query.limit(limit);
+        }
+        Ok(())
+    })();
+    if let Err(detail) = parsed {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": detail })),
+        )
+            .into_response();
+    }
+
+    match state.repo.store().erasures(&query).await {
+        Ok(records) => {
+            let rows: Vec<_> = records
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "subject_ref": r.subject.as_ref().map(|s| s.as_str()),
+                        "epoch":       r.epoch(),
+                        "erased_at":   r.erased_at.format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
+                        "reason":      r.reason,
+                        "actor":       r.actor,
+                        "trigger":     r.trigger.as_str(),
+                        "lifted":      r.lifted.as_ref().map(|l| serde_json::json!({
+                            "at":     l.at.format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
+                            "actor":  l.actor,
+                            "reason": l.reason,
+                        })),
+                    })
+                })
+                .collect();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "erasures": rows })),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "edmd: erasure trail query failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    }
 }

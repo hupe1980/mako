@@ -59,11 +59,14 @@ pub struct SubstituteRequest {
     /// `STROM` (default) · `GAS` · `WAERME` · `WASSER`. Determines the `unit`
     /// the substitute is stored in — a substituted water gap is m³, not kWh.
     pub sparte: Option<String>,
-    /// Why a substitute is required (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit trail).
+    /// Why a substitute is required — **required**.
     ///
-    /// One of the `substitute_value_log.reason` values. Defaults to
-    /// `NoMeasurementAvailable`.
-    pub reason: Option<String>,
+    /// One of the 28 `STS+Z40` Gründe der Ersatzwertbildung (MSCONS MIG 2.4c),
+    /// by name (`NO_ACCESS`) or by market code (`Z74`). The list is closed and
+    /// carries no catch-all, so an unstated reason cannot be defaulted: it would
+    /// put an invented one into a § 147 Abs. 1 AO audit trail and onto the
+    /// `STS+Z40` of the MSCONS that later carries the value.
+    pub reason: String,
     /// OBIS register the gap belongs to.
     ///
     /// Omit it and the measuring point's **dominant energy register** — the one
@@ -183,6 +186,37 @@ pub async fn run_substitute_values(
 
     let prior_days = req.prior_days.unwrap_or(7) as i64;
     let operator_id = req.operator_id.as_deref().unwrap_or("AUTO");
+
+    // The `STS+Z40` Grund. The list is closed: an unrecognised token is refused
+    // rather than logged verbatim, because the value it labels is what a later
+    // MSCONS states as its Ersatzwertbildungsgrund.
+    let reason: metering::substitute::SubstitutionReason = {
+        let raw = req.reason.trim();
+        match raw
+            .parse()
+            .ok()
+            .or_else(|| metering::substitute::SubstitutionReason::from_code(raw))
+        {
+            Some(r) => r,
+            None => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": format!("unknown Ersatzwertbildungsgrund `{raw}`"),
+                        "supported": metering::substitute::SubstitutionReason::ALL
+                            .iter()
+                            .map(|r| serde_json::json!({
+                                "name": r.as_str(),
+                                "code": r.code(),
+                                "beschreibung": r.description(),
+                            }))
+                            .collect::<Vec<_>>(),
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    };
 
     let method = match req.method.as_deref().unwrap_or("PriorPeriodAverage") {
         "PriorPeriodAverage" => SubstituteMethod::PriorPeriodAverage,
@@ -400,12 +434,13 @@ pub async fn run_substitute_values(
                 Some(metering::Sparte::Gas) => metering::calendar::DayBoundary::Gastag,
                 _ => metering::calendar::DayBoundary::Midnight,
             },
-            // § 60 Abs. 1 MsbG: this endpoint fills a gap, which is what
-            // `NoMeasurementAvailable` records. A caller that knows better —
-            // a meter fault, a gateway outage — is a richer request than this
-            // endpoint currently accepts, and inventing a reason it was not
-            // told would put a false one in an audit trail.
-            reason: metering::substitute::SubstitutionReason::NoMeasurementAvailable,
+            // The caller's own `STS+Z40` Grund, validated above.
+            reason,
+            // The Vergleichstag rule of `DayType` needs a Bundesland, and a
+            // Marktlokation carries none here: `marktd` holds the address, edmd
+            // holds the readings. `Weekday` is the rule that needs no holiday
+            // calendar, and it is what the crate defaults to.
+            reference_days: metering::substitute::ReferenceDayMatch::Weekday,
         },
     );
     // Only the requested window is stored. The run-up from `fill_from` exists
@@ -437,11 +472,7 @@ pub async fn run_substitute_values(
             .unwrap_or(metering::Sparte::Strom)
     });
 
-    let reason_str = req
-        .reason
-        .as_deref()
-        .unwrap_or("NoMeasurementAvailable")
-        .to_owned();
+    let reason_str = reason.as_str().to_owned();
     let mut stored = 0usize;
     let mut log_entries: Vec<serde_json::Value> = Vec::new();
     // Intervals left alone because they already carry a billable reading.

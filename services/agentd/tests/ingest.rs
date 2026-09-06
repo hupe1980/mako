@@ -46,6 +46,11 @@ struct Tools;
 
 #[async_trait::async_trait]
 impl ToolClient for Tools {
+    /// A stub opens no connection, so the allowlist has no host to judge.
+    fn destination(&self, _tool: &ToolId) -> agentplane::tools::Destination {
+        agentplane::tools::Destination::Local
+    }
+
     async fn call(
         &self,
         _tool: &ToolId,

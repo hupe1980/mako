@@ -101,10 +101,10 @@ async fn skip_list(pool: &sqlx::PgPool, corrects: Option<Uuid>) -> Vec<String> {
 /// A run spanning several territories records each one, and a **retry** — which
 /// is a new run — still skips the ones that reached the BIKO.
 ///
-/// This is the defect the period key exists for. The skip list used to be read
-/// with the *new* run's id, which by construction has no `submission_series`
-/// rows yet, so it was always empty and every retry re-filed the territories the
-/// BIKO had already acked. An acked Summenzeitreihe cannot be withdrawn, so that
+/// This is what the **period** key exists for. Reading the skip list with the
+/// new run's id gives an empty list by construction — that run has no
+/// `submission_series` rows yet — and every retry then re-files the territories
+/// the BIKO already acked. An acked Summenzeitreihe cannot be withdrawn, so that
 /// is a second binding filing for a settled month, not a duplicate.
 #[tokio::test]
 async fn a_retry_does_not_re_file_what_the_biko_already_acked() {

@@ -192,12 +192,10 @@ Preisblatt it warns instead of disputing, as the standard engine does.
 or surcharge position is backed by a contracted `AufAbschlag` (WiM PRICAT
 27001–27003).
 
-Stages 3 and 7 used to be skipped here, so an MSB invoice stating no
-Umsatzsteuer at all was accepted. Nothing about metering service warrants that:
-the INVOIC AHB makes the Fälligkeitsdatum (`SG8 DTM+265`) and the tax block
-(`TAX`/`MOA`) **Muss** on 31003 and 31009 just as on 31001/31002, § 14 Abs. 4
-Nr. 8 UStG reaches every invoice, and `check_esa_rechnung()` already ran both
-for the same PID 31009.
+Stages 3 and 7 run here like everywhere else. Nothing about metering service
+exempts them: the INVOIC AHB makes the Fälligkeitsdatum (`SG8 DTM+265`) and the
+tax block (`TAX`/`MOA`) **Muss** on 31003 and 31009 just as on 31001/31002, and
+§ 14 Abs. 4 Nr. 8 UStG reaches every invoice.
 
 ---
 

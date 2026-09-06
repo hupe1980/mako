@@ -302,6 +302,8 @@ impl Daemon for Accountingd {
             .route("/api/v1/sepa/pain002", post(handlers::import_pain002))
             // pain.007 reversal — the creditor giving a settled collection back.
             .route("/api/v1/sepa/reversals", post(handlers::post_sepa_reversal))
+            .route("/api/v1/sepa/recalls", post(handlers::post_sepa_recall))
+            .route("/api/v1/sepa/camt029", post(handlers::import_camt029))
             // ── §25 EEG 2023 — SEPA Credit Transfer payout pipeline ───────────────
             // GET  /api/v1/eeg/payouts             — list payout orders (?status=PDNG|ACCP|RJCT|CANC)
             // GET  /api/v1/eeg/payouts/{id}        — single order with pain.001 XML

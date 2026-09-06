@@ -368,6 +368,8 @@ jobs:
       - run: cargo run -p xtask -- check-publish-order
       # Documented dependency versions against the manifests.
       - run: cargo run -p xtask -- check-dep-versions
+      # The licence governance page against deny.toml's allow list.
+      - run: cargo run -p xtask -- check-licenses
       # `rubo4e::v202xyy::` pins a BO4E version alias; `rubo4e::current::` is
       # the one that moves with the crate.
       - name: No hardcoded rubo4e version alias

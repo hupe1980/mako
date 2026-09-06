@@ -68,7 +68,7 @@ miette       = { version = "7", features = ["fancy-no-syscall"] }
 # `validate` carries the BO4E cross-field rules (`mako_markt::bo4e`). Off:
 # `schemars` (no mako type exposes a rubo4e type in a JSON Schema) and `strum`
 # (its `FromStr` accepts the `"UNKNOWN"` catch-all; `from_wire` refuses it).
-rubo4e       = { version = "0.13.0", features = ["versioned", "identifiers", "decimal", "time", "validate", "json", "builder"] }
+rubo4e       = { version = "0.14.0", features = ["versioned", "identifiers", "decimal", "time", "validate", "json", "builder"] }
 # `serde-str` makes a `Decimal` deserialize from its **string** form only. A
 # JSON float cannot represent 0.1, so accepting one for a price or a billed
 # quantity rounds it through `f64` silently — the same argument that makes the
@@ -83,7 +83,7 @@ rubo4e       = { version = "0.13.0", features = ["versioned", "identifiers", "de
 # counted — `mako_service::metrics` exports
 # `mako_bo4e_decimal_from_json_number_total` for exactly that.
 rust_decimal = { version = "1", features = ["db-postgres", "macros", "serde-str"] }
-billing      = { version = "0.14.0", features = ["serde"] }
+billing      = { version = "0.15.0", features = ["serde"] }
 # EN 16931 semantic invoice model + business-rule validation (the `billing`
 # adapter bridges the shared money core); en16931-formats renders XRechnung/CII +
 # PEPPOL UBL, and its `zugferd` feature *reads* a finished ZUGFeRD PDF — the
@@ -91,8 +91,8 @@ billing      = { version = "0.14.0", features = ["serde"] }
 # outputd's publish gate runs. Writing the carrier is mako's
 # (`outputd::document::facturx`), because that crate deliberately ships no
 # writer — a position upstream holds by design (fed back to its authors).
-en16931         = { version = "0.6.0", features = ["billing", "serde", "time"] }
-en16931-formats = { version = "0.6.0", features = ["cii", "ubl", "serde", "zugferd"] }
+en16931         = { version = "0.7.0", features = ["billing", "serde", "time"] }
+en16931-formats = { version = "0.7.0", features = ["cii", "ubl", "serde", "zugferd"] }
 serde        = { version = "1", features = ["derive"] }
 # Jaro-Winkler for the `E_0624` Prüfschritt-50 name comparison. Already in the
 # tree via clap and darling, so it adds no supply-chain surface.
@@ -145,7 +145,7 @@ mako-fristen     = { path = "crates/mako-fristen",     version = "0.19" }
 # AS4/ebMS3 stack behind the BDEW MaKo profile. Declared once here because
 # mako-as4 and makod both depend on it: independent declarations drift onto two
 # versions in one build.
-asx-rs           = { version = "0.13" }
+asx-rs           = { version = "0.14" }
 mako-service     = { path = "crates/mako-service",     version = "0.19" }
 invoic-checker   = { path = "crates/invoic-checker",   version = "0.19" }
 # `default-features = false` on purpose: the crate's defaults are *every*
@@ -157,8 +157,8 @@ mako-emob        = { path = "crates/mako-emob",        version = "0.19" }
 mako-mabis       = { path = "crates/mako-mabis",       version = "0.19" }
 energy-billing   = { path = "crates/energy-billing",   version = "0.19" }
 dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.19" }
-metering         = { version = "0.22" }
-sepa             = { version = "0.6.0" }
+metering         = { version = "0.23" }
+sepa             = { version = "0.7" }
 # Immutable, tamper-evident double-entry ledger kernel (sibling repo). accountingd's
 # storage/accounting base. Domain-neutral by design — the BillingDocument→Entry and
 # SKR mapping live in accountingd, never in the crate.
@@ -168,7 +168,7 @@ doubleentry      = { version = "0.7" }
 # The one consumer is `edmd` (kafka_ingest), for high-volume metering ingest;
 # marktd's fan-out is the durable event_log/event_delivery worker and needs no
 # broker.
-krafka           = { version = "0.20" }
+krafka           = { version = "0.22" }
 
 # ── Arrow (edmd meterstore tier) ────────────────────────────────────────────
 # `edmd` stores metering time series through the `meterstore` crate, which

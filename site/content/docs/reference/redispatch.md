@@ -1,6 +1,6 @@
 +++
 title = "Redispatch 2.0"
-description = "Redispatch 2.0 in mako: XML document types, 8 event-sourced workflows, the BilAReM regime under BK6-23-241, which deadlines still have a published source, IFTSTA EDIFACT integration, and RedispatchModule deployment."
+description = "Redispatch 2.0 in mako: the XML document types, eight event-sourced workflows, the BilAReM regime under BK6-23-241, and IFTSTA integration."
 weight = 16
 +++
 Redispatch 2.0 is the mandatory German grid-congestion management protocol
@@ -137,7 +137,7 @@ VNB, ANB and ÜNB all deploy under the **NB Strom** role, and the enum has
 ```mermaid
 graph LR
     subgraph "Transport boundary"
-        AS4["AS4/ebMS3<br/>(SOAP/MTOM)<br/>XML sniff: first non-blank byte &lt;"]
+        AS4["AS4/ebMS3<br/>(SOAP/SwA)<br/>XML sniff: first non-blank byte &lt;"]
     end
 
     subgraph "redispatch-xml"

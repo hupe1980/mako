@@ -151,9 +151,9 @@ dependencies = [
 
 [[package]]
 name = "agentplane"
-version = "0.25.0"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a334296e07a8e45f71c97d4a76e708c387e266b2d605bf4fcf441e775b9ad502"
+checksum = "75fc4d59f7574a5bef7d2fb8e491bfe4048752510dbe84fa51cf42618b9d7952"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -678,9 +678,9 @@ dependencies = [
 
 [[package]]
 name = "asx-rs"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5fdd8d7f9f686d74caf72e448838a18fb8729624fe1d91365cfa9f7ec63cd03"
+checksum = "a100f686f598b1266c6397a0a625a2df79252251d8fd82998456c6e41b922a7a"
 dependencies = [
  "aes-gcm 0.11.1",
  "axum",
@@ -1453,9 +1453,9 @@ dependencies = [
 
 [[package]]
 name = "billing"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad74ced3ececdbae7957c090783355c2b890d4ac332c70730ba26d927e438592"
+checksum = "ccf778746b9b4f8bc9db0e34c9350448ed732536a27e69a0651a3269cb214ee3"
 dependencies = [
  "rust_decimal",
  "serde",
@@ -3992,9 +3992,9 @@ dependencies = [
 
 [[package]]
 name = "en16931"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6e7bffd0720d850ef7d1bcdc32f52130a3248191890a32157cb30f183b76af7"
+checksum = "5a1b4ca7200ebe0816055a74f8ba5901583c7024e811ed57d51e7b634d63cfed"
 dependencies = [
  "billing",
  "rust_decimal",
@@ -4005,9 +4005,9 @@ dependencies = [
 
 [[package]]
 name = "en16931-formats"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34ce4c943813da93a86ac2499028921aa74f350e272a5b9ab5e79d0beea247b3"
+checksum = "2c1c1bf0c086ae225abe7cd08631e3395695f8f956b1bbc7e77aff155a339b35"
 dependencies = [
  "en16931",
  "lopdf",
@@ -4206,9 +4206,9 @@ dependencies = [
 
 [[package]]
 name = "fancy-regex"
-version = "0.19.0"
+version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "476de73bddf2ef8490aa4ee8f1cf40b430bf1d56c48c22080e5186952cd580e6"
+checksum = "52e0387578e845beb7a1acff126228499f26cb18edf12919cc513bb863266464"
 dependencies = [
  "bit-set",
  "regex-automata",
@@ -5908,9 +5908,9 @@ dependencies = [
 
 [[package]]
 name = "ipnet"
-version = "2.12.1"
+version = "2.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a756c3fac73139e83f14c2d742155dd2b78d3ee56597b419a0579b7bdd6dd78"
+checksum = "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
 
 [[package]]
 name = "is-terminal"
@@ -6112,7 +6112,7 @@ dependencies = [
  "bytecount",
  "data-encoding",
  "email_address",
- "fancy-regex 0.19.0",
+ "fancy-regex 0.19.1",
  "fraction",
  "getrandom 0.3.4",
  "idna",
@@ -6198,9 +6198,9 @@ dependencies = [
 
 [[package]]
 name = "krafka"
-version = "0.20.0"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da8a3454fc8025d606b4a648e27fec4a3d3cf65a12f24b81389b14d653bd6e50"
+checksum = "a5708df34867da7feb7e296457debb61c74fcd1c1f6e159dcdff788639ff3a00"
 dependencies = [
  "ahash",
  "arc-swap",
@@ -7146,9 +7146,9 @@ dependencies = [
 
 [[package]]
 name = "metering"
-version = "0.22.0"
+version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbfd52cc1cec00262ad91650fb05003a02990c74ec80848b40970edddacc132f"
+checksum = "9a1b124084a95045b7bb0c25846cd362cbc00a399470aa0c5ff85334b75e5d9d"
 dependencies = [
  "rust_decimal",
  "serde",
@@ -7159,9 +7159,9 @@ dependencies = [
 
 [[package]]
 name = "meterstore"
-version = "0.9.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4dc4c9ebb8e55fdc02f1977eb39fefc84c639cdc89cd280209cf2571cb143c85"
+checksum = "0b823ab49d905a61e1fd618948a6b597339c9426d5543f187c6f15075b362903"
 dependencies = [
  "arrow",
  "async-stream",
@@ -8625,13 +8625,13 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "plist"
-version = "1.10.0"
+version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7da1d65da6dd5d1e44199ac0f58712d241c0f439f80adea8924d832384087f85"
+checksum = "2896bade328c13f7042a297ea5ac5b0951f6cf989dea5f32c2fd98da398195cb"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "indexmap 2.14.2",
- "quick-xml 0.41.0",
+ "quick-xml 0.42.0",
  "serde",
  "time",
 ]
@@ -9207,9 +9207,9 @@ dependencies = [
 
 [[package]]
 name = "quick-xml"
-version = "0.40.1"
+version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2474bd2e5029e7ccb6abb2ba48cf2383a333851dedf495901544281590c7da7f"
+checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
 dependencies = [
  "memchr",
  "serde",
@@ -9217,12 +9217,11 @@ dependencies = [
 
 [[package]]
 name = "quick-xml"
-version = "0.41.0"
+version = "0.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
+checksum = "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b"
 dependencies = [
  "memchr",
- "serde",
 ]
 
 [[package]]
@@ -9490,7 +9489,7 @@ dependencies = [
 name = "redispatch-xml"
 version = "0.19.0"
 dependencies = [
- "quick-xml 0.40.1",
+ "quick-xml 0.41.0",
  "serde",
  "thiserror 2.0.20",
  "time",
@@ -9934,9 +9933,9 @@ dependencies = [
 
 [[package]]
 name = "rubo4e"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1006d7b7ce95399d42d41edda2069225b4bc9d0eedab50de3fc4ec50d699f79f"
+checksum = "519d32f81b957c4fb4cf7dff24e59ff8c9aeddbfe4b2d61a001d4c80a8a4d109"
 dependencies = [
  "garde",
  "indexmap 2.14.2",
@@ -10360,9 +10359,9 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "sepa"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1d99bb63b4908ba1730c6af3c2d1626e98192008343c12d57ac24827fd29256"
+checksum = "e53d9229c9ae90ae276fcdbcb69248c601b2612573d0fcc0542bee6817b80758"
 dependencies = [
  "quick-xml 0.41.0",
  "thiserror 2.0.20",
@@ -13794,7 +13793,7 @@ dependencies = [
  "jsonschema",
  "lopdf",
  "mako-fristen",
- "quick-xml 0.40.1",
+ "quick-xml 0.41.0",
  "regex",
  "reqwest 0.13.4",
  "rubo4e",

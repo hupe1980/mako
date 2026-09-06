@@ -139,9 +139,9 @@ pub(crate) async fn get_annual_forecast(
             "projected_annual_kwh": forecast.projected_annual,
             "seasonal_correction_applied": forecast.seasonal_correction_applied,
             "seasonal_factor": forecast.seasonal_factor,
-            // New in 0.17: a 95 % prediction interval over the observed daily
-            // sums. `None` when fewer than two whole days were observed — a
-            // projection with no spread stated is one a caller cannot judge.
+            // A 95 % prediction interval over the observed daily sums. `None`
+            // when fewer than two whole days were observed — a projection with
+            // no spread stated is one a caller cannot judge.
             "confidence_lower_kwh": forecast.confidence_lower,
             "confidence_upper_kwh": forecast.confidence_upper,
             "prediction_interval_note": metering::AnnualForecast::prediction_interval_note(),

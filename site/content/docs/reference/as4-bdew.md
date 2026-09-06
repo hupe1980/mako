@@ -1,6 +1,6 @@
 +++
 title = "BDEW AS4 Guide"
-description = "How to configure makod for BDEW AS4-Profil v1.2 production deployments. Covers the certificate triplet (TLS / signing / encryption), P-Mode registry, BDEW Verzeichnisdienst endpoint discovery, and testing without WIRK certificates."
+description = "Configure makod for BDEW AS4-Profil v1.2: the certificate triplet, the P-Mode registry, Verzeichnisdienst endpoint discovery, and testing without WIRK certs."
 weight = 17
 +++
 AS4 became the mandatory transport for BDEW MaKo since **1 April 2024** (Strom, BK6-22-024)
@@ -376,6 +376,15 @@ sequenceDiagram
     makod-->>LF: synchronous eb:Receipt (signed)
 ```
 
+### Connectivity pings are acknowledged, not delivered
+
+A message whose `eb:Service` and `eb:Action` are both the ebMS3 Test Service
+URIs (Core §5.2.2) is a connectivity check, not a business document: its payload
+is empty or a loopback of what the sender sent. `makod` answers it with the
+signed receipt and stops — the EDIFACT pipeline never sees it, so a counterparty
+testing its AS4 link does not produce a dead letter or a `400`. Both URIs must
+match, so a real document cannot be labelled a ping to skip validation.
+
 ### Outbound — delivery is acknowledged only once the receipt is proven
 
 Inbound stops at the signed receipt. Outbound is the harder half: an
@@ -433,7 +442,7 @@ to run integration tests locally immediately:
 ```toml
 [dev-dependencies]
 mako-as4 = { path = "../mako-as4", features = ["testing"] }
-asx-rs   = { version = "0.13", features = ["as4", "testing"] }
+asx-rs   = { version = "0.14", features = ["as4", "testing"] }
 ```
 
 No manual `CertHandle` construction or direct `zeroize` dependency is needed:

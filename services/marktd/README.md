@@ -461,12 +461,11 @@ PostgreSQL.
 
 **A refused overlap is a `422`.** PostgreSQL raises `23P01` (`exclusion_violation`)
 for these, a different code from the `23514` (`check_violation`) a column bound
-raises — and only the latter used to be translated, and only on `lf_zuordnung`,
-so all eight constraints answered `500` and told the operator the server had
-broken. Both codes now map to `422` on every write path, with the constraint name
-and "close the existing row at the new start date, or move `valid_from`" in the
-message. `tests/overlap_is_a_client_error.rs` drives each of the eight through
-the repository the API writes through and asserts the status.
+raises. Both map to `422` on every write path — an overlap is the request being
+wrong, and a `500` would tell the operator the server had broken — with the
+constraint name and "close the existing row at the new start date, or move
+`valid_from`" in the message. `tests/overlap_is_a_client_error.rs` drives each of
+the eight through the repository the API writes through and asserts the status.
 
 ---
 

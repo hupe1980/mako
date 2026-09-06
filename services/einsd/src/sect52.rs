@@ -20,7 +20,7 @@
 //!
 //! | § | Violation | Source |
 //! |---|---|---|
-//! | Abs. 1 Nr. 1 | §9 Steuerbarkeit missing | derived (`sect9_erfuellung` × capacity) |
+//! | Abs. 1 Nr. 1 | §9 Steuerbarkeit missing | derived (routes carried × capacity × Vergütungsform) |
 //! | Abs. 1 Nr. 5 | Ausfallvergütung Höchstdauer exceeded | derived from the receipts |
 //! | Abs. 1 Nr. 9 | §21c switch not notified | derived from the notification timestamp |
 //! | Abs. 1 Nr. 11 | MaStR registration missing | derived; `mastr_violation_start` is its clock |
@@ -123,7 +123,6 @@ pub fn derive_pflichtverstoesse(
     ctx: Sect52Context,
 ) -> Vec<Pflichtverstoss> {
     let leistung_kw = anlage.leistung_kwp;
-    let art = eeg_billing::ErzeugungsArt::from_db_str(&anlage.erzeugungsart).ok();
     let mut out = Vec::new();
 
     // Only the entries that bear on this month, indexed by Nummer.
@@ -159,13 +158,14 @@ pub fn derive_pflichtverstoesse(
         });
     };
 
-    // ── Nr. 1 — §9 Abs. 1/2 Steuerbarkeit ────────────────────────────────────
-    // Staged by capacity: from 100 kW only Fernsteuerbarkeit will do, the
-    // 25–100 kW band may take the 60 % Leistungsbegrenzung instead, and a
-    // Steckersolargerät below 2 kW is out of scope. The old check was a flat
-    // "≥ 25 kW without a Fernsteuerbarkeit date", which charged 10 €/kW/month to
-    // every compliant plant that had taken the route the statute offers it.
-    if eeg_billing::settlement_state::sect9_verletzt(leistung_kw, art, anlage.sect9_erfuellung()) {
+    // ── Nr. 1 — §9 Abs. 2 Steuerbarkeit ──────────────────────────────────────
+    // Staged by capacity and gated on the Vergütungsform: Nr. 2 asks a geförderte
+    // Anlage for the ferngesteuerte Reduzierung **and** the 60 % cap, Nr. 3 asks
+    // only the geförderten und KWK-Anlagen below 25 kW for the cap alone.
+    if eeg_billing::settlement_state::sect9_verletzt(
+        anlage.sect9_anlage(),
+        anlage.sect9_erfuellung(),
+    ) {
         push(SanktionsTyp::FernsteuerbarkeitFehlend, None);
     }
 

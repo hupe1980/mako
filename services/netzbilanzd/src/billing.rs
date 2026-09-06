@@ -279,6 +279,7 @@ pub fn settle(position: &BillingPositionRequest) -> anyhow::Result<SettlementRes
                 grundgebuehr_eur_per_month: msb.grundgebuehr_eur_per_month,
                 billing_months: msb.billing_months,
                 messdienstleistung_eur: msb.messdienstleistung_eur,
+                steuereinrichtung_eur_per_month: msb.steuereinrichtung_eur_per_month,
                 messstellen_kategorie: msb.messstellen_kategorie,
                 entgeltschuldner: msb.entgeltschuldner,
             };
@@ -636,6 +637,8 @@ mod tests {
             nne.konzessionsabgabe = Some(Konzessionsabgabe {
                 satz_ct_per_kwh: dec!(1.32),
                 klasse,
+                niederspannung: None,
+                grenzpreis: None,
             });
             settle(&pos).expect("settle")
         };
@@ -852,6 +855,7 @@ mod tests {
             grundgebuehr_eur_per_month: dec!(20),
             billing_months: 0,
             messdienstleistung_eur: None,
+            steuereinrichtung_eur_per_month: None,
             messstellen_kategorie: None,
             entgeltschuldner: None,
         };

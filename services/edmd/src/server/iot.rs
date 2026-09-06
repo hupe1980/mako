@@ -225,29 +225,31 @@ pub(crate) async fn post_iot_reads(
 
     let pool = state.repo.pool();
 
-    // Idempotency: a committed session replays as 200, never as duplicate rows.
-    let already: Option<String> = sqlx::query_scalar(
-        r"SELECT status FROM direct_push_sessions
-          WHERE session_id = $1 AND malo_id = $2 AND tenant = $3 AND status = 'committed'",
-    )
-    .bind(&req.session_id)
-    .bind(&malo_id)
-    .bind(resource_tenant)
-    .fetch_optional(state.repo.pool())
-    .await
-    .ok()
-    .flatten();
-
-    if already.is_some() {
-        return (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "malo_id": malo_id,
-                "session_id": req.session_id,
-                "status": "already_committed",
-            })),
-        )
-            .into_response();
+    // Claim the key before any work: a committed session replays as 200, never
+    // as a second set of CloudEvents.
+    let session = super::session::Session {
+        tenant: resource_tenant,
+        session_id: &req.session_id,
+        malo_id: &malo_id,
+        source: "IOT_PUSH",
+    };
+    match super::session::claim(pool, session).await {
+        Ok(super::session::Claim::Claimed | super::session::Claim::Resumed) => {}
+        Ok(super::session::Claim::Committed { .. }) => {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "malo_id": malo_id,
+                    "session_id": req.session_id,
+                    "status": "already_committed",
+                })),
+            )
+                .into_response();
+        }
+        Ok(super::session::Claim::MaloMismatch { recorded }) => {
+            return super::session::malo_mismatch(&req.session_id, &malo_id, &recorded);
+        }
+        Err(e) => return super::session::unverifiable(&malo_id, "iot-push", &e),
     }
 
     // Calibration check. Expired → warn, never reject (see fn docs).
@@ -447,33 +449,24 @@ pub(crate) async fn post_iot_reads(
 
     // Commit the session only when something landed, so a wholly-failed batch
     // stays retryable.
-    if stored > 0 {
-        let _ = sqlx::query(
-            r"INSERT INTO direct_push_sessions
-                (session_id, malo_id, source, obis_code, interval_count,
-                 period_from, period_to, status, raw_payload, transport, device_id, tenant)
-              VALUES ($1,$2,'IOT_PUSH',$3,$4,$5,$6,'committed',$7,$8,$9,$10)
-              ON CONFLICT (tenant, session_id) DO UPDATE
-                  SET status      = 'committed',
-                      raw_payload = COALESCE(EXCLUDED.raw_payload,
-                                             direct_push_sessions.raw_payload),
-                      transport   = COALESCE(EXCLUDED.transport,
-                                             direct_push_sessions.transport),
-                      device_id   = COALESCE(EXCLUDED.device_id,
-                                             direct_push_sessions.device_id)",
+    if stored > 0
+        && let Err(e) = super::session::commit(
+            pool,
+            session,
+            super::session::Committed {
+                obis_code: req.obis_code.as_deref(),
+                interval_count: i32::try_from(stored).unwrap_or(i32::MAX),
+                period_from,
+                period_to,
+                raw_payload: req.raw_payload.as_deref(),
+                transport: Some(req.transport.trim()),
+                device_id: req.device_id.as_deref(),
+                ..Default::default()
+            },
         )
-        .bind(&req.session_id)
-        .bind(&malo_id)
-        .bind(&req.obis_code)
-        .bind(i32::try_from(stored).unwrap_or(i32::MAX))
-        .bind(period_from)
-        .bind(period_to)
-        .bind(&req.raw_payload)
-        .bind(req.transport.trim())
-        .bind(&req.device_id)
-        .bind(resource_tenant)
-        .execute(state.repo.pool())
-        .await;
+        .await
+    {
+        return super::session::commit_failed(&malo_id, "iot-push", &e);
     }
 
     // Same warning every other ingest door raises. Without it a FAULTY reading

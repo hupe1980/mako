@@ -118,7 +118,6 @@ impl RegulatoryRegime {
     /// silently pick one side.
     #[must_use]
     pub fn for_period(period_from: Date, period_to: Date) -> Self {
-        let _ = period_from;
         Self {
             netzzugang: if period_to <= NZV_LETZTER_TAG {
                 NetzzugangRegime::Nzv

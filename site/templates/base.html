@@ -27,9 +27,9 @@
   {%- if page is defined and page.description -%}{%- set page_desc = page.description -%}{%- elif section is defined and section.description -%}{%- set page_desc = section.description -%}{%- endif -%}
   {%- set page_url = config.base_url -%}
   {%- if page is defined and page.permalink -%}{%- set page_url = page.permalink -%}{%- elif section is defined and section.permalink -%}{%- set page_url = section.permalink -%}{%- endif -%}
-  {#- Search engines show roughly 155–160 characters of a description. Several
-      front-matter descriptions run past 400 (they double as the on-page lead),
-      so the meta copy is bounded here rather than shipped at full length. -#}
+  {#- Search engines show roughly 155–160 characters. Every front-matter
+      description is written to fit; this bound is the backstop that keeps a
+      longer one from being cut by the engine instead. -#}
   {%- set meta_desc = page_desc | striptags | truncate(length=180, end="…") -%}
   {%- set og_image = get_url(path=config.extra.og_image) -%}
 

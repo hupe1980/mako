@@ -293,20 +293,20 @@ name    = "hmac"
 version = "0.13"
 reason  = "asx-rs WS-Security uses hmac 0.13 (RustCrypto 2024); p256/ecdsa ecosystem pins hmac 0.12. See companion hmac 0.12 entry."
 
-# ── asx-rs vs object_store/slatedb quick-xml split ──────────────────────────────
-# asx-rs (AS4 SOAP/ebMS3 parsing) pins quick-xml 0.41; object_store (slatedb cloud) pins 0.40.
-# Both versions carry RUSTSEC-2026-0194 / RUSTSEC-2026-0195, exempted in [advisories]
-# with usage-context justification (authenticated XML sources, not attacker-controlled).
-# Resolve when asx-rs or object_store updates to a common quick-xml version.
-[[bans.skip]]
-name    = "quick-xml"
-version = "0.40"
-reason  = "object_store (slatedb cloud backend) pins quick-xml 0.40; asx-rs uses quick-xml 0.41. RUSTSEC-2026-0194/0195 exempted in [advisories]."
-
+# ── quick-xml versions in the tree ─────────────────────────────────────────────
+# 0.41 is the workspace version: mako's own crates, asx-rs (AS4 SOAP/ebMS3) and
+# object_store (slatedb cloud) all agree on it. The others come in transitively
+# and are not ours to move: opendal pins 0.39, and typst's document tooling
+# pulls both 0.38 (hayagriva → citationberg) and 0.42 (syntect → plist).
 [[bans.skip]]
 name    = "quick-xml"
 version = "0.41"
-reason  = "asx-rs AS4 SOAP parsing uses quick-xml 0.41; object_store (slatedb) pins quick-xml 0.40. See companion quick-xml 0.40 entry."
+reason  = "workspace version — mako's own crates, asx-rs and object_store/slatedb."
+
+[[bans.skip]]
+name    = "quick-xml"
+version = "0.38"
+reason  = "typst document rendering (outputd) → hayagriva → citationberg pins quick-xml 0.38."
 
 [[bans.skip]]
 name    = "heck"
@@ -410,24 +410,17 @@ ignore = [
     # Impact: xtask dev tooling only; no production or library code path.
     # Resolution: bump pdf-extract when a release depending on skrifa is available.
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser maintenance announcement only (no CVE); reachable only via xtask pdf tooling, not production code" },
-    # RUSTSEC-2026-0194: quick-xml 0.40.x O(N²) attribute-dedup scan on start tags.
-    # Exploitable only when iterating attributes of a start tag with many *distinct*
-    # attribute names from untrusted XML. In our usage:
-    #   - object_store (slatedb/cloud): parses S3/GCS/Azure XML responses from
-    #     authenticated endpoints — not attacker-controlled.
-    #   - asx-rs (mako-as4): parses AS4 SOAP/ebMS3 envelopes from BDEW/ENTSO-E
-    #     counterparties over mutually-authenticated AS4 channels, not public internet.
-    # Neither path accepts attacker-supplied XML without prior authentication.
-    # Resolution: upgrade asx-rs + object_store once they release with quick-xml ≥ 0.41.
-    { id = "RUSTSEC-2026-0194", reason = "quick-xml O(N²) DoS; all XML consumers in this workspace parse from authenticated sources (object_store → cloud APIs, asx-rs → AS4 channels) — not attacker-controlled input" },
-    # RUSTSEC-2026-0195: quick-xml 0.40.x NsReader unbounded namespace-declaration
-    # allocation (memory exhaustion) — same upstream version constraint as 0194.
-    # Exploitable only when parsing XML with many namespace declarations from
-    # attacker-controlled input. Same usage analysis applies: object_store parses
-    # authenticated cloud-provider responses; asx-rs parses AS4 envelopes over
-    # mutually-authenticated channels. Neither path is reachable from untrusted input.
-    # Resolution: upgrade asx-rs + object_store once they release with quick-xml ≥ 0.41.
-    { id = "RUSTSEC-2026-0195", reason = "quick-xml NsReader memory-exhaustion DoS; all XML consumers in this workspace parse from authenticated sources — not attacker-controlled input. Same upstream constraint as RUSTSEC-2026-0194." },
+    # RUSTSEC-2026-0194 / RUSTSEC-2026-0195: quick-xml O(N²) attribute-dedup scan
+    # and unbounded namespace-declaration allocation, both patched in 0.41.
+    # Every path that parses XML from a counterparty is on 0.41: mako's own crates,
+    # asx-rs (AS4 SOAP/ebMS3 envelopes) and object_store (cloud API responses).
+    # What remains on an affected version is transitive and reaches no untrusted
+    # input: opendal 0.57 (0.39) parses authenticated S3/GCS/Azure responses on
+    # edmd's cold tier, and typst's citation tooling (0.38) parses bundled assets
+    # while rendering our own document templates.
+    # Resolution: drops out when opendal and hayagriva reach quick-xml ≥ 0.41.
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml O(N²) DoS, patched in 0.41 — every counterparty-facing parser here is on 0.41; the affected versions remain only under opendal (authenticated cloud APIs) and typst (bundled assets)" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml NsReader memory-exhaustion DoS; same version constraint and same usage analysis as RUSTSEC-2026-0194." },
     # RUSTSEC-2025-0111: rustls-pemfile 1.x unmaintained.
     # Pulled transitively by testcontainers → bollard. Dev-only dependency (integration
     # tests only); not present in any production binary. Resolved when testcontainers
@@ -529,7 +522,12 @@ reason  = "transitional: iceberg/slatedb ecosystem requires 0.14 alongside 0.15.
 [[bans.skip]]
 name    = "quick-xml"
 version = "=0.39"
-reason  = "opendal 0.57 (iceberg-storage-opendal, edmd/meterstore cold tier) pins quick-xml 0.39; asx-rs uses 0.41."
+reason  = "opendal 0.57 (iceberg-storage-opendal, edmd/meterstore cold tier) pins quick-xml 0.39; the workspace uses 0.41."
+
+[[bans.skip]]
+name    = "quick-xml"
+version = "=0.42"
+reason  = "typst document rendering (outputd) → syntect → plist pins quick-xml 0.42; the workspace uses 0.41."
 
 [[bans.skip]]
 name    = "aes"

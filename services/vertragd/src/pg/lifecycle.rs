@@ -33,8 +33,8 @@ use crate::domain::Verlaengerung;
 // coordinator note about hoisting both copies into `mako-service`. The keys
 // differ so the two services never contend with one another on one database.
 
-// The single-runner advisory lock lives in `mako-service` — this used to be a
-// verbatim copy of `accountingd`'s, and a third copy was one worker away.
+// The single-runner advisory lock lives in `mako-service`, so every service
+// takes it the same way and a third copy cannot drift from the first two.
 pub use mako_service::worker_lock::{release_worker_lock, try_worker_lock};
 
 /// Advisory-lock keys — stable, and distinct per worker so a slow

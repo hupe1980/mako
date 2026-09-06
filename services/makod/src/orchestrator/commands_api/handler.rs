@@ -147,12 +147,23 @@ pub(crate) async fn handle_command(
     // The per-family business guard below stays in place and is the stronger
     // of the two: it refuses a second `anmelden` for the same business key even
     // from a *different* key, which no idempotency scheme can see.
-    let idempotency_key = match headers
-        .get("idempotency-key")
-        .or_else(|| headers.get("Idempotency-Key"))
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned)
-    {
+    // A repeated `Idempotency-Key` is refused rather than resolved first-wins:
+    // the stored response is keyed on this value, so two of them would let an
+    // intermediary decide which request a replay answers.
+    let supplied_key = match mako_service::headers::single_str(&headers, "idempotency-key") {
+        Ok(key) => key.map(str::to_owned),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error":  "duplicate_idempotency_key_header",
+                    "detail": e.to_string(),
+                })),
+            )
+                .into_response();
+        }
+    };
+    let idempotency_key = match supplied_key {
         Some(key) if !key.is_empty() => key,
         _ => {
             return (

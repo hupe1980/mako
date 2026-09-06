@@ -303,8 +303,8 @@ mod tests {
 
     /// The signature covers the id and the timestamp, not the body alone.
     ///
-    /// This is the property the old scheme did not have, and the reason a
-    /// captured POST could replay forever.
+    /// Signing the body alone lets a captured POST replay for ever: the id and
+    /// the timestamp are what bind a signature to one delivery.
     #[test]
     fn the_signature_covers_the_id_and_the_timestamp() {
         let (secret, body, ts) = (b"s3cr3t".as_slice(), b"{}".as_slice(), now());

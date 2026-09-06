@@ -218,8 +218,11 @@ impl OutboxWorker {
     ///
     /// # Errors
     ///
-    /// Returns `sqlx::Error` if the claim query fails (per-row delivery failures
-    /// are recorded, not surfaced).
+    /// Returns `sqlx::Error` if the claim query fails. A per-row delivery
+    /// failure is recorded on the row rather than returned — the batch carries
+    /// on. A failure to *record* it cannot be recorded anywhere, so it is
+    /// logged: it leaves the row claimed and the event is posted again after the
+    /// lease expires, which is the one outcome nothing downstream can see.
     pub async fn flush_once(&self) -> Result<usize, sqlx::Error> {
         let lease_secs = i64::try_from(self.cfg.lease.as_secs()).unwrap_or(i64::MAX);
         // Atomically claim + lease a batch (push next_attempt_at forward) so no
@@ -253,23 +256,53 @@ impl OutboxWorker {
                 Ok(ce) => ce,
                 Err(e) => {
                     // A stored envelope that no longer decodes can never succeed.
-                    let _ = self
+                    if let Err(db) = self
                         .dead_letter(row.id, &format!("undecodable envelope: {e}"))
-                        .await;
+                        .await
+                    {
+                        tracing::error!(
+                            outbox_id = %row.id, error = %db,
+                            "outbox: undecodable envelope could not be dead-lettered; \
+                             it stays in the queue"
+                        );
+                    }
                     continue;
                 }
             };
             match crate::post_ce_with_retry(&self.client, &self.url, &ce, secret.as_deref()).await {
                 Ok(()) => {
-                    let _ = self.mark_delivered(row.id).await;
+                    if let Err(db) = self.mark_delivered(row.id).await {
+                        // The consumer accepted the event and the row still says
+                        // it did not, so the next flush posts it again — and
+                        // keeps posting it. Nothing downstream can tell the
+                        // difference; only this line can.
+                        tracing::error!(
+                            outbox_id = %row.id, error = %db,
+                            "outbox: delivered event could not be marked delivered; \
+                             it will be redelivered"
+                        );
+                    }
                 }
                 Err(e) if e.is_permanent() => {
-                    let _ = self.dead_letter(row.id, &e.to_string()).await;
+                    if let Err(db) = self.dead_letter(row.id, &e.to_string()).await {
+                        tracing::error!(
+                            outbox_id = %row.id, error = %db,
+                            "outbox: permanent delivery failure could not be \
+                             dead-lettered; the row stays in the queue"
+                        );
+                    }
                 }
                 Err(e) => {
-                    let _ = self
+                    if let Err(db) = self
                         .record_failure(row.id, row.attempts, &e.to_string())
-                        .await;
+                        .await
+                    {
+                        tracing::warn!(
+                            outbox_id = %row.id, error = %db,
+                            "outbox: retry bookkeeping failed; the lease still \
+                             expires and the event retries"
+                        );
+                    }
                 }
             }
         }

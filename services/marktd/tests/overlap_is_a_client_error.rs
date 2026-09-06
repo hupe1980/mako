@@ -301,7 +301,7 @@ async fn an_overlapping_netznutzungsvertrag_is_unprocessable() {
 ///
 /// The `ON CONFLICT (…, valid_from)` upsert absorbs a *re-file of the same start
 /// date*; it is a **different** start date whose window overlaps that the
-/// exclusion constraint catches, and that used to be a `500`.
+/// exclusion constraint catches, and that has to reach the caller as a `422`.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn an_overlapping_preisblatt_is_unprocessable_in_every_family() {

@@ -1,6 +1,6 @@
 +++
 title = "Domain Model"
-description = "BDEW market role model, market objects (MaLo, MeLo, NeLo, NeBe), territory definitions, identifier formats with check-digit rules, and EDIFACT encoding for all identifiers used in German energy market communication."
+description = "The BDEW market role model, market objects (MaLo, MeLo, NeLo, NeBe), territories, identifier check-digit rules and their EDIFACT encoding."
 weight = 13
 +++
 This page is the definitive reference for the BDEW **Rollenmodell für die

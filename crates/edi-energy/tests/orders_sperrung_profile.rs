@@ -1,11 +1,12 @@
-//! Regression guards for the ORDERS Sperrung/Entsperrung columns.
+//! Guards on the ORDERS Sperrung/Entsperrung columns, pinned against the
+//! shipped profiles. Two properties of the import that a reader cannot see from
+//! the extractor:
 //!
-//! Two defects the import used to have, pinned against the shipped profiles:
-//!
-//! 1. PIDs 17008/17116/17117 were lost — only the first column of each
-//!    multi-column table survived.
-//! 2. `IMD` was read as mandatory for 17115 (Sperrauftrag) instead of 17117
-//!    (Entsperrauftrag).
+//! 1. **Every column of a multi-column table survives** — 17008/17116/17117 sit
+//!    beside 17001/17115 in one table, and an extractor that keeps only the
+//!    first column loses them silently.
+//! 2. **`IMD` is Muss for 17117 (Entsperrauftrag), not 17115 (Sperrauftrag)** —
+//!    the two are adjacent columns and the requirement belongs to one of them.
 
 // The ORDERS profiles are embedded only with the `orders` feature.
 #![cfg(feature = "orders")]

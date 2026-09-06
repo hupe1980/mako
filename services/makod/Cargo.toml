@@ -27,9 +27,9 @@ mako-invoic      = { path = "../../crates/mako-invoic" }
 # that publishes it before the answer can reach the wire.
 # `role-msb` implies `role-esa`, and both are used directly here (the WiM
 # adapters resolve Antwortcodes, the ESA ones the Wertebestellung trees).
-# Naming them is the point: they used to arrive only because `mako-wim` enables
-# them, so dropping that would have broken makod with an error pointing
-# somewhere else entirely.
+# Naming them is the point: inherited through `mako-wim` they would leave makod
+# depending on another crate's feature choice, and dropping it there would break
+# this crate with an error pointing somewhere else entirely.
 mako-pruefung      = { workspace = true, features = ["role-msb", "role-emob"] }
 mako-wim         = { path = "../../crates/mako-wim" }
 mako-geli-gas    = { path = "../../crates/mako-geli-gas" }

@@ -1,6 +1,6 @@
 +++
 title = "invoicd Operator Guide"
-description = "invoicd operator guide: INVOIC plausibility-check daemon (LF role). Checks the ten inbound billing PIDs against marktd price sheets, persists every receipt for § 147 AO / GoBD, answers the counterparty through makod, and notifies the ERP."
+description = "invoicd operator guide: the LF-side INVOIC plausibility check over ten inbound billing PIDs, with § 147 AO receipts and the answer back through makod."
 weight = 24
 +++
 `invoicd` is the **INVOIC plausibility-check daemon** for the LF (Lieferant) role.
@@ -311,16 +311,13 @@ described above. Both the `Messung` and the ESA entry point run the document
 stages 2–7 and replace stage 8 with their own price basis; neither runs stage 1,
 because a Storno is routed to `ArithmetikNur` before either is reached.
 
-The `Messung` path used to skip stages 3 and 7 — an MSB invoice stating no
-Umsatzsteuer at all, or one due before the day it was issued, was accepted. It
-was an omission rather than a rule about MSB invoices: the INVOIC AHB makes the
-Fälligkeitsdatum (`SG8 DTM+265`, MIG Nr. 00033) and the tax block (`TAX`
-Nr. 00058 with `MOA` Nr. 00061/00062) **Muss** on 31003 and 31009 exactly as on
-31001/31002, § 14 Abs. 4 Nr. 8 UStG reaches every invoice, and the *same* PID
-31009 already ran both stages when it arrived through the ESA door. Stage 7
-still tells an absent tax block apart from a reverse-charged zero: a § 13b
-invoice states 0,00 EUR with an `RCV` Steuerbetrag naming the ground, and that
-is not a `SteuerMissing`.
+Stages 3 and 7 run on the `Messung` path too. No rule about MSB invoices
+exempts them: the INVOIC AHB makes the Fälligkeitsdatum (`SG8 DTM+265`, MIG
+Nr. 00033) and the tax block (`TAX` Nr. 00058 with `MOA` Nr. 00061/00062)
+**Muss** on 31003 and 31009 exactly as on 31001/31002, and § 14 Abs. 4 Nr. 8
+UStG reaches every invoice. Stage 7 tells an absent tax block apart from a
+reverse-charged zero: a § 13b invoice states 0,00 EUR with an `RCV` Steuerbetrag
+naming the ground, and that is not a `SteuerMissing`.
 
 The MMM settlement check is skipped, not disputed, when the month's reference
 prices are not yet published — the BDEW series lands after the

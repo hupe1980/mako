@@ -112,7 +112,7 @@ spec:
   # would therefore gate nothing, and `required` would suspend a run per finding
   # and cost a case row until somebody clears it.
   #
-  # `triage` is the third mode agentplane 0.15 added for exactly this: the run
+  # `triage` is the mode for exactly this: the run
   # completes and returns, and a matching answer *also* opens a worklist row.
   # Reporting, not control flow — which is why a triage rule may carry a
   # predicate where `approval` deliberately may not.

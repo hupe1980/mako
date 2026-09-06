@@ -45,6 +45,11 @@ struct Tools;
 
 #[async_trait::async_trait]
 impl ToolClient for Tools {
+    /// A stub opens no connection, so the allowlist has no host to judge.
+    fn destination(&self, _tool: &ToolId) -> agentplane::tools::Destination {
+        agentplane::tools::Destination::Local
+    }
+
     async fn call(
         &self,
         _tool: &ToolId,
@@ -317,12 +322,12 @@ fn the_record_signer_and_the_claim_signer_are_one_identity() {
 /// **A failed run's delivery says *why*.**
 ///
 /// This is mako's own upstream report, pinned in mako's tree.
-/// `RecordKind::RunSealed` gained a `reason` so that why a run failed outlives
-/// the process that wrote it — and the projection that turns a sealed record
-/// into `de.agent.decision.made` destructured it away behind `..`, so a receiver
-/// got `outcome: "failed"` and nothing else: the exact state the field was added
-/// to end, one layer further out. The projection destructures every field of
-/// the seal, so the next field added has to answer deliver-or-not at the
+/// `RecordKind::RunConcluded` carries a `reason` so that why a run failed
+/// outlives the process that wrote it, and the projection that turns a
+/// conclusion into `de.agent.decision.made` has to carry it out: a receiver told
+/// `outcome: "failed"` and nothing else is back in the state the field exists to
+/// end, one layer further out. The projection destructures every field of the
+/// conclusion, so the next field added has to answer deliver-or-not at the
 /// build.
 ///
 /// It is asserted here rather than trusted because the failure mode is silence:
@@ -352,7 +357,7 @@ async fn a_failed_runs_delivery_carries_the_reason_it_failed() {
     let sealed = records_of(&plane, &decision.run_id)
         .await
         .into_iter()
-        .find(|r| matches!(r.kind(), RecordKind::RunSealed { .. }))
+        .find(|r| matches!(r.kind(), RecordKind::RunConcluded { .. }))
         .expect("a concluded run seals");
 
     let projection = RunCompleted::new("urn:mako:test:agentd").event_type("de.agent.decision.made");
@@ -402,7 +407,7 @@ async fn a_successful_runs_delivery_carries_no_reason_field() {
     let sealed = records_of(&plane, &decision.run_id)
         .await
         .into_iter()
-        .find(|r| matches!(r.kind(), RecordKind::RunSealed { .. }))
+        .find(|r| matches!(r.kind(), RecordKind::RunConcluded { .. }))
         .expect("a concluded run seals");
 
     let projection = RunCompleted::new("urn:mako:test:agentd").event_type("de.agent.decision.made");
@@ -440,7 +445,7 @@ async fn a_delivery_carries_the_conclusion_and_not_the_answer() {
     let sealed = records_of(&plane, &decision.run_id)
         .await
         .into_iter()
-        .find(|r| matches!(r.kind(), RecordKind::RunSealed { .. }))
+        .find(|r| matches!(r.kind(), RecordKind::RunConcluded { .. }))
         .expect("seals");
 
     let projection = RunCompleted::new("urn:mako:test:agentd").event_type("de.agent.decision.made");

@@ -217,10 +217,10 @@ where
 
 /// Stage 4: every BO4E-stated rule the value breaks, from both sources.
 ///
-/// `rubo4e`'s derived validators run first and cover the tree — since 0.11 the
-/// generator emits `garde(dive)` for every field carrying rules, so one call
-/// reaches a `Zeitraum` on a position or a `Kostenposition` two levels down, and
-/// reports each at its path. mako's two residual rules
+/// `rubo4e`'s derived validators run first and cover the tree: the generator
+/// emits `garde(dive)` for every field carrying rules, so one call reaches a
+/// `Zeitraum` on a position or a `Kostenposition` two levels down and reports
+/// each at its path. mako's two residual rules
 /// ([`Bo4eConformance`]) are appended in the same shape.
 ///
 /// `Validate::validate` takes `&self`, so nothing is cloned.

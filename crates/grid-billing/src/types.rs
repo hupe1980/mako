@@ -92,7 +92,16 @@ pub enum KaKundengruppe {
     Schwachlast,
     /// Sondervertragskunde — KAV §2 Abs. 3. Flat, independent of municipality size.
     Sondervertragskunde,
-    /// Freigestellt nach KAV §2 Abs. 7.
+    /// No Konzessionsabgabe may be agreed or paid — KAV §2 Abs. 4 (Strom) resp.
+    /// Abs. 5 (Gas).
+    ///
+    /// The prohibitions are the Grenzpreisvergleich for Strom-Sondervertrags-
+    /// kunden (Abs. 4) and, for Gas, a Liefermenge über 5 Millionen kWh je Jahr
+    /// und Abnahmefall or a Durchschnittspreis unter dem Grenzpreis (Abs. 5).
+    /// §2 Abs. 7 is **not** one of them: it decides whether a
+    /// Niederspannungslieferung counts as a Tarif- or a Sondervertragslieferung
+    /// (30 kW in mindestens zwei Monaten **und** mehr als 30 000 kWh im Jahr),
+    /// and never that no Konzessionsabgabe is payable.
     Exempt,
 }
 
@@ -147,27 +156,37 @@ impl KaKundengruppe {
     }
 
     /// Short label for the invoice position text.
+    ///
+    /// `sparte` is read only for [`Self::Exempt`], whose prohibition sits in a
+    /// different Absatz for each Sparte.
     #[must_use]
-    pub const fn label(self) -> &'static str {
+    pub const fn label(self, sparte: Sparte) -> &'static str {
         match self {
             Self::Tarifkunde { .. } => "KAV §2 Abs. 2 Tarifkunde",
             Self::Schwachlast => "KAV §2 Abs. 2 Schwachlast",
             Self::Sondervertragskunde => "KAV §2 Abs. 3 Sondervertragskunde",
-            Self::Exempt => "KAV §2 Abs. 7 — freigestellt",
+            Self::Exempt => match sparte {
+                Sparte::Strom => "KAV §2 Abs. 4 — keine Konzessionsabgabe zulässig",
+                Sparte::Gas => "KAV §2 Abs. 5 — keine Konzessionsabgabe zulässig",
+            },
         }
     }
 
-    /// The KAV paragraph that fixes this group's Höchstbetrag.
+    /// The KAV paragraph that governs this group.
     ///
     /// Cited on the position, so the invoice states the rule it was actually
     /// billed under: §2 Abs. 2 for a Tarifkunde, Abs. 3 for a
-    /// Sondervertragskunde, Abs. 7 for a freigestellter Kunde.
+    /// Sondervertragskunde, and — where no Konzessionsabgabe may be charged at
+    /// all — Abs. 4 for Strom, Abs. 5 for Gas.
     #[must_use]
-    pub const fn kav_paragraph(self) -> &'static str {
+    pub const fn kav_paragraph(self, sparte: Sparte) -> &'static str {
         match self {
             Self::Tarifkunde { .. } | Self::Schwachlast => "§2 Abs. 2",
             Self::Sondervertragskunde => "§2 Abs. 3",
-            Self::Exempt => "§2 Abs. 7",
+            Self::Exempt => match sparte {
+                Sparte::Strom => "§2 Abs. 4",
+                Sparte::Gas => "§2 Abs. 5",
+            },
         }
     }
 }
@@ -704,7 +723,7 @@ pub enum WarningSeverity {
 /// | `MsbGrundgebuehr` | `EntgeltEinbauBetriebWartungMesstechnik` | PID 31009 MSB monthly fee |
 /// | `Messdienstleistung` | `EntgeltMessungAblesung` | PID 31009 reading service |
 /// | `GasAwhSperrung` | `Sperrkosten` | PID 31011 AWH disconnection |
-/// | `GasAwhEntsprrung` | `Entsperrkosten` | PID 31011 AWH reconnection |
+/// | `GasAwhEntsperrung` | `Entsperrkosten` | PID 31011 AWH reconnection |
 /// | `GasAwhSonstige` | `EntgeltAbrechnung` | PID 31011 other AWH |
 /// | `Blindmehrarbeit` | `Blindmehrarbeit` | Reactive energy excess |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -762,6 +781,9 @@ pub enum BillingPositionKind {
     /// MSB Grundgebühr Messstellenbetrieb — monthly metering base fee.
     /// MsbG §§6–7. → `BdewArtikelnummer::EntgeltEinbauBetriebWartungMesstechnik`
     MsbGrundgebuehr,
+    /// Einbau und Betrieb einer Steuerungseinrichtung am Netzanschlusspunkt.
+    /// MsbG §30 Abs. 2. → `BdewArtikelnummer::EntgeltEinbauBetriebWartungMesstechnik`
+    MsbSteuereinrichtung,
     /// Messdienstleistung — periodic reading service fee.
     /// MsbG §2. → `BdewArtikelnummer::EntgeltMessungAblesung`
     Messdienstleistung,
@@ -770,7 +792,7 @@ pub enum BillingPositionKind {
     GasAwhSperrung,
     /// Gas AWH Entsperrung — abrechnungswürdige Handlung reconnection.
     /// BK7-24-01-009 §5.4. → `BdewArtikelnummer::Entsperrkosten`
-    GasAwhEntsprrung,
+    GasAwhEntsperrung,
     /// Gas AWH sonstige — other abrechnungswürdige Handlung.
     /// BK7-24-01-009 §5.4. → `BdewArtikelnummer::EntgeltAbrechnung`
     GasAwhSonstige,
@@ -804,6 +826,75 @@ pub enum BillingPositionKind {
     /// Gas Kapazitätsentgelt — booked capacity at the price sheet's annual
     /// rate, pro-rated over the period. §15 GasNEV.
     GasKapazitaetsentgelt,
+}
+
+impl BillingPositionKind {
+    /// Every variant, so a guard can walk the whole enum instead of a list that
+    /// drifts. A wildcard-free `match` in the crate's tests anchors it: adding a
+    /// variant without listing it here fails to compile.
+    pub const ALL: [Self; 26] = [
+        Self::NneAbschlag,
+        Self::NneArbeit,
+        Self::NneArbeitHt,
+        Self::NneArbeitSt,
+        Self::NneArbeitNt,
+        Self::NneArbeitModul1,
+        Self::NneArbeitModul2,
+        Self::NneArbeitModul3,
+        Self::NneLeistung,
+        Self::NneGasGrundpreis,
+        Self::Konzessionsabgabe,
+        Self::Mehrmenge,
+        Self::Mindermenge,
+        Self::MsbGrundgebuehr,
+        Self::MsbSteuereinrichtung,
+        Self::Messdienstleistung,
+        Self::GasAwhSperrung,
+        Self::GasAwhEntsperrung,
+        Self::GasAwhSonstige,
+        Self::Blindmehrarbeit,
+        Self::Sect19StromNevUmlage,
+        Self::OffshoreNetzumlage,
+        Self::KwkgUmlage,
+        Self::DezentraleEinspeisung,
+        Self::Sect19IndividuellesEntgelt,
+        Self::GasKapazitaetsentgelt,
+    ];
+
+    /// Anchors `ALL` to the enum: the `match` has no wildcard, so a new
+    /// variant breaks the build here rather than silently escaping every guard
+    /// that walks `ALL`.
+    #[cfg(test)]
+    pub(crate) const fn is_exhaustive(self) -> bool {
+        match self {
+            Self::NneAbschlag
+            | Self::NneArbeit
+            | Self::NneArbeitHt
+            | Self::NneArbeitSt
+            | Self::NneArbeitNt
+            | Self::NneArbeitModul1
+            | Self::NneArbeitModul2
+            | Self::NneArbeitModul3
+            | Self::NneLeistung
+            | Self::NneGasGrundpreis
+            | Self::Konzessionsabgabe
+            | Self::Mehrmenge
+            | Self::Mindermenge
+            | Self::MsbGrundgebuehr
+            | Self::MsbSteuereinrichtung
+            | Self::Messdienstleistung
+            | Self::GasAwhSperrung
+            | Self::GasAwhEntsperrung
+            | Self::GasAwhSonstige
+            | Self::Blindmehrarbeit
+            | Self::Sect19StromNevUmlage
+            | Self::OffshoreNetzumlage
+            | Self::KwkgUmlage
+            | Self::DezentraleEinspeisung
+            | Self::Sect19IndividuellesEntgelt
+            | Self::GasKapazitaetsentgelt => true,
+        }
+    }
 }
 
 /// One line item in a grid settlement.
@@ -942,10 +1033,12 @@ impl BillingPositionKind {
             (K::Konzessionsabgabe, _) => Some("KONZESSIONSABGABE"),
             (K::Mehrmenge, _) => Some("MEHRMENGE"),
             (K::Mindermenge, _) => Some("MINDERMENGE"),
-            (K::MsbGrundgebuehr, _) => Some("ENTGELT_EINBAU_BETRIEB_WARTUNG_MESSTECHNIK"),
+            (K::MsbGrundgebuehr | K::MsbSteuereinrichtung, _) => {
+                Some("ENTGELT_EINBAU_BETRIEB_WARTUNG_MESSTECHNIK")
+            }
             (K::Messdienstleistung, _) => Some("ENTGELT_MESSUNG_ABLESUNG"),
             // AWH Gas positions carry a 2-01-7-xxx Artikel-ID from the input.
-            (K::GasAwhSperrung | K::GasAwhEntsprrung | K::GasAwhSonstige, _) => None,
+            (K::GasAwhSperrung | K::GasAwhEntsperrung | K::GasAwhSonstige, _) => None,
             (K::Blindmehrarbeit, _) => Some("BLINDMEHRARBEIT"),
             // Netzseitige Umlagen (EnFG). `OFFSHORE_HAFTUNGSUMLAGE` is the code's
             // legacy name — the levy was renamed Offshore-Netzumlage, the article
@@ -1324,17 +1417,141 @@ pub struct Grundpreis {
     pub months: Decimal,
 }
 
+/// The § 2 Abs. 7 KAV facts that classify a Niederspannungslieferung.
+///
+/// „Unbeschadet des § 1 Abs. 3 und 4 gelten Stromlieferungen aus dem
+/// Niederspannungsnetz (bis 1 Kilovolt) konzessionsabgabenrechtlich als
+/// Lieferungen an Tarifkunden, es sei denn, die gemessene Leistung des Kunden
+/// überschreitet in mindestens zwei Monaten des Abrechnungsjahres 30 Kilowatt
+/// **und** der Jahresverbrauch beträgt mehr als 30.000 Kilowattstunden."
+///
+/// Both limbs must be met for the point to be a Sondervertragslieferung, and
+/// that decides between a 1,32-ct and a 0,11-ct ceiling — so the classification
+/// is derived from the facts rather than taken from the caller's own label.
+///
+/// The reference is the **einzelne Betriebsstätte oder Abnahmestelle** (Satz 2).
+/// Netzbetreiber and Gemeinde may agree lower figures (Satz 4); where they have,
+/// state them here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NiederspannungsEinstufung {
+    /// Months of the Abrechnungsjahr in which the **gemessene** Leistung
+    /// exceeded the Leistungswert — the statutory 30 kW, or the lower figure
+    /// [`Self::leistungsgrenze_kw`] names. Counted by the caller, because only
+    /// it holds the per-month series.
+    pub monate_ueber_leistungsgrenze: u32,
+    /// Jahresverbrauch at this Betriebsstätte or Abnahmestelle, in kWh.
+    ///
+    /// Satz 3 excludes Lieferungen nach §§ 7 und 9 BTOElt and Lieferungen im
+    /// Rahmen von Sonderabkommen für lastschwache Zeiten from this figure; those
+    /// are priced under Abs. 2 Nr. 1a and Abs. 3 in their own right.
+    pub jahresverbrauch_kwh: Decimal,
+    /// The agreed Leistungswert in kW, where Netzbetreiber and Gemeinde set one
+    /// below the statutory 30 (Satz 4). Recorded on the settlement so the
+    /// month count above can be read against the figure it was counted at;
+    /// `None` means [`Self::LEISTUNGSGRENZE_KW`].
+    pub leistungsgrenze_kw: Option<Decimal>,
+    /// The agreed Jahresverbrauchsmenge in kWh, where one below the statutory
+    /// 30 000 was set (Satz 4). `None` uses the statute's figure.
+    pub verbrauchsgrenze_kwh: Option<Decimal>,
+}
+
+impl NiederspannungsEinstufung {
+    /// „überschreitet in mindestens zwei Monaten des Abrechnungsjahres 30
+    /// Kilowatt" — the statutory Leistungswert.
+    pub const LEISTUNGSGRENZE_KW: Decimal = rust_decimal::dec!(30);
+    /// „und der Jahresverbrauch beträgt mehr als 30.000 Kilowattstunden".
+    pub const VERBRAUCHSGRENZE_KWH: Decimal = rust_decimal::dec!(30_000);
+    /// „in mindestens zwei Monaten des Abrechnungsjahres".
+    pub const MINDESTMONATE: u32 = 2;
+
+    /// Whether § 2 Abs. 7 makes this a Sondervertragslieferung.
+    ///
+    /// Both limbs, because the statute joins them with „und": a point drawing
+    /// 40 kW in one month of the year, or 200 kW every month on 20 000 kWh, is
+    /// still a Tariflieferung.
+    #[must_use]
+    pub fn ist_sondervertragslieferung(&self) -> bool {
+        let verbrauchsgrenze = self
+            .verbrauchsgrenze_kwh
+            .unwrap_or(Self::VERBRAUCHSGRENZE_KWH);
+        self.monate_ueber_leistungsgrenze >= Self::MINDESTMONATE
+            && self.jahresverbrauch_kwh > verbrauchsgrenze
+    }
+
+    /// The group § 2 Abs. 7 puts this metering point in.
+    #[must_use]
+    pub fn klasse(&self, gemeinde: GemeindeGroesse) -> KaKundengruppe {
+        if self.ist_sondervertragslieferung() {
+            KaKundengruppe::Sondervertragskunde
+        } else {
+            KaKundengruppe::Tarifkunde {
+                gemeinde,
+                nur_kochen_warmwasser: false,
+            }
+        }
+    }
+}
+
+/// The § 2 Abs. 4 / Abs. 5 Nr. 2 KAV Grenzpreisvergleich, as facts.
+///
+/// Both Absätze forbid a Konzessionsabgabe outright — „dürfen
+/// Konzessionsabgaben … nicht vereinbart oder gezahlt werden" — for a
+/// Sondervertragskunde whose Durchschnittspreis im Kalenderjahr lies below the
+/// Grenzpreis. Neither figure is derivable here: the Strom Grenzpreis is the
+/// Durchschnittserlös the amtliche Statistik published for the *vorletzte*
+/// Kalenderjahr, and the customer's own Durchschnittspreis is measured
+/// „unter Einschluß des Netznutzungsentgelts" over the whole supply. Both are
+/// supplied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Grenzpreisvergleich {
+    /// The customer's Durchschnittspreis im Kalenderjahr, in ct/kWh, ohne USt.
+    pub durchschnittspreis_ct_per_kwh: Decimal,
+    /// The applicable Grenzpreis, in ct/kWh, ohne USt.
+    pub grenzpreis_ct_per_kwh: Decimal,
+}
+
+impl Grenzpreisvergleich {
+    /// Whether the Verordnung forbids a Konzessionsabgabe on this supply.
+    ///
+    /// „unter dem … Durchschnittserlös … liegt" — strictly below, so a price
+    /// exactly at the Grenzpreis still admits one.
+    #[must_use]
+    pub fn verbietet_konzessionsabgabe(&self) -> bool {
+        self.durchschnittspreis_ct_per_kwh < self.grenzpreis_ct_per_kwh
+    }
+}
+
+/// § 2 Abs. 5 Nr. 1 KAV — the Gas Grenzmenge per Jahr und Abnahmefall.
+///
+/// Above it no Konzessionsabgabe may be agreed or paid for a
+/// Sondervertragskunde. Netzbetreiber and Gemeinde may agree a lower
+/// Grenzmenge (Satz 3).
+pub const KAV_GAS_GRENZMENGE_KWH: Decimal = rust_decimal::dec!(5_000_000);
+
 /// A Konzessionsabgabe — the rate together with the customer group it applies to.
 ///
-/// Paired so the KAV §2 Höchstbetrag check can always run. They were independent
-/// `Option`s, and the ceiling check was skipped entirely when the group was
-/// absent — which is exactly when an over-charge is most likely to go unnoticed.
+/// Paired so the KAV § 2 Höchstbetrag check can always run: independent
+/// `Option`s let the ceiling check be skipped exactly when an over-charge is
+/// most likely to go unnoticed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Konzessionsabgabe {
     /// Published rate in ct/kWh.
     pub satz_ct_per_kwh: Decimal,
     /// The KAV §2 customer group, which fixes the ceiling.
     pub klasse: KaKundengruppe,
+    /// § 2 Abs. 7 KAV — the facts that classify a Niederspannungslieferung.
+    ///
+    /// `None` where the supply is not aus dem Niederspannungsnetz, or where the
+    /// per-month Leistung is not held; the stated [`Self::klasse`] then stands
+    /// unchecked.
+    #[serde(default)]
+    pub niederspannung: Option<NiederspannungsEinstufung>,
+    /// § 2 Abs. 4 (Strom) / Abs. 5 Nr. 2 (Gas) KAV — the Grenzpreisvergleich.
+    ///
+    /// `None` leaves it unchecked, which is what a Tarifkunde needs: both
+    /// Absätze speak only of Sondervertragskunden.
+    #[serde(default)]
+    pub grenzpreis: Option<Grenzpreisvergleich>,
 }
 
 // ── SettlementPeriod ──────────────────────────────────────────────────────────
@@ -1994,6 +2211,7 @@ impl AbschlagGrundlage {
 /// The NB bills the MSB for the metering service period.  Positions:
 /// 1. Grundgebühr Messstellenbetrieb — flat monthly base fee × billing months.
 /// 2. Messdienstleistung — optional per-period measurement service fee.
+/// 3. Steuerungseinrichtung am Netzanschlusspunkt — optional, §30 Abs. 2 MsbG.
 #[derive(Debug, Clone)]
 pub struct MsbInput {
     /// 11-digit Marktlokations-ID.
@@ -2022,6 +2240,17 @@ pub struct MsbInput {
     ///
     /// `None` when the MSB provides only the meter, not a separate measurement service.
     pub messdienstleistung_eur: Option<Decimal>,
+
+    /// Einbau und Betrieb einer Steuerungseinrichtung am Netzanschlusspunkt in
+    /// **EUR/month** — §30 Abs. 2 MsbG, where the gMSB equipped the metering
+    /// point under §29 Abs. 1 Nr. 2.
+    ///
+    /// It is charged „zusätzlich zu den nach den Absätzen 1 und 5 zulässigen
+    /// Preisobergrenzen" and carries a ceiling of its own, so it is stated apart
+    /// from the Grundgebühr: folded into that figure it would consume Abs. 1
+    /// headroom it does not belong to, and its own 50-EUR cap could not be
+    /// checked at all.
+    pub steuereinrichtung_eur_per_month: Option<Decimal>,
 
     /// Which §30 MsbG case this metering point falls under.
     ///
@@ -2640,6 +2869,24 @@ mod korrektur_grund_tests {
                 rechtsgrundlage: "§12 Abs. 1 UStG",
             },
             warnings: Vec::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod position_kind_tests {
+    use super::BillingPositionKind as K;
+
+    /// `K::ALL` really is every variant.
+    ///
+    /// The `const fn` it calls matches without a wildcard, so a new kind that is
+    /// not listed in `ALL` breaks this file's build — which is what keeps every
+    /// guard walking `ALL` honest.
+    #[test]
+    fn the_kind_catalogue_is_complete() {
+        assert!(K::ALL.iter().all(|k| k.is_exhaustive()));
+        for (i, a) in K::ALL.iter().enumerate() {
+            assert!(!K::ALL[i + 1..].contains(a), "ALL lists {a:?} twice");
         }
     }
 }

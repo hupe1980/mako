@@ -5179,11 +5179,10 @@ fn invoice_allocate_proportionally_penny_correct() {
 
 /// A three-way split must conserve the metered volume, not only the money.
 ///
-/// Each share used to be rounded on its own, which is exact only when the
-/// fractions divide evenly: 1000 kWh split three ways came out as
-/// 3 × 333.3333 kWh = 999.9999 kWh, so the recipients' invoices no longer
-/// accounted for the volume the building was metered at. The amounts were
-/// already remainder-distributed; the quantities now go the same way.
+/// Rounding each share on its own is exact only when the fractions divide
+/// evenly: 1000 kWh split three ways gives 3 × 333.3333 kWh = 999.9999 kWh, and
+/// the recipients' invoices then account for less than the building was metered
+/// at. Quantities are remainder-distributed like the amounts.
 #[test]
 fn invoice_allocation_conserves_quantity_and_warnings() {
     let tariff: Product = serde_json::from_str(

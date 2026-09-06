@@ -299,8 +299,15 @@ CREATE TABLE direct_push_sessions (
     interval_count  INTEGER     NOT NULL DEFAULT 0,
     period_from     TIMESTAMPTZ,
     period_to       TIMESTAMPTZ,
-    status          TEXT        NOT NULL DEFAULT 'committed'
-                        CHECK (status IN ('committed','partial','failed')),
+    -- The row is the idempotency claim, not a report written afterwards: a door
+    -- inserts it `partial` before it ingests anything and flips it `committed`
+    -- when the readings are stored. `ON CONFLICT DO NOTHING` over the primary
+    -- key is therefore the claim, so two simultaneous requests carrying one
+    -- session id cannot both decide they are the first. A claim that never
+    -- commits stays `partial` and the next request takes it over, which keeps a
+    -- wholly failed batch retryable under its own key.
+    status          TEXT        NOT NULL DEFAULT 'partial'
+                        CHECK (status IN ('partial','committed')),
     quality_summary JSONB,
     -- The undecoded uplink frame, for the IoT door (LoRaWAN / wM-Bus). Network
     -- server codecs are mutable and carry no version, so the stored value can

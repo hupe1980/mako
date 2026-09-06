@@ -15,6 +15,20 @@
 //! charge against a gross ceiling grants the whole tax rate as headroom, so a
 //! settlement 18.9 % above the statutory maximum passes at 19 %.
 //!
+//! ## The schedule is dated, and Abs. 4 decides the figure it is read with
+//!
+//! Abs. 1 and Abs. 3 state their ceilings „für die Zeit ab dem 1. Januar 2025",
+//! so a settlement for an earlier period is not measured against them:
+//! [`preisobergrenze_eur_per_jahr`] takes the period's end and answers
+//! [`Preisobergrenze::VorSchedule`] below [`SCHEDULE_AB`]. Abs. 6 lets a BNetzA
+//! Festlegung nach § 33 replace Abs. 1 bis 3 from a date it names; none has
+//! issued, so there is nothing to model yet.
+//!
+//! Abs. 4 fixes **which** Jahresstromverbrauch picks the band: the average of
+//! the last three erfasste Jahresverbrauchswerte, falling back to the
+//! Netzbetreiber's Jahresverbrauchsprognose until three exist, re-checked once a
+//! year. That figure is the caller's — one year's reading is not it.
+//!
 //! ## The band is derived, never asserted
 //!
 //! §30 Abs. 1 states five Nummern, each a disjunction of criteria over facts the
@@ -136,45 +150,91 @@ pub enum Entgeltschuldner {
     Letztverbraucher,
 }
 
-/// The §30 MsbG ceiling in EUR **brutto** per year, or `None` where the statute
-/// sets none.
+/// The first day the §30 schedule below governs.
 ///
-/// `None` means "no fixed ceiling" — the >100 000 kWh band, where §30 Abs. 1
-/// allows an angemessenes Entgelt for the Letztverbraucher's share. It does not
-/// mean "unchecked": the Netzbetreiber's share is capped in every band.
+/// Abs. 1 and Abs. 3 both open „für die Zeit ab dem 1. Januar 2025", so the
+/// figures are dated and a settlement for an earlier period is not measured
+/// against them. The schedule that applied before is not in mako's regulatory
+/// corpus; [`Preisobergrenze::VorSchedule`] says so rather than reaching for
+/// the nearest number.
+pub const SCHEDULE_AB: time::Date = time::macros::date!(2025 - 01 - 01);
+
+/// What §30 MsbG has to say about one party's share.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Preisobergrenze {
+    /// A fixed ceiling in EUR **brutto** per year.
+    ///
+    /// Gross, as §30 states it: a net charge is grossed up at the Umsatzsteuer
+    /// rate of its delivery period before the comparison.
+    Betrag(Decimal),
+    /// §30 Abs. 1 Nr. 1 — „ein angemessenes jährliches Entgelt". There is no
+    /// figure to compare against for the Anschlussnutzer's share above
+    /// 100 000 kWh; the Netzbetreiber's share is still capped.
+    Angemessen,
+    /// The delivery period ends before [`SCHEDULE_AB`], so this schedule does
+    /// not govern it and mako holds no earlier one.
+    VorSchedule,
+}
+
+impl Preisobergrenze {
+    /// The ceiling as a number, where there is one to compare against.
+    #[must_use]
+    pub const fn betrag(self) -> Option<Decimal> {
+        match self {
+            Self::Betrag(eur) => Some(eur),
+            Self::Angemessen | Self::VorSchedule => None,
+        }
+    }
+}
+
+/// The §30 MsbG ceiling for one party over a delivery period ending `period_to`.
 ///
-/// The figure is gross, as §30 states it. A net charge is grossed up at the
-/// Umsatzsteuer rate of its delivery period before the comparison.
+/// The date decides whether the schedule applies at all: a correction settled
+/// today for a 2024 period is governed by the rules of 2024, not by these.
+///
+/// **§30 Abs. 6 is not modelled**, because nothing to model has issued: from the
+/// date a BNetzA Festlegung nach §33 names, its Preisobergrenzen replace Abs. 1
+/// bis 3. Wire the override when one publishes.
 #[must_use]
 pub fn preisobergrenze_eur_per_jahr(
     kategorie: MessstellenKategorie,
     schuldner: Entgeltschuldner,
-) -> Option<Decimal> {
+    period_to: time::Date,
+) -> Preisobergrenze {
     use Entgeltschuldner as E;
     use MessstellenKategorie as K;
     use PflichtBand as B;
+    use Preisobergrenze as P;
+
+    if period_to < SCHEDULE_AB {
+        return P::VorSchedule;
+    }
 
     match (kategorie, schuldner) {
         // §30 Abs. 1: the Netzbetreiber's share is 80 EUR in every band.
-        (K::Pflichteinbau(_), E::Netzbetreiber) => Some(dec!(80)),
+        (K::Pflichteinbau(_), E::Netzbetreiber) => P::Betrag(dec!(80)),
         (K::Pflichteinbau(einstufung), E::Letztverbraucher) => match einstufung.band() {
-            B::Bis10000 => Some(dec!(40)),
-            B::Bis20000 => Some(dec!(50)),
-            B::Bis50000 => Some(dec!(110)),
-            B::Bis100000 => Some(dec!(140)),
-            // "angemessenes jährliches Entgelt" — no fixed figure.
-            B::Ueber100000 => None,
+            B::Bis10000 => P::Betrag(dec!(40)),
+            B::Bis20000 => P::Betrag(dec!(50)),
+            B::Bis50000 => P::Betrag(dec!(110)),
+            B::Bis100000 => P::Betrag(dec!(140)),
+            B::Ueber100000 => P::Angemessen,
         },
         // §30 Abs. 3: 60 EUR in total, 30 EUR each.
-        (K::OptionalerEinbau, _) => Some(dec!(30)),
+        (K::OptionalerEinbau, _) => P::Betrag(dec!(30)),
     }
 }
 
 /// The combined §30 Abs. 1 ceiling across both parties, where one is fixed.
 #[must_use]
-pub fn gesamtobergrenze_eur_per_jahr(kategorie: MessstellenKategorie) -> Option<Decimal> {
-    let nb = preisobergrenze_eur_per_jahr(kategorie, Entgeltschuldner::Netzbetreiber)?;
-    let lv = preisobergrenze_eur_per_jahr(kategorie, Entgeltschuldner::Letztverbraucher)?;
+pub fn gesamtobergrenze_eur_per_jahr(
+    kategorie: MessstellenKategorie,
+    period_to: time::Date,
+) -> Option<Decimal> {
+    let nb = preisobergrenze_eur_per_jahr(kategorie, Entgeltschuldner::Netzbetreiber, period_to)
+        .betrag()?;
+    let lv = preisobergrenze_eur_per_jahr(kategorie, Entgeltschuldner::Letztverbraucher, period_to)
+        .betrag()?;
     Some(nb + lv)
 }
 
@@ -188,6 +248,9 @@ mod tests {
     use Entgeltschuldner as E;
     use MessstellenKategorie as K;
     use PflichtBand as B;
+
+    /// A delivery period inside the schedule's own window.
+    const IM_SCHEDULE: time::Date = time::macros::date!(2026 - 12 - 31);
 
     /// A Pflichteinbau point known only by its Jahresverbrauch.
     fn verbrauch(kwh: Decimal) -> MessstellenKategorie {
@@ -216,14 +279,14 @@ mod tests {
         ] {
             let k = verbrauch(kwh);
             assert_eq!(
-                preisobergrenze_eur_per_jahr(k, E::Netzbetreiber),
-                Some(dec!(80))
+                preisobergrenze_eur_per_jahr(k, E::Netzbetreiber, IM_SCHEDULE),
+                Preisobergrenze::Betrag(dec!(80))
             );
             assert_eq!(
-                preisobergrenze_eur_per_jahr(k, E::Letztverbraucher),
-                Some(lv)
+                preisobergrenze_eur_per_jahr(k, E::Letztverbraucher, IM_SCHEDULE),
+                Preisobergrenze::Betrag(lv)
             );
-            assert_eq!(gesamtobergrenze_eur_per_jahr(k), Some(total));
+            assert_eq!(gesamtobergrenze_eur_per_jahr(k, IM_SCHEDULE), Some(total));
         }
     }
 
@@ -280,8 +343,12 @@ mod tests {
         };
         assert_eq!(einstufung.band(), B::Bis20000);
         assert_eq!(
-            preisobergrenze_eur_per_jahr(K::Pflichteinbau(einstufung), E::Letztverbraucher),
-            Some(dec!(50))
+            preisobergrenze_eur_per_jahr(
+                K::Pflichteinbau(einstufung),
+                E::Letztverbraucher,
+                IM_SCHEDULE
+            ),
+            Preisobergrenze::Betrag(dec!(50))
         );
     }
 
@@ -306,8 +373,8 @@ mod tests {
     fn an_unclassifiable_point_takes_the_tightest_ceiling() {
         let k = K::Pflichteinbau(PflichtEinstufung::default());
         assert_eq!(
-            preisobergrenze_eur_per_jahr(k, E::Letztverbraucher),
-            Some(dec!(40))
+            preisobergrenze_eur_per_jahr(k, E::Letztverbraucher, IM_SCHEDULE),
+            Preisobergrenze::Betrag(dec!(40))
         );
     }
 
@@ -317,12 +384,15 @@ mod tests {
     fn the_top_band_caps_only_the_grid_operators_share() {
         let k = verbrauch(dec!(250_000));
         assert_eq!(
-            preisobergrenze_eur_per_jahr(k, E::Netzbetreiber),
-            Some(dec!(80))
+            preisobergrenze_eur_per_jahr(k, E::Netzbetreiber, IM_SCHEDULE),
+            Preisobergrenze::Betrag(dec!(80))
         );
-        assert_eq!(preisobergrenze_eur_per_jahr(k, E::Letztverbraucher), None);
         assert_eq!(
-            gesamtobergrenze_eur_per_jahr(k),
+            preisobergrenze_eur_per_jahr(k, E::Letztverbraucher, IM_SCHEDULE),
+            Preisobergrenze::Angemessen
+        );
+        assert_eq!(
+            gesamtobergrenze_eur_per_jahr(k, IM_SCHEDULE),
             None,
             "no total where one share is open"
         );
@@ -333,14 +403,47 @@ mod tests {
     fn an_optional_installation_is_capped_at_thirty_each() {
         for schuldner in [E::Netzbetreiber, E::Letztverbraucher] {
             assert_eq!(
-                preisobergrenze_eur_per_jahr(K::OptionalerEinbau, schuldner),
-                Some(dec!(30))
+                preisobergrenze_eur_per_jahr(K::OptionalerEinbau, schuldner, IM_SCHEDULE),
+                Preisobergrenze::Betrag(dec!(30))
             );
         }
         assert_eq!(
-            gesamtobergrenze_eur_per_jahr(K::OptionalerEinbau),
+            gesamtobergrenze_eur_per_jahr(K::OptionalerEinbau, IM_SCHEDULE),
             Some(dec!(60))
         );
+    }
+
+    /// **Invariant: the schedule is dated.**
+    ///
+    /// Abs. 1 and Abs. 3 both read „für die Zeit ab dem 1. Januar 2025". A
+    /// correction settled today for a 2024 period is governed by the rules of
+    /// 2024, and mako holds none — so it answers `VorSchedule` rather than
+    /// measuring the charge against a schedule that did not apply to it.
+    #[test]
+    fn a_period_before_the_schedule_is_not_measured_against_it() {
+        let vorher = time::macros::date!(2024 - 12 - 31);
+        let k = verbrauch(dec!(9_000));
+        for schuldner in [E::Netzbetreiber, E::Letztverbraucher] {
+            assert_eq!(
+                preisobergrenze_eur_per_jahr(k, schuldner, vorher),
+                Preisobergrenze::VorSchedule
+            );
+        }
+        assert_eq!(gesamtobergrenze_eur_per_jahr(k, vorher), None);
+
+        // The first day it governs.
+        assert_eq!(
+            preisobergrenze_eur_per_jahr(k, E::Letztverbraucher, SCHEDULE_AB),
+            Preisobergrenze::Betrag(dec!(40))
+        );
+    }
+
+    /// `betrag()` distinguishes "no ceiling in law" from "a ceiling of zero".
+    #[test]
+    fn only_a_fixed_ceiling_yields_a_number() {
+        assert_eq!(Preisobergrenze::Betrag(dec!(80)).betrag(), Some(dec!(80)));
+        assert_eq!(Preisobergrenze::Angemessen.betrag(), None);
+        assert_eq!(Preisobergrenze::VorSchedule.betrag(), None);
     }
 
     /// The bands rise monotonically — a higher band never caps lower.
@@ -348,8 +451,10 @@ mod tests {
     fn the_bands_rise_monotonically() {
         let mut previous = Decimal::ZERO;
         for kwh in [dec!(9_000), dec!(15_000), dec!(30_000), dec!(80_000)] {
-            let ceiling = preisobergrenze_eur_per_jahr(verbrauch(kwh), E::Letztverbraucher)
-                .expect("a fixed ceiling");
+            let ceiling =
+                preisobergrenze_eur_per_jahr(verbrauch(kwh), E::Letztverbraucher, IM_SCHEDULE)
+                    .betrag()
+                    .expect("a fixed ceiling");
             assert!(
                 ceiling > previous,
                 "{kwh} kWh must exceed the band below it"

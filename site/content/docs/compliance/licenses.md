@@ -53,29 +53,6 @@ still in `Cargo.lock`.
 
 ---
 
-### `MPL-2.0` — Mozilla Public License 2.0 — **retired**
-
-**Status:** was approved; **no longer allowed** — `MPL-2.0` is absent from
-`deny.toml`'s `allow` list, so a dependency reintroducing it fails `cargo deny`
-and needs a fresh review.
-
-**Why it was approved:** `MPL-2.0` is **file-level** (weak) copyleft.
-Modifications to MPL-covered files must be released under MPL, but the licence
-explicitly permits combining MPL code with proprietary or permissively-licensed
-code in a larger work without relicensing that work, and mako consumed the
-affected crates unmodified.
-
-**Transitive path (historical):** `cbindgen` (build-time header generation for
-`aws-lc-sys`) and the `im-rc` / `bitmaps` / `sized-chunks` trio. None of the four
-is in `Cargo.lock` any more, which is why the entry was dropped from `deny.toml`
-rather than kept as a standing exception.
-
-**Risk assessment:** was Low — OSI-approved and FSF Free/Libre, with no
-obligation on the combined work. Kept here as the governance record, not as a
-current permission.
-
----
-
 ## Review Process
 
 When a new non-standard licence needs to be added to `deny.toml`:
@@ -88,13 +65,15 @@ When a new non-standard licence needs to be added to `deny.toml`:
    - Rationale (< 3 sentences)
    - Transitive dependency path
    - Risk assessment
-3. Commit both files together so `deny.toml` and this document are always in sync.
+3. Commit both files together: `cargo xtask check-licenses` fails the build when
+   this page and `deny.toml` disagree in either direction.
 
-**A note on copyleft strength.** mako distinguishes *file-level* weak copyleft
-(`MPL-2.0`) — which only constrains modifications to the licensed files
-themselves and is **allowed** with governance review — from *library/linking-level* and
-*network* copyleft (LGPL, AGPL), which impose obligations on the combined or served work
-and are **never acceptable** for this dual-MIT/Apache workspace.
+**A note on copyleft strength.** *File-level* weak copyleft (`MPL-2.0`)
+constrains only modifications to the licensed files themselves, so it is
+reviewable — it is not in the allow list, and a dependency introducing it fails
+`cargo deny` until one is done. *Library/linking-level* and *network* copyleft
+(LGPL, AGPL) impose obligations on the combined or served work and are never
+acceptable for this dual-MIT/Apache workspace.
 
 Licences that are **never acceptable** (regardless of governance review):
 - GPL-2.0-only, GPL-3.0-only (strong copyleft, incompatible with MIT/Apache dual-licence)

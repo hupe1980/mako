@@ -980,9 +980,9 @@ impl Plane {
         // decided the same way for every specialist that receives it.
         let correlation = super::label::correlation(event.id, &payload);
 
-        // Admission is where mako's trust boundary is drawn, and 0.10 made the
-        // label part of the value rather than part of the method name: every
-        // door takes a `Tainted<Value>`. Almost nothing in a CloudEvent payload
+        // Admission is where mako's trust boundary is drawn, and the label is
+        // part of the value rather than part of the method name: every door
+        // takes a `Tainted<Value>`. Almost nothing in a CloudEvent payload
         // is trusted — a MaLo came out of a counterparty's UTILMD, a `reference`
         // is text they wrote — so `plane::label` carries the real labels in.
         let input = match route.execution == RouteExecution::Planned {
@@ -1055,7 +1055,7 @@ impl Plane {
                 o.run_id.to_string(),
                 o.status.clone(),
                 told(&o),
-                o.spend.tokens,
+                o.spend().tokens,
                 Admitted::Fresh,
             ),
             // A duplicate is answered, not refused: a caller that retried wants
@@ -1084,7 +1084,7 @@ impl Plane {
                     o.run_id.to_string(),
                     o.status.clone(),
                     summary,
-                    o.spend.tokens,
+                    o.spend().tokens,
                     Admitted::Replayed,
                 )
             }
@@ -1145,6 +1145,11 @@ impl Plane {
             // for by an operator. Neither is a fault, and neither is success.
             RunStatus::Replanning(_) => "replanning",
             RunStatus::Cancelled { .. } => "cancelled",
+            // Abandoned is not cancelled: a cancellation unwinds and puts the
+            // world back, this closes a run whose outcome nobody could
+            // establish and leaves whatever it did standing. Distinct label,
+            // because the two need opposite follow-up.
+            RunStatus::Abandoned { .. } => "abandoned",
         };
 
         // Why it is waiting, not merely that it is. A run suspended on an

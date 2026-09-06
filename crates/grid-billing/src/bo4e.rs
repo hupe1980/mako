@@ -902,33 +902,11 @@ mod artikelnummer_bridge_tests {
     /// The two are joined by a string, so a typo on either side degrades
     /// silently: `from_str` returns `Err`, the article number becomes `None`,
     /// and the INVOIC ships without it. This is the test that makes the seam
-    /// safe.
+    /// safe — walked over `K::ALL`, so a new position kind is covered by it
+    /// without anyone remembering to add it.
     #[test]
     fn every_emitted_codelist_name_parses() {
-        let kinds = [
-            K::NneArbeit,
-            K::NneArbeitHt,
-            K::NneArbeitNt,
-            K::NneArbeitModul1,
-            K::NneArbeitModul3,
-            K::NneLeistung,
-            K::NneGasGrundpreis,
-            K::Konzessionsabgabe,
-            K::Mehrmenge,
-            K::Mindermenge,
-            K::MsbGrundgebuehr,
-            K::Messdienstleistung,
-            K::GasAwhSperrung,
-            K::GasAwhEntsprrung,
-            K::GasAwhSonstige,
-            K::Blindmehrarbeit,
-            K::Sect19StromNevUmlage,
-            K::OffshoreNetzumlage,
-            K::KwkgUmlage,
-            K::DezentraleEinspeisung,
-            K::Sect19IndividuellesEntgelt,
-            K::GasKapazitaetsentgelt,
-        ];
+        let kinds = K::ALL;
         let types = [
             ST::NneStrom,
             ST::NneGas,

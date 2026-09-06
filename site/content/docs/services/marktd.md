@@ -874,14 +874,12 @@ so the refusal names the constraint and says what to move:
 }
 ```
 
-PostgreSQL raises `23P01` (`exclusion_violation`) for these, which is a different
-code from the `23514` (`check_violation`) a column bound raises. Only the latter
-used to be translated, and only on `lf_zuordnung`, so every one of the eight
-constraints above answered `500 internal` — the server saying it broke, when what
-broke was the request. Both codes now map to `422` on every write path, and
-`services/marktd/tests/overlap_is_a_client_error.rs` drives each of the eight
-through the repository the API writes through and asserts the status and the
-message.
+PostgreSQL raises `23P01` (`exclusion_violation`) for these, a different code
+from the `23514` (`check_violation`) a column bound raises. Both map to `422` on
+every write path: an overlap is the request being wrong, and a `500` would say
+the server broke instead. `services/marktd/tests/overlap_is_a_client_error.rs`
+drives each of the eight through the repository the API writes through and
+asserts the status and the message.
 
 > **Operator note.** `422` after a `PUT` whose `valid_from`/`valid_to` overlaps
 > is the constraint working, not an outage — check the `valid_to` of the row
@@ -1250,15 +1248,14 @@ worker drains it:
 
 **The claim counts the attempt, not the outcome.** `attempts` is incremented by
 the claim itself, so the retry budget is spent by *trying*, whatever happens
-next. It used to be incremented only when a failure was successfully recorded,
-which meant a lost outcome write — or a worker that died between the POST and
-the write — advanced nothing: the delivery retried for ever and never
-dead-lettered. Because the claim is per-aggregate FIFO, one such delivery also
-held back every later event with the same `ordering_key` for that subscriber, so
-a single stuck row silently froze one Marktlokation's whole stream to it. A
-sweep at the top of each cycle dead-letters rows whose budget is spent and whose
-lease has lapsed, so the dead-letter decision does not rest on one write
-succeeding either.
+next. Counting the outcome instead would let a lost outcome write — or a worker
+that dies between the POST and the write — advance nothing, so the delivery
+retries for ever and never dead-letters; and because the claim is per-aggregate
+FIFO, one such row holds back every later event with the same `ordering_key` for
+that subscriber and freezes one Marktlokation's whole stream to it. A sweep at
+the top of each cycle dead-letters rows whose budget is spent and whose lease has
+lapsed, so the dead-letter decision does not rest on one write succeeding
+either.
 
 A crash at any boundary is recoverable from the two tables; subscribers receive
 at-least-once and dedup on the CloudEvent `id`. This durability is required by

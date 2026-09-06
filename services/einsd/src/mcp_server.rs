@@ -763,6 +763,8 @@ impl EinsdMcpHandler {
         // the same module the settlement charges from.
         let monatlich = crate::sect52::monatliche_exposition(&verstoesse, anlage.leistung_kwp);
 
+        let sect9_pflicht = eeg_billing::settlement_state::sect9_pflicht(anlage.sect9_anlage());
+
         let eeg_2023_regime = anlage.eeg_gesetz >= 2023;
         let kwk_max_kwh = anlage
             .kwk_foerderdauer_h
@@ -781,11 +783,14 @@ impl EinsdMcpHandler {
                 "datum": anlage.mastr_datum.map(|d| d.to_string()),
             },
             "sect9": {
-                "erfuellung": anlage.sect9_erfuellung,
-                "pflicht": format!("{:?}", eeg_billing::settlement_state::sect9_pflicht(
-                    anlage.leistung_kwp,
-                    eeg_billing::ErzeugungsArt::from_db_str(&anlage.erzeugungsart).ok(),
-                )),
+                "erfuellung": {
+                    "fernsteuerbarkeit": anlage.sect9_fernsteuerbarkeit,
+                    "begrenzung_60": anlage.sect9_begrenzung_60,
+                },
+                "pflicht": {
+                    "fernsteuerbarkeit": sect9_pflicht.fernsteuerbarkeit,
+                    "begrenzung_60": sect9_pflicht.begrenzung_60,
+                },
             },
             "pflichtverstoesse": verstoesse.iter().map(|v| serde_json::json!({
                 "typ": v.typ.as_db_str(),
@@ -1383,12 +1388,15 @@ impl EinsdMcpHandler {
                  - verguetungsform: UEBERSCHUSS (default) | VOLLEINSPEISUNG | KWK_ZUSCHLAG.\n\
                    The two solar forms differ by the §48 Abs. 2a bonus, so the rate lookup\n\
                    cannot answer without it.\n\
-                 - sect9_erfuellung: FERNSTEUERBARKEIT | LEISTUNGSBEGRENZUNG_60 | KEINE.\n\
-                   §9 is staged — from 100 kW only Fernsteuerbarkeit satisfies it, the\n\
-                   25–100 kW band may take the 60 % Leistungsbegrenzung instead, below\n\
-                   25 kW the cap alone is enough, and a Steckersolargerät under 2 kW is out\n\
-                   of scope. KEINE is a §52 Abs. 1 Nr. 1 breach wherever §9 requires\n\
-                   anything, at 10 €/kW/Monat, so say which route the plant took.\n\
+                 - sect9_fernsteuerbarkeit / sect9_begrenzung_60, both booleans, plus\n\
+                   wechselrichterleistung_va. § 9 Abs. 2 Satz 1 is staged: ab 100 kW the\n\
+                   ferngesteuerte Reduzierung alone (Nr. 1); ab 25 kW bis unter 100 kW that\n\
+                   **und** — bei Einspeisevergütung oder Mieterstromzuschlag — die\n\
+                   60-%-Begrenzung (Nr. 2 lit. a und b); unter 25 kW die Begrenzung allein,\n\
+                   und nur von geförderten Anlagen und KWK-Anlagen (Nr. 3). A Steckersolar-\n\
+                   gerät bis 2 kW und 800 VA is out of scope. Whatever the obligation names\n\
+                   and the plant does not carry is a §52 Abs. 1 Nr. 1 breach at\n\
+                   10 €/kW/Monat.\n\
                  - settlement_model, one of twelve (see the server instructions).\n\n\
                  ### Per model\n\
                  - DIREKTVERMARKTUNG: direktverm_aw_ct + direktverm_mp_id\n\

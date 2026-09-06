@@ -134,9 +134,8 @@ const COMMAND_OVERRIDES: &[(&str, &str)] = &[
 
 /// The label for a family nothing in the table claims.
 ///
-/// Never the empty string: a blank label is invisible in a legend, and the
-/// completion counter used to emit one for every message that carried no
-/// workflow name.
+/// Never the empty string: a blank label is invisible in a legend, so every
+/// message that carries no workflow name counts under this one instead.
 pub const UNKNOWN: &str = "other";
 
 /// The `family` label for a workflow name.

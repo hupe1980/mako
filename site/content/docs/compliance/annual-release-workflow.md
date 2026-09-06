@@ -1,6 +1,6 @@
 +++
 title = "Annual Release Workflow"
-description = "Step-by-step engineering playbook for incorporating a new BDEW release: mirror the documents, extend sources.json, import and validate the profiles, check PID coverage, roll out and migrate."
+description = "The engineering playbook for a new BDEW release: mirror the documents, import and validate the profiles, check PID coverage, roll out, migrate."
 weight = 12
 +++
 This document is the step-by-step engineering playbook for incorporating a new

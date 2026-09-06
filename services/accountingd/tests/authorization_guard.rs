@@ -11,14 +11,13 @@
 //! 3. **A Cedar action checked in code but named in no policy is a permanent
 //!    403,** because Cedar is default-deny. The reverse is a dead grant, and
 //!    usually means an endpoint lost its guard.
-//! 4. **An exemption whose justification is only a comment.** The MCP surface
-//!    used to carry no Cedar action at all, exempted in `accountingd.cedar` as
-//!    "read-only by construction". Five of its thirteen tools write: they post
-//!    a Buchung, raise the month's Abschlagsforderungen, book a CAMT.054
-//!    payment, rewrite a customer's advance, or emit a bank-submittable
-//!    pain.008. The last three tests below make the replacement claim —
-//!    "every tool is held to the action its REST twin enforces" — a thing that
-//!    is checked rather than asserted.
+//! 4. **An exemption whose justification is only a comment.** Exempting the MCP
+//!    surface as "read-only by construction" is not true of it: five of its
+//!    thirteen tools write — they post a Buchung, raise the month's
+//!    Abschlagsforderungen, book a CAMT.054 payment, rewrite a customer's
+//!    advance, or emit a bank-submittable pain.008. The last three tests below
+//!    make the claim that replaces it — every tool is held to the action its
+//!    REST twin enforces — checked rather than asserted.
 
 use std::collections::BTreeSet;
 

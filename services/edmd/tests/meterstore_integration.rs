@@ -87,6 +87,14 @@ async fn boot() -> (sqlx::PgPool, String, String, PgContainer, tempfile::TempDir
     (pool, url, warehouse_uri, container, warehouse)
 }
 
+/// The suppression key the suite runs with. Without one an erasure destroys the
+/// mapping and records nothing, so a re-registration silently re-links the
+/// subject — the posture a deployment must not be in, and therefore not the one
+/// these tests should prove behaviour against.
+fn test_erasure_keys() -> Vec<Vec<u8>> {
+    vec![b"edmd-test-erasure-key-32-bytes-min".to_vec()]
+}
+
 async fn setup() -> (
     MeterStoreTimeSeriesRepository,
     sqlx::PgPool,
@@ -102,6 +110,7 @@ async fn setup() -> (
         &warehouse_uri,
         TieringConfig::default(),
         &WarehouseAuth::default(),
+        &test_erasure_keys(),
     )
     .await
     .expect("build meterstore tiers");
@@ -239,6 +248,7 @@ async fn reads_and_typ2_share_a_catalog_but_stay_isolated() {
         &warehouse_uri,
         TieringConfig::default(),
         &WarehouseAuth::default(),
+        &test_erasure_keys(),
     )
     .await
     .expect("build meterstore tiers");
@@ -683,7 +693,7 @@ async fn gdpr_erasure_unlinks_the_ingest_registered_subject() {
 
     // Ingest registered the MaLo as an erasure subject.
     let subject = registry
-        .lookup(&natural)
+        .lookup(&natural, OffsetDateTime::now_utc(), Sparte::Strom)
         .await
         .expect("lookup")
         .expect("ingest registers the MaLo as a subject");
@@ -701,12 +711,100 @@ async fn gdpr_erasure_unlinks_the_ingest_registered_subject() {
 
     assert!(
         registry
-            .lookup(&natural)
+            .lookup(&natural, OffsetDateTime::now_utc(), Sparte::Strom)
             .await
             .expect("lookup after erasure")
             .is_none(),
         "the subject mapping is gone after erasure"
     );
+}
+
+/// An Article 17 request names a person, not a year. A MaLo that fed in for
+/// several years has one subject reference per retention epoch (§ 60 Abs. 6 MsbG
+/// comes due per value), and every one of them must go — probing a fixed window
+/// year by year reports a subject as fully erased while a mapping survives.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn erasure_unlinks_every_retention_epoch_of_one_identifier() {
+    let (repo, _pool, _pg, _wh) = setup().await;
+    let registry = repo
+        .store()
+        .subject_registry()
+        .expect("authoritative store has a subject registry")
+        .clone();
+    let natural = edmd::store::subject_natural_id("9910000000001", "51238696012");
+
+    for epoch in [2023, 2024, 2025] {
+        registry
+            .register_in_epoch(&natural, epoch)
+            .await
+            .expect("register an epoch");
+    }
+    assert_eq!(
+        registry.epochs(&natural).await.expect("epochs"),
+        vec![2023, 2024, 2025],
+        "the registry enumerates every year this identifier is still linked in"
+    );
+
+    let erased = repo
+        .store()
+        .erase_subject_by_id(
+            &natural,
+            "Art. 17 request",
+            "dpo",
+            OffsetDateTime::now_utc(),
+        )
+        .await
+        .expect("erase every epoch");
+    assert_eq!(erased.len(), 3, "one audit record per epoch unlinked");
+
+    assert!(
+        registry
+            .references(&natural)
+            .await
+            .expect("references after erasure")
+            .is_empty(),
+        "no epoch may survive an Art. 17 erasure"
+    );
+}
+
+/// The half of an erasure that is not deletion: *do not start again*. A broker
+/// redelivering, a reprocessing job on an old offset or a nightly import from a
+/// system that never learned would otherwise re-register the identifier and put
+/// the linkage back — with nothing reporting that it happened.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn an_erased_identifier_cannot_be_registered_again() {
+    let (repo, _pool, _pg, _wh) = setup().await;
+    let store = repo.store();
+    let natural = edmd::store::subject_natural_id("9910000000001", "51238696012");
+    let t = OffsetDateTime::now_utc() - Duration::days(1);
+
+    store
+        .register_subject(&natural, t, Sparte::Strom)
+        .await
+        .expect("register the subject");
+    store
+        .erase_subject_by_id(
+            &natural,
+            "Art. 17 request",
+            "dpo",
+            OffsetDateTime::now_utc(),
+        )
+        .await
+        .expect("erase the subject");
+
+    assert!(
+        store
+            .is_subject_suppressed(&natural)
+            .await
+            .expect("suppression check"),
+        "the erasure must record a tombstone the deployment can recognise"
+    );
+    store
+        .register_subject(&natural, t, Sparte::Strom)
+        .await
+        .expect_err("a replaying pipeline must not resurrect an erased linkage");
 }
 
 #[tokio::test]
@@ -824,7 +922,7 @@ async fn a_substitute_reproduces_the_same_slot_one_week_earlier() {
         prior_days: Some(7),
         operator_id: Some("TEST-OPERATOR".to_owned()),
         sparte: Some("STROM".to_owned()),
-        reason: Some("NoMeasurementAvailable".to_owned()),
+        reason: "NO_ACCESS".to_owned(),
         obis_code: Some(obis.to_owned()),
     };
     let status = run_substitute_values(&repo, "9910000000001", malo, &req)
@@ -960,7 +1058,7 @@ async fn a_short_gap_interpolates_between_its_real_brackets() {
         prior_days: Some(7),
         operator_id: Some("TEST-OPERATOR".to_owned()),
         sparte: Some("STROM".to_owned()),
-        reason: Some("NoMeasurementAvailable".to_owned()),
+        reason: "NO_ACCESS".to_owned(),
         obis_code: Some(obis.to_owned()),
     };
     let status = run_substitute_values(&repo, "9910000000001", malo, &req)
@@ -1215,7 +1313,7 @@ async fn a_faulty_slot_is_a_gap_a_substitute_may_fill() {
         prior_days: Some(7),
         operator_id: Some("TEST-OPERATOR".to_owned()),
         sparte: None,
-        reason: Some("MeterFault".to_owned()),
+        reason: "METERING_EQUIPMENT_FAULT".to_owned(),
         obis_code: Some(obis.to_owned()),
     };
     let status = run_substitute_values(&repo, "9910000000001", malo, &req)
@@ -1444,9 +1542,9 @@ async fn a_gas_quality_delivery_is_recorded_and_reads_back() {
 
 /// Two tenants may mint the same session id; neither may overwrite the other.
 ///
-/// Every read of `direct_push_sessions` was tenant-scoped, but the table was
-/// keyed on `session_id` alone — so the ingest upsert's `ON CONFLICT` landed on
-/// whichever tenant got there first and rewrote its status and quality summary.
+/// Every read of `direct_push_sessions` is tenant-scoped, so `tenant` has to be
+/// part of the key as well — otherwise one tenant's session would answer the
+/// other's idempotency claim.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn a_push_session_id_is_private_to_its_tenant() {
@@ -1482,12 +1580,76 @@ async fn a_push_session_id_is_private_to_its_tenant() {
     assert_eq!(rows[1], ("9910000000002".into(), "51238696781".into(), 42));
 }
 
+/// The push-session key is claimed before the work, not written after it.
+///
+/// Only a `committed` row is a replay. A `partial` claim is an attempt that
+/// never finished, so the next request takes it over — otherwise a batch that
+/// failed halfway would be locked out of its own key for good.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn a_push_session_claim_is_taken_before_the_work() {
+    let (_repo, pool, _pg, _wh) = setup().await;
+
+    // A claim on a free key succeeds and lands `partial`.
+    let claimed: Option<i32> = sqlx::query_scalar(
+        "INSERT INTO direct_push_sessions (session_id, malo_id, source, status, tenant)
+         VALUES ('S-1', '51238696012', 'DIRECT_PUSH', 'partial', '9910000000001')
+         ON CONFLICT (tenant, session_id) DO NOTHING
+         RETURNING 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .expect("claim");
+    assert!(claimed.is_some(), "the first claim on a free key wins it");
+
+    // A second claim on the same key does not, whatever it carries.
+    let second: Option<i32> = sqlx::query_scalar(
+        "INSERT INTO direct_push_sessions (session_id, malo_id, source, status, tenant)
+         VALUES ('S-1', '51238696012', 'DIRECT_PUSH', 'partial', '9910000000001')
+         ON CONFLICT (tenant, session_id) DO NOTHING
+         RETURNING 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .expect("second claim");
+    assert!(
+        second.is_none(),
+        "a concurrent claim does not also win the key"
+    );
+
+    // The row is still `partial`, so a door reading it resumes rather than
+    // replaying a result that was never produced.
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM direct_push_sessions WHERE session_id = 'S-1'")
+            .fetch_one(&pool)
+            .await
+            .expect("status");
+    assert_eq!(status, "partial");
+
+    // Committing is the door's own statement that the readings landed.
+    sqlx::query(
+        "UPDATE direct_push_sessions SET status = 'committed', interval_count = 96
+          WHERE tenant = '9910000000001' AND session_id = 'S-1'",
+    )
+    .execute(&pool)
+    .await
+    .expect("commit");
+    let (status, count): (String, i32) = sqlx::query_as(
+        "SELECT status, interval_count FROM direct_push_sessions WHERE session_id = 'S-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read back");
+    assert_eq!((status.as_str(), count), ("committed", 96));
+}
+
 /// A Gas reading is stored — and labelled — in kWh.
 ///
 /// Every ingest door converts m³ → kWh_Hs before the value reaches the store
-/// (§ 25 Nr. 4 MessEV), but the stored unit was the Sparte's *measured* unit, so
-/// gas was tagged `m³`. Anything trusting the unit — the BO4E `Mengeneinheit`,
-/// an external engine reading the cold tier — saw a tenth of the real quantity.
+/// (§ 25 Nr. 4 MessEV), so the stored unit is the *billing* unit and not the
+/// Sparte's measured one. Anything trusting the label — the BO4E
+/// `Mengeneinheit`, an external engine reading the cold tier — would otherwise
+/// read a tenth of the real quantity.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn a_gas_reading_is_stored_in_its_billing_unit() {
@@ -2060,7 +2222,7 @@ async fn a_feed_in_reading_does_not_block_substituting_the_consumption_register(
         prior_days: Some(7),
         operator_id: Some("TEST-OPERATOR".to_owned()),
         sparte: None,
-        reason: Some("MeterFault".to_owned()),
+        reason: "METERING_EQUIPMENT_FAULT".to_owned(),
         obis_code: Some(bezug.to_owned()),
     };
     let status = run_substitute_values(&repo, "9910000000001", malo, &req)
@@ -2254,7 +2416,7 @@ async fn a_substitute_is_filed_under_the_register_it_fills() {
         prior_days: Some(7),
         operator_id: Some("TEST-OPERATOR".to_owned()),
         sparte: None,
-        reason: Some("MeterFault".to_owned()),
+        reason: "METERING_EQUIPMENT_FAULT".to_owned(),
         // Deliberately unnamed: the point's dominant energy register is chosen.
         obis_code: None,
     };
@@ -2321,6 +2483,7 @@ async fn erasure_unlinks_the_esa_typ2_store_as_well() {
         &warehouse_uri,
         TieringConfig::default(),
         &WarehouseAuth::default(),
+        &test_erasure_keys(),
     )
     .await
     .expect("build meterstore tiers");
@@ -2566,7 +2729,7 @@ async fn erasure_unlinks_the_zaehlerstandsgang() {
         .expect("the Zählerstandsgang store has a subject registry");
     let natural = edmd::store::subject_natural_id(tenant, malo);
     let subject = registry
-        .lookup(&natural)
+        .lookup(&natural, OffsetDateTime::now_utc(), Sparte::Strom)
         .await
         .expect("lookup")
         .expect("storing a Zählerstand registers the MaLo as a subject");
@@ -2582,7 +2745,11 @@ async fn erasure_unlinks_the_zaehlerstandsgang() {
         .expect("erase subject");
 
     assert!(
-        registry.lookup(&natural).await.expect("lookup").is_none(),
+        registry
+            .lookup(&natural, OffsetDateTime::now_utc(), Sparte::Strom)
+            .await
+            .expect("lookup")
+            .is_none(),
         "the mapping must be destroyed, leaving the readings unattributable"
     );
 
@@ -2923,6 +3090,7 @@ async fn both_kapitel_46_delivery_paths_reach_the_typ2_store() {
         &warehouse_uri,
         TieringConfig::default(),
         &WarehouseAuth::default(),
+        &test_erasure_keys(),
     )
     .await
     .expect("build meterstore tiers");

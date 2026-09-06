@@ -90,6 +90,19 @@ impl SlateDbDedupBridge {
     }
 }
 
+/// Hand-written, because the SlateDB handle behind the store is not printable
+/// and a dedup backend's interesting property is its durability rather than its
+/// file descriptors. `asx-rs` requires `Debug` on the trait so that the request
+/// and policy types holding a backend can be printed.
+impl std::fmt::Debug for SlateDbDedupBridge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SlateDbDedupBridge")
+            .field("durable", &self.durable)
+            .field("cluster_safe", &false)
+            .finish()
+    }
+}
+
 impl DedupStorage for SlateDbDedupBridge {
     fn is_durable(&self) -> bool {
         // Report true only when the underlying SlateDB is backed by a
@@ -283,6 +296,7 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                     payload_bytes  = edifact.len(),
                     "AS4 inbound: message received",
                 );
+
                 // ── Synchronous receipt builder ───────────────────────────────
                 // BDEW AS4-Profil §2.2.4: the receipt must be signed and echo
                 // the inbound message's ds:Reference digests (NRR).  Unsigned
@@ -334,6 +348,24 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                         }
                     }
                 };
+
+                // ── ebMS3 Test Service (Core §5.2.2) ──────────────────────────
+                // A connectivity ping is acknowledged and **not delivered**: its
+                // payload is empty or a loopback of what the sender sent, so
+                // every branch below would read it as a malformed business
+                // document — a dead letter, or a 400 that tells the counterparty
+                // its connectivity check failed. `is_test_service_ping` is
+                // derived from the verified `eb:Service` and `eb:Action`, so a
+                // sender cannot label a real document as a ping to skip the
+                // pipeline: the payload never reaches it either way.
+                if output.is_test_service_ping() {
+                    tracing::info!(
+                        as4_message_id = %msg_id,
+                        from_party     = %from,
+                        "AS4 inbound: ebMS3 Test Service ping — acknowledged, not delivered",
+                    );
+                    return send_receipt();
+                }
 
                 // ── Redispatch 2.0 XML leg ────────────────────────────────────
                 // The BDEW AS4 channel carries two payload formats: EDIFACT

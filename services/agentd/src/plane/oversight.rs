@@ -66,12 +66,15 @@ impl OidcAuthenticator {
         Self { verifier }
     }
 
-    /// The bearer token, if one was presented.
+    /// The bearer token, if exactly one was presented.
+    ///
+    /// A repeated `Authorization` header yields `None` rather than the first
+    /// occurrence: an intermediary that authorized the other one would
+    /// disagree with the identity this returns.
     fn bearer(headers: &HeaderMap) -> Option<&str> {
-        headers
-            .get(axum::http::header::AUTHORIZATION)?
-            .to_str()
-            .ok()?
+        mako_service::headers::single_str(headers, axum::http::header::AUTHORIZATION.as_str())
+            .ok()
+            .flatten()?
             .strip_prefix("Bearer ")
             .map(str::trim)
     }

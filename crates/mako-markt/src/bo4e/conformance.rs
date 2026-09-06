@@ -395,8 +395,8 @@ mod tests {
         assert!(rubo4e::current::Messlokation::default().validate().is_ok());
     }
 
-    /// `.validate()` descends since 0.11, so a violation two levels down is
-    /// caught without mako recursing by hand.
+    /// `.validate()` descends, so a violation two levels down is caught without
+    /// mako recursing by hand.
     #[test]
     fn rubo4e_descends_into_nested_values() {
         use rubo4e::prelude::Validate as _;

@@ -212,10 +212,11 @@ async fn a_failed_dispatch_keeps_the_report_and_queues_a_retry() {
 /// Two replicas sweeping at the same moment: exactly one sends the IFTSTA.
 ///
 /// A Sperrauftrag-Status is a disconnection outcome the Lieferant acts on, and
-/// `makod` does not deduplicate on the idempotency key. The claim used to be a
-/// pooled `SELECT … FOR UPDATE SKIP LOCKED`, whose row lock is released when the
-/// implicit transaction commits — as the statement returns, before the caller
-/// has even seen the row — so both replicas claimed it and both dispatched.
+/// `makod` does not deduplicate on the idempotency key, so the claim has to be
+/// exclusive here. A pooled `SELECT … FOR UPDATE SKIP LOCKED` is not: its row
+/// lock is released when the implicit transaction commits — as the statement
+/// returns, before the caller has seen the row — so both replicas claim it and
+/// both dispatch.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn two_replicas_cannot_claim_the_same_iftsta() {

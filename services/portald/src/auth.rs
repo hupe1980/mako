@@ -88,10 +88,12 @@ pub async fn authorize(
         });
     };
 
-    let Some(token) = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-    else {
+    // A repeated `Authorization` header is refused rather than read first-wins:
+    // vertragd authenticates the token this reads, and an intermediary picking
+    // the other occurrence would authorize a different customer.
+    let header = mako_service::headers::single_str(headers, header::AUTHORIZATION.as_str())
+        .map_err(|_| unauthorized("Authorization must appear exactly once"))?;
+    let Some(token) = header else {
         return Err(unauthorized("Authorization: Bearer required"));
     };
 

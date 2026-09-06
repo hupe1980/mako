@@ -193,8 +193,13 @@ pub struct TriggerSubstitutionParams {
     pub obis_code: Option<String>,
     /// `STROM` (default) · `GAS` · `WAERME` · `WASSER`.
     pub sparte: Option<String>,
-    /// § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit reason (default `NoMeasurementAvailable`).
-    pub reason: Option<String>,
+    /// **Required** — the `STS+Z40` Grund der Ersatzwertbildung (MSCONS MIG
+    /// 2.4c), by name (`NO_ACCESS`, `METERING_EQUIPMENT_FAULT`,
+    /// `COMMUNICATION_FAILURE`, …) or by market code (`Z74`, `Z81`, `Z75`, …).
+    /// The list is closed and has no catch-all, so an unstated reason is a
+    /// refusal rather than a default: it would put an invented one into the
+    /// § 147 Abs. 1 AO audit trail and onto the MSCONS that carries the value.
+    pub reason: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

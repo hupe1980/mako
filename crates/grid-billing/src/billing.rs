@@ -1010,7 +1010,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                 code: "KA_ABOVE_KAV_MAXIMUM",
                 message: format!(
                     "KA rate {ka_ct} ct/kWh exceeds the KAV §2 Höchstbetrag {max} ct/kWh for {}",
-                    gruppe.label()
+                    gruppe.label(input.sparte)
                 ),
             }),
             None if gruppe == KaKundengruppe::Exempt && ka_ct > Decimal::ZERO => {
@@ -1018,14 +1018,102 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                     severity: WarningSeverity::Warning,
                     code: "KA_CHARGED_WHILE_EXEMPT",
                     message: format!(
-                        "KA rate {ka_ct} ct/kWh charged although the customer is \
-                         freigestellt nach KAV §2 Abs. 7"
+                        "KA rate {ka_ct} ct/kWh charged although {} for this customer",
+                        gruppe.label(input.sparte)
                     ),
                 });
             }
             _ => {}
         }
-        let ka_klasse_note = format!(" ({})", gruppe.label());
+
+        // § 2 Abs. 7 KAV — the group is a consequence of the metering point's
+        // own facts, not a label. Getting it wrong moves the ceiling by a
+        // factor of twelve, in whichever direction the caller happened to name.
+        if let Some(ns) = ka.niederspannung {
+            let abgeleitet = ns.klasse(match gruppe {
+                KaKundengruppe::Tarifkunde { gemeinde, .. } => gemeinde,
+                // Only the Tarifkunde branch is priced by Gemeindegröße, and it
+                // is the branch Abs. 7 would put the point in; any band answers
+                // the classification question the same way.
+                _ => crate::types::GemeindeGroesse::Bis25k,
+            });
+            let widerspruch = matches!(
+                (gruppe, abgeleitet),
+                (
+                    KaKundengruppe::Sondervertragskunde,
+                    KaKundengruppe::Tarifkunde { .. }
+                ) | (
+                    KaKundengruppe::Tarifkunde { .. },
+                    KaKundengruppe::Sondervertragskunde
+                )
+            );
+            if widerspruch {
+                warnings.push(SettlementWarning {
+                    severity: WarningSeverity::Warning,
+                    code: "KA_GRUPPE_WIDERSPRICHT_KAV_ABS7",
+                    message: format!(
+                        "the settlement states {}, but § 2 Abs. 7 KAV classifies this \
+                         Niederspannungslieferung as {} — {} month(s) over the Leistungswert \
+                         and {} kWh im Jahr",
+                        gruppe.label(input.sparte),
+                        abgeleitet.label(input.sparte),
+                        ns.monate_ueber_leistungsgrenze,
+                        ns.jahresverbrauch_kwh,
+                    ),
+                });
+            }
+        }
+
+        // § 2 Abs. 4 (Strom) / Abs. 5 Nr. 2 (Gas) KAV — below the Grenzpreis no
+        // Konzessionsabgabe may be agreed or paid at all. Both Absätze speak of
+        // Sondervertragskunden only.
+        if gruppe == KaKundengruppe::Sondervertragskunde
+            && ka_ct > Decimal::ZERO
+            && ka
+                .grenzpreis
+                .is_some_and(|g| g.verbietet_konzessionsabgabe())
+        {
+            let g = ka.grenzpreis.unwrap_or(crate::types::Grenzpreisvergleich {
+                durchschnittspreis_ct_per_kwh: Decimal::ZERO,
+                grenzpreis_ct_per_kwh: Decimal::ZERO,
+            });
+            warnings.push(SettlementWarning {
+                severity: WarningSeverity::Warning,
+                code: "KA_UNTER_GRENZPREIS",
+                message: format!(
+                    "KA rate {ka_ct} ct/kWh charged although the Durchschnittspreis \
+                     {} ct/kWh lies below the Grenzpreis {} ct/kWh — {} forbids one",
+                    g.durchschnittspreis_ct_per_kwh,
+                    g.grenzpreis_ct_per_kwh,
+                    match input.sparte {
+                        Sparte::Strom => "KAV § 2 Abs. 4",
+                        Sparte::Gas => "KAV § 2 Abs. 5 Nr. 2",
+                    },
+                ),
+            });
+        }
+
+        // § 2 Abs. 5 Nr. 1 KAV — Gas only, and computable from the annual
+        // quantity the settlement already carries.
+        if input.sparte == Sparte::Gas
+            && gruppe == KaKundengruppe::Sondervertragskunde
+            && ka_ct > Decimal::ZERO
+            && input
+                .jahresarbeit_kwh
+                .is_some_and(|kwh| kwh > crate::types::KAV_GAS_GRENZMENGE_KWH)
+        {
+            warnings.push(SettlementWarning {
+                severity: WarningSeverity::Warning,
+                code: "KA_GAS_UEBER_GRENZMENGE",
+                message: format!(
+                    "KA rate {ka_ct} ct/kWh charged on {} kWh a year — KAV § 2 Abs. 5 Nr. 1 \
+                     forbids a Konzessionsabgabe above {} kWh je Jahr und Abnahmefall",
+                    input.jahresarbeit_kwh.unwrap_or_default(),
+                    crate::types::KAV_GAS_GRENZMENGE_KWH,
+                ),
+            });
+        }
+        let ka_klasse_note = format!(" ({})", gruppe.label(input.sparte));
         let p = SettlementPosition {
             text: format!("Konzessionsabgabe{ka_klasse_note}"),
             kind: BillingPositionKind::Konzessionsabgabe,
@@ -1044,7 +1132,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                 input_unit_price_eur: ct_to_eur(ka_ct),
                 gross_eur: ka_base_kwh * ct_to_eur(ka_ct),
                 legal_refs: vec![LegalReference::Kav {
-                    paragraph: gruppe.kav_paragraph(),
+                    paragraph: gruppe.kav_paragraph(input.sparte),
                 }],
                 tariff_source: tariff_src.clone(),
                 regulatory_reduction_factor: None,
@@ -1613,6 +1701,7 @@ pub fn settle_abschlag(input: &AbschlagInput) -> Result<SettlementResult, Billin
 ///
 /// - Grundgebühr Messstellenbetrieb → `MsbG §§6–7`, `MsbG §2`
 /// - Messdienstleistung → `MsbG §2`
+/// - Steuerungseinrichtung am Netzanschlusspunkt → `MsbG §30 Abs. 2`
 ///
 /// ## Errors
 ///
@@ -1678,10 +1767,25 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
             input.period.from(),
             input.period.to(),
         );
-        if let (Some(satz), Some(pog)) = (
-            satz,
-            crate::msbg::preisobergrenze_eur_per_jahr(kategorie, schuldner),
-        ) {
+        let obergrenze =
+            crate::msbg::preisobergrenze_eur_per_jahr(kategorie, schuldner, input.period.to());
+        if obergrenze == crate::msbg::Preisobergrenze::VorSchedule {
+            // § 30 Abs. 1 and Abs. 3 state their figures „für die Zeit ab dem
+            // 1. Januar 2025". Measuring an earlier period against them would
+            // report a charge that was lawful when it was made.
+            warnings.push(SettlementWarning {
+                severity: WarningSeverity::Warning,
+                code: "MSB_POG_VOR_SCHEDULE",
+                message: format!(
+                    "the delivery period ends {} — before the § 30 MsbG schedule applies \
+                     ({}), and mako carries no earlier Preisobergrenzen, so the charge is \
+                     not checked against one",
+                    input.period.to(),
+                    crate::msbg::SCHEDULE_AB,
+                ),
+            });
+        }
+        if let (Some(satz), Some(pog)) = (satz, obergrenze.betrag()) {
             // The Messdienstleistung is a flat fee for the whole period, so it
             // is spread over the months the period bills before annualising —
             // for the monthly settlement that is the common case, that is the
@@ -1702,6 +1806,29 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
                          {schuldner:?}"
                     ),
                 });
+            }
+
+            // §30 Abs. 2 is „zusätzlich zu den nach den Absätzen 1 und 5
+            // zulässigen Preisobergrenzen", with its own 50-EUR-brutto ceiling
+            // per party. Measuring it against the Abs. 1 figure would refuse a
+            // lawful charge; folding it into that figure would grant it headroom
+            // the Absatz does not.
+            if let Some(steuer_monatlich) = input.steuereinrichtung_eur_per_month {
+                let steuer_netto_annual = steuer_monatlich * Decimal::from(12);
+                let steuer_brutto_annual =
+                    (steuer_netto_annual * (Decimal::ONE + satz / HUNDRED)).round_kfm(2);
+                let cap = crate::msbg::STEUEREINRICHTUNG_OBERGRENZE_EUR_PER_JAHR;
+                if steuer_brutto_annual > cap {
+                    warnings.push(SettlementWarning {
+                        severity: WarningSeverity::Warning,
+                        code: "MSB_STEUEREINRICHTUNG_ABOVE_MSBG_POG",
+                        message: format!(
+                            "Steuerungseinrichtung am Netzanschlusspunkt {steuer_netto_annual} \
+                             EUR/a netto = {steuer_brutto_annual} EUR/a brutto at {satz} % \
+                             exceeds the §30 Abs. 2 MsbG Preisobergrenze of {cap} EUR/a brutto"
+                        ),
+                    });
+                }
             }
         }
     }
@@ -1773,6 +1900,20 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
                 rounding_note: Some("flat fee — rounded to 5 dp"),
             },
         };
+        total += p.net_eur;
+        positions.push(p);
+    }
+
+    // §30 Abs. 2 MsbG — its own position, because it carries its own ceiling.
+    if let Some(steuer) = input.steuereinrichtung_eur_per_month {
+        let p = monat_pos_traced(
+            "Steuerungseinrichtung am Netzanschlusspunkt",
+            BillingPositionKind::MsbSteuereinrichtung,
+            months,
+            steuer,
+            vec![LegalReference::MsbG { paragraph: "§30" }],
+            None,
+        );
         total += p.net_eur;
         positions.push(p);
     }
@@ -2245,6 +2386,7 @@ mod tests {
             grundgebuehr_eur_per_month: d("3.00"),
             billing_months: 1,
             messdienstleistung_eur: None,
+            steuereinrichtung_eur_per_month: None,
             messstellen_kategorie: None,
             entgeltschuldner: None,
         }
@@ -2307,6 +2449,8 @@ mod tests {
         ka.konzessionsabgabe = Some(Konzessionsabgabe {
             satz_ct_per_kwh: d("0.11"),
             klasse: KaKundengruppe::Sondervertragskunde,
+            niederspannung: None,
+            grenzpreis: None,
         });
         out.push((
             "NNE + Konzessionsabgabe".to_owned(),
@@ -2613,6 +2757,8 @@ mod tests {
         i.konzessionsabgabe = Some(Konzessionsabgabe {
             satz_ct_per_kwh: d("0.11"),
             klasse: KaKundengruppe::Sondervertragskunde,
+            niederspannung: None,
+            grenzpreis: None,
         });
         let r = settle_nne(&i).unwrap();
         assert_eq!(r.total_eur, d("54.15"));
@@ -2638,6 +2784,8 @@ mod tests {
         i.konzessionsabgabe = Some(Konzessionsabgabe {
             satz_ct_per_kwh: d("0.11"),
             klasse: KaKundengruppe::Sondervertragskunde,
+            niederspannung: None,
+            grenzpreis: None,
         });
         let r = settle_nne(&i).unwrap();
         // 12.5 kW × 4.20 EUR/kW·Monat = 52.50 EUR for the month, beside 52.50
@@ -2767,6 +2915,8 @@ mod tests {
         i.konzessionsabgabe = Some(Konzessionsabgabe {
             satz_ct_per_kwh: d("0.11"),
             klasse: KaKundengruppe::Sondervertragskunde,
+            niederspannung: None,
+            grenzpreis: None,
         });
         i.sect19 = Some(Sect19Vereinbarung {
             art: Sect19Art::IntensiveNetznutzung,
@@ -3079,6 +3229,7 @@ mod tests {
             grundgebuehr_eur_per_month: d("12.50"),
             billing_months: 1,
             messdienstleistung_eur: None,
+            steuereinrichtung_eur_per_month: None,
             messstellen_kategorie: None,
             entgeltschuldner: None,
         };
@@ -3102,6 +3253,7 @@ mod tests {
             grundgebuehr_eur_per_month: d("12.50"),
             billing_months: 3,
             messdienstleistung_eur: Some(d("8.00")),
+            steuereinrichtung_eur_per_month: None,
             messstellen_kategorie: None,
             entgeltschuldner: None,
         };
@@ -3151,6 +3303,8 @@ mod tests {
         i.konzessionsabgabe = Some(Konzessionsabgabe {
             satz_ct_per_kwh: d("0.11"),
             klasse: KaKundengruppe::Sondervertragskunde,
+            niederspannung: None,
+            grenzpreis: None,
         });
         let r = settle_nne(&i).unwrap();
         let refs = r.all_legal_refs();
@@ -3350,6 +3504,63 @@ mod tests {
         );
     }
 
+    /// **Invariant: §30 Abs. 2 sits beside the Abs. 1 ceiling, not inside it.**
+    ///
+    /// „zusätzlich zu den nach den Absätzen 1 und 5 zulässigen Preisobergrenzen
+    /// dem Anschlussnehmer und dem Anschlussnetzbetreiber jeweils nicht mehr als
+    /// 50 Euro brutto jährlich für Einbau und Betrieb einer Steuerungseinrichtung
+    /// am Netzanschlusspunkt". Measured against the Abs. 1 figure it would refuse
+    /// a lawful charge; folded into the Grundgebühr it would take headroom the
+    /// Absatz does not grant, and its own ceiling could not be checked at all.
+    #[test]
+    fn the_steuereinrichtung_carries_its_own_ceiling() {
+        use crate::msbg::{Entgeltschuldner, MessstellenKategorie, PflichtEinstufung};
+
+        let mut i = base_msb();
+        i.messstellen_kategorie = Some(MessstellenKategorie::Pflichteinbau(PflichtEinstufung {
+            jahresverbrauch_kwh: Some(d("9000")),
+            ..PflichtEinstufung::default()
+        }));
+        i.entgeltschuldner = Some(Entgeltschuldner::Letztverbraucher);
+        i.billing_months = 1;
+        // 40 EUR/a brutto is the Nr. 5 ceiling; stay just inside it.
+        i.grundgebuehr_eur_per_month = d("2.80");
+        i.messdienstleistung_eur = None;
+
+        // 3.50 EUR/month is 42 EUR/a netto = 49.98 brutto — inside the 50 EUR of
+        // Abs. 2, and far outside the 40 EUR of Abs. 1 it is not measured against.
+        i.steuereinrichtung_eur_per_month = Some(d("3.50"));
+        let r = settle_msb(&i).expect("settles");
+        assert!(
+            !r.warnings
+                .iter()
+                .any(|w| w.code == "MSB_STEUEREINRICHTUNG_ABOVE_MSBG_POG"),
+            "49.98 EUR/a brutto is inside the Abs. 2 ceiling: {:?}",
+            r.warnings
+        );
+        assert!(
+            !r.warnings.iter().any(|w| w.code == "MSB_ABOVE_MSBG_POG"),
+            "the Abs. 1 check must not see the Abs. 2 charge: {:?}",
+            r.warnings
+        );
+        let pos = r
+            .positions
+            .iter()
+            .find(|p| p.kind == BillingPositionKind::MsbSteuereinrichtung)
+            .expect("the Steuerungseinrichtung is its own position");
+        assert_eq!(pos.net_eur, d("3.50"));
+
+        // 4.50 EUR/month is 54 EUR/a netto = 64.26 brutto — over the 50 EUR cap.
+        i.steuereinrichtung_eur_per_month = Some(d("4.50"));
+        let ueber = settle_msb(&i).expect("settles");
+        let finding = ueber
+            .warnings
+            .iter()
+            .find(|w| w.code == "MSB_STEUEREINRICHTUNG_ABOVE_MSBG_POG")
+            .unwrap_or_else(|| panic!("64.26 exceeds 50: {:?}", ueber.warnings));
+        assert!(finding.message.contains("64.26"), "{}", finding.message);
+    }
+
     /// Annualising is what makes the comparison right.
     ///
     /// The ceiling is per year and the charge per month; billing a year in
@@ -3385,6 +3596,7 @@ mod tests {
             grundgebuehr_eur_per_month: d("12.50"),
             billing_months: 1,
             messdienstleistung_eur: None,
+            steuereinrichtung_eur_per_month: None,
             messstellen_kategorie: None,
             entgeltschuldner: None,
         };
@@ -3428,6 +3640,8 @@ mod tests {
         i.konzessionsabgabe = Some(Konzessionsabgabe {
             satz_ct_per_kwh: d("0.11"),
             klasse: KaKundengruppe::Sondervertragskunde,
+            niederspannung: None,
+            grenzpreis: None,
         });
         let r = settle_nne(&i).unwrap();
         assert_eq!(
@@ -3762,6 +3976,7 @@ mod tests {
                 grundgebuehr_eur_per_month: d("15.00"),
                 billing_months: 1,
                 messdienstleistung_eur: None,
+                steuereinrichtung_eur_per_month: None,
                 messstellen_kategorie: None,
                 entgeltschuldner: None,
             };
@@ -3806,6 +4021,8 @@ mod tests {
         i.konzessionsabgabe = Some(Konzessionsabgabe {
             satz_ct_per_kwh: d("0.09"),
             klasse: KaKundengruppe::Sondervertragskunde,
+            niederspannung: None,
+            grenzpreis: None,
         });
         if let Some(ka) = i.konzessionsabgabe.as_mut() {
             ka.klasse = KaKundengruppe::Sondervertragskunde;
@@ -3823,6 +4040,181 @@ mod tests {
         );
     }
 
+    /// **Invariant: § 2 Abs. 7 KAV classifies, it does not exempt.**
+    ///
+    /// „Stromlieferungen aus dem Niederspannungsnetz gelten … als Lieferungen an
+    /// Tarifkunden, es sei denn, die gemessene Leistung … überschreitet in
+    /// mindestens zwei Monaten … 30 Kilowatt **und** der Jahresverbrauch beträgt
+    /// mehr als 30.000 Kilowattstunden." Both limbs, so one of them alone leaves
+    /// the point a Tarifkunde — and the ceiling twelve times higher.
+    #[test]
+    fn kav_abs7_needs_both_limbs() {
+        use crate::types::NiederspannungsEinstufung as N;
+
+        let ns = |monate, kwh: &str| N {
+            monate_ueber_leistungsgrenze: monate,
+            jahresverbrauch_kwh: d(kwh),
+            leistungsgrenze_kw: None,
+            verbrauchsgrenze_kwh: None,
+        };
+        // Both limbs met.
+        assert!(ns(2, "30001").ist_sondervertragslieferung());
+        // One month over, however large the draw.
+        assert!(!ns(1, "500000").ist_sondervertragslieferung());
+        // Every month over, but the year stays inside 30 000 kWh.
+        assert!(!ns(12, "30000").ist_sondervertragslieferung());
+        // „mehr als" is strict, „mindestens zwei Monaten" is not.
+        assert!(!ns(12, "30000").ist_sondervertragslieferung());
+        assert!(ns(2, "30000.001").ist_sondervertragslieferung());
+    }
+
+    /// A settlement whose stated group contradicts § 2 Abs. 7 is reported.
+    ///
+    /// The two groups are 1,32 ct and 0,11 ct apart, so naming the wrong one is
+    /// the difference between an over-charge of twelve times and a Gemeinde paid
+    /// a twelfth of what it is owed.
+    #[test]
+    fn a_group_that_contradicts_kav_abs7_is_reported() {
+        use crate::types::NiederspannungsEinstufung as N;
+
+        let mut i = base_nne();
+        // 40 kW in five months on 90 000 kWh: a Sondervertragslieferung.
+        let ns = N {
+            monate_ueber_leistungsgrenze: 5,
+            jahresverbrauch_kwh: d("90000"),
+            leistungsgrenze_kw: None,
+            verbrauchsgrenze_kwh: None,
+        };
+        i.konzessionsabgabe = Some(Konzessionsabgabe {
+            satz_ct_per_kwh: d("0.11"),
+            klasse: KaKundengruppe::Tarifkunde {
+                gemeinde: GemeindeGroesse::Bis25k,
+                nur_kochen_warmwasser: false,
+            },
+            niederspannung: Some(ns),
+            grenzpreis: None,
+        });
+        let r = settle_nne(&i).expect("settles");
+        assert!(
+            r.warnings
+                .iter()
+                .any(|w| w.code == "KA_GRUPPE_WIDERSPRICHT_KAV_ABS7"),
+            "a Tarifkunde label on a point Abs. 7 makes a Sondervertragskunde: {:?}",
+            r.warnings
+        );
+
+        // Stated correctly, nothing is reported.
+        if let Some(ka) = i.konzessionsabgabe.as_mut() {
+            ka.klasse = KaKundengruppe::Sondervertragskunde;
+        }
+        let ok = settle_nne(&i).expect("settles");
+        assert!(
+            !ok.warnings
+                .iter()
+                .any(|w| w.code == "KA_GRUPPE_WIDERSPRICHT_KAV_ABS7"),
+            "{:?}",
+            ok.warnings
+        );
+    }
+
+    /// **Invariant: below the Grenzpreis no Konzessionsabgabe may be charged.**
+    ///
+    /// § 2 Abs. 4 KAV for Strom, § 2 Abs. 5 Nr. 2 for Gas: „dürfen
+    /// Konzessionsabgaben … nicht vereinbart oder gezahlt werden". A rate inside
+    /// the Höchstbetrag is still unlawful there, so the ceiling check alone
+    /// cannot catch it.
+    #[test]
+    fn a_rate_below_the_grenzpreis_is_reported() {
+        use crate::types::Grenzpreisvergleich as G;
+
+        let mut i = base_nne();
+        i.konzessionsabgabe = Some(Konzessionsabgabe {
+            satz_ct_per_kwh: d("0.11"), // exactly the Abs. 3 Höchstbetrag
+            klasse: KaKundengruppe::Sondervertragskunde,
+            niederspannung: None,
+            grenzpreis: Some(G {
+                durchschnittspreis_ct_per_kwh: d("17.50"),
+                grenzpreis_ct_per_kwh: d("18.20"),
+            }),
+        });
+        let r = settle_nne(&i).expect("settles");
+        assert!(
+            r.warnings.iter().any(|w| w.code == "KA_UNTER_GRENZPREIS"),
+            "17,50 < 18,20 forbids the Konzessionsabgabe: {:?}",
+            r.warnings
+        );
+        assert!(
+            !r.warnings.iter().any(|w| w.code == "KA_ABOVE_KAV_MAXIMUM"),
+            "the rate is inside the Höchstbetrag — that check must stay quiet: {:?}",
+            r.warnings
+        );
+
+        // At the Grenzpreis it is admissible: „unter … liegt" is strict.
+        if let Some(ka) = i.konzessionsabgabe.as_mut() {
+            ka.grenzpreis = Some(G {
+                durchschnittspreis_ct_per_kwh: d("18.20"),
+                grenzpreis_ct_per_kwh: d("18.20"),
+            });
+        }
+        let at = settle_nne(&i).expect("settles");
+        assert!(
+            !at.warnings.iter().any(|w| w.code == "KA_UNTER_GRENZPREIS"),
+            "{:?}",
+            at.warnings
+        );
+    }
+
+    /// **Invariant: KAV § 2 Abs. 5 Nr. 1 — no Gas Konzessionsabgabe above
+    /// 5 Millionen kWh je Jahr und Abnahmefall.**
+    ///
+    /// Unlike the Grenzpreis, the Grenzmenge is a fact the settlement already
+    /// carries, so nothing has to be supplied for the check to run.
+    #[test]
+    fn a_gas_supply_above_the_grenzmenge_is_reported() {
+        let mut i = base_nne();
+        i.sparte = Sparte::Gas;
+        i.konzessionsabgabe = Some(Konzessionsabgabe {
+            satz_ct_per_kwh: d("0.03"), // the Abs. 3 Nr. 2 Höchstbetrag
+            klasse: KaKundengruppe::Sondervertragskunde,
+            niederspannung: None,
+            grenzpreis: None,
+        });
+
+        i.jahresarbeit_kwh = Some(d("5000001"));
+        let over = settle_nne(&i).expect("settles");
+        assert!(
+            over.warnings
+                .iter()
+                .any(|w| w.code == "KA_GAS_UEBER_GRENZMENGE"),
+            "above 5 GWh the Verordnung admits no Konzessionsabgabe: {:?}",
+            over.warnings
+        );
+
+        // „übersteigen" is strict, so the Grenzmenge itself still admits one.
+        i.jahresarbeit_kwh = Some(d("5000000"));
+        let at = settle_nne(&i).expect("settles");
+        assert!(
+            !at.warnings
+                .iter()
+                .any(|w| w.code == "KA_GAS_UEBER_GRENZMENGE"),
+            "{:?}",
+            at.warnings
+        );
+
+        // Strom has no Grenzmenge at all.
+        i.sparte = Sparte::Strom;
+        i.jahresarbeit_kwh = Some(d("50000000"));
+        let strom = settle_nne(&i).expect("settles");
+        assert!(
+            !strom
+                .warnings
+                .iter()
+                .any(|w| w.code == "KA_GAS_UEBER_GRENZMENGE"),
+            "{:?}",
+            strom.warnings
+        );
+    }
+
     /// KAV §2 rates are Höchstbeträge. Strom Sondervertragskunden cap at
     /// 0.11 ct/kWh, so a higher agreed rate is a compliance defect.
     #[test]
@@ -3834,6 +4226,8 @@ mod tests {
                 gemeinde: GemeindeGroesse::Bis25k,
                 nur_kochen_warmwasser: false,
             },
+            niederspannung: None,
+            grenzpreis: None,
         });
         if let Some(ka) = i.konzessionsabgabe.as_mut() {
             ka.klasse = KaKundengruppe::Sondervertragskunde;
@@ -3971,6 +4365,7 @@ mod tests {
             grundgebuehr_eur_per_month: d("12.50"),
             billing_months: 0,
             messdienstleistung_eur: None,
+            steuereinrichtung_eur_per_month: None,
             messstellen_kategorie: None,
             entgeltschuldner: None,
         };
@@ -3992,6 +4387,8 @@ mod tests {
         i.konzessionsabgabe = Some(Konzessionsabgabe {
             satz_ct_per_kwh: d("0.11"),
             klasse: KaKundengruppe::Sondervertragskunde,
+            niederspannung: None,
+            grenzpreis: None,
         });
         let original = settle_nne(&i).unwrap();
         let storno = reverse(&original, KorrekturGrund::Messwertkorrektur);
@@ -4733,6 +5130,8 @@ mod proptests {
                 konzessionsabgabe: Some(crate::types::Konzessionsabgabe {
                     satz_ct_per_kwh: Decimal::new(11, 2),
                     klasse: crate::types::KaKundengruppe::Sondervertragskunde,
+                    niederspannung: None,
+                    grenzpreis: None,
                 }),
                 grundpreis: None,
                 tariff_sheet_id: None,

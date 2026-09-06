@@ -1096,6 +1096,240 @@ pub async fn record_sepa_reversal(
     Ok(row.try_get("reversal_id")?)
 }
 
+/// One submitted pain.008 run, by id.
+///
+/// # Errors
+///
+/// Propagates the query failure.
+pub async fn fetch_sepa_run(
+    executor: impl sqlx::PgExecutor<'_>,
+    run_id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<Option<SepaRunRow>> {
+    let row = sqlx::query(
+        "SELECT run_id, msg_id, collection_date, dispatch_status, total_ct, mandate_count
+           FROM sepa_collection_runs
+          WHERE run_id = $1 AND tenant = $2",
+    )
+    .bind(run_id)
+    .bind(tenant)
+    .fetch_optional(executor)
+    .await
+    .context("fetch_sepa_run")?;
+    row.map(|r| {
+        Ok(SepaRunRow {
+            run_id: r.try_get("run_id")?,
+            msg_id: r.try_get("msg_id")?,
+            collection_date: r.try_get("collection_date")?,
+            dispatch_status: r.try_get("dispatch_status")?,
+            total_ct: r.try_get("total_ct")?,
+            mandate_count: r.try_get("mandate_count")?,
+        })
+    })
+    .transpose()
+}
+
+/// One row of `sepa_collection_runs`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SepaRunRow {
+    pub run_id: Uuid,
+    /// `GrpHdr/MsgId` of the submitted pain.008 — what a camt.055 names as the
+    /// original and a pain.002 quotes in `OrgnlMsgId`.
+    pub msg_id: String,
+    pub collection_date: Date,
+    pub dispatch_status: String,
+    pub total_ct: i64,
+    pub mandate_count: i32,
+}
+
+/// One row of `sepa_recalls`, as an operator reads it back.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RecallRow {
+    pub recall_id: Uuid,
+    pub run_id: Uuid,
+    pub assignment_id: String,
+    pub scope: String,
+    pub reason_code: String,
+    pub entry_count: i32,
+    pub total_ct: Option<i64>,
+    pub status: String,
+    pub status_reason: Option<String>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub resolved_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
+
+/// The collection entries a recall names, for `RecallScope::Entries`.
+#[derive(Debug, Clone)]
+pub struct RecallTarget {
+    pub entry_id: Uuid,
+    pub end_to_end_id: String,
+    pub payment_info_id: String,
+    pub amount_ct: i64,
+    pub status: String,
+}
+
+/// Every entry of a run that a recall could still stop.
+///
+/// Only `SUBMITTED` entries: a settled one is a pain.007's business and a
+/// rejected one never moved money, so recalling either asks the bank to stop
+/// something that is not in flight.
+///
+/// # Errors
+///
+/// Propagates the query failure.
+pub async fn recallable_entries(
+    executor: impl sqlx::PgExecutor<'_>,
+    tenant: &str,
+    run_id: Uuid,
+) -> anyhow::Result<Vec<RecallTarget>> {
+    let rows = sqlx::query(
+        "SELECT entry_id, end_to_end_id, payment_info_id, amount_ct, status
+           FROM sepa_collection_entries
+          WHERE tenant = $1 AND run_id = $2
+          ORDER BY payment_info_id, end_to_end_id",
+    )
+    .bind(tenant)
+    .bind(run_id)
+    .fetch_all(executor)
+    .await
+    .context("recallable_entries")?;
+    rows.into_iter()
+        .map(|r| {
+            Ok(RecallTarget {
+                entry_id: r.try_get("entry_id")?,
+                end_to_end_id: r.try_get("end_to_end_id")?,
+                payment_info_id: r.try_get("payment_info_id")?,
+                amount_ct: r.try_get("amount_ct")?,
+                status: r.try_get("status")?,
+            })
+        })
+        .collect()
+}
+
+/// Record a camt.055 against the run it recalls.
+///
+/// # Errors
+///
+/// The unique index on `(tenant, assignment_id)` makes a replayed request a
+/// conflict rather than a second case.
+#[allow(clippy::too_many_arguments)]
+pub async fn record_sepa_recall(
+    executor: impl sqlx::PgExecutor<'_>,
+    tenant: &str,
+    run_id: Uuid,
+    recall: &crate::sepa::Camt055Recall,
+    reason_code: &str,
+    created_by: Option<&str>,
+) -> anyhow::Result<Uuid> {
+    let row = sqlx::query(
+        r"INSERT INTO sepa_recalls
+              (tenant, run_id, assignment_id, scope, reason_code,
+               camt055_xml, entry_count, total_ct, created_by)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          RETURNING recall_id",
+    )
+    .bind(tenant)
+    .bind(run_id)
+    .bind(&recall.assignment_id)
+    .bind(recall.scope)
+    .bind(reason_code)
+    .bind(&recall.xml)
+    .bind(i32::try_from(recall.entry_count).unwrap_or(i32::MAX))
+    .bind(recall.total_ct)
+    .bind(created_by)
+    .fetch_one(executor)
+    .await
+    .context("record_sepa_recall")?;
+    Ok(row.try_get("recall_id")?)
+}
+
+/// Apply a camt.029 to the recall it resolves.
+///
+/// Returns the recall as it now stands, or `None` when no open recall carries
+/// that `Assgnmt/Id` — an answer to a case this tenant never opened is not
+/// something to guess at.
+///
+/// # Errors
+///
+/// Propagates the query failure.
+pub async fn resolve_sepa_recall(
+    executor: impl sqlx::PgExecutor<'_>,
+    tenant: &str,
+    assignment_id: &str,
+    status: &str,
+    status_reason: Option<&str>,
+    camt029_xml: &str,
+) -> anyhow::Result<Option<RecallRow>> {
+    let row = sqlx::query(
+        r"UPDATE sepa_recalls
+             SET status        = $3,
+                 status_reason = $4,
+                 camt029_xml   = $5,
+                 resolved_at   = now()
+           WHERE tenant = $1 AND assignment_id = $2
+          RETURNING recall_id, run_id, assignment_id, scope, reason_code,
+                    entry_count, total_ct, status, status_reason, resolved_at, created_at",
+    )
+    .bind(tenant)
+    .bind(assignment_id)
+    .bind(status)
+    .bind(status_reason)
+    .bind(camt029_xml)
+    .fetch_optional(executor)
+    .await
+    .context("resolve_sepa_recall")?;
+    row.map(|r| {
+        Ok(RecallRow {
+            recall_id: r.try_get("recall_id")?,
+            run_id: r.try_get("run_id")?,
+            assignment_id: r.try_get("assignment_id")?,
+            scope: r.try_get("scope")?,
+            reason_code: r.try_get("reason_code")?,
+            entry_count: r.try_get("entry_count")?,
+            total_ct: r.try_get("total_ct")?,
+            status: r.try_get("status")?,
+            status_reason: r.try_get("status_reason")?,
+            resolved_at: r.try_get("resolved_at")?,
+            created_at: r.try_get("created_at")?,
+        })
+    })
+    .transpose()
+}
+
+/// Close the collections an accepted recall stopped.
+///
+/// `RECALLED` and not `REJECTED`: a pain.002 rejection is the bank refusing the
+/// collection, a recall is the creditor withdrawing it, and the two are settled
+/// differently — only the second is the creditor's own act.
+///
+/// # Errors
+///
+/// Propagates the query failure.
+pub async fn mark_entries_recalled(
+    executor: impl sqlx::PgExecutor<'_>,
+    tenant: &str,
+    run_id: Uuid,
+    end_to_end_ids: Option<&[String]>,
+    reason: &str,
+) -> anyhow::Result<u64> {
+    let r = sqlx::query(
+        r"UPDATE sepa_collection_entries
+             SET status = 'RECALLED', status_reason = $4, status_at = now()
+           WHERE tenant = $1 AND run_id = $2 AND status = 'SUBMITTED'
+             AND ($3::text[] IS NULL OR end_to_end_id = ANY($3))",
+    )
+    .bind(tenant)
+    .bind(run_id)
+    .bind(end_to_end_ids)
+    .bind(reason)
+    .execute(executor)
+    .await
+    .context("mark_entries_recalled")?;
+    Ok(r.rows_affected())
+}
+
 /// Atomically claim a SEPA collection run for dispatch.
 ///
 /// Returns `true` only for the caller that flips the run from a non-dispatched

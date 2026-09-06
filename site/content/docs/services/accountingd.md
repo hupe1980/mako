@@ -255,6 +255,8 @@ Stufe is 3.
 | `GET` | `/api/v1/sepa/collections/{run_id}/entries` | What a run collected, and where each entry stands (`SUBMITTED`/`SETTLED`/`REJECTED`/`RETURNED`/`REVERSED`) |
 | `POST` | `/api/v1/sepa/pain002` | Ingest a **pain.002 XML** status report — applies to payouts *and* collections, incl. Verification of Payee |
 | `POST` | `/api/v1/sepa/reversals` | Build a **pain.007** giving a settled collection back (creditor-initiated Storno) |
+| `POST` | `/api/v1/sepa/recalls` | Build a **camt.055** asking the bank to stop a submitted collection before it settles |
+| `POST` | `/api/v1/sepa/camt029` | Apply the bank's answer to a recall |
 | `POST` | `/api/v1/payments/import/camt054` | Ingest a camt.054 XML notification (batch-booked entries expanded per `TxDtls`; returns → `BANKRUECKLAST`) |
 | `POST` | `/api/v1/payments/import/camt053` | Ingest a camt.053 XML end-of-day statement (same booking rules, plus the bank's closing balance) |
 | `POST` | `/api/v1/payments/import/camt052` | Ingest a camt.052 XML intraday report — **booked entries only**, the provisional ones are reported not posted |
@@ -1139,7 +1141,7 @@ ledger table cannot give.
 
 ## SEPA payments
 
-`accountingd` uses the [`sepa`](https://crates.io/crates/sepa) crate (0.6) —
+`accountingd` uses the [`sepa`](https://crates.io/crates/sepa) crate (0.7) —
 schema defaults are the current SEPA releases (`pain.008.001.08`,
 `pain.001.001.09`) and can be pinned per bank via the `pain008_schema` /
 `pain001_schema` config keys (e.g. `pain.008.001.02` for banks still on the
@@ -1306,6 +1308,7 @@ curl "http://accountingd:9380/api/v1/sepa/collections/{run_id}/entries"
 | `REJECTED` | pain.002 `RJCT` — the collection never left the bank | `SUBMITTED` | the report's own reason, e.g. `AM04` insufficient funds |
 | `RETURNED` | a camt Rückläufer (R-transaction) | `SUBMITTED`, `SETTLED` | `MS03` no reason given |
 | `REVERSED` | the creditor gave it back via `POST /sepa/reversals` | `SUBMITTED`, `SETTLED` | the pain.007 reason, e.g. `MD06` refund on the debtor's request |
+| `RECALLED` | a camt.055 the bank accepted, applied by `POST /sepa/camt029` | `SUBMITTED` | the camt.029 outcome, e.g. `CNCL` |
 
 `status_reason` is the EPC/ISO reason code the reply carried, and `status_at`
 when it was applied. `RETURNED` and `REVERSED` are reachable from `SUBMITTED` as
@@ -1367,10 +1370,9 @@ version. `pain.001.003.03` has no `LclInstrm` element at all, so requesting SCT
 Instant on that schema is refused with `UnsupportedBySchema` rather than emitting
 an element its own XSD forbids.
 
-The **execution date is always stated explicitly** (`ReqdExctnDt`). sepa 0.6
-changed the crate's own default from "five days out" — a pain.008
-pre-notification floor borrowed wholesale — to "today", and a payment date is not
-something to inherit from a library default.
+The **execution date is always stated explicitly** (`ReqdExctnDt`):
+`CreditTransferGroup::new` takes it, so a payment date cannot be inherited from
+a library default.
 
 §25 Abs. 1 EEG 2023 mandates *"unverzüglich nach Ende des Monats"*. SCT Inst
 satisfies this more strongly than CORE, which becomes D+2 across weekends.
@@ -1548,6 +1550,57 @@ A verification status never lands in `pain002_status` — writing `RCVC` there
 would make a name check look like an acceptance. Anything other than a clean
 match emits `de.accounting.payee.verification-mismatch`, because releasing the
 payment after a no-match is an operator's decision, not a service's.
+
+### camt.055 — recalling a collection that has not settled
+
+A pain.007 gives back a collection that **settled**. A camt.055 asks the bank to
+stop one that has not: a run built on a mandate that turned out to be revoked, a
+duplicated collection date, a debtor who paid by transfer after the file went
+out. Only the second can still prevent the debit, and only while the entries are
+`SUBMITTED`.
+
+```bash
+# Recall two collections out of a submitted run
+curl -X POST "http://accountingd:9380/api/v1/sepa/recalls" \
+  -H "Content-Type: application/json" \
+  -d '{ "run_id": "…", "reason_code": "UPAY", "end_to_end_ids": ["MND-4711", "MND-4712"] }'
+
+# Omit end_to_end_ids to recall the whole submission (GrpCxl)
+curl -X POST "http://accountingd:9380/api/v1/sepa/recalls" \
+  -H "Content-Type: application/json" -d '{ "run_id": "…", "reason_code": "DUPL" }'
+```
+
+`reason_code` is an ISO 20022 `CancellationReason5Code` — `UPAY` (default, the
+payment was not due), `DUPL`, `AGNT`, `CURR`, `CUST`, `CUTA`, `TECH`, `FRAD`.
+Naming transactions and asking for the whole file are mutually exclusive in the
+schema, so they are one decision here: an empty `end_to_end_ids` is a
+whole-message recall, not a shorthand for "all of them".
+
+**A recall is a request.** The bank may refuse it, so nothing about the
+collections changes when it goes out — they stay `SUBMITTED`, the receivable
+stays open, and the recall stands `REQUESTED`. `Assgnmt/Assgne` addresses the
+bank holding the submission, which is why `debtor_agent_bic` has to be
+configured; without it the endpoint answers `503` naming it.
+
+The answer arrives as a camt.029 and is applied with:
+
+```bash
+curl -X POST "http://accountingd:9380/api/v1/sepa/camt029" \
+  -H "Content-Type: application/xml" --data-binary @camt029.xml
+```
+
+It is matched on `RslvdCase/Id`, which echoes the request's `Assgnmt/Id` — the
+only thing in the document that points back at the case, so an answer naming an
+assignment this tenant never opened is a `404` rather than a guess. `CNCL` (or
+every named transaction `ACCR`) closes what it stopped as `RECALLED`; `RJCR`
+leaves the collection standing; `PDCR` and an outcome this build cannot
+interpret both leave the case open, because an unknown answer is not an
+acceptance.
+
+| Event | When |
+|---|---|
+| `de.accounting.sepa.recall-requested` | the camt.055 is recorded |
+| `de.accounting.sepa.recall-resolved` | a camt.029 decides the case |
 
 ### pain.007 — reversing a settled collection
 
@@ -1804,9 +1857,8 @@ are held to the rule.
 
 #### The MCP surface is authorized per tool
 
-`policies/accountingd.cedar` used to exempt the whole `/mcp` surface, on the
-grounds that it was "read-only by construction". It is not. Five of its thirteen
-tools write:
+The `/mcp` surface is not read-only by construction — five of its thirteen tools
+write:
 
 | Tool | What it does | Action |
 |---|---|---|
@@ -1819,29 +1871,26 @@ tools write:
 `trigger_jahresabschluss` is a preview despite its name — committing the
 settlement is `POST /api/v1/jahresabschluss/{malo_id}` — so it is a read.
 
-The exemption is gone rather than made true: those five are the automation the
-surface exists for, and a claim that has to be re-proved every time a tool is
-added is the wrong shape of guarantee. `mcp_server::tool_action` now maps **every**
+So there is no surface-wide exemption: `mcp_server::tool_action` maps **every**
 tool to the Cedar action its REST twin enforces, the MCP middleware checks it
 before the frame is dispatched, and a `tools/call` naming a tool with no mapping
 is refused rather than served.
 
 Reads are mapped too, not only the five writes, because the reads are themselves
 role-split: `read-account` is open to any token of the tenant, while
-`read-banking` and `read-books` are held to `LF`/`MSB`. A blanket gate would have
-let a role-less token read the mandate register (`list_sepa_collections`) and the
-whole aging list (`list_overdue`) through MCP after their REST twins refused.
+`read-banking` and `read-books` are held to `LF`/`MSB`. A blanket gate would let a
+role-less token read the mandate register (`list_sepa_collections`) and the whole
+aging list (`list_overdue`) through MCP after their REST twins refused.
 
-`use-mcp` remains as the weakest grant in the policy — permission to open the
-surface, list the tools and read a prompt — and on its own reaches no balance, no
-IBAN and no ledger write. An API-key caller is a deployment-trusted boundary the
-shared middleware handles on its own, so an `[mcp]` key is still as powerful as
-the tools it can name: scope it at the ingress.
+`use-mcp` is the weakest grant in the policy — permission to open the surface,
+list the tools and read a prompt — and on its own reaches no balance, no IBAN and
+no ledger write. An API-key caller is a deployment-trusted boundary the shared
+middleware handles on its own, so an `[mcp]` key is as powerful as the tools it
+can name: scope it at the ingress.
 
-`tests/authorization_guard.rs` pins the replacement claim: every declared tool
-has a mapping, and any tool whose body reaches a mutating pg/ledger call must map
-to a write action, not to one of the three reads. That last test is what would
-have caught the original defect — under the old exemption it fails for all five.
+`tests/authorization_guard.rs` pins both halves: every declared tool has a
+mapping, and any tool whose body reaches a mutating pg/ledger call must map to a
+write action rather than to one of the three reads.
 
 `/webhook` is HMAC-authenticated and carries no Cedar action.
 

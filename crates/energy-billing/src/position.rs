@@ -529,15 +529,13 @@ impl BillingPosition {
 /// Round and range-validate a monetary EUR amount to 5 decimal places.
 ///
 /// Uses [`EuroAmount`] internally to detect overflow. The ceiling is
-/// `i64::MAX × 10⁻⁵` ≈ **92,2 billion EUR** (`billing::Amount::MAX`) — not the
-/// ~92 M this said, which would have put it inside the range of a real
-/// industrial portfolio. The check is here for a corrupt input, not a large
-/// customer.
-/// Beyond the fixed-point range the amount is kept and rounded directly —
-/// zeroing it (the old behaviour) silently erased the position's value,
-/// which is exactly the silent-degradation failure a billing engine must
-/// not have. An out-of-range line then fails loudly downstream in the
-/// EN16931 total-reconciliation checks instead of vanishing.
+/// `billing::Amount::MAX`, about 92,2 billion EUR, so the check is here for a
+/// corrupt input rather than for a large customer.
+///
+/// Beyond the fixed-point range the amount is **kept** and rounded directly.
+/// Zeroing it would erase the position's value silently, which is the one
+/// failure a billing engine must not have; an out-of-range line instead fails
+/// loudly downstream in the EN 16931 total reconciliation.
 pub(crate) fn validated_eur(amount: Decimal) -> Decimal {
     EuroAmount::checked_from_decimal(amount)
         .map(EuroAmount::into_decimal)

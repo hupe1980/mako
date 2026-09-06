@@ -3341,14 +3341,19 @@ fn sect52_netting_is_optional_for_the_netzbetreiber() {
 // Settlement state machine
 // ══════════════════════════════════════════════════════════════════════════════
 
-/// A healthy plant, and the facts that move it off `Active`.
+/// A healthy geförderte 50-kW plant, and the facts that move it off `Active`.
 fn state_facts() -> eeg_billing::settlement_state::SettlementStateFacts {
-    use eeg_billing::settlement_state::{Sect9Erfuellung, SettlementStateFacts};
+    use eeg_billing::settlement_state::{Sect9Anlage, Sect9Erfuellung, SettlementStateFacts};
     SettlementStateFacts {
         mastr_registriert: true,
-        sect9_erfuellung: Sect9Erfuellung::Fernsteuerbarkeit,
-        leistung_kwp: d("50"),
-        erzeugungsart: None,
+        sect9_anlage: Sect9Anlage {
+            leistung_kwp: d("50"),
+            erzeugungsart: None,
+            einspeiseverguetung_oder_mieterstrom: true,
+            ist_kwk_anlage: false,
+            wechselrichterleistung_va: None,
+        },
+        sect9_erfuellung: Sect9Erfuellung::BEIDES,
         foerderendedatum: Some(date!(2040 - 12 - 31)),
         billing_date: date!(2026 - 07 - 01),
         eeg_gesetz_year: 2023,
@@ -3365,30 +3370,57 @@ fn settlement_state_healthy_plant_is_active() {
     );
 }
 
-/// §9 Abs. 2 Nr. 2 EEG — a 50 kW plant may satisfy §9 with the 60 %
-/// Leistungsbegrenzung instead of Fernsteuerbarkeit.
-///
-/// A flat "≥ 25 kW must have Fernsteuerbarkeit" would put every compliant plant
-/// in the 25–100 kW band into `Reduced` and charge it a §52 Abs. 1 Nr. 1
-/// Pflichtzahlung of 10 €/kW/month it does not owe.
+/// § 9 Abs. 2 Satz 1 Nr. 2 EEG — „a) … **und** b) …". A geförderte Anlage in the
+/// 25-bis-100-kW band owes the ferngesteuerte Reduzierung *and* the 60 % cap;
+/// the trailing „oder" in the Nummer separates it from Nr. 3, it does not offer
+/// the two lit. as a choice. Which route is owed at all follows the
+/// Veräußerungsform: lit. b binds only „Anlagen, die der Einspeisevergütung oder
+/// dem Mieterstromzuschlag … zugeordnet sind".
 #[test]
-fn settlement_state_sixty_percent_cap_satisfies_sect9_below_100kw() {
+fn settlement_state_the_middle_band_owes_both_sect9_routes() {
     use eeg_billing::settlement_state::{
-        Sect9Erfuellung, SettlementPeriodState, SettlementStateFacts, derive_settlement_state,
+        Sect9Anlage, Sect9Erfuellung, SettlementPeriodState, SettlementStateFacts,
+        derive_settlement_state,
     };
-    let facts = SettlementStateFacts {
-        sect9_erfuellung: Sect9Erfuellung::Leistungsbegrenzung60,
+    let nur_cap = SettlementStateFacts {
+        sect9_erfuellung: Sect9Erfuellung::BEGRENZUNG_60,
         ..state_facts()
     };
     assert_eq!(
-        derive_settlement_state(&facts),
+        derive_settlement_state(&nur_cap),
+        SettlementPeriodState::Reduced
+    );
+
+    let nur_fern = SettlementStateFacts {
+        sect9_erfuellung: Sect9Erfuellung::FERNSTEUERBARKEIT,
+        ..state_facts()
+    };
+    assert_eq!(
+        derive_settlement_state(&nur_fern),
+        SettlementPeriodState::Reduced
+    );
+
+    // In der Direktvermarktung lit. b falls away and the Fernsteuerbarkeit alone
+    // discharges the Nummer.
+    let direkt = SettlementStateFacts {
+        sect9_anlage: Sect9Anlage {
+            einspeiseverguetung_oder_mieterstrom: false,
+            ..state_facts().sect9_anlage
+        },
+        ..nur_fern
+    };
+    assert_eq!(
+        derive_settlement_state(&direkt),
         SettlementPeriodState::Active
     );
 
-    // From 100 kW the alternative is gone (§9 Abs. 2 Nr. 1).
+    // From 100 kW Nr. 1 applies and knows no cap route.
     let gross = SettlementStateFacts {
-        leistung_kwp: d("100"),
-        ..facts
+        sect9_anlage: Sect9Anlage {
+            leistung_kwp: d("100"),
+            ..state_facts().sect9_anlage
+        },
+        ..nur_cap
     };
     assert_eq!(
         derive_settlement_state(&gross),
@@ -3436,7 +3468,6 @@ fn settlement_state_foerderdauer_expired_post_eeg() {
         SettlementPeriodState, SettlementStateFacts, derive_settlement_state,
     };
     let facts = SettlementStateFacts {
-        leistung_kwp: d("10"),
         foerderendedatum: Some(date!(2024 - 12 - 31)),
         billing_date: date!(2025 - 01 - 01),
         ..state_facts()

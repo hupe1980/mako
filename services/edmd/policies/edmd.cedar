@@ -14,6 +14,7 @@
 //   "read-corrections"    — GET /api/v1/corrections/:malo_id
 //   "write-corrections"   — POST /api/v1/corrections/:malo_id (§ 60 Abs. 6 MsbG)
 //   "write-gdpr-erasure"  — DELETE /api/v1/gdpr/erasure/:malo_id (GDPR Art. 17)
+//   "read-gdpr-erasures"  — GET /api/v1/gdpr/erasures (the erasure audit trail)
 //   "use-mcp"             — /mcp (Streamable HTTP MCP server)
 
 // Same-tenant read: any authenticated caller may read their own meter data.
@@ -115,9 +116,15 @@ permit(
 
 // GDPR erasure (Art. 17 DSGVO): destructive — operator roles only. An
 // LF-role token of the right tenant is refused.
+//
+// Reading the trail carries the same audience rather than joining the
+// same-tenant read permit above. It names no person — that is the point of it —
+// but it is the compliance record of an irreversible action and it answers
+// whether the § 60 Abs. 6 sweep is running, which is an operator's question
+// about the deployment rather than a customer's about their data.
 permit(
     principal,
-    action == Action::"write-gdpr-erasure",
+    action in [Action::"write-gdpr-erasure", Action::"read-gdpr-erasures"],
     resource
 ) when {
     context.principal_tenant == context.resource_tenant &&

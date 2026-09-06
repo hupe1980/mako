@@ -63,6 +63,10 @@ fn lf_cannot_write_measurement_data() {
         "write-quality-rescore",
         "write-reading-order",
         "write-gdpr-erasure",
+        // The trail names no person, but it answers whether this deployment's
+        // § 60 Abs. 6 sweep is running — an operator's question about the
+        // deployment, not a customer's about their own data.
+        "read-gdpr-erasures",
     ] {
         assert!(
             e.check(&lf, action, TENANT).is_err(),
@@ -99,6 +103,7 @@ fn admin_role_covers_all_writes() {
         "write-quality-rescore",
         "write-reading-order",
         "write-gdpr-erasure",
+        "read-gdpr-erasures",
     ] {
         assert!(
             e.check(&admin, action, TENANT).is_ok(),

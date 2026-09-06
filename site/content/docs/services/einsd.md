@@ -1,6 +1,6 @@
 +++
 title = "einsd Operator Guide"
-description = "Operator guide for einsd, the EEG/KWKG feed-in settlement daemon: plant registry, 12 settlement models, §51 Negativpreisregel, §52 Pflichtzahlungen, 19 MCP tools, eeg-agent."
+description = "Operator guide for einsd, the EEG/KWKG feed-in settlement daemon: plant registry, §51 Negativpreisregel, §52 Pflichtzahlungen, 19 MCP tools, eeg-agent."
 weight = 28
 +++
 `einsd` is the **Einspeiser Registry and EEG/KWKG Settlement daemon**. It manages the full
@@ -563,7 +563,7 @@ They reach a settlement from **two sources**, merged in one place
 
 | §52 Abs. 1 | Violation | Source |
 |---|---|---|
-| Nr. 1 | §9 Steuerbarkeit not satisfied | **derived** — `sect9_erfuellung` × capacity × technology |
+| Nr. 1 | §9 Steuerbarkeit not satisfied | **derived** — routes carried × capacity × Veräußerungsform |
 | Nr. 5 | Ausfallvergütung past its Höchstdauer | **derived** — from the settlement receipts |
 | Nr. 9 | §21c switch not notified | **derived** — `veraeusserungsform_notification_sent_at` |
 | Nr. 11 | MaStR registration missing | **derived** — `mastr_registriert`, with `mastr_violation_start` as its clock |
@@ -632,26 +632,33 @@ a §10b record filed against a plant on the Einspeisevergütung charges nothing:
 Nr. 5 is deliberately absent: Abs. 4 does not name it, and adding three months
 there would charge a plant on the Ausfallvergütung a quarter it does not owe.
 
-### §9 is staged by capacity
+### §9 is staged by capacity and gated on the Veräußerungsform
 
-The Steuerbarkeit obligation is **not** a single threshold:
+§9 Abs. 2 Satz 1 has three Nummern, and the middle one carries **two** duties
+joined by „und" — the „oder" that follows lit. b separates Nr. 2 from Nr. 3.
+Which of them applies also depends on how the plant is paid: lit. b and Nr. 3
+bind only „Anlagen, die der Einspeisevergütung oder dem Mieterstromzuschlag nach
+§19 Absatz 1 Nummer 2 oder Nummer 3 zugeordnet sind", and Nr. 3 additionally
+every KWK-Anlage of that size.
 
-| Installed capacity | Obligation | Basis |
-|---|---|---|
-| Steckersolargerät < 2 kW (≤ 800 VA) | none | §9 Abs. 1 Satz 2 |
-| < 25 kW | 60 % Leistungsbegrenzung | §9 Abs. 2 Nr. 3 |
-| 25 kW – < 100 kW | Fernsteuerbarkeit **or** the 60 % Leistungsbegrenzung | §9 Abs. 2 Nr. 2 |
-| ≥ 100 kW | Fernsteuerbarkeit; the 60 % route is not available | §9 Abs. 2 Nr. 1 |
+| Installed capacity | Ferngesteuerte Reduzierung | 60 % Wirkleistungsbegrenzung | Basis |
+|---|---|---|---|
+| Steckersolargerät ≤ 2 kW **und** ≤ 800 VA | – | – | §9 Abs. 2 Satz 4 |
+| < 25 kW | – | nur geförderte Anlagen und KWK-Anlagen | §9 Abs. 2 Satz 1 Nr. 3 |
+| 25 kW – < 100 kW | ja | nur geförderte Anlagen | §9 Abs. 2 Satz 1 Nr. 2 lit. a **und** lit. b |
+| ≥ 100 kW | ja | – | §9 Abs. 2 Satz 1 Nr. 1 |
 
-Each plant therefore records **how** it satisfies §9, not merely when a
-Fernsteuerbarkeit was installed:
+The two routes are separate facts, so a plant records both:
 
 ```json
-{ "sect9_erfuellung": "LEISTUNGSBEGRENZUNG_60" }
+{ "sect9_fernsteuerbarkeit": true, "sect9_begrenzung_60": true }
 ```
 
-`KEINE` (the default) is a Nr. 1 violation wherever §9 requires anything, so a compliant
-plant has to say which route it took.
+Anything the obligation names and the plant does not carry is a §52 Abs. 1 Nr. 1
+breach at 10 €/kW/Kalendermonat. Carrying *more* than is owed never is — a
+directly-marketed plant that limits itself to 60 % anyway stays compliant.
+`wechselrichterleistung_va` is the second half of the Steckersolar carve-out;
+left unstated it keeps the carve-out shut.
 
 ---
 
@@ -1698,7 +1705,9 @@ PK: `(tr_id, tenant)`.
 | `verguetungssatz_ct` | NUMERIC | **Net** rate ct/kWh (gross AW minus §53 deduction) |
 | `foerderendedatum` | DATE? | Dec 31 of year+20 (statutory); exact 20y for Ausschreibung. **NULL for a KWKG plant**, which has no Förderende — § 8 KWKG caps the Zuschlag in Vollbenutzungsstunden, not on a date |
 | `settlement_model` | TEXT | `VERGUETUNG`, `DIREKTVERMARKTUNG`, … (see the model table) |
-| `sect9_erfuellung` | TEXT | §9: `KEINE` · `FERNSTEUERBARKEIT` · `LEISTUNGSBEGRENZUNG_60` |
+| `sect9_fernsteuerbarkeit` | BOOLEAN | §9 Abs. 2 Satz 1 Nr. 1 / Nr. 2 lit. a — ferngesteuerte Reduzierung |
+| `sect9_begrenzung_60` | BOOLEAN | §9 Abs. 2 Satz 1 Nr. 2 lit. b / Nr. 3 — 60 % Wirkleistungsbegrenzung |
+| `wechselrichterleistung_va` | NUMERIC | §9 Abs. 2 Satz 4 — second half of the Steckersolar carve-out |
 | `leistung_kwp` | NUMERIC | `CHECK (> 0)` |
 | `verguetungssatz_ct` | NUMERIC | `CHECK (>= 0)` |
 | `zuschlag_erloeschen_datum` | DATE | §36e/§37e/§39e: the award lapses on this date; the expiry is derived, not stored |

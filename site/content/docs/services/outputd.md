@@ -1,6 +1,6 @@
 +++
 title = "outputd Operator Guide"
-description = "Operator guide for outputd, the customer-communications daemon: operator-owned Typst templates, the ZUGFeRD PDF/A-3 carrier, and delivery with per-channel evidence."
+description = "Operator guide for outputd, the customer-communications daemon: operator-owned Typst templates, the ZUGFeRD PDF/A-3 carrier and per-channel delivery evidence."
 weight = 33
 +++
 `outputd` renders the documents a customer receives and delivers them. It owns

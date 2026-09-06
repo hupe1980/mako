@@ -162,14 +162,15 @@ report.is_valid();                 // true
   <div class="wrap">
     <h2>The shape of the platform</h2>
     <p class="section-lead">Seventeen services along one path: transport and protocol at the
-      edge, master data in the middle, settlement and billing at the end — each owning its own
-      data, talking over typed REST and CloudEvents.</p>
+      edge, master data in the middle, settlement, billing and the customer's documents at the
+      end — each owning its own data, talking over typed REST and CloudEvents.</p>
 
     <pre class="mermaid">
 graph TB
     subgraph edge["Edge — protocol"]
       MAKOD["makod<br/>AS4 · EDIFACT · workflows"]
       PROCESSD["processd<br/>STP decisions"]
+      SPERRD["sperrd<br/>Sperr-/Entsperraufträge"]
     end
     subgraph core["Core — market data"]
       MARKTD["marktd<br/>BO4E hub · fan-out"]
@@ -179,8 +180,10 @@ graph TB
     subgraph money["Settlement and billing"]
       NETZ["netzbilanzd<br/>NNE · MMM"]
       EINSD["einsd<br/>EEG · KWKG"]
+      MABIS["mabis-syncd<br/>MaBiS Summenzeitreihen"]
       BILLINGD["billingd · invoicd<br/>retail · EN 16931"]
       ACCT["accountingd<br/>FI-CA ledger"]
+      OUTPUTD["outputd<br/>documents · delivery"]
     end
     subgraph ops["Operations"]
       OBSD["obsd<br/>BNetzA KPIs · Fristen"]
@@ -189,15 +192,19 @@ graph TB
     end
 
     PROCESSD --> MAKOD
+    MAKOD --> SPERRD
     MAKOD --> MARKTD
     MARKTD --> VERTRAGD
     MARKTD --> EDMD
     EDMD --> NETZ
     EDMD --> EINSD
     EDMD --> BILLINGD
+    EDMD --> MABIS
     VERTRAGD --> BILLINGD
     NETZ --> ACCT
     BILLINGD --> ACCT
+    BILLINGD --> OUTPUTD
+    ACCT --> OUTPUTD
     EINSD --> ACCT
     PORTALD --> BILLINGD
     OBSD -.->|"watches"| MAKOD
@@ -237,9 +244,10 @@ graph TB
       <div class="card">
         <h3>Billing &amp; ledger</h3>
         <p>Retail billing with EN 16931 e-invoicing (XRechnung, ZUGFeRD), SEPA collection and
-          returns, and a hash-chained FI-CA ledger with § 147 AO period seals and Merkle
-          inclusion proofs.</p>
-        <a class="card-count" href="{{ get_url(path='@/docs/services/billingd.md') | safe }}">billingd · invoicd · accountingd →</a>
+          returns, a hash-chained FI-CA ledger with § 147 AO period seals and Merkle inclusion
+          proofs, and the documents themselves — rendered from operator templates and
+          delivered with per-channel evidence.</p>
+        <a class="card-count" href="{{ get_url(path='@/docs/services/billingd.md') | safe }}">billingd · invoicd · accountingd · outputd →</a>
       </div>
       <div class="card">
         <h3>Operations &amp; oversight</h3>

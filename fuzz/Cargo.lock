@@ -197,9 +197,9 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "billing"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad74ced3ececdbae7957c090783355c2b890d4ac332c70730ba26d927e438592"
+checksum = "ccf778746b9b4f8bc9db0e34c9350448ed732536a27e69a0651a3269cb214ee3"
 dependencies = [
  "rust_decimal",
  "serde",
@@ -1959,9 +1959,9 @@ dependencies = [
 
 [[package]]
 name = "rubo4e"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1006d7b7ce95399d42d41edda2069225b4bc9d0eedab50de3fc4ec50d699f79f"
+checksum = "519d32f81b957c4fb4cf7dff24e59ff8c9aeddbfe4b2d61a001d4c80a8a4d109"
 dependencies = [
  "garde",
  "indexmap",

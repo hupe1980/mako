@@ -367,7 +367,7 @@ pub struct EngineConfig {
 /// encrypted, which means three distinct pieces of key material: the operator's
 /// signing key pair, the operator's own decryption key, and one encryption
 /// certificate per trading partner.
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct As4Config {
     /// AS4 inbound listen address, e.g. `"0.0.0.0:4080"`.
@@ -454,6 +454,38 @@ pub struct As4Config {
     /// instead of a delivery failure. Interop debugging only.
     #[serde(default)]
     pub lenient_receipts: bool,
+}
+
+/// Hand-written so the two inline private keys cannot reach a log.
+///
+/// `signing_key_pem` and `decryption_key_pem` are the operator's own key
+/// material: one `tracing::debug!(?as4)` or a `{as4:?}` in a panic message
+/// would put an AS4 signing key into the log stream. Their presence is worth
+/// printing — it decides whether the daemon can start — their content is not.
+/// Certificates and trust anchors are public and print in full.
+impl std::fmt::Debug for As4Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redact = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
+        f.debug_struct("As4Config")
+            .field("addr", &self.addr)
+            .field("party_id", &self.party_id)
+            .field("signing_key_pem", &redact(&self.signing_key_pem))
+            .field("signing_key_pem_file", &self.signing_key_pem_file)
+            .field("signing_cert_pem", &self.signing_cert_pem)
+            .field("signing_cert_pem_file", &self.signing_cert_pem_file)
+            .field("decryption_key_pem", &redact(&self.decryption_key_pem))
+            .field("decryption_key_pem_file", &self.decryption_key_pem_file)
+            .field("trust_anchor_pem", &self.trust_anchor_pem)
+            .field("trust_anchor_pem_file", &self.trust_anchor_pem_file)
+            .field("partners", &self.partners)
+            .field("partner_certs", &self.partner_certs)
+            .field("partner_cert_files", &self.partner_cert_files)
+            .field("allow_unencrypted", &self.allow_unencrypted)
+            .field("allow_no_signing", &self.allow_no_signing)
+            .field("allow_no_trust_anchor", &self.allow_no_trust_anchor)
+            .field("lenient_receipts", &self.lenient_receipts)
+            .finish()
+    }
 }
 
 /// `[erp]` — ERP / backend integration settings (BO4E contract).
@@ -676,5 +708,63 @@ partner_cert_files = ["9900000000002=/etc/makod/partners/9900000000002.pem"]
         std::fs::write(&path, "no-separator-here\n").expect("write");
         let err = read_pairs_file("http.auth_keys_file", &path).expect_err("must reject");
         assert!(err.to_string().contains("expected NAME=VALUE"), "{err}");
+    }
+
+    /// The hand-written `Debug` for [`As4Config`] must keep the two inline
+    /// private keys out of the output — and must not silently miss a field
+    /// added later. The exhaustive destructuring below fails to compile when a
+    /// field appears, which is the point at which someone decides whether it is
+    /// secret.
+    #[test]
+    fn as4_config_debug_redacts_key_material() {
+        let cfg = As4Config {
+            addr: None,
+            party_id: Some("9900000000001".to_owned()),
+            signing_key_pem: Some("-----BEGIN EC PRIVATE KEY-----secret".to_owned()),
+            signing_key_pem_file: None,
+            signing_cert_pem: None,
+            signing_cert_pem_file: None,
+            decryption_key_pem: Some("-----BEGIN EC PRIVATE KEY-----other".to_owned()),
+            decryption_key_pem_file: None,
+            trust_anchor_pem: None,
+            trust_anchor_pem_file: None,
+            partners: None,
+            partner_certs: None,
+            partner_cert_files: None,
+            allow_unencrypted: false,
+            allow_no_signing: false,
+            allow_no_trust_anchor: false,
+            lenient_receipts: false,
+        };
+        let As4Config {
+            addr: _,
+            party_id: _,
+            signing_key_pem: _,
+            signing_key_pem_file: _,
+            signing_cert_pem: _,
+            signing_cert_pem_file: _,
+            decryption_key_pem: _,
+            decryption_key_pem_file: _,
+            trust_anchor_pem: _,
+            trust_anchor_pem_file: _,
+            partners: _,
+            partner_certs: _,
+            partner_cert_files: _,
+            allow_unencrypted: _,
+            allow_no_signing: _,
+            allow_no_trust_anchor: _,
+            lenient_receipts: _,
+        } = &cfg;
+
+        let rendered = format!("{cfg:?}");
+        assert!(
+            !rendered.contains("PRIVATE KEY"),
+            "no key material may reach Debug output: {rendered}"
+        );
+        assert_eq!(rendered.matches("<redacted>").count(), 2);
+        assert!(
+            rendered.contains("9900000000001"),
+            "non-secret fields still print: {rendered}"
+        );
     }
 }

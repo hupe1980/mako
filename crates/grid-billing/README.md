@@ -13,8 +13,8 @@
 
 The Höchstbeträge are checked on every settlement, and each position cites the
 paragraph its group is actually capped under: **§2 Abs. 2** for Tarifkunden and
-Schwachlast, **Abs. 3** for Sondervertragskunden, **Abs. 7** where the customer is
-freigestellt.
+Schwachlast, **Abs. 3** for Sondervertragskunden, and **Abs. 4** (Strom) resp.
+**Abs. 5** (Gas) where the Verordnung forbids a Konzessionsabgabe altogether.
 
 The rates themselves are undated because the statute has not changed them since
 the Euro conversion — the annual reductions people remember were the §3
@@ -32,8 +32,7 @@ Every figure §30 states is **brutto jährlich**.
 | > 50 000 – ≤ 100 000 kWh · > 25 – ≤ 100 kW | 80 € | 140 € | 220 € |
 | > 100 000 kWh · > 100 kW | 80 € | angemessenes Entgelt | — |
 
-§30 Abs. 3 (optionaler Einbau) is 30 € each, 60 € total. §30 Abs. 2 adds up to
-50 € a year per party for a Steuereinrichtung.
+§30 Abs. 3 (optionaler Einbau) is 30 € each, 60 € total.
 
 Two conversions before the comparison means anything. The monthly charge is
 **annualised** — billing a year in instalments does not raise the cap — and it is
@@ -53,6 +52,29 @@ Testing the Grundgebühr alone would let a settlement clear any ceiling by movin
 part of the charge into the second position. The Messdienstleistung is a flat fee
 for the whole period, so it is spread over `billing_months` before annualising.
 
+The **Steuerungseinrichtung am Netzanschlusspunkt** is the exception, and it is
+`steuereinrichtung_eur_per_month`'s own position. §30 Abs. 2 charges it
+„zusätzlich zu den nach den Absätzen 1 und 5 zulässigen Preisobergrenzen" and
+caps it at 50 € brutto a year per party, so it is measured against that figure
+and left out of the Abs. 1 comparison — folded into the Grundgebühr it would take
+headroom the Absatz does not grant, and an excess raises
+`MSB_STEUEREINRICHTUNG_ABOVE_MSBG_POG`.
+
+**§ 2 Abs. 7 is a classification rule, and it is checked too.** A
+Niederspannungslieferung counts as a Tariflieferung unless the gemessene Leistung
+exceeds 30 kW in mindestens zwei Monaten des Abrechnungsjahres **und** the
+Jahresverbrauch exceeds 30 000 kWh. `Konzessionsabgabe::niederspannung` carries
+those two facts (with the Satz-4 lower figures where a Gemeinde agreed them), and
+a stated `klasse` that contradicts them raises
+`KA_GRUPPE_WIDERSPRICHT_KAV_ABS7` — the two ceilings are 1,32 ct and 0,11 ct
+apart, so the label is worth checking.
+
+**Two rules forbid a Konzessionsabgabe outright**, and a ceiling cannot catch
+either: § 2 Abs. 4 (Strom) resp. Abs. 5 Nr. 2 (Gas) where a Sondervertragskunde's
+Durchschnittspreis lies under the Grenzpreis (`Grenzpreisvergleich` →
+`KA_UNTER_GRENZPREIS`), and § 2 Abs. 5 Nr. 1 above 5 Millionen kWh Gas je Jahr
+und Abnahmefall (read off `jahresarbeit_kwh` → `KA_GAS_UEBER_GRENZMENGE`).
+
 The band is **derived, not named**. Each §30 Abs. 1 Nummer is a disjunction over
 facts about the metering point, so `MessstellenKategorie::Pflichteinbau` carries
 `PflichtEinstufung { jahresverbrauch_kwh, installierte_leistung_kw,
@@ -60,6 +82,22 @@ steuerbare_verbrauchseinrichtung }` and `PflichtEinstufung::band` walks the Numm
 top down — a point meeting several takes the highest, and a settlement cannot pick
 its own ceiling. With no fact at all the tightest applies: a Pflichteinbaufall
 exists only above 6 000 kWh (§29 Abs. 1), so Nr. 5 is the catalogue's floor.
+
+**The schedule is dated.** Abs. 1 and Abs. 3 state their figures „für die Zeit ab
+dem 1. Januar 2025", so `preisobergrenze_eur_per_jahr` takes the period's end and
+answers `Preisobergrenze::VorSchedule` below it — a correction settled today for a
+2024 period is governed by rules mako does not carry, and reporting it against
+these would call a lawful charge an excess (`MSB_POG_VOR_SCHEDULE`). The three
+answers are distinct on purpose: `Betrag` is a ceiling, `Angemessen` is Abs. 1
+Nr. 1's *angemessenes jährliches Entgelt* above 100 000 kWh, and `VorSchedule` is
+"not this schedule's period". Abs. 6 lets a BNetzA Festlegung nach § 33 replace
+Abs. 1 bis 3 from a date it names; none has issued.
+
+**Which Jahresstromverbrauch picks the band is Abs. 4's answer, not the
+caller's choice**: the average of the last three erfasste Jahresverbrauchswerte,
+the Netzbetreiber's Jahresverbrauchsprognose until three exist, re-checked
+annually. `PflichtEinstufung::jahresverbrauch_kwh` is that figure — one year's
+reading is not.
 
 ### §17 StromNEV — Netzebene and Benutzungsstundenzahl
 
@@ -703,7 +741,7 @@ pub enum BillingPositionKind {
     MsbGrundgebuehr,     // EntgeltEinbauBetriebWartungMesstechnik (9990001 00061 5)
     Messdienstleistung,  // EntgeltMessungAblesung (9990001 00062 3)
     GasAwhSperrung,      // Sperrkosten — Artikel-ID "2-01-7-001" (BK7-24-01-009 §5.4)
-    GasAwhEntsprrung,    // Entsperrkosten — Artikel-ID "2-01-7-002"
+    GasAwhEntsperrung,    // Entsperrkosten — Artikel-ID "2-01-7-002"
     GasAwhSonstige,      // Artikel-ID from AwhPositionInput.artikel_id
     Blindmehrarbeit,     // Blindmehrarbeit  (9990001 00047 5)
     Sect19StromNevUmlage,// §19 StromNEV-Umlage — artikelnummer PARAGRAF_19_STROM_NEV_UMLAGE
@@ -738,7 +776,7 @@ pub enum KaKundengruppe {
     },
     Schwachlast,          // KAV §2 Abs. 2 — Strom only; gas has no such tier
     Sondervertragskunde,  // KAV §2 Abs. 3 — flat, independent of municipality size
-    Exempt,               // KAV §2 Abs. 7 — freigestellt
+    Exempt,               // KAV §2 Abs. 4 (Strom) / Abs. 5 (Gas) — keine KA zulässig
 }
 
 pub enum GemeindeGroesse {
@@ -751,12 +789,21 @@ pub enum GemeindeGroesse {
 
 `KaKundengruppe::hoechstsatz_ct_per_kwh(sparte)` returns the statutory KAV §2
 Höchstbetrag (or `None` for `Exempt`, and for `Schwachlast` on Gas).
-`.kav_paragraph()` returns the paragraph the group is actually capped under
-(`"§2 Abs. 2"`, `"§2 Abs. 3"`, or `"§2 Abs. 7"`) and `.label()` the position
-text. The group is carried on `Konzessionsabgabe.klasse`, so the ceiling check
-always has what it needs: `settle_nne` emits `KA_ABOVE_KAV_MAXIMUM` when the
-agreed rate exceeds the ceiling, and `KA_CHARGED_WHILE_EXEMPT` when a rate is
-applied to a §2 Abs. 7 exemption.
+`.kav_paragraph(sparte)` returns the paragraph the group is governed by
+(`"§2 Abs. 2"`, `"§2 Abs. 3"`, or — where no Konzessionsabgabe may be charged at
+all — `"§2 Abs. 4"` for Strom and `"§2 Abs. 5"` for Gas) and `.label(sparte)` the
+position text. The group is carried on `Konzessionsabgabe.klasse`, so the ceiling
+check always has what it needs: `settle_nne` emits `KA_ABOVE_KAV_MAXIMUM` when
+the agreed rate exceeds the ceiling, and `KA_CHARGED_WHILE_EXEMPT` when a rate is
+applied where the Verordnung forbids one.
+
+The two prohibitions are Abs. 4 and Abs. 5, not Abs. 7. Abs. 4 forbids a
+Konzessionsabgabe for Strom-Sondervertragskunden below the Grenzpreis, Abs. 5 for
+Gas above 5 Millionen kWh je Jahr und Abnahmefall or below the Gas-Grenzpreis.
+**Abs. 7 is a classification rule**: a Niederspannungslieferung counts as a
+Tariflieferung unless the gemessene Leistung exceeds 30 kW in at least two months
+of the Abrechnungsjahr *and* the Jahresverbrauch exceeds 30 000 kWh. Deciding
+that is the caller's, which is why the group arrives with the rate.
 
 ## Who uses this library
 

@@ -18,7 +18,7 @@ jsonschema = { version = "0.49", default-features = false }
 lopdf       = { version = "0.44", default-features = false }
 time        = { workspace = true }
 zip         = { version = "3", default-features = false, features = ["deflate"] }
-quick-xml   = { version = "0.40", features = ["serialize"] }
+quick-xml   = { version = "0.41", features = ["serialize"] }
 # The identifier guard validates EIC codes with the same implementation the
 # services use, so the check can never disagree with the validator that matters.
 rubo4e      = { workspace = true }

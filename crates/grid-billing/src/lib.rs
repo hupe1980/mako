@@ -74,6 +74,10 @@
 //!     konzessionsabgabe: Some(Konzessionsabgabe {
 //!         satz_ct_per_kwh: d("0.11"),
 //!         klasse: KaKundengruppe::Sondervertragskunde,
+//!         // § 2 Abs. 7 classification facts and the Abs. 4 Grenzpreisvergleich,
+//!         // where the settlement holds them.
+//!         niederspannung: None,
+//!         grenzpreis: None,
 //!     }),
 //!     tariff_sheet_id: Some("Preisblatt-NNE-2025-Q1".into()),
 //!     sparte: grid_billing::Sparte::Strom,

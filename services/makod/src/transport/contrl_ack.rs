@@ -434,14 +434,13 @@ fn is_unambiguous_gas_pid(pid: u32) -> bool {
 /// carries for it — *GPKE Teil 3* (MSB → NB, MSB → LF), *WiM Strom Teil 1*,
 /// *WiM Strom Teil 2* (MSB → ESA, the ESA-Rechnung) and *AWH Prozesse zur
 /// Änderung der Technik an Lokationen* — are Strom, and none is Gas: the Gas
-/// MSB bills on 31003. Four other sites in this workspace already treated it as
-/// Strom-only; only the comment and test here said otherwise.
+/// MSB bills on 31003.
 ///
-/// **21028 is not a Strom PID** either, though it sits inside the range that
-/// used to be written `21024..=21028`: the overview carries it once, as a GeLi
-/// Gas 2.0 Informationsmeldung (MSB → NB). It is in [`is_unambiguous_gas_pid`]
-/// instead. 21024 and 21026 appear nowhere in the 4.0 overview at all; the
-/// range keeps them because a PID that no longer exists cannot arrive.
+/// **21028 is not a Strom PID** either, though it sits inside the IFTSTA range:
+/// the overview carries it once, as a GeLi Gas 2.0 Informationsmeldung
+/// (MSB → NB), so it is in [`is_unambiguous_gas_pid`] instead. 21024 and 21026
+/// appear nowhere in the 4.0 overview at all; the range keeps them because a
+/// PID that no longer exists cannot arrive.
 fn is_strom_only_pid(pid: u32) -> bool {
     matches!(
         pid,
@@ -620,8 +619,8 @@ mod tests {
         assert!(is_strom_only_pid(55001));
         assert!(is_strom_only_pid(21024));
         assert!(is_strom_only_pid(13003));
-        // …and the Gas Informationsmeldung that used to sit inside the IFTSTA
-        // range is not one of them.
+        // …and the Gas Informationsmeldung sitting inside the IFTSTA range is
+        // not one of them.
         assert!(!is_strom_only_pid(21028));
     }
 

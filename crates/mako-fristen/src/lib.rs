@@ -892,12 +892,15 @@ pub fn sub_werktage(from: Date, n: u32, cal: HolidayCalendar) -> Date {
     current
 }
 
-/// How many Werktage separate `from` and `to`, counting neither endpoint —
-/// the inverse of [`add_werktage`].
+/// How many Werktage separate `from` and `to` — the inverse of [`add_werktage`].
 ///
-/// `werktage_between(d, add_werktage(d, n, cal), cal) == n` for every `d` and
-/// `n`. Returns `0` when `to <= from`; the caller decides whether a target in
-/// the past is a violation, because for a Vorlauffrist it always is and for a
+/// The range is half-open the other way round from the usual convention: `from`
+/// is not counted, `to` is. That is what makes
+/// `werktage_between(d, add_werktage(d, n, cal), cal) == n` hold for every `d`
+/// and `n`, which is the property every caller relies on.
+///
+/// Returns `0` when `to <= from`; the caller decides whether a target in the
+/// past is a violation, because for a Vorlauffrist it always is and for a
 /// Realisierungskorridor it need not be.
 ///
 /// # Example

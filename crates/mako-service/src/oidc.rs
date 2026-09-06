@@ -132,6 +132,12 @@ pub enum OidcError {
     MissingTenant,
 
     #[error(
+        "the Authorization header appears more than once — the identity a request \
+         carries must not depend on which occurrence a reader picks"
+    )]
+    RepeatedAuthorization,
+
+    #[error(
         "JWT `mako_tenant` {actual:?} does not match this deployment's tenant {expected:?} — \
          a validly signed token from another operator must not read this tenant's data"
     )]
@@ -649,10 +655,11 @@ where
             return Ok(Claims(verifier.disabled_claims()));
         }
 
-        let bearer = parts
-            .headers
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
+        // A repeated `Authorization` header is refused rather than read
+        // first-wins: a gateway in front of this service may authorize on the
+        // other occurrence, so the identity would depend on who is reading.
+        let bearer = crate::headers::single_str(&parts.headers, header::AUTHORIZATION.as_str())
+            .map_err(|_| AuthError(OidcError::RepeatedAuthorization))?
             .and_then(|v| v.strip_prefix("Bearer "));
 
         let token = bearer.ok_or(AuthError(OidcError::MissingKid))?;

@@ -167,9 +167,17 @@ pub struct NneRequest {
     /// Gas Verrechnungspreis (§14 GasNEV) — monthly rate and months billed.
     #[serde(default)]
     pub grundpreis: Option<Grundpreis>,
-    /// Konzessionsabgabe — rate **and** KAV §2 customer group, so the
+    /// Konzessionsabgabe — rate **and** KAV § 2 customer group, so the
     /// Höchstbetrag can be checked. A bare rate cannot be checked against
     /// anything, which is exactly when an over-charge goes unnoticed.
+    ///
+    /// Two optional fact blocks travel with it. `niederspannung` carries the
+    /// § 2 Abs. 7 classification facts — months over the Leistungswert and the
+    /// Jahresverbrauch — so the stated group can be held against the statute
+    /// rather than believed; `grenzpreis` carries the § 2 Abs. 4 / Abs. 5 Nr. 2
+    /// Grenzpreisvergleich, below which no Konzessionsabgabe may be charged at
+    /// all. The § 2 Abs. 5 Nr. 1 Gas Grenzmenge needs neither: it is read off
+    /// `jahresarbeit_kwh`.
     #[serde(default)]
     pub konzessionsabgabe: Option<Konzessionsabgabe>,
     /// Blindmehrarbeit — reactive energy beyond the price sheet's free share.
@@ -283,6 +291,11 @@ pub struct MsbRequest {
     /// Optional Messdienstleistung flat fee in EUR for the whole period.
     #[serde(default)]
     pub messdienstleistung_eur: Option<Decimal>,
+    /// Einbau und Betrieb einer Steuerungseinrichtung am Netzanschlusspunkt in
+    /// EUR per month — §30 Abs. 2 MsbG. Stated apart from the Grundgebühr
+    /// because it carries a ceiling of its own, beside the Abs. 1 one.
+    #[serde(default)]
+    pub steuereinrichtung_eur_per_month: Option<Decimal>,
     /// Which §30 MsbG case the metering point falls under. Supplying it turns
     /// on the Preisobergrenze check — a charge above the POG is an amount the
     /// customer is entitled to have refunded.

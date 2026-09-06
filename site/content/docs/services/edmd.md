@@ -1,6 +1,6 @@
 +++
 title = "edmd Operator Guide"
-description = "Operator guide for edmd, the Energy Data Management daemon: MSCONS and iMSys meter readings, quality scoring and validation, virtual meters and substitute values."
+description = "Operator guide for edmd, the energy-data daemon: MSCONS and iMSys readings, quality scoring, validation, virtual meters and § 60 MsbG Ersatzwerte."
 weight = 27
 +++
 `edmd` is the **Energy Data Management daemon** — the service that stores meter
@@ -271,15 +271,45 @@ over to discharge.
 
 That covers **both** reading stores. `meterstore_subject_map` is one table over
 one pool, and the authoritative store and the ESA Typ-2 store enrol the same
-`(tenant, MaLo)` natural id, so one erasure unlinks both. It did not: the subject
-column and registry were attached only to the authoritative table, so a Typ-2
-reading kept its MaLo-ID through an erasure that reached everything else.
-Non-authoritative is a statement about settlement, not about personal data —
-§ 60 Abs. 6 MsbG makes no exception for it.
+`(tenant, MaLo)` natural id, so one erasure unlinks both. Attaching the subject
+column to the authoritative table alone would leave a Typ-2 reading holding its
+MaLo-ID through an erasure that reached everything else: non-authoritative is a
+statement about settlement, not about personal data, and § 60 Abs. 6 MsbG makes
+no exception for it.
 
 That covers every measurement, the Zählerstandsgang included: one subject
 registry spans the catalog's tables, so destroying the mapping unlinks the
 intervals, the ESA Typ-2 values and the register readings at once.
+
+It also covers every **year**. § 60 Abs. 6 MsbG comes due per value, so a subject
+reference belongs to one collection year and a MaLo that fed in for a decade has
+ten of them. The request names a person rather than a year, so the registry is
+asked which epochs it still holds and all of them are unlinked in one call.
+
+### An erasure has a second half: do not start again
+
+Deleting the mapping is only half of Art. 17. Without a record that the erasure
+happened, the next delivery for the same MaLo registers a fresh mapping and the
+linkage is back — a broker redelivering, a reprocessing job on an old offset, or
+a nightly import from a system that never learned. `[privacy] erasure_secret`
+is what closes that: an erasure records `HMAC(key, identifier)` and later
+registrations of that identifier are refused, without the identifier itself
+being kept anywhere. It is also what lets a request that arrives *before* the
+data does be honoured.
+
+```toml
+[privacy]
+erasure_secret          = "env:EDMD_ERASURE_SECRET"    # ≥ 32 bytes
+retired_erasure_secrets = ["env:EDMD_ERASURE_SECRET_2025"]
+```
+
+The key cannot be recovered: the tombstone is a MAC over an identifier that was
+destroyed in the same transaction. So rotation is additive — move the outgoing
+key to `retired_erasure_secrets`, put the new one in `erasure_secret` — and a
+retired key stays for as long as the erasures it recorded must stay suppressed.
+Retired keys without a current one are refused at startup: it is the state in
+which nothing records a new erasure. Leaving the section out disables
+suppression entirely and is logged as such at startup.
 
 edmd keeps a dozen tables of its own keyed on `malo_id`, several of them holding
 values beside it, so the same transaction splits them by what each row is: the
@@ -335,7 +365,7 @@ this one surface — every table shares a DataFusion session, so a free-form
 ### GDPR erasure is one transaction
 
 The request record, the subject-mapping erasure
-([`SubjectRegistry::erase_in`](https://github.com/hupe1980/meterstore)) and the
+([`SubjectRegistry::erase_all_in`](https://github.com/hupe1980/meterstore)) and the
 derived-table deletes (billing periods, quality assessments, substitute-value log)
 commit together on edmd's pool — meterstore's registry lives in the same database,
 so one transaction encloses them all. An erasure either completed or it did not: a
@@ -572,6 +602,14 @@ is written to, and "dominant" is a guess about which one the caller meant.
 cadence. A flat 900 s assumption fills four times as many Ersatzwerte into an
 hourly gas series as the meter has slots, each a quarter of the energy, none
 aligned with the intervals the operator later delivers.
+
+`reason` is **required**, and it is one of the 28 `STS+Z40` *Gründe der
+Ersatzwertbildung* the MSCONS MIG 2.4c publishes — by name (`NO_ACCESS`,
+`METERING_EQUIPMENT_FAULT`, `COMMUNICATION_FAILURE`, …) or by market code
+(`Z74`, `Z81`, `Z75`, …). The list is closed and carries no catch-all, so an unstated
+reason is a `422` naming every accepted value rather than a default: the value
+this endpoint writes ends up on an MSCONS whose `STS+Z40` states why it was
+formed, and in a § 147 Abs. 1 AO audit row that has to say the same thing.
 
 The substitution path first reads the existing intervals and marks every slot
 that already holds a **billable** value (`QualityFlag::is_billable` — every
@@ -1284,6 +1322,28 @@ The failure mode is silent: the same 2026-10-25 delivered as 96 intervals still
 parses and passes every other rule, and bills an hour short. That case is the
 one V07 exists for.
 
+## Push-session idempotency
+
+All four push doors — RLM, Gas, IoT and Zählerstandsgang — share one key in
+`direct_push_sessions`, keyed `(tenant, session_id)`. Readings upsert on their
+own primary key, so a replay costs nothing there; the CloudEvents a billing
+recompute hangs off do, which is what the key protects.
+
+The key is **claimed before the work and committed after it**. The claim is the
+insert itself — `INSERT … ON CONFLICT (tenant, session_id) DO NOTHING` writing
+`status = 'partial'` — so two simultaneous requests carrying one session id
+cannot both decide they are the first. When the readings are stored the row flips
+to `committed`.
+
+| Outcome | Response |
+|---|---|
+| Claim taken | the door ingests, then commits |
+| Row exists, `status = 'committed'` | `200`, the recorded result replayed |
+| Row exists, `status = 'partial'` | this request takes it over — a batch that never committed stays retryable |
+| Row exists for a **different** `malo_id` | `409`, naming both MaLo-IDs |
+| The claim could not be read or written | `503` — a database error is not evidence that a session is new |
+| The commit could not be written | `500`, asking for a retry under the same key: the readings landed but the evidence that they did has not |
+
 ## Reading-order idempotency
 
 `ON CONFLICT DO NOTHING` needs a unique index to fire on — the surrogate `id`
@@ -1370,6 +1430,7 @@ indexes back it:
 │                                                                                               │
 │  ── GDPR ──────────────────────────────────────────────────────────────────────────────────── │
 │  DELETE /api/v1/gdpr/erasure/{malo_id}                     ← Art. 17 DSGVO erasure            │
+│  GET  /api/v1/gdpr/erasures                                ← the erasure audit trail          │
 │                                                                                               │
 │  POST|GET /mcp                                             ← MCP Streamable HTTP              │
 │  GET  /metrics                                             ← the runner's request metrics     │
@@ -1508,12 +1569,11 @@ whose intervals it stores for OLAP and audit while another family routes the
 message.
 
 There is no PID filter on the subscription either. A `marktd` webhook
-subscription narrows by `roles`, `event_types` and `sparten`; it has no PID
+subscription narrows by `roles`, `event_types` and `sparten` and has no PID
 column, so every event edmd is subscribed to arrives whatever its PID and the
-narrowing happens here, on `ALL_MSCONS_PIDS`. edmd used to register `MSCONS_PIDS`
-as a `makopid_filter` in its subscription body — a key `marktd` has never read.
-Had it ever taken effect it would have cut off exactly the Ausfallarbeit
-deliveries listed below, which are in the accept set and not in that one.
+narrowing happens here, on `ALL_MSCONS_PIDS`. Narrowing at the subscription
+instead would cut off exactly the Ausfallarbeit deliveries listed below, which
+edmd stores without owning their process.
 
 The descriptions are the AHB's own Tabellenspalte headings
 (`domain::mscons_pid_description`), so a receipt can be matched against the AHB
@@ -1609,7 +1669,8 @@ Omitted, the endpoint's own default applies: `DIRECT_PUSH` / `DIRECT_GAS` here,
 
 The response includes a **quality report** (see below). HTTP 201 = clean data; 202 = stored with quality warnings.
 
-Idempotent on `session_id` — re-submitting the same key returns 200 with the original result.
+Idempotent on `session_id` — re-submitting the same key returns 200 with the original
+result. See [Push-session idempotency](#push-session-idempotency).
 
 ---
 
@@ -1687,6 +1748,9 @@ the original frame.
 `devEUI:fCnt` for LoRaWAN or the telegram access number for OMS/M-Bus. A committed
 session replays as **200 `already_committed`**. A batch in which nothing landed is
 not committed, so it stays retryable.
+
+The key is claimed before the work and committed after it — see
+[Push-session idempotency](#push-session-idempotency).
 
 ### Unit and Sparte
 
@@ -2500,8 +2564,8 @@ so a value the enum does not know is an unreadable row.
 `AggregationRule` is **internally tagged**: `rule_json` carries its variant in a
 `"kind"` field beside the variant's own fields, not wrapped in an outer object
 named after the variant. `rule_type` is derived from that same `kind`, so the
-column and the document cannot disagree — a body that stated one and meant the
-other used to be accepted and then failed at read time.
+column and the document cannot disagree — a body stating one and meaning the
+other would otherwise be accepted and fail at read time.
 
 `sqlx::query` is unchecked, so a column that does not exist is a runtime error
 rather than a compile error. The `schema_code_guard` test suite reads the
@@ -2668,7 +2732,8 @@ CloudEvent target and its HMAC key). The remaining sections have their own
 chapters above, because each is only meaningful beside the mechanism it
 configures: [`[archive]`](#configuration), [`[rate_limit]`](#rate-limiting),
 [`[kafka_ingest]`](#kafka-batch-ingest-head-end-systems),
-[`[confirmation]`](#ss-60-abs-1-msbg-schatzwert-bestatigungsschleife) and
+[`[confirmation]`](#ss-60-abs-1-msbg-schatzwert-bestatigungsschleife),
+[`[privacy]`](#an-erasure-has-a-second-half-do-not-start-again) and
 [`[[oidc.service_keys]]`](#internal-services-authenticate-with-a-service-key-not-a-jwt).
 
 **Connection budget.** edmd opens more PostgreSQL pools than most services, so size
@@ -3217,9 +3282,10 @@ rows — and Art. 17 destroys that subject mapping. In one transaction on edmd's
 pool the endpoint:
 
 1. Records the erasure request in `gdpr_deletions` (idempotent on `malo_id + tenant`).
-2. Destroys the MaLo's subject mapping in meterstore's registry
-   ([`SubjectRegistry::erase_in`](https://github.com/hupe1980/meterstore)) — the
-   readings survive in both tiers but become unattributable everywhere at once.
+2. Destroys every one of the MaLo's subject mappings in meterstore's registry
+   ([`SubjectRegistry::erase_all_in`](https://github.com/hupe1980/meterstore)) —
+   one per collection year — so the readings survive in both tiers but become
+   unattributable everywhere at once.
 3. Rewrites `malo_id` to that (now unmapped) subject reference in every table
    whose rows are Buchungsbelege — `zsg_conversion_log`,
    `meter_read_corrections`, `substitute_value_log`, `meter_data_receipts`,
@@ -3252,7 +3318,24 @@ Response `200 OK`:
 
 The readings remain for § 147 Abs. 1 AO reconciliation but no longer identify
 the MaLo. `subject_unlinked` is `false` when the MaLo had no mapping — never
-stored or already erased — which is recorded, not treated as an error.
+stored or already erased — which is recorded, not treated as an error. With
+`[privacy] erasure_secret` set the request still leaves its tombstone in that
+case, so a delivery that arrives afterwards is refused rather than re-linking a
+subject somebody already asked to be forgotten.
+
+### The trail
+
+`GET /api/v1/gdpr/erasures?since=&until=&trigger=&limit=` — "we deleted it" is
+not evidence. Each row carries when, why, by whom, which duty it discharged
+(`request` for Art. 17, `retention` for the § 60 Abs. 6 sweep) and the
+suppression lift if one was ever granted. It holds no natural identifier: that
+is the thing being erased.
+
+Filtering by trigger is the point of the column. A quarter with no `request`
+rows is an ordinary quarter; a quarter with no `retention` rows is a **sweep
+that has stopped running**, and summed into one list the two are
+indistinguishable. A backwards period or a non-positive limit is refused rather
+than answered with an empty list, which would read as "nothing was erased".
 
 ---
 

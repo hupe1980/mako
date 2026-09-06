@@ -9,7 +9,7 @@ For the complete operator reference — including persistence configuration, AS4
 ## Port layout
 
 ```
-:4080  ← AS4/ebMS3 inbound  (EDIFACT + Redispatch XML via SOAP/MTOM, WS-Security)
+:4080  ← AS4/ebMS3 inbound  (EDIFACT + Redispatch XML as SwA attachments, WS-Security)
 :8080  ← HTTP REST API       (POST /edifact, ERP Command API, admin)
 :8090  ← API-Webdienste Strom (iMS REST/JSON — energy-api)
 ```

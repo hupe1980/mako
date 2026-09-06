@@ -249,19 +249,18 @@ pub async fn post_zaehlerstandsgang(
         )
     });
 
-    // Idempotency, on the same table and with the same tenant scoping as every
-    // other push door.
-    match sqlx::query_scalar::<_, String>(
-        r"SELECT status FROM direct_push_sessions
-          WHERE session_id = $1 AND malo_id = $2 AND tenant = $3 AND status = 'committed'",
-    )
-    .bind(&session_id)
-    .bind(&malo_id)
-    .bind(&tenant)
-    .fetch_optional(state.repo.pool())
-    .await
-    {
-        Ok(Some(_)) => {
+    // Claim the key on the same table and with the same tenant scoping as every
+    // other push door. A failed claim is not evidence that the session is new —
+    // re-ingesting would re-emit the CloudEvents a billing recompute hangs off.
+    let session = super::session::Session {
+        tenant: &tenant,
+        session_id: &session_id,
+        malo_id: &malo_id,
+        source: ingestion_source.as_str(),
+    };
+    match super::session::claim(state.repo.pool(), session).await {
+        Ok(super::session::Claim::Claimed | super::session::Claim::Resumed) => {}
+        Ok(super::session::Claim::Committed { .. }) => {
             return (
                 StatusCode::OK,
                 Json(serde_json::json!({
@@ -272,19 +271,10 @@ pub async fn post_zaehlerstandsgang(
             )
                 .into_response();
         }
-        Ok(None) => {}
-        // A failed lookup is not evidence that the session is new — re-ingesting
-        // would re-emit the CloudEvents a billing recompute hangs off.
-        Err(e) => {
-            tracing::error!(malo_id, error = %e, "edmd: ZSG idempotency check failed");
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({
-                    "error": "could not verify whether this session was already committed",
-                })),
-            )
-                .into_response();
+        Ok(super::session::Claim::MaloMismatch { recorded }) => {
+            return super::session::malo_mismatch(&session_id, &malo_id, &recorded);
         }
+        Err(e) => return super::session::unverifiable(&malo_id, "zaehlerstandsgang", &e),
     }
 
     // ── Parse the readings ───────────────────────────────────────────────────
@@ -513,25 +503,21 @@ pub async fn post_zaehlerstandsgang(
         q.record(state.repo.pool(), &tenant, &malo_id).await;
     }
 
-    let _ = sqlx::query(
-        r"INSERT INTO direct_push_sessions
-              (session_id, malo_id, source, obis_code, interval_count,
-               period_from, period_to, status, tenant)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,'committed',$8)
-          ON CONFLICT (tenant, session_id) DO UPDATE
-              SET status         = 'committed',
-                  interval_count = EXCLUDED.interval_count",
+    if let Err(e) = super::session::commit(
+        state.repo.pool(),
+        session,
+        super::session::Committed {
+            obis_code: req.obis_code.as_deref(),
+            interval_count: i32::try_from(stored).unwrap_or(i32::MAX),
+            period_from,
+            period_to,
+            ..Default::default()
+        },
     )
-    .bind(&session_id)
-    .bind(&malo_id)
-    .bind(ingestion_source.as_str())
-    .bind(&req.obis_code)
-    .bind(i32::try_from(stored).unwrap_or(i32::MAX))
-    .bind(period_from)
-    .bind(period_to)
-    .bind(&tenant)
-    .execute(state.repo.pool())
-    .await;
+    .await
+    {
+        return super::session::commit_failed(&malo_id, "zaehlerstandsgang", &e);
+    }
 
     let alert = crate::server::quality_alert::QualityAlert {
         malo_id: &malo_id,

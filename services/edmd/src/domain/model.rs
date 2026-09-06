@@ -65,11 +65,9 @@ pub fn parse_sparte(raw: &str) -> Option<Sparte> {
 ///
 /// **This table and [`mscons_pid_description`] render one source** — the BDEW
 /// *Anwendungsübersicht der Prüfidentifikatoren* 4.0 — and
-/// `pid_table_matches_descriptions` pins them together. They used to disagree on
-/// five of eleven rows: 13005 was labelled "Lastgang Messwerte Strom", 13016
-/// "Ausfallarbeit Strom", 13018 "korrigierte Werte", 13019 "Netzverluste Strom"
-/// and 13025 a *Gas* Lastgang. Each names a different Anwendungsfall than the
-/// PID carries and sends a reader to the wrong AHB section.
+/// `pid_table_matches_descriptions` pins them together, because a row naming a
+/// different Anwendungsfall than its PID carries sends a reader to the wrong
+/// AHB section.
 ///
 /// ## 13006 is a cancellation, not a reading
 ///
@@ -1147,7 +1145,7 @@ mod mscons_pid_tests {
     }
 
     /// The doc table on `MSCONS_PIDS` and `mscons_pid_description` render one
-    /// source, so they must not drift — and they had, on five of eleven rows.
+    /// source, so they must not drift.
     #[test]
     fn pid_table_matches_descriptions() {
         // The table as it appears in the `MSCONS_PIDS` doc comment.

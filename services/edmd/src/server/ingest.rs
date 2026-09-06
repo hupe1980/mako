@@ -3,7 +3,7 @@
 #[allow(unused_imports)]
 use super::*;
 
-// \u2500\u2500 iMSys / SMGW 15-min direct push \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// ── iMSys / SMGW 15-min direct push ─────────────────────────────────────────
 
 /// One 15-min (or other fixed-length) metered interval in a direct-push batch.
 #[derive(Debug, serde::Deserialize)]
@@ -82,7 +82,7 @@ pub struct DirectPushRequest {
     pub sender_mp_id: Option<String>,
     /// Metered intervals (15-min for iMSys; 60-min or 1440-min for SLP).
     pub intervals: Vec<DirectInterval>,
-    // ── Gas-specific fields ───────────────────────────────────────────────────
+    // ── Gas-specific fields ─────────────────────────────────────────────────
     /// Brennwert (superior calorific value) in kWh/m³ — required when `unit = "m3"`.
     pub brennwert_kwh_per_m3: Option<Decimal>,
     /// Zustandszahl (volume correction factor) — default 1.0 when absent.
@@ -249,7 +249,7 @@ pub(crate) async fn post_direct_reads_inner(
     };
     let source = ingestion_source.as_str();
 
-    // \u2500\u2500 Idempotency check \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    // ── Claim the session ───────────────────────────────────────────────────
     let session_id = req.session_id.clone().unwrap_or_else(|| {
         // Auto-generate from malo_id + first interval timestamp
         req.intervals
@@ -258,53 +258,41 @@ pub(crate) async fn post_direct_reads_inner(
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
     });
 
-    // Check if this session was already committed.
-    //
-    // Scoped by tenant: two tenants may legitimately use the same `session_id`
-    // for the same MaLo-ID, and without it one would read the other's summary
-    // and skip its own ingest.
-    let existing: Option<serde_json::Value> = match sqlx::query_scalar(
-        r"SELECT quality_summary FROM direct_push_sessions
-          WHERE session_id = $1 AND malo_id = $2 AND tenant = $3
-            AND status = 'committed'",
-    )
-    .bind(&session_id)
-    .bind(malo_id)
-    .bind(&state.tenant)
-    .fetch_optional(state.repo.pool())
-    .await
-    {
-        Ok(row) => row.flatten(),
-        // A failed lookup is not evidence that the session is new. Re-ingesting
-        // on a transient database error would be safe for the readings, which
-        // upsert, but it would also re-emit the CloudEvents that trigger a
-        // billing recompute downstream.
-        Err(e) => {
-            tracing::error!(malo_id, error = %e, "edmd: direct push idempotency check failed");
+    // Claim the key before any work: the claim *is* the insert, so two
+    // simultaneous requests carrying one session id cannot both read "new".
+    let session = super::session::Session {
+        tenant: &state.tenant,
+        session_id: &session_id,
+        malo_id,
+        source,
+    };
+    match super::session::claim(pool, session).await {
+        Ok(super::session::Claim::Claimed | super::session::Claim::Resumed) => {}
+        Ok(super::session::Claim::Committed {
+            quality_summary, ..
+        }) => {
             return (
-                StatusCode::SERVICE_UNAVAILABLE,
+                StatusCode::OK,
                 Json(serde_json::json!({
-                    "error": "could not verify whether this session was already committed",
+                    "session_id": session_id,
+                    "malo_id": malo_id,
+                    "status": "already_committed",
+                    "quality": quality_summary,
                 })),
             )
                 .into_response();
         }
-    };
-
-    if let Some(summary) = existing {
-        return (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "session_id": session_id,
-                "malo_id": malo_id,
-                "status": "already_committed",
-                "quality": summary,
-            })),
-        )
-            .into_response();
+        Ok(super::session::Claim::MaloMismatch { recorded }) => {
+            return super::session::malo_mismatch(&session_id, malo_id, &recorded);
+        }
+        // A failed claim is not evidence that the session is new. Re-ingesting on
+        // a transient database error would be safe for the readings, which
+        // upsert, but it would also re-emit the CloudEvents that trigger a
+        // billing recompute downstream.
+        Err(e) => return super::session::unverifiable(malo_id, "rlm-direct-push", &e),
     }
 
-    // \u2500\u2500 Interval validation + kWh conversion \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    // ── Interval validation + kWh conversion ────────────────────────────────
     // Gas m³ → kWh_Hs via metering::gas_m3_to_kwh_hs (§25 Nr. 4 MessEV / DVGW G 685)
     // Units are parsed by the same `metering` machinery as the IoT path, so the
     // ingest families share one unit contract. A string compare against `"m3"`
@@ -405,7 +393,7 @@ pub(crate) async fn post_direct_reads_inner(
             .into_response();
     }
 
-    // \u2500\u2500 Quality scoring \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    // ── Quality scoring ─────────────────────────────────────────────────────
     let period_start = accepted.iter().map(|iv| iv.from).min().unwrap();
     let period_end = accepted.iter().map(|iv| iv.to).max().unwrap();
 
@@ -470,7 +458,7 @@ pub(crate) async fn post_direct_reads_inner(
         "algorithm": quality.algorithm,
     });
 
-    // \u2500\u2500 Persist intervals \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    // ── Persist intervals ───────────────────────────────────────────────────
     let obis_code = req.obis_code.as_deref();
     let melo_id = req.melo_id.as_deref();
 
@@ -529,29 +517,25 @@ pub(crate) async fn post_direct_reads_inner(
     )
     .await;
 
-    // \u2500\u2500 Record session \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-    let _ = sqlx::query(
-        r"INSERT INTO direct_push_sessions
-              (session_id, malo_id, source, obis_code, interval_count,
-               period_from, period_to, status, quality_summary, tenant)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, 'committed', $8, $9)
-          ON CONFLICT (tenant, session_id) DO UPDATE
-              SET status          = 'committed',
-                  quality_summary = EXCLUDED.quality_summary",
+    // ── Commit the session ──────────────────────────────────────────────────
+    if let Err(e) = super::session::commit(
+        pool,
+        session,
+        super::session::Committed {
+            obis_code,
+            interval_count: i32::try_from(accepted.len()).unwrap_or(i32::MAX),
+            period_from: Some(period_start),
+            period_to: Some(period_end),
+            quality_summary: Some(quality_json.clone()),
+            ..Default::default()
+        },
     )
-    .bind(&session_id)
-    .bind(malo_id)
-    .bind(source)
-    .bind(obis_code)
-    .bind(accepted.len() as i32)
-    .bind(period_start)
-    .bind(period_end)
-    .bind(&quality_json)
-    .bind(state.tenant.as_str())
-    .execute(state.repo.pool())
-    .await;
+    .await
+    {
+        return super::session::commit_failed(malo_id, "rlm-direct-push", &e);
+    }
 
-    // \u2500\u2500 Recompute billing period aggregates \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    // ── Recompute billing period aggregates ─────────────────────────────────
     // After a direct push, the cached meter_billing_periods aggregate for the
     // affected period is refreshed by `store_reads` (cache invalidation) plus the
     // read-through `billing_period()` path, so billingd picks up the new data.
@@ -560,12 +544,12 @@ pub(crate) async fn post_direct_reads_inner(
 
     // No manual recompute here: `store_reads` above already invalidated the
     // cached `meter_billing_periods` aggregate for the affected window, and
-    // `billing_period()` is read-through — it recomputes from the version-resolved
-    // series on the next read and re-caches. The former raw `SELECT ... FROM
-    // meter_reads` recompute was both broken (that relation is DataFusion-only,
-    // not a Postgres table) and redundant against the read-through model.
+    // `billing_period()` is read-through — it recomputes from the
+    // version-resolved series on the next read and re-caches. `meter_reads` is a
+    // DataFusion relation rather than a Postgres table, so it could not be
+    // re-aggregated here in any case.
 
-    // \u2500\u2500 CloudEvent notifications \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    // ── CloudEvent notifications ────────────────────────────────────────────
     let correlation_id = uuid::Uuid::new_v4().to_string();
 
     // Both quality signals in one place, so the status code below and the event
@@ -669,7 +653,7 @@ mod ingest_contract_tests {
     use crate::domain::model::Sparte;
     use time::macros::datetime;
 
-    // ── DST transitions ───────────────────────────────────────────────────────
+    // ── DST transitions ─────────────────────────────────────────────────────
     //
     // Germany runs on Europe/Berlin, so two days a year are not 24 hours long:
     // the last Sunday in March has 23 (CET→CEST) and the last Sunday in October
@@ -774,9 +758,9 @@ mod ingest_contract_tests {
 
     /// A day that is merely *short* is not reported as a collapsed hour.
     ///
-    /// The distinction 0.17 introduced, pinned from mako's side: a truncated
-    /// read is a truncated read. Reporting it as "the repeated hour was
-    /// collapsed" names a cause that did not happen.
+    /// Pinned from mako's side, because the distinction is the point: a
+    /// truncated read is a truncated read, and reporting it as "the repeated
+    /// hour was collapsed" names a cause that did not happen.
     #[test]
     fn a_fall_back_day_that_is_merely_truncated_is_not_reported_as_collapsed() {
         let start = datetime!(2026-10-24 22:00:00 UTC);
@@ -871,7 +855,7 @@ mod ingest_contract_tests {
     }
 }
 
-// ── Bitemporal corrections (§ 147 Abs. 1 AO / § 146 Abs. 4 AO) ───────────────
+// ── Bitemporal corrections (§ 147 Abs. 1 AO / § 146 Abs. 4 AO) ──────────────
 
 /// `POST /api/v1/corrections/{malo_id}`
 ///
@@ -1008,7 +992,7 @@ pub async fn post_corrections(
     }
 }
 
-// ── Bulk ingestion ────────────────────────────────────────────────────────────
+// ── Bulk ingestion ──────────────────────────────────────────────────────────
 
 /// Request body for `POST /api/v1/meter-reads/{malo_id}/bulk`.
 ///
@@ -1128,32 +1112,6 @@ pub async fn post_bulk_reads(
             .into_response();
     }
 
-    // Deduplicate by session_id
-    if let Some(ref sid) = req.session_id {
-        let existing: Option<i64> = sqlx::query_scalar(
-            // Only a committed session is a duplicate. Matching any status made
-            // a `failed` session permanently unretryable.
-            "SELECT interval_count FROM direct_push_sessions
-             WHERE session_id = $1 AND tenant = $2 AND status = 'committed'",
-        )
-        .bind(sid)
-        .bind(state.tenant.as_str())
-        .fetch_optional(state.repo.pool())
-        .await
-        .unwrap_or(None);
-        if let Some(count) = existing {
-            return (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "session_id": sid,
-                    "stored_count": count,
-                    "deduplicated": true
-                })),
-            )
-                .into_response();
-        }
-    }
-
     // Sparte determines the storage unit, so an unrecognised value is rejected
     // rather than defaulted.
     let Some(sparte_enum) = crate::domain::parse_sparte(&req.sparte) else {
@@ -1194,6 +1152,34 @@ pub async fn post_bulk_reads(
         .session_id
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    // Claim the key before any work. Only a committed session is a duplicate:
+    // an attempt that never committed stays `partial` and is taken over here,
+    // so a wholly failed import remains retryable under its own key.
+    let session = super::session::Session {
+        tenant: &state.tenant,
+        session_id: &session_id,
+        malo_id: &malo_id,
+        source,
+    };
+    match super::session::claim(state.repo.pool(), session).await {
+        Ok(super::session::Claim::Claimed | super::session::Claim::Resumed) => {}
+        Ok(super::session::Claim::Committed { interval_count, .. }) => {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "session_id": session_id,
+                    "stored_count": interval_count,
+                    "deduplicated": true,
+                })),
+            )
+                .into_response();
+        }
+        Ok(super::session::Claim::MaloMismatch { recorded }) => {
+            return super::session::malo_mismatch(&session_id, &malo_id, &recorded);
+        }
+        Err(e) => return super::session::unverifiable(&malo_id, "bulk-import", &e),
+    }
 
     let mut batch: Vec<MeterRead> = Vec::with_capacity(req.reads.len());
 
@@ -1318,24 +1304,22 @@ pub async fn post_bulk_reads(
     });
 
     // Persist session record
-    let _ = sqlx::query(
-        r"INSERT INTO direct_push_sessions
-              (session_id, malo_id, source, obis_code, interval_count,
-               period_from, period_to, status, quality_summary, tenant)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,'committed',$8,$9)
-          ON CONFLICT (tenant, session_id) DO NOTHING",
+    if let Err(e) = super::session::commit(
+        state.repo.pool(),
+        session,
+        super::session::Committed {
+            obis_code: req.obis_code.as_deref(),
+            interval_count: i32::try_from(stored).unwrap_or(i32::MAX),
+            period_from,
+            period_to,
+            quality_summary: Some(issues_summary.clone()),
+            ..Default::default()
+        },
     )
-    .bind(&session_id)
-    .bind(&malo_id)
-    .bind(source)
-    .bind(&req.obis_code)
-    .bind(stored as i32)
-    .bind(period_from)
-    .bind(period_to)
-    .bind(&issues_summary)
-    .bind(state.tenant.as_str())
-    .execute(state.repo.pool())
-    .await;
+    .await
+    {
+        return super::session::commit_failed(&malo_id, "bulk-import", &e);
+    }
 
     // The V-rule verdict has to reach the operator: a bare 201 would report a
     // month of corrected readings the same way whether the file is clean or

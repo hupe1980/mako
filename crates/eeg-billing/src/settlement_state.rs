@@ -42,6 +42,7 @@
 
 use crate::technology::ErzeugungsArt;
 use rust_decimal::Decimal;
+use rust_decimal::dec;
 use time::Date;
 
 // ── SettlementPeriodState ─────────────────────────────────────────────────────
@@ -209,19 +210,17 @@ pub enum StateTransitionReason {
 
 /// The compliance facts a settlement state is derived from.
 ///
-/// A struct rather than six positional arguments: the old signature took two
-/// `Option<Date>`s, a `Decimal`, a `bool` and an `i16` in a row, and every call
-/// site had to be read against the definition to know which was which.
+/// A struct rather than a row of positional arguments, so a call site says which
+/// fact it is passing.
 #[derive(Debug, Clone, Copy)]
 pub struct SettlementStateFacts {
     /// Whether the plant has a confirmed MaStR registration.
     pub mastr_registriert: bool,
-    /// How the plant satisfies §9 (Fernsteuerbarkeit, 60 % cap, or nothing).
-    pub sect9_erfuellung: crate::settlement_state::Sect9Erfuellung,
-    /// Installed capacity — §9 is staged by it.
-    pub leistung_kwp: rust_decimal::Decimal,
-    /// Technology, for the §9 Abs. 1 Satz 2 Steckersolar carve-out.
-    pub erzeugungsart: Option<ErzeugungsArt>,
+    /// The plant facts § 9 Abs. 2 stages its obligation by — capacity,
+    /// technology, Vergütungsform.
+    pub sect9_anlage: Sect9Anlage,
+    /// Which of the two § 9 Abs. 2 routes the plant actually carries.
+    pub sect9_erfuellung: Sect9Erfuellung,
     /// Subsidy end date; `None` = never expires.
     pub foerderendedatum: Option<Date>,
     /// First day of the billing period being evaluated.
@@ -240,29 +239,35 @@ pub struct SettlementStateFacts {
 ///
 /// ```rust
 /// use eeg_billing::settlement_state::{
-///     derive_settlement_state, Sect9Erfuellung, SettlementPeriodState, SettlementStateFacts,
+///     derive_settlement_state, Sect9Anlage, Sect9Erfuellung, SettlementPeriodState,
+///     SettlementStateFacts,
 /// };
 /// use rust_decimal::dec;
 /// use time::macros::date;
 ///
 /// let facts = SettlementStateFacts {
 ///     mastr_registriert: true,
-///     sect9_erfuellung: Sect9Erfuellung::Fernsteuerbarkeit,
-///     leistung_kwp: dec!(50),
-///     erzeugungsart: None,
+///     sect9_anlage: Sect9Anlage {
+///         leistung_kwp: dec!(50),
+///         erzeugungsart: None,
+///         einspeiseverguetung_oder_mieterstrom: true,
+///         ist_kwk_anlage: false,
+///         wechselrichterleistung_va: None,
+///     },
+///     sect9_erfuellung: Sect9Erfuellung::BEIDES,
 ///     foerderendedatum: Some(date!(2040-12-31)),
 ///     billing_date: date!(2026-07-01),
 ///     eeg_gesetz_year: 2023,
 /// };
 /// assert_eq!(derive_settlement_state(&facts), SettlementPeriodState::Active);
 ///
-/// // A 50 kW plant on the 60 % Leistungsbegrenzung is compliant too — §9 Abs. 2
-/// // Nr. 2 offers it as an equal alternative below 100 kW.
+/// // § 9 Abs. 2 Satz 1 Nr. 2 asks a geförderte Anlage of this size for lit. a
+/// // **and** lit. b, so the 60 % cap alone leaves the Fernsteuerbarkeit open.
 /// let cap = SettlementStateFacts {
-///     sect9_erfuellung: Sect9Erfuellung::Leistungsbegrenzung60,
+///     sect9_erfuellung: Sect9Erfuellung::BEGRENZUNG_60,
 ///     ..facts
 /// };
-/// assert_eq!(derive_settlement_state(&cap), SettlementPeriodState::Active);
+/// assert_eq!(derive_settlement_state(&cap), SettlementPeriodState::Reduced);
 ///
 /// // MaStR not registered, EEG 2023 → Reduced (Pflichtzahlung, not suspension)
 /// let no_mastr = SettlementStateFacts { mastr_registriert: false, ..facts };
@@ -280,9 +285,8 @@ pub struct SettlementStateFacts {
 pub fn derive_settlement_state(facts: &SettlementStateFacts) -> SettlementPeriodState {
     let &SettlementStateFacts {
         mastr_registriert,
+        sect9_anlage,
         sect9_erfuellung,
-        leistung_kwp,
-        erzeugungsart: art,
         foerderendedatum,
         billing_date,
         eeg_gesetz_year,
@@ -307,10 +311,9 @@ pub fn derive_settlement_state(facts: &SettlementStateFacts) -> SettlementPeriod
     }
 
     // ── §9 EEG not satisfied ──────────────────────────────────────────────────
-    // The obligation is staged: from 100 kW only Fernsteuerbarkeit will do, in the
-    // 25–100 kW band the 60 % Leistungsbegrenzung is an equal alternative, and a
-    // Steckersolargerät below 2 kW is out of scope entirely.
-    if sect9_verletzt(leistung_kwp, art, sect9_erfuellung) {
+    // The obligation is staged by capacity and gated on the Vergütungsform;
+    // `sect9_pflicht` carries the reading.
+    if sect9_verletzt(sect9_anlage, sect9_erfuellung) {
         return if eeg_gesetz_year >= 2023 {
             // EEG 2023: Pflichtzahlung €10/kW/month (§52 Abs. 1 Nr. 1)
             SettlementPeriodState::Reduced
@@ -364,16 +367,28 @@ mod tests {
         assert!(!SettlementPeriodState::Ended.is_payable());
     }
 
-    /// A healthy plant, and the four facts that move it off `Active`.
+    /// A healthy geförderte 50-kW plant, and the facts that move it off `Active`.
     fn gesund() -> SettlementStateFacts {
         SettlementStateFacts {
             mastr_registriert: true,
-            sect9_erfuellung: Sect9Erfuellung::Fernsteuerbarkeit,
-            leistung_kwp: dec!(50),
-            erzeugungsart: None,
+            sect9_anlage: Sect9Anlage {
+                leistung_kwp: dec!(50),
+                erzeugungsart: None,
+                einspeiseverguetung_oder_mieterstrom: true,
+                ist_kwk_anlage: false,
+                wechselrichterleistung_va: None,
+            },
+            sect9_erfuellung: Sect9Erfuellung::BEIDES,
             foerderendedatum: Some(date!(2040 - 12 - 31)),
             billing_date: date!(2026 - 07 - 01),
             eeg_gesetz_year: 2023,
+        }
+    }
+
+    fn mit_leistung(kwp: rust_decimal::Decimal) -> Sect9Anlage {
+        Sect9Anlage {
+            leistung_kwp: kwp,
+            ..gesund().sect9_anlage
         }
     }
 
@@ -425,7 +440,7 @@ mod tests {
     #[test]
     fn derive_reduced_when_sect9_is_not_satisfied_at_all() {
         let facts = SettlementStateFacts {
-            sect9_erfuellung: Sect9Erfuellung::Keine,
+            sect9_erfuellung: Sect9Erfuellung::KEINE,
             ..gesund()
         };
         assert_eq!(
@@ -434,13 +449,31 @@ mod tests {
         );
     }
 
-    /// §9 Abs. 2 Nr. 2 — the 25–100 kW band may satisfy §9 with the 60 %
-    /// Leistungsbegrenzung, so a flat "≥ 25 kW needs Fernsteuerbarkeit" rule
-    /// would put such a plant into `Reduced` and charge it 10 €/kW/month.
+    /// § 9 Abs. 2 Satz 1 Nr. 2 binds lit. a and lit. b together, so a geförderte
+    /// Anlage in the 25-bis-100-kW band that carries only the 60 % cap is in
+    /// breach — the § 52 Abs. 1 Nr. 1 Zahlung is 10 €/kW/Kalendermonat.
     #[test]
-    fn the_sixty_percent_cap_keeps_a_50kw_plant_active() {
+    fn the_sixty_percent_cap_alone_does_not_carry_a_50kw_plant() {
         let facts = SettlementStateFacts {
-            sect9_erfuellung: Sect9Erfuellung::Leistungsbegrenzung60,
+            sect9_erfuellung: Sect9Erfuellung::BEGRENZUNG_60,
+            ..gesund()
+        };
+        assert_eq!(
+            derive_settlement_state(&facts),
+            SettlementPeriodState::Reduced
+        );
+    }
+
+    /// The same plant in der Direktvermarktung owes lit. a alone, so the
+    /// Fernsteuerbarkeit on its own keeps it `Active`.
+    #[test]
+    fn a_directly_marketed_50kw_plant_needs_only_the_remote_control() {
+        let facts = SettlementStateFacts {
+            sect9_anlage: Sect9Anlage {
+                einspeiseverguetung_oder_mieterstrom: false,
+                ..gesund().sect9_anlage
+            },
+            sect9_erfuellung: Sect9Erfuellung::FERNSTEUERBARKEIT,
             ..gesund()
         };
         assert_eq!(
@@ -449,12 +482,12 @@ mod tests {
         );
     }
 
-    /// From 100 kW the 60 % route is gone (§9 Abs. 2 Nr. 1).
+    /// From 100 kW the 60 % route is gone (§ 9 Abs. 2 Satz 1 Nr. 1).
     #[test]
     fn the_sixty_percent_cap_does_not_carry_a_100kw_plant() {
         let facts = SettlementStateFacts {
-            leistung_kwp: dec!(100),
-            sect9_erfuellung: Sect9Erfuellung::Leistungsbegrenzung60,
+            sect9_anlage: mit_leistung(dec!(100)),
+            sect9_erfuellung: Sect9Erfuellung::BEGRENZUNG_60,
             ..gesund()
         };
         assert_eq!(
@@ -466,8 +499,8 @@ mod tests {
     #[test]
     fn derive_active_small_plant_on_the_cap() {
         let facts = SettlementStateFacts {
-            leistung_kwp: dec!(5),
-            sect9_erfuellung: Sect9Erfuellung::Leistungsbegrenzung60,
+            sect9_anlage: mit_leistung(dec!(5)),
+            sect9_erfuellung: Sect9Erfuellung::BEGRENZUNG_60,
             ..gesund()
         };
         assert_eq!(
@@ -479,85 +512,223 @@ mod tests {
 
 // ── §9 EEG — Steuerbarkeit ────────────────────────────────────────────────────
 
-/// How a plant satisfies the §9 EEG technical requirements.
+/// Which of the two § 9 Abs. 2 technical routes a plant has in place.
 ///
-/// §9 Abs. 2 is **staged by installed capacity**, not a single threshold, and the
-/// middle band is a genuine choice: a 25–100 kW plant on the
-/// 60-%-Leistungsbegrenzung route the statute offers it is compliant, so no
-/// §52 Abs. 1 Nr. 1 Pflichtzahlung is owed.
+/// The two are **not** alternatives. § 9 Abs. 2 Satz 1 Nr. 2 joins them with
+/// „und" — lit. a the ferngesteuerte Reduzierung, lit. b the 60-%-Begrenzung —
+/// and only Nr. 3 stands alone. A plant can therefore carry both, one or
+/// neither, which is a pair of facts and not a choice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
-pub enum Sect9Erfuellung {
-    /// Nothing installed. A violation wherever §9 requires something.
-    #[default]
-    Keine,
-    /// Technische Einrichtungen per §9 Abs. 1: the Netzbetreiber can read the
-    /// Ist-Einspeisung and remotely reduce the Einspeiseleistung.
-    Fernsteuerbarkeit,
-    /// The 60 % Leistungsbegrenzung at the Netzverknüpfungspunkt — the
-    /// alternative §9 Abs. 2 Nr. 2 grants plants below 100 kW.
-    Leistungsbegrenzung60,
+pub struct Sect9Erfuellung {
+    /// Technische Einrichtung nach § 9 Abs. 2 Satz 1 Nr. 1 bzw. Nr. 2 lit. a:
+    /// the Netzbetreiber can reduce the Einspeiseleistung remotely — and, in the
+    /// Nr. 1 band, read the Ist-Einspeisung as well.
+    pub fernsteuerbarkeit: bool,
+    /// Maximale Wirkleistungseinspeisung am Verknüpfungspunkt auf 60 % der
+    /// installierten Leistung begrenzt — § 9 Abs. 2 Satz 1 Nr. 2 lit. b bzw. Nr. 3.
+    pub begrenzung_60: bool,
 }
 
-/// The §9 obligation a plant of this size and type carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
-pub enum Sect9Pflicht {
-    /// Steckersolargerät up to 2 kW — §9 Abs. 2 Satz 2 lifts Nr. 3 for it.
-    ///
-    /// Abs. 2 Satz 2 conditions the exemption on the installed capacity alone.
-    /// The 800-VA Wechselrichter limit belongs to the separate Abs. 1 Satz 3
-    /// exemption and to §24 Abs. 1 Satz 5 Nr. 2, not here.
-    Keine,
-    /// Below 25 kW: the 60 % Leistungsbegrenzung only.
-    Leistungsbegrenzung60,
-    /// 25 kW up to 100 kW: Fernsteuerbarkeit **or** the 60 % Leistungsbegrenzung.
-    FernsteuerbarkeitOderBegrenzung,
-    /// From 100 kW: full Fernsteuerbarkeit; the 60 % route is not available.
-    Fernsteuerbarkeit,
+impl Sect9Erfuellung {
+    /// Nothing installed. A breach wherever § 9 Abs. 2 requires anything.
+    pub const KEINE: Self = Self {
+        fernsteuerbarkeit: false,
+        begrenzung_60: false,
+    };
+    /// The ferngesteuerte Reduzierung alone.
+    pub const FERNSTEUERBARKEIT: Self = Self {
+        fernsteuerbarkeit: true,
+        begrenzung_60: false,
+    };
+    /// The 60 % cap alone.
+    pub const BEGRENZUNG_60: Self = Self {
+        fernsteuerbarkeit: false,
+        begrenzung_60: true,
+    };
+    /// Both routes — what a geförderte Anlage in the 25-bis-100-kW band owes.
+    pub const BEIDES: Self = Self {
+        fernsteuerbarkeit: true,
+        begrenzung_60: true,
+    };
 }
 
-/// Which §9 obligation applies to a plant.
+/// The plant facts § 9 Abs. 2 stages its obligation by.
 ///
-/// | Installed capacity | Obligation | Basis |
-/// |---|---|---|
-/// | Steckersolargerät ≤ 2 kW | none | §9 Abs. 2 Satz 2 |
-/// | < 25 kW | 60 % Leistungsbegrenzung | §9 Abs. 2 Nr. 3 |
-/// | 25 kW – < 100 kW | Fernsteuerbarkeit **or** 60 % | §9 Abs. 2 Nr. 2 |
-/// | ≥ 100 kW | Fernsteuerbarkeit | §9 Abs. 2 Nr. 1 |
-#[must_use]
-pub fn sect9_pflicht(leistung_kwp: Decimal, art: Option<ErzeugungsArt>) -> Sect9Pflicht {
-    use rust_decimal::dec;
-    // „bis zu 2 Kilowatt" — inclusive. A 2 kWp module string behind an 800-VA
-    // inverter is the standard Steckersolar build, so the boundary is the case.
-    if art == Some(ErzeugungsArt::SolarStecker) && leistung_kwp <= dec!(2) {
-        return Sect9Pflicht::Keine;
-    }
-    if leistung_kwp >= dec!(100) {
-        Sect9Pflicht::Fernsteuerbarkeit
-    } else if leistung_kwp >= dec!(25) {
-        Sect9Pflicht::FernsteuerbarkeitOderBegrenzung
-    } else {
-        Sect9Pflicht::Leistungsbegrenzung60
+/// Capacity alone does not decide it: lit. b of Nr. 2 and the whole of Nr. 3
+/// bind only „Anlagen, die der Einspeisevergütung oder dem Mieterstromzuschlag
+/// nach § 19 Absatz 1 Nummer 2 oder Nummer 3 zugeordnet sind" — and Nr. 3
+/// additionally every KWK-Anlage of that size. A directly-marketed Solaranlage
+/// below 25 kW owes nothing at all under § 9 Abs. 2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Sect9Anlage {
+    /// Installed capacity in kW — the Nr. 1 / Nr. 2 / Nr. 3 staging.
+    pub leistung_kwp: Decimal,
+    /// Technology, for the Steckersolar carve-out.
+    pub erzeugungsart: Option<ErzeugungsArt>,
+    /// The plant is settled under § 19 Abs. 1 Nr. 2 (Einspeisevergütung, in any
+    /// of its Varianten) or Nr. 3 (Mieterstromzuschlag) — the gate on the 60 %
+    /// cap in Nr. 2 lit. b and Nr. 3.
+    pub einspeiseverguetung_oder_mieterstrom: bool,
+    /// A KWK-Anlage. Nr. 3 names it beside the geförderten Anlagen, so a
+    /// KWK-Anlage below 25 kW carries the cap whatever it is paid under.
+    pub ist_kwk_anlage: bool,
+    /// Wechselrichterleistung in Voltampere. The Steckersolar carve-out is a
+    /// two-part test — „bis zu 2 Kilowatt **und** … bis zu 800 Voltampere" — so
+    /// `None` leaves it closed rather than assuming the standard build.
+    pub wechselrichterleistung_va: Option<Decimal>,
+}
+
+/// What § 9 Abs. 2 Satz 1 requires of this plant.
+///
+/// The same shape as [`Sect9Erfuellung`], so a breach is the pointwise
+/// comparison of the two and no band has to be re-derived to report one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Sect9Pflicht {
+    /// Nr. 1 (ab 100 kW) resp. Nr. 2 lit. a (ab 25 kW) — the ferngesteuerte
+    /// Reduzierung.
+    pub fernsteuerbarkeit: bool,
+    /// Nr. 2 lit. b resp. Nr. 3 — the 60 % Wirkleistungsbegrenzung.
+    pub begrenzung_60: bool,
+}
+
+impl Sect9Pflicht {
+    /// Whether § 9 Abs. 2 asks anything of this plant at all.
+    #[must_use]
+    pub const fn ist_leer(self) -> bool {
+        !self.fernsteuerbarkeit && !self.begrenzung_60
     }
 }
 
-/// Whether the plant is in breach of §9 Abs. 1/2 — the §52 Abs. 1 Nr. 1 trigger.
+/// The installed capacity up to which a Steckersolargerät escapes Nr. 3.
+pub const STECKERSOLAR_LEISTUNG_KW: Decimal = dec!(2);
+
+/// The Wechselrichterleistung up to which a Steckersolargerät escapes Nr. 3.
+pub const STECKERSOLAR_WECHSELRICHTER_VA: Decimal = dec!(800);
+
+/// Which § 9 Abs. 2 Satz 1 obligations apply to a plant.
+///
+/// | Installed capacity | Fernsteuerbarkeit | 60 % cap | Basis |
+/// |---|---|---|---|
+/// | Steckersolargerät ≤ 2 kW und ≤ 800 VA | – | – | Abs. 2 Satz 4 |
+/// | < 25 kW | – | nur geförderte Anlagen und KWK-Anlagen | Nr. 3 |
+/// | 25 kW bis < 100 kW | ja | nur geförderte Anlagen | Nr. 2 lit. a + b |
+/// | ab 100 kW | ja | – | Nr. 1 |
+///
+/// „ab 25 Kilowatt" and „mindestens 100 Kilowatt" are inclusive, „weniger als"
+/// exclusive, so both boundaries fall into the higher band.
+///
+/// # Example
+///
+/// ```rust
+/// use eeg_billing::settlement_state::{Sect9Anlage, Sect9Pflicht, sect9_pflicht};
+/// use rust_decimal::dec;
+///
+/// let gefoerdert = |kwp| Sect9Anlage {
+///     leistung_kwp: kwp,
+///     erzeugungsart: None,
+///     einspeiseverguetung_oder_mieterstrom: true,
+///     ist_kwk_anlage: false,
+///     wechselrichterleistung_va: None,
+/// };
+///
+/// // 50 kW in der Einspeisevergütung: Nr. 2 lit. a **und** lit. b.
+/// assert_eq!(
+///     sect9_pflicht(gefoerdert(dec!(50))),
+///     Sect9Pflicht { fernsteuerbarkeit: true, begrenzung_60: true },
+/// );
+///
+/// // Dieselbe Anlage in der Direktvermarktung: lit. b entfällt.
+/// let direkt = Sect9Anlage { einspeiseverguetung_oder_mieterstrom: false, ..gefoerdert(dec!(50)) };
+/// assert_eq!(
+///     sect9_pflicht(direkt),
+///     Sect9Pflicht { fernsteuerbarkeit: true, begrenzung_60: false },
+/// );
+///
+/// // 10 kW in der Direktvermarktung: § 9 Abs. 2 verlangt nichts.
+/// let klein = Sect9Anlage { einspeiseverguetung_oder_mieterstrom: false, ..gefoerdert(dec!(10)) };
+/// assert!(sect9_pflicht(klein).ist_leer());
+/// ```
 #[must_use]
-pub fn sect9_verletzt(
-    leistung_kwp: Decimal,
-    art: Option<ErzeugungsArt>,
-    erfuellung: Sect9Erfuellung,
-) -> bool {
-    match sect9_pflicht(leistung_kwp, art) {
-        Sect9Pflicht::Keine => false,
-        Sect9Pflicht::Fernsteuerbarkeit => erfuellung != Sect9Erfuellung::Fernsteuerbarkeit,
-        Sect9Pflicht::FernsteuerbarkeitOderBegrenzung | Sect9Pflicht::Leistungsbegrenzung60 => {
-            erfuellung == Sect9Erfuellung::Keine
+pub fn sect9_pflicht(anlage: Sect9Anlage) -> Sect9Pflicht {
+    let Sect9Anlage {
+        leistung_kwp,
+        erzeugungsart,
+        einspeiseverguetung_oder_mieterstrom,
+        ist_kwk_anlage,
+        wechselrichterleistung_va,
+    } = anlage;
+
+    // Abs. 2 Satz 4 lifts **Satz 1 Nr. 3** — and only Nr. 3 — for a
+    // Steckersolargerät „bis zu 2 Kilowatt und mit einer Wechselrichterleistung
+    // von insgesamt bis zu 800 Voltampere". Both halves are conditions: an
+    // unknown Wechselrichterleistung leaves the carve-out shut, because
+    // claiming it would suppress a real § 52 Abs. 1 Nr. 1 charge.
+    let steckersolar_ausgenommen = erzeugungsart == Some(ErzeugungsArt::SolarStecker)
+        && leistung_kwp <= STECKERSOLAR_LEISTUNG_KW
+        && wechselrichterleistung_va.is_some_and(|va| va <= STECKERSOLAR_WECHSELRICHTER_VA);
+
+    // The 60 % cap is owed by geförderte Anlagen throughout, and below 25 kW by
+    // every KWK-Anlage as well.
+    let cap_adressat = einspeiseverguetung_oder_mieterstrom;
+
+    if leistung_kwp >= dec!(100) {
+        // Nr. 1 — „mindestens 100 Kilowatt": Ist-Einspeisung abrufen und
+        // ferngesteuert reduzieren. No 60 % route, and no Vergütungsform gate.
+        Sect9Pflicht {
+            fernsteuerbarkeit: true,
+            begrenzung_60: false,
+        }
+    } else if leistung_kwp >= dec!(25) {
+        // Nr. 2 — „ab 25 Kilowatt und von weniger als 100 Kilowatt": lit. a for
+        // every plant, lit. b additionally for a geförderte one.
+        Sect9Pflicht {
+            fernsteuerbarkeit: true,
+            begrenzung_60: cap_adressat,
+        }
+    } else {
+        // Nr. 3 — „weniger als 25 Kilowatt": the cap alone, and only for a
+        // geförderte Anlage or a KWK-Anlage.
+        Sect9Pflicht {
+            fernsteuerbarkeit: false,
+            begrenzung_60: (cap_adressat || ist_kwk_anlage) && !steckersolar_ausgenommen,
         }
     }
+}
+
+/// Whether the plant is in breach of § 9 Abs. 2 — the § 52 Abs. 1 Nr. 1 trigger.
+///
+/// A breach is any obligation [`sect9_pflicht`] states and
+/// [`Sect9Erfuellung`] does not carry. Having *more* than is owed is never a
+/// breach: a directly-marketed plant that limits itself to 60 % anyway is
+/// compliant, and so is a small plant with a Fernsteuerbarkeit it did not have
+/// to install.
+///
+/// # Example
+///
+/// ```rust
+/// use eeg_billing::settlement_state::{Sect9Anlage, Sect9Erfuellung, sect9_verletzt};
+/// use rust_decimal::dec;
+///
+/// let anlage = Sect9Anlage {
+///     leistung_kwp: dec!(50),
+///     erzeugungsart: None,
+///     einspeiseverguetung_oder_mieterstrom: true,
+///     ist_kwk_anlage: false,
+///     wechselrichterleistung_va: None,
+/// };
+///
+/// // Nr. 2 asks for both, so the 60 % cap on its own is a breach of lit. a.
+/// assert!(sect9_verletzt(anlage, Sect9Erfuellung::BEGRENZUNG_60));
+/// assert!(sect9_verletzt(anlage, Sect9Erfuellung::FERNSTEUERBARKEIT));
+/// assert!(!sect9_verletzt(anlage, Sect9Erfuellung::BEIDES));
+/// ```
+#[must_use]
+pub fn sect9_verletzt(anlage: Sect9Anlage, erfuellung: Sect9Erfuellung) -> bool {
+    let pflicht = sect9_pflicht(anlage);
+    (pflicht.fernsteuerbarkeit && !erfuellung.fernsteuerbarkeit)
+        || (pflicht.begrenzung_60 && !erfuellung.begrenzung_60)
 }
 
 #[cfg(test)]
@@ -565,84 +736,138 @@ mod sect9_tests {
     use super::*;
     use rust_decimal::dec;
 
-    /// §9 Abs. 2 Nr. 2 states the middle band as a choice — „ab 25 Kilowatt und
-    /// von weniger als 100 Kilowatt" is satisfied by either route.
-    #[test]
-    fn the_middle_band_may_take_either_route() {
-        for e in [
-            Sect9Erfuellung::Fernsteuerbarkeit,
-            Sect9Erfuellung::Leistungsbegrenzung60,
-        ] {
-            assert!(!sect9_verletzt(dec!(50), None, e), "{e:?}");
+    fn anlage(kwp: Decimal) -> Sect9Anlage {
+        Sect9Anlage {
+            leistung_kwp: kwp,
+            erzeugungsart: None,
+            einspeiseverguetung_oder_mieterstrom: true,
+            ist_kwk_anlage: false,
+            wechselrichterleistung_va: None,
         }
-        assert!(sect9_verletzt(dec!(50), None, Sect9Erfuellung::Keine));
     }
 
-    /// From 100 kW the 60 % route is no longer available.
+    /// § 9 Abs. 2 Satz 1 Nr. 2 is „a) … **und** b) …" — the trailing „oder"
+    /// separates Nr. 2 from Nr. 3, it does not offer the two lit. as a choice.
+    /// Reading it as an alternative lets a geförderte Anlage in the middle band
+    /// escape lit. a, which is the whole point of the Nummer.
     #[test]
-    fn from_100_kw_only_fernsteuerbarkeit_satisfies_sect9() {
-        assert!(sect9_verletzt(
-            dec!(100),
-            None,
-            Sect9Erfuellung::Leistungsbegrenzung60
-        ));
-        assert!(!sect9_verletzt(
-            dec!(100),
-            None,
-            Sect9Erfuellung::Fernsteuerbarkeit
-        ));
+    fn the_middle_band_owes_both_routes() {
+        let a = anlage(dec!(50));
+        assert_eq!(
+            sect9_pflicht(a),
+            Sect9Pflicht {
+                fernsteuerbarkeit: true,
+                begrenzung_60: true
+            }
+        );
+        assert!(sect9_verletzt(a, Sect9Erfuellung::FERNSTEUERBARKEIT));
+        assert!(sect9_verletzt(a, Sect9Erfuellung::BEGRENZUNG_60));
+        assert!(sect9_verletzt(a, Sect9Erfuellung::KEINE));
+        assert!(!sect9_verletzt(a, Sect9Erfuellung::BEIDES));
     }
 
-    /// Below 25 kW the 60 % Leistungsbegrenzung is the whole obligation
-    /// (§9 Abs. 2 Nr. 3) — nothing else is owed, and having nothing is a breach.
+    /// lit. b binds „Anlagen, die der Einspeisevergütung oder dem
+    /// Mieterstromzuschlag … zugeordnet sind" — a Marktprämien-Anlage owes
+    /// lit. a alone.
     #[test]
-    fn below_25_kw_the_sixty_percent_cap_is_enough() {
-        assert!(!sect9_verletzt(
-            dec!(10),
-            None,
-            Sect9Erfuellung::Leistungsbegrenzung60
-        ));
-        assert!(sect9_verletzt(dec!(10), None, Sect9Erfuellung::Keine));
+    fn the_middle_band_in_direktvermarktung_owes_only_the_remote_control() {
+        let a = Sect9Anlage {
+            einspeiseverguetung_oder_mieterstrom: false,
+            ..anlage(dec!(50))
+        };
+        assert_eq!(
+            sect9_pflicht(a),
+            Sect9Pflicht {
+                fernsteuerbarkeit: true,
+                begrenzung_60: false
+            }
+        );
+        assert!(!sect9_verletzt(a, Sect9Erfuellung::FERNSTEUERBARKEIT));
+        assert!(sect9_verletzt(a, Sect9Erfuellung::BEGRENZUNG_60));
     }
 
-    /// §9 Abs. 2 Satz 2 — a Steckersolargerät „bis zu 2 Kilowatt" is out of scope.
-    ///
-    /// The boundary is the ordinary case, not an edge: 2 kWp of modules behind an
-    /// 800-VA inverter is the standard build, and it is exempt.
+    /// Nr. 1 has no Vergütungsform gate and no 60 % route.
     #[test]
-    fn a_steckersolargeraet_is_exempt_up_to_and_including_two_kilowatt() {
+    fn from_100_kw_only_the_remote_control_satisfies_sect9() {
+        for gefoerdert in [true, false] {
+            let a = Sect9Anlage {
+                einspeiseverguetung_oder_mieterstrom: gefoerdert,
+                ..anlage(dec!(100))
+            };
+            assert_eq!(
+                sect9_pflicht(a),
+                Sect9Pflicht {
+                    fernsteuerbarkeit: true,
+                    begrenzung_60: false
+                }
+            );
+            assert!(sect9_verletzt(a, Sect9Erfuellung::BEGRENZUNG_60));
+            assert!(!sect9_verletzt(a, Sect9Erfuellung::FERNSTEUERBARKEIT));
+        }
+    }
+
+    /// Nr. 3 names „Anlagen, die der Einspeisevergütung oder dem
+    /// Mieterstromzuschlag … zugeordnet sind" and „KWK-Anlagen"; a
+    /// direktvermarktende Solaranlage below 25 kW is in neither list.
+    #[test]
+    fn below_25_kw_the_cap_is_owed_only_by_the_addressees_of_nr_3() {
+        assert_eq!(
+            sect9_pflicht(anlage(dec!(10))),
+            Sect9Pflicht {
+                fernsteuerbarkeit: false,
+                begrenzung_60: true
+            }
+        );
+        assert!(sect9_verletzt(anlage(dec!(10)), Sect9Erfuellung::KEINE));
+
+        let direkt = Sect9Anlage {
+            einspeiseverguetung_oder_mieterstrom: false,
+            ..anlage(dec!(10))
+        };
+        assert!(sect9_pflicht(direkt).ist_leer());
+        assert!(!sect9_verletzt(direkt, Sect9Erfuellung::KEINE));
+
+        let kwk = Sect9Anlage {
+            ist_kwk_anlage: true,
+            ..direkt
+        };
+        assert!(sect9_verletzt(kwk, Sect9Erfuellung::KEINE));
+        assert!(!sect9_verletzt(kwk, Sect9Erfuellung::BEGRENZUNG_60));
+    }
+
+    /// Abs. 2 Satz 4 — „bis zu 2 Kilowatt **und** … bis zu 800 Voltampere". Both
+    /// halves are conditions, and an unstated Wechselrichterleistung keeps the
+    /// carve-out shut.
+    #[test]
+    fn the_steckersolar_carve_out_is_a_two_part_test() {
+        let stecker = |kwp, va| Sect9Anlage {
+            erzeugungsart: Some(ErzeugungsArt::SolarStecker),
+            wechselrichterleistung_va: va,
+            ..anlage(kwp)
+        };
         for kwp in [dec!(0.8), dec!(2)] {
             assert!(
-                !sect9_verletzt(
-                    kwp,
-                    Some(ErzeugungsArt::SolarStecker),
-                    Sect9Erfuellung::Keine
-                ),
+                sect9_pflicht(stecker(kwp, Some(dec!(800)))).ist_leer(),
                 "{kwp} kWp"
             );
-            assert_eq!(
-                sect9_pflicht(kwp, Some(ErzeugungsArt::SolarStecker)),
-                Sect9Pflicht::Keine
-            );
         }
-        // Above 2 kW the exemption stops and Nr. 3 applies again.
-        assert!(sect9_verletzt(
-            dec!(2.01),
-            Some(ErzeugungsArt::SolarStecker),
-            Sect9Erfuellung::Keine
-        ));
-        assert_eq!(
-            sect9_pflicht(dec!(2.01), Some(ErzeugungsArt::SolarStecker)),
-            Sect9Pflicht::Leistungsbegrenzung60
-        );
+        // Above either limit the exemption stops and Nr. 3 applies again.
+        assert!(!sect9_pflicht(stecker(dec!(2.01), Some(dec!(800)))).ist_leer());
+        assert!(!sect9_pflicht(stecker(dec!(2), Some(dec!(1200)))).ist_leer());
+        // Unknown inverter rating: no carve-out.
+        assert!(!sect9_pflicht(stecker(dec!(2), None)).ist_leer());
     }
 
-    /// The exemption is for Steckersolargeräte only — a 2 kWp roof array is not one.
+    /// The carve-out is for Steckersolargeräte only — a 2 kWp roof array is not one.
     #[test]
-    fn the_exemption_does_not_reach_an_ordinary_small_plant() {
-        assert_eq!(
-            sect9_pflicht(dec!(2), None),
-            Sect9Pflicht::Leistungsbegrenzung60
-        );
+    fn the_carve_out_does_not_reach_an_ordinary_small_plant() {
+        assert!(!sect9_pflicht(anlage(dec!(2))).ist_leer());
+    }
+
+    /// More than is owed is never a breach.
+    #[test]
+    fn exceeding_the_obligation_is_compliant() {
+        assert!(!sect9_verletzt(anlage(dec!(10)), Sect9Erfuellung::BEIDES));
+        assert!(!sect9_verletzt(anlage(dec!(120)), Sect9Erfuellung::BEIDES));
     }
 }

@@ -76,17 +76,17 @@ spec:
   # `MemoryStore::forget_subject` erases, so a literal subject here would mean
   # one customer's history recalled into another customer's run, and a GDPR
   # Art. 17 erasure naming one person unsatisfiable without destroying
-  # everybody's. Until agentplane 0.15 the declarative tier could only write a
-  # literal, which is why 26 specialists shipped with no memory at all.
+  # everybody's. A specialist that cannot bind its subject declares no memory at
+  # all rather than pooling one.
   #
   # A binding that cannot resolve fails the run rather than falling back to a
   # default — a memory filed under the wrong scope is worse than none.
   #
   # Formation reads the agent's own answer, which is model output and therefore
   # untrusted, so it runs on the **quarantined** model.
-  # 0.19 moved formation under `memory`, beside a `recall` channel this
-  # plane does not use: recall order is a ranking signal any writer can
-  # influence, and adopting it is a decision somebody makes deliberately.
+  # `memory` also carries a `recall` channel this plane does not use: recall
+  # order is a ranking signal any writer can influence, so adopting it is a
+  # decision somebody makes deliberately.
   memory:
     formation:
       subject: "$correlation/malo"
@@ -127,7 +127,7 @@ spec:
   # would therefore gate nothing, and `required` would suspend a run per finding
   # and cost a case row until somebody clears it.
   #
-  # `triage` is the third mode agentplane 0.15 added for exactly this: the run
+  # `triage` is the mode for exactly this: the run
   # completes and returns, and a matching answer *also* opens a worklist row.
   # Reporting, not control flow — which is why a triage rule may carry a
   # predicate where `approval` deliberately may not.

@@ -296,6 +296,17 @@ pub mod accounting {
     pub const SEPA_COLLECTION_REJECTED: &str = "de.accounting.sepa.collection-rejected";
     /// The creditor gave a settled collection back via pain.007.
     pub const SEPA_REVERSAL_ISSUED: &str = "de.accounting.sepa.reversal-issued";
+    /// A camt.055 recall was sent for a submitted pain.008: the creditor is
+    /// asking the bank to stop a collection **before** it settles.
+    ///
+    /// Distinct from [`SEPA_REVERSAL_ISSUED`], which gives back a collection
+    /// that already settled — a different message, a different moment, and a
+    /// different reconciliation.
+    pub const SEPA_RECALL_REQUESTED: &str = "de.accounting.sepa.recall-requested";
+    /// The bank answered a camt.055 with a camt.029. The outcome is `ACCR`
+    /// (stopped), `RJCR` (the collection stands), `PDCR` (still open) or `PACR`
+    /// (some of the named transactions).
+    pub const SEPA_RECALL_RESOLVED: &str = "de.accounting.sepa.recall-resolved";
     /// Verification of Payee reported something other than a match for an
     /// outgoing credit transfer. Mandatory for euro credit transfers since
     /// 9 October 2025: executing after a `RVNM` no-match shifts liability to
@@ -702,6 +713,8 @@ pub fn all() -> &'static [&'static str] {
         accounting::BANKRUECKLAST,
         accounting::SEPA_COLLECTION_REJECTED,
         accounting::SEPA_REVERSAL_ISSUED,
+        accounting::SEPA_RECALL_REQUESTED,
+        accounting::SEPA_RECALL_RESOLVED,
         accounting::PAYEE_VERIFICATION_MISMATCH,
         // de.netzbilanz.*
         netzbilanz::INVOIC_DRAFTED,
